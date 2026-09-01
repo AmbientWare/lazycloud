@@ -315,8 +315,7 @@ class RedisEventStreamRepository:
         filtered = tuple(
             record for record in records if _log_record_matches_query(record, plan.query)
         )
-        offset = plan.page * plan.limit
-        return filtered[offset : offset + read_limit]
+        return filtered[-read_limit:]
 
     def stream_event_history(
         self,
@@ -556,6 +555,11 @@ def log_record_from_redis(record: RedisStreamRecord) -> LogRecord:
             "workspaceid",
         ),
         app_id=_first_text((payload, sequenced.headers, body), "app_id", "appid"),
+        deployment_id=_first_text(
+            (payload, sequenced.headers, body),
+            "deployment_id",
+            "deploymentid",
+        ),
         machine_id=_first_text(
             (payload, sequenced.headers, body),
             "machine_id",
@@ -629,6 +633,7 @@ def _log_record_matches_query(record: RedisStreamRecord, query: LogStreamQuery) 
         (query.container_id, log_record.container_id),
         (query.stub_id, log_record.stub_id),
         (query.app_id, log_record.app_id),
+        (query.deployment_id, log_record.deployment_id),
         (query.machine_id, log_record.machine_id),
         (query.worker_id, log_record.worker_id),
     ):

@@ -157,13 +157,13 @@ def cron_delete(name: str) -> None:
 @cron_app.command("runs")
 def cron_runs(
     ctx: typer.Context,
-    limit: Annotated[int | None, typer.Option("--limit")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=1_000)] = 100,
+    cursor: Annotated[str | None, typer.Option("--cursor")] = None,
 ) -> None:
-    runs = admin_api_client().list_cron_job_runs().runs
-    if limit is not None:
-        runs = runs[:limit]
+    page = admin_api_client().list_cron_job_runs(limit=limit, cursor=cursor)
+    runs = page.data
     if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in runs])
+        print_payload(ctx, page.model_dump(mode="json"))
     else:
         rows = [
             [
@@ -182,6 +182,8 @@ def cron_runs(
                 rows,
             )
         )
+        if page.next:
+            console.print(f"Next cursor: {page.next}")
 
 
 @scheduler_app.command("tick")

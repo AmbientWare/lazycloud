@@ -3,6 +3,7 @@ from __future__ import annotations
 import socket
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -44,7 +45,6 @@ from execution.containers.runtime_state import RedisContainerRuntimeStateReposit
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
 from execution.endpoints.dispatch import (
-    ACTIVE_ENDPOINT_DISPATCH_STATUSES,
     EndpointInstanceDispatcher,
     EndpointResponseStream,
 )
@@ -283,7 +283,7 @@ class FunctionApiService(Protocol):
 
     def assert_may_accept_invocation(self, stub_id: str) -> None: ...
 
-    def unclaimed_task_count(self, stub_id: str) -> int: ...
+    def unclaimed_task_counts(self, stub_ids: Sequence[str]) -> dict[str, int]: ...
 
     def start_function_container(self, stub_id: str) -> bool: ...
 
@@ -390,18 +390,29 @@ class ApiSchedulerWorkloadControl:
 class ApiEndpointDispatchAutoscalingReader:
     repository: EndpointDispatchStateRepository
 
-    def active_count(self, stub_id: str) -> int:
-        return self.repository.active_count(stub_id)
+    def active_counts_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]:
+        return self.repository.active_counts_by_stub(stub_ids)
 
-    def list_by_stub(self, stub_id: str) -> list[EndpointAutoscalingDispatchObservation]:
-        return [
-            EndpointAutoscalingDispatchObservation(
-                container_id=record.container_id,
-                active=record.status in ACTIVE_ENDPOINT_DISPATCH_STATUSES,
-                finished_at=record.finished_at,
-            )
-            for record in self.repository.list_by_stub(stub_id)
-        ]
+    def observations_by_stub(
+        self,
+        stub_ids: Sequence[str],
+        *,
+        finished_since: datetime,
+    ) -> dict[str, list[EndpointAutoscalingDispatchObservation]]:
+        return {
+            stub_id: [
+                EndpointAutoscalingDispatchObservation(
+                    container_id=record.container_id,
+                    active=record.active,
+                    finished_at=record.finished_at,
+                )
+                for record in records
+            ]
+            for stub_id, records in self.repository.observations_by_stub(
+                stub_ids,
+                finished_since=finished_since,
+            ).items()
+        }
 
 
 @runtime_checkable

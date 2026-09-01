@@ -447,9 +447,9 @@ class _UnsupportedTaskHandleOperations:
         *,
         workspace: str | None = None,
         limit: int = 100,
-        page: int = 0,
+        cursor: str | None = None,
     ) -> list[LogRecord]:
-        _ = workspace, limit, page
+        _ = workspace, limit, cursor
         raise AssertionError(f"unexpected task log read for {task_id}")
 
     def subscribe(self, task_id: str) -> TaskSubscription:

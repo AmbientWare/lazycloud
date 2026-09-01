@@ -124,18 +124,6 @@ class TaskMetricsSummaryResponse(HttpModel):
     startup_ms_p95: float | None = None
 
 
-class TaskLogEntryResponse(HttpModel):
-    id: str
-    task_id: str
-    stream: str = "system"
-    message: str
-    created_at: datetime
-
-
-class TaskLogListResponse(HttpModel):
-    logs: list[TaskLogEntryResponse] = Field(default_factory=list)
-
-
 __all__ = [
     "TaskActionCapabilitiesResponse",
     "TaskAppReferenceResponse",
@@ -143,8 +131,6 @@ __all__ = [
     "TaskCountByDeploymentResponse",
     "TaskDeploymentReferenceResponse",
     "TaskDetailResponse",
-    "TaskLogEntryResponse",
-    "TaskLogListResponse",
     "TaskMetricsSummaryResponse",
     "TaskPageResponse",
     "TaskResponse",

@@ -177,7 +177,7 @@ def test_real_redis_expired_cursors_clamp_or_raise_typed_conflict(
         )
 
 
-def test_api_maps_expired_log_and_event_cursors_to_409(
+def test_api_maps_expired_event_cursor_to_409(
     isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
     request: pytest.FixtureRequest,
@@ -193,12 +193,6 @@ def test_api_maps_expired_log_and_event_cursors_to_409(
         workspace_id = services.context.default_workspace_id(session)
 
     repository.append_event(
-        EventRecordType.ContainerLog,
-        _log_data(workspace_id, "api-container", 0),
-        event_id="api-old-log",
-    )
-    old_log_cursor = repository.read_logs(LogStreamQuery(workspace_id=workspace_id))[-1].entry_id
-    repository.append_event(
         EventRecordType.TaskUpdated,
         {"workspace_id": workspace_id, "task_id": "api-task", "status": "running"},
         event_id="api-old-event",
@@ -206,11 +200,6 @@ def test_api_maps_expired_log_and_event_cursors_to_409(
     event_query = EventHistoryQuery(workspace_id=workspace_id, task_id="api-task")
     old_event_cursor = repository.read_event_history(event_query)[-1].entry_id
     for index in range(1, 226):
-        repository.append_event(
-            EventRecordType.ContainerLog,
-            _log_data(workspace_id, "api-container", index),
-            event_id=f"api-log-{index}",
-        )
         repository.append_event(
             EventRecordType.TaskUpdated,
             {"workspace_id": workspace_id, "task_id": "api-task", "status": "running"},
@@ -220,15 +209,6 @@ def test_api_maps_expired_log_and_event_cursors_to_409(
     client = client_stack.enter_context(TestClient(create_app(services)))
     token, _record = administrator_credential(isolated_services, "cursor-admin")
     headers = {"Authorization": f"Bearer {token}"}
-    log_response = client.get(
-        "/api/v1/logs",
-        params={
-            "workspace": workspace_id,
-            "cursor": old_log_cursor,
-            "clamp": "false",
-        },
-        headers=headers,
-    )
     event_response = client.get(
         "/api/v1/events/tasks/api-task/stream",
         params={
@@ -241,11 +221,6 @@ def test_api_maps_expired_log_and_event_cursors_to_409(
         headers=headers,
     )
 
-    assert log_response.status_code == 409
-    assert log_response.json() == {
-        "detail": "realtime cursor is older than retained history",
-        "code": "expired_cursor",
-    }
     assert event_response.status_code == 409
     assert event_response.json() == {
         "detail": "realtime cursor is older than retained history",

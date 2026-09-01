@@ -14,7 +14,7 @@ from observability.stream_state import (
 )
 from shared.errors import NotFoundError
 from shared.http.observability import LogObjectType, LogQueryRequest, LogQueryResponse
-from shared.realtime.streams import EventStreamPlanner, LogStreamQuery
+from shared.realtime.streams import LogStreamQuery
 from shared.tasks import is_terminal_task_status
 
 from api.server.auth import read_workspace
@@ -32,13 +32,13 @@ def api_v1_stream_logs(
     object_type: LogObjectType | None = None,
     stub_id: str | None = None,
     app_id: str | None = None,
+    deployment_id: str | None = None,
     task_id: str | None = None,
     container_id: str | None = None,
     machine_id: str | None = None,
     worker_id: str | None = None,
     query: str | None = None,
-    limit: int = 100,
-    page: int = 0,
+    limit: int = Query(100, gt=0, le=1_000),
     start_time: str | None = None,
     end_time: str | None = None,
     cursor: str | None = None,
@@ -60,13 +60,13 @@ def api_v1_stream_logs(
         object_type=object_type,
         stub_id=stub_id,
         app_id=app_id,
+        deployment_id=deployment_id,
         task_id=task_id,
         container_id=container_id,
         machine_id=machine_id,
         worker_id=worker_id,
         query=query,
         limit=limit,
-        page=page,
         start_time=_parsed_time(start_time),
         end_time=_parsed_time(end_time),
         cursor=cursor,
@@ -77,29 +77,28 @@ def api_v1_stream_logs(
     )
     request = _resolve_log_query_request(services, request)
     stream_query = _log_stream_query(request, wait_seconds=wait_seconds)
-    if response := _redis_log_response(
-        services,
-        stream_query,
-        follow=follow,
-        max_events=max_events,
-        wait_seconds=_effective_wait_seconds(request, wait_seconds),
-        last_event_id=last_event_id,
-    ):
-        return response
-    if _requires_stream_metadata(stream_query):
-        return sse_response(())
-    if request.cursor:
-        return sse_response(())
-    if follow and request.task_id:
-        return sse_response(
-            _follow_task_logs(
+    if follow:
+        if not _is_database_log_cursor(request.cursor) and (
+            response := _redis_log_response(
                 services,
-                request,
-                poll_interval_seconds=poll_interval_seconds,
+                stream_query,
+                max_events=max_events,
+                wait_seconds=_effective_wait_seconds(request, wait_seconds),
+                last_event_id=last_event_id,
             )
-        )
+        ):
+            return response
+        if request.task_id and (request.cursor is None or _is_database_log_cursor(request.cursor)):
+            return sse_response(
+                _follow_task_logs(
+                    services,
+                    request,
+                    poll_interval_seconds=poll_interval_seconds,
+                )
+            )
+        return sse_response(())
     result = _management(services).logs(request.workspace_id, **_management_log_kwargs(request))
-    return sse_response(("log", item.id, item) for item in result.data)
+    return sse_response(("log", item.cursor, item) for item in result.data)
 
 
 @router.get(
@@ -112,19 +111,16 @@ def api_v1_get_logs(
     object_type: LogObjectType | None = None,
     stub_id: str | None = None,
     app_id: str | None = None,
+    deployment_id: str | None = None,
     task_id: str | None = None,
     container_id: str | None = None,
     machine_id: str | None = None,
     worker_id: str | None = None,
     query: str | None = None,
-    limit: int = 100,
-    page: int = 0,
+    limit: int = Query(100, gt=0, le=1_000),
     start_time: str | None = None,
     end_time: str | None = None,
     cursor: str | None = None,
-    seq_num: int | None = Query(None, ge=0),
-    wait: int | None = Query(None, ge=0, le=30),
-    clamp: bool | None = None,
     *,
     workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),
@@ -135,28 +131,18 @@ def api_v1_get_logs(
         object_type=object_type,
         stub_id=stub_id,
         app_id=app_id,
+        deployment_id=deployment_id,
         task_id=task_id,
         container_id=container_id,
         machine_id=machine_id,
         worker_id=worker_id,
         query=query,
         limit=limit,
-        page=page,
         start_time=_parsed_time(start_time),
         end_time=_parsed_time(end_time),
         cursor=cursor,
-        seq_num=seq_num,
-        wait=wait,
-        clamp=clamp,
     )
     request = _resolve_log_query_request(services, request)
-    stream_query = _log_stream_query(request)
-    if response := _redis_log_query_response(services, stream_query):
-        return response
-    if _requires_stream_metadata(stream_query):
-        return _empty_log_query_response(stream_query)
-    if request.cursor:
-        return _empty_log_query_response(stream_query)
     return _management(services).logs(request.workspace_id, **_management_log_kwargs(request))
 
 
@@ -166,19 +152,20 @@ def _follow_task_logs(
     *,
     poll_interval_seconds: float,
 ) -> Iterator[tuple[str, str, object]]:
-    seen: set[str] = set()
+    task_id = request.task_id or ""
+    _management(services).workspace_task(request.workspace_id, task_id)
+    cursor = request.cursor
     sleep_seconds = max(poll_interval_seconds, 0.05)
     while True:
         log_kwargs = _management_log_kwargs(request)
-        log_kwargs["page"] = 0
+        log_kwargs["cursor"] = cursor
+        log_kwargs["after_cursor"] = cursor is not None
         result = _management(services).logs(request.workspace_id, **log_kwargs)
         for item in result.data:
-            if item.id in seen:
-                continue
-            seen.add(item.id)
-            yield ("log", item.id, item)
+            cursor = item.cursor
+            yield ("log", item.cursor, item)
         try:
-            task = services.tasks.get(request.task_id or "")
+            task = services.tasks.get(task_id)
         except NotFoundError:
             return
         if is_terminal_task_status(task.status):
@@ -193,13 +180,13 @@ def _log_query_request(
     object_type: LogObjectType | None = None,
     stub_id: str | None = None,
     app_id: str | None = None,
+    deployment_id: str | None = None,
     task_id: str | None = None,
     container_id: str | None = None,
     machine_id: str | None = None,
     worker_id: str | None = None,
     query: str | None = None,
     limit: int = 100,
-    page: int = 0,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
     cursor: str | None = None,
@@ -219,13 +206,13 @@ def _log_query_request(
         object_type=object_type,
         stub_id=stub_id,
         app_id=app_id,
+        deployment_id=deployment_id,
         task_id=task_id,
         container_id=container_id,
         machine_id=machine_id,
         worker_id=worker_id,
         query=query,
         limit=limit,
-        page=page,
         start_time=start_time,
         end_time=end_time,
         cursor=cursor,
@@ -246,13 +233,13 @@ def _log_stream_query(
         object_type=request.object_type.value if request.object_type is not None else "",
         stub_id=request.stub_id or "",
         app_id=request.app_id or "",
+        deployment_id=request.deployment_id or "",
         task_id=request.task_id or "",
         container_id=request.container_id or "",
         machine_id=request.machine_id or "",
         worker_id=request.worker_id or "",
         query=request.query or "",
         limit=request.limit,
-        page=request.page,
         start_time=request.start_time,
         end_time=request.end_time,
         cursor=request.cursor or "",
@@ -274,6 +261,7 @@ def _resolve_log_query_request(
     )
     return request.model_copy(
         update={
+            "deployment_id": deployment.id,
             "stub_id": deployment.stub_id,
             "app_id": deployment.app_id,
         }
@@ -282,42 +270,36 @@ def _resolve_log_query_request(
 
 def _management_log_kwargs(request: LogQueryRequest) -> _ManagementLogKwargs:
     return {
-        "object_id": request.object_id,
-        "object_type": request.object_type.value if request.object_type is not None else None,
         "stub_id": request.stub_id,
         "app_id": request.app_id,
+        "deployment_id": request.deployment_id,
         "task_id": request.task_id,
         "container_id": request.container_id,
         "machine_id": request.machine_id,
         "worker_id": request.worker_id,
         "query": request.query,
         "limit": request.limit,
-        "page": request.page,
         "start_time": request.start_time,
         "end_time": request.end_time,
-        "seq_num": request.seq_num,
-        "wait_seconds": request.wait,
-        "clamp": request.clamp,
+        "cursor": request.cursor,
+        "after_cursor": False,
     }
 
 
 class _ManagementLogKwargs(TypedDict):
-    object_id: str | None
-    object_type: str | None
     stub_id: str | None
     app_id: str | None
+    deployment_id: str | None
     task_id: str | None
     container_id: str | None
     machine_id: str | None
     worker_id: str | None
     query: str | None
     limit: int
-    page: int
     start_time: datetime | None
     end_time: datetime | None
-    seq_num: int | None
-    wait_seconds: float | None
-    clamp: bool | None
+    cursor: str | None
+    after_cursor: bool
 
 
 def _effective_wait_seconds(
@@ -331,74 +313,32 @@ def _effective_wait_seconds(
     return 1.0
 
 
-def _redis_log_query_response(
-    services: ApiServices,
-    query: LogStreamQuery,
-) -> LogQueryResponse | None:
-    repository = RedisEventStreamRepository(services.redis())
-    try:
-        records = repository.read_logs(query)
-    except (AttributeError, TypeError, RuntimeError):
-        return None
-    if not records:
-        return None
-    logs = tuple(log_record_from_redis(record) for record in records)
-    return LogQueryResponse(
-        object_id=query.object_id,
-        object_type=_log_object_type(query.object_type),
-        data=logs,
-        count=len(logs),
-        total_expected=len(logs),
-        streams=repository.planner.plan_log_page(query).streams,
-    )
-
-
-def _empty_log_query_response(query: LogStreamQuery) -> LogQueryResponse:
-    return LogQueryResponse(
-        object_id=query.object_id,
-        object_type=_log_object_type(query.object_type),
-        streams=EventStreamPlanner().plan_log_page(query).streams,
-    )
-
-
-def _log_object_type(value: str) -> LogObjectType | None:
-    return LogObjectType(value) if value else None
-
-
-def _requires_stream_metadata(query: LogStreamQuery) -> bool:
-    if query.stub_id or query.app_id or query.machine_id or query.worker_id:
-        return True
-    return query.object_type in {"deployment", "stub", "app", "machine"}
+def _is_database_log_cursor(value: str | None) -> bool:
+    return bool(value and value.startswith("pg."))
 
 
 def _redis_log_response(
     services: ApiServices,
     query: LogStreamQuery,
     *,
-    follow: bool,
     max_events: int,
     wait_seconds: float,
     last_event_id: str | None,
 ) -> StreamingResponse | None:
-    repository = RedisEventStreamRepository(services.redis())
-    if follow:
-        return sse_response(
-            _redis_log_items(
-                repository.stream_logs(
-                    query,
-                    last_event_id=last_event_id,
-                    block_milliseconds=int(wait_seconds * 1000),
-                    max_events=max_events,
-                )
-            )
-        )
     try:
-        records = repository.read_logs(query)
+        repository = RedisEventStreamRepository(services.redis())
     except (AttributeError, TypeError, RuntimeError):
         return None
-    if not records:
-        return None
-    return sse_response(_redis_log_items(records))
+    return sse_response(
+        _redis_log_items(
+            repository.stream_logs(
+                query,
+                last_event_id=last_event_id,
+                block_milliseconds=int(wait_seconds * 1000),
+                max_events=max_events,
+            )
+        )
+    )
 
 
 def _redis_log_items(

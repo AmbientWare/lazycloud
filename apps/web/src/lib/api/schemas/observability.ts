@@ -8,21 +8,29 @@ export const logRecordSchema = z.object({
   id: z.string().default(""),
   cursor: z.string().default(""),
   seq_num: z.number().default(0),
+  stored_at_ns: z.number().default(0),
   timestamp: z.string(),
   message: z.string(),
   stream: z.string().default(""),
   container_id: z.string().default(""),
   stub_id: z.string().default(""),
+  stub_type: z.string().default(""),
   task_id: z.string().default(""),
+  workspace_id: z.string().default(""),
   app_id: z.string().default(""),
+  deployment_id: z.string().default(""),
+  machine_id: z.string().default(""),
+  worker_id: z.string().default(""),
+  pid: z.number().default(0),
+  process_args: z.array(z.string()).default([]),
+  process_cwd: z.string().default(""),
+  process_seq: z.number().default(0),
 });
 export type LogRecord = z.infer<typeof logRecordSchema>;
 
 export const logQuerySchema = z.object({
   data: z.array(logRecordSchema).default([]),
   next: z.string().default(""),
-  count: z.number().default(0),
-  total_expected: z.number().default(0),
 });
 export type LogQuery = z.infer<typeof logQuerySchema>;
 

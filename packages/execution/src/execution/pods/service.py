@@ -25,7 +25,12 @@ from shared.container_requests import (
     StopContainerReason,
     WorkerStartupKind,
 )
-from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
+from shared.containers import (
+    LIVE_CONTAINER_STATUSES,
+    TERMINAL_CONTAINER_STATUSES,
+    ContainerRecord,
+    ContainerStatus,
+)
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.http.pods import (
@@ -442,15 +447,14 @@ class PodControlService:
         current_time = now or utc_now()
         with self.services.context.database.session() as session:
             expired = ContainerRepository(session).expired_containers_across_workspaces(
-                now=current_time
+                now=current_time,
+                stub_types=(StubKind.Pod.value,),
             )
         stopped: list[ContainerRecord] = []
         for container in expired:
             if not container.stub_id:
                 continue
             stub = self.control_plane.get_stub(container.stub_id)
-            if stub.kind is not StubKind.Pod:
-                continue
             # Named, because the default is `User` and settles the invocations this
             # container held as cancellations: the caller is told they stopped work
             # they did not stop, and charged the attempt. A TTL is the platform's
@@ -1215,11 +1219,11 @@ class PodControlService:
         health_port: int,
     ) -> tuple[list[PodBackendContainer], dict[str, PodProxyTarget]]:
         with self.services.context.database.session() as session:
-            records = [
-                container
-                for container in ContainerRepository(session).list(workspace_id=workspace_id)
-                if container.stub_id == stub_id
-            ]
+            records = ContainerRepository(session).list(
+                workspace_id=workspace_id,
+                statuses=tuple(status.value for status in LIVE_CONTAINER_STATUSES),
+                stub_ids=(stub_id,),
+            )
         targets: dict[str, PodProxyTarget] = {}
         container_clients = self._container_client_factory()
         probe_port = health_port or port

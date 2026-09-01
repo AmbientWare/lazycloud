@@ -5,6 +5,10 @@ from database.records.apps import (
     StubKind,
     StubRecord,
 )
+from database.records.endpoint_dispatch import (
+    EndpointDispatchObservationRecord,
+    EndpointDispatchStateRecord,
+)
 from database.records.source_cache import (
     SourceCacheCleanupSummary,
     SourceCacheCleanupTargetRecord,
@@ -15,6 +19,8 @@ __all__ = [
     "AppContainerShutdownIntentRecord",
     "AppDeploymentIntentRecord",
     "AppRecord",
+    "EndpointDispatchObservationRecord",
+    "EndpointDispatchStateRecord",
     "SourceCacheCleanupSummary",
     "SourceCacheCleanupTargetRecord",
     "StubKind",

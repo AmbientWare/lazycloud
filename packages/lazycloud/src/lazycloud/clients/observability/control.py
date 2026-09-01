@@ -264,8 +264,10 @@ def _logs_path(request: LogQueryRequest) -> str:
     return _with_query(
         "/api/v1/logs",
         {
+            **workspace_query(request.workspace_id),
             **request.model_dump(
                 mode="json",
+                exclude={"workspace_id"},
                 exclude_none=True,
             ),
         },
@@ -296,6 +298,7 @@ def _logs_stream_params(
 ) -> dict[str, JsonValue]:
     params = validate_json_object(
         {
+            **workspace_query(request.workspace_id),
             **request.model_dump(
                 mode="json",
                 exclude={"workspace_id"},

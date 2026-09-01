@@ -5,7 +5,6 @@ import { Download, Pause, Play, Search } from "lucide-react";
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { CopyButton } from "@/components/shared/CopyButton";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
-import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEventStream } from "@/hooks/useEventStream";
@@ -137,6 +136,23 @@ export function LogViewer({
         data-log-scroll=""
         className="min-h-0 flex-1 overflow-auto bg-background/60"
       >
+        {!history.isPending && !history.isError && historyList.nextCursor ? (
+          <div className="flex justify-center border-b border-border/60 p-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={history.isFetchingNextPage}
+              onClick={() => void history.fetchNextPage()}
+            >
+              {history.isFetchNextPageError
+                ? "Retry loading older logs"
+                : history.isFetchingNextPage
+                  ? "Loading older logs"
+                  : "Load older logs"}
+            </Button>
+          </div>
+        ) : null}
         {history.isPending ? (
           <div className="space-y-1.5 p-2" aria-hidden="true">
             {[80, 60, 90, 45, 70].map((width, index) => (
@@ -163,15 +179,6 @@ export function LogViewer({
             ))}
           </div>
         )}
-        {!history.isPending && !history.isError ? (
-          <InfiniteScrollBoundary
-            nextCursor={historyList.nextCursor}
-            loading={history.isFetchingNextPage}
-            error={history.isFetchNextPageError}
-            onLoadMore={() => void history.fetchNextPage()}
-            resourceLabel="logs"
-          />
-        ) : null}
       </div>
     </div>
   );

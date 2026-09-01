@@ -16,7 +16,6 @@ class LogObjectType(StringEnum):
     Task = "task"
     Stub = "stub"
     Container = "container"
-    Workspace = "workspace"
     App = "app"
     Machine = "machine"
 
@@ -35,6 +34,7 @@ class LogRecord(HttpModel):
     task_id: str = ""
     workspace_id: str = ""
     app_id: str = ""
+    deployment_id: str = ""
     machine_id: str = ""
     worker_id: str = ""
     pid: int = 0
@@ -43,30 +43,49 @@ class LogRecord(HttpModel):
     process_seq: int = 0
 
     @classmethod
-    def from_entry(cls, entry: LogEntry, *, workspace_id: str = "") -> LogRecord:
+    def from_entry(
+        cls,
+        entry: LogEntry,
+        *,
+        cursor: str = "",
+        workspace_id: str = "",
+        app_id: str = "",
+        deployment_id: str = "",
+        stub_id: str = "",
+        container_id: str = "",
+        machine_id: str = "",
+        worker_id: str = "",
+    ) -> LogRecord:
         return cls(
             id=entry.id,
+            cursor=cursor,
             timestamp=entry.created_at,
             message=entry.message,
             stream=entry.stream,
             task_id=entry.task_id,
             workspace_id=workspace_id,
+            app_id=app_id,
+            deployment_id=deployment_id,
+            stub_id=stub_id,
+            container_id=container_id,
+            machine_id=machine_id,
+            worker_id=worker_id,
         )
 
 
 class LogQueryRequest(HttpModel):
-    workspace_id: str = "default"
+    workspace_id: str
     object_id: str | None = None
     object_type: LogObjectType | None = None
     stub_id: str | None = None
     app_id: str | None = None
+    deployment_id: str | None = None
     task_id: str | None = None
     container_id: str | None = None
     machine_id: str | None = None
     worker_id: str | None = None
     query: str | None = None
-    limit: int = Field(default=100, gt=0)
-    page: int = Field(default=0, ge=0)
+    limit: int = Field(default=100, gt=0, le=1_000)
     start_time: datetime | None = None
     end_time: datetime | None = None
     cursor: str | None = None
@@ -78,6 +97,7 @@ class LogQueryRequest(HttpModel):
         "object_id",
         "stub_id",
         "app_id",
+        "deployment_id",
         "task_id",
         "container_id",
         "machine_id",
@@ -117,10 +137,14 @@ class LogQueryRequest(HttpModel):
                     )
                 case LogObjectType.App:
                     object.__setattr__(self, "app_id", self.app_id or self.object_id)
+                case LogObjectType.Deployment:
+                    object.__setattr__(
+                        self,
+                        "deployment_id",
+                        self.deployment_id or self.object_id,
+                    )
                 case LogObjectType.Machine:
                     object.__setattr__(self, "machine_id", self.machine_id or self.object_id)
-                case LogObjectType.Workspace:
-                    object.__setattr__(self, "workspace_id", self.object_id)
         if not self.object_id:
             object.__setattr__(
                 self,
@@ -129,6 +153,7 @@ class LogQueryRequest(HttpModel):
                     self.container_id
                     or self.task_id
                     or self.stub_id
+                    or self.deployment_id
                     or self.app_id
                     or self.machine_id
                     or self.worker_id
@@ -139,13 +164,8 @@ class LogQueryRequest(HttpModel):
 
 
 class LogQueryResponse(HttpModel):
-    object_id: str = ""
-    object_type: LogObjectType | None = None
     data: tuple[LogRecord, ...] = ()
     next: str = ""
-    count: int = 0
-    total_expected: int = 0
-    streams: tuple[str, ...] = ()
 
 
 class EventHistoryRequest(HttpModel):

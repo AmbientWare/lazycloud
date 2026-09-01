@@ -12,6 +12,7 @@ from database.repositories.common import (
     WorkspaceTableRepository,
 )
 from database.repositories.identity import WorkspaceRepository
+from database.tables.apps import StubTable
 from database.tables.identity import WorkspaceMemberTable
 from database.tables.orchestration import (
     AgentLeaseTable,
@@ -474,6 +475,41 @@ class ContainerRepository:
             or 0
         )
 
+    def autoscaling_candidates(
+        self,
+        *,
+        stub_ids: Sequence[str],
+        failed_since: datetime,
+    ) -> list[ContainerRecord]:
+        """Live containers and recent startup failures for these stubs."""
+        wanted = tuple(dict.fromkeys(stub_ids))
+        if not wanted:
+            return []
+        statement = (
+            select(ContainerTable)
+            .where(
+                ContainerTable.stub_id.in_(wanted),
+                or_(
+                    ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+                    and_(
+                        ContainerTable.status == ContainerStatus.Failed.value,
+                        or_(
+                            ContainerTable.created_at >= failed_since,
+                            ContainerTable.finished_at >= failed_since,
+                        ),
+                    ),
+                ),
+            )
+            .order_by(
+                ContainerTable.stub_id.asc(),
+                ContainerTable.created_at.desc(),
+                ContainerTable.id.desc(),
+            )
+        )
+        return [
+            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+        ]
+
     def live_container_ids_for_owner(self, *, owner_user_id: str, limit: int) -> list[str]:
         """Which containers this account is holding capacity for, oldest first.
 
@@ -580,15 +616,83 @@ class ContainerRepository:
         self.session.flush()
         return settled
 
-    def expired_containers_across_workspaces(self, *, now: datetime) -> list[ContainerRecord]:
-        """System reaper input: every live container past its expiry."""
+    def expired_containers_across_workspaces(
+        self,
+        *,
+        now: datetime,
+        stub_types: Sequence[str] = (),
+    ) -> list[ContainerRecord]:
+        """System reaper input: expired live containers of the requested kinds."""
+        statement = select(ContainerTable).where(
+            ContainerTable.expires_at.is_not(None),
+            ContainerTable.expires_at <= now,
+            ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+        )
+        if stub_types:
+            statement = statement.join(
+                StubTable,
+                StubTable.id == ContainerTable.stub_id,
+            ).where(StubTable.type.in_(stub_types))
+        statement = statement.order_by(ContainerTable.expires_at.asc(), ContainerTable.id.asc())
         return [
-            container
-            for container in self.list_across_workspaces()
-            if container.expires_at is not None
-            and container.expires_at <= now
-            and container.status in {ContainerStatus.Pending, ContainerStatus.Running}
+            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
         ]
+
+    def get_for_stub(
+        self,
+        container_id: str,
+        *,
+        workspace_id: str,
+        stub_id: str,
+    ) -> ContainerRecord | None:
+        row = self.session.scalars(
+            select(ContainerTable).where(
+                ContainerTable.id == container_id,
+                ContainerTable.workspace_id == workspace_id,
+                ContainerTable.stub_id == stub_id,
+            )
+        ).first()
+        return ContainerRecord.model_validate(row.payload) if row is not None else None
+
+    def latest_for_stubs(
+        self,
+        *,
+        workspace_id: str,
+        stub_ids: Sequence[str],
+    ) -> dict[str, ContainerRecord]:
+        wanted = tuple(dict.fromkeys(stub_ids))
+        if not wanted:
+            return {}
+        rank = func.row_number().over(
+            partition_by=ContainerTable.stub_id,
+            order_by=(
+                func.coalesce(ContainerTable.started_at, ContainerTable.created_at).desc(),
+                ContainerTable.created_at.desc(),
+                ContainerTable.id.desc(),
+            ),
+        )
+        ranked = (
+            select(
+                ContainerTable.id.label("container_id"),
+                ContainerTable.stub_id.label("stub_id"),
+                rank.label("position"),
+            )
+            .where(
+                ContainerTable.workspace_id == workspace_id,
+                ContainerTable.stub_id.in_(wanted),
+            )
+            .subquery()
+        )
+        rows = self.session.execute(
+            select(ContainerTable, ranked.c.stub_id)
+            .join(ranked, ranked.c.container_id == ContainerTable.id)
+            .where(ranked.c.position == 1)
+        )
+        return {
+            str(stub_id): ContainerRecord.model_validate(row.payload)
+            for row, stub_id in rows
+            if stub_id is not None
+        }
 
     def page(
         self,

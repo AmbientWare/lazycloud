@@ -256,7 +256,7 @@ def container_logs(
     container_id: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
     limit: Annotated[int, typer.Option("--limit", min=1, max=1000)] = 100,
-    page: Annotated[int, typer.Option("--page", min=0)] = 0,
+    cursor: Annotated[str | None, typer.Option("--cursor")] = None,
     query: Annotated[str | None, typer.Option("--query")] = None,
 ) -> None:
     selected = current_workspace(workspace)
@@ -265,7 +265,7 @@ def container_logs(
             workspace_id=selected,
             container_id=container_id,
             limit=limit,
-            page=page,
+            cursor=cursor,
             query=query,
         )
     )

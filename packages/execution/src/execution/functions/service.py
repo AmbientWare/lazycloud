@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from control.service import ControlPlaneService, StubKind, StubRecord
 from database.repositories.execution import (
+    LogPageCursor,
     TaskDependencyRepository,
     TaskRepository,
 )
@@ -340,11 +341,9 @@ class FunctionControlService:
             task = marked
         return self._schedule_function_task(task)
 
-    def unclaimed_task_count(self, stub_id: str) -> int:
-        """How much runnable work this stub has that nobody has taken."""
-
+    def unclaimed_task_counts(self, stub_ids: Sequence[str]) -> dict[str, int]:
         with self.services.context.database.session() as session:
-            return TaskRepository(session).count_unclaimed_for_stub(stub_id)
+            return TaskRepository(session).count_unclaimed_by_stub(stub_ids)
 
     def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]:
         """Which of these containers is serving an invocation right now.
@@ -993,15 +992,19 @@ class FunctionControlService:
         if initial.done or initial.exit_code != 0 or not initial.task_id or request.headless:
             return
 
-        seen_logs: set[str] = set()
+        log_cursor: LogPageCursor | None = None
         sleep_seconds = max(poll_interval_seconds, 0.05)
         last_status = ""
         last_keepalive = time.monotonic()
         while True:
-            for entry in self.services.tasks.logs(initial.task_id):
-                if entry.id in seen_logs:
-                    continue
-                seen_logs.add(entry.id)
+            log_page = self.services.tasks.log_page(
+                initial.task_id,
+                limit=1_000,
+                cursor=log_cursor,
+            )
+            for record in log_page.data:
+                entry = record.entry
+                log_cursor = record.cursor
                 last_keepalive = time.monotonic()
                 yield FunctionInvokeResponse.from_result(
                     task_id=initial.task_id,

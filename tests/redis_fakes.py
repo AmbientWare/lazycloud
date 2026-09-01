@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from typing import Protocol, runtime_checkable
@@ -63,6 +63,9 @@ class FakeRedis:
 
     def get(self, name: str) -> RedisWireScalar | None:
         return self.values.get(name)
+
+    def mget(self, keys: Iterable[str]) -> list[RedisWireScalar | None]:
+        return [self.values.get(key) for key in keys]
 
     def getdel(self, name: str) -> RedisWireScalar | None:
         with self._lock:

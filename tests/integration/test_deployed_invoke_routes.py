@@ -105,8 +105,8 @@ class RecordingFunctionService:
     def assert_may_accept_invocation(self, stub_id: str) -> None:
         raise AssertionError(f"unexpected assert_may_accept_invocation call: {stub_id}")
 
-    def unclaimed_task_count(self, stub_id: str) -> int:
-        raise AssertionError(f"unexpected unclaimed_task_count call: {stub_id}")
+    def unclaimed_task_counts(self, stub_ids: Sequence[str]) -> dict[str, int]:
+        raise AssertionError(f"unexpected unclaimed_task_counts call: {stub_ids}")
 
     def start_function_container(self, stub_id: str) -> bool:
         raise AssertionError(f"unexpected start_function_container call: {stub_id}")

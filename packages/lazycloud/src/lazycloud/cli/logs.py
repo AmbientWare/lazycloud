@@ -18,7 +18,7 @@ def logs(
     container_id: Annotated[str | None, typer.Option("--container-id")] = None,
     lines: Annotated[
         int,
-        typer.Option("--lines", "-n", min=1, help="Display the last N lines."),
+        typer.Option("--lines", "-n", min=1, max=1000, help="Display the last N lines."),
     ] = 250,
     show_timestamp: Annotated[
         bool,

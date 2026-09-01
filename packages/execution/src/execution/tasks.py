@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from database.repositories.cleanup import CleanupRepository
-from database.repositories.execution import LogRepository, TaskAttemptRepository, TaskRepository
+from database.repositories.execution import (
+    LogPage,
+    LogPageCursor,
+    LogRepository,
+    TaskAttemptRepository,
+    TaskRepository,
+)
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
 from foundation.ids import optional_uuid, required_uuid
@@ -18,6 +24,7 @@ from shared.events import EventLevel
 from shared.function_payloads import FunctionInvocationPayload, FunctionResultPayload
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.logs import LogEntry
+from shared.realtime.streams import LogStreamQuery
 from shared.tasks import (
     RetryDecision,
     RetryPolicy,
@@ -182,28 +189,6 @@ class TaskService:
                     "message": line,
                 },
                 workspace_id=task.workspace_id,
-            )
-
-    def merge_kwargs(self, task_id: str, key: str, value: JsonValue) -> Task:
-        """Store one keyword entry against a task without rewriting the rest.
-
-        Callers that hold a task while another party advances it must not write
-        the whole row back to record one field: the endpoint dispatcher kept its
-        state here and, saving its own copy, reverted the container and start
-        time the task had been given in between.
-        """
-        with self.context.database.session() as session:
-            task_repository = TaskRepository(session)
-            current = task_repository.get_for_update_across_workspaces(task_id)
-            if current is None:
-                msg = f"task not found: {task_id}"
-                raise NotFoundError(msg)
-            current.kwargs[key] = value
-            return task_repository.records.upsert_across_workspaces(
-                current,
-                workspace_id=current.workspace_id,
-                name=current.name,
-                status=current.status.value,
             )
 
     def transition(
@@ -516,12 +501,11 @@ class TaskService:
         limit: int = 100,
     ) -> list[Task]:
         current = now or utc_now()
-        tasks = self.list(status=TaskStatus.Retry)
-        due = [
-            task for task in tasks if task.next_retry_at is None or task.next_retry_at <= current
-        ]
-        due.sort(key=lambda item: (item.next_retry_at or item.created_at, item.created_at))
-        return due[: max(limit, 0)]
+        with self.context.database.session() as session:
+            return TaskRepository(session).due_retry_tasks(
+                now=current,
+                limit=limit,
+            )
 
     def list(
         self,
@@ -585,11 +569,37 @@ class TaskService:
             return task
         return self.transition(task, TaskStatus.Cancelled, error="task cancelled")
 
-    def logs(self, task_id: str) -> list[LogEntry]:
+    def logs(self, task_id: str, *, limit: int = 100) -> list[LogEntry]:
+        return [record.entry for record in self.log_page(task_id, limit=limit).data]
+
+    def log_page(
+        self,
+        task_id: str,
+        *,
+        limit: int = 100,
+        cursor: LogPageCursor | None = None,
+    ) -> LogPage:
         with self.context.database.session() as session:
-            entries = LogRepository(session).list_for_task(task_id)
-        entries.sort(key=lambda item: item.created_at)
-        return entries
+            task = TaskRepository(session).get_across_workspaces(task_id)
+            if task is None:
+                raise NotFoundError(f"task not found: {task_id}")
+            workspace_id = task.workspace_id
+            if not workspace_id:
+                raise ConflictError(f"task logs require a workspace-owned task: {task_id}")
+            repository = LogRepository(session)
+            query = LogStreamQuery(workspace_id=workspace_id, task_id=task.id)
+            if cursor is not None:
+                return repository.page_after(
+                    query,
+                    workspace_id=workspace_id,
+                    limit=limit,
+                    cursor=cursor,
+                )
+            return repository.page(
+                query,
+                workspace_id=workspace_id,
+                limit=limit,
+            )
 
     def _sync_latest_attempt(
         self,

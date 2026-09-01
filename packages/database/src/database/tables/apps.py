@@ -296,6 +296,13 @@ class CronJobTable(IdPayloadTable, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_cron_jobs_deployment", "deployment_id"),
         Index("ix_cron_jobs_workspace", "workspace_id"),
+        Index(
+            "ix_cron_jobs_due",
+            "next_run_at",
+            "id",
+            postgresql_where=text("enabled IS TRUE"),
+            sqlite_where=text("enabled = 1"),
+        ),
     )
 
     workspace_id: Mapped[str] = mapped_column(

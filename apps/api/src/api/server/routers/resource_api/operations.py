@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.service import Scheduler, SchedulerWorkloadControls
 from shared.autoscaler_state import AutoscalerTargetKind
@@ -86,13 +86,19 @@ def delete_cron_job(
 )
 def list_cron_job_runs(
     _auth: admin_access,
+    workspace_id: read_workspace,
+    limit: int = Query(100, gt=0, le=1_000),
+    cursor: str | None = None,
     services: ApiServices = Depends(current_services),
 ) -> CronJobRunListResponse:
+    page = Scheduler(services).list_cron_job_runs(
+        workspace_id=workspace_id,
+        limit=limit,
+        cursor=cursor,
+    )
     return CronJobRunListResponse(
-        runs=[
-            CronJobRunResponse.model_validate(item)
-            for item in Scheduler(services).list_cron_job_runs()
-        ]
+        data=[CronJobRunResponse.model_validate(item) for item in page.data],
+        next=page.next,
     )
 
 
@@ -107,7 +113,7 @@ def tick_scheduler(
     services: ApiServices = Depends(current_services),
 ) -> CronJobRunListResponse:
     return CronJobRunListResponse(
-        runs=[CronJobRunResponse.model_validate(item) for item in Scheduler(services).tick()]
+        data=[CronJobRunResponse.model_validate(item) for item in Scheduler(services).tick()]
     )
 
 

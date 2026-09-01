@@ -5,7 +5,7 @@ import socket
 import sys
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 
@@ -39,7 +39,6 @@ DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY = 1
 # For a caller that runs no handler, so a container already serving its
 # limit can still answer. Larger than any load the dispatcher records.
 UNLIMITED_ENDPOINT_CONTAINER_CONCURRENCY = sys.maxsize
-ENDPOINT_DISPATCH_TASK_KEY = "__endpoint_dispatch"
 
 
 class EndpointDispatchUnavailable(RuntimeError):
@@ -95,6 +94,7 @@ class EndpointDispatchRecord(ContractModel):
     enqueued_at: datetime = Field(default_factory=utc_now)
     started_at: datetime | None = None
     heartbeat_at: datetime | None = None
+    expires_at: datetime
     finished_at: datetime | None = None
     error: str | None = None
 
@@ -116,8 +116,21 @@ class EndpointDispatchRecord(ContractModel):
             self.finished_at = now
         if heartbeat:
             self.heartbeat_at = now
-        if error is not None:
+            self.expires_at = now + timedelta(seconds=max(self.wait_timeout_seconds, 1.0))
+        if error is not None or status in TERMINAL_ENDPOINT_DISPATCH_STATUSES:
             self.error = error
+        return self
+
+    def requeue(self) -> EndpointDispatchRecord:
+        now = utc_now()
+        self.status = EndpointDispatchStatus.Queued
+        self.container_id = None
+        self.enqueued_at = now
+        self.started_at = None
+        self.heartbeat_at = now
+        self.expires_at = now + timedelta(seconds=max(self.wait_timeout_seconds, 1.0))
+        self.finished_at = None
+        self.error = None
         return self
 
 
@@ -127,14 +140,6 @@ TERMINAL_ENDPOINT_DISPATCH_STATUSES: frozenset[EndpointDispatchStatus] = frozens
         EndpointDispatchStatus.Failed,
         EndpointDispatchStatus.Timeout,
         EndpointDispatchStatus.Cancelled,
-    }
-)
-
-ACTIVE_ENDPOINT_DISPATCH_STATUSES: frozenset[EndpointDispatchStatus] = frozenset(
-    {
-        EndpointDispatchStatus.Queued,
-        EndpointDispatchStatus.WaitingCapacity,
-        EndpointDispatchStatus.Inflight,
     }
 )
 
