@@ -102,6 +102,14 @@ def normalize_exception(
     combined = " ".join(item.lower() for item in messages if item)
     message = _first_message(messages) or _class_title(exc)
 
+    if _is_forbidden_error(exc):
+        return ClientErrorDetails(
+            type="permission_denied",
+            title="Access denied",
+            message=message,
+            hint="Check the selected workspace or ask an administrator for access.",
+        )
+
     if _is_auth_error(exc):
         return ClientErrorDetails(
             type="authentication_failed",
@@ -332,11 +340,19 @@ def _is_auth_error(exc: BaseException) -> bool:
     for item in exception_chain(exc):
         if isinstance(item, PermissionError):
             return True
-        if isinstance(item, HttpApiError) and item.status_code in {401, 403}:
+        if isinstance(item, HttpApiError) and item.status_code == 401:
             return True
-        if isinstance(item, urllib.error.HTTPError) and item.code in {401, 403}:
+        if isinstance(item, urllib.error.HTTPError) and item.code == 401:
             return True
     return False
+
+
+def _is_forbidden_error(exc: BaseException) -> bool:
+    return any(
+        (isinstance(item, HttpApiError) and item.status_code == 403)
+        or (isinstance(item, urllib.error.HTTPError) and item.code == 403)
+        for item in exception_chain(exc)
+    )
 
 
 def _is_connection_error(exc: BaseException, message: str) -> bool:

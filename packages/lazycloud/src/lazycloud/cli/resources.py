@@ -6,7 +6,11 @@ import webbrowser
 from typing import Annotated, Any
 
 import typer
-from shared.aws_connections import AwsAccountConnectionPhase, AwsAccountNetwork
+from shared.aws_connections import (
+    AwsAccountComputeConfiguration,
+    AwsAccountConnectionPhase,
+    AwsAccountNetwork,
+)
 from shared.compute_policy import MachinePool
 from shared.http.aws_connections import (
     AwsComputeConfigurationUpdateRequest,
@@ -23,9 +27,10 @@ from shared.http.gateway import (
 )
 from shared.tasks import is_terminal_task_status
 
+from lazycloud.cli.apps import resolve_app_id
 from lazycloud.cli.components.cards import empty_state, notice_card, result_card
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.components.formatting import timestamp
+from lazycloud.cli.components.formatting import duration, timestamp
 from lazycloud.cli.components.output import (
     console,
     emit,
@@ -70,15 +75,22 @@ def compute_status(
         print_payload(ctx, response.model_dump(mode="json"))
         return
     connection = response.connection
-    rows: list[list[Any]] = [
-        ["default pool", response.policy.default_pool],
-        ["AWS account", connection.account_id if connection is not None else "not connected"],
-        ["instances", str(response.instances.total)],
-        ["ready", str(response.instances.ready)],
-        ["pending", str(response.instances.pending)],
-        ["workloads", str(response.workload_count)],
-    ]
-    console.print(table("Compute", ["field", "value"], rows))
+    instance_states = [f"{response.instances.ready} ready"]
+    if response.instances.pending:
+        instance_states.append(f"{response.instances.pending} pending")
+    if response.instances.degraded:
+        instance_states.append(f"{response.instances.degraded} degraded")
+    console.print(
+        result_card(
+            "Compute",
+            {
+                "default_pool": response.policy.default_pool,
+                "cloud": connection.account_id if connection is not None else "not connected",
+                "instances": ", ".join(instance_states),
+                "workloads": response.workload_count,
+            },
+        )
+    )
 
 
 @compute_app.command("instances", help="List provisioned compute instances.")
@@ -92,25 +104,23 @@ def compute_instances(
         return
     rows = [
         [
-            item.id,
             item.provider,
             item.region,
             item.instance_type or "",
-            item.booted_template_version,
             item.service_state.value,
-            (
+            item.bootstrap_failure_detail
+            or (
                 item.bootstrap_failure_reason.value
                 if item.bootstrap_failure_reason is not None
                 else ""
             ),
-            item.bootstrap_failure_detail,
         ]
         for item in response.data
     ]
     console.print(
         table(
             "Compute instances",
-            ["id", "provider", "region", "type", "template version", "state", "reason", "detail"],
+            ["provider", "region", "type", "state", "issue"],
             rows,
         )
     )
@@ -163,7 +173,7 @@ def compute_policy_show(
         payload=response.model_dump(mode="json"),
         view=result_card(
             "Compute policy",
-            {"default_pool": response.default_pool, "revision": response.revision},
+            {"default_pool": response.default_pool},
         ),
     )
 
@@ -200,7 +210,14 @@ def cloud_compute_show(ctx: typer.Context) -> None:
     connection = compute_client().current_connection()
     if connection is None:
         raise typer.BadParameter("no cloud account is connected")
-    print_payload(ctx, connection.compute.model_dump(mode="json"))
+    emit(
+        ctx,
+        payload=connection.compute.model_dump(mode="json"),
+        view=result_card(
+            "Compute settings",
+            json_default(_compute_configuration_summary(connection.compute)),
+        ),
+    )
 
 
 @cloud_compute_app.command("update", help="Update connected-account compute settings.")
@@ -268,6 +285,9 @@ def cloud_compute_update(
         "idle_timeout_seconds": idle_timeout_seconds,
         "root_volume_gib": root_volume_gib,
     }
+    changed_keys = tuple(key for key, value in supplied.items() if value is not None)
+    if not changed_keys:
+        raise typer.BadParameter("provide at least one compute setting to update")
     response = client.update_compute_configuration(
         AwsComputeConfigurationUpdateRequest(
             expected_revision=current.revision,
@@ -276,7 +296,67 @@ def cloud_compute_update(
             ),
         )
     )
-    print_payload(ctx, response.compute.model_dump(mode="json"))
+    emit(
+        ctx,
+        payload=response.compute.model_dump(mode="json"),
+        view=result_card(
+            "Compute settings updated",
+            json_default(
+                _compute_configuration_updates(
+                    response.compute,
+                    keys=changed_keys,
+                )
+            ),
+            tone="success",
+        ),
+    )
+
+
+def _compute_configuration_summary(
+    configuration: AwsAccountComputeConfiguration,
+) -> dict[str, object]:
+    allowed_types: object = configuration.allowed_instance_types or "any"
+    return {
+        "region": configuration.default_region,
+        "instance_type": configuration.default_instance_type,
+        "cpu_workers": (
+            f"{configuration.min_cpu_workers} min, "
+            f"{configuration.initial_cpu_workers} initial, "
+            f"{configuration.max_cpu_instances} max"
+        ),
+        "max_gpu_instances": configuration.max_gpu_instances,
+        "free_capacity": (
+            f"{configuration.min_free_cpu_millicores / 1000:g} CPU, "
+            f"{configuration.min_free_memory_mib} MiB memory"
+        ),
+        "allowed_regions": configuration.allowed_regions,
+        "allowed_instance_types": allowed_types,
+        "idle_timeout": duration(configuration.idle_timeout_seconds),
+        "root_volume": f"{configuration.root_volume_gib} GiB",
+    }
+
+
+def _compute_configuration_updates(
+    configuration: AwsAccountComputeConfiguration,
+    *,
+    keys: tuple[str, ...],
+) -> dict[str, object]:
+    values = configuration.model_dump(mode="python")
+    updates: dict[str, object] = {}
+    for key in keys:
+        value = values[key]
+        if key == "min_free_cpu_millicores":
+            value = f"{configuration.min_free_cpu_millicores / 1000:g} CPU"
+        elif key == "min_free_memory_mib":
+            value = f"{configuration.min_free_memory_mib} MiB"
+        elif key == "idle_timeout_seconds":
+            value = duration(configuration.idle_timeout_seconds)
+        elif key == "root_volume_gib":
+            value = f"{configuration.root_volume_gib} GiB"
+        elif key == "allowed_instance_types" and not value:
+            value = "any"
+        updates[key] = value
+    return updates
 
 
 def _account_network(
@@ -359,20 +439,21 @@ def cloud_connect_aws(
         webbrowser.open(response.authorization.url)
     if response.authorization.url is None and response.authorization.external_id is None:
         raise RuntimeError("existing-role authorization did not return its external ID")
+    authorization: dict[str, object] = {
+        "account_id": account_id,
+        "phase": response.connection.phase.value,
+    }
+    if response.authorization.url:
+        authorization["authorization_url"] = response.authorization.url
+    if response.authorization.external_id:
+        authorization["external_id"] = response.authorization.external_id
+    authorization["next_step"] = "Run `lazycloud cloud validate` after authorization."
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
         view=result_card(
             "AWS authorization required",
-            json_default(
-                {
-                    "account_id": account_id,
-                    "phase": response.connection.phase.value,
-                    "authorization_url": response.authorization.url,
-                    "external_id": response.authorization.external_id,
-                    "next_step": "Complete authorization, then run `cloud validate`.",
-                }
-            ),
+            json_default(authorization),
             tone="info",
         ),
     )
@@ -395,20 +476,21 @@ def cloud_reconnect(
     account_id = response.connection.account_id
     if open_console and response.authorization.url is not None:
         webbrowser.open(response.authorization.url)
+    authorization: dict[str, object] = {
+        "account_id": account_id,
+        "phase": response.connection.phase.value,
+    }
+    if response.authorization.url:
+        authorization["authorization_url"] = response.authorization.url
+    if response.authorization.external_id:
+        authorization["external_id"] = response.authorization.external_id
+    authorization["next_step"] = "Run `lazycloud cloud validate` after authorization."
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
         view=result_card(
             "Replacement authorization required",
-            json_default(
-                {
-                    "account_id": account_id,
-                    "phase": response.connection.phase.value,
-                    "authorization_url": response.authorization.url,
-                    "external_id": response.authorization.external_id,
-                    "next_step": "Complete authorization, then run `cloud validate`.",
-                }
-            ),
+            json_default(authorization),
             tone="info",
         ),
     )
@@ -425,10 +507,11 @@ def cloud_validate(
     summary: dict[str, object] = {
         "account_id": account_id,
         "phase": response.phase.value,
-        "detail": response.detail,
     }
     if failure is not None:
-        summary["error"] = f"{failure[0]}: {failure[1]}"
+        summary["issue"] = f"{failure[0]}: {failure[1]}"
+    elif response.detail:
+        summary["detail"] = response.detail
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
@@ -477,14 +560,8 @@ def cloud_status(
         if target_phase is None:
             raise typer.BadParameter("--watch requires --until")
         deadline = time.monotonic() + timeout_seconds
-        observed_phase: AwsAccountConnectionPhase | None = None
         while response.phase is not target_phase:
-            if not json_output_enabled(ctx) and response.phase is not observed_phase:
-                console.print(
-                    f"{account_id}:",
-                    styled(response.phase.value, state_style(response.phase)),
-                )
-                observed_phase = response.phase
+            _print_cloud_poll(account_id, response, started_at=deadline - timeout_seconds)
             if time.monotonic() >= deadline:
                 raise RuntimeError(
                     f"timed out waiting for AWS account {account_id} to reach {target_phase.value}"
@@ -527,17 +604,11 @@ def cloud_disconnect(
     connection = client.remove_account()
     if wait and connection is not None:
         deadline = time.monotonic() + timeout_seconds
-        observed_phase: AwsAccountConnectionPhase | None = None
         while (
             connection is not None
             and connection.phase is not AwsAccountConnectionPhase.ActionRequired
         ):
-            if not json_output_enabled(ctx) and connection.phase is not observed_phase:
-                console.print(
-                    f"AWS account {account_id}:",
-                    styled(connection.phase.value, state_style(connection.phase)),
-                )
-                observed_phase = connection.phase
+            _print_cloud_poll(account_id, connection, started_at=deadline - timeout_seconds)
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"timed out waiting for AWS account {account_id} removal")
             time.sleep(interval_seconds)
@@ -625,14 +696,30 @@ def _connection_summary(response: AwsConnectionResponse) -> dict[str, object]:
     return summary
 
 
+def _print_cloud_poll(
+    account_id: str,
+    response: AwsConnectionResponse,
+    *,
+    started_at: float,
+) -> None:
+    elapsed = duration(time.monotonic() - started_at)
+    status = styled(response.phase.value.replace("_", " "), state_style(response.phase))
+    console.print(f"[{elapsed}] {account_id}", status, response.detail, soft_wrap=True)
+
+
 @task_app.command("list", help="List recent tasks.")
 def task_list(
     ctx: typer.Context,
     limit: Annotated[int, typer.Option("--limit", min=1)] = 100,
-    app_id: Annotated[str | None, typer.Option("--app-id")] = None,
+    app: Annotated[
+        str | None,
+        typer.Option("--app", help="App name or ID."),
+    ] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = resource_client(workspace=workspace).list_tasks(limit=limit, app_id=app_id)
+    client = resource_client(workspace=workspace)
+    app_id = resolve_app_id(app, client=client) if app else None
+    response = client.list_tasks(limit=limit, app_id=app_id)
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in response.data])
         return
@@ -641,12 +728,11 @@ def task_list(
             item.workload.name if item.workload is not None else item.name,
             item.status.value,
             timestamp(item.created_at),
-            item.container_id or "",
             item.id,
         ]
         for item in response.data
     ]
-    console.print(table("Tasks", ["workload", "status", "requested", "container", "id"], rows))
+    console.print(table("Tasks", ["workload", "status", "requested", "id"], rows))
 
 
 @task_app.command("stop", help="Stop one or more tasks.")
@@ -656,7 +742,18 @@ def task_stop(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     response = resource_client(workspace=workspace).stop_tasks(task_ids)
-    print_payload(ctx, response.model_dump(mode="json"))
+    summary: dict[str, object] = {"stopped": len(response.stopped)}
+    if response.skipped:
+        summary["skipped"] = list(response.skipped)
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=result_card(
+            "Tasks stopped",
+            json_default(summary),
+            tone="warning" if response.skipped else "success",
+        ),
+    )
 
 
 @task_app.command("show", help="Show one task and its current state.")
@@ -799,9 +896,9 @@ def container_list(
         print_payload(ctx, [item.model_dump(mode="json") for item in containers])
         return
     rows: list[list[Any]] = [
-        [item.name, item.status.value, item.image, item.exit_code, item.id] for item in containers
+        [item.name, item.status.value, item.exit_code, item.id] for item in containers
     ]
-    console.print(table("Containers", ["name", "status", "image", "exit", "id"], rows))
+    console.print(table("Containers", ["name", "status", "exit", "id"], rows))
 
 
 @container_app.command("attach", help="Attach to a container's output until it exits.")
@@ -831,7 +928,7 @@ def container_attach(
         payload=terminal.model_dump(mode="json"),
         view=result_card(
             "Container finished",
-            {"container_id": container_id, "exit_code": terminal.exit_code},
+            {"exit_code": terminal.exit_code},
             tone="success" if terminal.exit_code == 0 else "warning",
         ),
     )
@@ -892,8 +989,10 @@ def machine_list(
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in machines])
         return
-    rows: list[list[str]] = [[item.status.value, item.gpu or "", item.id] for item in machines]
-    console.print(table("Machines", ["status", "gpu", "id"], rows))
+    rows: list[list[str]] = [
+        [str(item.pool), item.status.value, item.gpu or "", item.id] for item in machines
+    ]
+    console.print(table("Machines", ["pool", "status", "gpu", "id"], rows))
 
 
 @machine_app.command("join", help="Join this machine to a compute pool.")

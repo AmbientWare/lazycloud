@@ -80,15 +80,22 @@ def domain_add(
     """Register a domain, then point it at the platform with the CNAME shown."""
 
     registered = domain_client(workspace=workspace).register(domain)
-    _print(ctx, registered)
-    if not json_output_enabled(ctx):
-        console.print(
-            notice_card(
-                "DNS pending",
-                "Wait for the new records to appear.",
-                hint=f"Run lazycloud domain status {registered.hostname}",
-            )
-        )
+    emit(
+        ctx,
+        payload=_payload(registered),
+        view=notice_card(
+            "Domain added",
+            f"{registered.hostname} is {registered.phase.value.replace('_', ' ')}.",
+            hint=f"Run `lazycloud domain status {registered.hostname}` to check it.",
+            tone="success" if registered.phase is CustomDomainPhase.Ready else "info",
+        ),
+    )
+    if json_output_enabled(ctx):
+        return
+    if registered.error_message:
+        console.print(notice_card("Domain error", registered.error_message, tone="warning"))
+    if registered.phase is not CustomDomainPhase.Ready and registered.cname_target:
+        _print_dns_record(registered)
 
 
 @domain_app.command("list", help="List registered custom domains.")
@@ -100,8 +107,8 @@ def domain_list(
     if json_output_enabled(ctx):
         print_payload(ctx, [_payload(item) for item in response.data])
         return
-    rows = [[item.hostname, item.phase.value, item.cname_target or "-"] for item in response.data]
-    console.print(table("Domains", ["hostname", "status", "cname target"], rows))
+    rows = [[item.hostname, item.phase.value] for item in response.data]
+    console.print(table("Domains", ["hostname", "status"], rows))
 
 
 @domain_app.command("status")

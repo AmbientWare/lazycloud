@@ -176,12 +176,13 @@ def table(
     rows: list[list[Any]],
     *,
     expand: bool = False,
+    empty: str | None = None,
 ) -> RenderableType:
     return resource_table(
         title,
         columns,
         rows,
-        empty="No items found.",
+        empty=empty or f"No {title.lower()} found.",
         expand=expand,
     )
 
@@ -190,7 +191,7 @@ def _command_title(ctx: typer.Context) -> str:
     names = [part.replace("-", " ") for part in ctx.command_path.split()[1:]]
     if not names:
         return "Result"
-    return " ".join(names).title()
+    return " ".join(names).capitalize()
 
 
 def _command_tone(ctx: typer.Context) -> CardTone:

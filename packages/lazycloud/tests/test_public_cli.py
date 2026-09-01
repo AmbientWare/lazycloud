@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import typer
+from lazycloud.abstractions.shell import ShellSession
 from lazycloud.cli.main import build_public_cli
 from lazycloud.cli.main import start as client_start
 from lazycloud.cli.volumes import parse_remote_path, parse_remote_path_if_schemed
@@ -61,8 +62,8 @@ def test_task_list_filters_by_exact_app_id(
             "--json",
             "task",
             "list",
-            "--app-id",
-            "app-1",
+            "--app",
+            "11111111-1111-4111-8111-111111111111",
             "--workspace",
             "team",
         ],
@@ -70,7 +71,7 @@ def test_task_list_filters_by_exact_app_id(
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)[0]["id"] == "task-1"
-    assert resources.app_ids == ["app-1"]
+    assert resources.app_ids == ["11111111-1111-4111-8111-111111111111"]
 
 
 def test_public_cli_opens_an_existing_container_shell_without_a_handler(
@@ -97,6 +98,44 @@ def test_public_cli_opens_an_existing_container_shell_without_a_handler(
 
     assert public_result.exit_code == 0, public_result.output
     assert calls == [("container-1", "team")]
+
+
+def test_development_session_connects_without_printing_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = ShellSession(
+        container_id="container-1",
+        stub_id="stub-1",
+        username="shell",
+        password="fixture-shell-secret",
+    )
+    opened: list[ShellSession] = []
+
+    class FakePod:
+        workspace: str | None = None
+
+        def shell(self, *, workspace: str | None, sync_dir: str) -> ShellSession:
+            assert workspace == "team"
+            assert sync_dir == "./"
+            return session
+
+    def open_session(
+        _ctx: typer.Context,
+        selected: ShellSession,
+        *,
+        workspace: str | None = None,
+    ) -> None:
+        assert workspace == "team"
+        opened.append(selected)
+
+    monkeypatch.setattr("lazycloud.cli.development._default_dev_pod", lambda _overrides: FakePod())
+    monkeypatch.setattr("lazycloud.cli.development.open_shell_session", open_session)
+
+    result = CliRunner().invoke(client_cli, ["dev", "--workspace", "team"])
+
+    assert result.exit_code == 0, result.output
+    assert opened == [session]
+    assert "fixture-shell-secret" not in result.output
 
 
 def test_interactive_shell_rejects_json_output_before_creating_a_session() -> None:

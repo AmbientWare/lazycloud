@@ -105,13 +105,12 @@ def volume_ls(
             Path(item.path).name + ("/" if item.is_dir else ""),
             "" if item.is_dir else bytes_count(item.size),
             timestamp(item.mod_time),
-            "yes" if item.is_dir else "no",
         ]
         for item in response.path_infos
     ]
     output = table(
         f"{selected.full_path} ({len(response.path_infos)} items, {bytes_count(total_size)})",
-        ["name", "size", "modified", "directory"],
+        ["name", "size", "modified"],
         rows,
     )
     console.print(output)

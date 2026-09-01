@@ -5,18 +5,19 @@ from typing import Annotated, Any, Protocol, runtime_checkable
 import typer
 from shared.compute_policy import MachinePool
 
-from lazycloud.abstractions.app import App
+from lazycloud.abstractions.app import App, AppDeployResult
 from lazycloud.abstractions.function import Function
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.pod import Pod
 from lazycloud.abstractions.serve import sync_local_workspace
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.cli.apps import resolve_app_id
-from lazycloud.cli.components.cards import notice_card
+from lazycloud.cli.components.cards import notice_card, result_card
 from lazycloud.cli.components.context import current_workspace
 from lazycloud.cli.components.output import (
     console,
     emit,
+    json_default,
     json_output_enabled,
     parse_json_argument,
     payload_data,
@@ -161,7 +162,19 @@ def deploy(
                     "source_root": source_root,
                 },
             )
-    print_payload(ctx, payload_data(response), title="Deployment complete", tone="success")
+    payload = payload_data(response)
+    if isinstance(user_object, (App, Function, Pod)):
+        emit(
+            ctx,
+            payload=payload,
+            view=result_card(
+                "App deployed" if isinstance(response, AppDeployResult) else "Deployment created",
+                json_default(_deployment_summary(response, handler=handler, name=name)),
+                tone="success",
+            ),
+        )
+        return
+    print_payload(ctx, payload, title="Deployment result", tone="success")
 
 
 def run(
@@ -467,6 +480,36 @@ def deployment_delete(
 
 def _attach_workflow_terminal(target: object) -> None:
     attach_terminal(target)
+
+
+def _deployment_summary(
+    response: object,
+    *,
+    handler: str,
+    name: str | None,
+) -> dict[str, object]:
+    if isinstance(response, AppDeployResult):
+        summary: dict[str, object] = {
+            "app": response.app,
+            "workloads": len(response.resources),
+        }
+        urls = [
+            invoke_url
+            for resource in response.resources
+            if (invoke_url := getattr(resource, "invoke_url", ""))
+        ]
+        if urls:
+            summary["urls"] = urls
+        return summary
+
+    summary = {"name": name or handler}
+    version = getattr(response, "version", 0)
+    if version:
+        summary["version"] = version
+    invoke_url = getattr(response, "invoke_url", "")
+    if invoke_url:
+        summary["url"] = invoke_url
+    return summary
 
 
 def _load_run_target(reference: str) -> object | None:

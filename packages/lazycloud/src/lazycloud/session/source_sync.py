@@ -143,25 +143,20 @@ class SourcePackageSyncer:
             msg = f"source root is not a directory: {root}"
             raise SourcePackageSyncError(msg)
 
-        self._header("Syncing files")
-        self._detail(f"Collecting files from {root}")
         archive = build_source_package_archive(
             root,
             archive_prefix=self.archive_prefix,
             ignore_patterns=ignore_patterns,
             include_patterns=include_patterns,
         )
-        self._detail(
-            f"Collected {len(archive.files)} files "
-            f"({humanize_bytes(archive.size)}, sha256:{archive.sha256[:12]})"
-        )
+        self._header(f"Packaging {len(archive.files)} files ({humanize_bytes(archive.size)})")
         cached = self.cache.get(root, archive.sha256) if cache_object_id else None
         if cached is not None:
-            self._header("Files already synced")
+            self._header("Using cached source")
             return cached
 
         object_name = f"{SOURCE_PACKAGE_PREFIX}/{archive.sha256}.zip"
-        self._header("Uploading")
+        self._header("Uploading source")
         if self.terminal is not None:
             with self.terminal.progress_bytes("source package", total=archive.size) as progress:
                 uploaded = _upload_source_package(
@@ -190,7 +185,7 @@ class SourcePackageSyncer:
         )
         if cache_object_id:
             self.cache.put(root, result)
-        self._header("Files synced")
+        self._header("Source uploaded")
         return result
 
     def _header(self, message: str) -> None:

@@ -161,7 +161,7 @@ def test_cloud_disconnect_waits_for_automatic_removal(
 
     assert result.exit_code == 0, result.output
     assert client.remove_count == 1
-    assert "disconnect_draining" in result.stdout
+    assert "disconnect draining" in result.stdout
     assert "removed" in result.stdout
 
 
@@ -243,4 +243,4 @@ def test_cloud_connect_requires_a_provider_subcommand_and_account_id(
     assert client.requests == [
         ("123456789012", "arn:aws:iam::123456789012:role/platform-management")
     ]
-    assert "run `cloud validate`" in connected.stdout
+    assert "lazycloud cloud validate" in connected.stdout

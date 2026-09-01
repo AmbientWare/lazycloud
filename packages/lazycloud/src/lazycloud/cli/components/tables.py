@@ -35,7 +35,11 @@ def resource_table(
     )
     normalized_columns = [str(column) for column in columns]
     for column in normalized_columns:
-        output.add_column(formatting.label(column), overflow="fold")
+        output.add_column(
+            formatting.label(column),
+            overflow="fold",
+            no_wrap=column.strip().lower() == "id",
+        )
     for row in rows:
         output.add_row(
             *(

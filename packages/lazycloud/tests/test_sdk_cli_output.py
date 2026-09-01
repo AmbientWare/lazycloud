@@ -154,7 +154,9 @@ def test_normalize_exception_preserves_safe_actionable_details(case: str) -> Non
             "authentication_failed",
             "unauthorized",
         )
-        assert (forbidden.type, forbidden.message) == ("authentication_failed", "forbidden")
+        assert (forbidden.type, forbidden.message) == ("permission_denied", "Forbidden")
+        assert forbidden.title == "Access denied"
+        assert "workspace" in forbidden.hint
         assert invalid.message == "invalid token"
         assert "lazycloud login" in unauthorized.hint
     elif case == "timeout":

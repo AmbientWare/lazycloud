@@ -7,7 +7,6 @@ from typing import Annotated
 import typer
 
 from lazycloud.cli.components.cards import notice_card, result_card
-from lazycloud.cli.components.formatting import bytes_count
 from lazycloud.cli.components.output import console, emit, json_output_enabled, print_payload, table
 
 example_app = typer.Typer(help="Manage example apps.")
@@ -136,10 +135,7 @@ def example_download(
 
 @example_app.command("list", help="List available example apps.")
 def example_list(ctx: typer.Context) -> None:
-    rows = [
-        [template.name, template.description, bytes_count(template.size_bytes)]
-        for template in TEMPLATES.values()
-    ]
+    rows = [[template.name, template.description] for template in TEMPLATES.values()]
     if json_output_enabled(ctx):
         print_payload(
             ctx,
@@ -153,7 +149,7 @@ def example_list(ctx: typer.Context) -> None:
             ],
         )
         return
-    console.print(table("Examples", ["name", "description", "size"], rows))
+    console.print(table("Examples", ["name", "description"], rows))
 
 
 def _write_template(name: str, target: Path, *, force: bool) -> list[str]:

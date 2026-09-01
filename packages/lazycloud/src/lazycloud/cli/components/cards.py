@@ -34,7 +34,7 @@ def result_card(
     elif payload is not None:
         parts.append(formatting.value(payload))
     if not parts:
-        parts.append(formatting.text("Done", style=theme.SUCCESS))
+        parts.append(formatting.text("No result", style=theme.MUTED))
     return card(title, Group(*parts), tone=tone)
 
 
