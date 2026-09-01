@@ -91,13 +91,11 @@ def resolve_login_token(
 ) -> tuple[str, str]:
     """Resolve the login credential without requiring a secret command argument.
 
-    An explicit ``--token`` remains authoritative, including an explicitly empty
-    value that requests device authorization. Otherwise the canonical
-    ``LAZYCLOUD_TOKEN`` setting wins over the stored profile so self-hosted
-    bootstrap credentials can enter through the process environment instead of
-    argv. A stored token is not a login credential: with no provided or
-    environment token, login starts device authorization and replaces the old
-    credential only after the new one works.
+    An explicit ``--token`` remains authoritative, including an empty value that
+    requests device authorization. Otherwise ``LAZYCLOUD_TOKEN`` supplies a
+    non-interactive credential without exposing it in process arguments. With
+    neither source, login starts device authorization. The stored token remains
+    untouched until the new credential works.
     """
     if token is not None:
         return token, "provided"
