@@ -71,7 +71,7 @@ function StubsStory({ active }: { active: boolean }) {
               Generate a typed client <em>for any deployment.</em>
             </>
           }
-          body="Create a pinned Python package for any app. Agents can inspect the same methods and return types your editor uses."
+          body="Create a pinned Python package for any app. It gives agents the same typed methods and return values as your editor."
         />
       </div>
 

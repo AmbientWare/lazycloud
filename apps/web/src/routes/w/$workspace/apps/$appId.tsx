@@ -15,7 +15,7 @@ import { AppActivitySection } from "./-components/AppActivitySection";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { Skeleton } from "@/components/ui/skeleton";
 
-import { AppDetailFacts, AppDetailStatus } from "./-components/AppDetailHeader";
+import { AppDetailFacts } from "./-components/AppDetailHeader";
 import { AppLifecycleActions } from "./-components/AppLifecycleActions";
 import { AppRecentTasksSection } from "./-components/AppRecentTasksSection";
 import { AppSandboxesSection } from "./-components/AppSandboxesSection";
@@ -68,17 +68,11 @@ function AppDetailPage() {
         }
         actions={
           app.data ? (
-            <>
-              <AppDetailStatus
-                latestDeployment={latestDeployment}
-                activeWorkloads={activeWorkloads}
-              />
-              <AppLifecycleActions
-                app={app.data}
-                workspaceId={workspace.id}
-                workspaceName={workspace.name}
-              />
-            </>
+            <AppLifecycleActions
+              app={app.data}
+              workspaceId={workspace.id}
+              workspaceName={workspace.name}
+            />
           ) : null
         }
         contentClassName="overflow-y-auto lg:overflow-hidden"

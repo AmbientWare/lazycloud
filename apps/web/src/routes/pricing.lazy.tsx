@@ -14,7 +14,6 @@ import {
   GetStartedButton,
   MarketingButton,
   MarketingCard,
-  SectionLabel,
   shell,
 } from "./-marketing/MarketingPrimitives";
 
@@ -91,7 +90,7 @@ function computeGroups(catalog: PricingCatalog, meter: Meter): readonly RateGrou
       heading: "CPU",
       lines: [
         {
-          label: "Every core a container holds",
+          label: "Reserved or used CPU, whichever is greater",
           figure: metered(shape.nanos_per_cpu_core_hour, meter),
           unit: `/ core / ${per}`,
         },
@@ -101,7 +100,7 @@ function computeGroups(catalog: PricingCatalog, meter: Meter): readonly RateGrou
       heading: "Memory",
       lines: [
         {
-          label: "Reserved and resident alike",
+          label: "Reserved or used memory, whichever is greater",
           figure: metered(shape.nanos_per_memory_gib_hour, meter),
           unit: `/ GiB / ${per}`,
         },
@@ -134,7 +133,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
       heading: "Egress",
       lines: [
         {
-          label: "Traffic leaving the platform",
+          label: "Traffic leaving LazyCloud",
           figure: catalog.platform_rate.nanos_per_egress_gib,
           unit: "/ GiB",
         },
@@ -147,7 +146,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
           /* The compute rates, not every rate above it: volumes and egress are this
            platform's own infrastructure and are charged whole wherever a container
            ran. Saying "the rates above" would quietly include them. */
-          label: "Management fee on the compute rates above. Your provider bills the machine.",
+          label: "Added to the compute rates above. Your provider bills the machine.",
           figure: `${catalog.connected_cloud_management_fee_percent}%`,
           unit: "",
         },
@@ -159,7 +158,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
 /* The one account-wide fact a reader needs before choosing a plan: what they get
    before they have paid for anything. The rest is disclosure, not pricing. */
 function accountTerm(catalog: PricingCatalog): string {
-  return `Without a card, any plan runs on ${exactDollars(catalog.no_payment_method.included_nanos)} of usage and ${catalog.no_payment_method.max_concurrent_containers} containers. When that is spent, containers stop and new volumes are refused. Volumes you already have stay readable, and keep billing.`;
+  return `Without a card, each plan includes ${exactDollars(catalog.no_payment_method.included_nanos)} of usage and up to ${catalog.no_payment_method.max_concurrent_containers} concurrent containers. Once the included usage is spent, containers stop and new volumes cannot be created. Existing volumes remain readable, and you continue to pay for them.`;
 }
 
 const sectionTitle =
@@ -200,8 +199,7 @@ function MarketingPricing() {
                 The meter starts and stops with your <em>code</em>.
               </h1>
               <p className="mt-6 max-w-[30rem] text-[15px] leading-[1.6] text-muted-foreground sm:text-base">
-                A container meters from the second it starts and stops the second it does. You pay
-                for the compute you use.
+                Compute billing starts with the container and stops with it. You pay by the second.
               </p>
               <div className="mt-8 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
                 <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
@@ -226,7 +224,7 @@ function MarketingPricing() {
                 <MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />
               </div>
               <p className="mt-3.5 text-[12.5px] leading-snug text-muted-foreground">
-                On LazyCloud capacity — machines we buy, run, and price whole.
+                Rates for machines managed by LazyCloud.
               </p>
 
               <RateList
@@ -240,7 +238,6 @@ function MarketingPricing() {
         <section className="border-b border-border bg-muted py-14 sm:py-16 lg:py-20" id="plans">
           <div className={shell}>
             <div className="mb-6 max-w-[44rem]">
-              <SectionLabel>Plans</SectionLabel>
               <h2 className={sectionTitle}>Pricing plans</h2>
             </div>
             <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
@@ -320,10 +317,10 @@ function MarketingPricing() {
         <FinalCta
           title={
             <>
-              Pay for the resources <em>that actually ran.</em>
+              Pay for the resources <em>that ran.</em>
             </>
           }
-          body="Applications, jobs, GPU workloads, and sandboxes all meter the same way, on one balance you can spend anywhere."
+          body="Applications, jobs, GPU workloads, and sandboxes use the same meter and draw from one balance."
         />
       </main>
     </MarketingLayout>

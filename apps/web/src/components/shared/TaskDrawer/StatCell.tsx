@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import { cn } from "@/lib/utils";
 
 export function StatCell({
@@ -6,7 +8,7 @@ export function StatCell({
   className,
 }: {
   label: string;
-  value: string;
+  value: ReactNode;
   className?: string;
 }) {
   return (

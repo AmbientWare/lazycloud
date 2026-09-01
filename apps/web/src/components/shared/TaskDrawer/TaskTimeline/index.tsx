@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, type LinkProps } from "@tanstack/react-router";
+
+import { useLiveNow } from "@/hooks/use-live-now";
 
 import {
   axisTicks,
@@ -38,12 +40,7 @@ export function TaskTimeline({
   }, [graph.data, task]);
 
   const live = rows.some((row) => !isTerminalTaskStatus(row.node.status));
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    if (!live) return;
-    const timer = setInterval(() => setNowMs(Date.now()), 1_000);
-    return () => clearInterval(timer);
-  }, [live]);
+  const nowMs = useLiveNow(live);
 
   const { status: streamStatus } = useWorkspaceLiveUpdates();
 
@@ -54,12 +51,12 @@ export function TaskTimeline({
   const ticks = axisTicks(domain);
 
   return (
-    <div className="overflow-x-auto">
-      <div className="min-w-[352px]">
-        <div className="flex h-9 items-center border-b border-border px-3 text-[11px] text-muted-foreground">
+    <div className="min-w-0 overflow-hidden">
+      <div className="min-w-0">
+        <div className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-[11px] text-muted-foreground">
           <span>
-            {rows.length} {rows.length === 1 ? "task" : "tasks"} ·{" "}
-            {formatDuration(domain.endMs - domain.startMs)}
+            {rows.length === 1 ? "1 call" : `${rows.length} calls`} ·{" "}
+            {formatDuration(domain.endMs - domain.startMs)} total
           </span>
           {live && streamStatus !== "open" ? (
             <span className="ml-3 flex items-center gap-1.5 text-warning" data-stream-stale="">
@@ -67,7 +64,7 @@ export function TaskTimeline({
               {streamStatus === "reconnecting" ? "Reconnecting" : "Connecting"}
             </span>
           ) : null}
-          <span className="ml-auto flex items-center gap-3" aria-label="Timeline legend">
+          <span className="ml-auto flex flex-wrap items-center gap-3" aria-label="Timeline legend">
             <span className="flex items-center gap-1.5">
               <span className="h-1.5 w-3 bg-muted-foreground/40" aria-hidden="true" />
               Queued
@@ -79,7 +76,7 @@ export function TaskTimeline({
           </span>
         </div>
 
-        <div className="grid grid-cols-[minmax(132px,180px)_minmax(220px,1fr)] px-3 pb-3 text-xs">
+        <div className="grid min-w-0 grid-cols-[minmax(8rem,12rem)_minmax(8rem,1fr)] px-3 pb-3 text-xs">
           <div className="flex h-8 items-end border-b border-border/60 pb-1 text-[10px] text-muted-foreground">
             Task
           </div>
@@ -132,7 +129,8 @@ function TimelineBarRow({
   const segments = rowSegments(node, domain, nowMs);
   const runSegment = segments.find((item) => item.kind === "run");
   const queuedSegment = segments.find((item) => item.kind === "queued");
-  const label = node.function_name || node.name || "Task";
+  const sourceLabel = node.function_name || node.name || "Task";
+  const label = taskLabel(sourceLabel);
   const elapsed = runSegment
     ? formatDuration(runSegment.durationMs)
     : queuedSegment
@@ -149,7 +147,7 @@ function TimelineBarRow({
       className={cn(
         "interactive-row group col-span-2 grid min-w-0 grid-cols-subgrid border-b border-border/50",
       )}
-      title={`${label} · ${status} · ${elapsed}`}
+      title={`${sourceLabel} · ${status} · ${elapsed}`}
     >
       <span className="flex h-12 min-w-0 items-center pr-3">
         <TreeBranch
@@ -160,7 +158,7 @@ function TimelineBarRow({
         <span className="flex min-w-0 flex-1 flex-col justify-center">
           <span
             className={cn(
-              "truncate text-[11px]",
+              "mono truncate text-[11px]",
               highlighted ? "font-medium text-foreground" : "text-foreground/90",
             )}
           >
@@ -230,9 +228,16 @@ function TreeBranch({
   isLastSibling: boolean;
 }) {
   if (depth === 0) return <span className="w-1 shrink-0" aria-hidden="true" />;
+  const hiddenDepth = Math.max(ancestorContinues.length - 3, 0);
+  const visibleAncestors = ancestorContinues.slice(hiddenDepth);
   return (
     <span className="flex h-full shrink-0" aria-hidden="true">
-      {ancestorContinues.map((continues, index) => (
+      {hiddenDepth > 0 ? (
+        <span className="flex w-3 shrink-0 items-center justify-center text-[9px] text-muted-foreground">
+          …
+        </span>
+      ) : null}
+      {visibleAncestors.map((continues, index) => (
         <span key={index} className="relative w-3 shrink-0">
           {continues ? (
             <span className="absolute inset-y-0 left-1.5 border-l border-border" />
@@ -286,6 +291,11 @@ function tickPlacement(index: number, length: number): "start" | "middle" | "end
 function statusLabel(status: string): string {
   if (!status) return "Unknown";
   return status.charAt(0).toUpperCase() + status.slice(1).replaceAll("_", " ");
+}
+
+function taskLabel(value: string): string {
+  const handler = value.includes(":") ? (value.split(":").at(-1) ?? value) : value;
+  return handler.replace(/^function[-_:]/, "") || "Task";
 }
 
 function taskAsNode(task: Task): CallGraphNode {

@@ -19,6 +19,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Container, Deployment } from "@/lib/api/schemas";
 import { countLabel } from "@/lib/format";
+import { useLiveNow } from "@/hooks/use-live-now";
 import { scaleDeploymentMutationOptions } from "@/lib/queries/apps";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
@@ -64,6 +65,7 @@ export function PodInstances({
     ACTIVE_CONTAINER_STATUSES.has(container.status),
   ).length;
   const running = instances.filter((container) => container.status === "running").length;
+  const now = useLiveNow(running > 0);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -98,6 +100,7 @@ export function PodInstances({
                   appId={appId}
                   workloadName={workloadName}
                   container={container}
+                  now={now}
                 />
               ))}
               <InfiniteScrollBoundary
@@ -301,11 +304,13 @@ function InstanceRow({
   appId,
   workloadName,
   container,
+  now,
 }: {
   workspaceName: string;
   appId: string;
   workloadName: string;
   container: Container;
+  now: number;
 }) {
   const running = container.status === "running";
   return (
@@ -331,7 +336,7 @@ function InstanceRow({
           <StatusChip status={container.status} live={running} />
         </span>
         <span className="mono hidden truncate text-xs tabular-nums text-muted-foreground lg:block">
-          {podInstanceUptime(container)}
+          {podInstanceUptime(container, now)}
         </span>
         <ChevronRight
           className="size-4 justify-self-end text-muted-foreground transition-colors group-hover:text-foreground"

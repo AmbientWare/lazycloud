@@ -2,13 +2,14 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelError } from "@/components/shared/PanelError";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AppSummary } from "@/lib/api/schemas";
-import { countLabel, exactTime, formatKind, relativeTime } from "@/lib/format";
+import { countLabel, formatKind } from "@/lib/format";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -172,15 +173,12 @@ function AppCard({
         <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
           <span>{countLabel(item.running_containers, "running container")}</span>
           <span aria-hidden="true">·</span>
-          <span className="shrink-0" title={exactTime(lastDeployedAt)}>
-            Deployed <time dateTime={lastDeployedAt}>{relativeTime(lastDeployedAt)}</time>
+          <span className="shrink-0">
+            Deployed <LiveRelativeTime value={lastDeployedAt} />
           </span>
         </div>
 
         <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
-          <span className="micro-label shrink-0">
-            {countLabel(item.workload_count, "workload")}
-          </span>
           {workloadKinds.map(([kind, count]) => (
             <span key={kind} className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <StubKindIcon kind={kind} className="size-3.5" />

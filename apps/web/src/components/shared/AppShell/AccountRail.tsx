@@ -1,4 +1,4 @@
-import { useCallback, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { ChevronUp, LogOut, Settings } from "lucide-react";
 
 import { useSession } from "@/components/shared/AuthGate/session";
@@ -7,10 +7,6 @@ import { cn } from "@/lib/utils";
 /**
  * The account end of the rail: who is signed in, and everything that acts on
  * them rather than on a workspace.
- *
- * Collapsed to one row by default and opened by pointer, focus or click. Hover
- * alone would strand a keyboard user on the trigger with no way past it, and
- * says nothing at all on a touch screen, where there is no hover to give.
  *
  * The panel is rendered above the trigger and the trigger is pinned last, so
  * opening it grows upward into the rail instead of pushing the navigation off
@@ -32,18 +28,10 @@ export function AccountRail({
   const panelId = useId();
   const container = useRef<HTMLDivElement>(null);
 
-  const closeOnLeaving = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
-    if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
-  }, []);
-
   return (
     <div
       ref={container}
       className="mt-auto border-t border-sidebar-border px-3 py-3"
-      onPointerEnter={() => setOpen(true)}
-      onPointerLeave={() => setOpen(false)}
-      onFocusCapture={() => setOpen(true)}
-      onBlurCapture={closeOnLeaving}
       onKeyDown={(event) => {
         if (event.key !== "Escape" || !open) return;
         setOpen(false);

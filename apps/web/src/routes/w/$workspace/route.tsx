@@ -73,8 +73,8 @@ function WorkspaceDeletionRecovery({ workspace }: { workspace: Workspace }) {
         <div className="min-w-0 flex-1">
           <h1 className="text-lg font-semibold">Deletion is incomplete for {workspace.name}</h1>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            Normal workspace operations are paused while cleanup is in progress. Resume the
-            idempotent deletion to finish cleanup, or switch to another workspace.
+            Workspace operations are paused until cleanup finishes. Resume deletion or switch
+            workspaces.
           </p>
           {deletion.canManage ? (
             <Button
@@ -88,7 +88,7 @@ function WorkspaceDeletionRecovery({ workspace }: { workspace: Workspace }) {
             </Button>
           ) : (
             <p className="mt-4 text-sm text-destructive" role="alert">
-              Administrator access is required to resume deletion.
+              Only an administrator can resume deletion.
             </p>
           )}
         </div>
@@ -108,7 +108,7 @@ function WorkspaceNotFound({
     <PreShellScreen>
       <h1 className="text-lg font-semibold">Workspace not found</h1>
       <p className="mt-1 text-sm text-muted-foreground">
-        No workspace named <code className="mono">{workspaceName}</code> is visible to this token.
+        You cannot access a workspace named <code className="mono">{workspaceName}</code>.
       </p>
       <div className="mt-4 space-y-1">
         {workspaceNames.map((name) => (

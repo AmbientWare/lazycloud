@@ -3,10 +3,11 @@ import { Link } from "@tanstack/react-router";
 import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
+import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import type { Task } from "@/lib/api/schemas";
-import { durationBetween, exactTime, relativeTime, startupBetween } from "@/lib/format";
+import { startupBetween } from "@/lib/format";
 
 export function AppRecentTasksSection({
   workspaceName,
@@ -96,15 +97,19 @@ function RecentRunsList({
           <StatusChip status={task.status} live={task.status === "running"} />
           <span className="col-span-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
             <span>
-              Requested{" "}
-              <time dateTime={task.created_at} title={exactTime(task.created_at)}>
-                {relativeTime(task.created_at)}
-              </time>
+              Requested <LiveRelativeTime value={task.created_at} />
             </span>
             <span aria-hidden="true">·</span>
             <span>Startup {startupBetween(task.created_at, task.started_at) ?? "-"}</span>
             <span aria-hidden="true">·</span>
-            <span>Duration {durationBetween(task.started_at, task.finished_at) ?? "-"}</span>
+            <span>
+              Duration{" "}
+              <LiveDuration
+                startedAt={task.started_at}
+                finishedAt={task.finished_at}
+                fallback="-"
+              />
+            </span>
           </span>
         </div>
       ))}

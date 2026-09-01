@@ -58,8 +58,8 @@ function WorkspaceDeletionDialog({ controller }: { controller: WorkspaceDeletion
             {workspace?.status === "deleting" ? "Resume deleting" : "Delete"} {workspace?.name}?
           </AlertDialogTitle>
           <AlertDialogDescription>
-            This permanently removes the workspace identity, access tokens, configuration, and
-            remaining owned resources. Enter the workspace name to continue.
+            This permanently deletes the workspace, its access tokens and configuration, and the
+            resources it owns. Enter the workspace name to continue.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <label className="block text-xs font-medium text-muted-foreground">

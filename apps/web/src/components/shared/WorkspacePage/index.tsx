@@ -22,6 +22,7 @@ export function WorkspacePage({
   title,
   description,
   actions,
+  headerDetails,
   children,
   className,
   contentClassName,
@@ -29,6 +30,7 @@ export function WorkspacePage({
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
+  headerDetails?: ReactNode;
   children: ReactNode;
   className?: string;
   contentClassName?: string;
@@ -54,6 +56,9 @@ export function WorkspacePage({
               <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">{actions}</div>
             ) : null}
           </div>
+          {headerDetails ? (
+            <div className="mt-3 border-t border-border/80 pt-3">{headerDetails}</div>
+          ) : null}
         </header>
         <div
           data-workspace-page-content=""

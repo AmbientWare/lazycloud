@@ -1,8 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 
-/* Marketing-only syntax colouring for the Python and shell snippets shown in
- * CodeWindow. Small on purpose: the snippets are authored in this repository,
- * so the tokenizer covers exactly the constructs they use. */
+/* Syntax colouring for the Python and shell snippets authored in this
+ * repository. The tokenizer stays small because it only handles known examples. */
 
 const PYTHON_KEYWORDS = new Set([
   "and",
@@ -104,8 +103,10 @@ function tokenize(code: string, pattern: RegExp, wordClass: string[]): Token[] {
   return tokens;
 }
 
-export function highlight(code: string): ReactNode {
-  const isShell = /^\s*\$/.test(code);
+export type CodeLanguage = "auto" | "python" | "shell";
+
+export function highlight(code: string, language: CodeLanguage = "auto"): ReactNode {
+  const isShell = language === "shell" || (language === "auto" && /^\s*\$/.test(code));
   const tokens = isShell
     ? tokenize(code, SHELL_TOKEN, ["tok-comment", "tok-string", "tok-prompt", "tok-param"])
     : tokenize(code, PYTHON_TOKEN, ["tok-comment", "tok-string", "tok-decorator", "tok-number"]);

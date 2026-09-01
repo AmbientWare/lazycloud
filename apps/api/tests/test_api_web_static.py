@@ -76,6 +76,7 @@ def test_a_retired_build_asset_is_not_answered_with_the_document(
     static_dir = tmp_path / "web"
     (static_dir / "assets").mkdir(parents=True)
     (static_dir / "index.html").write_text("<html><body>web-shell</body></html>")
+    (static_dir / "_shell.html").write_text("<html><body>spa-shell</body></html>")
     (static_dir / "assets" / "app-abc123.js").write_text("export const ok = 1")
     monkeypatch.setenv("LAZYCLOUD_WEB_STATIC_DIR", str(static_dir))
 
@@ -91,5 +92,6 @@ def test_a_retired_build_asset_is_not_answered_with_the_document(
         # A client-side route still resolves to the app.
         document = client.get("/w/default/apps", headers={"accept": "text/html"})
         assert document.status_code == 200
-        assert "web-shell" in document.text
+        assert "spa-shell" in document.text
+        assert "web-shell" not in document.text
         assert document.headers["cache-control"] == "no-cache"

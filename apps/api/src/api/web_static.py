@@ -21,6 +21,7 @@ posting to a mistyped webhook path would read the dashboard's HTML as a
 successful delivery and stop retrying.
 """
 _BUILD_ASSET_NAMESPACE = "assets"
+_SPA_DOCUMENT = "_shell.html"
 
 
 class _SpaStaticFiles(StaticFiles):
@@ -49,7 +50,8 @@ class _SpaStaticFiles(StaticFiles):
             # failure it then reports names neither the file nor the reason.
             if namespace == _BUILD_ASSET_NAMESPACE:
                 raise
-            response = await super().get_response("index.html", scope)
+            fallback = _SPA_DOCUMENT if namespace == "w" else "index.html"
+            response = await super().get_response(fallback, scope)
         return _with_cache_policy(response, namespace=namespace)
 
 

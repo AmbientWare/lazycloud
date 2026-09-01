@@ -4,10 +4,10 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { Loader2, Pause, Play, Trash2 } from "lucide-react";
 
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import type { Deployment } from "@/lib/api/schemas";
-import { relativeTime } from "@/lib/format";
 import {
   deleteDeploymentMutationOptions,
   startDeploymentMutationOptions,
@@ -146,9 +146,7 @@ function VersionRow({
         <StatusChip status={deployment.active ? "active" : "stopped"} live={deployment.active} />
       </span>
       <span className="flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
-        <time dateTime={deployment.created_at} title={deployment.created_at}>
-          {relativeTime(deployment.created_at)}
-        </time>
+        <LiveRelativeTime value={deployment.created_at} />
         <Link
           to="/w/$workspace/tasks"
           params={{ workspace: workspaceName }}

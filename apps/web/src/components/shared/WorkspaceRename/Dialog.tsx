@@ -52,7 +52,7 @@ export function WorkspaceRenameDialog({
         <DialogHeader>
           <DialogTitle>Rename workspace</DialogTitle>
           <DialogDescription>
-            Its URLs change with it. Anything addressing this workspace by name needs the new one.
+            Workspace URLs will use the new name. Update anything that uses the current URLs.
           </DialogDescription>
         </DialogHeader>
         <form

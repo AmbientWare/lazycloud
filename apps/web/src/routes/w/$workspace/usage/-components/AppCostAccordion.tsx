@@ -52,13 +52,7 @@ export function AppCostAccordion({
     return <PanelError message={costs.error.message} />;
   }
   if (rows.length === 0) {
-    return (
-      <PanelEmpty
-        message={`No app was billed over ${caption}`}
-        detail="An app appears here as soon as one of its workloads runs."
-        className="h-40"
-      />
-    );
+    return <PanelEmpty message={`No apps were billed during ${caption}`} className="h-40" />;
   }
 
   return (

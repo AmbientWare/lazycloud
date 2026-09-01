@@ -1,7 +1,5 @@
-import { useState } from "react";
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { Pause, Play } from "lucide-react";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
@@ -9,7 +7,6 @@ import { PanelError } from "@/components/shared/PanelError";
 import { TaskTable } from "@/components/shared/TaskTable";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
-import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -25,6 +22,7 @@ import {
   taskMetricsQueryOptions,
   tasksInfiniteQueryOptions,
 } from "@/lib/queries/tasks";
+import { stubsQueryOptions } from "@/lib/queries/stubs";
 import { useWorkspace } from "@/lib/workspace-context";
 
 type TasksSearch = {
@@ -33,7 +31,6 @@ type TasksSearch = {
   app?: string;
   workload?: string;
   deployment?: string;
-  root?: boolean;
 };
 
 export const Route = createFileRoute("/w/$workspace/tasks")({
@@ -44,7 +41,6 @@ export const Route = createFileRoute("/w/$workspace/tasks")({
     workload: typeof search.workload === "string" && search.workload ? search.workload : undefined,
     deployment:
       typeof search.deployment === "string" && search.deployment ? search.deployment : undefined,
-    root: search.root === true || search.root === "true" ? true : undefined,
   }),
   component: TasksPage,
   errorComponent: RouteErrorFallback,
@@ -61,7 +57,6 @@ function TasksPage() {
   const { workspace } = useWorkspace();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  const [live, setLive] = useState(true);
 
   const tasks = useInfiniteQuery(
     tasksInfiniteQueryOptions(workspace.id, {
@@ -71,17 +66,14 @@ function TasksPage() {
       stubIds: search.workload ? [search.workload] : undefined,
       deploymentId: search.deployment,
       kind: search.kind,
-      rootOnly: search.root,
-      live,
     }),
   );
   const apps = useQuery(appSummariesQueryOptions(workspace.id));
+  const workloads = useQuery(stubsQueryOptions(workspace.id, search.app));
   const metrics = useQuery(taskMetricsQueryOptions(workspace.id));
   const taskList = selectTaskList(tasks.data, tasks.hasNextPage);
   const selectedDeployment = taskList.items.find((task) => task.deployment_id === search.deployment)
     ?.deployment?.name;
-  const selectedWorkload = taskList.items.find((task) => task.stub_id === search.workload)?.workload
-    ?.name;
 
   const setSearch = (patch: Partial<TasksSearch>) => {
     void navigate({ search: (previous: TasksSearch) => ({ ...previous, ...patch }) });
@@ -102,18 +94,6 @@ function TasksPage() {
             />
           ) : null
         }
-        actions={
-          <Button
-            variant="outline"
-            size="sm"
-            aria-label={live ? "Pause task updates" : "Resume task updates"}
-            title={live ? "Pause updates" : "Resume updates"}
-            onClick={() => setLive((value) => !value)}
-          >
-            {live ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
-            {live ? "Pause" : "Resume"}
-          </Button>
-        }
       >
         <section
           className="panel flex h-full min-h-0 flex-col overflow-hidden rounded-md"
@@ -124,14 +104,6 @@ function TasksPage() {
             className="flex min-h-12 shrink-0 items-center gap-3 overflow-x-auto border-b border-border px-3 py-2"
           >
             <div data-tasks-filters="" className="flex shrink-0 items-center gap-2">
-              <label className="flex h-7 shrink-0 items-center gap-2 px-1 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={search.root ?? false}
-                  onChange={(event) => setSearch({ root: event.target.checked || undefined })}
-                />
-                Root tasks
-              </label>
               <FilterSelect
                 label="Status"
                 value={search.status}
@@ -154,7 +126,17 @@ function TasksPage() {
                   apps.data?.items.find((item) => item.app.id === appId)?.app.name ?? appId
                 }
                 allLabel="All apps"
-                onChange={(app) => setSearch({ app })}
+                onChange={(app) => setSearch({ app, workload: undefined })}
+              />
+              <FilterSelect
+                label="Workload"
+                value={search.workload}
+                options={(workloads.data?.stubs ?? []).map((workload) => workload.id)}
+                optionLabel={(stubId) =>
+                  workloads.data?.stubs.find((workload) => workload.id === stubId)?.name ?? stubId
+                }
+                allLabel="All workloads"
+                onChange={(workload) => setSearch({ workload })}
               />
               {search.deployment ? (
                 <div className="flex shrink-0 items-center gap-2 border-l border-border pl-3 text-xs text-muted-foreground">
@@ -163,18 +145,6 @@ function TasksPage() {
                     type="button"
                     className="text-brand hover:underline"
                     onClick={() => setSearch({ deployment: undefined })}
-                  >
-                    Clear
-                  </button>
-                </div>
-              ) : null}
-              {search.workload ? (
-                <div className="flex shrink-0 items-center gap-2 border-l border-border pl-3 text-xs text-muted-foreground">
-                  <span>Workload {selectedWorkload ?? "filter"}</span>
-                  <button
-                    type="button"
-                    className="text-brand hover:underline"
-                    onClick={() => setSearch({ workload: undefined })}
                   >
                     Clear
                   </button>
@@ -194,12 +164,7 @@ function TasksPage() {
                   search,
                 })}
                 emptyMessage={
-                  search.status ||
-                  search.kind ||
-                  search.app ||
-                  search.workload ||
-                  search.deployment ||
-                  search.root
+                  search.status || search.kind || search.app || search.workload || search.deployment
                     ? "No tasks match these filters"
                     : "No tasks yet"
                 }

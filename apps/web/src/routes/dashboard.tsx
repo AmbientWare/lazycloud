@@ -6,7 +6,7 @@ import { useWorkspaceSelection } from "@/lib/workspace-selection";
 export const Route = createFileRoute("/dashboard")({
   component: DashboardEntry,
   head: () => ({
-    meta: [{ title: "Dashboard — LazyCloud" }],
+    meta: [{ title: "Dashboard | LazyCloud" }],
   }),
 });
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
@@ -16,7 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { Container, Deployment } from "@/lib/api/schemas";
-import { countLabel, exactTime, formatKind, relativeTime } from "@/lib/format";
+import { countLabel, formatKind } from "@/lib/format";
 
 import { groupDeploymentsByWorkload } from "../-workloads/grouping";
 
@@ -157,25 +158,17 @@ export function AppWorkloadsSection({
                         live={group.active}
                       />
                     </span>
-                    <time
-                      dateTime={group.latest.created_at}
-                      title={exactTime(group.latest.created_at)}
+                    <LiveRelativeTime
+                      value={group.latest.created_at}
                       className="hidden text-xs text-muted-foreground xl:block"
-                    >
-                      {relativeTime(group.latest.created_at)}
-                    </time>
+                    />
 
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground xl:hidden">
                       <span className="mono text-foreground">v{group.latest.version}</span>
                       <span aria-hidden="true">·</span>
                       <span>{running} running</span>
                       <span aria-hidden="true">·</span>
-                      <time
-                        dateTime={group.latest.created_at}
-                        title={exactTime(group.latest.created_at)}
-                      >
-                        {relativeTime(group.latest.created_at)}
-                      </time>
+                      <LiveRelativeTime value={group.latest.created_at} />
                       <StatusChip
                         status={group.active ? "deployed" : "inactive"}
                         live={group.active}

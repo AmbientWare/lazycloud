@@ -52,7 +52,7 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
   return (
     <Panel
       title="Domains"
-      description="Registered for your account; any workspace in it can serve from them"
+      description="Available to every workspace in this account"
       action={
         billing.isPending || billing.error ? null : customDomainsEnabled ? (
           <form
@@ -99,8 +99,8 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
       ) : rows.length === 0 ? (
         <p className="p-4 text-[11px] text-muted-foreground">
           {customDomainsEnabled
-            ? "No domains yet. Add one here to serve a deployment from a name you own."
-            : "Custom domains are available on the Team plan. Every deployment still has a platform hostname."}
+            ? "No domains yet. Add one to use it for deployments."
+            : "Custom domains require the Team plan. Deployments still have platform hostnames."}
         </p>
       ) : (
         <ul className="divide-y divide-border/80">
@@ -162,8 +162,7 @@ function DnsInstructions({ domain }: { domain: CustomDomain }) {
   return (
     <div className="mt-1.5 space-y-1.5">
       <p className="text-[11px] text-muted-foreground">
-        Add this record where you manage DNS for this domain. It can take a few minutes to take
-        effect; nothing else is needed here.
+        Add this record with your DNS provider. Changes may take a few minutes.
       </p>
       <dl className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1">
         <dt className="text-[11px] text-muted-foreground">Type</dt>
@@ -181,8 +180,8 @@ function DnsInstructions({ domain }: { domain: CustomDomain }) {
         <div className="space-y-1">
           <p className="text-[11px] text-muted-foreground">
             {domain.required_records.length === 1
-              ? "Add this record too — it proves you own the domain, so a certificate can be issued for it:"
-              : "Add these records too — they prove you own the domain, so a certificate can be issued for it:"}
+              ? "Add this record to verify domain ownership:"
+              : "Add these records to verify domain ownership:"}
           </p>
           {domain.required_records.map((record) => (
             <dl

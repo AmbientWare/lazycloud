@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +15,6 @@ import {
   denyDeviceCodeMutationOptions,
   deviceCodeQueryOptions,
 } from "@/lib/queries/auth";
-import { relativeTime } from "@/lib/format";
 
 export const Route = createFileRoute("/activate")({
   validateSearch: (search: Record<string, unknown>): { code: string } => ({
@@ -42,7 +42,7 @@ function ActivatePage() {
         </div>
         <h1 className="mt-3 text-xl font-semibold">Approve CLI sign-in</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Confirm the code shown in your terminal to connect the CLI to your account.
+          Match the code in your terminal to sign the CLI in.
         </p>
       </div>
       {userCode.length === 9 ? <DeviceCodePanel userCode={userCode} /> : <CodeEntryForm />}
@@ -102,8 +102,8 @@ function DeviceCodePanel({ userCode }: { userCode: string }) {
       <CodeEntryForm
         error={
           deviceCode.error instanceof ApiError && deviceCode.error.status === 404
-            ? `Code ${userCode} was not found. It may have expired — run the login command again.`
-            : "The code could not be checked. Retry or run the login command again."
+            ? `Code ${userCode} was not found. It may have expired. Run the login command again.`
+            : "Could not check the code. Retry or run the login command again."
         }
       />
     );
@@ -125,15 +125,15 @@ function DeviceCodeDecision({
   if (approve.isSuccess) {
     return (
       <Outcome tone="positive" title="CLI connected">
-        The CLI is now signed in as <span className="font-medium">{user.display_name}</span> and
-        reaches every workspace you belong to. You can return to your terminal.
+        The CLI is signed in as <span className="font-medium">{user.display_name}</span> and can
+        access your workspaces. Return to your terminal.
       </Outcome>
     );
   }
   if (deny.isSuccess) {
     return (
       <Outcome tone="muted" title="Sign-in denied">
-        The request was denied. The CLI will stop waiting shortly.
+        The request was denied. The CLI will stop waiting.
       </Outcome>
     );
   }
@@ -142,7 +142,7 @@ function DeviceCodeDecision({
       <CodeEntryForm
         error={
           deviceCode.status === "expired"
-            ? `Code ${userCode} has expired. Run the login command again for a fresh code.`
+            ? `Code ${userCode} expired. Run the login command again.`
             : `Code ${userCode} was already ${deviceCode.status}.`
         }
       />
@@ -157,21 +157,21 @@ function DeviceCodeDecision({
         <div className="mono mt-1 text-lg">{deviceCode.user_code}</div>
         <div className="mt-2 text-sm text-muted-foreground">
           Requested by <span className="mono text-foreground/90">{deviceCode.client_name}</span>{" "}
-          {relativeTime(deviceCode.created_at)}
+          <LiveRelativeTime value={deviceCode.created_at} />
         </div>
       </div>
 
       {failure ? (
         <div className="rounded border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
           {failure instanceof ApiError && failure.status === 403
-            ? "Approving a CLI needs a signed-in account, not a workspace token."
+            ? "Sign in with an account to approve the CLI. Workspace tokens cannot approve it."
             : failure.message}
         </div>
       ) : null}
 
       <p className="text-sm text-muted-foreground">
-        Approving signs the CLI in as <span className="font-medium">{user.display_name}</span>. It
-        will reach every workspace you belong to, and picks its active one itself.
+        This signs the CLI in as <span className="font-medium">{user.display_name}</span> with
+        access to your workspaces. The CLI chooses its active workspace.
       </p>
 
       <div className="flex gap-2">

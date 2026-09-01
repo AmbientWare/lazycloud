@@ -10,6 +10,7 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelErrorBoundary, RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
+import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
@@ -17,7 +18,6 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import type { ContainerDetail } from "@/lib/api/schemas";
-import { durationBetween, relativeTime } from "@/lib/format";
 import { containerQueryOptions, stopContainerMutationOptions } from "@/lib/queries/containers";
 import {
   createSandboxImageMutationOptions,
@@ -216,18 +216,24 @@ function SandboxFacts({ record }: { record: ContainerDetail }) {
         <Fact label="Image" value={record.image} mono />
         <Fact
           label="Uptime"
-          value={durationBetween(record.started_at, record.finished_at) ?? "None"}
+          value={
+            <LiveDuration
+              startedAt={record.started_at}
+              finishedAt={record.finished_at}
+              fallback="None"
+            />
+          }
         />
         <Fact
           label="Expires"
-          value={record.expires_at ? relativeTime(record.expires_at) : "No expiry"}
+          value={record.expires_at ? <LiveRelativeTime value={record.expires_at} /> : "No expiry"}
         />
         <Fact
           label="Version"
           value={record.deployment ? `v${record.deployment.version}` : "None"}
           mono
         />
-        <Fact label="Created" value={relativeTime(record.created_at)} />
+        <Fact label="Created" value={<LiveRelativeTime value={record.created_at} />} />
         <Fact label="Container" value={<CopyId value={record.id} className="-ml-1.5" />} />
       </FactGrid>
       <StopCause

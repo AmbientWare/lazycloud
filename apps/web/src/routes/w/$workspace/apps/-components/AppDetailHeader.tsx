@@ -1,7 +1,7 @@
-import { StatusChip } from "@/components/shared/StatusChip";
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import type { Deployment } from "@/lib/api/schemas";
-import { countLabel, exactTime, relativeTime } from "@/lib/format";
+import { countLabel } from "@/lib/format";
 
 /**
  * What an app is, under its name.
@@ -25,31 +25,13 @@ export function AppDetailFacts({
         countLabel(workloadCount, "workload"),
         countLabel(activeWorkloads, "active version"),
         latestDeployment ? (
-          <span title={exactTime(latestDeployment.created_at)}>
-            Last deployed{" "}
-            <time dateTime={latestDeployment.created_at}>
-              {relativeTime(latestDeployment.created_at)}
-            </time>
+          <span>
+            Last deployed <LiveRelativeTime value={latestDeployment.created_at} />
           </span>
         ) : (
           "No deployments yet"
         ),
       ]}
-    />
-  );
-}
-
-export function AppDetailStatus({
-  latestDeployment,
-  activeWorkloads,
-}: {
-  latestDeployment: Deployment | undefined;
-  activeWorkloads: number;
-}) {
-  return (
-    <StatusChip
-      status={activeWorkloads > 0 ? "deployed" : latestDeployment ? "inactive" : "not deployed"}
-      live={activeWorkloads > 0}
     />
   );
 }

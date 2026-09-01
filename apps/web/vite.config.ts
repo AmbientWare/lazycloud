@@ -168,8 +168,9 @@ export default defineConfig({
     tanstackStart({
       spa: {
         enabled: true,
+        maskPath: "/w/_shell/apps",
         prerender: {
-          outputPath: "/index.html",
+          outputPath: "/_shell",
         },
       },
       pages: [{ path: "/" }],

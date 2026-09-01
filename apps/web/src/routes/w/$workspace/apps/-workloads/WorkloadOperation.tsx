@@ -3,24 +3,17 @@ import { useQuery } from "@tanstack/react-query";
 import { CopyButton } from "@/components/shared/CopyButton";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelError } from "@/components/shared/PanelError";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { CronJob, Deployment } from "@/lib/api/schemas";
 import { deploymentUrlQueryOptions } from "@/lib/queries/apps";
 import { cronJobsQueryOptions } from "@/lib/queries/cron";
-import { relativeTime } from "@/lib/format";
 
 import type { WorkloadGroup } from "./grouping";
 
 const INVOKABLE_KINDS = new Set(["function", "endpoint", "asgi"]);
 
-/**
- * Where the workload answers from, and what governs reaching it there.
- *
- * Only that: how the container is provisioned is reference a reader consults
- * once, so it sits in the inspector's configuration view rather than competing
- * with the address for the top of the page.
- */
 export function WorkloadOperation({
   workspaceId,
   deployment,
@@ -35,13 +28,13 @@ export function WorkloadOperation({
   const isScheduled = Boolean(group.latest.spec?.cron);
 
   return (
-    <div className="min-w-0 space-y-4 p-4">
+    <div className="flex min-w-0 flex-wrap items-start gap-x-8 gap-y-3">
       {INVOKABLE_KINDS.has(kind) ? (
         group.active ? (
           <InvokeTarget workspaceId={workspaceId} deploymentId={deployment.id} />
         ) : (
           <p className="text-sm text-muted-foreground">
-            This version is stopped and is not accepting requests.
+            This version is stopped and cannot accept requests.
           </p>
         )
       ) : null}
@@ -52,12 +45,6 @@ export function WorkloadOperation({
   );
 }
 
-/**
- * The address gets the page's whole measure. Fitted into a column beside other
- * readings it truncated to its hostname, which is the half a reader already
- * knows — and a copy control beside an elided value reads as copying the
- * elision.
- */
 function InvokeTarget({
   workspaceId,
   deploymentId,
@@ -71,7 +58,7 @@ function InvokeTarget({
   if (query.isError) return <PanelError message={query.error.message} />;
 
   return (
-    <div className="min-w-0">
+    <div className="min-w-[18rem] flex-1 basis-[32rem]">
       <div className="micro-label mb-1.5">Invoke URL</div>
       <div className="flex min-w-0 items-start gap-1.5">
         <code className="mono min-w-0 flex-1 rounded bg-muted/60 px-2.5 py-1.5 text-xs break-all">
@@ -133,14 +120,19 @@ function ScheduleFacts({ workspaceId, group }: { workspaceId: string; group: Wor
       <Fact
         label="Next run"
         value={
-          job?.enabled === false
-            ? "Disabled"
-            : job?.next_run_at
-              ? relativeTime(job.next_run_at)
-              : "-"
+          job?.enabled === false ? (
+            "Disabled"
+          ) : job?.next_run_at ? (
+            <LiveRelativeTime value={job.next_run_at} />
+          ) : (
+            "-"
+          )
         }
       />
-      <Fact label="Last run" value={job?.last_run_at ? relativeTime(job.last_run_at) : "-"} />
+      <Fact
+        label="Last run"
+        value={job?.last_run_at ? <LiveRelativeTime value={job.last_run_at} /> : "-"}
+      />
     </FactGrid>
   );
 }

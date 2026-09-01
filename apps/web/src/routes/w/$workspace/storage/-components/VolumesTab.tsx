@@ -2,12 +2,13 @@ import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Download, File, Folder, Loader2, Trash2, Upload } from "lucide-react";
 
+import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Volume, VolumePathInfo } from "@/lib/api/schemas";
-import { displayValue, formatBytes } from "@/lib/format";
+import { formatBytes } from "@/lib/format";
 import {
   createVolume,
   deleteVolume,
@@ -56,10 +57,7 @@ export function VolumesTab({
           ) : query.isError ? (
             <PanelError message={query.error.message} />
           ) : query.data.volumes.length === 0 && !creating ? (
-            <PanelEmpty
-              message="No volumes yet. Create one to mount it into a workload."
-              className="p-6"
-            />
+            <PanelEmpty message="No volumes. Create one to mount in a workload." className="p-6" />
           ) : (
             <div className="divide-y divide-border/60">
               {query.data.volumes.map((volume) => (
@@ -135,7 +133,7 @@ function VolumeRow({
             {volume.name}
           </span>
           <span className="mt-0.5 block text-[11px] text-muted-foreground">
-            {formatBytes(volume.size)} · updated {displayValue(volume.updated_at)}
+            {formatBytes(volume.size)} · updated <LiveRelativeTime value={volume.updated_at} />
           </span>
         </button>
         {!confirming ? (
@@ -299,7 +297,7 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
                     <span className="mono min-w-0 flex-1 truncate text-[13px]">{itemName}</span>
                   )}
                   <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">
-                    {displayValue(item.mod_time)}
+                    <LiveRelativeTime value={item.mod_time} />
                   </span>
                   {!item.is_dir ? (
                     <span className="mono w-16 shrink-0 text-right text-[11px] text-muted-foreground">
