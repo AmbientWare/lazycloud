@@ -406,7 +406,7 @@ def _client_connection_hint(exc: BaseException) -> str:
 
 
 CLIENT_ERROR_POLICY = CliErrorPolicy(
-    auth_hint=f"Run `{CLIENT_CLI_NAME} login --token <token>` to refresh credentials.",
+    auth_hint=f"Run `{CLIENT_CLI_NAME} login` to sign in again.",
     connection_hint=_client_connection_hint,
     timeout_hint="Retry the command or check service logs if the operation keeps timing out.",
     debug_hint="Run the command again with `--debug` to see the full traceback.",
