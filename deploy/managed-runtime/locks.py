@@ -16,7 +16,7 @@ MANAGED_PACKAGE_PATHS = (
     ROOT / "packages" / "lazycloud",
     ROOT / "packages" / "runner",
 )
-MANAGED_DISTRIBUTIONS = frozenset({"foundation", "runner", "lazycloud", "lazycloud-shared"})
+MANAGED_DISTRIBUTIONS = frozenset({"foundation", "runner", "lazycloud-client", "lazycloud-shared"})
 PYTHON_VERSIONS = ("3.10", "3.11", "3.12")
 ARCHITECTURES = ("amd64", "arm64")
 UV_PLATFORMS = {
