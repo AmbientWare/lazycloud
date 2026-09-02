@@ -90,8 +90,11 @@ class ComputeUnitProviderState(ContractModel):
     """Durable reason the control plane stopped restoring pool capacity.
 
     Set when bootstrap relaunch attempts are exhausted; cleared by an explicit
-    capacity mutation (public scale or an account compute configuration update).
+    capacity mutation (public scale or an account compute configuration update)
+    or, on its own, once the relaunch interval has passed since `degraded_at`.
     """
+    degraded_at: datetime | None = None
+    """When the reason above was recorded, so a relaunch can be paced from it."""
     launch_attempt_baseline: int = Field(default=0, ge=0)
     """Attempt ordinal the current failure streak counts from.
 

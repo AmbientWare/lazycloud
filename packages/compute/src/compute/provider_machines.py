@@ -458,6 +458,7 @@ class ProviderMachineReconciler:
         provider_state = snapshot.provider_state.model_copy(
             update={
                 "degraded_reason": pool.provider_state.degraded_reason,
+                "degraded_at": pool.provider_state.degraded_at,
                 "launch_attempt_baseline": pool.provider_state.launch_attempt_baseline,
             }
         )
