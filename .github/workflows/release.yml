@@ -76,14 +76,96 @@ jobs:
           test "${repository}" != "None"
           echo "uri=${repository}" >> "${GITHUB_OUTPUT}"
 
+      # The previous release is the baseline every reuse decision is made
+      # against. Its manifest names each artifact by digest, which is how the
+      # control plane and the managed runtime check them, so a manifest for this
+      # version may point at an artifact an earlier one built. Tags newer than
+      # this one are skipped, and a tag with no manifest behind it (a cancelled
+      # ship) is skipped too, back to the newest release that published.
+      - name: Resolve the previous release
+        id: previous
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force --quiet
+          base=""
+          for tag in $(git tag -l 'v*' --sort=-v:refname | grep -vx "v${{ inputs.version }}" | head -5); do
+            url="https://s3.${AWS_RELEASE_REGION}.amazonaws.com/${{ vars.AWS_RELEASE_ASSET_BUCKET }}/connected-aws/releases/${tag#v}/manifest.json"
+            if curl -fsS -o previous-manifest.json "${url}"; then
+              base="${tag}"
+              echo "baseline ${tag}: ${url}"
+              break
+            fi
+            echo "${tag} published no manifest; looking further back"
+          done
+          if [ -z "${base}" ]; then
+            echo "::warning::no previous release with a manifest; every artifact is built"
+            rm -f previous-manifest.json
+          fi
+          echo "base=${base}" >> "${GITHUB_OUTPUT}"
+
+      - name: Plan what this release rebuilds
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_arg=()
+          if [ -f previous-manifest.json ]; then
+            manifest_arg=(--previous-manifest previous-manifest.json)
+          fi
+          uv run --group workspace python deploy/aws-release-assets/plan.py \
+            "${manifest_arg[@]}" \
+            --base "${{ steps.previous.outputs.base }}" \
+            --head "${GITHUB_SHA}" \
+            --output plan.json \
+            --summary "${GITHUB_STEP_SUMMARY}" \
+            --github-output "${GITHUB_OUTPUT}"
+
       - name: Build and stage Linux agent executables
+        if: steps.plan.outputs.rebuild_agent == 'true'
         run: >-
           uv run --no-project python deploy/agent-binary/build.py build
           --version "${{ inputs.version }}"
           --output dist/agent-binarys
           --arch amd64
 
+      # The same bytes the previous release published, staged under this
+      # version. The stage tool verifies the hash and the ELF header the way it
+      # does for a fresh build, and the object is republished under this
+      # version's key so the manifest's object list is complete on its own.
+      - name: Reuse the previous release's agent executable
+        if: steps.plan.outputs.rebuild_agent != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          directory="dist/agent-binarys/${version}"
+          mkdir -p "${directory}"
+          curl -fsSL -o "${directory}/lazycloud-agent-linux-amd64" \
+            "${{ steps.plan.outputs.previous_agent_url }}"
+          echo "${{ steps.plan.outputs.previous_agent_sha256 }}  ${directory}/lazycloud-agent-linux-amd64" | sha256sum -c -
+          chmod 0755 "${directory}/lazycloud-agent-linux-amd64"
+          python3 - "${version}" "${directory}" <<'PY'
+          import json, os, sys
+          version, directory = sys.argv[1], sys.argv[2]
+          path = os.path.join(directory, "lazycloud-agent-linux-amd64")
+          manifest = {
+              "schema_version": 1,
+              "version": version,
+              "artifacts": [{
+                  "os": "linux",
+                  "arch": "amd64",
+                  "filename": "lazycloud-agent-linux-amd64",
+                  "sha256": "${{ steps.plan.outputs.previous_agent_sha256 }}",
+                  "size_bytes": os.path.getsize(path),
+              }],
+          }
+          with open(os.path.join(directory, "manifest.json"), "w") as handle:
+              handle.write(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n")
+          PY
+
       - name: Build and publish container worker
+        if: steps.plan.outputs.rebuild_worker == 'true'
         id: container-worker
         uses: docker/build-push-action@v7
         with:
@@ -96,20 +178,33 @@ jobs:
           cache-from: type=gha,scope=connected-aws-container-worker
           cache-to: type=gha,mode=max,scope=connected-aws-container-worker
 
-      # Always. The image carries the agent binary and the worker image this
-      # release publishes, so one baked for an earlier release describes an
-      # earlier release. Skipping it published an empty catalog instead, and a
-      # control plane refuses a release that names no AMI to launch, which is a
-      # release that cost fifteen minutes less and can run nothing.
+      - name: Resolve the worker image this release names
+        id: worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.plan.outputs.rebuild_worker }}" = "true" ]; then
+            image="${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}"
+          else
+            image="${{ steps.plan.outputs.previous_worker_image }}"
+          fi
+          test -n "${image}"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+          echo "worker image: ${image}"
+
+      # Baked only when the agent or worker the image embeds was rebuilt, or the
+      # bake itself changed; otherwise the previous release's images serve this
+      # one. The plan decides, not the image name: a name carries the version,
+      # so matching on it would either never reuse or reuse the wrong thing.
       - name: Bake connected AWS node image
+        if: steps.plan.outputs.rebuild_images == 'true'
         id: bake
         shell: bash
         run: |
           cpu_ami_ids="$(uv run --group workspace python deploy/ami/bake.py \
             --release-version "${{ inputs.version }}" \
             --agent-version-dir "dist/agent-binarys/${{ inputs.version }}" \
-            --worker-image \
-            "${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}" \
+            --worker-image "${{ steps.worker.outputs.image }}" \
             --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}" \
             --bucket-region "${AWS_RELEASE_REGION}" \
             --regions us-east-1)"
@@ -120,15 +215,16 @@ jobs:
       # toolkit. One image covers every card, because the driver branch is
       # unified across Turing through Blackwell.
       #
-      # Baked here rather than by hand so both catalogs describe one release. A
-      # GPU AMI from an earlier bake names an earlier agent and worker image
-      # than the CPU one beside it.
+      # Baked beside the CPU image so both catalogs describe one release. A GPU
+      # image from an earlier bake names an earlier agent and worker image than
+      # the CPU one beside it.
       #
       # A release without this publishes an empty GPU catalog and nothing fails.
       # Every GPU instance type stops being offerable while CPU capacity keeps
       # working, so the symptom is a priced fleet that will not launch the cards
       # it is priced for.
       - name: Bake connected AWS GPU node image
+        if: steps.plan.outputs.rebuild_images == 'true'
         id: bake-gpu
         shell: bash
         run: |
@@ -136,13 +232,30 @@ jobs:
             --variant gpu \
             --release-version "${{ inputs.version }}" \
             --agent-version-dir "dist/agent-binarys/${{ inputs.version }}" \
-            --worker-image \
-            "${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}" \
+            --worker-image "${{ steps.worker.outputs.image }}" \
             --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}" \
             --bucket-region "${AWS_RELEASE_REGION}" \
             --regions us-east-1)"
           test -n "${gpu_ami_ids}"
           echo "gpu_ami_ids=${gpu_ami_ids}" >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve the node images this release names
+        id: images
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.plan.outputs.rebuild_images }}" = "true" ]; then
+            cpu='${{ steps.bake.outputs.cpu_ami_ids }}'
+            gpu='${{ steps.bake-gpu.outputs.gpu_ami_ids }}'
+          else
+            cpu='${{ steps.plan.outputs.previous_cpu_ami_ids }}'
+            gpu='${{ steps.plan.outputs.previous_gpu_ami_ids }}'
+          fi
+          test -n "${cpu}"
+          echo "cpu_ami_ids=${cpu}" >> "${GITHUB_OUTPUT}"
+          echo "gpu_ami_ids=${gpu}" >> "${GITHUB_OUTPUT}"
+          echo "cpu images: ${cpu}"
+          echo "gpu images: ${gpu}"
 
       - name: Stage immutable connected AWS release bundle
         run: >-
@@ -150,12 +263,13 @@ jobs:
           --version "${{ inputs.version }}"
           --agent-version-dir
           "dist/agent-binarys/${{ inputs.version }}"
-          --worker-image
-          "${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}"
+          --worker-image "${{ steps.worker.outputs.image }}"
           --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}"
           --region "${AWS_RELEASE_REGION}"
-          --cpu-ami-ids '${{ steps.bake.outputs.cpu_ami_ids }}'
-          --gpu-ami-ids '${{ steps.bake-gpu.outputs.gpu_ami_ids }}'
+          --cpu-ami-ids '${{ steps.images.outputs.cpu_ami_ids }}'
+          --gpu-ami-ids '${{ steps.images.outputs.gpu_ami_ids }}'
+          --source-revision "${GITHUB_SHA}"
+          --reused-from '${{ steps.plan.outputs.reused_from }}'
           --output dist/connected-aws
 
       - name: Publish and anonymously verify connected AWS release bundle

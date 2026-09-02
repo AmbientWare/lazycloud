@@ -447,17 +447,14 @@ def _verify_public_agent(url: str, *, expected_sha256: str, expected_size: int) 
 
 
 def _bake_region(request: _BakeRequest, *, region: str) -> str:
+    # Whether an image is reused is the release plan's decision, made from the
+    # digests of what an image embeds. An image of this name already existing is
+    # a name collision, not a reason to skip: a name carries only the version.
     existing = _find_existing_image(request, region=region)
     if existing is not None:
-        if existing.state == "available":
-            _log(f"{region}: image {request.image_name} already available as {existing.image_id}")
-            return existing.image_id
-        if existing.state == "pending":
-            _log(f"{region}: image {request.image_name} already pending as {existing.image_id}")
-            _wait_for_image(request, region=region, image_id=existing.image_id)
-            return existing.image_id
         raise SystemExit(
-            f"{region}: image {request.image_name} exists in unusable state {existing.state}"
+            f"{region}: an image named {request.image_name} already exists as "
+            f"{existing.image_id}; a release bakes each name once"
         )
 
     base_ami = _latest_al2023_ami(request, region=region)
@@ -717,9 +714,13 @@ def _wait_for_instance_stopped(request: _BakeRequest, *, region: str, instance_i
 
 
 def _create_image(request: _BakeRequest, *, region: str, instance_id: str) -> str:
+    # What the image embeds, readable from the console without a manifest.
+    worker_digest = request.worker_image.rsplit("@", 1)[-1]
     tags = (
         f"{{Key={_MANAGED_TAG_KEY},Value={_MANAGED_TAG_VALUE}}},"
-        f"{{Key={_RELEASE_TAG_KEY},Value={request.release_version}}}"
+        f"{{Key={_RELEASE_TAG_KEY},Value={request.release_version}}},"
+        f"{{Key=lazycloud:agent-sha256,Value={request.agent.sha256}}},"
+        f"{{Key=lazycloud:worker-digest,Value={worker_digest}}}"
     )
     result = _run_aws(
         request.aws_cli,

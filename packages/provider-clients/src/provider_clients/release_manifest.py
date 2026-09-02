@@ -57,6 +57,11 @@ class AwsReleaseManifest(ReleaseModel):
     capacity_gpu_ami_ids: dict[str, str] = Field(default_factory=dict)
     objects: list[ReleaseObject]
     deployment_environment: dict[str, str]
+    source_revision: str = ""
+    """The commit this release was published from."""
+    reused_from: dict[str, str] = Field(default_factory=dict)
+    """Artifacts this release did not build, keyed by name, valued by the
+    release that did. Absent for an artifact means this release built it."""
 
     @property
     def connection_template_object(self) -> ReleaseObject:
