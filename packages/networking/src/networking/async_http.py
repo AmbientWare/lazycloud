@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 import h11
 from foundation.http import grouped_response_headers
-from shared.urls import parse_container_address
+from shared.urls import parse_http_address
 
 from networking.dialer import (
     BackendRouteDialer,
@@ -227,7 +227,7 @@ class AsyncBackendHttpClient:
                     timeout=timeout_seconds,
                 )
                 return reader, writer, "backend.route"
-            parsed = parse_container_address(address, resource=resource)
+            parsed = parse_http_address(address, resource=resource)
             tls = await self._https_context() if parsed.scheme == "https" else None
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(

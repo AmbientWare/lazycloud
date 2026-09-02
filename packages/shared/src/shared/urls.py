@@ -186,6 +186,26 @@ def parse_container_address(address: str, *, resource: str) -> ParseResult:
     return parsed
 
 
+def parse_http_address(address: str, *, resource: str) -> ParseResult:
+    """Parse an HTTP origin whose port may come from its scheme.
+
+    Container addresses always carry a port; an object store or any other
+    public HTTPS origin usually does not.
+    """
+    raw = address.strip()
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    parsed = urlparse(raw)
+    try:
+        port = parsed.port
+    except ValueError:
+        port = -1
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or port == -1:
+        msg = f"invalid {resource} address: {address}"
+        raise ValueError(msg)
+    return parsed
+
+
 def _parse_external_url(external_url: str) -> ParseResult:
     parsed = urlparse(external_url)
     if not parsed.scheme or not parsed.netloc:
