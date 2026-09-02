@@ -258,6 +258,7 @@ def _request_service(
     capacity_reservations: CapacityReservationService | None = None,
     requeue_delay_seconds: float = DEFAULT_SCHEDULER_REQUEUE_DELAY_SECONDS,
     max_retry_count: int = DEFAULT_MAX_SCHEDULE_RETRY_COUNT,
+    retry_grace_seconds: float = 180.0,
     claim_lease_seconds: float = DEFAULT_CONTAINER_REQUEST_CLAIM_LEASE_SECONDS,
 ) -> SchedulerContainerRequestService:
     return SchedulerContainerRequestService(
@@ -276,6 +277,7 @@ def _request_service(
         workspace_owners=_UnownedWorkspaces(),
         requeue_delay_seconds=requeue_delay_seconds,
         max_retry_count=max_retry_count,
+        retry_grace_seconds=retry_grace_seconds,
         claim_lease_seconds=claim_lease_seconds,
     )
 
