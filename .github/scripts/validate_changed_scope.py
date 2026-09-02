@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import shlex
 import subprocess
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -62,6 +63,52 @@ def _is_opt_in_e2e(path: Path) -> bool:
     return path.parts[:2] == ("tests", "e2e")
 
 
+def _workspace_dependents(owners: set[Path]) -> set[Path]:
+    """Workspace members that depend, directly or through others, on any owner.
+
+    A change in a package is only proven safe once the members built on top of
+    it still import and boot, so their owner tests join the changed scope.
+    """
+    manifests = [
+        *REPOSITORY_ROOT.glob("packages/*/pyproject.toml"),
+        *REPOSITORY_ROOT.glob("packages/providers/*/pyproject.toml"),
+        *REPOSITORY_ROOT.glob("apps/*/pyproject.toml"),
+    ]
+    directory_of: dict[str, Path] = {}
+    requirements: dict[str, set[str]] = {}
+    for manifest in manifests:
+        project = tomllib.loads(manifest.read_text(encoding="utf-8")).get("project", {})
+        name = str(project.get("name", "")).strip().lower()
+        if not name:
+            continue
+        directory_of[name] = manifest.parent.relative_to(REPOSITORY_ROOT)
+        requirements[name] = {
+            _requirement_name(item)
+            for item in project.get("dependencies", [])
+            if isinstance(item, str)
+        }
+    dependents_of: dict[str, set[str]] = {name: set() for name in directory_of}
+    for name, required in requirements.items():
+        for requirement in required & directory_of.keys():
+            dependents_of[requirement].add(name)
+    pending = [name for name, directory in directory_of.items() if directory in owners]
+    seen: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        pending.extend(dependents_of[name])
+    return {directory_of[name] for name in seen} - owners
+
+
+def _requirement_name(requirement: str) -> str:
+    name = requirement.strip()
+    for separator in ("[", ">", "<", "=", "!", "~", ";", " "):
+        name = name.split(separator, 1)[0]
+    return name.strip().lower()
+
+
 def _existing(paths: set[Path]) -> list[str]:
     return sorted(str(path) for path in paths if (REPOSITORY_ROOT / path).exists())
 
@@ -109,6 +156,10 @@ def _validate(base: str) -> None:
     for owner in production_owners:
         typing_targets.add(owner)
         tests = owner / "tests"
+        if (REPOSITORY_ROOT / tests).is_dir():
+            test_targets.add(tests)
+    for dependent in _workspace_dependents(production_owners):
+        tests = dependent / "tests"
         if (REPOSITORY_ROOT / tests).is_dir():
             test_targets.add(tests)
 
