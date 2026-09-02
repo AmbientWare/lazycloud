@@ -1,6 +1,6 @@
 ---
 title: "quickstart, create-app, example"
-description: "Generate starter apps and download examples."
+description: "Generate starter files."
 ---
 
 ## lazycloud quickstart
@@ -9,8 +9,9 @@ description: "Generate starter apps and download examples."
 lazycloud quickstart [-o <path>] [--force]
 ```
 
-Writes the minimal starter function app (default `quickstart.py`; `--force`
-overwrites). Walk through it in the [Quickstart](/getting-started/quickstart).
+Writes the starter function app, `quickstart.py` by default. `--force`
+overwrites an existing file. The [Quickstart](/getting-started/quickstart)
+walks through it.
 
 ## lazycloud create-app
 
@@ -18,7 +19,7 @@ overwrites). Walk through it in the [Quickstart](/getting-started/quickstart).
 lazycloud create-app NAME [-o <path>] [--force]
 ```
 
-Creates a new app scaffold named `NAME`.
+Writes the starter app into a directory named `NAME`.
 
 ## lazycloud example
 
@@ -27,8 +28,4 @@ lazycloud example list
 lazycloud example download NAME [-o <path>] [--force]
 ```
 
-Lists and downloads example app templates. Available templates:
-
-| Template | Description |
-| --- | --- |
-| `quickstart` | Minimal function app. |
+Lists and downloads starter templates. `quickstart` is the one available.

@@ -1,0 +1,49 @@
+---
+title: "Custom domains"
+description: "Serve an endpoint, ASGI app, or pod from a hostname you own."
+---
+
+Every deployed HTTP workload gets a LazyCloud hostname. On the Team plan you
+can also serve it from a domain you own. Domains belong to your account and
+are available to every workspace you own.
+
+## Register the domain
+
+```bash
+lazycloud domain add app.acme.com
+```
+
+The command prints a CNAME record to create at your DNS provider, and any
+records needed to prove you own the name. Create them, then check:
+
+```bash
+lazycloud domain status app.acme.com
+```
+
+The domain is ready once DNS resolves and a certificate has been issued. That
+follows your DNS propagation time, so `status` is a single read rather than a
+wait.
+
+The dashboard has the same flow under Settings, then Domains.
+
+## Point a workload at it
+
+Name the hostname on the resource and deploy:
+
+```python
+@app.endpoint(name="predict", route="/predict", domain="app.acme.com")
+def predict(value: int) -> int: ...
+```
+
+`domain` is accepted by `@app.endpoint`, `@app.asgi`, and `@app.realtime`.
+The hostname must be the registered domain or a name under it.
+
+## Remove it
+
+```bash
+lazycloud domain list
+lazycloud domain remove app.acme.com
+```
+
+Removing a domain discards its certificate. Deployments keep their LazyCloud
+hostnames.

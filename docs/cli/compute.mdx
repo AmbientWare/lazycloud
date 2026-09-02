@@ -1,71 +1,88 @@
 ---
-title: "cloud, compute, and machine"
-description: "Connect a cloud account, inspect pools and capacity, and manage self-hosted machines."
+title: "compute, cloud, machine, domain"
+description: "Inspect compute, connect an AWS account, join your own machines, and register custom domains."
 ---
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-## lazycloud cloud
-
-| Command | Description |
-| --- | --- |
-| `lazycloud cloud connect aws --account-id <id> [--role-arn <arn>] [--open]` | Connect an AWS account to your account. |
-| `lazycloud cloud status [--watch] [--until <phase>] [--interval <s>] [--timeout <s>]` | Show or wait on the connection phase. |
-| `lazycloud cloud validate` | Validate the pending or active authorization. |
-| `lazycloud cloud reconnect [--role-arn <arn>] [--open]` | Start a replacement authorization. |
-| `lazycloud cloud cancel-reconnect` | Cancel a pending replacement authorization. |
-| `lazycloud cloud retry` | Retry the connection's current pending action. |
-| `lazycloud cloud disconnect [--wait] [--open] [--interval <s>] [--timeout <s>]` | Disconnect the account and remove its managed compute. |
-| `lazycloud cloud compute show` | How capacity is provisioned in the connected account. |
-| `lazycloud cloud compute update [options]` | Change the connected account's provisioning limits and defaults. |
-
-Connection phases for `--until`: `awaiting_authorization`, `validating`,
-`ready`, `degraded`, `reconnect_pending`, `retiring_authorization`,
-`disconnect_draining`, `revoking`, `verifying_revocation`, `action_required`.
-
-`cloud compute update` options, which belong to the connected account rather
-than to one workspace: `--default-region`, `--default-instance-type`,
-`--initial-cpu-workers` (0–100), `--min-cpu-workers` (0–100), `--max-cpu`
-(0–100), `--max-gpu` (0–100), `--min-free-cpu-millicores`,
-`--min-free-memory-mib`, `--allowed-region` (repeatable),
-`--allowed-instance-type` (repeatable), `--idle-timeout` (60–86400 seconds),
-`--root-volume-gib` (50–2048). An option you leave out keeps the value the
-account already carries.
+See [Compute](/platform/compute) for what pools are and when you need any of
+this. Workloads run on LazyCloud's compute with no setup.
 
 ## lazycloud compute
 
-| Command | Description |
-| --- | --- |
-| `lazycloud compute status` | Default pool and capacity for the workspace. |
-| `lazycloud compute instances` | Running compute instances. |
-| `lazycloud compute pools` | Pools this workspace can run workloads in. |
-| `lazycloud compute workloads` | Workloads and the pool each runs in. |
-| `lazycloud compute policy show` | The workspace's scheduling defaults. |
-| `lazycloud compute policy update --default-pool <pool>` | Set the pool this workspace's workloads land in when they name none. |
+```bash
+lazycloud compute status       # capacity and the workspace's default pool
+lazycloud compute instances    # running instances
+lazycloud compute pools        # pools this workspace can use
+lazycloud compute workloads    # which pool each workload runs in
+lazycloud compute policy show
+lazycloud compute policy update --default-pool <pool>
+```
+
+## lazycloud cloud
+
+Connecting an AWS account needs the Team plan. The connection belongs to your
+account and backs every workspace you own.
+
+```bash
+lazycloud cloud connect aws --account-id <id> [--role-arn <arn>] [--open]
+lazycloud cloud status [--watch] [--until <phase>] [--interval <s>] [--timeout <s>]
+lazycloud cloud validate            # recheck the current authorization
+lazycloud cloud reconnect [--open]  # start a replacement authorization
+lazycloud cloud cancel-reconnect
+lazycloud cloud retry               # retry the connection's pending action
+lazycloud cloud disconnect [--wait]
+lazycloud cloud compute show
+lazycloud cloud compute update [options]
+```
+
+`cloud status --until` accepts `awaiting_authorization`, `validating`,
+`ready`, `degraded`, `reconnect_pending`, `retiring_authorization`,
+`disconnect_draining`, `revoking`, `verifying_revocation`, and
+`action_required`.
+
+`cloud compute update` options: `--default-region`,
+`--default-instance-type`, `--initial-cpu-workers`, `--min-cpu-workers`,
+`--max-cpu`, `--max-gpu`, `--min-free-cpu-millicores`,
+`--min-free-memory-mib`, `--allowed-region` (repeatable),
+`--allowed-instance-type` (repeatable), `--idle-timeout` (60 to 86400
+seconds), and `--root-volume-gib` (50 to 2048). An option you leave out keeps
+its current value.
 
 ## lazycloud machine
 
-| Command | Description |
-| --- | --- |
-| `lazycloud machine list` | List the self-hosted machines serving this workspace. |
-| `lazycloud machine join [options]` | Join the current machine to your account. |
-| `lazycloud machine remove MACHINE_ID` | Remove a machine. |
+```bash
+lazycloud machine list
+lazycloud machine join [options]     # run on the machine you are joining
+lazycloud machine remove MACHINE_ID
+```
 
 `machine join` options:
 
-| Option | Description |
+| Option | What it does |
 | --- | --- |
-| `--pool <name>` | Pool to join, created if new (default `self-hosted`). |
-| `--ttl <duration>` | Join token lifetime. |
-| `--gpu <type>` | GPU type this machine contributes. |
-| `--max-cpu` / `--max-memory` / `--max-gpus` | Capacity to advertise (for example `--max-memory 32Gi`). |
-| `--gpu-ids <ids>` | Comma-separated GPU device ids to expose. |
-| `--background` / `--foreground` | Install the agent as a background service (default) or run it in the foreground. |
-| `--service-manager` / `--service-name` / `--state-dir` | Background service installation details. |
-| `--print-only` | Print the generated join command instead of running it (for another host). |
+| `--pool <name>` | Pool to join, created if new. Default `self-hosted`. |
+| `--gpu <model>` | GPU model this machine contributes. |
+| `--max-cpu`, `--max-memory`, `--max-gpus` | Capacity to advertise, for example `--max-memory 32Gi`. |
+| `--gpu-ids <ids>` | Comma-separated GPU device ids to expose, instead of `--max-gpus`. |
+| `--background`, `--foreground` | Install the agent as a service (default) or run it in the terminal. |
+| `--service-manager`, `--service-name`, `--state-dir` | Service installation details. |
+| `--ttl <duration>` | Lifetime of the join credential. |
+| `--print-only` | Print the install command instead of running it. |
 
-Read the [self-hosted machine requirements](/platform/compute#host-requirements)
-before generating an install command. The compute guide also explains pools
-and connected AWS capacity.
+Read the [host requirements](/platform/compute#your-own-machines) first.
+
+## lazycloud domain
+
+Custom domains need the Team plan.
+
+```bash
+lazycloud domain add HOSTNAME       # prints the DNS records to create
+lazycloud domain status HOSTNAME
+lazycloud domain list
+lazycloud domain remove HOSTNAME
+```
+
+See [Custom domains](/platform/domains).
 
 <WorkspaceFlag />

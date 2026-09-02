@@ -11,7 +11,7 @@ dependencies = [
     "foundation",
     "identity",
     "lazycloud-shared==0.1.0",
-    "lazycloud==0.1.0",
+    "lazycloud-client==0.1.0",
     "networking",
     "provider-clients",
     "provider-aws",

@@ -1,14 +1,14 @@
 ---
 title: "Endpoints, ASGI, and realtime"
-description: "Serve HTTP traffic from typed Python callables, ASGI applications, or realtime WebSocket-style handlers."
+description: "Serve HTTP from a typed Python callable, an ASGI application, or a WebSocket-style handler."
 ---
 
 import WorkloadOptions from '/snippets/workload-options.mdx';
 
 ## Endpoints
 
-`@app.endpoint` turns a typed Python callable into an HTTP route. Arguments
-map from the request body; the return value is serialized to the response.
+`@app.endpoint` gives a Python callable an HTTP route. Arguments come from the
+request body and the return value is serialized as the response.
 
 ```python
 from lazycloud import App, Image
@@ -22,22 +22,43 @@ def predict(value: int = 7) -> dict[str, int]:
     return {"input": value, "prediction": value + 1}
 ```
 
-Endpoints default to `cpu=1.0`, `memory="128Mi"`, `timeout_seconds=180`,
-`retries=0`, `workers=1`, `concurrency=1`, `keep_warm=180`,
-`max_pending_tasks=100`, and `authorized=True`.
+`route` defaults to `/` and `methods` to `GET` and `POST`. Endpoints default
+to `cpu=1.0`, `memory="128Mi"`, `timeout_seconds=180`, `retries=0`, one worker
+with `concurrency=1`, `keep_warm=180`, `max_pending_tasks=100`, and
+`authorized=True`.
 
-### Scaling options
+### Calling an endpoint
 
-| Option | Description |
-| --- | --- |
-| `workers` | Number of containers serving the endpoint. |
-| `concurrency` | Concurrent requests handled per worker. |
-| `keep_warm` | Seconds an idle worker stays available before scaling to zero. |
-| `max_pending_tasks` | Backpressure limit on queued requests. |
-| `autoscaler` | Queue-depth autoscaling; see below. |
-| `checkpoint_enabled` | Snapshot a warmed worker so replacements restore instead of cold-starting. |
+`lazycloud deploy` prints the endpoint's URL. Send a bearer token for the
+workspace unless the endpoint sets `authorized=False`:
 
-Queue-depth autoscaling scales workers with request backlog:
+```bash
+curl -X POST "<endpoint-url>" \
+  -H "Authorization: Bearer $LAZYCLOUD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"value": 41}'
+```
+
+The decorated object is a typed client too:
+
+```python
+response = predict.request(41)                      # served preview if one is running, else deployed
+response = predict.target("deployed").request(41)
+print(response.status_code, response.json())
+```
+
+`target()` takes `"auto"`, `"served"`, or `"deployed"`, plus
+`deployment_name` and `deployment_version` to pin one deployment.
+`predict.local(41)` calls the plain function in your process.
+
+### Scaling
+
+`workers` is the number of containers. `concurrency` is requests per
+container. `keep_warm` is how long an idle worker stays up before scaling to
+zero. `max_pending_tasks` bounds the request queue; requests past it are
+refused rather than queued.
+
+For autoscaling on backlog:
 
 ```python
 from lazycloud import QueueDepthAutoscaler
@@ -45,74 +66,53 @@ from lazycloud import QueueDepthAutoscaler
 
 @app.endpoint(
     name="infer",
-    autoscaler=QueueDepthAutoscaler(
-        queue="infer",
-        min_containers=0,
-        max_containers=8,
-        tasks_per_container=2,
-    ),
+    autoscaler=QueueDepthAutoscaler(min_containers=0, max_containers=8, tasks_per_container=2),
 )
 def infer(prompt: str) -> str: ...
 ```
 
-### Calling endpoints
-
-Deployed endpoints get a stable invoke URL (printed by `lazycloud deploy`).
-Requests require a bearer token authorized for the workspace unless
-`authorized=False`.
-
-The decorated object is also a typed client:
-
-```python
-response = predict.request(41)          # auto-targets served or deployed
-response = predict.target("deployed").request(41)
-print(response.status_code, response.json())
-```
-
-`target(...)` accepts `"auto"`, `"served"`, or `"deployed"`, plus
-`deployment_name`/`deployment_version` to pin a specific deployment.
-`.local(...)` calls the plain Python function in-process, and `.serve()` /
-`lazycloud serve` previews the endpoint with live logs.
+`checkpoint_enabled=True` snapshots a warmed worker so replacements restore
+from it instead of cold-starting.
 
 ## ASGI applications
 
-`@app.asgi` deploys any ASGI callable — FastAPI, Starlette, or a raw
-`scope/receive/send` app — as an HTTP resource:
-
-```python
-@app.asgi(name="service", route="/service")
-async def service(scope, receive, send) -> None:
-    await send({"type": "http.response.start", "status": 200, "headers": []})
-    await send({"type": "http.response.body", "body": b"ok"})
-```
-
-A framework application object such as a FastAPI or Starlette instance is
-itself an ASGI callable, so register it by applying the decorator directly:
+`@app.asgi` deploys any ASGI callable. A FastAPI or Starlette instance is one,
+so apply the decorator to it directly:
 
 ```python
 from fastapi import FastAPI
 
 api = FastAPI()
-service = app.asgi(name="service")(api)
+service = app.asgi(name="service", route="/")(api)
 ```
 
-ASGI options mirror endpoints with `concurrent_requests` and
-`keep_warm_seconds` naming, and the resource name defaults to `"asgi"`.
-
-Call a deployed ASGI app with the full request shape:
+A raw `scope, receive, send` callable works the same way:
 
 ```python
-response = service.request(method="GET", path="/service", target="deployed")
+@app.asgi(name="ping")
+async def ping(scope, receive, send) -> None:
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b"ok"})
 ```
 
-`request(...)` accepts `method`, `path`, `json`, `data`, `headers`, `params`,
-and the same targeting options as endpoints.
+ASGI apps take the endpoint options with two renamed: `concurrent_requests`
+and `keep_warm_seconds`. `name` defaults to `"asgi"`.
+
+Call a deployed ASGI app with a full request:
+
+```python
+response = service.request(method="GET", path="/health", target="deployed")
+```
+
+`request()` accepts `method`, `path`, `json`, `data`, `headers`, `params`,
+and the same `target`, `deployment_name`, and `deployment_version` options as
+endpoints.
 
 ## Realtime handlers
 
-`@app.realtime` registers a WebSocket-style message handler wrapped as an ASGI
-resource. Each incoming message invokes the handler; the return value (or each
-item of an iterable return) is sent back on the socket.
+`@app.realtime` turns a function into a WebSocket handler. Each incoming
+message calls the handler with the message; the return value is sent back, and
+an iterable return sends each item.
 
 ```python
 @app.realtime(name="echo")
@@ -120,13 +120,29 @@ def echo(message: str) -> str:
     return message
 ```
 
-Realtime resources share the ASGI option set and deploy, serve, and scale the
-same way.
+Realtime handlers take the ASGI options and deploy, serve, and scale the same
+way. `name` defaults to `"realtime"`.
+
+## Preview before deploying
+
+`lazycloud serve` runs an endpoint or ASGI app on LazyCloud with a temporary
+URL and streams logs, syncing your working directory into the container as you
+edit:
+
+```bash
+lazycloud serve api_demo.py:predict
+```
+
+## Custom domains
+
+On the Team plan, `domain="app.acme.com"` on an endpoint, ASGI app, or
+realtime handler serves it from a hostname you own. See
+[Custom domains](/platform/domains).
 
 ## Shared options
 
 Endpoints, ASGI apps, and realtime handlers also accept `env`, `secrets`,
-`volumes`, an `on_start` hook (run once per worker boot), `task_policy`, and
-the scheduling options below.
+`volumes`, an `on_start` hook that runs once per worker boot, `task_policy`,
+and the options below.
 
 <WorkloadOptions />

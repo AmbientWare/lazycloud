@@ -1,11 +1,16 @@
 {{/*
-One replica, and that is a capacity decision rather than a correctness one.
+Two replicas, and the second is for the drain rather than for capacity.
 
 The scheduler serialises its work on Redis token locks and tolerates overlapping
 ticks by design. `packages/scheduler/AGENTS.md`: "where two overlap anyway the
 second finds the row already terminal and settles nothing twice". What made more
 than one impossible before was a Redis per host, which is why that moved out of
 the cluster.
+
+With one replica a node replacement stops placement until the pod is rescheduled
+and its first housekeeping pass, the one that talks to every external service,
+has finished. Spread across nodes with a disruption budget, one replica keeps
+deciding while the other moves.
 
 It fetches the agent artifact it never serves. Resolving the release is what
 gives it the worker image and the AMI catalogue, and that resolution validates
@@ -27,6 +32,14 @@ spec:
         app: scheduler
     spec:
       serviceAccountName: {{ .Values.serviceAccounts.scheduler }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          matchLabelKeys: [pod-template-hash]
+          labelSelector:
+            matchLabels:
+              app: scheduler
       volumes:
         - name: agent-binarys
           emptyDir: {}

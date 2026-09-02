@@ -66,16 +66,17 @@ node, not from estimates. Memory carries a limit; CPU does not, because a CPU
 limit is throttling, and throttling a connector or an API turns contention into
 the latency the request was meant to prevent.
 
-`control-plane`, `cloudflared`, and `tunnel-gateway` spread replicas across
-nodes. That is what turns their second replicas into redundancy, and it obliges
+`control-plane`, `scheduler`, `cloudflared`, and `tunnel-gateway` spread
+replicas across nodes. That is what turns their second replicas into redundancy, and it obliges
 the cluster to hold more than one node. `DoNotSchedule` leaves the second replica
 Pending, and Pending is the state Karpenter provisions for. A
 `PodDisruptionBudget` on each prevents one drain from removing both replicas.
 
 ## Replica counts
 
-`scheduler` at one is a capacity decision: it serialises on Redis token locks and
-tolerates overlapping ticks, so more is safe once there is load to justify it.
+`scheduler` at two is an availability decision, not capacity: it serialises on
+Redis token locks and tolerates overlapping ticks, so the second replica adds
+nothing to throughput and keeps placement running while a node is replaced.
 
 `cache-server` at one is a correctness decision: it serves a local directory, so
 a second replica is a second cache rather than a larger one.

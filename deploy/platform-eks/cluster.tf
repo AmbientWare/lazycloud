@@ -29,13 +29,16 @@ resource "aws_eks_cluster" "control_plane" {
 
   vpc_config {
     subnet_ids = aws_subnet.cluster[*].id
-    # Reachable from outside, because the deploy runs from GitHub Actions and an
-    # operator runs `kubectl` from a laptop; neither sits in this VPC. Access is
-    # an IAM decision rather than a network one -- `aws_eks_access_entry` below
-    # names who may act, and unauthenticated callers reach an endpoint that
-    # refuses them.
-    endpoint_public_access  = true
+    # Reachable from outside only from the addresses `cluster_api_cidrs` names.
+    # `terraform apply` runs from an operator's machine and reaches this endpoint
+    # through the Kubernetes and Helm providers, so that address has to be
+    # listed. GitHub Actions never applies and needs nothing here; Argo and
+    # External Secrets reach the private endpoint from inside the VPC. IAM still
+    # decides who may act -- `aws_eks_access_entry` below names them -- and the
+    # allowlist decides who may ask. An empty list turns the public endpoint off.
+    endpoint_public_access  = length(var.cluster_api_cidrs) > 0
     endpoint_private_access = true
+    public_access_cidrs     = length(var.cluster_api_cidrs) > 0 ? var.cluster_api_cidrs : null
   }
 
   # Auto Mode. Without both blocks the cluster comes up with no compute at all

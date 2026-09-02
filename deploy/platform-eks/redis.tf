@@ -7,9 +7,12 @@
 # each other. Managed, it is one Redis several replicas share, and running more
 # than one of anything becomes a capacity decision rather than a correctness one.
 #
-# Single node. Replication here buys failover for state that is rebuilt on
-# reconnect -- leases expire, origins are republished -- and costs twice the
-# instance to protect it.
+# A primary and one standby in another zone, with automatic failover. What it
+# holds is rebuilt on reconnect -- leases expire, origins are republished -- so
+# replication protects no data. It protects the minutes ElastiCache takes to
+# replace a lost node, during which no scheduler loop can take a lease and no
+# worker stream can be brokered. Failover promotes the standby in about a minute
+# and the primary endpoint follows it, so clients reconnect rather than wait.
 
 resource "aws_elasticache_subnet_group" "redis" {
   name       = "${var.deployment}-redis"
@@ -45,8 +48,9 @@ resource "aws_elasticache_replication_group" "redis" {
   node_type      = var.redis_node_type
   port           = 6379
 
-  num_cache_clusters         = 1
-  automatic_failover_enabled = false
+  num_cache_clusters         = 2
+  automatic_failover_enabled = true
+  multi_az_enabled           = true
 
   subnet_group_name  = aws_elasticache_subnet_group.redis.name
   security_group_ids = [aws_security_group.redis.id]

@@ -1,11 +1,10 @@
 ---
 title: "Pods"
-description: "Long-running command-style containers created, deployed, and managed under an app."
+description: "Run a long-lived container command under your app."
 ---
 
-A pod runs an arbitrary container command — a web server, a worker process, a
-database sidecar — under the same app slug as your other resources. Unlike
-functions and endpoints, a pod is not tied to a Python callable.
+A pod runs a container command: a web server, a worker process, a model
+server. It is not tied to a Python callable, so it can run any image.
 
 ```python
 from lazycloud import App, Image
@@ -25,56 +24,69 @@ web = app.pod(
 Pods default to `cpu=1.0`, `memory="128Mi"`, `keep_warm=600`, and
 `authorized=False`.
 
-## Deployed pods vs. on-demand instances
+## Deploy it
 
-**Deploy** the pod to keep it running under deployment management:
+Deploying a pod keeps it running under a deployment. The deploy output prints
+its URL.
 
 ```bash
 lazycloud deploy tools.py:app --resource pod:web
 ```
 
-Manage it through its deployment: `web.scale(containers)`, `web.pause()`,
-`web.resume()`, `web.delete()` from Python, or the
-[`lazycloud deployment`](/cli/deployments-and-containers) commands.
+Manage it through the deployment, from Python with `web.scale(containers)`,
+`web.pause()`, `web.resume()`, and `web.delete()`, or from the CLI:
 
-**Create** an on-demand instance without a deployment:
+```bash
+lazycloud deployment list --app tools
+lazycloud deployment scale web --containers 2
+lazycloud deployment stop web
+```
+
+## Or create an instance on demand
+
+A pod can also run once without a deployment:
 
 ```python
-instance = web.create()                      # runs the configured command
+instance = web.create()                                   # runs the configured command
 print(instance.container_id, instance.url)
 
-instance = web.run("python", "-m", "http.server", "9090")  # override command
+instance = web.run("python", "-m", "http.server", "9090")  # a different command
 instance.terminate()
 ```
 
-`create` and `run` return a `PodInstance` with `container_id`, `url`,
-`timeout_seconds`, `expires_at`, and `terminate()`.
+Both return a `PodInstance` with `container_id`, `url`, `timeout_seconds`,
+`expires_at`, and `terminate()`. The instance lives for `keep_warm` seconds
+unless you pass `timeout_seconds`.
 
 ## Options
 
-| Option | Description |
-| --- | --- |
-| `command` | Container command and arguments. |
-| `ports` | Named ports exposed by the pod, for example `{"http": 8080}`. |
-| `env`, `secrets`, `volumes` | Runtime configuration injected into the container. |
-| `keep_warm` | Seconds an idle pod stays alive. |
-| `authorized` | Whether ingress requires an authenticated client. |
-| `tcp` | Expose raw TCP ingress instead of HTTP. |
-| `block_network` / `allow_list` | Outbound network policy. |
-| `docker_enabled` | Give the pod an isolated Docker daemon. |
-| `checkpoint_enabled` | Checkpoint/restore support; `checkpoint_readiness_path` and `checkpoint_readiness_port` define an HTTP readiness probe checked before checkpointing. |
-| `pool`, `provider`, `metadata` | Pool and custom metadata. |
+`command` and `ports` describe what runs and what it listens on. `ports` maps
+a name to a container port, for example `{"http": 8080}`. `env`, `secrets`,
+and `volumes` inject configuration.
 
-`web.configure(...)` returns the pod with updated settings for reuse, and
-`web.shell()` opens an interactive shell in a pod container.
+`authorized=True` requires a bearer token on the pod's URL. `tcp=True`
+exposes raw TCP instead of HTTP. `block_network=True` cuts outbound access;
+`allow_list=[...]` permits named hosts instead.
 
-## Attaching to containers
+`health_check_path` and `health_check_port` give the proxy an HTTP probe to
+call before routing to a container. Without one, the proxy only checks that
+the port accepts connections.
 
-Attach to a running pod container from the CLI:
+`checkpoint_enabled=True` lets you checkpoint a running pod. It needs
+`checkpoint_readiness_path` and `checkpoint_readiness_port`, an HTTP probe
+checked before the snapshot is taken.
+
+`docker_enabled=True` gives the pod its own Docker daemon. `pool` picks the
+compute pool.
+
+`web.configure(...)` returns the pod with changed settings, and `web.shell()`
+opens a shell in a pod container.
+
+## Containers
 
 ```bash
 lazycloud container list
-lazycloud container attach <container-id>
+lazycloud container attach <container-id>      # stream output until it exits
 lazycloud container checkpoint <container-id>
 lazycloud container stop <container-id>
 ```

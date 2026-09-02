@@ -1,11 +1,11 @@
 ---
 title: "Images"
-description: "Define container images in Python with the chainable Image builder."
+description: "Describe a workload's container image in Python."
 ---
 
-Every workload runs in a container image described by an `Image`. Builds are
-content-addressed: the same definition reuses the cached image, and a changed
-definition rebuilds only what changed.
+Every workload runs in an image described by an `Image`. Builds are cached by
+content: the same definition reuses the built image, and a change rebuilds
+only what changed.
 
 ```python
 from lazycloud import Image
@@ -17,57 +17,55 @@ image = (
 )
 ```
 
+`Image()` with no arguments is the managed Python 3.12 image. Python 3.10,
+3.11, and 3.12 are available.
+
 ## Constructor
 
 ```python
 Image(
-    python_version="python3.12",   # "3.10" | "3.11" | "3.12"
-    python_packages=[...],          # packages, or a path to requirements.txt
-    commands=[...],                 # shell commands run during the build
-    base_image=None,                # custom registry base image
-    base_image_creds=None,          # registry credentials (see below)
-    env_vars=None,                  # build/runtime environment variables
+    python_version="3.12",         # "3.10" | "3.11" | "3.12"
+    python_packages=[...],         # package specs, or a path to requirements.txt
+    commands=[...],                # shell commands run during the build
+    base_image=None,               # start from a registry image instead
+    base_image_creds=None,         # registry credentials, see below
+    env_vars=None,                 # environment variables baked into the image
 )
 ```
 
-Managed Python runtimes are available for Python 3.10, 3.11, and 3.12.
-
 ## Builder methods
 
-All methods return the image, so they chain.
+Each returns the image, so they chain.
 
-| Method | Description |
-| --- | --- |
-| `add_python_packages(packages)` | Install Python packages. Accepts a sequence of package requirements, or a path to a `requirements.txt` file. |
-| `add_commands(commands)` | Run shell commands during the build (system packages, downloads, setup). |
-| `add_python_version(version)` | Switch the managed Python version. |
-| `add_local_path(pattern="*")` | Include local files matching the pattern in the build context. |
-| `add_uv_project(path=".", extras=[...])` | Install a local uv project (its `pyproject.toml` dependencies) into the image. |
-| `micromamba()` | Switch the environment to micromamba. |
-| `add_micromamba_packages(packages, channels=[...])` | Install conda-forge/micromamba packages (after `micromamba()`). |
-| `with_envs(env_vars, clear=False)` | Set environment variables (mapping, `"KEY=value"` strings, or a sequence of them). |
-| `with_secrets(secrets)` | Make workspace secrets available to the build. |
-| `with_docker()` | Enable an isolated Docker daemon in containers using this image. |
-| `build_with_gpu(hint)` | Run the image build itself on a GPU worker of the given type. |
+- `add_python_packages(packages)` installs packages. Pass a list of specs or a
+  path to a `requirements.txt`.
+- `add_commands(commands)` runs shell commands during the build.
+- `add_uv_project(path=".", extras=[...])` installs a local uv project from its
+  `pyproject.toml` and `uv.lock`.
+- `add_local_path(pattern="*")` includes matching local files in the build
+  context.
+- `add_python_version(version)` switches the managed Python version.
+- `micromamba()` switches to a micromamba environment, and
+  `add_micromamba_packages(packages, channels=[...])` installs into it.
+- `with_envs(env_vars, clear=False)` sets environment variables from a
+  mapping, `"KEY=value"` strings, or a sequence of them.
+- `with_secrets(secrets)` makes workspace secrets available during the build.
+- `with_docker()` installs Docker so containers using the image can run their
+  own daemon.
+- `build_with_gpu(hint)` runs the build on a GPU worker of the given model.
 
-## Starting from existing images
-
-| Method | Description |
-| --- | --- |
-| `Image.from_registry(image_uri, credentials=...)` | Use a public or private registry image as the base. |
-| `Image.from_dockerfile(path, context_dir=None)` | Build from an existing Dockerfile. |
-| `Image.from_id(image_id)` | Reuse an already-built image by id, including ids from `SandboxInstance.create_image_from_filesystem()`. |
+## Start from an existing image
 
 ```python
 gpu_image = Image.from_registry("nvcr.io/nvidia/pytorch:24.05-py3")
 legacy = Image.from_dockerfile("./Dockerfile", context_dir=".")
+snapshot = Image.from_id(image_id)   # an id from a sandbox filesystem snapshot
 ```
 
-### Private registry credentials
+### Private registries
 
-`base_image_creds` (and `from_registry(credentials=...)`) accept a mapping of
-credential values or a list of environment variable names to read at deploy
-time:
+Pass credentials as environment variable names to read at deploy time, never
+as values in code:
 
 ```python
 image = Image.from_registry(
@@ -76,11 +74,8 @@ image = Image.from_registry(
 )
 ```
 
-Never inline registry passwords in code; reference environment variables or
-[workspace secrets](/concepts/secrets).
+## From the CLI
 
-## CLI equivalents
-
-`lazycloud deploy`, `run`, `serve`, `shell`, and `dev` accept `--image` (registry
-reference), or `--dockerfile` with `--context` to build from a Dockerfile
-without touching Python code.
+`lazycloud deploy`, `run`, `serve`, `shell`, and `dev` accept `--image <ref>`
+for a registry image, or `--dockerfile <path>` with `--context <dir>` to build
+from a Dockerfile, without changing Python code.

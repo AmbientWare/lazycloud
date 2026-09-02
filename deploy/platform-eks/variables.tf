@@ -236,6 +236,26 @@ variable "wireguard_public_endpoint" {
   }
 }
 
+variable "cluster_api_cidrs" {
+  description = <<-EOT
+    Addresses allowed to reach the Kubernetes API from outside the VPC, as CIDR
+    blocks. The machine `terraform apply` runs from belongs here, because the
+    Kubernetes and Helm providers reach the cluster through this endpoint. Empty
+    disables the public endpoint.
+
+    When that machine's address changes, move the cluster alone:
+    `terraform apply -target=aws_eks_cluster.control_plane` rewrites the list
+    through the AWS API without the providers having to reach an endpoint that
+    now refuses them. A full apply follows.
+  EOT
+  type        = list(string)
+
+  validation {
+    condition     = alltrue([for cidr in var.cluster_api_cidrs : can(cidrnetmask(cidr))])
+    error_message = "cluster_api_cidrs must be IPv4 CIDR blocks, for example 203.0.113.7/32."
+  }
+}
+
 variable "redis_node_type" {
   description = "ElastiCache node type for the coordination Redis."
   type        = string

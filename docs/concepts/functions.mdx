@@ -1,13 +1,13 @@
 ---
 title: "Functions"
-description: "Run plain Python callables on remote compute with retries, timeouts, secrets, volumes, and lifecycle hooks."
+description: "Run a Python callable on remote compute with retries, timeouts, secrets, volumes, and lifecycle hooks."
 ---
 
 import WorkloadOptions from '/snippets/workload-options.mdx';
 
-Use `@app.function` for Python work that should run remotely but does not need
-an HTTP route or a queue. The decorated object preserves the callable's
-argument and return typing.
+Use `@app.function` for Python that should run remotely and does not need an
+HTTP route. The decorated object keeps the callable's argument and return
+types.
 
 ```python
 from lazycloud import App, Image
@@ -21,69 +21,44 @@ def build_report(month: str) -> dict[str, str]:
     return {"month": month, "status": "built"}
 ```
 
-## Invoking a function
+Deploy it with `lazycloud deploy reports.py:build_report` or
+`build_report.deploy()`.
 
-| Call | Behavior |
-| --- | --- |
-| `build_report.local("2026-06")` | Runs the plain Python function in your own process. |
-| `build_report.remote("2026-06")` | Runs on the deployed compute and blocks for the result. |
-| `build_report("2026-06")` | Same as `.remote(...)`. |
-| `build_report.spawn("2026-06")` | Submits without blocking and returns a `FunctionCall` task handle. |
-| `build_report.map(["2026-05", "2026-06"])` | Runs one invocation per input and yields results in order. |
-| `build_report.spawn_map([...])` | Submits one task per input and returns the list of handles. |
+## Call it
 
-`async_remote` and `async_spawn` are the awaitable equivalents for async
-callers. A `FunctionCall` handle carries the task id; retrieve outcomes with
-the [task workflow](/concepts/tasks-and-logs).
+```python
+build_report.local("2026-06")     # runs in your own process
+build_report.remote("2026-06")    # runs on LazyCloud and returns the result
+build_report("2026-06")           # same as .remote(...)
 
-Deploy a single function with `lazycloud deploy module.py:build_report` or
-programmatically with `build_report.deploy()`. `build_report.shell()` opens an
-interactive shell in the function's container image for debugging (also
-available as `lazycloud shell module.py:build_report`).
+handle = build_report.spawn("2026-06")   # returns a FunctionCall without waiting
+handle.task_id
+handle.get()                             # waits for the value
+
+for result in build_report.map(["2026-05", "2026-06"]):   # one task per input
+    ...
+handles = build_report.spawn_map(["2026-05", "2026-06"])
+```
+
+`async_remote` and `async_spawn` are the awaitable forms. A `FunctionCall`
+carries the task id; see [Tasks and logs](/concepts/tasks-and-logs) for
+results, waiting, and logs.
+
+From the CLI, `lazycloud run reports.py:build_report 2026-06` submits one call
+and prints the result. An argument that parses as JSON is passed as that
+value; anything else is a string.
 
 ## Sizing, timeouts, and retries
 
 Functions default to `cpu=0.125`, `memory="128Mi"`, `timeout_seconds=3600`,
 and `retries=3`.
 
-- `timeout_seconds` caps one invocation's runtime; a run that exceeds it is
-  marked timed out.
-- `retries` is the number of retry attempts after a failure, with
-  `retry_delay_seconds` between attempts.
-- `retry_policy` gives full control as a `RetryPolicy` (or plain mapping):
-  `max_attempts`, `delay_seconds`, `backoff` (`"fixed"` or `"exponential"`),
-  `max_delay_seconds`, and `retry_on_statuses`.
-
-## Serving several calls at once
-
-A container stays warm between invocations for `keep_warm` seconds — 10 by
-default — so a call arriving inside that window reaches an interpreter that has
-already imported the handler and run `on_start`. Set `keep_warm=0` to retire a
-container as soon as it goes idle, which trades warm starts for no idle cost.
-
-`concurrency` sets how many invocations one container serves at the same time.
-Each slot runs in its own process by default, so one call cannot disturb another
-and CPU-bound work runs genuinely in parallel.
-
-`in_process=True` puts the slots in one interpreter instead. Use it when the
-slots need to share something a process cannot duplicate — a model on a GPU is
-loaded once by `on_start` and served by every slot, where four processes would
-try to load four copies onto one card. The trade is the interpreter's: CPU-bound
-handlers contend for the GIL rather than running in parallel, so it suits work
-that waits on a device, a network call, or a library that releases the lock.
+`timeout_seconds` caps one invocation. A run that exceeds it ends with status
+`timeout`. `retries` is the number of attempts after a failure, with
+`retry_delay_seconds` between them. For backoff, pass a `RetryPolicy`:
 
 ```python
-@app.function(gpu="a100-80", concurrency=8, in_process=True, on_start=load_model)
-def embed(text: str) -> list[float]:
-    return MODEL.encode(text).tolist()
-```
-
-Read the current invocation's task id with `lazycloud.current_task_id()` rather
-than the `TASK_ID` environment variable — several invocations share one
-environment, and only the accessor answers per call.
-
-```python
-from lazycloud import RetryPolicy, RetryBackoff
+from lazycloud import RetryBackoff, RetryPolicy
 
 
 @app.function(
@@ -97,17 +72,55 @@ from lazycloud import RetryPolicy, RetryBackoff
 def flaky_ingest(url: str) -> int: ...
 ```
 
-<Note>
-  Functions intentionally have no `workers`, `keep_warm`, or `autoscaler`
-  options — each invocation is scheduled as an independent task. Warm worker
-  pools and queue-depth autoscaling belong to
-  [endpoints](/concepts/endpoints).
-</Note>
+## Warm containers and concurrency
+
+A container stays up for `keep_warm` seconds after a call finishes, 10 by
+default, so a call arriving inside that window reaches an interpreter that has
+already imported your code and run `on_start`. Set `keep_warm=0` to retire a
+container as soon as it goes idle.
+
+`concurrency` is how many calls one container serves at once. Each slot runs
+in its own process by default, so calls cannot disturb each other and CPU-bound
+work runs in parallel.
+
+`in_process=True` puts the slots in one interpreter instead. Use it when the
+slots must share something a process cannot duplicate. A model loaded onto a
+GPU by `on_start` is loaded once and served by every slot; with separate
+processes, four slots would try to load four copies. The trade is Python's:
+CPU-bound handlers contend for the GIL, so it suits work that waits on a
+device, a network call, or a library that releases the lock.
+
+```python
+@app.function(gpu="a100-80", gpu_count=1, concurrency=8, in_process=True, on_start=load_model)
+def embed(text: str) -> list[float]:
+    return MODEL.encode(text).tolist()
+```
+
+Inside a handler, read the current task id with `lazycloud.current_task_id()`.
+Several calls can share one environment, so the `TASK_ID` environment variable
+is not per call.
+
+`max_pending_tasks` caps how many calls a function has in flight; a call past
+the cap is refused with a capacity error rather than queued.
+
+Queue-depth autoscaling adds containers when calls back up:
+
+```python
+from lazycloud import QueueDepthAutoscaler
+
+
+@app.function(autoscaler=QueueDepthAutoscaler(min_containers=0, max_containers=8, tasks_per_container=2))
+def transcribe(path: str) -> str: ...
+```
+
+`min_containers` keeps that many containers up with nothing queued, which also
+makes the keep-warm window infinite for them.
 
 ## Secrets and environment
 
-`env` injects plain environment variables; `secrets` injects
-[workspace secrets](/concepts/secrets) by name as environment variables:
+`env` sets plain environment variables. `secrets` injects
+[workspace secrets](/concepts/secrets) by name, each as an environment
+variable with the same name:
 
 ```python
 @app.function(env={"REGION": "us-east-1"}, secrets=["OPENAI_API_KEY"])
@@ -116,8 +129,7 @@ def summarize(text: str) -> str: ...
 
 ## Volumes
 
-Mount durable [volumes and cloud buckets](/concepts/volumes) into the
-container filesystem:
+Mount [volumes and cloud buckets](/concepts/volumes) at a path:
 
 ```python
 from lazycloud import Volume
@@ -129,11 +141,12 @@ def load_model(name: str) -> str: ...
 
 ## Lifecycle hooks
 
-Functions accept hooks that the workload
-runner invokes at each stage of a task's life: `on_start`, `on_running`,
-`on_success`, `on_error`, `on_retry`, `on_failure`, `on_cancelled`,
-`on_timeout`, and `on_finish`. A hook is a callable, a decorated SDK object,
-or a dotted import reference string; each option also accepts a list of hooks.
+`on_start` runs once when a container boots, before its first call. Load
+models and warm caches there. The other hooks run at each stage of a task:
+`on_running`, `on_success`, `on_error`, `on_retry`, `on_failure`,
+`on_cancelled`, `on_timeout`, and `on_finish`. A hook is a callable, a
+decorated function, or a dotted import string, and each option also takes a
+list.
 
 ```python
 def notify_failure() -> None:
@@ -144,8 +157,10 @@ def notify_failure() -> None:
 def build_daily() -> None: ...
 ```
 
-`on_start` runs once when a container boots, which makes it the place to load
-models or warm caches before the first invocation.
+## Debugging
+
+`build_report.shell()` or `lazycloud shell reports.py:build_report` opens an
+interactive shell in the function's image.
 
 ## Shared options
 

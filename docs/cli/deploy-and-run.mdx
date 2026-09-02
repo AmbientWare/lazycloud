@@ -1,27 +1,9 @@
 ---
 title: "deploy, run, serve, shell, dev"
-description: "Build, deploy, invoke, preview, and iterate on workloads from the CLI."
+description: "Deploy, invoke, preview, and iterate on workloads from the CLI."
 ---
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
-
-These commands share a set of **workload options** that override or supply the
-resource configuration:
-
-| Option | Description |
-| --- | --- |
-| `--cpu <float>` / `--memory <str>` | Compute per container, for example `--memory 512Mi`. |
-| `--gpu <type>` / `--gpu-count <n>` | GPU type and count. |
-| `--image <ref>` | Registry image reference. |
-| `--dockerfile <path>` / `--context <dir>` | Build from a Dockerfile instead. |
-| `--env KEY=VALUE` | Environment variables (repeatable). |
-| `--secret <name>` | Workspace secrets to inject (repeatable). |
-| `--port <spec>` | Exposed port(s). |
-| `--keep-warm <seconds>` | Idle keep-warm window. |
-| `--tcp` / `--no-tcp` | Raw TCP ingress instead of HTTP. |
-| `--pool <name>` | Target worker pool. |
-| `--pool <pool>` | Pool to run in. |
-| `--entrypoint <cmd>` | Container entrypoint override. |
 
 ## lazycloud deploy
 
@@ -29,49 +11,55 @@ resource configuration:
 lazycloud deploy HANDLER [options]
 ```
 
-Deploys a handler or app object. Additional flags: `--name` (deployment name
-override), `--source-root` (directory packaged as the code root), and
-`--resource <selector>` to deploy one resource from an app (`name` or
-`kind:name`).
+Deploys one decorated object, or every resource in an `App`:
 
 ```bash
 lazycloud deploy quickstart.py:hello
-lazycloud deploy examples.all_workloads:app --resource endpoint:predict
+lazycloud deploy myproject.api:app
+lazycloud deploy myproject.api:app --resource endpoint:predict
 ```
+
+`--name` overrides the deployment name when deploying one resource, and
+`--source-root <dir>` packages a different directory as the code root.
 
 ## lazycloud run
 
 ```bash
-lazycloud run [COMMAND]... [options]
+lazycloud run HANDLER [ARGS]... [options]
 ```
 
-Runs a handler locally or remotely. Pass a handler reference and its
-arguments; workload options size the execution container.
+Calls a deployed function with the given arguments and prints the result.
+An argument that parses as JSON (a number, `true` or `false`, a list, an
+object) is passed as that value; anything else is passed as a string:
 
 ```bash
-lazycloud run quickstart.py:hello 'LazyCloud'
+lazycloud run quickstart.py:hello LazyCloud
+lazycloud run pipeline.py:process 42 '["a", "b"]' '{"dry_run": true}'
 ```
+
+Pass a pod to run it once with a command; pass a plain function with a
+`.run()` or `.remote()` method to call that.
 
 ## lazycloud serve
 
 ```bash
-lazycloud serve HANDLER [--timeout <seconds>] [options]
+lazycloud serve HANDLER [--timeout <seconds>] [--resource <selector>] [options]
 ```
 
-Serves an endpoint or ASGI app on remote compute with a preview
-URL and live logs. `--timeout 0` (default) serves until interrupted.
-`--sync-dir <dir>` syncs a local directory into the serve container;
-`--container-port` maps the container port.
+Runs an endpoint or ASGI app on LazyCloud with a temporary URL and streams
+its logs. Your working directory is synced into the container as you edit;
+`--sync-dir <dir>` syncs a different one. `--timeout 0`, the default, serves
+until you interrupt it. `--container-port` maps the container port.
 
 ## lazycloud shell
 
 ```bash
-lazycloud shell [HANDLER] [--container-id <id>] [options]
+lazycloud shell HANDLER [--sync-dir <dir>] [options]
+lazycloud shell --container-id <id>
 ```
 
-Opens an interactive shell in a handler's container image, or attaches a
-shell to a running container with `--container-id`. `--sync-dir` copies a
-local directory in.
+Opens an interactive shell in the handler's image, or attaches a shell to a
+running container.
 
 ## lazycloud dev
 
@@ -79,7 +67,28 @@ local directory in.
 lazycloud dev [HANDLER] [--sync <dir>] [options]
 ```
 
-Runs the local development loop: a remote container with your working
-directory synced (default `--sync ./`), for iterating without deploys.
+Opens a shell in a remote container with your working directory synced in
+(`--sync ./` by default), for iterating without deploying. Without a handler
+it uses the managed Python image, or `--image` or `--dockerfile` if given.
+
+## Workload options
+
+`deploy`, `run`, `serve`, `shell`, and `dev` accept these overrides. An option
+you leave out keeps what the decorator says.
+
+| Option | What it does |
+| --- | --- |
+| `--cpu <float>`, `--memory <str>` | Compute per container, for example `--memory 512Mi`. |
+| `--gpu <model>`, `--gpu-count <n>` | GPU model and count. `dev` accepts `--gpu` more than once for a preference, best first. |
+| `--image <ref>` | Run in a registry image. |
+| `--dockerfile <path>`, `--context <dir>` | Build from a Dockerfile instead. |
+| `--env KEY=VALUE` | Environment variable. Repeatable. |
+| `--secret <name>` | Workspace secret to inject. Repeatable. |
+| `--port <spec>` | Port to expose, as `8080` or `name=8080`. Repeatable. |
+| `--keep-warm <seconds>` | Idle seconds a container stays up. |
+| `--tcp`, `--no-tcp` | Raw TCP ingress instead of HTTP. |
+| `--pool <name>` | Compute pool to run in. |
+| `--preemptible`, `--no-preemptible` | Allow reclaimable capacity (`deploy` and `run`). |
+| `--entrypoint <cmd>` | Container entrypoint override. |
 
 <WorkspaceFlag />

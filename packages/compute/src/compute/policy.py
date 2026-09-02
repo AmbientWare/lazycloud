@@ -19,7 +19,6 @@ from database.repositories.compute import (
 )
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.types import DatabaseSession
-from foundation.resources import parse_memory_mib
 from pydantic import ConfigDict, Field, JsonValue
 from shared.aws_connections import AwsAccountComputeConfiguration, AwsAccountConnection
 from shared.compute_enrollment import (
@@ -40,6 +39,7 @@ from shared.contracts import ContractModel
 from shared.deployment_records import Deployment, DeploymentSpec, request_and_limit
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
+from shared.resources import parse_memory_mib
 from shared.timestamps import utc_now
 
 from compute.agent_control import (

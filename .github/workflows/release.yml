@@ -5,7 +5,7 @@ name: Release Artifacts
 # that shipping code to our control plane does not rebuild artifacts other
 # people's infrastructure already resolves.
 #
-# `ship.yml` runs this and then the deploy, which is how a tag becomes both.
+# `ship.yml` cuts the version, runs this, and then the deploy.
 
 # Called by `ship.yml`, never dispatched on its own. Publishing a release
 # finishes nothing by itself: the artifacts are immutable and public, and
@@ -14,10 +14,12 @@ name: Release Artifacts
 # start against a release that exists and that it was never told about.
 on:
   workflow_call:
-    outputs:
+    inputs:
       version:
-        description: The immutable version the release was published under.
-        value: ${{ jobs.connected-aws-assets.outputs.version }}
+        description: The version this release is published under, as cut by ship.yml.
+        type: string
+        required: true
+    outputs:
       manifest_url:
         description: Public URL of the published manifest, for a deployment to name.
         value: ${{ jobs.connected-aws-assets.outputs.manifest_url }}
@@ -27,40 +29,11 @@ permissions:
   id-token: write
 
 jobs:
-  build:
-    name: Build uv workspace packages
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          enable-cache: true
-          version: "0.11.21"
-
-      - name: Build packages
-        run: uv build --all-packages -o dist
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: lazycloud-python-packages
-          path: dist/*
-          if-no-files-found: error
-
   connected-aws-assets:
     name: Publish connected AWS assets
     runs-on: ubuntu-latest
     environment: release
     outputs:
-      version: ${{ steps.version.outputs.version }}
       manifest_url: ${{ steps.published.outputs.manifest_url }}
     env:
       AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
@@ -103,21 +76,10 @@ jobs:
           test "${repository}" != "None"
           echo "uri=${repository}" >> "${GITHUB_OUTPUT}"
 
-      - name: Resolve immutable version
-        id: version
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            version="${GITHUB_REF_NAME#v}"
-          else
-            version="${GITHUB_SHA}"
-          fi
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
-
       - name: Build and stage Linux agent executables
         run: >-
           uv run --no-project python deploy/agent-binary/build.py build
-          --version "${{ steps.version.outputs.version }}"
+          --version "${{ inputs.version }}"
           --output dist/agent-binarys
           --arch amd64
 
@@ -130,7 +92,7 @@ jobs:
           target: container-worker
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.repository.outputs.uri }}:${{ steps.version.outputs.version }}
+          tags: ${{ steps.repository.outputs.uri }}:${{ inputs.version }}
           cache-from: type=gha,scope=connected-aws-container-worker
           cache-to: type=gha,mode=max,scope=connected-aws-container-worker
 
@@ -144,8 +106,8 @@ jobs:
         shell: bash
         run: |
           cpu_ami_ids="$(uv run --group workspace python deploy/ami/bake.py \
-            --release-version "${{ steps.version.outputs.version }}" \
-            --agent-version-dir "dist/agent-binarys/${{ steps.version.outputs.version }}" \
+            --release-version "${{ inputs.version }}" \
+            --agent-version-dir "dist/agent-binarys/${{ inputs.version }}" \
             --worker-image \
             "${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}" \
             --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}" \
@@ -172,8 +134,8 @@ jobs:
         run: |
           gpu_ami_ids="$(uv run --group workspace python deploy/ami/bake.py \
             --variant gpu \
-            --release-version "${{ steps.version.outputs.version }}" \
-            --agent-version-dir "dist/agent-binarys/${{ steps.version.outputs.version }}" \
+            --release-version "${{ inputs.version }}" \
+            --agent-version-dir "dist/agent-binarys/${{ inputs.version }}" \
             --worker-image \
             "${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}" \
             --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}" \
@@ -185,9 +147,9 @@ jobs:
       - name: Stage immutable connected AWS release bundle
         run: >-
           uv run --group workspace python deploy/aws-release-assets/release.py stage
-          --version "${{ steps.version.outputs.version }}"
+          --version "${{ inputs.version }}"
           --agent-version-dir
-          "dist/agent-binarys/${{ steps.version.outputs.version }}"
+          "dist/agent-binarys/${{ inputs.version }}"
           --worker-image
           "${{ steps.repository.outputs.uri }}@${{ steps.container-worker.outputs.digest }}"
           --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}"
@@ -200,28 +162,28 @@ jobs:
         run: >-
           uv run --group workspace python deploy/aws-release-assets/release.py publish
           --manifest
-          "dist/connected-aws/${{ steps.version.outputs.version }}/manifest.json"
+          "dist/connected-aws/${{ inputs.version }}/manifest.json"
 
       - name: Name the published release
         id: published
         shell: bash
         run: |
           set -euo pipefail
-          manifest="dist/connected-aws/${{ steps.version.outputs.version }}/manifest.json"
+          manifest="dist/connected-aws/${{ inputs.version }}/manifest.json"
           url="$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["manifest_public_url"])' "${manifest}")"
           test -n "${url}"
           echo "manifest_url=${url}" >> "${GITHUB_OUTPUT}"
-          echo "Published ${{ steps.version.outputs.version }} at ${url}"
+          echo "Published ${{ inputs.version }} at ${url}"
 
       - name: Verify published assets without AWS or registry credentials
         run: >-
           uv run --group workspace python deploy/aws-release-assets/release.py verify
           --manifest
-          "dist/connected-aws/${{ steps.version.outputs.version }}/manifest.json"
+          "dist/connected-aws/${{ inputs.version }}/manifest.json"
 
       - name: Upload connected AWS release evidence
         uses: actions/upload-artifact@v7
         with:
-          name: lazycloud-connected-aws-${{ steps.version.outputs.version }}
-          path: dist/connected-aws/${{ steps.version.outputs.version }}/
+          name: lazycloud-connected-aws-${{ inputs.version }}
+          path: dist/connected-aws/${{ inputs.version }}/
           if-no-files-found: error

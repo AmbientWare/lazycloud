@@ -1,120 +1,98 @@
 ---
-title: "Authentication and workspaces"
-description: "Accounts, sign-in, workspaces, tokens, profiles, and environment configuration."
+title: "Sign-in and workspaces"
+description: "How you sign in to the dashboard and the CLI, how workspaces work, and how to authenticate CI and scripts."
 ---
 
-## Accounts and workspaces
+## Sign in to the dashboard
 
-A **workspace** is the isolation boundary: apps, deployments, tasks, secrets,
-volumes, and compute policy all belong to a workspace.
+Go to [lazycloud.dev](https://lazycloud.dev) and continue with GitHub. The first
+sign-in creates your account and a workspace you own. There is no password;
+GitHub is the only way in.
 
-Credentials belong to your **account**. A session or an access token reaches
-every workspace your account is a member of, so choosing a workspace selects
-which one a command acts in rather than which credential it uses. Only a
-platform administrator can act on a workspace they are not a member of.
+Your name, email, and avatar come from GitHub and refresh each time you sign
+in. A browser session lasts 12 hours. Signing out ends that session only; the
+CLI and other browsers stay signed in.
 
-Your access tokens, your connected AWS account, your registered domains, and the
-machines you join belong to the account too, and apply to every workspace you
-own.
-
-```bash
-lazycloud workspace show
-lazycloud workspace rename <name>
-lazycloud workspace audit          # recent audit events, --limit/--cursor
-```
-
-## Signing in to the dashboard
-
-The dashboard signs you in with GitHub. Continuing with GitHub sends you there to
-authorize, and coming back exchanges a single-use code for a session credential
-held by the browser. Signing in for the first time creates your account and a
-workspace you own.
-
-- Your account is keyed to your GitHub account, not to your email address or
-  your login, so renaming either keeps you signed in to the same account.
-- Your name, email, and avatar come from GitHub and refresh on each sign-in.
-- A session lasts 12 hours. Signing out ends that session only — other browsers
-  and CLI logins keep working.
-- There is no password to set or change, and there is no second way in. An
-  administrator who needs access without GitHub uses the offline credential
-  described below.
-
-## Logging in with the CLI
-
-Plain `lazycloud login` signs in to the hosted LazyCloud platform. The control
-plane **endpoint** resolves in this order:
-
-1. `--endpoint <url>` flag
-2. `LAZYCLOUD_ENDPOINT` environment variable
-3. The endpoint stored in the selected profile
-4. The packaged hosted default
-
-Hosted customers need neither `--endpoint` nor `LAZYCLOUD_ENDPOINT`; both
-override the default when a command must reach a different control plane.
-
-Without `--token`, login runs a device-code flow: the CLI prints a verification
-URL and confirmation code, you approve it in the web dashboard, and the token it
-mints is stored in the profile. That token carries the approving account's own
-reach, so `--workspace` chooses which of your workspaces the profile acts in.
-With `--token`, the token is stored directly — use this for CI and scripts.
+## Sign in from the CLI
 
 ```bash
 lazycloud login
-lazycloud login --endpoint https://control-plane.example.com
-lazycloud login --token <token>
 ```
 
-`--tls/--no-tls` controls TLS for the stored endpoint, and
-`--profile`/`--activate` control profile placement.
+The CLI prints a link and a code. Open the link, confirm the code matches what
+your terminal shows, and approve. The code expires if you wait too long; run
+`lazycloud login` again to get a new one.
 
-## Profiles
+Approval signs the CLI in as you. It can reach every workspace your account
+belongs to, and it stores its credential in `~/.lazycloud/config.yaml`.
 
-Profiles hold endpoint, workspace, token, and TLS settings, stored in
-`~/.lazycloud/config.yaml` (relocate with `LAZYCLOUD_HOME`). Multiple profiles make
-it easy to switch between installations or workspaces:
+## Workspaces
+
+A workspace holds apps, deployments, tasks, secrets, volumes, and queues. It is
+the boundary between one project and another. Your account can own or belong
+to several workspaces, and the same sign-in reaches all of them.
+
+The CLI acts in one workspace at a time:
 
 ```bash
+lazycloud workspace list
+lazycloud workspace use <name>
+lazycloud workspace rename <new-name>
+```
+
+To act in a different workspace for one command, pass `--workspace <name>`.
+Create new workspaces from the workspace menu in the dashboard. Members of a
+workspace are listed in the same menu.
+
+Access tokens, your connected AWS account, joined machines, custom domains, and
+your plan belong to your account rather than to a workspace. They apply to
+every workspace you own.
+
+## CI and scripts
+
+Create an access token in the dashboard under Settings, then Tokens. Give it a
+name and an expiry (1 day to 90 days, or never). Copy the value when it is
+shown; it is not shown again. A token has the same reach as your sign-in, so
+treat it like a password. Deleting a token stops it working immediately.
+
+Give the token to the CLI through the environment:
+
+```bash
+export LAZYCLOUD_TOKEN="<token>"
+export LAZYCLOUD_WORKSPACE="<workspace-name>"
+lazycloud deploy app.py:app
+```
+
+`LAZYCLOUD_TOKEN` and `LAZYCLOUD_WORKSPACE` override whatever the CLI has
+stored, so a CI job needs no `lazycloud login` step. `LAZYCLOUD_HOME` moves the
+state directory away from `~/.lazycloud` if the job cannot write there.
+
+To store a token instead of exporting it each time:
+
+```bash
+lazycloud login --token "<token>" --workspace <workspace-name>
+```
+
+Use the token as a bearer credential when calling an authorized endpoint or
+pod directly:
+
+```bash
+curl "<endpoint-url>" -H "Authorization: Bearer $LAZYCLOUD_TOKEN"
+```
+
+### Profiles
+
+The CLI can keep more than one sign-in, for example one per workspace or one
+for an automation token. Each is a profile, and one profile is active at a
+time:
+
+```bash
+lazycloud login --profile ci --token "<token>" --workspace staging --no-activate
 lazycloud profile list
+lazycloud profile activate ci
 lazycloud profile current
-lazycloud profile show --profile staging
-lazycloud profile set --profile staging --endpoint https://staging.example.com
-lazycloud profile activate staging
-lazycloud profile delete staging
+lazycloud profile delete ci
 ```
 
-## Access tokens
-
-Create access tokens in the dashboard under **Settings → Tokens**, with an
-optional expiry. A token is account-scoped: it reaches every workspace you
-belong to, so treat it like your GitHub session.
-
-```bash
-lazycloud token show     # whether the active profile holds one
-lazycloud token set <value>
-```
-
-Tokens are bearer credentials: send them as `Authorization: Bearer <token>`
-when calling authorized endpoints directly. Revoking a token is permanent — it
-stops working across the platform immediately and is never reactivated — and
-disabling an account revokes the credentials it holds.
-
-## Environment variables
-
-Every profile setting has an environment override, which takes precedence and
-suits CI:
-
-| Variable | Purpose |
-| --- | --- |
-| `LAZYCLOUD_ENDPOINT` | Control plane endpoint URL. |
-| `LAZYCLOUD_TOKEN` | Access token. |
-| `LAZYCLOUD_WORKSPACE` | Workspace name. |
-| `LAZYCLOUD_PROFILE` | Profile to use instead of the active one. |
-| `LAZYCLOUD_TLS` | Force TLS on or off. |
-| `LAZYCLOUD_HOME` | Local state directory (default `~/.lazycloud`). |
-| `LAZYCLOUD_CONFIG` | Explicit path to the profile file. |
-
-## Workload authorization
-
-HTTP workloads default to `authorized=True`: requests must carry a bearer token
-authorized for the workspace. Set `authorized=False` on an endpoint, ASGI app,
-or pod to make it publicly reachable at its invoke URL.
+`LAZYCLOUD_PROFILE=<name>` selects a profile for one command without changing
+the active one.

@@ -1,21 +1,45 @@
 ---
-title: "Web dashboard"
-description: "A short tour of the workspace dashboard."
+title: "Dashboard"
+description: "What each part of the dashboard at lazycloud.dev shows."
 ---
 
-The dashboard is served at your control plane URL. Sign in with GitHub. It is
-also where device login codes from `lazycloud login` are approved.
+The dashboard at [lazycloud.dev](https://lazycloud.dev) is where you sign in,
+approve CLI logins, watch your workloads, and manage your account.
 
-## Surfaces
+## Workspace pages
 
-| Section | What it shows |
-| --- | --- |
-| **Apps** | Every app with its workloads, recent activity, deployment version history, lifecycle actions (stop/start/scale/delete), pod instances, latency panels, and a request playground for invoking workloads from the browser. |
-| **Tasks** | Workspace-wide task history with per-task detail: status, timing, retries, result, and logs. |
-| **Sandboxes** | Running sandboxes with an in-browser terminal, file browser, process list, and container lifecycle/lineage views. |
-| **Storage** | Volumes, secrets, and the queue/map collections, with inspectors and links back to the workloads that use them. |
-| **Usage** | Cost and usage activity over time, broken down by app. |
-| **Settings** | A layer over the current page, addressed to your account rather than to a workspace: your GitHub identity, access tokens, the AWS cloud connection and the machines you joined, custom domains, and every workspace your account belongs to. |
+Apps lists every app in the workspace with its workloads, recent activity, and
+version history. From an app you can pause, resume, scale, and delete
+workloads, inspect pod instances, watch latency, and call a workload from the
+browser with the request playground.
 
-Rendering failures degrade to per-panel error states with a retry affordance,
-so one failing panel does not take down the dashboard.
+Tasks is the workspace's task history. Each task shows its status, timing,
+retries, result, and logs.
+
+Storage holds volumes, secrets, and the queue and map collections, with a
+browser for each and links back to the workloads that use them.
+
+Sandboxes are listed under their app, with an in-browser terminal, a file
+browser, and a process list for each running one.
+
+Usage shows spend over time, broken down by app and workload. It answers for
+the account, so the figure is the same whichever workspace you are in.
+
+## Settings
+
+Settings opens over the current page and is about your account rather than a
+workspace.
+
+General shows your GitHub identity and your plan: what is included, what you
+have used, how many containers are running against your limit, and the buttons
+to manage the subscription and payment method.
+
+Tokens creates and deletes access tokens for the CLI, CI, and direct API calls.
+
+Compute is where you connect an AWS account, adjust what it may launch, and
+join your own machines. See [Compute](/platform/compute).
+
+Domains registers hostnames you own. See [Custom domains](/platform/domains).
+
+Workspace creation, renaming, and members are in the workspace menu at the top
+of the page.

@@ -12,6 +12,21 @@ resource "planetscale_postgres_branch" "control_plane" {
   major_version = var.planetscale_major_version
   cluster_size  = var.planetscale_cluster_size
   region        = var.planetscale_region
+
+  # The connection ceiling is the chart's number, not PlanetScale's default.
+  # `lazycloud.databaseBudget` refuses to render pools that exceed
+  # `database.maxConnections`, so the server is told the figure the pools are
+  # divided under and the two cannot drift. Postgres applies `max_connections`
+  # on restart; PlanetScale performs that restart when the parameter changes.
+  parameters = {
+    pgconf = {
+      max_connections = tostring(local.database_max_connections)
+    }
+  }
+}
+
+locals {
+  database_max_connections = yamldecode(file("${path.module}/../chart/values.yaml")).database.maxConnections
 }
 
 # The role the control plane connects as. Its password exists only here and in

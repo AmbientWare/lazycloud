@@ -45,8 +45,9 @@ runbook and states the two deployment models.
   workspace bucket and that the connected-AWS control role trusts.
 - Redis is managed and outside the cluster. It holds the leases the scheduler
   serialises capacity work on, so an in-cluster Redis per replica is two
-  schedulers that cannot see each other. It is single-node on purpose: what it
-  holds is rebuilt on reconnect.
+  schedulers that cannot see each other. It runs a primary and a standby with
+  automatic failover: what it holds is rebuilt on reconnect, so the standby
+  protects nothing durable, only the minutes a lost node would otherwise cost.
 - Buckets a workspace creates at runtime are not declared here and do not go away
   with `terraform destroy`. The control plane names them from
   `workspace_bucket_prefix` and creates them lazily, so a teardown that only runs

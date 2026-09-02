@@ -1,143 +1,122 @@
 ---
-title: "Run a coding agent in a Sandbox"
-description: "Plan a bounded code change with an OpenAI-compatible model, then test it without network access or provider credentials."
+title: "Run a coding agent in a sandbox"
+description: "Plan a code change with an OpenAI-compatible model in a function, then test it in a sandbox with no network and no credentials."
 ---
 
-This example separates model access from generated-code execution. A trusted
-Function calls your OpenAI-compatible provider and returns one validated file
-replacement. A second, network-blocked Sandbox receives only the seed project
-and that replacement, runs the real unit test, and is terminated in `finally`
-whether the test passes, fails, or raises an error.
+This example separates model access from running generated code. A function
+calls your OpenAI-compatible provider and returns one validated file
+replacement. A network-blocked sandbox receives only the seed project and
+that replacement, runs the unit test, and is terminated whether the test
+passes, fails, or errors.
 
-The complete implementation and seed project live under
-`examples/sandboxed_coding_agent/`.
+The source and seed project are under `examples/sandboxed_coding_agent/` in
+the LazyCloud repository.
 
 ## Trust boundary
 
+Only the planner function receives provider configuration:
+
 ```python
-from examples.sandboxed_coding_agent.app import plan_patch, sandbox
+@app.function(
+    name="plan-patch",
+    secrets=["CODING_AGENT_BASE_URL", "CODING_AGENT_MODEL", "CODING_AGENT_API_KEY"],
+)
+def plan_patch(prompt: str, seed_files: dict[str, str]) -> PatchPlan: ...
 
-planner_spec = plan_patch.spec()
-sandbox_spec = sandbox.spec()
 
-assert planner_spec.secrets == [
-    "CODING_AGENT_BASE_URL",
-    "CODING_AGENT_MODEL",
-    "CODING_AGENT_API_KEY",
-]
-assert sandbox_spec.metadata["block_network"] is True
-assert sandbox_spec.secrets == []
-assert sandbox_spec.env == {}
+sandbox = app.sandbox(name="test-patch", block_network=True)
 ```
 
-Only the planner container receives provider configuration. The Sandbox has no
-provider secret, outbound network access, exposed port, snapshot, or retained
-filesystem. The local orchestrator validates the remote result again before it
-uploads anything.
+The sandbox has no secrets, no outbound network, no exposed ports, and no
+retained filesystem. The local orchestrator validates the planner's result
+again before uploading anything.
 
-The patch contract accepts complete UTF-8 content only for `calculator.py`. It
-rejects absolute and traversal paths, empty segments, unapproved or duplicate
-files, NUL/control payloads, more than three files, and more than 12,000 total
-bytes. The model cannot modify the test.
+The patch contract accepts complete UTF-8 content for `calculator.py` only.
+It rejects absolute and traversal paths, unapproved or duplicate files,
+control characters, more than three files, and more than 12,000 bytes. The
+model cannot modify the test.
 
-## Configure an OpenAI-compatible provider
+## Configure a provider
 
-Set a base URL ending at the provider's OpenAI-compatible API root, such as an
-HTTPS `/v1` URL, along with that provider's model identifier and API key. The
-example appends `/chat/completions` itself.
+Set a base URL ending at the provider's OpenAI-compatible root (an HTTPS
+`/v1` URL), the model name, and the API key. The example appends
+`/chat/completions` itself.
 
 ```bash
 export CODING_AGENT_BASE_URL="https://provider.example/v1"
 export CODING_AGENT_MODEL="provider-model-name"
 read -rsp "Provider API key: " CODING_AGENT_API_KEY && echo
 
-uv run lazycloud secret create CODING_AGENT_BASE_URL "$CODING_AGENT_BASE_URL" --workspace default
-uv run lazycloud secret create CODING_AGENT_MODEL "$CODING_AGENT_MODEL" --workspace default
-uv run lazycloud secret create CODING_AGENT_API_KEY "$CODING_AGENT_API_KEY" --workspace default
+lazycloud secret create CODING_AGENT_BASE_URL "$CODING_AGENT_BASE_URL"
+lazycloud secret create CODING_AGENT_MODEL "$CODING_AGENT_MODEL"
+lazycloud secret create CODING_AGENT_API_KEY "$CODING_AGENT_API_KEY"
 unset CODING_AGENT_BASE_URL CODING_AGENT_MODEL CODING_AGENT_API_KEY
 ```
 
-Shell history records the variable names shown above, not their expanded
-values. Do not paste a key directly into the example, prompt, URL, logs, or
-source files. Workspace secret values are injected only into the planner
-Function's environment.
+Shell history records the variable names, not the values. Do not paste the
+key into the prompt, a URL, or a source file.
 
 <Warning>
-  The planner sends the prompt and seed source files to the provider you
-  configure. Do not use this example with proprietary source until that
-  provider's data handling and retention terms are acceptable to you.
+  The planner sends the prompt and the seed source files to the provider you
+  configure. Check that provider's data handling terms before pointing it at
+  proprietary code.
 </Warning>
 
 ## Deploy and run
 
-Deploying the App deploys the planner Function. Sandboxes are created on demand,
-so there is no long-running Sandbox deployment.
+Deploying the app deploys the planner. Sandboxes are created on demand.
 
 ```bash
-uv run lazycloud deploy examples.sandboxed_coding_agent.app:app --workspace default
-uv run lazycloud deployment list --app sandboxed_coding_agent --workspace default
-uv run lazycloud run examples.sandboxed_coding_agent.app:run_agent --workspace default
+lazycloud deploy examples.sandboxed_coding_agent.app:app
+lazycloud deployment list --app sandboxed_coding_agent
+lazycloud run examples.sandboxed_coding_agent.app:run_agent
 ```
 
-The default prompt asks the planner to fix the intentionally incorrect
-`calculator.add` implementation without changing its test. The result includes
-the planner Task ID, terminated Sandbox ID, changed paths, test exit code,
-bounded test output, and `tests_passed`. It never includes provider credentials
-or generated file contents.
+The default prompt asks the planner to fix the deliberately wrong
+`calculator.add` without changing its test. The result includes the planner
+task id, the terminated sandbox id, changed paths, the test exit code,
+bounded test output, and `tests_passed`. It never includes credentials or
+generated file contents.
 
-Pass a different bounded instruction as the first argument while keeping the
-same approved file scope:
+Pass a different instruction as the first argument:
 
 ```bash
-uv run lazycloud run examples.sandboxed_coding_agent.app:run_agent "Correct calculator.add and preserve its type hints." --workspace default
+lazycloud run examples.sandboxed_coding_agent.app:run_agent "Correct calculator.add and preserve its type hints."
 ```
 
-## Inspect the workflow
-
-Use the planner Task ID returned by `run_agent` to inspect durable status and
-logs. The provider response body and credentials are never logged by the
-example.
+## Inspect
 
 ```bash
-uv run lazycloud task show <planner-task-id> --workspace default
-uv run lazycloud task logs <planner-task-id> --workspace default
-uv run lazycloud run examples.sandboxed_coding_agent.app:inspect_sandboxes 20 --workspace default
+lazycloud task show <planner-task-id>
+lazycloud task logs <planner-task-id>
+lazycloud run examples.sandboxed_coding_agent.app:inspect_sandboxes 20
 ```
 
-The final list should show the invocation's Sandbox in a terminal `stopped` or
-`failed` state, never `running` or `stopping`. A failed provider request or
-invalid structured response fails before Sandbox creation.
-A file-upload, process, or test exception terminates the created Sandbox before
-the error propagates. A normal failing test returns `tests_passed: false` and a
+The sandbox list should show this run's sandbox as `stopped` or `failed`,
+never `running`. A failed provider request fails before the sandbox is
+created. An upload, process, or test exception terminates the sandbox before
+the error propagates. A failing test returns `tests_passed: false` and a
 nonzero exit code; it is never reported as success.
 
-## Cost and production hardening
+## Cost and hardening
 
-Each invocation incurs your model provider's token charges and LazyCloud compute
-for one short planner Function plus one CPU Sandbox. The default project is tiny,
-but costs grow with source size, model pricing, and repeated attempts.
+Each run costs your provider's tokens plus a short planner function and one
+CPU sandbox. The seed project is tiny; costs grow with source size, model
+pricing, and retries.
 
-This example demonstrates a narrow execution boundary, not a complete autonomous
-software-development system. Before adapting it, add your own authorization,
-approval policy, repository checkout controls, prompt-injection defenses,
-language-specific resource limits, audit retention, and human review before
-merging generated changes.
+This is a narrow execution boundary, not an autonomous development system.
+Before adapting it, add authorization, an approval policy, repository
+checkout controls, prompt-injection defenses, per-language resource limits,
+audit retention, and human review before merging generated changes.
 
-## Cleanup
+## Clean up
 
-The orchestrator terminates its Sandbox automatically. Delete the planner
-deployment and its three configuration secrets when finished:
+The orchestrator terminates its sandbox. Delete the planner deployment and
+the three secrets:
 
 ```bash
-uv run lazycloud deployment delete plan-patch --workspace default
-uv run lazycloud secret delete CODING_AGENT_BASE_URL --workspace default
-uv run lazycloud secret delete CODING_AGENT_MODEL --workspace default
-uv run lazycloud secret delete CODING_AGENT_API_KEY --workspace default
+lazycloud deployment delete plan-patch
+lazycloud secret delete CODING_AGENT_BASE_URL
+lazycloud secret delete CODING_AGENT_MODEL
+lazycloud secret delete CODING_AGENT_API_KEY
 ```
-
-<Note>
-  Local tests verify the provider protocol, patch constraints, public workload
-  specifications, bounded results, and cleanup paths. End-to-end acceptance
-  still requires a real provider credential plus a reachable LazyCloud control
-  plane; the example has no deterministic or mocked production success path.
-</Note>

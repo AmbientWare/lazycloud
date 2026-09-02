@@ -24,7 +24,7 @@ workspace = [
     "provider-clients",
     "scheduler",
     "runner",
-    "lazycloud==0.1.0",
+    "lazycloud-client==0.1.0",
     "storage",
     "storage-client",
     "worker",
@@ -128,7 +128,7 @@ scheduler-app = { workspace = true }
 tunnel-gateway-app = { workspace = true }
 scheduler = { workspace = true }
 runner = { workspace = true }
-lazycloud = { workspace = true }
+lazycloud-client = { workspace = true }
 storage = { workspace = true }
 storage-client = { workspace = true }
 worker = { workspace = true }

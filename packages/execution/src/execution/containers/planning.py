@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from foundation.resources import parse_memory_mib
 from pydantic import Field
 from shared.container_requests import (
     DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
@@ -14,6 +13,7 @@ from shared.container_requests import (
 from shared.contracts import ContractModel
 from shared.deployment_records import DEFAULT_DISK
 from shared.errors import InvalidInputError
+from shared.resources import parse_memory_mib
 from shared.workload_config import StubRuntimeConfig
 
 # The platform ceiling in MiB, for paths that start a container without a

@@ -3,56 +3,41 @@ title: "CLI overview"
 description: "The lazycloud command: global flags, handler references, and command groups."
 ---
 
-The `lazycloud` command is installed with the `lazycloud` Python distribution. See
-[Installation](/getting-started/installation).
+The `lazycloud` command installs with the `lazycloud` Python package. See
+[Installation](/getting-started/installation). Sign in once with
+`lazycloud login`; see [Sign-in and workspaces](/platform/auth).
 
 ```text
 lazycloud [--json] [--debug] COMMAND [ARGS]...
 ```
 
-| Global flag | Description |
-| --- | --- |
-| `--json` | Print structured JSON output (clean for scripting). |
-| `--debug` | Show full tracebacks for execution errors. |
-| `--install-completion` / `--show-completion` | Shell completion management. |
-| `-h`, `--help` | Help for any command. |
+`--json` prints one JSON document to stdout for scripting; progress goes to
+stderr and errors become one JSON error document with a nonzero exit code.
+Log-follow commands print newline-delimited JSON, one record per event.
+Interactive commands (`shell`, `dev`, `serve`) reject `--json`. `--debug`
+shows full tracebacks. `-h` or `--help` works on every command.
 
-## Output modes
-
-Human output is the default. Finite commands use labeled cards for records and
-completed actions, tables for collections, and semantic status text. Styling is
-removed automatically when output is redirected.
-
-`--json` reserves standard output for machine data. A finite command writes one
-JSON document to stdout; progress stays on stderr. Command errors write one JSON
-error document to stderr and return a nonzero exit code. Place the flag before
-`--`: arguments after `--` belong to the invoked handler.
-
-Log-follow commands write newline-delimited JSON in `--json` mode because each
-event is a separate record. Human log and container streams remain exact text so
-bracketed content, whitespace, and line endings are not interpreted as terminal
-markup. Interactive commands such as `shell`, `dev`, and `serve` reject
-`--json`.
+Human output is the default. Styling is dropped when output is redirected.
 
 ## Handler references
 
 Commands that take a `HANDLER` accept `<file-or-module>:<object>`:
 
-- `quickstart.py:hello` — a Python file path and a decorated object in it.
-- `examples.all_workloads:app` — an importable module path and an object.
+- `quickstart.py:hello`, a Python file and a decorated object in it.
+- `myproject.api:app`, an importable module and an object in it.
 
-The object can be a single decorated resource or an `App` (deploying an app
-deploys everything it registers; use `--resource <name>` or
-`--resource <kind>:<name>` to select one).
+The object is one decorated resource or an `App`. Deploying an `App` deploys
+everything it registers; `--resource <name>` or `--resource <kind>:<name>`
+selects one.
 
 ## Command groups
 
-| Group | Commands | Reference |
-| --- | --- | --- |
-| Build and run | `deploy`, `run`, `serve`, `shell`, `dev` | [Deploy and run](/cli/deploy-and-run) |
-| Tasks and logs | `task`, `logs` | [Tasks and logs](/cli/tasks-and-logs) |
-| Deployments | `deployment`, `container` | [Deployments and containers](/cli/deployments-and-containers) |
-| Storage | `volume`, `ls`, `cp`, `rm`, `mv`, `secret` | [Storage](/cli/storage) |
-| Compute | `cloud`, `compute`, `machine` | [Compute](/cli/compute) |
-| Auth | `login`, `profile`, `token`, `workspace` | [Auth](/cli/auth) |
-| Scaffolding | `quickstart`, `create-app`, `example` | [Scaffolding](/cli/scaffolding) |
+| Commands | Reference |
+| --- | --- |
+| `deploy`, `run`, `serve`, `shell`, `dev` | [Deploy and run](/cli/deploy-and-run) |
+| `task`, `logs` | [Tasks and logs](/cli/tasks-and-logs) |
+| `app`, `deployment`, `container`, `client` | [Apps and deployments](/cli/deployments-and-containers) |
+| `volume`, `ls`, `cp`, `rm`, `mv`, `secret` | [Storage](/cli/storage) |
+| `compute`, `cloud`, `machine`, `domain` | [Compute and domains](/cli/compute) |
+| `login`, `workspace`, `profile`, `token` | [Sign-in](/cli/auth) |
+| `quickstart`, `create-app`, `example` | [Scaffolding](/cli/scaffolding) |

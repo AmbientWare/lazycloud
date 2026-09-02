@@ -1,74 +1,76 @@
 ---
 title: "Tasks and logs"
-description: "Every invocation is a durable task with status, result, and logs."
+description: "Every invocation is a durable task with a status, a result, and logs."
 ---
 
-Every function call, endpoint request, queue submission, and scheduled run is
-recorded as a durable **task**. Tasks carry status, timing, the serialized
-result or error, retry history, and logs.
+Every function call, endpoint request, scheduled run, and `lazycloud run` is
+recorded as a task. A task keeps its status, timing, result or error, retry
+history, and logs.
 
-## Task lifecycle
+## Lifecycle
 
-A task moves through pending, running, and a terminal state: complete, error
-(after exhausting retries), cancelled, or timed out. Retries are recorded on
-the same task.
+A task is `pending` until a container picks it up, then `running`. If an
+attempt fails and retries remain it is `retry`. It ends as `complete`,
+`failed`, `timeout`, `cancelled`, or `expired`. Retries stay on the same task.
 
-## Inspecting tasks from the CLI
+## From the CLI
 
 ```bash
-lazycloud task list                 # recent tasks in the workspace
+lazycloud task list                 # recent tasks, --app to filter by app
 lazycloud task show <task-id>       # status, timing, deployment, container
-lazycloud task result <task-id>     # waits for and prints the result
-lazycloud task logs <task-id>       # recent log lines for the task
+lazycloud task result <task-id>     # waits for completion and prints the result
+lazycloud task logs <task-id>       # recent log lines
 lazycloud task stop <task-id> ...   # stop running tasks
 lazycloud task cancel <task-id>     # cancel a pending task
 ```
 
-`task result` waits by default; use `--no-wait` for a snapshot or `--timeout`
-to bound the wait.
+`task result --no-wait` returns the current state without waiting;
+`--timeout <seconds>` bounds the wait.
 
-## Streaming logs
+## Logs
 
-`lazycloud logs` streams logs by task, container, deployment, or stub:
+`lazycloud logs` reads logs by deployment, task, or container, and `--follow`
+streams them:
 
 ```bash
 lazycloud logs --task-id <task-id> --follow
-lazycloud logs --deployment-id <deployment-id> -n 500 --show-timestamp
+lazycloud logs --deployment predict -n 500 --show-timestamp
 lazycloud logs --container-id <container-id>
 ```
 
-Anything your code prints to stdout/stderr is captured. Print with
-`flush=True` (or run Python unbuffered) so lines appear promptly.
+`--deployment` takes a deployment name or id. Anything your code prints to
+stdout or stderr is captured. Print with `flush=True`, or run Python
+unbuffered, so lines show up promptly.
 
-## Task handles in Python
+## From Python
 
-Spawned functions and queue submissions return handles:
+`spawn` returns a `FunctionCall`:
 
 ```python
-handle = my_function.spawn(42)          # FunctionCall
-print(handle.task_id)
+handle = my_function.spawn(42)
+handle.task_id
+handle.get(timeout_seconds=120)              # waits and returns the value, or raises
 
-queued = my_queue_fn.target("deployed").put(42)
-result = queued.result(wait=True, timeout_seconds=120)
-print(result.ok, result.status, result.value, result.error)
+result = handle.result(wait=True, timeout_seconds=120)
+result.ok, result.status, result.value, result.error
+handle.logs()
 ```
 
-The `Client` session object offers the same workflow when you need task
-control outside a decorated object:
+For a task you only know by id, use `Client`:
 
 ```python
 from lazycloud import Client
 
-client = Client()
-task = client.task_handle("<task-id>")
-outcome = task.wait(timeout_seconds=120)
+task = Client().task_handle("<task-id>")
+outcome = task.wait(timeout_seconds=120)     # a TaskResult
+task.logs()
+task.cancel()
 ```
 
-Results expose `ok`, `status`, `value`, and `error`. Failed tasks keep the
-error message and full logs for debugging.
+Failed tasks keep the error message and the full logs.
 
 ## Callbacks
 
-Every workload accepts `callback_url`; the platform calls the webhook with
-execution events as tasks change state, so external systems can react without
-polling.
+Every workload accepts `callback_url`. LazyCloud calls the webhook with
+execution events as the task changes state, so another system can react
+without polling.

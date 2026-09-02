@@ -61,6 +61,12 @@ pools that never launch rather than anything that fails. Without the account id
 the apply refuses, because the catalog publisher checks the credential against it
 and has nothing to check.
 
+`cluster_api_cidrs` names the addresses the Kubernetes API accepts from outside
+the VPC, and the machine running this apply must be one of them; the Kubernetes
+and Helm providers reach the cluster through that endpoint. When your address
+changes, `terraform apply -target=aws_eks_cluster.control_plane` updates the
+list through the AWS API alone, and a full apply follows.
+
 **A failed apply is not proof that nothing was created.** EKS has returned a 400
 on `CreateCluster` and created the cluster anyway, leaving it ACTIVE and absent
 from state, where `terraform destroy` will never find it. After any failed apply,

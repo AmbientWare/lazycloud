@@ -1,15 +1,17 @@
 ---
 title: "Volumes and cloud buckets"
-description: "Durable shared filesystems mounted into workloads, plus S3-compatible bucket mounts."
+description: "Durable shared filesystems mounted into workloads, and S3-compatible buckets you own mounted in place."
 ---
 
 ## Volumes
 
-A `Volume` is a durable, workspace-scoped filesystem that mounts into any
-workload at a path you choose. Use volumes for model weights, datasets, and
+A `Volume` is a durable filesystem owned by the workspace. Mount it into any
+workload at a path you choose. Use it for model weights, datasets, and
 anything that should outlive a container.
 
 ```python
+from pathlib import Path
+
 from lazycloud import App, Volume
 
 app = App("training")
@@ -18,10 +20,10 @@ models = Volume("models", "/models")
 
 @app.function(volumes=[models])
 def load(name: str) -> int:
-    return len((__import__("pathlib").Path("/models") / name).read_bytes())
+    return len((Path("/models") / name).read_bytes())
 ```
 
-Create volumes from the CLI or SDK:
+Create it from the CLI or Python:
 
 ```bash
 lazycloud volume create models
@@ -33,29 +35,31 @@ lazycloud volume delete models
 models.get_or_create()   # idempotent; .create() and .delete() also exist
 ```
 
-## Working with files
+Volume storage is billed per GiB-month. See [Plans and limits](/platform/plans).
 
-From inside a mounted container, a volume is just a directory. From outside,
-the `Volume` object reads and writes through the control plane:
+## Move files
+
+Inside a container, a mounted volume is a directory. From outside, the `Volume`
+object reads and writes it:
 
 ```python
 models.put("weights.pt", "llama/weights.pt")     # upload
 models.get("llama/weights.pt", "weights.pt")     # download
 models.list("llama")                              # names under a prefix
-models.list_path("llama")                         # entries with size metadata
+models.list_path("llama")                         # entries with size and time
 models.stat("llama/weights.pt")
 models.move("llama/weights.pt", "archive/weights.pt")
 models.remove("archive/weights.pt")
 
 models.write_text("notes.txt", "hello")
-print(models.read_text("notes.txt"))
+models.read_text("notes.txt")
 models.write_bytes("blob.bin", b"\x00")
 models.read_bytes("blob.bin")
 ```
 
-The CLI mirrors these with `lazycloud://<volume>/<path>` remote paths (the
-scheme is optional except for the source of a download, where it marks the
-path as remote):
+The CLI does the same with `lazycloud://<volume>/<path>` paths. The scheme is
+optional except on the source of a download, where it marks the path as
+remote:
 
 ```bash
 lazycloud ls models/llama
@@ -65,19 +69,18 @@ lazycloud mv models/llama/weights.pt models/archive/weights.pt
 lazycloud rm models/archive/weights.pt
 ```
 
-### Large files
-
-For multi-gigabyte uploads, volumes support presigned URLs and multipart
-uploads: `presigned_url(...)`, `create_multipart_upload(...)`,
-`complete_multipart_upload(...)`, and `abort_multipart_upload(...)`.
+For multi-gigabyte uploads, `presigned_url(...)`,
+`create_multipart_upload(...)`, `complete_multipart_upload(...)`, and
+`abort_multipart_upload(...)` let you upload in parts.
 
 ## Cloud buckets
 
-`CloudBucket` mounts an S3-compatible bucket you own directly into workloads.
-The mount reads and writes the bucket in place — nothing is copied into
-platform storage.
+`CloudBucket` mounts an S3-compatible bucket you own into workloads. Reads and
+writes go to the bucket in place; nothing is copied into LazyCloud storage.
 
 ```python
+from pathlib import Path
+
 from lazycloud import App, CloudBucket, CloudBucketConfig
 
 app = App("etl")
@@ -95,24 +98,16 @@ bucket = CloudBucket(
 
 @app.function(volumes=[bucket])
 def process(key: str) -> str:
-    return (__import__("pathlib").Path("/data") / key).read_text()
+    return (Path("/data") / key).read_text()
 ```
 
-`access_key` and `secret_key` are the **names of workspace
-[secrets](/concepts/secrets)** holding your credentials — never the credential
-values themselves. Set both or neither; with neither, the mount uses the
-compute environment's ambient credentials (for example an AWS instance role on
-[connected-cloud compute](/platform/compute)).
+`access_key` and `secret_key` are the names of [workspace secrets](/concepts/secrets)
+holding your credentials, never the values. Set both or neither. With neither,
+the mount uses the credentials of the compute it runs on, for example the
+instance role on your [connected AWS account](/platform/compute).
 
-`CloudBucketConfig` options:
-
-| Field | Description |
-| --- | --- |
-| `provider` | Bucket provider; `"s3"` (S3-compatible) is supported. |
-| `bucket` | Bucket name when it differs from the `CloudBucket` name. |
-| `prefix` | Mount only a key prefix of the bucket. |
-| `region` | Bucket region. |
-| `endpoint` | Custom endpoint URL for S3-compatible stores. |
-| `read_only` | Mount read-only. |
-| `force_path_style` | Use path-style addressing (required by many S3-compatible stores). |
-| `access_key` / `secret_key` | Workspace secret names holding the credentials. |
+`CloudBucketConfig` also takes `bucket` when the bucket name differs from the
+mount name, `prefix` to mount only part of the bucket, `endpoint` for a
+non-AWS S3-compatible store, `force_path_style` for stores that need
+path-style addressing, and `read_only`. The bucket must already exist; a
+mount never creates one.

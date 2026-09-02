@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Annotated, Literal
 
-from foundation.resources import parse_memory_mib
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -22,6 +21,7 @@ from shared.deployment_records import (
 from shared.enums import StringEnum
 from shared.image_building.authoring import PythonVersion
 from shared.mounts import MountAuthMode, validate_mount_auth
+from shared.resources import parse_memory_mib
 from shared.workload_config import (
     cpu_limit_at_or_above_request,
     memory_limit_at_or_above_request,

@@ -1,11 +1,11 @@
 ---
 title: "Examples"
-description: "Complete LazyCloud applications for GPU inference, model training, ASGI services, coding agents, and parallel data processing."
+description: "Complete applications built on the LazyCloud SDK: GPU inference, model training, an ASGI service, a coding agent, and parallel data processing."
 ---
 
-Each example is a complete application built with the public LazyCloud Python SDK. Start with the
-guide for the workflow you want, then use the matching directory under `examples/` as the runnable
-source of truth.
+Each example is a complete application. Its source lives under `examples/` in
+the LazyCloud repository; clone the repository and run the commands in each
+guide from its root, where `examples.<name>.app:app` is importable.
 
 <CardGroup cols={2}>
   <Card
@@ -13,53 +13,46 @@ source of truth.
     icon="messages"
     href="/examples/openai-compatible-llm"
   >
-    Serve a public language model behind an authenticated OpenAI-compatible API on GPU compute.
+    Serve a language model behind an authenticated OpenAI-compatible API on a GPU.
   </Card>
   <Card
     title="Train a YOLO object detector"
     icon="camera"
     href="/examples/train-yolo-object-detector"
   >
-    Train on a GPU, persist the checkpoint, and run prediction from a separate Function.
+    Train on a GPU, keep the checkpoint in a volume, and predict from a second function.
   </Card>
   <Card
     title="Document processing with FastAPI"
     icon="file-magnifying-glass"
     href="/examples/document-processing-asgi"
   >
-    Build a complete ASGI application with uploads, background OCR, durable Tasks, and polling.
+    An ASGI upload service with background OCR and polling over durable tasks.
   </Card>
   <Card
     title="Sandboxed coding agent"
     icon="terminal"
     href="/examples/sandboxed-coding-agent"
   >
-    Keep model credentials in a trusted Function while generated code runs in an isolated Sandbox.
+    Keep model credentials in a function while generated code runs in a network-blocked sandbox.
   </Card>
   <Card
     title="Parallel Parquet processing on S3"
     icon="table"
     href="/examples/parallel-parquet-s3"
   >
-    Fan out partition work through a Function and write the aggregate result back to your bucket.
+    Fan partition work out through a function and write the summary back to your bucket.
   </Card>
 </CardGroup>
 
 ## Before you begin
 
-Install and authenticate the CLI, then select the workspace used by each guide:
-
 ```bash
 lazycloud login
-lazycloud workspace show
+lazycloud workspace list
 ```
 
-The GPU examples require available NVIDIA capacity and incur compute and model-download costs. The
-storage examples create durable files that remain until you run their cleanup steps. Every guide
-calls out its external credentials, licenses, retained resources, and teardown commands before the
-first deployment.
-
-<Note>
-  These examples use current LazyCloud APIs and their real production backends. They do not include
-  local-only substitutes for Tasks, Sandboxes, Volumes, object storage, or model execution.
-</Note>
+The GPU examples need GPU capacity and cost compute and model-download time.
+The storage examples create volumes and files that stay until you run the
+cleanup steps. Each guide names its external credentials, licenses, and
+teardown commands before the first deploy.
