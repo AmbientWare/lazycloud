@@ -4,6 +4,8 @@ ARG PYTHON_IMAGE=python:3.12-slim
 ARG PYTHON310_IMAGE=python:3.10-slim
 ARG PYTHON311_IMAGE=python:3.11-slim
 ARG PYTHON312_IMAGE=python:3.12-slim
+ARG PYTHON313_IMAGE=python:3.13-slim
+ARG PYTHON314_IMAGE=python:3.14-slim
 ARG GO_IMAGE=golang:1.24.4-bookworm
 
 FROM debian:bookworm-slim AS runsc
@@ -205,10 +207,36 @@ RUN --mount=type=cache,id=lazycloud-managed-runtime-uv-cache-v2,target=/root/.ca
     bash deploy/managed-runtime/build-version.sh /out/amd64 amd64 \
     && bash deploy/managed-runtime/build-version.sh /out/arm64 arm64
 
+FROM ${PYTHON313_IMAGE} AS managed-runtime-python313
+ENV UV_LINK_MODE=copy
+WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc /uv /uvx /bin/
+COPY --from=managed-package-source /packages ./packages
+COPY deploy/managed-runtime ./deploy/managed-runtime
+COPY deploy/managed-runtime/build.py deploy/managed-runtime/build-version.sh ./deploy/managed-runtime/
+COPY deploy/managed-runtime/locks.py ./deploy/managed-runtime/locks.py
+RUN --mount=type=cache,id=lazycloud-managed-runtime-uv-cache-v2,target=/root/.cache/uv \
+    bash deploy/managed-runtime/build-version.sh /out/amd64 amd64 \
+    && bash deploy/managed-runtime/build-version.sh /out/arm64 arm64
+
+FROM ${PYTHON314_IMAGE} AS managed-runtime-python314
+ENV UV_LINK_MODE=copy
+WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc /uv /uvx /bin/
+COPY --from=managed-package-source /packages ./packages
+COPY deploy/managed-runtime ./deploy/managed-runtime
+COPY deploy/managed-runtime/build.py deploy/managed-runtime/build-version.sh ./deploy/managed-runtime/
+COPY deploy/managed-runtime/locks.py ./deploy/managed-runtime/locks.py
+RUN --mount=type=cache,id=lazycloud-managed-runtime-uv-cache-v2,target=/root/.cache/uv \
+    bash deploy/managed-runtime/build-version.sh /out/amd64 amd64 \
+    && bash deploy/managed-runtime/build-version.sh /out/arm64 arm64
+
 FROM python-manifests AS managed-runtime
 COPY --from=managed-runtime-python310 /out/ /tmp/managed-runtime-python310/
 COPY --from=managed-runtime-python311 /out/ /tmp/managed-runtime-python311/
 COPY --from=managed-runtime-python312 /out/ /tmp/managed-runtime-python312/
+COPY --from=managed-runtime-python313 /out/ /tmp/managed-runtime-python313/
+COPY --from=managed-runtime-python314 /out/ /tmp/managed-runtime-python314/
 COPY deploy/managed-runtime/build.py ./deploy/managed-runtime/build.py
 COPY packages/shared/src/shared/__init__.py \
     packages/shared/src/shared/managed_runtime_integrity.py \
@@ -223,10 +251,14 @@ RUN PYTHONPATH="/app/packages/shared/src" \
       --version-root /tmp/managed-runtime-python311/arm64 \
       --version-root /tmp/managed-runtime-python312/amd64 \
       --version-root /tmp/managed-runtime-python312/arm64 \
+      --version-root /tmp/managed-runtime-python313/amd64 \
+      --version-root /tmp/managed-runtime-python313/arm64 \
+      --version-root /tmp/managed-runtime-python314/amd64 \
+      --version-root /tmp/managed-runtime-python314/arm64 \
       --launcher packages/runner/src/runner/managed_runtime_launcher.py \
       --output-root /out \
     && rm -rf /tmp/managed-runtime-python310 /tmp/managed-runtime-python311 \
-      /tmp/managed-runtime-python312
+      /tmp/managed-runtime-python312 /tmp/managed-runtime-python313 /tmp/managed-runtime-python314
 
 FROM debian:bookworm-slim AS container-worker-tools
 ARG TARGETARCH

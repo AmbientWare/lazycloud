@@ -15,7 +15,7 @@ from shared.managed_runtime_integrity import (
 )
 
 MANAGED_RUNTIME_SCHEMA_VERSION = 3
-MANAGED_RUNTIME_PYTHON_VERSIONS = ("3.10", "3.11", "3.12")
+MANAGED_RUNTIME_PYTHON_VERSIONS = ("3.10", "3.11", "3.12", "3.13", "3.14")
 MANAGED_RUNTIME_ARCHITECTURES = (
     LinuxArchitecture.Amd64,
     LinuxArchitecture.Arm64,

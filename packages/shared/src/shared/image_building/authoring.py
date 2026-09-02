@@ -18,6 +18,8 @@ class PythonVersion(StringEnum):
     Py310 = "3.10"
     Py311 = "3.11"
     Py312 = "3.12"
+    Py313 = "3.13"
+    Py314 = "3.14"
 
 
 class LinuxArchitecture(StringEnum):

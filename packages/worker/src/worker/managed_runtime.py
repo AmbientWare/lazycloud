@@ -99,7 +99,7 @@ def managed_runtime_python_version(command: Sequence[str]) -> str:
     if match is None:
         raise RuntimeError(
             "managed workload entrypoint must use an explicit target interpreter such as "
-            "python3.10, python3.11, python3.12, or the matching micromamba executable"
+            "python3.10 through python3.14, or the matching micromamba executable"
         )
     return match.group(1)
 

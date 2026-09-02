@@ -73,6 +73,57 @@ jobs:
       - name: Managed runtime locks are current
         run: uv run --no-project python deploy/managed-runtime/locks.py check
 
+  # The customer package claims Python 3.10 through 3.14, and the two wheels
+  # it ships are all a customer gets. Installing them into an empty environment
+  # on every version is what catches an import that only one interpreter
+  # lacks, and it catches it here rather than on a customer's machine.
+  client-wheels:
+    name: Client wheels install on every supported Python
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          version: "0.11.21"
+
+      - name: Build the wheels
+        run: |
+          set -euo pipefail
+          uv build --package lazycloud-shared -o dist/pypi
+          uv build --package lazycloud-client -o dist/pypi
+
+      - name: Install them on every supported Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          for python in 3.10 3.11 3.12 3.13 3.14; do
+            uv run --isolated --no-project --python "${python}" \
+              --with dist/pypi/lazycloud_shared-*.whl \
+              --with dist/pypi/lazycloud_client-*.whl \
+              -- python - <<'PY'
+          import importlib, pkgutil, sys
+          import lazycloud, shared
+          failed = []
+          for package in (lazycloud, shared):
+              for module in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
+                  try:
+                      importlib.import_module(module.name)
+                  except Exception as exc:
+                      failed.append(f"{module.name}: {exc}")
+          if failed:
+              sys.exit("\n".join(failed))
+          print(f"every module imports on {sys.version.split()[0]}")
+          PY
+            uv run --isolated --no-project --python "${python}" \
+              --with dist/pypi/lazycloud_shared-*.whl \
+              --with dist/pypi/lazycloud_client-*.whl \
+              -- lazycloud --help >/dev/null
+          done
+
   validate:
     name: Changed Python owners
     runs-on: ubuntu-latest
