@@ -68,6 +68,11 @@ class PublicCliRegistry:
             raise ValueError(f"root command {name!r} is already registered")
         self._root_commands[name] = registrar
 
+    def remove_root_command(self, name: str) -> None:
+        if name not in self._root_commands:
+            raise ValueError(f"root command {name!r} is not registered")
+        del self._root_commands[name]
+
     def add_group(self, name: str, template: typer.Typer) -> None:
         if name in self._groups:
             raise ValueError(f"command group {name!r} is already registered")

@@ -186,7 +186,8 @@ jobs:
 
   release:
     name: Publish the release
-    needs: version
+    # Nothing bakes until the wheels install on every supported Python.
+    needs: [version, python-package]
     uses: ./.github/workflows/release.yml
     secrets: inherit
     with:

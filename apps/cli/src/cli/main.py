@@ -144,6 +144,8 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.add_group("usage", usage_app)
     registry.add_group("wireguard", wireguard_app)
 
+    # The admin CLI ships inside the control-plane image, not from PyPI.
+    registry.remove_root_command("update")
     registry.order_root_commands(_ADMIN_ROOT_ORDER)
     registry.order_groups(_ADMIN_GROUP_ORDER)
 
