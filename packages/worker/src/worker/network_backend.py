@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import shutil
+import socket
 import threading
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -66,6 +67,7 @@ DEFAULT_NETWORK_LOCK_RETRIES = 3
 class AgentBridgeNetworkOperation(StrEnum):
     InspectBridge = "inspect-bridge"
     InspectDefaultRoute = "inspect-default-route"
+    InspectGatewayRoute = "inspect-gateway-route"
     InspectFirewall = "inspect-firewall"
     EnableForwarding = "enable-forwarding"
     CheckFirewallRule = "check-firewall-rule"
@@ -157,6 +159,11 @@ class AgentBridgeNetworkConfig(ContractModel):
 class HostNetworkCapabilities(ContractModel):
     ipv4_interface: str
     ipv6_interface: str = ""
+    # The interface that routes to the control plane's runtime endpoint when it
+    # is not the default-route one. On a managed node the control plane is
+    # reached over WireGuard, so container traffic to it leaves through the
+    # tunnel interface and needs forwarding and NAT there, not on the uplink.
+    gateway_interface: str = ""
 
     @property
     def ipv6_enabled(self) -> bool:
@@ -342,6 +349,8 @@ class CommandNetworkSystem:
     def discover_host_capabilities(
         self,
         config: AgentBridgeNetworkConfig,
+        *,
+        gateway_address: str = "",
     ) -> HostNetworkCapabilities:
         ipv4_route = self.run(
             NetworkCommand(
@@ -352,6 +361,22 @@ class CommandNetworkSystem:
         ipv4_interface = default_route_interface(ipv4_route.stdout)
         if not ipv4_interface:
             raise RuntimeError("worker host has no IPv4 default-route interface")
+
+        gateway_interface = ""
+        if gateway_address:
+            gateway_route = self.run(
+                NetworkCommand(
+                    operation=AgentBridgeNetworkOperation.InspectGatewayRoute,
+                    argv=[config.ip_binary, "-4", "route", "get", gateway_address],
+                )
+            )
+            candidate = route_lookup_interface(gateway_route.stdout)
+            if not candidate:
+                raise RuntimeError(
+                    f"worker host has no route to the control plane at {gateway_address}"
+                )
+            if candidate != ipv4_interface:
+                gateway_interface = candidate
 
         for binary in (config.iptables_binary,):
             for table in ("nat", "filter"):
@@ -388,7 +413,47 @@ class CommandNetworkSystem:
         return HostNetworkCapabilities(
             ipv4_interface=ipv4_interface,
             ipv6_interface=ipv6_interface,
+            gateway_interface=gateway_interface,
         )
+
+
+def _gateway_ipv4_address(gateway_public_http_url: str) -> str:
+    """The IPv4 address the control plane's runtime endpoint routes to.
+
+    Resolved before the bridge is built rather than inside the probe: the
+    firewall rules are chosen from the route to this address, and the probe
+    only proves the choice was right.
+    """
+    parsed = urlsplit(gateway_public_http_url)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        raise RuntimeError("worker public gateway URL must be an HTTP origin")
+    try:
+        addresses = socket.getaddrinfo(
+            parsed.hostname,
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            family=socket.AF_INET,
+            type=socket.SOCK_STREAM,
+        )
+    except OSError as exc:
+        raise RuntimeError(
+            f"worker gateway host {parsed.hostname!r} could not be resolved"
+        ) from exc
+    if not addresses:
+        raise RuntimeError(f"worker gateway host {parsed.hostname!r} has no IPv4 address")
+    return str(addresses[0][4][0])
+
+
+def route_lookup_interface(output: str) -> str:
+    """The device `ip route get` chose, from its one-line answer."""
+    for line in output.splitlines():
+        fields = line.split()
+        try:
+            index = fields.index("dev")
+        except ValueError:
+            continue
+        if index + 1 < len(fields) and fields[index + 1]:
+            return fields[index + 1]
+    return ""
 
 
 def default_route_interface(output: str) -> str:
@@ -424,7 +489,10 @@ class AgentBridgeNetworkBackend:
         return capabilities
 
     def initialize(self, gateway_public_http_url: str = "") -> HostNetworkCapabilities:
-        self._ensure_bridge_commands()
+        gateway_address = (
+            _gateway_ipv4_address(gateway_public_http_url) if gateway_public_http_url else ""
+        )
+        self._ensure_bridge_commands(gateway_address=gateway_address)
         if gateway_public_http_url:
             self._probe_gateway_egress(gateway_public_http_url)
         return self.capabilities
@@ -680,13 +748,16 @@ class AgentBridgeNetworkBackend:
             operations=[command.operation for command in commands],
         )
 
-    def _ensure_bridge_commands(self) -> list[NetworkCommand]:
+    def _ensure_bridge_commands(self, *, gateway_address: str = "") -> list[NetworkCommand]:
         with self._bridge_lock:
             if self._bridge_ready:
                 return []
             token = self.ip_allocator.acquire_network_lock()
             try:
-                capabilities = self.system.discover_host_capabilities(self.config)
+                capabilities = self.system.discover_host_capabilities(
+                    self.config,
+                    gateway_address=gateway_address,
+                )
                 commands = self._ensure_bridge_link()
                 bridge_commands = self._bridge_commands(capabilities)
                 for command in bridge_commands:
@@ -915,6 +986,33 @@ class AgentBridgeNetworkBackend:
                 egress_interface=capabilities.ipv4_interface,
             )
         )
+        if capabilities.gateway_interface:
+            # Masqueraded to the host's own address on that interface. A WireGuard
+            # server admits the node's single tunnel address and nothing behind
+            # it, so a container's packet has to leave as the node or it is
+            # dropped at the far end without a reply to explain why.
+            commands.extend(
+                self._ensure_firewall_rule(
+                    binary=self.config.iptables_binary,
+                    table="nat",
+                    chain="POSTROUTING",
+                    rule=[
+                        "-s",
+                        self.config.subnet,
+                        "-o",
+                        capabilities.gateway_interface,
+                        "-j",
+                        "MASQUERADE",
+                    ],
+                    operation=AgentBridgeNetworkOperation.EnableMasquerade,
+                )
+            )
+            commands.extend(
+                self._ensure_forwarding_rules(
+                    binary=self.config.iptables_binary,
+                    egress_interface=capabilities.gateway_interface,
+                )
+            )
         if capabilities.ipv6_enabled:
             commands.extend(
                 self._ensure_firewall_rule(
