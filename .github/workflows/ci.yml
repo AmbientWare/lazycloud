@@ -67,6 +67,12 @@ jobs:
       - name: Connection role policy is current
         run: uv run --group workspace python deploy/render_connection_policy.py --check
 
+      # The worker image refuses a lock whose metadata digest disagrees with the
+      # managed packages, and it does so twenty minutes into a release. A rename
+      # in a pyproject is caught here instead.
+      - name: Managed runtime locks are current
+        run: uv run --no-project python deploy/managed-runtime/locks.py check
+
   validate:
     name: Changed Python owners
     runs-on: ubuntu-latest
