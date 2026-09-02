@@ -31,10 +31,6 @@ on:
           - patch
           - minor
           - major
-      deployment:
-        description: Deployment prefix the ECR repositories and secrets carry
-        type: string
-        default: lazycloud-prod
 
 # What the called workflows need, because a caller cannot grant less than they
 # ask for: this run pushes the tag and the deploy records its build as a commit
@@ -45,7 +41,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: ship-${{ inputs.deployment || 'lazycloud-prod' }}
+  group: ship
   cancel-in-progress: false
 
 jobs:
@@ -196,11 +192,13 @@ jobs:
     with:
       version: ${{ needs.version.outputs.version }}
 
+  # Straight to prod, until staging runs. Then a release lands on staging here
+  # and `promote.yml` carries it to prod once it has been looked at.
   deploy:
     name: Deploy onto it
     needs: [version, python-package, release]
     uses: ./.github/workflows/deploy.yml
     secrets: inherit
     with:
-      deployment: ${{ inputs.deployment || 'lazycloud-prod' }}
+      deployment: prod
       release_manifest_url: ${{ needs.release.outputs.manifest_url }}

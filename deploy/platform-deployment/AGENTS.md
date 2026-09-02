@@ -1,13 +1,24 @@
-# Platform EKS
+# Platform deployment
 
-Terraform for everything this platform runs on: the cluster the control plane
-runs in, the managed Redis it coordinates through, and the storage, secrets,
-registry, database and fleet network around them. `README.md` is the operator
-runbook and states the two deployment models.
+Terraform for one deployment of the platform on the cluster
+`deploy/platform-core` declares: the managed Redis it coordinates through, the
+buckets, secret documents, database branch and fleet network around it, and
+the identities its workloads hold in its namespace. Applied once per
+deployment, `lazycloud-prod` and later `lazycloud-staging`, each with its own
+state. `README.md` is the operator runbook.
 
 - The boundary is ownership, not provider. Anything in an account we hold
   credentials for is declared here. CloudFormation is only for a customer's own
   account, where we cannot run Terraform at all.
+- `var.deployment` is the namespace. Every globally-named resource and secret
+  path carries it, the PlanetScale database is named by it, and the Pod
+  Identity associations name it, so the one word that tells two deployments
+  apart in AWS is the one that tells them apart in the cluster.
+- Nothing here reaches the Kubernetes API. Every association is an AWS call
+  keyed on the cluster's name, so an apply needs no kubeconfig and no listed
+  address, and a deployment can be applied from anywhere. Keep it that way:
+  the day this module declares a Kubernetes object it inherits the core's
+  allowlist and the core's providers.
 - This is greenfield and stays greenfield. An apply produces the deployment; it
   does not adopt one. Do not add import blocks or reconciliation against
   hand-built resources.
@@ -28,21 +39,16 @@ runbook and states the two deployment models.
   `provider_aws.connection_policy` into `connection-role-policy.json`, and CI
   fails on a stale file. A second copy of a permission set drifts into a launch
   denial that names an API call rather than the policy behind it.
-- `control_role_name` is a durable external contract. A customer's trust policy
-  names it, and `prevent_destroy` exists because AWS resolves that name to a
-  unique ID that recreating cannot restore.
-
-- Auto Mode provisions everything, including the control plane. No node group is
-  declared here and no workload names a node: Karpenter sizes from what the pods
-  request, so a hand-declared pool would be choosing hardware on its behalf and
-  paying for it whether or not anything lands there.
-  The control-plane WireGuard sidecar and gateway need `NET_ADMIN` and a real
-  `/dev/net/tun`. Those are properties of a pod and of the node image every node
-  already runs, not reasons to pick an instance type.
-- A workload's AWS identity is its own, assumed through the cluster's OIDC
-  provider, and never the node's. The subject names service accounts exactly: a
-  wildcard would let any pod in the namespace hold the role that reaches every
-  workspace bucket and that the connected-AWS control role trusts.
+- `control_role_name` is a durable external contract once a customer connects.
+  A customer's trust policy names it, and AWS resolves that name to a unique ID
+  that recreating cannot restore. Unset, it is `<deployment>-control-principal`.
+- A workload's AWS identity is its own, and never the node's. Workload pods hold
+  theirs through Pod Identity: an association names this cluster, this
+  namespace and one service account, so `lazycloud-staging/control-plane`
+  cannot hold prod's role. The secret reader is the one IRSA identity, because
+  the External Secrets store is reconciled by an operator shared across
+  namespaces and the only identity it can present per store is a service
+  account token; its trust names this namespace's subject and nothing else.
 - Redis is managed and outside the cluster. It holds the leases the scheduler
   serialises capacity work on, so an in-cluster Redis per replica is two
   schedulers that cannot see each other. It runs a primary and a standby with

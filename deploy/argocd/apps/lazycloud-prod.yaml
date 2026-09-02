@@ -1,0 +1,53 @@
+# Wave 0: after the operator whose kinds it declares.
+#
+# One file per deployment, and the file is the deployment's registration. Its
+# name is the namespace it runs in and the branch it reads is the record of
+# what it runs: Deploy writes `deploy/chart/values-deployment.yaml` there, with
+# the image tag of the commit that produced it and the release it names, so what
+# the cluster runs is a fact recorded in the branch rather than an argument
+# between a workflow and a controller.
+#
+# This file lives on `main` and takes effect on the next sync. A staging file
+# beside it, `lazycloud-staging.yaml` reading `staging` into `lazycloud-staging`,
+# is added the day that branch first exists; an Application whose branch does
+# not exist reports a comparison error and nothing else.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lazycloud-prod
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  # Removing this file removes the deployment, workloads included. Without the
+  # finalizer Argo forgets the Application and leaves everything it created
+  # running with nothing declaring it.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/AmbientWare/lazycloud
+    targetRevision: prod
+    path: deploy/chart
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-deployment.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lazycloud-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      # The bootstrap Jobs depend on a database that may still be accepting its
+      # first connection, and on secrets the operator above may not have
+      # materialised yet. Retrying is cheaper than a human noticing.
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

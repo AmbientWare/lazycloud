@@ -1,11 +1,11 @@
-name: Deploy EKS
+name: Deploy
 
-# Builds the control-plane images and records them on the deployment branch.
+# Builds the control-plane images once and records them for one deployment.
 #
-# Nothing here installs anything. Argo CD watches that branch and reconciles the
-# cluster to it, so a deploy is a commit rather than a command, and what the
-# cluster runs is a fact recorded in git rather than the outcome of whichever
-# workflow ran last.
+# Nothing here installs anything. Argo CD watches the deployment's branch and
+# reconciles its namespace to it, so a deploy is a commit rather than a command,
+# and what the cluster runs is a fact recorded in git rather than the outcome of
+# whichever workflow ran last.
 #
 # One bake, pushing every control-plane image to ECR in a single invocation. A
 # subset rebuild produces a package-digest mismatch the managed runtime rejects
@@ -13,16 +13,36 @@ name: Deploy EKS
 # which is why `deploy/release.py` refuses one and why this does not build images
 # job by job.
 #
+# Images belong to a commit, not to a deployment. They go to one set of
+# repositories shared by every deployment and are tagged by the commit that
+# built them, so recording the same commit for a second deployment is a values
+# file and no build. That is what promotion is: `promote.yml` calls this with
+# the commit staging runs and the images are already there.
+#
 # Nothing here holds a long-lived AWS key or a GitHub one. The job assumes a role
 # through OIDC and pushes with the token GitHub gives it for this repository.
+# Which role is decided by the GitHub environment the job runs under, which is
+# named for the deployment: the role's trust admits that environment and no
+# other, so a staging deploy cannot write prod's bundle.
 
 on:
   workflow_dispatch:
     inputs:
       deployment:
-        description: Deployment prefix the ECR repositories and secrets carry
+        description: Which deployment records this commit
+        type: choice
+        required: true
+        default: prod
+        options:
+          - prod
+          - staging
+      commit:
+        description: |
+          Commit to record. Empty records the commit this workflow runs from.
+          Naming one is how a deployment moves onto a commit that is already
+          built, which is a values commit and no build.
         type: string
-        default: lazycloud-prod
+        default: ""
       release_manifest_url:
         description: |
           Release this deployment should run. Empty keeps whichever release it
@@ -35,9 +55,13 @@ on:
   workflow_call:
     inputs:
       deployment:
-        description: Deployment prefix the ECR repositories and secrets carry
+        description: Which deployment records this commit, prod or staging
         type: string
-        default: lazycloud-prod
+        required: true
+      commit:
+        description: Commit to record. Empty records the caller's commit.
+        type: string
+        default: ""
       release_manifest_url:
         description: |
           Release this deployment should run. Empty keeps whichever release it
@@ -55,24 +79,42 @@ permissions:
   id-token: write
 
 concurrency:
-  # A second deploy overtaking the first would leave the cluster on whichever
-  # release landed last rather than on whichever is newer.
-  group: deploy-eks-${{ inputs.deployment || 'lazycloud-prod' }}
+  # A second deploy overtaking the first would leave the deployment on whichever
+  # commit landed last rather than on whichever is newer. Per deployment, so a
+  # staging deploy and a prod one do not queue on each other.
+  group: deploy-${{ inputs.deployment }}
   cancel-in-progress: false
 
 jobs:
   deploy:
     name: Build images and record them
     runs-on: ubuntu-latest
-    environment: production
+    # The environment is the deployment. It holds AWS_DEPLOY_ROLE_ARN for that
+    # deployment's role, and the role's trust names this environment.
+    environment: ${{ inputs.deployment }}
     env:
-      DEPLOYMENT: ${{ inputs.deployment || 'lazycloud-prod' }}
+      DEPLOYMENT: lazycloud-${{ inputs.deployment }}
+      BRANCH: ${{ inputs.deployment }}
+      # The path every image repository shares. The cluster's, not the
+      # deployment's: `deploy/platform-core` creates them once under its name.
+      IMAGE_PREFIX: lazycloud
+      COMMIT: ${{ inputs.commit || github.sha }}
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       RELEASE_MANIFEST_URL: ${{ inputs.release_manifest_url }}
-      DEPLOYMENT_BRANCH: ${{ vars.DEPLOYMENT_BRANCH || 'prod' }}
     steps:
+      # A `workflow_call` input is a string, so the choice above does not
+      # constrain a caller. The two names are the two GitHub environments and
+      # the two Terraform states; anything else has nothing behind it.
+      - name: Refuse an unknown deployment
+        if: inputs.deployment != 'prod' && inputs.deployment != 'staging'
+        run: |
+          echo "::error::deployment is prod or staging, not '${{ inputs.deployment }}'."
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.commit || github.sha }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -86,8 +128,9 @@ jobs:
 
       # An ECR tag is immutable, so a deploy re-run for a commit whose images
       # are already published cannot push them again. Recording the values is
-      # still the point of the run: a deployment moves onto a new release
-      # without its code changing, and that deploy has nothing to build.
+      # still the point of the run: a deployment moves onto a new release or
+      # onto a commit another deployment already built, and that deploy has
+      # nothing to build.
       #
       # All or nothing. A tag present in some repositories and absent in others
       # is a half-published build, and completing it would put images from two
@@ -102,23 +145,23 @@ jobs:
           missing=0
           for repository in api scheduler tunnel-gateway cache-server worker-bootstrap cli database-bootstrap; do
             if aws ecr describe-images \
-              --repository-name "$DEPLOYMENT/$repository" \
-              --image-ids "imageTag=$GITHUB_SHA" >/dev/null 2>&1; then
+              --repository-name "$IMAGE_PREFIX/$repository" \
+              --image-ids "imageTag=$COMMIT" >/dev/null 2>&1; then
               present=$((present + 1))
             else
               missing=$((missing + 1))
-              echo "not published: $DEPLOYMENT/$repository:$GITHUB_SHA"
+              echo "not published: $IMAGE_PREFIX/$repository:$COMMIT"
             fi
           done
           if [ "$present" -gt 0 ] && [ "$missing" -gt 0 ]; then
-            echo "::error::$present image(s) already published at $GITHUB_SHA and $missing missing; an immutable tag cannot be completed. Deploy a new commit."
+            echo "::error::$present image(s) already published at $COMMIT and $missing missing; an immutable tag cannot be completed. Deploy a new commit."
             exit 1
           fi
           if [ "$missing" -gt 0 ]; then
             echo "build=true" >>"$GITHUB_OUTPUT"
           else
             echo "build=false" >>"$GITHUB_OUTPUT"
-            echo "every image is already published at $GITHUB_SHA; recording values only"
+            echo "every image is already published at $COMMIT; recording values only"
           fi
 
       - name: Set up Docker Buildx
@@ -136,13 +179,13 @@ jobs:
           set: |
             *.cache-from=type=gha,scope=deploy-control-plane
             *.cache-to=type=gha,mode=max,scope=deploy-control-plane
-            api.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/api:${{ github.sha }}
-            scheduler.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/scheduler:${{ github.sha }}
-            tunnel-gateway.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/tunnel-gateway:${{ github.sha }}
-            cache-server.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/cache-server:${{ github.sha }}
-            worker-bootstrap.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/worker-bootstrap:${{ github.sha }}
-            cli.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/cli:${{ github.sha }}
-            database-bootstrap.tags=${{ steps.ecr.outputs.registry }}/${{ env.DEPLOYMENT }}/database-bootstrap:${{ github.sha }}
+            api.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/api:${{ env.COMMIT }}
+            scheduler.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/scheduler:${{ env.COMMIT }}
+            tunnel-gateway.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/tunnel-gateway:${{ env.COMMIT }}
+            cache-server.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/cache-server:${{ env.COMMIT }}
+            worker-bootstrap.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/worker-bootstrap:${{ env.COMMIT }}
+            cli.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/cli:${{ env.COMMIT }}
+            database-bootstrap.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/database-bootstrap:${{ env.COMMIT }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -163,22 +206,23 @@ jobs:
       - name: Render the values the branch will carry
         run: |
           set -euo pipefail
-          terraform -chdir=deploy/platform-eks init -input=false \
+          terraform -chdir=deploy/platform-deployment init -input=false \
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=platform-eks/$DEPLOYMENT.tfstate" \
+            -backend-config="key=platform-deployment/$DEPLOYMENT.tfstate" \
             -backend-config="region=$AWS_REGION"
-          terraform -chdir=deploy/platform-eks output -json runtime_configuration >runtime.json
-          terraform -chdir=deploy/platform-eks output -json secret_files >secret-files.json
-          terraform -chdir=deploy/platform-eks output -json fleet_connection >fleet.json
-          terraform -chdir=deploy/platform-eks output -json secret_environment >secret-map.json
-          tunnel_id="$(terraform -chdir=deploy/platform-eks output -raw cloudflare_tunnel_id)"
-          wireguard_secret="$(terraform -chdir=deploy/platform-eks output -raw wireguard_secret)"
+          terraform -chdir=deploy/platform-deployment output -json runtime_configuration >runtime.json
+          terraform -chdir=deploy/platform-deployment output -json secret_files >secret-files.json
+          terraform -chdir=deploy/platform-deployment output -json fleet_connection >fleet.json
+          terraform -chdir=deploy/platform-deployment output -json secret_environment >secret-map.json
+          tunnel_id="$(terraform -chdir=deploy/platform-deployment output -raw cloudflare_tunnel_id)"
+          wireguard_secret="$(terraform -chdir=deploy/platform-deployment output -raw wireguard_secret)"
+          secrets_reader_role_arn="$(terraform -chdir=deploy/platform-deployment output -raw secrets_reader_role_arn)"
 
           # Which release this deployment runs is a fact about the deployment,
           # not about its infrastructure, so it is not a Terraform output. It
           # lives beside the bundle, in the bucket Terraform does own, and is
           # therefore destroyed with the stack rather than outliving it.
-          bucket="$(terraform -chdir=deploy/platform-eks output -raw deploy_bucket)"
+          bucket="$(terraform -chdir=deploy/platform-deployment output -raw deploy_bucket)"
           pointer="s3://${bucket}/current/release-manifest-url"
           if [ -z "${RELEASE_MANIFEST_URL}" ]; then
             RELEASE_MANIFEST_URL="$(aws s3 cp "${pointer}" - 2>/dev/null || true)"
@@ -191,16 +235,17 @@ jobs:
 
           uv run --group workspace python deploy/chart_values.py \
             --registry "${{ steps.ecr.outputs.registry }}" \
-            --deployment "$DEPLOYMENT" \
-            --tag "$GITHUB_SHA" \
+            --repository-prefix "$IMAGE_PREFIX" \
+            --tag "$COMMIT" \
             --tunnel-id "${tunnel_id}" \
             --wireguard-secret "${wireguard_secret}" \
+            --secrets-reader-role-arn "${secrets_reader_role_arn}" \
             --runtime runtime.json \
             --secret-map secret-map.json \
             --secret-files secret-files.json \
             --fleet fleet.json \
             --release-manifest-url "${RELEASE_MANIFEST_URL}" \
-            --output values-prod.yaml
+            --output values-deployment.yaml
 
       - name: Record it on the deployment branch
         run: |
@@ -213,8 +258,8 @@ jobs:
           # Branched from this commit rather than merged into: the deployment
           # branch is the source that produced the images plus the file naming
           # them, so it can never describe a tree the tag was not built from.
-          git fetch origin "${DEPLOYMENT_BRANCH}" || true
-          git checkout -B "${DEPLOYMENT_BRANCH}" "$GITHUB_SHA"
+          git fetch origin "${BRANCH}" || true
+          git checkout -B "${BRANCH}" "${COMMIT}"
           # Argo reads `deploy/chart` from this branch and nothing else, so the
           # workflows are carried here for no reader. They are not free to
           # carry: a deploy of any commit that touched one makes this push a
@@ -222,7 +267,8 @@ jobs:
           # after every image is built, and with no way to grant it, because
           # `workflows` is not a permission a job can ask for.
           git rm -r --quiet --cached .github
-          mv values-prod.yaml deploy/chart/values-prod.yaml
-          git add deploy/chart/values-prod.yaml
-          git commit -m "Run ${GITHUB_SHA}"
-          git push --force-with-lease origin "${DEPLOYMENT_BRANCH}"
+          mv values-deployment.yaml deploy/chart/values-deployment.yaml
+          git add deploy/chart/values-deployment.yaml
+          git commit -m "Run ${COMMIT}"
+          git push --force-with-lease origin "${BRANCH}"
+          echo "${DEPLOYMENT} now records ${COMMIT}" >> "${GITHUB_STEP_SUMMARY}"

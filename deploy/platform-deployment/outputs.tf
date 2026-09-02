@@ -1,26 +1,21 @@
 output "cluster_name" {
-  description = "Cluster `helm` and `kubectl` target."
-  value       = aws_eks_cluster.control_plane.name
-}
-
-output "cluster_endpoint" {
-  description = "Kubernetes API endpoint."
-  value       = aws_eks_cluster.control_plane.endpoint
+  description = "Cluster this deployment runs on; `kubectl -n <deployment>` targets it."
+  value       = local.cluster_name
 }
 
 output "kubernetes_namespace" {
-  description = "Namespace the chart installs into."
-  value       = var.kubernetes_namespace
+  description = "Namespace the deployment runs in, which is its name."
+  value       = var.deployment
 }
 
 output "control_plane_role_arn" {
-  description = <<-EOT
-    Belongs in the control stack's TrustedPrincipalArns.
-
-    `deploy/connected-aws/bootstrap.py --trusted-principal <this>` is what lets the
-    control plane assume the connected-AWS control role.
-  EOT
+  description = "Identity of the control plane and scheduler pods, and the principal the control role trusts."
   value       = aws_iam_role.control_plane.arn
+}
+
+output "secrets_reader_role_arn" {
+  description = "Annotated onto the chart's `secrets-reader` service account; what the SecretStore assumes."
+  value       = aws_iam_role.secrets_reader.arn
 }
 
 output "deploy_bucket" {
@@ -29,13 +24,8 @@ output "deploy_bucket" {
 }
 
 output "ecr_registry" {
-  description = "Registry the deployment override pins image digests against."
-  value       = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com"
-}
-
-output "ecr_repositories" {
-  description = "Repository URL per image name."
-  value       = { for name, repository in aws_ecr_repository.image : name => repository.repository_url }
+  description = "Registry the images this deployment runs are pulled from. The cluster's, re-exported so a deploy reads one state."
+  value       = local.ecr_registry
 }
 
 output "secret_arns" {
@@ -159,7 +149,7 @@ output "acceptance_role_arns" {
 }
 
 output "deploy_role_arn" {
-  description = "Set as the AWS_DEPLOY_ROLE_ARN repository secret."
+  description = "Set as the AWS_DEPLOY_ROLE_ARN secret on the GitHub environment named by github_environment."
   value       = aws_iam_role.deploy.arn
 }
 

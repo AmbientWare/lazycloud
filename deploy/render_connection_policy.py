@@ -24,7 +24,7 @@ from pathlib import Path
 
 from provider_aws.connection_policy import ConcreteArns, connection_role_policy
 
-_RENDERED = Path(__file__).resolve().parent / "platform-eks" / "connection-role-policy.json"
+_RENDERED = Path(__file__).resolve().parent / "platform-deployment" / "connection-role-policy.json"
 
 # Rendered against wildcards rather than one account's identity. The platform's
 # own connection role is the only consumer, its node identity names are derived

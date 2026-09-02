@@ -8,8 +8,12 @@
 # writes this role's ARN into every connection role's trust policy, so the name
 # is a durable external contract rather than a label. Terraform likes generated
 # and suffixed names; this one takes neither.
+locals {
+  control_role_name = coalesce(var.control_role_name, "${var.deployment}-control-principal")
+}
+
 resource "aws_iam_role" "control_principal" {
-  name        = var.control_role_name
+  name        = local.control_role_name
   description = "LazyCloud platform control principal for connected AWS."
 
   assume_role_policy = jsonencode({

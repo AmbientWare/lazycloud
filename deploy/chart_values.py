@@ -1,12 +1,16 @@
 """Render the chart's values from what the infrastructure already knows.
 
 Nothing here is authored. Image references come from what the deploy pushed,
-and runtime values and secret paths from the platform module's outputs. The chart
-then decides nothing about a value the infrastructure has already decided, which
-is what makes a variable impossible to supply in one place and forget in another.
+and runtime values and secret paths from the deployment module's outputs. The
+chart then decides nothing about a value the infrastructure has already decided,
+which is what makes a variable impossible to supply in one place and forget in
+another.
 
-No role ARNs: which AWS identity a service account holds is a Pod Identity
-association declared beside the cluster, so it never travels through here.
+One role ARN, the secret reader's. Every workload's AWS identity is a Pod
+Identity association declared beside the cluster and never travels through here;
+the SecretStore's cannot be, because it is a token exchange the shared operator
+performs on the store's behalf, and the role it exchanges for is the one the
+chart names.
 
 One image tag, naming the commit that produced the images, and it is safe to pin
 by tag for a reason worth stating: every repository is created
@@ -124,7 +128,7 @@ def render(args: argparse.Namespace) -> None:
     values: dict[str, object] = {
         "image": {
             "registry": args.registry,
-            "repositoryPrefix": args.deployment,
+            "repositoryPrefix": args.repository_prefix,
             "tag": args.tag,
         },
         "runtime": runtime,
@@ -132,6 +136,7 @@ def render(args: argparse.Namespace) -> None:
         "secrets": {
             "map": _string_map(Path(args.secret_map), "secret map"),
             "files": _string_map(Path(args.secret_files), "secret files"),
+            "readerRoleArn": args.secrets_reader_role_arn,
         },
         "cloudflared": {
             # The zone the tunnel answers for, taken from the origin rather than
@@ -151,7 +156,11 @@ def render(args: argparse.Namespace) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", required=True, help="ECR registry host.")
-    parser.add_argument("--deployment", required=True, help="Deployment prefix repositories carry.")
+    parser.add_argument(
+        "--repository-prefix",
+        required=True,
+        help="Path under the registry every image repository shares: the cluster's name.",
+    )
     parser.add_argument(
         "--tag",
         required=True,
@@ -181,6 +190,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Secrets Manager document holding gateway and platform peer keys.",
     )
     parser.add_argument("--release-manifest-url", default="", help="Release this deployment runs.")
+    parser.add_argument(
+        "--secrets-reader-role-arn",
+        required=True,
+        help="Role the deployment's SecretStore assumes: output secrets_reader_role_arn.",
+    )
     parser.add_argument("--output", required=True, help="Where to write the rendered values.")
     return parser
 

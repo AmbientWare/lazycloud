@@ -1,7 +1,13 @@
 variable "deployment" {
-  description = "Name distinguishing this installation. Prefixes every globally-named resource."
+  description = <<-EOT
+    Name of this installation. Prefixes every globally-named resource and
+    secret path, names the PlanetScale database, and is the Kubernetes
+    namespace the deployment runs in.
+
+    `lazycloud-prod` and `lazycloud-staging` share one cluster and one AWS
+    account, and this is the one word that tells every resource apart.
+  EOT
   type        = string
-  default     = "lazycloud-prod"
 
   validation {
     condition     = can(regex("^[a-z][a-z0-9-]{2,30}$", var.deployment))
@@ -10,15 +16,31 @@ variable "deployment" {
 }
 
 variable "region" {
-  description = "Region holding the control plane and the shared fleet."
+  description = "Region holding the cluster and the shared fleet. Must match the cluster's."
   type        = string
   default     = "us-east-1"
 }
 
-variable "control_plane_cidr" {
-  description = "CIDR of the VPC holding the control plane."
+variable "core_state_key" {
+  description = "State key of the deploy/platform-core module this deployment attaches to."
   type        = string
-  default     = "10.80.0.0/16"
+  default     = "platform-core/lazycloud.tfstate"
+}
+
+variable "github_environment" {
+  description = <<-EOT
+    GitHub Actions environment whose jobs may assume this deployment's deploy
+    role: `prod` or `staging`. The Deploy workflow runs its job under the
+    environment named for the deployment it targets, and the role's trust
+    names the same one, so the environment is the whole of what separates a
+    staging deploy from a prod one.
+  EOT
+  type        = string
+
+  validation {
+    condition     = contains(["prod", "staging"], var.github_environment)
+    error_message = "github_environment is prod or staging."
+  }
 }
 
 variable "planetscale_organization" {
@@ -78,19 +100,19 @@ variable "acceptance_trusted_principal_arns" {
 }
 
 variable "github_repository" {
-  description = "owner/repo the Deploy workflow runs from, for the OIDC trust condition."
+  description = "owner/repo the Deploy workflow runs from, for the deploy role's trust condition."
   type        = string
   default     = "AmbientWare/lazycloud"
 }
 
 variable "state_bucket" {
-  description = "Bucket holding this module's Terraform state, which the workflow reads for outputs."
+  description = "Bucket holding every module's Terraform state: this one's, the core's it reads, and the cloudflare module's."
   type        = string
 }
 
 variable "destroy_buckets_with_contents" {
   description = <<-EOT
-    Let `terraform destroy` remove buckets and repositories that still hold data.
+    Let `terraform destroy` remove buckets that still hold data.
 
     True while predeployment, so the whole deployment can be torn down and rebuilt
     to prove it reproduces. Set it false once these hold anything a customer would
@@ -119,16 +141,15 @@ variable "control_role_name" {
     the role is nor where it runs, and the one error that named it read as a
     misconfiguration rather than as the caller being wrong.
 
-    It is also the one name that does not carry the deployment prefix, so two
-    deployments sharing an AWS account must give it different values. A
-    non-production deployment can pick freely, because the contract only binds
-    where customers already connected.
+    Unset, it is `<deployment>-control-principal`, which keeps two deployments
+    in one account apart. Set it only to keep a name customers already trust.
   EOT
   type        = string
-  default     = "lazycloud-control-principal"
+  default     = null
+  nullable    = true
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9_+=,.@-]{1,64}$", var.control_role_name))
+    condition     = var.control_role_name == null || can(regex("^[A-Za-z0-9_+=,.@-]{1,64}$", var.control_role_name))
     error_message = "control_role_name must be a valid IAM role name."
   }
 }
@@ -166,42 +187,6 @@ variable "instance_hourly_micros" {
   default     = {}
 }
 
-variable "cluster_subnet_count" {
-  description = <<-EOT
-    Availability zones the cluster spans.
-
-    Two is EKS's own minimum. A third costs nothing while no nodes run in it and
-    gives the scheduler somewhere to place a pod when a zone is degraded.
-  EOT
-  type        = number
-  default     = 3
-}
-
-variable "kubernetes_version" {
-  description = <<-EOT
-    EKS control plane version, and a billing decision as much as a technical one.
-
-    A cluster past its standard support date keeps running and costs roughly six
-    times the hourly rate, which is a change nothing in the console announces.
-    Check `aws eks describe-cluster-versions` before pinning: the value here
-    should be the newest version offered, not the newest one remembered.
-  EOT
-  type        = string
-  default     = "1.36"
-}
-
-variable "kubernetes_namespace" {
-  description = <<-EOT
-    Namespace the deployment's workloads run in.
-
-    Its own, because the control plane pod needs NET_ADMIN, NET_RAW and a TUN
-    device, which a restrictive Pod Security Standard refuses. Confining that
-    exception to one namespace is what keeps it from applying to everything.
-  EOT
-  type        = string
-  default     = "lazycloud"
-}
-
 variable "control_plane_service_accounts" {
   description = <<-EOT
     Service accounts permitted to assume the control plane's AWS identity.
@@ -214,16 +199,20 @@ variable "control_plane_service_accounts" {
   default     = ["control-plane", "scheduler"]
 }
 
-variable "external_secrets_service_account" {
-  description = "Service account the External Secrets Operator runs as."
-  type        = string
-  default     = "external-secrets"
-}
-
 variable "wireguard_bootstrap_service_account" {
   description = "Service account permitted to initialize the deployment's WireGuard key document."
   type        = string
   default     = "wireguard-bootstrap"
+}
+
+variable "secrets_reader_service_account" {
+  description = <<-EOT
+    Service account the deployment's External Secrets store presents. Named in
+    the reader role's trust as `system:serviceaccount:<deployment>:<this>`, so
+    the chart's `serviceAccounts.secretsReader` must say the same.
+  EOT
+  type        = string
+  default     = "secrets-reader"
 }
 
 variable "wireguard_public_endpoint" {
@@ -233,26 +222,6 @@ variable "wireguard_public_endpoint" {
   validation {
     condition     = can(regex("^[^:[:space:]]+:[0-9]{1,5}$", var.wireguard_public_endpoint))
     error_message = "wireguard_public_endpoint must be a host and port, for example gateway.example.com:51820."
-  }
-}
-
-variable "cluster_api_cidrs" {
-  description = <<-EOT
-    Addresses allowed to reach the Kubernetes API from outside the VPC, as CIDR
-    blocks. The machine `terraform apply` runs from belongs here, because the
-    Kubernetes and Helm providers reach the cluster through this endpoint. Empty
-    disables the public endpoint.
-
-    When that machine's address changes, move the cluster alone:
-    `terraform apply -target=aws_eks_cluster.control_plane` rewrites the list
-    through the AWS API without the providers having to reach an endpoint that
-    now refuses them. A full apply follows.
-  EOT
-  type        = list(string)
-
-  validation {
-    condition     = alltrue([for cidr in var.cluster_api_cidrs : can(cidrnetmask(cidr))])
-    error_message = "cluster_api_cidrs must be IPv4 CIDR blocks, for example 203.0.113.7/32."
   }
 }
 
@@ -268,76 +237,6 @@ variable "redis_engine_version" {
   default     = "7.1"
 }
 
-variable "argocd_namespace" {
-  description = "Namespace Argo CD runs in."
-  type        = string
-  default     = "argocd"
-}
-
-variable "argocd_chart_version" {
-  description = <<-EOT
-    Argo CD chart version, pinned.
-
-    A controller that reconciles everything else is the last thing that should
-    move on its own: an unpinned upgrade changes how every other workload is
-    applied, at whatever moment the next apply happens to run.
-
-    Pinned to a version that knows the cluster's Kubernetes. Argo builds a typed
-    diff from the live resource, so one older than the API server fails on fields
-    it has never heard of -- `.status.terminatingReplicas` here -- and reports it
-    as a comparison error rather than as its own age. Check
-    `helm search repo argo/argo-cd --versions` when moving Kubernetes.
-  EOT
-  type        = string
-  default     = "10.4.0"
-}
-
-variable "github_organization" {
-  description = "Organisation whose repositories Argo may read."
-  type        = string
-  default     = "AmbientWare"
-}
-
-
-variable "deployment_branch" {
-  description = <<-EOT
-    Branch Argo syncs from.
-
-    Separate from `main` because what is deployed and what is merged are
-    different questions. CI moves this branch forward with the image tag it just
-    built, so the branch is the record of what the cluster is meant to be running.
-  EOT
-  type        = string
-  default     = "prod"
-}
-
-variable "github_app_id" {
-  description = "GitHub App id. The AmbientWare App is 3246255."
-  type        = string
-  default     = "3246255"
-}
-
-variable "github_app_installation_id" {
-  description = "Installation id of that App on the organisation."
-  type        = string
-  default     = "124042395"
-}
-
-variable "github_app_private_key" {
-  description = <<-EOT
-    PEM for the organisation's GitHub App, which is how Argo reads the repository.
-
-    Supplied from the operator environment as `TF_VAR_github_app_private_key`,
-    beside the PlanetScale and Cloudflare credentials, because Terraform declares
-    this deployment's secret containers and cannot read a value out of one it has
-    only just created.
-
-    Generated in the App's settings and not readable back from GitHub, so a lost
-    key is replaced rather than recovered.
-  EOT
-  type        = string
-  sensitive   = true
-}
 
 variable "stripe_account_id" {
   description = <<-EOT

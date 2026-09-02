@@ -1,29 +1,32 @@
-# Standing this up, and taking it down
+# Standing a deployment up, and taking it down
 
-Three things own different parts of a deployment, and knowing which is which is
+Four things own different parts of a deployment, and knowing which is which is
 most of operating it.
 
 | owner | what it owns |
 |---|---|
-| `deploy/platform-eks` (Terraform) | the VPC, the cluster, Redis, IAM, ECR, S3, secret containers, the PlanetScale branch, the fleet network, and Argo CD |
-| Argo CD, from the deployment branch | everything that runs in the cluster |
+| `deploy/platform-core` (Terraform, once) | the VPC, the cluster, the image repositories, the OIDC provider, the storage class, and Argo CD |
+| `deploy/platform-deployment` (Terraform, per deployment) | Redis, S3, secret containers, the PlanetScale branch, the fleet network, and every identity the deployment's workloads hold |
+| Argo CD, from `main` and from the deployment's branch | everything that runs in the cluster |
 | The scheduler, at runtime | the Auto Scaling group and launch template for each compute unit |
 
-The third is why the fleet's capacity is not in Terraform. The scheduler sets
+The fourth is why the fleet's capacity is not in Terraform. The scheduler sets
 `DesiredCapacity` from demand and reconciles every second; a second declared
 owner would lose that argument on every apply.
 
-The second is why `helm install` appears nowhere below. CI builds images and
-records them on the deployment branch; Argo reconciles the cluster to that
-branch. A deploy is a commit.
+The third is why `helm install` appears nowhere below. Argo's root Application
+reads `deploy/argocd/apps` on `main`, which lists the operators every
+deployment shares and one Application per deployment. That Application reads
+the deployment's branch, where Deploy records the commit it built and the
+release it names. A deploy is a commit.
 
 ## Standing one up
 
 ### 1. Credentials
 
 An operator needs AWS, a Cloudflare token with Tunnel and DNS edit, a PlanetScale
-service token **and its token ID**, and a Stripe key. Keep them outside the
-repository:
+service token **and its token ID**, a Stripe key, and the organisation's GitHub
+App private key. Keep them outside the repository:
 
 ```sh
 install -d -m 0700 ~/.lazycloud/operator
@@ -33,23 +36,53 @@ export PLANETSCALE_SERVICE_TOKEN='...'
 export CLOUDFLARE_API_TOKEN='...'
 export STRIPE_API_KEY='...'
 EOF
+echo "export TF_VAR_github_app_private_key=\"$(cat ambientware.private-key.pem)\"" \
+  >> ~/.lazycloud/operator/deploy.env
 chmod 0600 ~/.lazycloud/operator/deploy.env
 ```
 
 The Cloudflare token is account-scoped, so `/user/tokens/verify` rejects it while
 the account endpoints accept it. Verify against `/accounts/<id>/tunnels`.
 
-### 2. Terraform
+The GitHub App key goes to Terraform rather than into a secret document. Argo
+needs it to read this repository, and reading this repository is how External
+Secrets gets installed, so a copy behind External Secrets would be behind
+itself. `deploy/platform-core` writes it straight into Argo's
+repository-credentials Secret. The App is installed on the organisation with
+`repository_selection: all`; its id and installation id are variables with
+defaults, and the key cannot be read back from GitHub, so a lost one is
+replaced rather than recovered.
+
+### 2. The cluster, once
 
 ```sh
 source ~/.lazycloud/operator/deploy.env
-DEPLOYMENT=lazycloud-prod
-terraform -chdir=deploy/platform-eks init \
+terraform -chdir=deploy/platform-core init \
   -backend-config="bucket=<state-bucket>" \
-  -backend-config="key=platform-eks/$DEPLOYMENT.tfstate" \
+  -backend-config="key=platform-core/lazycloud.tfstate" \
   -backend-config="region=us-east-1"
-terraform -chdir=deploy/platform-eks apply \
+terraform -chdir=deploy/platform-core apply
+```
+
+Its `terraform.tfvars` carries `cluster_api_cidrs`, which must include the
+address this apply runs from: the Kubernetes and Helm providers reach the
+cluster's API through it. A deployment apply never does, so only this step
+cares where it runs. `../platform-core/README.md` has the rest.
+
+Skip this when the cluster exists. A second deployment attaches to the same
+one.
+
+### 3. The deployment
+
+```sh
+DEPLOYMENT=lazycloud-prod
+terraform -chdir=deploy/platform-deployment init \
+  -backend-config="bucket=<state-bucket>" \
+  -backend-config="key=platform-deployment/$DEPLOYMENT.tfstate" \
+  -backend-config="region=us-east-1"
+terraform -chdir=deploy/platform-deployment apply \
   -var="deployment=$DEPLOYMENT" \
+  -var="github_environment=prod" \
   -var="planetscale_organization=<org>" \
   -var="state_bucket=<state-bucket>" \
   -var="wireguard_public_endpoint=gateway.example.com:51820"
@@ -61,18 +94,10 @@ pools that never launch rather than anything that fails. Without the account id
 the apply refuses, because the catalog publisher checks the credential against it
 and has nothing to check.
 
-`cluster_api_cidrs` names the addresses the Kubernetes API accepts from outside
-the VPC, and the machine running this apply must be one of them; the Kubernetes
-and Helm providers reach the cluster through that endpoint. When your address
-changes, `terraform apply -target=aws_eks_cluster.control_plane` updates the
-list through the AWS API alone, and a full apply follows.
+The module reads the cluster from `platform-core/lazycloud.tfstate` and refuses
+a deployment whose region differs from the cluster's.
 
-**A failed apply is not proof that nothing was created.** EKS has returned a 400
-on `CreateCluster` and created the cluster anyway, leaving it ACTIVE and absent
-from state, where `terraform destroy` will never find it. After any failed apply,
-check `aws eks list-clusters` before retrying.
-
-### 3. Secret values
+### 4. Secret values
 
 A deployment's credentials live in three Secrets Manager entries. Each entry is
 a JSON document grouped by its writer, not one entry per key.
@@ -97,7 +122,7 @@ cat > operator.json <<'JSON'
 }
 JSON
 aws secretsmanager put-secret-value \
-  --secret-id "$(terraform -chdir=deploy/platform-eks output -raw operator_secret)" \
+  --secret-id "$(terraform -chdir=deploy/platform-deployment output -raw operator_secret)" \
   --secret-string "file://$PWD/operator.json"
 shred -u operator.json
 ```
@@ -119,67 +144,52 @@ without this and the credential exists only inside that pod, nothing afterwards
 has a bearer token, and supplying the value later is refused as an already
 completed bootstrap. The way back is resetting the schema.
 
-**The GitHub App private key** is in neither document. Argo needs it to read this
-repository, and reading this repository is how External Secrets gets installed,
-so a copy behind External Secrets would be behind itself. Terraform writes it
-straight into Argo's repository-credentials Secret, from the operator
-environment:
+### 5. The GitHub environment
+
+Each deployment has a GitHub environment of its short name, `prod` or
+`staging`. The Deploy workflow runs its job under it, and the deployment's deploy
+role admits that environment's token and no other. The role's ARN is a secret on
+the environment, not on the repository:
 
 ```sh
-echo "export TF_VAR_github_app_private_key=\"$(cat ambientware.private-key.pem)\"" \
-  >> ~/.lazycloud/operator/deploy.env
-```
-
-The App is installed on the organisation with `repository_selection: all`, so
-this one key reaches every repository Argo is later pointed at. Its id and
-installation id are Terraform variables with defaults; the key is generated in
-the App's settings and cannot be read back from GitHub, so a lost one is replaced
-rather than recovered.
-
-### 4. Repository variables
-
-```sh
-gh secret set AWS_DEPLOY_ROLE_ARN --body "$(terraform -chdir=deploy/platform-eks output -raw deploy_role_arn)"
+gh secret set AWS_DEPLOY_ROLE_ARN --env prod \
+  --body "$(terraform -chdir=deploy/platform-deployment output -raw deploy_role_arn)"
 gh secret set TF_STATE_BUCKET --body '<state-bucket>'
 ```
 
-The deploy role's trust names `repo:<owner>/<repo>:environment:production`, so
-the workflow must keep `environment: production` or it cannot assume the role.
+Required reviewers on the `prod` environment are the approval gate for
+`promote.yml`; the run pauses at the deploy job until someone approves.
 
 Nothing else. The workflow pushes to a branch in its own repository with the
 token GitHub gives it, and the App credential Argo reads with is supplied to
-Terraform rather than to CI -- the two go in opposite directions and are not the
+Terraform rather than to CI. The two go in opposite directions and are not the
 same grant.
 
-### 5. The first deploy
+### 6. The first deploy
 
-```sh
-gh workflow run ship.yml -f deployment=lazycloud-prod
-```
+Run the Ship workflow from `main` and choose `patch`. It cuts the version,
+publishes the Python package and the release, then deploys onto the release,
+handing the manifest URL from one half to the next. Do that for a first
+bring-up, and for any change to the agent, the container-worker image, or the
+node AMI. It bakes both node images every time, CPU and GPU, and takes about
+half an hour, because each carries the agent and worker this release publishes
+and one baked earlier describes an earlier release.
 
-`ship` publishes the release and then deploys onto it, handing the manifest URL
-from the first half to the second. Do that for a first bring-up, and for any
-change to the agent, the container-worker image, or the node AMI. It bakes both
-node images every time, CPU and GPU, and takes about half an hour, because each
-carries the agent and worker this release publishes and one baked earlier
-describes an earlier release. Each bake registers its image under its own name.
-`bake.py` matches an existing image by name alone, so a shared name would find
-the CPU image already available and publish a driverless AMI as the GPU catalog
-entry.
+`deploy.yml` on its own is the ordinary case afterwards, and runs many times
+against one release: it builds the commit's images once, into the shared
+repositories, and records them for the deployment it was given, carrying
+forward whichever release that deployment already names. Ship deploys to prod
+directly until staging runs; then a release lands on staging and
+`promote.yml` carries the commit staging runs to prod with no build.
 
-`deploy` on its own is the ordinary case afterwards, and runs many times against
-one release: it builds the control-plane images, tags them with the commit, and
-pushes the rendered values to the deployment branch, carrying forward whichever
-release is already recorded.
+Run a deploy before there is a release and the control plane starts, reads a
+price map that says managed capacity is wanted, finds no worker image, agent
+binary or AMI catalog to serve it with, and refuses. That is a half-configured
+deployment being rejected rather than a fault, and the way out is Ship.
 
-Run it before there is a release and the control plane starts, reads a price map
-that says managed capacity is wanted, finds no worker image, agent binary or AMI
-catalog to serve it with, and refuses. That is a half-configured deployment being
-rejected rather than a fault, and the way out is `ship`.
-
-Argo takes it from there, in wave order: the storage class and service accounts,
-the WireGuard key bootstrap, External Secrets, the schema and billing catalog,
-the administrator, the rate card, and the workloads. The Jobs that open a
+Argo takes it from there, in wave order: the service accounts, the WireGuard
+key bootstrap, External Secrets, the schema and billing catalog, the
+administrator, the rate card, and the workloads. The Jobs that open a
 database are each alone in their wave because the chart's connection budget
 counts one Job's pool and refuses to render if the pools can exceed what the
 server allows.
@@ -211,21 +221,41 @@ rate card in `packages/shared` moving together in one commit.
 Watch it rather than assume it:
 
 ```sh
-aws eks update-kubeconfig --name lazycloud-prod --region us-east-1
+aws eks update-kubeconfig --name lazycloud --region us-east-1
 kubectl -n argocd get applications -w
-kubectl -n lazycloud get pods
+kubectl -n lazycloud-prod get pods
+kubectl -n lazycloud-prod describe secretstore aws-secrets-manager
 ```
 
-### 6. Ingress
+The store reports `Ready` once the operator has exchanged the reader's token
+for the deployment's role. Anything else names the subject or the role, and is
+this module's trust condition disagreeing with the chart's service account.
+
+### 7. Ingress
 
 Point the tunnel at the cluster once the control plane is Ready. `cloudflared`
 runs in the chart with more than one connector, so the tunnel is served by the
 cluster rather than by a host.
 
-Point the DNS name in `wireguard_public_endpoint` at the UDP load balancer on
-port 51820. This endpoint is separate from the Cloudflare HTTP tunnel. Confirm
-an enrolled agent and a platform peer report recent WireGuard handshakes before
-calling the private network ready.
+Point the DNS name in `wireguard_public_endpoint` at the deployment's UDP load
+balancer on port 51820. This endpoint is separate from the Cloudflare HTTP
+tunnel. Confirm an enrolled agent and a platform peer report recent WireGuard
+handshakes before calling the private network ready.
+
+## Adding staging
+
+Repeat steps 3 to 5 with `DEPLOYMENT=lazycloud-staging`, `github_environment=staging`,
+a Stripe test account, a `fleet_cidr` of its own, a `deploy/cloudflare` apply
+of its own named by `cloudflare_state_key`, and `planetscale_cluster_size`
+set to the development tier. Run `deploy.yml` with `staging` once to create the
+`staging` branch. Only then add `deploy/argocd/apps/lazycloud-staging.yaml`
+beside the prod file, reading `staging` into `lazycloud-staging`, and point
+Ship's deploy at staging. An Application whose branch does not exist yet sits
+in a comparison error and nothing else.
+
+Removing a deployment file from `deploy/argocd/apps` removes the deployment,
+workloads included; the Applications carry Argo's resources finalizer for that
+reason.
 
 ## Taking one down
 
@@ -254,36 +284,32 @@ The command retries both. Deleting the group in AWS instead is what fails: the
 unit survives, and the scheduler rebuilds the group from it minutes later, after
 the check that said the capacity was gone.
 
-Then drop the branch role from state and destroy:
+Remove the deployment's file from `deploy/argocd/apps` and let Argo prune the
+namespace, then drop the branch role from state and destroy:
 
 ```sh
-terraform -chdir=deploy/platform-eks state rm planetscale_postgres_branch_role.control_plane
-terraform -chdir=deploy/platform-eks destroy -var="deployment=$DEPLOYMENT" ...
+terraform -chdir=deploy/platform-deployment state rm planetscale_postgres_branch_role.control_plane
+terraform -chdir=deploy/platform-deployment destroy -var="deployment=$DEPLOYMENT" ...
 ```
 
 The role is removed rather than destroyed because Terraform cannot destroy it:
 it depends on the branch, so it goes first, and PlanetScale refuses to drop a
 role that still owns the tables the schema created. Deleting the branch takes
 the role and the database with it. Skip the `state rm` and the destroy runs to
-the end, fails on the role, and leaves you doing this anyway with ninety
-resources already gone.
+the end, fails on the role, and leaves you doing this anyway with the rest
+already gone.
 
-The destroy also leaves detached volumes behind, one per dynamic claim the
-cluster provisioned. They bill until removed:
+The cluster outlives the deployment. Destroy it last, and only when no
+deployment remains, with `../platform-core/README.md`.
 
-```sh
-aws ec2 describe-volumes --filters Name=status,Values=available \
-  --query 'Volumes[].[VolumeId,Size,Tags[?Key==`Name`]|[0].Value]' --output text
-```
-
-Three things survive it and have to be dealt with by hand:
+Three things survive a deployment's destroy and have to be dealt with by hand:
 
 - **Workspace buckets.** The control plane creates `<deployment>-workspace-<uuid>`
   lazily at runtime, so Terraform never knew them and leaves one per workspace.
 - **The PlanetScale database**, if a branch other than `main` was ever created.
   Deleting `main` takes the database with it, so an organisation left holding a
   database after a destroy is holding one this module did not make.
-- **The operator document.** A destroy removes it and its values, so step 3 is
+- **The operator document.** A destroy removes it and its values, so step 4 is
   done again on the next deployment. Keep a copy: the Stripe webhook signing
   secret is returned only when the endpoint is created, so it is the one value a
   provider will not show you twice.

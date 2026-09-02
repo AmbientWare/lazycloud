@@ -95,6 +95,14 @@ resource "helm_release" "argocd" {
     # The only Application Terraform declares; everything else is a file in the
     # repository that this one finds.
     #
+    # It reads `main`, not a deployment branch. What it finds there is the list
+    # of things this cluster runs: the operators every deployment shares and one
+    # Application per deployment, each of which names its own branch. Which
+    # deployments exist is a fact about the cluster and is merged; what a
+    # deployment runs is a fact about the deployment and is recorded on its
+    # branch by Deploy. A change to a file here takes effect on the next sync
+    # with no deploy in between.
+    #
     # Carried by the release rather than as its own `kubernetes_manifest`,
     # because that resource reads the cluster's API at plan time and the cluster
     # does not exist when a fresh deployment is planned. Planning would fail on
@@ -120,7 +128,7 @@ resource "helm_release" "argocd" {
         project = "default"
         source = {
           repoURL        = "https://github.com/${var.github_repository}"
-          targetRevision = var.deployment_branch
+          targetRevision = "main"
           path           = "deploy/argocd/apps"
         }
         destination = {

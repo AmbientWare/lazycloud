@@ -283,24 +283,29 @@ connectivity fault.
 
 ## The hosted deployment
 
-Creating or destroying a deployment is `deploy/platform-eks/LIFECYCLE.md`. This
-section is about running one that exists.
+Creating or destroying a deployment is `deploy/platform-deployment/LIFECYCLE.md`.
+This section is about running one that exists.
 
-The control plane runs in an EKS cluster declared by `deploy/platform-eks`.
-Nothing changes what it runs except a commit on the deployment branch, and
-nothing writes that branch except the `Deploy` workflow. Argo CD reconciles the
-cluster to the branch, so a deploy is a commit and a rollback is a revert.
+Every deployment runs on one EKS cluster declared by `deploy/platform-core`, in
+a namespace named for it, with its own AWS resources declared by
+`deploy/platform-deployment`. Nothing changes what a deployment runs except a
+commit on its branch, and nothing writes that branch except the `Deploy`
+workflow. Argo CD reconciles the namespace to the branch, so a deploy is a
+commit and a rollback is a revert.
 
 ```sh
-# Everything: publish a release, then record a build against it. A `v*` tag does
-# the same thing without the dispatch.
-gh workflow run ship.yml -f deployment=lazycloud-prod
+# Everything: cut a version, publish the package and the release, then record
+# a build against it. Prod directly, until staging runs.
+gh workflow run ship.yml -f bump=patch
 
 # Code only, onto the release the deployment already runs.
-gh workflow run deploy.yml -f deployment=lazycloud-prod
+gh workflow run deploy.yml -f deployment=prod
+
+# Prod onto the commit and release staging runs. No build.
+gh workflow run promote.yml
 
 # Neither: make Argo reconcile now rather than on its next poll.
-kubectl -n argocd patch application lazycloud --type merge \
+kubectl -n argocd patch application lazycloud-prod --type merge \
   -p '{"operation":{"sync":{"revision":"prod"}}}'
 ```
 
@@ -309,6 +314,11 @@ names from `s3://<deploy bucket>/current/release-manifest-url` and carries it
 forward, so shipping a code change does not take the fleet's managed capacity
 away. That file is written only by a run that published a release, and the deploy
 warns rather than proceeding quietly when there is none to read.
+
+Images are built once per commit into repositories every deployment shares,
+so `Promote` finds every image already published and writes prod's values
+file. What crosses from staging is the image tag and the release URL; prod's
+tunnel, secrets and database are rendered from prod's own outputs.
 
 Nothing here runs `helm`. A workflow that installs and a controller that
 reconciles are two opinions about what should be running, and they disagree where
@@ -322,9 +332,9 @@ the fleet is briefly one node larger per pool.
 Watching a deploy:
 
 ```sh
-aws eks update-kubeconfig --name lazycloud-prod --region us-east-1
+aws eks update-kubeconfig --name lazycloud --region us-east-1
 kubectl -n argocd get applications
-kubectl -n lazycloud get pods
+kubectl -n lazycloud-prod get pods
 ```
 
 ### Reading a slow scheduler
@@ -376,9 +386,9 @@ they land on the same nodes:
 
 | Workload | Declared in |
 | --- | --- |
-| control plane, scheduler, cache, tunnel, Jobs | `deploy/chart/values.yaml` |
+| control plane, scheduler, cache, tunnel, Jobs, once per deployment | `deploy/chart/values.yaml` |
 | External Secrets (3 pods) | `deploy/argocd/apps/external-secrets.yaml` |
-| Argo CD (7 pods) | `deploy/platform-eks/argocd.tf` |
+| Argo CD (7 pods) | `deploy/platform-core/argocd.tf` |
 
 Two nodes is the floor and it is deliberate. `control-plane`, `cloudflared`, and
 `tunnel-gateway` each spread replicas across nodes. During bring-up, a rollout,
@@ -452,10 +462,13 @@ database.
 
 ### Secrets
 
-The External Secrets Operator reads them from Secrets Manager as itself, through
-a Pod Identity association, and materialises one Kubernetes Secret the workloads
-read by variable name. No credential is ever in the chart or on the deployment
-branch: both are git, and a value committed there outlives every rotation.
+The External Secrets Operator reads them from Secrets Manager as the
+deployment's `secrets-reader` service account, whose token it exchanges for the
+`<deployment>-secrets-reader` role, and materialises one Kubernetes Secret the
+workloads read by variable name. The role's trust admits that namespace alone,
+so a staging store cannot read prod's documents. No credential is ever in the
+chart or on the deployment branch: both are git, and a value committed there
+outlives every rotation.
 
 To rotate one, write the new value. Nothing else is needed -- the operator
 refreshes on its interval and the pods pick it up:
@@ -468,20 +481,19 @@ A workload that caches a credential at startup needs a restart to notice, which
 is a property of that process rather than of the rotation:
 
 ```sh
-kubectl -n lazycloud rollout restart deployment/control-plane
+kubectl -n lazycloud-prod rollout restart statefulset/control-plane
 ```
 
 ### Connecting the platform account to its own fleet
 
 Shared capacity is a connected-AWS pool in the platform's own account, using the
-same managed flow a customer uses — which is what the control stack anticipates
-when it says a customer account can be this account. The connection stack creates
-the fleet VPC, its two subnets, the security group and the node instance profile,
-and the control plane reads them back from the stack outputs.
-
-`deploy/platform-eks` therefore declares no fleet network. Adding one there would
-mean declaring the connection role beside it, and that role's policy is generated
-in `provider_aws/account_connection.py`.
+same managed flow a customer uses, which is what the control stack anticipates
+when it says a customer account can be this account. `deploy/platform-deployment`
+declares the fleet VPC, its two subnets, the security group and the connection
+role, one set per deployment, and the `fleet-ensure` Job registers them through
+the public API after the control plane is serving. The connection role's policy
+is never hand-written: it is rendered from `provider_aws.connection_policy` into
+`connection-role-policy.json`, and CI fails on a stale copy.
 
 ## Secrets and rotation
 

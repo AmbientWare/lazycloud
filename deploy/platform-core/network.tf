@@ -22,13 +22,13 @@ resource "aws_vpc" "cluster" {
   enable_dns_support   = true
   enable_dns_hostnames = true
 
-  tags = { Name = "${var.deployment}-cluster" }
+  tags = { Name = "${var.name}-cluster" }
 }
 
 resource "aws_internet_gateway" "cluster" {
   vpc_id = aws_vpc.cluster.id
 
-  tags = { Name = "${var.deployment}-cluster" }
+  tags = { Name = "${var.name}-cluster" }
 }
 
 # Public subnets, and no NAT gateway.
@@ -51,7 +51,7 @@ resource "aws_subnet" "cluster" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "${var.deployment}-cluster-${count.index}"
+    Name = "${var.name}-cluster-${count.index}"
     # Read by the AWS load balancer controller when it places a public load
     # balancer. Absent, it finds no subnet and reports no eligible subnets rather
     # than naming the tag it wanted.
@@ -67,7 +67,7 @@ resource "aws_route_table" "cluster" {
     gateway_id = aws_internet_gateway.cluster.id
   }
 
-  tags = { Name = "${var.deployment}-cluster" }
+  tags = { Name = "${var.name}-cluster" }
 }
 
 resource "aws_route_table_association" "cluster" {

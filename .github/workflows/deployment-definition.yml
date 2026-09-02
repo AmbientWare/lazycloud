@@ -11,15 +11,19 @@ name: Deployment definition
 on:
   pull_request:
     paths:
-      - "deploy/platform-eks/**"
+      - "deploy/platform-core/**"
+      - "deploy/platform-deployment/**"
       - "deploy/chart/**"
+      - "deploy/chart_values.py"
       - "deploy/argocd/**"
       - ".github/workflows/deployment-definition.yml"
   push:
     branches: [main]
     paths:
-      - "deploy/platform-eks/**"
+      - "deploy/platform-core/**"
+      - "deploy/platform-deployment/**"
       - "deploy/chart/**"
+      - "deploy/chart_values.py"
       - "deploy/argocd/**"
 
 permissions:
@@ -45,9 +49,11 @@ jobs:
       - name: Terraform is formatted and valid
         run: |
           set -euo pipefail
-          terraform -chdir=deploy/platform-eks fmt -check -recursive
-          terraform -chdir=deploy/platform-eks init -backend=false -input=false
-          terraform -chdir=deploy/platform-eks validate
+          for module in deploy/platform-core deploy/platform-deployment; do
+            terraform -chdir="$module" fmt -check -recursive
+            terraform -chdir="$module" init -backend=false -input=false
+            terraform -chdir="$module" validate
+          done
 
       - name: Install Helm
         uses: azure/setup-helm@v4
@@ -62,7 +68,7 @@ jobs:
           set -euo pipefail
           helm template lazycloud deploy/chart \
             --set image.registry=registry.invalid \
-            --set image.repositoryPrefix=lazycloud-prod \
+            --set image.repositoryPrefix=lazycloud \
             --set image.tag=0000000000000000000000000000000000000000 \
             --set runtime.LAZYCLOUD_OBJECT_STORE_REGION_NAME=us-east-1 \
             --set runtime.LAZYCLOUD_REDIS_URL=rediss://redis.invalid:6379/0 \
@@ -75,6 +81,7 @@ jobs:
             --set secrets.map.LAZYCLOUD_TOKEN=deployment/administrator-token \
             --set secrets.files.LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS=deployment/tunnel \
             --set wireguard.secretId=deployment/wireguard \
+            --set secrets.readerRoleArn=arn:aws:iam::000000000000:role/reader \
             --set fleet.account_id=000000000000 \
             --set fleet.role_arn=arn:aws:iam::000000000000:role/connection \
             --set fleet.vpc_id=vpc-0 \
@@ -374,4 +381,16 @@ jobs:
               # it, which is the ordering bug this repository already paid for.
               wave = document["metadata"]["annotations"]["argocd.argoproj.io/sync-wave"]
               print(f"{path.name}: wave {wave}")
+              # A deployment's Application is named for its namespace, reads the
+              # branch Deploy writes for it, and takes the file Deploy writes
+              # there. Any of the three drifting is a deployment reconciling
+              # another's record.
+              if path.name.startswith("lazycloud-"):
+                  name = path.stem
+                  spec = document["spec"]
+                  assert document["metadata"]["name"] == name, f"{path}: named {document['metadata']['name']}"
+                  assert spec["destination"]["namespace"] == name, f"{path}: namespace is not {name}"
+                  assert spec["source"]["targetRevision"] == name.removeprefix("lazycloud-"), f"{path}: branch"
+                  assert spec["source"]["helm"]["valueFiles"] == ["values.yaml", "values-deployment.yaml"], f"{path}: valueFiles"
+                  assert "resources-finalizer.argocd.argoproj.io" in document["metadata"].get("finalizers", []), f"{path}: finalizer"
           PY
