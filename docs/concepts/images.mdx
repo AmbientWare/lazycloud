@@ -17,14 +17,14 @@ image = (
 )
 ```
 
-`Image()` with no arguments is the managed Python 3.12 image. Python 3.10,
-3.11, and 3.12 are available.
+`Image()` with no arguments is the managed Python 3.12 image. Python 3.10
+through 3.14 are available.
 
 ## Constructor
 
 ```python
 Image(
-    python_version="3.12",         # "3.10" | "3.11" | "3.12"
+    python_version="3.12",         # "3.10" through "3.14"
     python_packages=[...],         # package specs, or a path to requirements.txt
     commands=[...],                # shell commands run during the build
     base_image=None,               # start from a registry image instead

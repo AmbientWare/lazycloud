@@ -16,7 +16,7 @@ from shared.managed_runtime_integrity import (
 )
 
 MANAGED_DISTRIBUTIONS = ("foundation", "runner", "lazycloud-client", "lazycloud-shared")
-SUPPORTED_PYTHON_VERSIONS = ("3.10", "3.11", "3.12")
+SUPPORTED_PYTHON_VERSIONS = ("3.10", "3.11", "3.12", "3.13", "3.14")
 SUPPORTED_ARCHITECTURES = ("amd64", "arm64")
 SCHEMA_VERSION = 3
 JsonScalar: TypeAlias = bool | int | float | str | None
