@@ -8,14 +8,6 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.6"
-    }
-    planetscale = {
-      source  = "planetscale/planetscale"
-      version = "~> 1.8"
-    }
     helm = {
       source  = "hashicorp/helm"
       version = "~> 2.17"
@@ -32,7 +24,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      "lazycloud:deployment" = var.deployment
+      "lazycloud:platform"   = var.name
       "lazycloud:managed-by" = "terraform"
     }
   }

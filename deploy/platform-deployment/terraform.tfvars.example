@@ -1,12 +1,16 @@
+# The deployment's name, namespace, and the prefix of every AWS name it owns.
 deployment = "lazycloud-prod"
 region     = "us-east-1"
 
-control_plane_cidr = "10.80.0.0/16"
+# The GitHub environment whose jobs may assume this deployment's deploy role.
+github_environment = "prod"
 
-# Addresses that may reach the Kubernetes API from outside the VPC. The machine
-# `terraform apply` runs from must be listed; nothing else outside the VPC needs
-# it. `curl https://checkip.amazonaws.com` prints yours.
-cluster_api_cidrs = ["203.0.113.7/32"]
+# The tunnel this deployment serves through, from its own deploy/cloudflare apply.
+cloudflare_state_key = "cloudflare/production.tfstate"
+
+# A second deployment on the same cluster needs a CIDR that overlaps neither
+# this one nor the cluster's 10.80.0.0/16.
+fleet_cidr = "10.84.0.0/16"
 
 # The payment-provider account the catalog is published into, checked against the
 # credential before anything is written. `stripe accounts retrieve` prints it.

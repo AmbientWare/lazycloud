@@ -3,10 +3,17 @@
 The control plane, the scheduler, the cache, the tunnel, and the bootstrap that
 has to run before any of them.
 
-Values come from the platform module rather than being authored here: `images`
-from what the deploy pushed, `runtime` from `runtime_configuration`, and
-`secrets.map` from `secret_environment`. Nothing in this chart decides a value
-the infrastructure already knows.
+Values come from the deployment module rather than being authored here:
+`image` from what the deploy pushed, `runtime` from `runtime_configuration`,
+`secrets.map` from `secret_environment`, and `secrets.readerRoleArn` from
+`secrets_reader_role_arn`. Deploy renders them into
+`values-deployment.yaml` on the deployment's branch, and the deployment's Argo
+Application reads that file beside `values.yaml`. Nothing in this chart decides
+a value the infrastructure already knows.
+
+One chart, one namespace per deployment. The chart never names a namespace;
+Argo's Application does, and the only cluster-scoped object it once declared,
+the storage class, now belongs to `deploy/platform-core`.
 
 `billing.ratesEffectiveAt` is the exception, and it is authored here on purpose.
 No infrastructure output knows the instant a rate card starts applying, and
@@ -52,6 +59,16 @@ The `wireguard-bootstrap` Job initializes one Secrets Manager document with the
 gateway keypair and the small set of platform keypairs. External Secrets mounts
 them as read-only files. Agent private keys remain on their machines; Postgres
 stores public peer records, and Redis stores only the active-gateway lease.
+
+## Secrets
+
+The `SecretStore` presents the `secrets-reader` service account rather than the
+operator's own identity. The External Secrets operator is installed once for
+every namespace, so it holds no AWS identity; it mints a token for that account
+and exchanges it for the role the account's annotation names, and the role's
+trust admits this namespace's subject only. That is the one role ARN in the
+chart. Every other identity is a Pod Identity association the deployment
+module declares beside the cluster.
 
 ## Requests, and the node count that follows from them
 

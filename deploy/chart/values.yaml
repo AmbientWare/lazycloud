@@ -7,7 +7,7 @@ image:
   repositoryPrefix: ""
   tag: ""
 
-# Non-secret deployment values, rendered from the platform module's
+# Non-secret deployment values, rendered from the deployment module's
 # `runtime_configuration`. The list is not decoration: a control plane missing
 # one of these starts, reports healthy, and is wrong.
 runtime: {}
@@ -18,21 +18,28 @@ secrets:
   # mappings.
   name: lazycloud-secrets
   # Which Secrets Manager entry each variable is read from, rendered from the
-  # platform module's `secret_environment`. Every workload gets all of these as
-  # environment.
+  # deployment module's `secret_environment`. Every workload gets all of these
+  # as environment.
   map: {}
   # Entries materialised into the same Secret but mounted as files by the one
   # workload that reads them, from `secret_files`. Kept apart from `map` so a
   # credential one pod needs is not in the environment of every pod.
   files: {}
   refreshInterval: 1h
+  # The role the SecretStore assumes, from the deployment module's
+  # `secrets_reader_role_arn`. The one role ARN in this chart: every other
+  # identity is a Pod Identity association that names the service account from
+  # the cluster's side, but a SecretStore is reconciled by an operator shared
+  # across namespaces, and the only identity it can present per store is a
+  # service account token exchanged for this role.
+  readerRoleArn: ""
 
-# Named here and in the Pod Identity associations the platform module declares.
+# Named here and in the identity associations the deployment module declares.
 # A rename needs both.
 serviceAccounts:
   controlPlane: control-plane
   scheduler: scheduler
-  externalSecrets: external-secrets
+  secretsReader: secrets-reader
   wireguardBootstrap: wireguard-bootstrap
 
 wireguard:
@@ -47,7 +54,7 @@ wireguard:
 # The server's ceiling, divided below. Every process holds its own pool, so the
 # sum of what they may open is the number that has to fit, and nothing reports
 # the overrun except requests failing to connect once it is exceeded. Declared
-# here and read by `deploy/platform-eks/database.tf`, which sets the branch's
+# here and read by `deploy/platform-deployment/database.tf`, which sets the branch's
 # `max_connections` to it. Two control-plane and two scheduler replicas need 31
 # with the reserve; 40 leaves a third control-plane replica fitting without a
 # database change.
@@ -160,8 +167,8 @@ bootstrap:
 billing:
   ratesEffectiveAt: "2026-01-01T00:00:00Z"
 
-# The class every claim in this chart names, created here because Auto Mode
-# provides the driver and no class.
+# The class every claim in this chart names. Cluster-scoped, so it is created
+# once by `deploy/platform-core` rather than by each deployment's chart.
 storage:
   className: lazycloud-ebs
 

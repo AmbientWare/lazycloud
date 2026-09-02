@@ -48,7 +48,7 @@ data "aws_iam_policy_document" "control_plane" {
       "ecr:BatchGetImage",
       "ecr:GetDownloadUrlForLayer",
     ]
-    resources = [for repository in aws_ecr_repository.image : repository.arn]
+    resources = local.ecr_repository_arns
   }
 
   statement {

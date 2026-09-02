@@ -21,11 +21,12 @@ resource "aws_iam_role" "deploy" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          # Scoped to the environment, not just the repository. A workflow without
-          # `environment: production` gets a different sub claim and cannot assume
-          # this role, so a pull request from a fork cannot reach the deployment
-          # even if it can run a workflow.
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:production"
+          # Scoped to the environment, not just the repository. A workflow job
+          # without this deployment's `environment:` gets a different sub claim
+          # and cannot assume this role, so a pull request from a fork cannot
+          # reach the deployment even if it can run a workflow, and a deploy to
+          # staging cannot write prod's bundle.
+          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${var.github_environment}"
         }
       }
     }]
@@ -51,7 +52,7 @@ data "aws_iam_policy_document" "deploy" {
       "ecr:PutImage",
       "ecr:UploadLayerPart",
     ]
-    resources = [for repository in aws_ecr_repository.image : repository.arn]
+    resources = local.ecr_repository_arns
   }
 
   statement {
@@ -60,8 +61,8 @@ data "aws_iam_policy_document" "deploy" {
     resources = [aws_s3_bucket.deploy.arn, "${aws_s3_bucket.deploy.arn}/*"]
   }
 
-  # `terraform output` reads state. The workflow never applies, so this is read
-  # and the lock, not write.
+  # `terraform output` reads state, this module's and the core's it refers to.
+  # The workflow never applies, so this is read and the lock, not write.
   statement {
     sid     = "ReadDeploymentState"
     actions = ["s3:GetObject", "s3:ListBucket"]
@@ -69,15 +70,6 @@ data "aws_iam_policy_document" "deploy" {
       "${local.arn_prefix}:s3:::${var.state_bucket}",
       "${local.arn_prefix}:s3:::${var.state_bucket}/*",
     ]
-  }
-
-  # Reaching the cluster. `helm upgrade` needs the endpoint and the CA before it
-  # can authenticate, and who it may then act as inside the cluster is decided by
-  # the access entry rather than by this policy.
-  statement {
-    sid       = "DescribeTheCluster"
-    actions   = ["eks:DescribeCluster"]
-    resources = [aws_eks_cluster.control_plane.arn]
   }
 }
 

@@ -7,8 +7,9 @@
 #
 # That is deliberate rather than a limitation. Karpenter sizes the cluster from
 # what the pods request, so the way to obtain more machine here is to request
-# accurately, in `deploy/chart/values.yaml`, in the Argo CD values in
-# `argocd.tf`, and in `deploy/argocd/apps/external-secrets.yaml`. A floor on
+# accurately, in `deploy/chart/values.yaml` for every deployment that runs, in
+# the Argo CD values in `argocd.tf`, and in
+# `deploy/argocd/apps/external-secrets.yaml`. A floor on
 # instance size would buy one shortfall at a fixed price, be wrong again at the
 # next one, and hide the pod that caused it.
 #
@@ -18,7 +19,7 @@
 # fit.
 
 resource "aws_eks_cluster" "control_plane" {
-  name     = var.deployment
+  name     = var.name
   role_arn = aws_iam_role.cluster.arn
   version  = var.kubernetes_version
 
@@ -34,8 +35,10 @@ resource "aws_eks_cluster" "control_plane" {
     # through the Kubernetes and Helm providers, so that address has to be
     # listed. GitHub Actions never applies and needs nothing here; Argo and
     # External Secrets reach the private endpoint from inside the VPC. IAM still
-    # decides who may act -- `aws_eks_access_entry` below names them -- and the
-    # allowlist decides who may ask. An empty list turns the public endpoint off.
+    # decides who may act -- the creating principal is the administrator, and a
+    # deployment's identities are Pod Identity associations that never touch
+    # this endpoint -- and the allowlist decides who may ask. An empty list
+    # turns the public endpoint off.
     endpoint_public_access  = length(var.cluster_api_cidrs) > 0
     endpoint_private_access = true
     public_access_cidrs     = length(var.cluster_api_cidrs) > 0 ? var.cluster_api_cidrs : null
@@ -74,7 +77,7 @@ resource "aws_eks_cluster" "control_plane" {
     aws_iam_role_policy_attachment.cluster,
   ]
 
-  tags = { Name = var.deployment }
+  tags = { Name = var.name }
 }
 
 data "aws_eks_cluster_auth" "control_plane" {

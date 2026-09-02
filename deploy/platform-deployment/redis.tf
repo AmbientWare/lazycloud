@@ -16,24 +16,26 @@
 
 resource "aws_elasticache_subnet_group" "redis" {
   name       = "${var.deployment}-redis"
-  subnet_ids = aws_subnet.cluster[*].id
+  subnet_ids = local.cluster_subnet_ids
 }
 
 resource "aws_security_group" "redis" {
   name        = "${var.deployment}-redis"
   description = "Redis: reachable only from inside this VPC."
-  vpc_id      = aws_vpc.cluster.id
+  vpc_id      = local.cluster_vpc_id
 
   tags = { Name = "${var.deployment}-redis" }
 }
 
 # The VPC rather than the node security group, because Auto Mode owns the
 # security group its nodes carry and naming it here would be naming something
-# this module does not create.
+# this module does not create. Every deployment's Redis is therefore reachable
+# from every deployment's pods at the network layer; what keeps them apart is
+# that each deployment's URL names its own, and nothing hands one out.
 resource "aws_vpc_security_group_ingress_rule" "redis" {
   security_group_id = aws_security_group.redis.id
   description       = "Cluster workloads."
-  cidr_ipv4         = aws_vpc.cluster.cidr_block
+  cidr_ipv4         = local.cluster_vpc_cidr
   from_port         = 6379
   to_port           = 6379
   ip_protocol       = "tcp"

@@ -25,6 +25,10 @@ locals {
   fleet_launch_tag = { "cloud-pool:managed-by" = "control-plane" }
 }
 
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
 resource "aws_vpc" "fleet" {
   cidr_block           = var.fleet_cidr
   enable_dns_support   = true

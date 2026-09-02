@@ -45,9 +45,19 @@ substitutes, and gives every service an explicit owner and health check.
   forward the one already recorded; blanking it would silently take away every
   managed pool.
 - CI builds and records; Argo installs. The deploy workflow pushes images and
-  commits the values naming them to the deployment branch, and stops. Nothing in
+  commits the values naming them to the deployment's branch, and stops. Nothing in
   CI runs `helm install`, because a workflow that installs and a controller that
   reconciles are two opinions about what should be running, and they disagree
   where nobody is looking.
+- An image belongs to a commit, not to a deployment. Deploy builds a commit
+  once into repositories every deployment shares, tagged by the commit, and a
+  deployment names the tag it runs. Promotion records the commit staging runs
+  for prod and builds nothing; what crosses is the tag and the release URL,
+  and prod's values are rendered from prod's own outputs.
+- The list of deployments lives on `main`; what each runs lives on its branch.
+  Argo's root Application reads `deploy/argocd/apps` on `main`, one file per
+  deployment naming its namespace and branch, so adding a deployment is
+  merging its file and a change there takes effect on the next sync with no
+  deploy between. The chart and its values come only from the branch.
 - Operator documentation is part of the change: when deployment behavior
   changes, the runbook that describes it changes with it.
