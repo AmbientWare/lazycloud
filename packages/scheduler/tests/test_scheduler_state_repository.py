@@ -2552,6 +2552,8 @@ def test_scheduler_container_request_service_bounds_no_capacity_retries(
         failure_handler=failure_handler,
         requeue_delay_seconds=2,
         max_retry_count=1,
+        # The count, not the grace, is what this proves.
+        retry_grace_seconds=0.0,
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = SchedulerWorkerRequest(
@@ -2610,6 +2612,7 @@ def test_scheduler_image_build_failure_persists_coordination_evidence_and_fails_
         container_repo,
         failure_handler=failure_handler,
         max_retry_count=0,
+        retry_grace_seconds=0.0,
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = SchedulerWorkerRequest(
