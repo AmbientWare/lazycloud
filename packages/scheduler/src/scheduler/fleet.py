@@ -14,6 +14,14 @@ from scheduler.tools import WorkerPoolCapacity
 DEFAULT_REQUEST_PROCESSING_INTERVAL = timedelta(seconds=1)
 DEFAULT_MAX_SCHEDULE_RETRY_COUNT = 10
 DEFAULT_MAX_SCHEDULE_RETRY_DURATION = timedelta(minutes=15)
+# How long a request that fits no worker keeps retrying before the retry count
+# may fail it. A pool that needs a machine takes one to three minutes to boot,
+# register and report capacity, and a request placed at the wrong moment sees
+# only the machines that already exist. Failing it on a retry count reached in
+# seconds turned every scale-up into a customer-visible error naming the free
+# capacity of a machine that was about to have company.
+DEFAULT_SCHEDULE_RETRY_GRACE = timedelta(minutes=3)
+DEFAULT_MAX_RETRY_DELAY = timedelta(seconds=5)
 DEFAULT_PROVISIONING_HANDOFF = timedelta(seconds=30)
 
 
@@ -157,23 +165,31 @@ def plan_retry_soon(
     max_retry_count: int = DEFAULT_MAX_SCHEDULE_RETRY_COUNT,
     processing_interval: timedelta = DEFAULT_REQUEST_PROCESSING_INTERVAL,
     max_schedule_duration: timedelta = DEFAULT_MAX_SCHEDULE_RETRY_DURATION,
+    retry_grace: timedelta = DEFAULT_SCHEDULE_RETRY_GRACE,
 ) -> SchedulerRequeuePlan:
     current = now or utc_now()
-    if retry_count >= max_retry_count:
-        return SchedulerRequeuePlan(
-            action=SchedulerRequeueAction.Fail,
-            reason=SchedulerRetryReason.RetryLimit,
-            next_retry_count=retry_count,
-        )
-    if current - request_created_at >= max_schedule_duration:
+    age = current - request_created_at
+    if age >= max_schedule_duration:
         return SchedulerRequeuePlan(
             action=SchedulerRequeueAction.Fail,
             reason=SchedulerRetryReason.WorkerCapacityTimeout,
             next_retry_count=retry_count,
         )
+    # The count fails a request that will never fit, and it does so only once
+    # capacity that was being added has had time to arrive.
+    if retry_count >= max_retry_count and age >= retry_grace:
+        return SchedulerRequeuePlan(
+            action=SchedulerRequeueAction.Fail,
+            reason=SchedulerRetryReason.RetryLimit,
+            next_retry_count=retry_count,
+        )
+    delay = min(
+        processing_interval * (retry_count + 1),
+        max(processing_interval, DEFAULT_MAX_RETRY_DELAY),
+    )
     return SchedulerRequeuePlan(
         action=SchedulerRequeueAction.Requeue,
         reason=SchedulerRetryReason.ScheduleFailed,
-        delay_seconds=processing_interval.total_seconds(),
+        delay_seconds=delay.total_seconds(),
         next_retry_count=retry_count + 1,
     )

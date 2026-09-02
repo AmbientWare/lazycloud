@@ -36,6 +36,7 @@ from scheduler.fleet import (
     DEFAULT_MAX_SCHEDULE_RETRY_COUNT,
     DEFAULT_MAX_SCHEDULE_RETRY_DURATION,
     DEFAULT_PROVISIONING_HANDOFF,
+    DEFAULT_SCHEDULE_RETRY_GRACE,
     SchedulerRequeueAction,
     SchedulerRequeuePlan,
     plan_retry_soon,
@@ -308,6 +309,7 @@ class SchedulerContainerRequestService:
     requeue_delay_seconds: float = DEFAULT_SCHEDULER_REQUEUE_DELAY_SECONDS
     max_retry_count: int = DEFAULT_MAX_SCHEDULE_RETRY_COUNT
     max_retry_age_seconds: float = DEFAULT_MAX_SCHEDULE_RETRY_DURATION.total_seconds()
+    retry_grace_seconds: float = DEFAULT_SCHEDULE_RETRY_GRACE.total_seconds()
     claim_lease_seconds: float = DEFAULT_CONTAINER_REQUEST_CLAIM_LEASE_SECONDS
 
     def submit(
@@ -757,6 +759,7 @@ class SchedulerContainerRequestService:
             max_retry_count=self.max_retry_count,
             processing_interval=processing_interval,
             max_schedule_duration=max_schedule_duration,
+            retry_grace=timedelta(seconds=max(self.retry_grace_seconds, 0.0)),
         )
 
     def _dispatch(
