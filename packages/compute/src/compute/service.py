@@ -1785,7 +1785,7 @@ class ComputeService:
                 unit = unit.model_copy(
                     update={
                         "provider_state": unit.provider_state.model_copy(
-                            update={"degraded_reason": None}
+                            update={"degraded_reason": None, "degraded_at": None}
                         )
                     }
                 )
@@ -2136,6 +2136,7 @@ class ComputeService:
                 offer=offer,
                 now=now,
             )
+            current = self._relaunch_degraded_pool_after_interval(current, now=now)
             degraded = current.provider_state.degraded_reason is not None
             request = self._provider_unit_request(current, offer)
             snapshot = (
@@ -2376,6 +2377,7 @@ class ComputeService:
             degraded = self._mark_pooled_capacity_degraded(
                 current,
                 reason="bootstrap_launch_attempts_exhausted",
+                now=now,
             )
             if degraded is not None:
                 current = degraded
@@ -2695,7 +2697,11 @@ class ComputeService:
                 observed_machines=unit.observed_machines,
                 phase=ComputeUnitPhase.Ready,
                 provider_state=unit.provider_state.model_copy(
-                    update={"degraded_reason": None, "launch_attempt_baseline": highest}
+                    update={
+                        "degraded_reason": None,
+                        "degraded_at": None,
+                        "launch_attempt_baseline": highest,
+                    }
                 ),
             )
         if cleared is None:
@@ -2710,15 +2716,78 @@ class ComputeService:
         )
         return cleared
 
+    def _relaunch_degraded_pool_after_interval(
+        self,
+        pool: ComputeUnitRecord,
+        *,
+        now: datetime,
+    ) -> ComputeUnitRecord:
+        """Give a pool that exhausted its launch attempts another series.
+
+        The attempt baseline moves to the highest ordinal seen, as the explicit
+        clear does, so the next failure counts from here rather than degrading
+        the pool again on its first miss. A pool degraded before the stamp
+        existed relaunches at once: it has already waited longer than any
+        interval.
+        """
+        state = pool.provider_state
+        if state.degraded_reason != "bootstrap_launch_attempts_exhausted":
+            return pool
+        degraded_at = state.degraded_at
+        interval = timedelta(seconds=self.reclaim.degraded_relaunch_interval_seconds)
+        if degraded_at is not None and now - to_utc(degraded_at) < interval:
+            return pool
+        with self.context.database.session() as session:
+            repository = ComputeUnitRepository(session)
+            machines = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+            highest = max(
+                (record.launch_attempt for record in machines),
+                default=state.launch_attempt_baseline,
+            )
+            cleared = repository.apply_provider_state(
+                pool.id,
+                generation=pool.generation,
+                observed_machines=pool.observed_machines,
+                phase=ComputeUnitPhase.Ready,
+                provider_state=state.model_copy(
+                    update={
+                        "degraded_reason": None,
+                        "degraded_at": None,
+                        "launch_attempt_baseline": highest,
+                    }
+                ),
+            )
+        if cleared is None:
+            return pool
+        LOGGER.warning(
+            "relaunching degraded pooled capacity after the relaunch interval",
+            extra={
+                "pool": pool.name,
+                "capacity_owner_id": pool.capacity_owner_id,
+                "degraded_at": degraded_at.isoformat() if degraded_at is not None else None,
+                "launch_attempt_baseline": highest,
+            },
+        )
+        self._publish_change(
+            workspace_id=cleared.workspace_id,
+            topic=WorkspaceChangeTopic.ComputeUnits,
+            change=WorkspaceChangeType.Updated,
+            resource_id=cleared.id,
+        )
+        return cleared
+
     def _mark_pooled_capacity_degraded(
         self,
         pool: ComputeUnitRecord,
         *,
         reason: str | None = None,
         preserve_deleting: bool = False,
+        now: datetime | None = None,
     ) -> ComputeUnitRecord | None:
         provider_state = (
-            pool.provider_state.model_copy(update={"degraded_reason": reason})
+            pool.provider_state.model_copy(
+                update={"degraded_reason": reason, "degraded_at": to_utc(now or utc_now())}
+            )
             if reason is not None
             else pool.provider_state
         )

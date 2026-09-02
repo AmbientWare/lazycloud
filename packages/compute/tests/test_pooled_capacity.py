@@ -1447,6 +1447,16 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
     assert still_degraded.provider_state.degraded_reason == "bootstrap_launch_attempts_exhausted"
     assert provider.desired == 0
     assert len(provider.ensure_calls) == ensure_calls_before_exhaustion
+    # After the relaunch interval the pool buys machines again on its own, and
+    # the next failure counts from this point rather than degrading it at once.
+    compute.reconcile_pooled_capacity(now=moment + timedelta(seconds=601))
+    with isolated_services.context.database.session() as session:
+        relaunching = ComputeUnitRepository(session).get(pool.id)
+    assert relaunching is not None
+    assert relaunching.provider_state.degraded_reason is None
+    assert relaunching.provider_state.launch_attempt_baseline == 2
+    assert relaunching.provider_state.degraded_at is None
+    assert len(provider.ensure_calls) > ensure_calls_before_exhaustion
 
     scaled = compute.scale_internal_unit(
         pool.workspace_id,

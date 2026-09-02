@@ -53,6 +53,16 @@ otherwise terminate and relaunch billable machines forever; after the bound the
 pool is marked degraded until capacity is explicitly changed.
 """
 
+DEFAULT_DEGRADED_RELAUNCH_INTERVAL_SECONDS = 600
+"""How long a pool that exhausted its launch attempts waits before trying again.
+
+The attempt bound stops a broken image from billing forever; this is what stops
+it from needing a person. A bootstrap can fail for reasons that pass -- a
+release rolling under the launch, a registry hiccup, an endpoint not yet
+answering -- and a pool that stayed dark until someone noticed turned each of
+those into an outage. One fresh series of attempts every ten minutes bounds a
+systematic failure at three launches per interval and lets a passing one heal.
+"""
 DEFAULT_BOOTSTRAP_FAILURE_OBSERVATIONS = 2
 """Consecutive non-serving observations before a bootstrap deadline reclaims.
 
@@ -94,6 +104,9 @@ class ComputeReclaimPolicy(ContractModel):
         default_factory=lambda: dict(DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS)
     )
     max_launch_attempts: int = Field(default=DEFAULT_MAX_LAUNCH_ATTEMPTS, gt=0)
+    degraded_relaunch_interval_seconds: int = Field(
+        default=DEFAULT_DEGRADED_RELAUNCH_INTERVAL_SECONDS, gt=0
+    )
     bootstrap_failure_observations: int = Field(
         default=DEFAULT_BOOTSTRAP_FAILURE_OBSERVATIONS, gt=0
     )
@@ -159,6 +172,9 @@ class ComputeReclaimSettings(BaseSettings):
         default_factory=lambda: dict(DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS)
     )
     max_launch_attempts: int = Field(default=DEFAULT_MAX_LAUNCH_ATTEMPTS, gt=0)
+    degraded_relaunch_interval_seconds: int = Field(
+        default=DEFAULT_DEGRADED_RELAUNCH_INTERVAL_SECONDS, gt=0
+    )
     bootstrap_failure_observations: int = Field(
         default=DEFAULT_BOOTSTRAP_FAILURE_OBSERVATIONS, gt=0
     )
@@ -217,6 +233,7 @@ class ComputeReclaimSettings(BaseSettings):
         return ComputeReclaimPolicy(
             bootstrap_phase_deadline_seconds=self.bootstrap_phase_deadline_seconds,
             max_launch_attempts=self.max_launch_attempts,
+            degraded_relaunch_interval_seconds=self.degraded_relaunch_interval_seconds,
             bootstrap_failure_observations=self.bootstrap_failure_observations,
             service_loss_observations=self.service_loss_observations,
             service_loss_window_seconds=self.service_loss_window_seconds,
