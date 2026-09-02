@@ -10,9 +10,9 @@ name: Ship
 # workspace keeps a placeholder that the release stamps over at build time.
 #
 # The tag is pushed by this run rather than by hand, and it triggers nothing. A
-# tag pushed with the workflow token starts no other workflow, which is what
-# used to go wrong when release and deploy both listened for `v*` and the
-# deploy raced the release it was meant to run.
+# tag pushed with the workflow token starts no other workflow. That is the
+# point: with release and deploy each listening for `v*`, the deploy raced the
+# release it was meant to run.
 #
 # The two halves stay separate workflows because they answer to different
 # audiences. A release is immutable and public: a customer's own AWS account

@@ -35,9 +35,9 @@ substitutes, and gives every service an explicit owner and health check.
   its manifest, so rebuilding one per code deploy churns artifacts other
   people's infrastructure already points at. Sequencing them is the part that
   cannot be left to chance. Both once triggered on `v*` independently, so a
-  tagged deploy raced the release it was meant to run. Ship is now dispatched
-  with a bump choice, pushes the tag itself, and passes the version to both as
-  an input; a tag pushed with the workflow token starts no other workflow.
+  tagged deploy raced the release it was meant to run. Ship is dispatched with
+  a bump choice, pushes the tag itself, and passes the version to both as an
+  input; a tag pushed with the workflow token starts no other workflow.
 - Which release a deployment runs is a fact about the deployment rather than its
   infrastructure. It changes on a different schedule from anything Terraform
   declares, so it lives in the bucket Terraform does own and is destroyed with

@@ -21,7 +21,7 @@ resource "aws_iam_role" "deploy" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          # Scoped to the environment, not just the repository. A workflow job
+          # Scoped to the environment as well as the repository. A workflow job
           # without this deployment's `environment:` gets a different sub claim
           # and cannot assume this role, so a pull request from a fork cannot
           # reach the deployment even if it can run a workflow, and a deploy to
