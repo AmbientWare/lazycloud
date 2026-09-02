@@ -160,6 +160,11 @@ spec:
             failureThreshold: 6
         - name: wireguard-platform
           image: {{ include "lazycloud.image" (list . "tunnel-gateway") }}
+          # The image's default command is the gateway. This container is the
+          # platform peer beside the API, which is the other entrypoint the same
+          # image carries, and the gateway's settings refuse this container's
+          # environment on the first line.
+          command: ["lazycloud-wireguard-platform"]
           securityContext:
             capabilities:
               add: ["NET_ADMIN"]
