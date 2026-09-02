@@ -16,7 +16,7 @@ from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.identity import AuthScope, TokenKind
 from storage.service import ObjectStorage
-from storage_client.s3 import S3ObjectInfo
+from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
 from tests.service_fixtures import owned_workspace
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
@@ -263,6 +263,7 @@ def _services_with_object_storage(
         volume_filesystem=isolated_services.volume_filesystem,
         redis_client=isolated_services.redis_client,
         binary_redis_client=isolated_services.binary_redis_client,
+        async_io=isolated_services.require_async_io(),
         owns_redis_client=False,
         owns_binary_redis_client=False,
     )
@@ -389,6 +390,28 @@ class _PresignedObjectClient:
         _ = content_length, content_type
         target_bucket = bucket or "default"
         return f"https://objects.example/{target_bucket}/{key}?expires={expires_seconds}"
+
+    def generate_presigned_put(
+        self,
+        key: str,
+        *,
+        bucket: str | None = None,
+        expires_seconds: int = 3600,
+        content_length: int,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+        checksum_sha256: str = "",
+    ) -> S3PresignedUpload:
+        target_bucket = bucket or "default"
+        return S3PresignedUpload(
+            url=f"https://objects.example/{target_bucket}/{key}?expires={expires_seconds}",
+            headers={
+                "content-length": str(content_length),
+                "content-type": content_type,
+                **({"x-amz-checksum-sha256": checksum_sha256} if checksum_sha256 else {}),
+                **{f"x-amz-meta-{name}": value for name, value in (metadata or {}).items()},
+            },
+        )
 
     def delete(self, key: str, *, bucket: str | None = None) -> None:
         self.objects.pop((bucket or "default", key), None)

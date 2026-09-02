@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from coordination.invalidation import RedisInvalidationGeneration
-from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, RedisClient
+from coordination.invalidation import AsyncRedisInvalidationGeneration, RedisInvalidationGeneration
+from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, AsyncRedisClient, RedisClient
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,36 @@ class AuthTokenInvalidation:
         """
         try:
             self.generation.bump()
+        except REDIS_UNAVAILABLE_ERRORS:
+            logger.exception(
+                "auth token invalidation emit failed; "
+                "replicas bypass their token caches while Redis is unavailable"
+            )
+
+
+@dataclass(slots=True)
+class AsyncAuthTokenInvalidation:
+    generation: AsyncRedisInvalidationGeneration
+
+    @classmethod
+    def from_redis(cls, redis: AsyncRedisClient) -> AsyncAuthTokenInvalidation:
+        return cls(
+            AsyncRedisInvalidationGeneration(
+                redis=redis,
+                scope=AUTH_TOKEN_INVALIDATION_SCOPE,
+            )
+        )
+
+    async def current_generation(self) -> int | None:
+        try:
+            return await self.generation.current()
+        except REDIS_UNAVAILABLE_ERRORS:
+            logger.exception("auth token invalidation read failed; bypassing token cache")
+            return None
+
+    async def emit(self) -> None:
+        try:
+            await self.generation.bump()
         except REDIS_UNAVAILABLE_ERRORS:
             logger.exception(
                 "auth token invalidation emit failed; "

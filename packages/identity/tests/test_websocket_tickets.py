@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from database.tables.identity import TokenTable
 from identity.auth import AuthError, AuthorizationDeniedError, AuthService
 from identity.websocket_tickets import (
     WEBSOCKET_TICKET_TTL_SECONDS,
+    AsyncWebSocketTicketService,
     ShellWebSocketAudience,
     WebSocketTicketService,
     WebSocketTicketStoreError,
@@ -36,6 +38,23 @@ def _audience(workspace_id: str) -> ShellWebSocketAudience:
     )
 
 
+@pytest.fixture
+async def ticket_services(
+    isolated_services: ApiServices,
+) -> AsyncIterator[tuple[WebSocketTicketService, AsyncWebSocketTicketService]]:
+    async_io = isolated_services.require_async_io()
+    yield (
+        WebSocketTicketService(isolated_services.context, isolated_services.redis_client),
+        AsyncWebSocketTicketService(
+            AuthService(isolated_services.context),
+            async_io.database,
+            async_io.redis,
+            async_io.auth_invalidation,
+        ),
+    )
+    await async_io.close()
+
+
 def test_ticket_is_hashed_short_lived_and_contains_no_bearer(
     isolated_services: ApiServices,
 ) -> None:
@@ -57,32 +76,34 @@ def test_ticket_is_hashed_short_lived_and_contains_no_bearer(
     assert fake.ttl(key) == WEBSOCKET_TICKET_TTL_SECONDS
 
 
-def test_ticket_consumption_is_single_use_and_audience_bound(
+@pytest.mark.anyio
+async def test_ticket_consumption_is_single_use_and_audience_bound(
     isolated_services: ApiServices,
+    ticket_services: tuple[WebSocketTicketService, AsyncWebSocketTicketService],
 ) -> None:
     _raw_token, token = AuthService(isolated_services.context).create_token(
         "browser-shell",
         scopes=[AuthScope.Read.value],
     )
-    service, _fake = _ticket_service(isolated_services)
+    service, consumer = ticket_services
     audience = _audience(token.workspace_id)
     wrong_ticket = service.mint_shell_ticket(token, audience=audience)
 
     with pytest.raises(AuthError, match="audience"):
-        service.consume_shell_ticket(
+        await consumer.consume_shell_ticket(
             wrong_ticket,
             stub_id=audience.stub_id,
             container_id="another-container",
         )
     with pytest.raises(AuthError, match="invalid or expired"):
-        service.consume_shell_ticket(
+        await consumer.consume_shell_ticket(
             wrong_ticket,
             stub_id=audience.stub_id,
             container_id=audience.container_id,
         )
 
     ticket = service.mint_shell_ticket(token, audience=audience)
-    authorization = service.consume_shell_ticket(
+    authorization = await consumer.consume_shell_ticket(
         ticket,
         stub_id=audience.stub_id,
         container_id=audience.container_id,
@@ -90,22 +111,24 @@ def test_ticket_consumption_is_single_use_and_audience_bound(
     assert authorization.token.id == token.id
     assert authorization.audience == audience
     with pytest.raises(AuthError, match="invalid or expired"):
-        service.consume_shell_ticket(
+        await consumer.consume_shell_ticket(
             ticket,
             stub_id=audience.stub_id,
             container_id=audience.container_id,
         )
 
 
-def test_failed_scope_and_revocation_checks_consume_ticket(
+@pytest.mark.anyio
+async def test_failed_scope_and_revocation_checks_consume_ticket(
     isolated_services: ApiServices,
+    ticket_services: tuple[WebSocketTicketService, AsyncWebSocketTicketService],
 ) -> None:
     auth = AuthService(isolated_services.context)
     _raw_token, token = auth.create_token(
         "browser-shell",
         scopes=[AuthScope.Read.value],
     )
-    service, _fake = _ticket_service(isolated_services)
+    service, consumer = ticket_services
     audience = _audience(token.workspace_id)
     scope_ticket = service.mint_shell_ticket(token, audience=audience)
     with isolated_services.context.database.session() as session:
@@ -114,13 +137,13 @@ def test_failed_scope_and_revocation_checks_consume_ticket(
         current.scopes = [AuthScope.Write.value]
 
     with pytest.raises(AuthorizationDeniedError, match="missing scope"):
-        service.consume_shell_ticket(
+        await consumer.consume_shell_ticket(
             scope_ticket,
             stub_id=audience.stub_id,
             container_id=audience.container_id,
         )
     with pytest.raises(AuthError, match="invalid or expired"):
-        service.consume_shell_ticket(
+        await consumer.consume_shell_ticket(
             scope_ticket,
             stub_id=audience.stub_id,
             container_id=audience.container_id,
@@ -134,21 +157,23 @@ def test_failed_scope_and_revocation_checks_consume_ticket(
     auth.revoke_token(token.id)
 
     with pytest.raises(AuthError, match="invalid token identity"):
-        service.consume_shell_ticket(
+        await consumer.consume_shell_ticket(
             revoked_ticket,
             stub_id=audience.stub_id,
             container_id=audience.container_id,
         )
     with pytest.raises(AuthError, match="invalid or expired"):
-        service.consume_shell_ticket(
+        await consumer.consume_shell_ticket(
             revoked_ticket,
             stub_id=audience.stub_id,
             container_id=audience.container_id,
         )
 
 
-def test_expired_token_and_ticket_scope_mismatch_are_terminal(
+@pytest.mark.anyio
+async def test_expired_token_and_ticket_scope_mismatch_are_terminal(
     isolated_services: ApiServices,
+    ticket_services: tuple[WebSocketTicketService, AsyncWebSocketTicketService],
 ) -> None:
     auth = AuthService(isolated_services.context)
     _raw_token, token = auth.create_token(
@@ -156,18 +181,18 @@ def test_expired_token_and_ticket_scope_mismatch_are_terminal(
         scopes=[AuthScope.Read.value],
         expires_in_seconds=0,
     )
-    service, _fake = _ticket_service(isolated_services)
+    service, consumer = ticket_services
     audience = _audience(token.workspace_id)
     expired_token_ticket = service.mint_shell_ticket(token, audience=audience)
 
     with pytest.raises(AuthError, match="expired"):
-        service.consume_shell_ticket(
+        await consumer.consume_shell_ticket(
             expired_token_ticket,
             stub_id=audience.stub_id,
             container_id=audience.container_id,
         )
     with pytest.raises(AuthError, match="invalid or expired"):
-        service.consume_shell_ticket(
+        await consumer.consume_shell_ticket(
             expired_token_ticket,
             stub_id=audience.stub_id,
             container_id=audience.container_id,
@@ -179,14 +204,14 @@ def test_expired_token_and_ticket_scope_mismatch_are_terminal(
     )
     scope_ticket = service.mint_shell_ticket(active, audience=_audience(active.workspace_id))
     with pytest.raises(AuthError, match="scope"):
-        service.consume_shell_ticket(
+        await consumer.consume_shell_ticket(
             scope_ticket,
             stub_id=audience.stub_id,
             container_id=audience.container_id,
             required_scope=AuthScope.Write,
         )
     with pytest.raises(AuthError, match="invalid or expired"):
-        service.consume_shell_ticket(
+        await consumer.consume_shell_ticket(
             scope_ticket,
             stub_id=audience.stub_id,
             container_id=audience.container_id,

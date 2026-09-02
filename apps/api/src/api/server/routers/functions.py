@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncIterable, AsyncIterator
+from typing import Annotated
 
 from control.service import ControlPlaneService, StubKind, StubRecord
 from fastapi import APIRouter, Depends, Request
@@ -33,6 +34,18 @@ from api.server.services import ApiServices, FunctionApiService
 router = APIRouter(prefix="/api/v1/functions", tags=["function"])
 
 
+async def _http_invocation(request: Request) -> FunctionJsonInvocation:
+    body = await request.body()
+    payload = serialize_http_task_payload(body, query_params=request_query_params(request))
+    return FunctionJsonInvocation(
+        args=list(payload.args or []),
+        kwargs=dict(payload.kwargs),
+    )
+
+
+type HttpFunctionInvocation = Annotated[FunctionJsonInvocation, Depends(_http_invocation)]
+
+
 @router.post("/invoke", response_model=FunctionInvokeResponse)
 def function_invoke(
     request: FunctionInvokeBody,
@@ -60,8 +73,14 @@ def function_invoke_stream(
     service.assert_may_accept_invocation(request.stub_id)
     with services.context.database.session() as session:
         services.containers.assert_may_start_container(session, workspace_id=workspace_id)
+    initial = service.function_invoke(request)
     return StreamingResponse(
-        _function_ndjson(service.function_invoke_stream(request)),
+        _function_ndjson(
+            service.function_invoke_stream(
+                initial,
+                headless=request.headless,
+            )
+        ),
         media_type="application/x-ndjson",
     )
 
@@ -102,9 +121,9 @@ def function_monitor(
 
 
 @router.post("/id/{stub_id}", response_model=FunctionInvokeResponse)
-async def deployed_function_invoke_by_id(
+def deployed_function_invoke_by_id(
     stub_id: str,
-    request: Request,
+    invocation: HttpFunctionInvocation,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -112,46 +131,44 @@ async def deployed_function_invoke_by_id(
 ) -> FunctionInvokeResponse:
     stub = resolve_deployed_stub_id(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Function,
         public=False,
         resource_name="function",
         workspace=workspace_id,
     )
-    return await _invoke_deployed_function(stub, request, service)
+    return _invoke_deployed_function(stub, invocation, service)
 
 
 @router.post("/public/{stub_id}", response_model=FunctionInvokeResponse)
-async def deployed_public_function_invoke_by_id(
+def deployed_public_function_invoke_by_id(
     stub_id: str,
-    request: Request,
+    invocation: HttpFunctionInvocation,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> FunctionInvokeResponse:
     stub = resolve_deployed_stub_id(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Function,
         public=True,
         resource_name="function",
     )
-    return await _invoke_deployed_function(stub, request, service)
+    return _invoke_deployed_function(stub, invocation, service)
 
 
 @router.post("/{deployment_name}/latest", response_model=FunctionInvokeResponse)
-async def deployed_function_invoke_by_latest_path(
+def deployed_function_invoke_by_latest_path(
     deployment_name: str,
-    request: Request,
+    invocation: HttpFunctionInvocation,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> FunctionInvokeResponse:
     stub = resolve_deployed_stub(
-        control_plane,
         services,
         deployment_name,
         StubKind.Function,
@@ -159,21 +176,19 @@ async def deployed_function_invoke_by_latest_path(
         workspace=workspace_id,
         resource_name="function",
     )
-    return await _invoke_deployed_function(stub, request, service)
+    return _invoke_deployed_function(stub, invocation, service)
 
 
 @router.post("/{deployment_name}/v{version}", response_model=FunctionInvokeResponse)
-async def deployed_function_invoke_by_version(
+def deployed_function_invoke_by_version(
     deployment_name: str,
     version: int,
-    request: Request,
+    invocation: HttpFunctionInvocation,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> FunctionInvokeResponse:
     stub = resolve_deployed_stub(
-        control_plane,
         services,
         deployment_name,
         StubKind.Function,
@@ -181,33 +196,26 @@ async def deployed_function_invoke_by_version(
         workspace=workspace_id,
         resource_name="function",
     )
-    return await _invoke_deployed_function(stub, request, service)
+    return _invoke_deployed_function(stub, invocation, service)
 
 
-async def _invoke_deployed_function(
+def _invoke_deployed_function(
     stub: StubRecord,
-    request: Request,
+    invocation: FunctionJsonInvocation,
     service: FunctionApiService,
 ) -> FunctionInvokeResponse:
     return service.function_invoke(
         FunctionInvokeBody(
             stub_id=stub.id,
-            invocation=await _http_invocation(request),
+            invocation=invocation,
         )
     )
 
 
-async def _http_invocation(request: Request) -> FunctionJsonInvocation:
-    body = await request.body()
-    payload = serialize_http_task_payload(body, query_params=request_query_params(request))
-    return FunctionJsonInvocation(
-        args=list(payload.args or []),
-        kwargs=dict(payload.kwargs),
-    )
-
-
-def _function_ndjson(items: Iterable[FunctionInvokeResponse]) -> Iterator[bytes]:
-    for item in items:
+async def _function_ndjson(
+    items: AsyncIterable[FunctionInvokeResponse],
+) -> AsyncIterator[bytes]:
+    async for item in items:
         yield (json.dumps(item.model_dump(mode="json"), separators=(",", ":")) + "\n").encode(
             "utf-8"
         )

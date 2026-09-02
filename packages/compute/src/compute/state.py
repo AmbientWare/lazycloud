@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from coordination.redis_client import RedisClient
+from coordination.redis_client import AsyncRedisClient, RedisClient
 from coordination.redis_serialization import (
     dump_model_json,
     load_model_json,
@@ -207,8 +207,21 @@ class ComputeUnitLockPlan(ContractModel):
 
 @dataclass(frozen=True, slots=True)
 class ComputeStateKeys:
-    redis: RedisClient
+    redis: RedisClient | AsyncRedisClient
     namespace: str = "compute"
+
+    def agent_route_pattern(self) -> str:
+        return self.redis.key(
+            self.namespace,
+            "workspaces",
+            "*",
+            "units",
+            "*",
+            "machines",
+            "*",
+            "routes",
+            "*",
+        )
 
     def pool_state(self, workspace_id: str, capacity_owner_id: str) -> str:
         return self.redis.key(
@@ -708,30 +721,9 @@ class RedisComputeStateRepository:
         return states
 
     def scan_agent_route_states(self) -> list[AgentBackendRoute]:
-        pattern = self.redis.key(
-            self.keys.namespace,
-            "workspaces",
-            "*",
-            "units",
-            "*",
-            "machines",
-            "*",
-            "routes",
-            "*",
-        )
-        states: list[AgentBackendRoute] = []
-        for key in self.redis.scan(pattern):
-            raw = self.redis.get(key)
-            if raw is not None:
-                states.append(load_model_json(AgentBackendRoute, raw))
-        states.sort(
-            key=lambda item: (
-                item.workspace_id,
-                item.pool,
-                item.machine_id,
-                item.route_id,
-            )
-        )
+        raw_states = self.redis.mget(self.redis.scan(self.keys.agent_route_pattern()))
+        states = [load_model_json(AgentBackendRoute, raw) for raw in raw_states if raw is not None]
+        states.sort(key=_agent_route_order)
         return states
 
     def delete_agent_route_state(
@@ -833,5 +825,82 @@ class RedisComputeStateRepository:
         )
         self.redis.set_remove(
             self.keys.agent_slot_index(workspace_id, capacity_owner_id, machine_id), worker_id
+        )
+        return deleted
+
+
+def _agent_route_order(route: AgentBackendRoute) -> tuple[str, str, str, str]:
+    return (route.workspace_id, route.pool, route.machine_id, route.route_id)
+
+
+@dataclass(init=False, slots=True)
+class AsyncRedisComputeStateRepository:
+    redis: AsyncRedisClient
+    keys: ComputeStateKeys
+
+    def __init__(
+        self,
+        redis: AsyncRedisClient,
+        keys: ComputeStateKeys | None = None,
+    ) -> None:
+        self.redis = redis
+        self.keys = keys or ComputeStateKeys(redis)
+
+    async def save_agent_token_state(
+        self,
+        state: ComputeAgentTokenState,
+        *,
+        ttl_seconds: int = DEFAULT_COMPUTE_AGENT_TOKEN_TTL_SECONDS,
+    ) -> ComputeAgentTokenState:
+        payload = dump_model_json(state)
+        await self.redis.set(self.keys.agent_token(state.token_hash), payload, ex=ttl_seconds)
+        await self.redis.set(
+            self.keys.agent_machine(
+                state.workspace_id,
+                state.capacity_owner_id,
+                state.machine_id,
+            ),
+            payload,
+        )
+        await self.redis.set(
+            self.keys.agent_machine_owner(state.workspace_id, state.machine_id),
+            state.capacity_owner_id,
+        )
+        await self.redis.set_add(
+            self.keys.agent_machine_index(state.workspace_id, state.capacity_owner_id),
+            state.machine_id,
+        )
+        return state
+
+    async def scan_agent_route_states(self) -> list[AgentBackendRoute]:
+        raw_states = await self.redis.mget(await self.redis.scan(self.keys.agent_route_pattern()))
+        states = [load_model_json(AgentBackendRoute, raw) for raw in raw_states if raw is not None]
+        states.sort(key=_agent_route_order)
+        return states
+
+    async def delete_agent_route_state(
+        self,
+        *,
+        workspace_id: str,
+        capacity_owner_id: str,
+        machine_id: str,
+        route_id: str,
+    ) -> bool:
+        deleted = bool(
+            await self.redis.delete(
+                self.keys.agent_route(
+                    workspace_id,
+                    capacity_owner_id,
+                    machine_id,
+                    route_id,
+                )
+            )
+        )
+        await self.redis.set_remove(
+            self.keys.agent_route_index(workspace_id, capacity_owner_id, machine_id),
+            route_id,
+        )
+        await self.redis.increment(
+            self.keys.agent_route_revision(workspace_id, capacity_owner_id, machine_id)
         )
         return deleted

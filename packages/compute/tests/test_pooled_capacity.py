@@ -2015,16 +2015,18 @@ def _seed_serving_machine(
             )
         )
         ComputeProviderInstanceRepository(session).bind_machine(pool.id, instance_id, machine_id)
-        ComputeService(
-            isolated_services.context,
-            capacity_owner_mutations=_MutationLeases(),
-        ).record_provider_bootstrap_status(
-            pool_id=pool.id,
-            provider_instance_id=instance_id,
-            phase=MachineBootstrapPhase.Joining,
-            failure_reason=None,
-            now=now,
-        )
+    # The bootstrap status opens its own session, so the seed above must have
+    # committed first: a second writer inside an uncommitted one deadlocks.
+    ComputeService(
+        isolated_services.context,
+        capacity_owner_mutations=_MutationLeases(),
+    ).record_provider_bootstrap_status(
+        pool_id=pool.id,
+        provider_instance_id=instance_id,
+        phase=MachineBootstrapPhase.Joining,
+        failure_reason=None,
+        now=now,
+    )
     hooks.available_machines.add(machine_id)
 
 

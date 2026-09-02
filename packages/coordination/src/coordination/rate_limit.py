@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from coordination.redis_client import RedisClient
+from coordination.redis_client import AsyncRedisClient, RedisClient
 
 CONSUME_RATE_LIMIT_SCRIPT = """
 local count = redis.call("INCR", KEYS[1])
@@ -42,11 +42,26 @@ def try_consume(
     block, and never expiring would turn the limiter into one.
     """
 
+    _require_window(limit, window_seconds)
+    return redis.eval_int(CONSUME_RATE_LIMIT_SCRIPT, 1, key, limit, window_seconds) == 1
+
+
+async def try_consume_async(
+    redis: AsyncRedisClient,
+    key: str,
+    *,
+    limit: int,
+    window_seconds: int,
+) -> bool:
+    _require_window(limit, window_seconds)
+    return await redis.eval_int(CONSUME_RATE_LIMIT_SCRIPT, 1, key, limit, window_seconds) == 1
+
+
+def _require_window(limit: int, window_seconds: int) -> None:
     if limit <= 0:
         raise ValueError("rate-limit limit must be greater than zero")
     if window_seconds <= 0:
         raise ValueError("rate-limit window must be greater than zero")
-    return redis.eval_int(CONSUME_RATE_LIMIT_SCRIPT, 1, key, limit, window_seconds) == 1
 
 
 def try_acquire_slot(

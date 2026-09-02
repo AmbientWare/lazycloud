@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from coordination.redis_client import RedisClient, redis_text
+from coordination.redis_client import AsyncRedisClient, RedisClient, redis_text
 
 INVALIDATION_NAMESPACE = "invalidation"
 
@@ -33,3 +33,21 @@ class RedisInvalidationGeneration:
 
     def bump(self) -> int:
         return self.redis.increment(self.key())
+
+
+@dataclass(slots=True)
+class AsyncRedisInvalidationGeneration:
+    redis: AsyncRedisClient
+    scope: str
+
+    def key(self) -> str:
+        return self.redis.key(INVALIDATION_NAMESPACE, self.scope)
+
+    async def current(self) -> int:
+        value = await self.redis.get(self.key())
+        if value is None:
+            return 0
+        return int(redis_text(value))
+
+    async def bump(self) -> int:
+        return await self.redis.increment(self.key())

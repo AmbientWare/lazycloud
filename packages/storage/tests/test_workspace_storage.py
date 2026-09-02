@@ -463,6 +463,7 @@ def _services_with_object_storage(
         volume_filesystem=isolated_services.volume_filesystem,
         redis_client=isolated_services.redis_client,
         binary_redis_client=isolated_services.binary_redis_client,
+        async_io=isolated_services.require_async_io(),
         owns_redis_client=False,
         owns_binary_redis_client=False,
         agent_binary_settings=isolated_services.agent_binary_settings,

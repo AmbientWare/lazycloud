@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import ExitStack
 
 import pytest
 from api.fastapi_app import create_app
+from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
-from coordination.redis_client import RedisClient
 from fastapi.testclient import TestClient
-from observability.stream_state import RedisEventStreamRepository, log_record_from_redis
+from observability.stream_state import (
+    AsyncRedisEventStreamRepository,
+    RedisEventStreamRepository,
+    log_record_from_redis,
+)
 from pydantic import JsonValue
 from shared.deployment_records import DeploymentSpec
 from shared.errors import ExpiredCursorError
@@ -15,6 +20,16 @@ from shared.realtime.contracts import EventRecordType, create_cloud_event_record
 from shared.realtime.streams import LogStreamQuery
 from tests.real_redis import RealRedisActors
 from tests.service_fixtures import administrator_credential
+
+
+@pytest.fixture
+async def async_io(isolated_services: ApiServices) -> AsyncIterator[ApiAsyncIo]:
+    io = isolated_services.require_async_io()
+    await io.start()
+    try:
+        yield io
+    finally:
+        await io.close()
 
 
 def test_redis_log_repository_applies_filter_combinations(
@@ -48,7 +63,9 @@ def test_redis_log_repository_applies_filter_combinations(
     assert logs[0].worker_id == "worker-1"
 
 
-def test_redis_log_stream_resumes_by_sequence_through_skipped_records(
+@pytest.mark.anyio
+async def test_redis_log_stream_resumes_by_sequence_through_skipped_records(
+    async_io: ApiAsyncIo,
     real_redis_actors: RealRedisActors,
 ) -> None:
     repo = RedisEventStreamRepository(real_redis_actors.client())
@@ -59,19 +76,20 @@ def test_redis_log_stream_resumes_by_sequence_through_skipped_records(
     _append_container_log(repo, message="skip", task_id="other-task")
     _append_container_log(repo, message="second", task_id="task-1")
 
-    followed = list(
-        repo.stream_logs(
-            LogStreamQuery(
-                workspace_id="workspace-1",
-                task_id="task-1",
-                cursor=cursor,
-            ),
-            block_milliseconds=1,
-            max_events=1,
-        )
+    followed = await AsyncRedisEventStreamRepository(async_io.redis).follow_logs(
+        async_io.realtime,
+        LogStreamQuery(
+            workspace_id="workspace-1",
+            task_id="task-1",
+            cursor=cursor,
+        ),
+        max_events=1,
+        heartbeat_seconds=1.0,
     )
 
-    assert [log_record_from_redis(record).message for record in followed] == ["second"]
+    assert [
+        log_record_from_redis(record).message async for record in followed if record is not None
+    ] == ["second"]
 
 
 def test_redis_log_read_honors_clamp(real_redis_actors: RealRedisActors) -> None:
@@ -191,7 +209,6 @@ def test_redis_event_repository_deletes_only_workspace_streams(
 def test_api_log_history_and_stream_support_filters_wait_and_resume(
     isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
-    request: pytest.FixtureRequest,
     client_stack: ExitStack,
 ) -> None:
     with isolated_services.context.database.session() as session:
@@ -199,13 +216,12 @@ def test_api_log_history_and_stream_support_filters_wait_and_resume(
     task = isolated_services.tasks.create("durable-log", workspace_id=workspace_id)
     isolated_services.tasks.append_log(task.id, "stdout", "needle durable")
     redis = real_redis_actors.client()
-    services = _services_with_redis(isolated_services, redis, request)
     repo = RedisEventStreamRepository(redis)
     _append_container_log(repo, message="needle first", workspace_id=workspace_id)
     first_cursor = repo.read_logs(LogStreamQuery(workspace_id=workspace_id))[-1].entry_id
     _append_container_log(repo, message="needle second", workspace_id=workspace_id)
     second_cursor = repo.read_logs(LogStreamQuery(workspace_id=workspace_id))[-1].entry_id
-    client = client_stack.enter_context(TestClient(create_app(services)))
+    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     admin_token, _record = administrator_credential(isolated_services, "root")
 
     history = client.get(
@@ -231,18 +247,16 @@ def test_api_log_history_and_stream_support_filters_wait_and_resume(
 def test_api_deployment_logs_resolve_deployment_to_owned_stream(
     isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
-    request: pytest.FixtureRequest,
     client_stack: ExitStack,
 ) -> None:
     redis = real_redis_actors.client()
-    services = _services_with_redis(isolated_services, redis, request)
-    deployment = services.deployments.deploy(
+    deployment = isolated_services.deployments.deploy(
         DeploymentSpec(name="deployment-logs", handler="pkg.module:handler")
     )
     assert deployment.app_id
     assert deployment.stub_id
-    with services.context.database.session() as session:
-        workspace_id = services.context.default_workspace_id(session)
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
     _append_container_log(
         RedisEventStreamRepository(redis),
         message="deployment line",
@@ -250,15 +264,15 @@ def test_api_deployment_logs_resolve_deployment_to_owned_stream(
         stub_id=deployment.stub_id,
         app_id=deployment.app_id,
     )
-    task = services.tasks.create(
+    task = isolated_services.tasks.create(
         "deployment-log",
         workspace_id=workspace_id,
         app_id=deployment.app_id,
         stub_id=deployment.stub_id,
         deployment_id=deployment.id,
     )
-    services.tasks.append_log(task.id, "stdout", "deployment line")
-    client = client_stack.enter_context(TestClient(create_app(services)))
+    isolated_services.tasks.append_log(task.id, "stdout", "deployment line")
+    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     admin_token, _record = administrator_credential(isolated_services, "root")
 
     response = client.get(
@@ -275,26 +289,6 @@ def test_api_deployment_logs_resolve_deployment_to_owned_stream(
     payload = response.json()
     assert [item["message"] for item in payload["data"]] == ["deployment line"]
     assert payload["data"][0]["deployment_id"] == deployment.id
-
-
-def _services_with_redis(
-    isolated_services: ApiServices,
-    redis: RedisClient,
-    request: pytest.FixtureRequest,
-) -> ApiServices:
-    services = ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        create_schema=False,
-        workspace_storage_issuer=isolated_services.workspace_storage_issuer,
-        volume_filesystem=isolated_services.volume_filesystem,
-        redis_client=redis,
-        binary_redis_client=isolated_services.binary_redis_client,
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-    )
-    request.addfinalizer(services.close)
-    return services
 
 
 def _container_log_data(

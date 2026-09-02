@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import IntEnum
 
-from coordination.redis_client import RedisClient
+from coordination.redis_client import AsyncRedisClient, RedisClient
 
 RELEASE_TOKEN_LOCK_SCRIPT = """
 local current = redis.call("GET", KEYS[1])
@@ -42,11 +42,19 @@ def try_acquire_token_lock(
 ) -> bool:
     """Acquire one token-fenced Redis lock with a bounded lifetime."""
 
-    if ttl_seconds <= 0:
-        raise ValueError("token-lock TTL must be greater than zero")
-    if not token:
-        raise ValueError("token-lock token is required")
+    _require_lease(token, ttl_seconds)
     return redis.set(key, token, ex=ttl_seconds, nx=True)
+
+
+async def try_acquire_token_lock_async(
+    redis: AsyncRedisClient,
+    key: str,
+    token: str,
+    *,
+    ttl_seconds: int,
+) -> bool:
+    _require_lease(token, ttl_seconds)
+    return await redis.set(key, token, ex=ttl_seconds, nx=True)
 
 
 def renew_token_lock(
@@ -65,11 +73,19 @@ def renew_token_lock(
     slow.
     """
 
-    if ttl_seconds <= 0:
-        raise ValueError("token-lock TTL must be greater than zero")
-    if not token:
-        raise ValueError("token-lock token is required")
+    _require_lease(token, ttl_seconds)
     return redis.eval_int(RENEW_TOKEN_LOCK_SCRIPT, 1, key, token, ttl_seconds) == 1
+
+
+async def renew_token_lock_async(
+    redis: AsyncRedisClient,
+    key: str,
+    token: str,
+    *,
+    ttl_seconds: int,
+) -> bool:
+    _require_lease(token, ttl_seconds)
+    return await redis.eval_int(RENEW_TOKEN_LOCK_SCRIPT, 1, key, token, ttl_seconds) == 1
 
 
 def release_token_lock(
@@ -79,6 +95,25 @@ def release_token_lock(
 ) -> TokenLockReleaseStatus:
     """Release only the lock still owned by ``token`` in one Redis transition."""
 
+    _require_token(token)
+    return TokenLockReleaseStatus(redis.eval_int(RELEASE_TOKEN_LOCK_SCRIPT, 1, key, token))
+
+
+async def release_token_lock_async(
+    redis: AsyncRedisClient,
+    key: str,
+    token: str,
+) -> TokenLockReleaseStatus:
+    _require_token(token)
+    return TokenLockReleaseStatus(await redis.eval_int(RELEASE_TOKEN_LOCK_SCRIPT, 1, key, token))
+
+
+def _require_token(token: str) -> None:
     if not token:
         raise ValueError("token-lock token is required")
-    return TokenLockReleaseStatus(redis.eval_int(RELEASE_TOKEN_LOCK_SCRIPT, 1, key, token))
+
+
+def _require_lease(token: str, ttl_seconds: int) -> None:
+    if ttl_seconds <= 0:
+        raise ValueError("token-lock TTL must be greater than zero")
+    _require_token(token)

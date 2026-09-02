@@ -48,7 +48,7 @@ from storage.service import (
     MountedCacheSettings,
     ObjectStorage,
 )
-from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings
+from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings, S3PresignedUpload
 from tests.service_fixtures import owned_workspace
 from worker.checkpoints import (
     WorkerCheckpointStatus,
@@ -162,6 +162,33 @@ class _MemoryObjectClient:
     ) -> str:
         _ = (content_length, content_type)
         return f"memory://{bucket or 'objects'}/{key}?expires={expires_seconds}"
+
+    def generate_presigned_put(
+        self,
+        key: str,
+        *,
+        bucket: str | None = None,
+        expires_seconds: int = 3600,
+        content_length: int,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+        checksum_sha256: str = "",
+    ) -> S3PresignedUpload:
+        return S3PresignedUpload(
+            url=self.generate_presigned_put_url(
+                key,
+                bucket=bucket,
+                expires_seconds=expires_seconds,
+                content_length=content_length,
+                content_type=content_type,
+            ),
+            headers={
+                "content-length": str(content_length),
+                "content-type": content_type,
+                **({"x-amz-checksum-sha256": checksum_sha256} if checksum_sha256 else {}),
+                **{f"x-amz-meta-{name}": value for name, value in (metadata or {}).items()},
+            },
+        )
 
     def delete(self, key: str, *, bucket: str | None = None) -> None:
         location = (bucket or "objects", key)

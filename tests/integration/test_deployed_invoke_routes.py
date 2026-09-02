@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import socket
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import ExitStack
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlsplit
@@ -11,7 +11,7 @@ import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubRecord
-from execution.endpoints.dispatch import EndpointDispatchTarget, EndpointResponseStream
+from execution.endpoints.dispatch import AsyncEndpointResponseStream, EndpointDispatchTarget
 from execution.endpoints.service import EndpointIngressDispatchSession
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
@@ -79,15 +79,16 @@ class RecordingFunctionService:
         self.requests.append(request)
         return FunctionInvokeResponse.from_result(task_id=f"fn-{len(self.requests)}")
 
-    def function_invoke_stream(
+    async def function_invoke_stream(
         self,
-        request: FunctionInvokeBody,
+        initial: FunctionInvokeResponse,
         *,
+        headless: bool = False,
         poll_interval_seconds: float = 0.25,
         keepalive_interval_seconds: float = 5.0,
-    ) -> Iterable[FunctionInvokeResponse]:
-        _ = poll_interval_seconds, keepalive_interval_seconds
-        yield self.function_invoke(request)
+    ) -> AsyncIterator[FunctionInvokeResponse]:
+        _ = headless, poll_interval_seconds, keepalive_interval_seconds
+        yield initial
 
     def function_set_result(
         self,
@@ -123,7 +124,7 @@ class RecordingEndpointService:
         self.forward_requests: list[EndpointForwardRequest] = []
         self.serve_requests: list[StartEndpointServeRequest] = []
 
-    def forward_endpoint_request(
+    async def forward_endpoint_request(
         self,
         request: EndpointForwardRequest,
     ) -> EndpointForwardResponse:
@@ -148,7 +149,7 @@ class RecordingEndpointService:
             body=body,
         )
 
-    def forward_endpoint_health(
+    async def forward_endpoint_health(
         self,
         request: EndpointForwardRequest,
     ) -> EndpointForwardResponse:
@@ -165,13 +166,13 @@ class RecordingEndpointService:
             container_id=f"endpoint-{len(self.serve_requests)}",
         )
 
-    def prepare_asgi_websocket(
+    async def prepare_asgi_websocket(
         self,
         request: EndpointForwardRequest,
     ) -> EndpointIngressDispatchSession:
         raise AssertionError(f"unexpected prepare_asgi_websocket call: {request}")
 
-    def prepare_asgi_http(
+    async def prepare_asgi_http(
         self,
         request: EndpointForwardRequest,
     ) -> EndpointIngressDispatchSession:
@@ -184,15 +185,15 @@ class RecordingEndpointService:
             wait_timeout_seconds=1,
         )
 
-    def open_asgi_http_stream(
+    async def open_asgi_http_stream(
         self,
         session: EndpointIngressDispatchSession,
         request: EndpointForwardRequest,
-    ) -> EndpointResponseStream:
+    ) -> AsyncEndpointResponseStream:
         _ = session
-        return StaticEndpointResponseStream(self.forward_endpoint_request(request))
+        return StaticEndpointResponseStream(await self.forward_endpoint_request(request))
 
-    def finish_asgi_http(
+    async def finish_asgi_http(
         self,
         task_id: str,
         *,
@@ -203,17 +204,17 @@ class RecordingEndpointService:
     ) -> None:
         _ = task_id, status_code, body_size_bytes, cancelled, error
 
-    def open_asgi_websocket_socket(
+    async def open_asgi_websocket_socket(
         self,
         session: EndpointIngressDispatchSession,
     ) -> socket.socket | None:
         _ = session
         return None
 
-    def heartbeat_asgi_websocket(self, task_id: str) -> None:
+    async def heartbeat_asgi_websocket(self, task_id: str) -> None:
         raise AssertionError(f"unexpected heartbeat_asgi_websocket call: {task_id}")
 
-    def finish_asgi_websocket(
+    async def finish_asgi_websocket(
         self,
         task_id: str,
         *,
@@ -232,11 +233,10 @@ class StaticEndpointResponseStream:
         self.headers = response.headers
         self._body = response.body
 
-    def iter_chunks(self, chunk_size: int = 64 * 1024) -> Iterable[bytes]:
-        _ = chunk_size
+    async def iter_chunks(self) -> AsyncIterator[bytes]:
         yield self._body
 
-    def close(self) -> None:
+    async def close(self) -> None:
         return
 
 

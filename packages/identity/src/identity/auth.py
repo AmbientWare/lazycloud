@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import re
 import secrets
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from time import monotonic
@@ -38,12 +39,13 @@ from shared.identity import (
     TokenStatus,
     UserRecord,
     UserStatus,
+    WorkspaceMemberRecord,
     WorkspaceRecord,
     WorkspaceStatus,
 )
 from shared.timestamps import utc_now
 
-from database import DatabaseClient
+from database import AsyncDatabaseClient, DatabaseClient
 from identity.authz import (
     AuthzDecision,
     AuthzRequirement,
@@ -53,6 +55,7 @@ from identity.authz import (
 from identity.cursors import decode_created_at_cursor, encode_created_at_cursor
 from identity.secret_hashing import pbkdf2_encode, pbkdf2_matches
 from identity.token_invalidation import (
+    AsyncAuthTokenInvalidation,
     AuthTokenInvalidation,
     configured_token_invalidation,
 )
@@ -441,6 +444,33 @@ def _token_digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+class _SingleFlight[KeyT, ResultT]:
+    """One task per key and event loop, awaited by every caller that arrives meanwhile."""
+
+    def __init__(self) -> None:
+        self._tasks: dict[tuple[int, KeyT], asyncio.Task[ResultT]] = {}
+        self._guard = threading.Lock()
+
+    async def run(
+        self,
+        key: KeyT,
+        operation: Callable[[], Coroutine[object, object, ResultT]],
+    ) -> ResultT:
+        flight = (id(asyncio.get_running_loop()), key)
+        with self._guard:
+            task = self._tasks.get(flight)
+            if task is None:
+                task = asyncio.create_task(operation())
+                self._tasks[flight] = task
+                task.add_done_callback(lambda done: self._discard(flight, done))
+        return await asyncio.shield(task)
+
+    def _discard(self, flight: tuple[int, KeyT], task: asyncio.Task[ResultT]) -> None:
+        with self._guard:
+            if self._tasks.get(flight) is task:
+                del self._tasks[flight]
+
+
 class AuthService:
     def __init__(
         self,
@@ -452,6 +482,14 @@ class AuthService:
         self.context = context
         self._token_invalidation = token_invalidation
         self.token_cache = token_cache or AuthTokenCache()
+        self._authentication_flights: _SingleFlight[tuple[str, str | None], AuthTokenRecord] = (
+            _SingleFlight()
+        )
+        self._platform_role_flights: _SingleFlight[str, PlatformRole] = _SingleFlight()
+        self._workspace_access_flights: _SingleFlight[
+            tuple[str, str],
+            tuple[str, WorkspaceMemberRecord | None],
+        ] = _SingleFlight()
 
     def _invalidation(self) -> AuthTokenInvalidation | None:
         return self._token_invalidation or configured_token_invalidation()
@@ -466,8 +504,9 @@ class AuthService:
     def credentials_revoked(self) -> None:
         """Publish a committed credential revocation to every replica's token cache.
 
-        Called after the revoking transaction commits—workspace deletion, a disabled
-        account, administrator recovery—so a cached positive cannot outlive it.
+        Called after the revoking transaction commits, whether for workspace deletion,
+        a disabled account, or administrator recovery, so a cached positive cannot
+        outlive it.
         """
         self._invalidate_token_caches()
 
@@ -476,18 +515,69 @@ class AuthService:
 
         Two things confer it: the administrator token kind, which platform-minted
         operator credentials still carry, and an account whose role says so. Every
-        caller—the authorization decision and the routes that branch on it—asks here,
-        so the two cannot drift into disagreeing.
+        caller, the authorization decision and the routes that branch on it alike,
+        asks here, so the two cannot drift into disagreeing.
         """
-        if token.kind is TokenKind.Admin:
-            return PlatformRole.Administrator
-        if not token.names_user or not token.user_id:
-            return PlatformRole.Member
+        role = _platform_role_from_token(token)
+        if role is not None:
+            return role
         with self.context.database.session() as session:
             user = UserRepository(session).get(token.user_id)
-        if user is None or user.status is not UserStatus.Active:
-            return PlatformRole.Member
-        return user.role
+        return _platform_role_from_user(user)
+
+    async def platform_role_async(
+        self,
+        database: AsyncDatabaseClient,
+        token: AuthTokenRecord,
+    ) -> PlatformRole:
+        role = _platform_role_from_token(token)
+        if role is not None:
+            return role
+        user_id = token.user_id
+        return await self._platform_role_flights.run(
+            user_id,
+            lambda: self._load_platform_role_async(database, user_id),
+        )
+
+    async def _load_platform_role_async(
+        self,
+        database: AsyncDatabaseClient,
+        user_id: str,
+    ) -> PlatformRole:
+        user = await database.run_transaction(lambda session: UserRepository(session).get(user_id))
+        return _platform_role_from_user(user)
+
+    async def workspace_access_async(
+        self,
+        database: AsyncDatabaseClient,
+        token: AuthTokenRecord,
+        workspace: str,
+    ) -> tuple[str, WorkspaceMemberRecord | None]:
+        user_id = token.user_id if token.names_user and token.user_id else ""
+        return await self._workspace_access_flights.run(
+            (user_id, workspace),
+            lambda: self._load_workspace_access_async(database, user_id, workspace),
+        )
+
+    async def _load_workspace_access_async(
+        self,
+        database: AsyncDatabaseClient,
+        user_id: str,
+        workspace: str,
+    ) -> tuple[str, WorkspaceMemberRecord | None]:
+        def resolve(session: DatabaseSession) -> tuple[str, WorkspaceMemberRecord | None]:
+            record = self.context.workspace(session, workspace)
+            membership = (
+                WorkspaceMemberRepository(session).membership(
+                    workspace_id=record.id,
+                    user_id=user_id,
+                )
+                if user_id
+                else None
+            )
+            return record.id, membership
+
+        return await database.run_transaction(resolve)
 
     def create_token(
         self,
@@ -1015,36 +1105,153 @@ class AuthService:
         try:
             with self.context.database.session() as session:
                 repository = TokenRepository(session)
+                expired_ids: list[str] = []
+                matched: AuthTokenRecord | None = None
                 for record in repository.list_by_prefix(token[:10]):
-                    if record.status != TokenStatus.Active:
+                    if record.status is not TokenStatus.Active:
                         continue
                     if record.expires_at is not None and record.expires_at <= now:
-                        revoked_expired = (
-                            repository.revoke_if_expired(record.id, now=now) or revoked_expired
-                        )
+                        expired_ids.append(record.id)
                         continue
-                    if not _verify_token(token, record.token_hash):
-                        continue
-                    if record.disabled_by_admin:
-                        msg = "token has been disabled by an administrator"
-                        raise AuthError(msg)
-                    _require_scope(record, scope)
-                    if record.reusable:
-                        updated = repository.mark_reusable_used(record.id, now=now)
-                    elif repository.consume_non_reusable(record.id, now=now):
-                        record.last_used_at = now
-                        updated = record
-                        consumed = True
-                    break
+                    if _verify_token(token, record.token_hash):
+                        matched = record
+                        break
+                updated, revoked_expired, consumed = _settle_authentication(
+                    repository,
+                    matched,
+                    expired_ids,
+                    now=now,
+                    scope=scope,
+                )
         finally:
             if revoked_expired or consumed:
                 self._invalidate_token_caches()
-        if updated is not None:
-            if updated.reusable and cache_usable and not revoked_expired:
-                self.token_cache.store(token_digest, updated, generation=generation)
-            return updated
-        msg = "invalid token"
-        raise AuthError(msg)
+        if updated is None:
+            raise AuthError("invalid token")
+        if updated.reusable and cache_usable and not revoked_expired:
+            self.token_cache.store(token_digest, updated, generation=generation)
+        return updated
+
+    async def authenticate_async(
+        self,
+        database: AsyncDatabaseClient,
+        invalidation: AsyncAuthTokenInvalidation,
+        token: str,
+        *,
+        scope: AuthScope | str | None = None,
+    ) -> AuthTokenRecord:
+        now = utc_now()
+        token_digest = _token_digest(token)
+        generation = await invalidation.current_generation()
+        cache_usable = generation is not None
+        if cache_usable:
+            cached = self.token_cache.get(token_digest, now=now, generation=generation)
+            if cached is not None:
+                _require_scope(cached, scope)
+                return cached
+
+        # Scope is part of the flight so a refused scope never records a use,
+        # which is what keeps a single-use token intact for its rightful caller.
+        scope_value = scope.value if isinstance(scope, AuthScope) else scope
+        updated = await self._authentication_flights.run(
+            (token_digest, scope_value),
+            lambda: self._authenticate_uncached_async(
+                database,
+                invalidation,
+                token,
+                token_digest=token_digest,
+                now=now,
+                generation=generation,
+                cache_usable=cache_usable,
+                scope=scope,
+            ),
+        )
+        _require_scope(updated, scope)
+        return updated
+
+    async def _authenticate_uncached_async(
+        self,
+        database: AsyncDatabaseClient,
+        invalidation: AsyncAuthTokenInvalidation,
+        token: str,
+        *,
+        token_digest: str,
+        now: datetime,
+        generation: int | None,
+        cache_usable: bool,
+        scope: AuthScope | str | None,
+    ) -> AuthTokenRecord:
+        if cache_usable:
+            cached = self.token_cache.get(token_digest, now=now, generation=generation)
+            if cached is not None:
+                return cached
+
+        records = await database.run_transaction(
+            lambda session: TokenRepository(session).list_by_prefix(token[:10])
+        )
+        expired_ids: list[str] = []
+        matched: AuthTokenRecord | None = None
+        for record in records:
+            if record.status is not TokenStatus.Active:
+                continue
+            if record.expires_at is not None and record.expires_at <= now:
+                expired_ids.append(record.id)
+                continue
+            if await asyncio.to_thread(_verify_token, token, record.token_hash):
+                matched = record
+                break
+
+        updated, revoked_expired, consumed = await database.run_transaction(
+            lambda session: _settle_authentication(
+                TokenRepository(session),
+                matched,
+                expired_ids,
+                now=now,
+                scope=scope,
+            )
+        )
+        if revoked_expired or consumed:
+            self.token_cache.reset()
+            await invalidation.emit()
+        if updated is None:
+            raise AuthError("invalid token")
+        if updated.reusable and cache_usable and not revoked_expired:
+            self.token_cache.store(token_digest, updated, generation=generation)
+        return updated
+
+    async def authorize_principal_async(
+        self,
+        database: AsyncDatabaseClient,
+        invalidation: AsyncAuthTokenInvalidation,
+        authorization: str | None,
+        requirement: AuthzRequirement,
+        *,
+        allow_if_no_tokens: bool = False,
+    ) -> AuthorizedPrincipal | None:
+        if allow_if_no_tokens:
+            tokens = await database.run_transaction(
+                lambda session: TokenRepository(session).list_across_workspaces()
+            )
+            if not tokens:
+                return None
+        token = await self.authenticate_async(database, invalidation, _bearer_token(authorization))
+        platform_role = await self.platform_role_async(database, token)
+        return _authorized_principal(token, requirement, platform_role)
+
+    async def authenticate_header_async(
+        self,
+        database: AsyncDatabaseClient,
+        invalidation: AsyncAuthTokenInvalidation,
+        authorization: str | None,
+        *,
+        scope: AuthScope | str | None = None,
+    ) -> AuthTokenRecord:
+        return await self.authenticate_async(
+            database,
+            invalidation,
+            _bearer_token(authorization),
+            scope=scope,
+        )
 
     def authenticate_header(
         self,
@@ -1055,10 +1262,7 @@ class AuthService:
     ) -> AuthTokenRecord | None:
         if allow_if_no_tokens and not self.list_tokens():
             return None
-        if authorization is None or not authorization.startswith("Bearer "):
-            msg = "missing bearer token"
-            raise AuthError(msg)
-        return self.authenticate(authorization.removeprefix("Bearer ").strip(), scope=scope)
+        return self.authenticate(_bearer_token(authorization), scope=scope)
 
     def authorize_principal(
         self,
@@ -1073,11 +1277,7 @@ class AuthService:
         )
         if token is None:
             return None
-        platform_role = self.platform_role(token)
-        decision = decide_authorization(token, requirement, platform_role=platform_role)
-        if not decision.allowed:
-            raise AuthorizationDeniedError(decision.message)
-        return AuthorizedPrincipal(token, platform_role)
+        return _authorized_principal(token, requirement, self.platform_role(token))
 
     def authorize_header(
         self,
@@ -1093,25 +1293,26 @@ class AuthService:
         )
         return principal.token if principal is not None else None
 
-    def authorize_token_identity(
+    async def authorize_token_identity(
         self,
+        database: AsyncDatabaseClient,
+        invalidation: AsyncAuthTokenInvalidation,
         token_id: str,
         *,
         token_user_id: str = "",
         token_workspace_id: str = "",
         requirement: AuthzRequirement,
     ) -> AuthTokenRecord:
-        """Reload and authorize a previously authenticated identity from PostgreSQL.
+        """Reload and authorize an identity a credential exchange recorded earlier.
 
-        Short-lived credential exchanges call this after consuming their one-use
-        coordination state. Deliberately bypassing the bearer-token cache ensures
-        revocation, expiry, deletion, and scope changes take effect immediately.
+        The bearer-token cache is bypassed on purpose: a ticket is redeemed after
+        the token was authenticated, and revocation, expiry, deletion, or a scope
+        change in between must refuse it.
         """
 
         now = utc_now()
-        expired = False
-        updated: AuthTokenRecord | None = None
-        with self.context.database.session() as session:
+
+        def authorize(session: DatabaseSession) -> tuple[AuthTokenRecord | None, bool]:
             repository = TokenRepository(session)
             # Reloaded through the principal the exchange recorded, so a credential
             # cannot be redeemed as one belonging to someone else.
@@ -1129,24 +1330,20 @@ class AuthService:
                 raise AuthError("invalid token identity")
             if record.expires_at is not None and record.expires_at <= now:
                 repository.revoke_if_expired(record.id, now=now)
-                expired = True
+                return None, True
             elif record.disabled_by_admin:
                 raise AuthError("token has been disabled by an administrator")
-            else:
-                updated = repository.mark_reusable_used(record.id, now=now)
+            return repository.mark_reusable_used(record.id, now=now), False
+
+        updated, expired = await database.run_transaction(authorize)
         if expired:
-            self._invalidate_token_caches()
+            self.token_cache.reset()
+            await invalidation.emit()
             raise AuthError("token has expired")
         if updated is None:
             raise AuthError("invalid token identity")
-        decision = decide_authorization(
-            updated,
-            requirement,
-            platform_role=self.platform_role(updated),
-        )
-        if not decision.allowed:
-            raise AuthorizationDeniedError(decision.message)
-        return updated
+        platform_role = await self.platform_role_async(database, updated)
+        return _authorized_principal(updated, requirement, platform_role).token
 
     def decide_header(
         self,
@@ -1228,6 +1425,72 @@ def _require_scope(record: AuthTokenRecord, scope: AuthScope | str | None) -> No
         scope_value = scope.value if isinstance(scope, AuthScope) else scope
         msg = f"token is missing scope: {scope_value}"
         raise AuthError(msg)
+
+
+def _bearer_token(authorization: str | None) -> str:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise AuthError("missing bearer token")
+    return authorization.removeprefix("Bearer ").strip()
+
+
+def _platform_role_from_token(token: AuthTokenRecord) -> PlatformRole | None:
+    """The role the token alone settles; None when the account's own row decides."""
+
+    if token.kind is TokenKind.Admin:
+        return PlatformRole.Administrator
+    if not token.names_user or not token.user_id:
+        return PlatformRole.Member
+    return None
+
+
+def _platform_role_from_user(user: UserRecord | None) -> PlatformRole:
+    if user is None or user.status is not UserStatus.Active:
+        return PlatformRole.Member
+    return user.role
+
+
+def _authorized_principal(
+    token: AuthTokenRecord,
+    requirement: AuthzRequirement,
+    platform_role: PlatformRole,
+) -> AuthorizedPrincipal:
+    decision = decide_authorization(token, requirement, platform_role=platform_role)
+    if not decision.allowed:
+        raise AuthorizationDeniedError(decision.message)
+    return AuthorizedPrincipal(token, platform_role)
+
+
+def _settle_authentication(
+    repository: TokenRepository,
+    matched: AuthTokenRecord | None,
+    expired_ids: Sequence[str],
+    *,
+    now: datetime,
+    scope: AuthScope | str | None = None,
+) -> tuple[AuthTokenRecord | None, bool, bool]:
+    """Revoke what expired and record the match's use.
+
+    Returns the usable record, whether any expired credential was revoked, and
+    whether a single-use credential was consumed. Every expired id is revoked,
+    not only the first. A disabled match, or one missing `scope` when a scope
+    is given, is refused before its use is recorded, so the refusal leaves a
+    single-use token intact.
+    """
+
+    revoked_expired = any(
+        [repository.revoke_if_expired(token_id, now=now) for token_id in expired_ids]
+    )
+    if matched is None:
+        return None, revoked_expired, False
+    if matched.disabled_by_admin:
+        raise AuthError("token has been disabled by an administrator")
+    _require_scope(matched, scope)
+    if matched.reusable:
+        return repository.mark_reusable_used(matched.id, now=now), revoked_expired, False
+    if repository.consume_non_reusable(matched.id, now=now):
+        matched.last_used_at = now
+        return matched, revoked_expired, True
+    return None, revoked_expired, False
 
 
 def _claimed_token(

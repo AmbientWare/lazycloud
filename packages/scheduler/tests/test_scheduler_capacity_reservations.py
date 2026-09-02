@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from time import sleep
-from typing import Protocol
 
 import pytest
-from coordination.redis_client import RedisClient
+from coordination.redis_client import AsyncRedisClient, RedisSettings
 from scheduler.capacity_reservations import (
     CapacityAcquisitionResult,
     CapacityAcquisitionStatus,
@@ -60,6 +59,7 @@ from shared.scheduling import (
     SchedulerWorkerStatus,
     WorkerUnavailableReason,
 )
+from tests.real_redis import RealRedisActors
 
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
 WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
@@ -88,8 +88,17 @@ def _shape() -> CapacityRequestShape:
     )
 
 
-class _RealRedisActors(Protocol):
-    def client(self) -> RedisClient: ...
+@pytest.fixture
+async def async_redis(
+    real_redis_actors: RealRedisActors,
+) -> AsyncIterator[AsyncRedisClient]:
+    client = AsyncRedisClient.from_settings(
+        RedisSettings(url=real_redis_actors.url, key_prefix=real_redis_actors.prefix)
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
 
 
 @dataclass(slots=True)
@@ -100,7 +109,7 @@ class _AllocationOwners:
         return (workspace_id, container_id) in self.active
 
 
-def _repository(real_redis_actors: _RealRedisActors) -> RedisCapacityReservationRepository:
+def _repository(real_redis_actors: RealRedisActors) -> RedisCapacityReservationRepository:
     return RedisCapacityReservationRepository(real_redis_actors.client())
 
 
@@ -348,7 +357,7 @@ class _Events:
 
 
 def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -393,7 +402,7 @@ def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(
 
 
 def test_reservation_capacity_and_owner_identity_prevent_false_reuse(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -433,7 +442,7 @@ def test_reservation_capacity_and_owner_identity_prevent_false_reuse(
 
 
 def test_capacity_service_requests_one_unit_then_reuses_the_durable_intent(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
     controller = _Controller()
@@ -450,7 +459,7 @@ def test_capacity_service_requests_one_unit_then_reuses_the_durable_intent(
 
 
 def test_terminal_retry_releases_stale_reservation_before_new_attempt(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
     controller = _Controller(ensure_status=CapacityAcquisitionStatus.Unsupported)
@@ -472,7 +481,7 @@ def test_terminal_retry_releases_stale_reservation_before_new_attempt(
 
 
 def test_a_full_pool_keeps_one_open_claim_instead_of_churning_released_ones(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     """Full is backpressure: the container's claim waits for the pool to drain.
 
@@ -500,7 +509,7 @@ def test_a_full_pool_keeps_one_open_claim_instead_of_churning_released_ones(
 
 
 def test_unpinned_acquisition_fails_over_from_at_limit_pool_in_priority_order(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
     primary = _Controller(
@@ -547,7 +556,7 @@ def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() ->
 
 
 def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -598,8 +607,10 @@ def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
     assert updated.free_cpu_millicores == 3_000
 
 
-def test_final_dispatch_rechecks_owner_worker_after_scale_zero_mutation(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_final_dispatch_rechecks_owner_worker_after_scale_zero_mutation(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     redis = real_redis_actors.client()
@@ -669,7 +680,14 @@ def test_final_dispatch_rechecks_owner_worker_after_scale_zero_mutation(
     current_worker = workers.get_worker(worker.worker_id)
     assert current_worker is not None
     assert current_worker.status is SchedulerWorkerStatus.Unavailable
-    assert workers.get_next_container_request(worker.worker_id) is None
+    assert (
+        await workers.wait_for_next_container_request(
+            async_redis,
+            worker.worker_id,
+            timeout_seconds=0.01,
+        )
+        is None
+    )
     assert workers.has_recoverable_container_request(request.container_id)
     state = containers.get_container_state(request.container_id)
     assert state is not None
@@ -677,7 +695,7 @@ def test_final_dispatch_rechecks_owner_worker_after_scale_zero_mutation(
 
 
 def test_available_worker_registration_uses_reported_schedulable_capacity(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
     controller = _Controller(target_machine_id="machine-1")
@@ -731,7 +749,7 @@ def test_registration_proof_requires_the_reserved_preemptibility_class() -> None
 
 
 def test_registration_expiry_calls_capacity_owner_release_and_records_failure(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
     controller = _Controller(registration_timeout=timedelta(seconds=30))
@@ -746,7 +764,7 @@ def test_registration_expiry_calls_capacity_owner_release_and_records_failure(
 
 
 def test_cancellation_releases_exact_owned_capacity_after_last_allocation(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
     controller = _Controller()
@@ -766,7 +784,7 @@ def test_cancellation_releases_exact_owned_capacity_after_last_allocation(
 
 
 def test_cancellation_after_registration_keeps_capacity_for_idle_drain(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
     controller = _Controller()
@@ -788,7 +806,7 @@ def test_cancellation_after_registration_keeps_capacity_for_idle_drain(
 
 
 def test_reconcile_prunes_allocations_after_durable_container_owners_finish(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
     controller = _Controller()
@@ -829,7 +847,7 @@ def test_reconcile_prunes_allocations_after_durable_container_owners_finish(
 
 
 def test_unconfirmed_cancellation_cleanup_remains_open_and_blocks_owner_mutation(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
     controller = _Controller(release_status=CapacityAcquisitionStatus.TemporarilyUnavailable)
@@ -849,8 +867,10 @@ def test_unconfirmed_cancellation_cleanup_remains_open_and_blocks_owner_mutation
     assert service.has_open_reservations(OWNER_ID)
 
 
-def test_real_redis_dispatch_atomically_consumes_capacity_allocation(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_real_redis_dispatch_atomically_consumes_capacity_allocation(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     reservations = RedisCapacityReservationRepository(redis)
@@ -883,7 +903,14 @@ def test_real_redis_dispatch_atomically_consumes_capacity_allocation(
     assert updated.free_cpu_millicores == worker.free_cpu_millicores - request.cpu_millicores
     assert reservations.allocation_for_request(request.container_id) is None
     assert reservations.allocations_for(decision.reservation.id) == []
-    assert workers.get_next_container_request(worker.worker_id) == request
+    assert (
+        await workers.wait_for_next_container_request(
+            async_redis,
+            worker.worker_id,
+            timeout_seconds=0.01,
+        )
+        == request
+    )
 
 
 @pytest.mark.parametrize(
@@ -899,7 +926,7 @@ def test_real_redis_dispatch_atomically_consumes_capacity_allocation(
     ids=("cpu", "memory", "gpu"),
 )
 def test_cpu_memory_and_gpu_exhaustion_prevent_false_compatible_reuse(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
     first_updates: dict[str, int | str],
     second_updates: dict[str, int | str],
 ) -> None:
@@ -940,7 +967,7 @@ def test_cpu_memory_and_gpu_exhaustion_prevent_false_compatible_reuse(
 
 
 def test_concurrent_compatible_misses_deduplicate_after_lock_retry(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     controller = _Controller(delay_seconds=0.2)
     first_service = CapacityReservationService(_repository(real_redis_actors), lambda: [controller])
@@ -983,7 +1010,7 @@ def test_concurrent_compatible_misses_deduplicate_after_lock_retry(
 
 
 def test_reservation_repository_rejects_registered_state_regression(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = _repository(real_redis_actors)
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -1013,7 +1040,7 @@ def test_reservation_repository_rejects_registered_state_regression(
 
 
 def test_capacity_owner_mutation_lock_renews_during_slow_owner_operation(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     owner = _repository(real_redis_actors)
     contender = _repository(real_redis_actors)
@@ -1031,7 +1058,7 @@ def test_capacity_owner_mutation_lock_renews_during_slow_owner_operation(
 
 
 def test_capacity_owner_mutation_lock_re_enters_for_the_holder(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     """A decision under the lease calls services that take the same lease.
 

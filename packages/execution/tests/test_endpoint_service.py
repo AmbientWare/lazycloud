@@ -2,22 +2,20 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
-from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
 from database.repositories.images import CheckpointRepository
 from database.repositories.orchestration import ContainerRepository
-from execution.endpoints.dispatch import EndpointDispatchUnavailable, EndpointInstanceDispatcher
 from execution.endpoints.service import EndpointControlService
 from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContainerSubmitStatus
 from scheduler.state import SchedulerWorkerRequest
 from shared.checkpoints import CheckpointRecord, CheckpointStatus
 from shared.container_requests import WorkerContainerRequestPayload
-from shared.containers import ContainerRecord, ContainerStatus
+from shared.containers import ContainerStatus
 from shared.env import CHECKPOINT_ENABLED_ENV
-from shared.http.endpoints import StartEndpointServeRequest
+from shared.http.endpoints import EndpointForwardRequest, StartEndpointServeRequest
 
 
 class _Scheduler:
@@ -36,6 +34,28 @@ class _Scheduler:
             status=SchedulerContainerSubmitStatus.Queued,
             container_id=request.container_id,
         )
+
+
+class _FailingScheduler(_Scheduler):
+    def __init__(self, services: ApiServices) -> None:
+        super().__init__()
+        self.services = services
+
+    def submit(
+        self,
+        request: SchedulerWorkerRequest,
+        *,
+        ready_at: datetime | None = None,
+    ) -> SchedulerContainerSubmitResult:
+        result = super().submit(request, ready_at=ready_at)
+        with self.services.context.database.session() as session:
+            repository = ContainerRepository(session)
+            container = repository.get_across_workspaces(request.container_id)
+            assert container is not None
+            container.status = ContainerStatus.Failed
+            container.exit_code = 1
+            repository.upsert(container)
+        return result
 
 
 def test_endpoint_uses_latest_available_workspace_checkpoint(
@@ -89,42 +109,42 @@ def test_endpoint_uses_latest_available_workspace_checkpoint(
     assert payload.checkpoint_exposed_ports == [8001]
 
 
-def test_dispatch_names_dead_capacity_instead_of_waiting_out_its_deadline(
+@pytest.mark.anyio
+async def test_dispatch_names_dead_capacity_instead_of_waiting_out_its_deadline(
     isolated_services: ApiServices,
 ) -> None:
-    """A container that has already failed is an answer, not a reason to keep waiting.
-
-    The exit code and the container to read logs from are what the caller needs; the
-    alternative it replaces is holding the connection for the full ten-minute deadline
-    and then reporting a timeout, which names the symptom and never the cause.
-
-    Driving the whole wait loop here would prove no more and cost a fake scheduler:
-    warmup writes a pending container, and only a scheduler moves that to failed.
-
-    The dispatcher is the production one: the scheduler holds no account of a
-    container nothing ever scheduled, so the exit code is what answers.
-    """
-
-    control = ControlPlaneService(isolated_services.context)
-    stub = control.create_stub(
+    stub = ControlPlaneService(isolated_services.context).create_stub(
         "dead-capacity-endpoint",
         kind=StubKind.Endpoint,
         handler="pkg.web:app",
-        config={"image": {"image_id": "image-web"}},
+        config={
+            "image": {"image_id": "image-web"},
+            "runtime": {"timeout_seconds": 0.2},
+        },
     )
-    with isolated_services.context.database.session() as session:
-        ContainerRepository(session).upsert(
-            ContainerRecord(
-                id=str(uuid4()),
-                name="endpoint-dead",
-                image="image-web",
-                command=["python"],
-                workspace_id=stub.workspace_id,
-                stub_id=stub.id,
-                status=ContainerStatus.Failed,
-                exit_code=1,
-            )
+    services = replace(
+        isolated_services,
+        containers=replace(
+            isolated_services.containers,
+            scheduler=_FailingScheduler(isolated_services),
+        ),
+    )
+    composed_endpoint = isolated_services.endpoint_service
+    assert isinstance(composed_endpoint, EndpointControlService)
+    dispatcher = composed_endpoint.async_dispatcher
+    assert dispatcher is not None
+    async_io = isolated_services.require_async_io()
+    service = EndpointControlService(
+        services,
+        async_database=async_io.database,
+        async_dispatcher=dispatcher,
+    )
+    try:
+        response = await service.forward_endpoint_request(
+            EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
         )
-    dispatcher = EndpointInstanceDispatcher(isolated_services.scheduler_containers)
-    with pytest.raises(EndpointDispatchUnavailable, match="exit code 1"):
-        EndpointControlService(isolated_services)._raise_if_capacity_is_dead(dispatcher, stub)
+    finally:
+        await async_io.close()
+
+    assert response.status_code == 503
+    assert b"no container could start for this endpoint (exit code 1)" in response.body

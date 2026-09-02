@@ -1,27 +1,30 @@
 from __future__ import annotations
 
-import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import TypedDict
 
+from coordination.stream_tail import RedisStreamTailBroker
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import StreamingResponse
 from observability.stream_state import (
-    RedisEventStreamRepository,
+    AsyncRedisEventStreamRepository,
     RedisStreamRecord,
     log_record_from_redis,
 )
-from shared.errors import NotFoundError
 from shared.http.observability import LogObjectType, LogQueryRequest, LogQueryResponse
 from shared.realtime.streams import LogStreamQuery
-from shared.tasks import is_terminal_task_status
 
 from api.server.auth import read_workspace
 from api.server.dependencies import current_services
 from api.server.routers.resource_api.common import _management, _parsed_time
 from api.server.services import ApiServices
-from api.server.sse import sse_response
+from api.server.sse import (
+    SSE_HEARTBEAT_SECONDS,
+    SseItem,
+    sse_response_items,
+    sse_response_prepared,
+)
 
 router = APIRouter()
 
@@ -78,27 +81,14 @@ def api_v1_stream_logs(
     request = _resolve_log_query_request(services, request)
     stream_query = _log_stream_query(request, wait_seconds=wait_seconds)
     if follow:
-        if not _is_database_log_cursor(request.cursor) and (
-            response := _redis_log_response(
-                services,
-                stream_query,
-                max_events=max_events,
-                wait_seconds=_effective_wait_seconds(request, wait_seconds),
-                last_event_id=last_event_id,
-            )
-        ):
-            return response
-        if request.task_id and (request.cursor is None or _is_database_log_cursor(request.cursor)):
-            return sse_response(
-                _follow_task_logs(
-                    services,
-                    request,
-                    poll_interval_seconds=poll_interval_seconds,
-                )
-            )
-        return sse_response(())
+        return _redis_log_response(
+            services,
+            stream_query,
+            max_events=max_events,
+            last_event_id=last_event_id,
+        )
     result = _management(services).logs(request.workspace_id, **_management_log_kwargs(request))
-    return sse_response(("log", item.cursor, item) for item in result.data)
+    return sse_response_items(("log", item.cursor, item) for item in result.data)
 
 
 @router.get(
@@ -144,33 +134,6 @@ def api_v1_get_logs(
     )
     request = _resolve_log_query_request(services, request)
     return _management(services).logs(request.workspace_id, **_management_log_kwargs(request))
-
-
-def _follow_task_logs(
-    services: ApiServices,
-    request: LogQueryRequest,
-    *,
-    poll_interval_seconds: float,
-) -> Iterator[tuple[str, str, object]]:
-    task_id = request.task_id or ""
-    _management(services).workspace_task(request.workspace_id, task_id)
-    cursor = request.cursor
-    sleep_seconds = max(poll_interval_seconds, 0.05)
-    while True:
-        log_kwargs = _management_log_kwargs(request)
-        log_kwargs["cursor"] = cursor
-        log_kwargs["after_cursor"] = cursor is not None
-        result = _management(services).logs(request.workspace_id, **log_kwargs)
-        for item in result.data:
-            cursor = item.cursor
-            yield ("log", item.cursor, item)
-        try:
-            task = services.tasks.get(task_id)
-        except NotFoundError:
-            return
-        if is_terminal_task_status(task.status):
-            return
-        time.sleep(sleep_seconds)
 
 
 def _log_query_request(
@@ -313,37 +276,50 @@ def _effective_wait_seconds(
     return 1.0
 
 
-def _is_database_log_cursor(value: str | None) -> bool:
-    return bool(value and value.startswith("pg."))
-
-
 def _redis_log_response(
     services: ApiServices,
     query: LogStreamQuery,
     *,
     max_events: int,
-    wait_seconds: float,
     last_event_id: str | None,
-) -> StreamingResponse | None:
-    try:
-        repository = RedisEventStreamRepository(services.redis())
-    except (AttributeError, TypeError, RuntimeError):
-        return None
-    return sse_response(
-        _redis_log_items(
-            repository.stream_logs(
-                query,
-                last_event_id=last_event_id,
-                block_milliseconds=int(wait_seconds * 1000),
-                max_events=max_events,
-            )
+) -> StreamingResponse:
+    async_io = services.require_async_io()
+    repository = AsyncRedisEventStreamRepository(async_io.redis)
+    return sse_response_prepared(
+        lambda: _prepare_redis_log_items(
+            repository,
+            async_io.realtime,
+            query,
+            last_event_id=last_event_id,
+            max_events=max_events,
         )
     )
 
 
-def _redis_log_items(
-    records: Iterator[RedisStreamRecord] | tuple[RedisStreamRecord, ...],
-) -> Iterator[tuple[str, str, object]]:
-    for record in records:
-        log_record = log_record_from_redis(record)
-        yield ("log", record.entry_id, log_record)
+async def _prepare_redis_log_items(
+    repository: AsyncRedisEventStreamRepository,
+    tail: RedisStreamTailBroker,
+    query: LogStreamQuery,
+    *,
+    last_event_id: str | None,
+    max_events: int,
+) -> AsyncIterator[SseItem]:
+    return _async_redis_log_items(
+        await repository.follow_logs(
+            tail,
+            query,
+            last_event_id=last_event_id,
+            max_events=max_events,
+            heartbeat_seconds=SSE_HEARTBEAT_SECONDS,
+        )
+    )
+
+
+async def _async_redis_log_items(
+    records: AsyncIterator[RedisStreamRecord | None],
+) -> AsyncIterator[SseItem]:
+    async for record in records:
+        if record is None:
+            yield None
+        else:
+            yield ("log", record.entry_id, log_record_from_redis(record))

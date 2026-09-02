@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Annotated
 from urllib.parse import urlencode
 
@@ -28,7 +29,6 @@ from fastapi import (
 )
 from shared.containers import ContainerRecord
 from shared.errors import NotFoundError
-from starlette.concurrency import run_in_threadpool
 from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
@@ -41,14 +41,14 @@ from api.server.dependencies import (
     current_websocket_services,
 )
 from api.server.deployed_stubs import (
-    resolve_deployed_stub,
-    resolve_deployed_stub_id,
+    resolve_deployed_stub_async,
+    resolve_deployed_stub_id_async,
 )
 from api.server.http import (
     backend_websocket_headers,
     close_websocket,
     forwarded_path,
-    forwarded_response,
+    forwarded_streaming_response,
     request_headers,
     request_query_params,
     websocket_headers,
@@ -89,9 +89,9 @@ async def deployed_pod_proxy_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub_id(
+    stub = await resolve_deployed_stub_id_async(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Pod,
         public=False,
@@ -119,9 +119,9 @@ async def deployed_public_pod_proxy_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub_id(
+    stub = await resolve_deployed_stub_id_async(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Pod,
         public=True,
@@ -147,11 +147,9 @@ async def deployed_pod_proxy_by_latest_path(
     *,
     workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub(
-        control_plane,
+    stub = await resolve_deployed_stub_async(
         services,
         deployment_name,
         StubKind.Pod,
@@ -180,11 +178,9 @@ async def deployed_pod_proxy_by_version(
     *,
     workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub(
-        control_plane,
+    stub = await resolve_deployed_stub_async(
         services,
         deployment_name,
         StubKind.Pod,
@@ -205,10 +201,10 @@ async def deployed_pod_websocket_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    workspace_id = authorize_websocket_workspace(services, websocket)
-    stub = resolve_deployed_stub_id(
+    workspace_id = await authorize_websocket_workspace(services, websocket)
+    stub = await resolve_deployed_stub_id_async(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Pod,
         public=False,
@@ -228,9 +224,9 @@ async def deployed_public_pod_websocket_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    stub = resolve_deployed_stub_id(
+    stub = await resolve_deployed_stub_id_async(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Pod,
         public=True,
@@ -246,12 +242,10 @@ async def deployed_pod_websocket_by_latest_path(
     port: PortPath,
     subpath: str = "",
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    workspace_id = authorize_websocket_workspace(services, websocket)
-    stub = resolve_deployed_stub(
-        control_plane,
+    workspace_id = await authorize_websocket_workspace(services, websocket)
+    stub = await resolve_deployed_stub_async(
         services,
         deployment_name,
         StubKind.Pod,
@@ -270,12 +264,10 @@ async def deployed_pod_websocket_by_version(
     port: PortPath,
     subpath: str = "",
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    workspace_id = authorize_websocket_workspace(services, websocket)
-    stub = resolve_deployed_stub(
-        control_plane,
+    workspace_id = await authorize_websocket_workspace(services, websocket)
+    stub = await resolve_deployed_stub_async(
         services,
         deployment_name,
         StubKind.Pod,
@@ -306,7 +298,7 @@ async def deployed_sandbox_proxy_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    container, stub = _resolve_sandbox_container(
+    container, stub = await _resolve_sandbox_container(
         container_id,
         workspace=workspace_id,
         public=False,
@@ -342,7 +334,7 @@ async def deployed_public_sandbox_proxy_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    container, stub = _resolve_sandbox_container(
+    container, stub = await _resolve_sandbox_container(
         container_id,
         workspace=None,
         public=True,
@@ -370,8 +362,8 @@ async def deployed_sandbox_websocket_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    workspace_id = authorize_websocket_workspace(services, websocket)
-    container, stub = _resolve_sandbox_container(
+    workspace_id = await authorize_websocket_workspace(services, websocket)
+    container, stub = await _resolve_sandbox_container(
         container_id,
         workspace=workspace_id,
         public=False,
@@ -399,7 +391,7 @@ async def deployed_public_sandbox_websocket_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    container, stub = _resolve_sandbox_container(
+    container, stub = await _resolve_sandbox_container(
         container_id,
         workspace=None,
         public=True,
@@ -434,11 +426,9 @@ async def deployed_sandbox_proxy_by_latest_path(
     *,
     workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub(
-        control_plane,
+    stub = await resolve_deployed_stub_async(
         services,
         deployment_name,
         StubKind.Sandbox,
@@ -467,11 +457,9 @@ async def deployed_sandbox_proxy_by_version(
     *,
     workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub(
-        control_plane,
+    stub = await resolve_deployed_stub_async(
         services,
         deployment_name,
         StubKind.Sandbox,
@@ -501,15 +489,36 @@ async def _forward_proxy_request(
         body=await request.body(),
     )
     try:
-        result = await run_in_threadpool(service.forward_pod_http_request, proxy_request)
-    except PodProxyPortUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        session = await service.prepare_pod_proxy(
+            stub_id=stub.id,
+            container_id=container_id,
+            port=port,
+            path=proxy_request.path,
+            query_params=proxy_request.query_params,
+            protocol=PodProxyProtocol.Http,
+        )
+        try:
+            result = await service.open_pod_proxy_http_stream(session, proxy_request)
+        except BaseException:
+            await service.finish_pod_proxy(session)
+            raise
     except PodProxyUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except PodProxyBackendError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return forwarded_response(
-        status_code=result.status_code, headers=result.headers, body=result.body
+
+    async def body() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in result.iter_chunks():
+                yield chunk
+        finally:
+            await result.close()
+            await service.finish_pod_proxy(session)
+
+    return forwarded_streaming_response(
+        status_code=result.status_code,
+        headers=result.headers,
+        body=body(),
     )
 
 
@@ -535,8 +544,7 @@ async def _forward_pod_websocket(
     backend: ClientConnection | None = None
     accepted = False
     try:
-        session = await run_in_threadpool(
-            service.prepare_pod_proxy,
+        session = await service.prepare_pod_proxy(
             stub_id=stub.id,
             container_id=container_id,
             port=port,
@@ -569,12 +577,12 @@ async def _forward_pod_websocket(
             )
     finally:
         if session is not None:
-            await run_in_threadpool(service.finish_pod_proxy, session)
+            await service.finish_pod_proxy(session)
         if backend is not None:
             await backend.close()
 
 
-def _resolve_sandbox_container(
+async def _resolve_sandbox_container(
     container_id: str,
     *,
     workspace: str | None,
@@ -583,14 +591,16 @@ def _resolve_sandbox_container(
     services: ApiServices,
 ) -> tuple[ContainerRecord, StubRecord]:
     try:
-        container = services.containers.get(container_id)
+        container = await services.require_async_io().database.run_transaction(
+            lambda session: services.containers.get_in_session(session, container_id)
+        )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail="sandbox not found") from exc
     if container.stub_id is None or (workspace is not None and container.workspace_id != workspace):
         raise HTTPException(status_code=404, detail="sandbox not found")
-    stub = resolve_deployed_stub_id(
+    stub = await resolve_deployed_stub_id_async(
         control_plane,
-        services.apps,
+        services,
         container.stub_id,
         StubKind.Sandbox,
         public=public,
@@ -608,7 +618,7 @@ async def _connect_backend_websocket(
     request: PodProxyHttpRequest,
     websocket: WebSocket,
 ) -> ClientConnection:
-    backend_socket = await run_in_threadpool(service.open_pod_proxy_socket, session)
+    backend_socket = await service.open_pod_proxy_socket(session)
     try:
         return await websockets.asyncio.client.connect(
             _pod_backend_websocket_url(request),

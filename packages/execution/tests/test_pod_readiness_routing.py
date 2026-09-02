@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import NoReturn
+from dataclasses import dataclass, replace
 from uuid import uuid4
 
+import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
 from database.repositories.orchestration import ContainerRepository
 from execution.pods.planning import PodProxyProtocol
-from execution.pods.service import PodControlService
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.routing import AgentBackendRoute, BackendRouteState
 from shared.scheduling import (
@@ -29,18 +28,15 @@ class _RunningContainers:
     workspace_id: str
     stub_id: str
 
-    def client_for(self, container: ContainerRecord) -> NoReturn:
-        raise AssertionError("routing must not open a container client")
-
-    def state_for(self, container: ContainerRecord) -> SchedulerContainerState:
+    def _state(self, container_id: str) -> SchedulerContainerState:
         return SchedulerContainerState(
-            container_id=container.id,
+            container_id=container_id,
             workspace_id=self.workspace_id,
             stub_id=self.stub_id,
             status=SchedulerContainerStatus.Running,
         )
 
-    def address_map_for(self, container_id: str) -> SchedulerContainerAddressMap:
+    def _address_map(self, container_id: str) -> SchedulerContainerAddressMap:
         return SchedulerContainerAddressMap(
             container_id=container_id,
             address_map={PORT: f"route://{container_id}"},
@@ -54,12 +50,33 @@ class _RunningContainers:
             ],
         )
 
+    async def get_container_state(self, container_id: str) -> SchedulerContainerState:
+        return self._state(container_id)
+
+    async def list_by_stub(self, stub_id: str) -> list[SchedulerContainerState]:
+        assert stub_id == self.stub_id
+        return [
+            self._state(container_id) for container_id in (SERVING_CONTAINER, STARTED_CONTAINER)
+        ]
+
+    async def get_container_address_map(
+        self,
+        container_id: str,
+    ) -> SchedulerContainerAddressMap:
+        return self._address_map(container_id)
+
+    async def get_container_address_maps(
+        self,
+        container_ids: list[str],
+    ) -> dict[str, SchedulerContainerAddressMap]:
+        return {container_id: self._address_map(container_id) for container_id in container_ids}
+
 
 @dataclass(frozen=True, slots=True)
 class _OnlyOneIsServing:
     serving_container_id: str
 
-    def is_ready(
+    async def is_ready(
         self,
         *,
         container_id: str,
@@ -73,7 +90,8 @@ class _OnlyOneIsServing:
         return container_id == self.serving_container_id
 
 
-def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
+@pytest.mark.anyio
+async def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
     isolated_services: ApiServices,
 ) -> None:
     """A started container is not a serving one, and only the probe knows which.
@@ -101,19 +119,24 @@ def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
                 )
             )
 
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        container_clients=_RunningContainers(workspace_id=workspace_id, stub_id=stub.id),
+    service = replace(
+        isolated_services.pod_service,
+        async_scheduler_containers=_RunningContainers(
+            workspace_id=workspace_id,
+            stub_id=stub.id,
+        ),
         container_readiness_probe=_OnlyOneIsServing(serving_container_id=SERVING_CONTAINER),
     )
 
-    session = service.prepare_pod_proxy(
-        stub_id=stub.id,
-        port=PORT,
-        path="/",
-        query_params={},
-        protocol=PodProxyProtocol.Http,
-    )
-
-    assert session.target.container_id == SERVING_CONTAINER
+    try:
+        session = await service.prepare_pod_proxy(
+            stub_id=stub.id,
+            port=PORT,
+            path="/",
+            query_params={},
+            protocol=PodProxyProtocol.Http,
+        )
+        assert session.target.container_id == SERVING_CONTAINER
+        await service.finish_pod_proxy(session)
+    finally:
+        await isolated_services.require_async_io().close()

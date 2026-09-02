@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
-from typing import Protocol
 from uuid import uuid4
 
 import pytest
@@ -13,7 +14,7 @@ from api.server.services import ApiServices
 from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from control.service import ControlPlaneService
-from coordination.redis_client import RedisClient, redis_text
+from coordination.redis_client import AsyncRedisClient, RedisClient, RedisSettings, redis_text
 from database.records.apps import StubRecord
 from database.repositories.apps import DeploymentRepository
 from database.repositories.orchestration import ContainerRepository
@@ -102,6 +103,7 @@ from shared.realtime.contracts import (
 from shared.scheduling import WorkerUnavailableReason
 from shared.tasks import RetryPolicy, Task, TaskStatus, is_terminal_task_status
 from shared.usage import UsageBillingOwner
+from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 
 _EVENT_DATA_ADAPTER = TypeAdapter(dict[str, JsonValue | datetime])
@@ -288,8 +290,29 @@ def _capacity_reservations(redis: RedisClient) -> CapacityReservationService:
     return CapacityReservationService(RedisCapacityReservationRepository(redis), tuple)
 
 
-class _RealRedisActors(Protocol):
-    def client(self) -> RedisClient: ...
+@pytest.fixture
+async def async_redis(
+    real_redis_actors: RealRedisActors,
+) -> AsyncIterator[AsyncRedisClient]:
+    client = AsyncRedisClient.from_settings(
+        RedisSettings(url=real_redis_actors.url, key_prefix=real_redis_actors.prefix)
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+async def _worker_delivery_empty(
+    redis: AsyncRedisClient,
+    repository: RedisSchedulerWorkerRepository,
+    worker_id: str,
+) -> bool:
+    queued, inflight = await asyncio.gather(
+        redis.list_length(repository.keys.worker_requests(worker_id)),
+        redis.list_length(repository.keys.worker_inflight_requests(worker_id)),
+    )
+    return queued == 0 and inflight == 0
 
 
 def _backlog_request(
@@ -370,7 +393,7 @@ def _cron_scheduler(services: ApiServices, redis: RedisClient) -> Scheduler:
 
 def test_cron_failure_retries_same_run_then_persists_terminal_failure(
     isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     container_scheduler = RecordingContainerScheduler()
     isolated_services = replace(
@@ -513,7 +536,7 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
 
 def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
     isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     container_scheduler = RecordingContainerScheduler()
     isolated_services = replace(
@@ -660,7 +683,7 @@ def test_new_cron_version_takes_over_the_prior_schedule(
 
 def test_inactive_cron_deployment_never_enqueues(
     isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     deployment, _stub, cron_job = _create_cron_function(isolated_services)
     deployment.active = False
@@ -684,7 +707,7 @@ def test_inactive_cron_deployment_never_enqueues(
 
 
 def test_scheduler_worker_repository_requeues_removed_worker_requests(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     repo = RedisSchedulerWorkerRepository(redis)
@@ -762,8 +785,10 @@ def test_scheduler_worker_repository_requeues_removed_worker_requests(
 
 
 @pytest.mark.parametrize("entrypoint", ["cleanup", "list"])
-def test_scheduler_worker_repository_requeues_expired_worker_requests(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_scheduler_worker_repository_requeues_expired_worker_requests(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
     entrypoint: str,
 ) -> None:
     redis = real_redis_actors.client()
@@ -792,7 +817,7 @@ def test_scheduler_worker_repository_requeues_expired_worker_requests(
         memory_mib=100,
         timestamp=now,
     )
-    repo.enqueue_worker_request("worker-1", request)
+    await repo.enqueue_worker_request(async_redis, "worker-1", request)
     redis.delete(repo.keys.worker_state("worker-1"))
 
     if entrypoint == "cleanup":
@@ -812,8 +837,10 @@ def test_scheduler_worker_repository_requeues_expired_worker_requests(
     assert requeued.retry_count == 1
 
 
-def test_expired_worker_requeues_delivered_requests_but_not_ones_it_acted_on(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_expired_worker_requeues_delivered_requests_but_not_ones_it_acted_on(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     """A gone worker's in-flight requests come back, except the ones it already ran.
 
@@ -857,7 +884,7 @@ def test_expired_worker_requeues_delivered_requests_but_not_ones_it_acted_on(
         for container_id in ("container-1", "container-2")
     ]
     for request in delivered:
-        workers.enqueue_worker_request("worker-1", request)
+        await workers.enqueue_worker_request(async_redis, "worker-1", request)
         containers.set_container_state(
             SchedulerContainerState(
                 container_id=request.container_id,
@@ -867,13 +894,31 @@ def test_expired_worker_requeues_delivered_requests_but_not_ones_it_acted_on(
                 status=SchedulerContainerStatus.Pending,
             )
         )
-        assert workers.get_next_container_request("worker-1") == request
-        assert workers.acknowledge_worker_request("worker-1", request.container_id)
+        assert (
+            await workers.wait_for_next_container_request(
+                async_redis,
+                "worker-1",
+                timeout_seconds=0.01,
+            )
+            == request
+        )
+        assert await workers.acknowledge_worker_request(
+            async_redis,
+            "worker-1",
+            request.container_id,
+        )
     # Both are delivered again; only the first is handed out, and its container
     # runs to completion while the acknowledgement never lands.
     for request in delivered:
-        workers.enqueue_worker_request("worker-1", request)
-    assert workers.get_next_container_request("worker-1") == delivered[0]
+        await workers.enqueue_worker_request(async_redis, "worker-1", request)
+    assert (
+        await workers.wait_for_next_container_request(
+            async_redis,
+            "worker-1",
+            timeout_seconds=0.01,
+        )
+        == delivered[0]
+    )
     containers.update_container_status(
         "container-1",
         SchedulerContainerStatus.Complete,
@@ -890,8 +935,10 @@ def test_expired_worker_requeues_delivered_requests_but_not_ones_it_acted_on(
     assert requeued.retry_count == 1
 
 
-def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pull_locks(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pull_locks(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     repo = RedisSchedulerWorkerRepository(redis)
@@ -952,10 +999,21 @@ def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pull_loc
     assert repo.add_container_to_worker("worker-1", "container-1") == 1
     assert repo.remove_container_from_worker("worker-1", "container-1") == 1
 
-    repo.enqueue_worker_request("worker-1", request)
-    assert repo.get_next_container_request("worker-1") == request
-    assert repo.acknowledge_worker_request("worker-1", request.container_id)
-    assert repo.get_next_container_request("worker-1") is None
+    await repo.enqueue_worker_request(async_redis, "worker-1", request)
+    assert (
+        await repo.wait_for_next_container_request(
+            async_redis,
+            "worker-1",
+            timeout_seconds=0.01,
+        )
+        == request
+    )
+    assert await repo.acknowledge_worker_request(
+        async_redis,
+        "worker-1",
+        request.container_id,
+    )
+    assert await _worker_delivery_empty(async_redis, repo, "worker-1")
 
     repo.enqueue_container_request(request, ready_at=now)
     assert _claim_and_acknowledge_requests(repo, now=now, limit=10) == [request]
@@ -986,7 +1044,7 @@ def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pull_loc
 
 
 def test_scheduler_request_claim_recovers_after_process_loss(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     repository = RedisSchedulerWorkerRepository(redis)
@@ -1032,8 +1090,10 @@ def test_scheduler_request_claim_recovers_after_process_loss(
     assert redis.hash_length(repository.keys.container_request_claim_owners()) == 0
 
 
-def test_claim_dispatch_commit_survives_scheduler_crash_without_duplicate_delivery(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_claim_dispatch_commit_survives_scheduler_crash_without_duplicate_delivery(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -1097,9 +1157,20 @@ def test_claim_dispatch_commit_survives_scheduler_crash_without_duplicate_delive
     assert redis.list_range(workers.keys.worker_requests("worker-1"), 0, -1) == [
         request.container_id
     ]
-    assert workers.get_next_container_request("worker-1") == request
-    assert workers.acknowledge_worker_request("worker-1", request.container_id)
-    assert workers.get_next_container_request("worker-1") is None
+    assert (
+        await workers.wait_for_next_container_request(
+            async_redis,
+            "worker-1",
+            timeout_seconds=0.01,
+        )
+        == request
+    )
+    assert await workers.acknowledge_worker_request(
+        async_redis,
+        "worker-1",
+        request.container_id,
+    )
+    assert await _worker_delivery_empty(async_redis, workers, "worker-1")
 
     cancelled_request = request.model_copy(update={"container_id": "container-2"})
     assert workers.enqueue_container_request(cancelled_request, ready_at=now) == 1
@@ -1120,7 +1191,7 @@ def test_claim_dispatch_commit_survives_scheduler_crash_without_duplicate_delive
 
 
 def test_scheduler_worker_admin_service_lists_cordons_drains_and_removes_workers(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -1217,7 +1288,7 @@ def test_scheduler_worker_admin_service_lists_cordons_drains_and_removes_workers
 
 
 def test_scheduler_container_repository_state_indexes_and_concurrency_release(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     repo = RedisSchedulerContainerRepository(redis)
@@ -1351,8 +1422,10 @@ def test_scheduler_container_repository_state_indexes_and_concurrency_release(
     assert repo.get_worker_address("container-1") is None
 
 
-def test_scheduler_container_request_service_queues_selects_and_dispatches(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_scheduler_container_request_service_queues_selects_and_dispatches(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
@@ -1445,7 +1518,11 @@ def test_scheduler_container_request_service_queues_selects_and_dispatches(
     assert len(dispatched) == 1
     assert dispatched[0].status is SchedulerContainerDispatchStatus.Dispatched
     assert dispatched[0].worker_id == "worker-1"
-    queued = worker_repo.get_next_container_request("worker-1")
+    queued = await worker_repo.wait_for_next_container_request(
+        async_redis,
+        "worker-1",
+        timeout_seconds=0.01,
+    )
     assert queued is not None
     assert queued.container_id == request.container_id
     assert queued.workspace_id == request.workspace_id
@@ -1453,7 +1530,7 @@ def test_scheduler_container_request_service_queues_selects_and_dispatches(
     assert queued.pool_selector == "gpu-pool"
     assert queued.runtime_class == "runsc"
     assert queued.docker_enabled
-    assert worker_repo.get_next_container_request("worker-2") is None
+    assert await _worker_delivery_empty(async_redis, worker_repo, "worker-2")
     assigned_worker = worker_repo.get_worker("worker-1")
     assert assigned_worker is not None
     assert assigned_worker.free_cpu_millicores == 500
@@ -1478,7 +1555,7 @@ def test_scheduler_container_request_service_queues_selects_and_dispatches(
 
 def test_scheduler_dispatch_clears_runtime_assignment_when_queueing_fails(
     monkeypatch: pytest.MonkeyPatch,
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -1534,9 +1611,11 @@ def test_scheduler_dispatch_clears_runtime_assignment_when_queueing_fails(
     assert pending.status is SchedulerContainerStatus.Pending
 
 
-def test_scheduler_claim_dispatch_honors_cancellation_before_atomic_commit(
+@pytest.mark.anyio
+async def test_scheduler_claim_dispatch_honors_cancellation_before_atomic_commit(
     monkeypatch: pytest.MonkeyPatch,
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -1605,15 +1684,17 @@ def test_scheduler_claim_dispatch_honors_cancellation_before_atomic_commit(
     assert assignments.cleared == [("container-1", "worker-1")]
     assert containers.get_container_state(request.container_id) is None
     assert containers.is_container_cancelled(request.container_id)
-    assert workers.get_next_container_request("worker-1") is None
+    assert await _worker_delivery_empty(async_redis, workers, "worker-1")
     worker = workers.get_worker("worker-1")
     assert worker is not None
     assert worker.free_cpu_millicores == 1000
     assert worker.resource_version == 0
 
 
-def test_worker_request_dequeue_holds_one_delivery_without_the_worker_mutation_lock(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_worker_request_dequeue_holds_one_delivery_without_the_worker_mutation_lock(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -1626,37 +1707,50 @@ def test_worker_request_dequeue_holds_one_delivery_without_the_worker_mutation_l
         for index in (1, 2)
     ]
     for request in requests:
-        workers.enqueue_worker_request("worker-1", request)
+        await workers.enqueue_worker_request(async_redis, "worker-1", request)
 
     worker_lock_key = workers.keys.worker_lock("worker-1")
     assert redis.set(worker_lock_key, "scheduler-owner", ex=10, nx=True)
-    barrier = Barrier(2)
-
-    def dequeue() -> SchedulerWorkerRequest | None:
-        barrier.wait()
-        return workers.get_next_container_request("worker-1")
-
-    def dequeue_once(_index: int) -> SchedulerWorkerRequest | None:
-        return dequeue()
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        dequeued = list(executor.map(dequeue_once, range(2)))
+    dequeued = await asyncio.gather(
+        *(
+            workers.wait_for_next_container_request(
+                async_redis,
+                "worker-1",
+                timeout_seconds=0.01,
+            )
+            for _index in range(2)
+        )
+    )
 
     # A worker holds one delivery at a time: until it acknowledges the first
     # request, every take hands that same one back rather than moving on.
     assert {request.container_id for request in dequeued if request is not None} == {"container-1"}
     assert all(request is not None for request in dequeued)
-    assert workers.acknowledge_worker_request("worker-1", "container-1")
-    second = workers.get_next_container_request("worker-1")
+    assert await workers.acknowledge_worker_request(
+        async_redis,
+        "worker-1",
+        "container-1",
+    )
+    second = await workers.wait_for_next_container_request(
+        async_redis,
+        "worker-1",
+        timeout_seconds=0.01,
+    )
     assert second is not None
     assert second.container_id == "container-2"
-    assert workers.acknowledge_worker_request("worker-1", "container-2")
-    assert workers.get_next_container_request("worker-1") is None
+    assert await workers.acknowledge_worker_request(
+        async_redis,
+        "worker-1",
+        "container-2",
+    )
+    assert await _worker_delivery_empty(async_redis, workers, "worker-1")
     assert redis.get(worker_lock_key) == "scheduler-owner"
 
 
-def test_worker_request_blocking_pop_wakes_on_assignment_without_duplicate(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_worker_request_blocking_pop_wakes_on_assignment_without_duplicate(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -1666,25 +1760,33 @@ def test_worker_request_blocking_pop_wakes_on_assignment_without_duplicate(
         container_id="container-1",
     )
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        waiting = executor.submit(
-            workers.wait_for_next_container_request,
+    waiting = asyncio.create_task(
+        workers.wait_for_next_container_request(
+            async_redis,
             "worker-1",
             timeout_seconds=1.0,
         )
-        workers.enqueue_worker_request("worker-1", request)
-        dequeued = waiting.result(timeout=1.0)
+    )
+    await asyncio.sleep(0)
+    await workers.enqueue_worker_request(async_redis, "worker-1", request)
+    dequeued = await waiting
 
     assert dequeued == request
-    assert workers.acknowledge_worker_request("worker-1", request.container_id)
-    assert workers.get_next_container_request("worker-1") is None
+    assert await workers.acknowledge_worker_request(
+        async_redis,
+        "worker-1",
+        request.container_id,
+    )
+    assert await _worker_delivery_empty(async_redis, workers, "worker-1")
     assert redis.hash_length(workers.keys.worker_request_payloads("worker-1")) == 0
     assert redis.list_length(workers.keys.worker_inflight_requests("worker-1")) == 0
-    assert workers.wait_for_next_container_request("worker-1", timeout_seconds=1.0) is None
+    assert await _worker_delivery_empty(async_redis, workers, "worker-1")
 
 
-def test_scheduler_dispatch_records_the_placement_an_image_build_is_priced_from(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_scheduler_dispatch_records_the_placement_an_image_build_is_priced_from(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -1724,7 +1826,11 @@ def test_scheduler_dispatch_records_the_placement_an_image_build_is_priced_from(
     [result] = service.dispatch_ready(now=now, limit=1)
 
     assert result.status is SchedulerContainerDispatchStatus.Dispatched
-    queued = workers.get_next_container_request("worker-1")
+    queued = await workers.wait_for_next_container_request(
+        async_redis,
+        "worker-1",
+        timeout_seconds=0.01,
+    )
     assert queued is not None
     assert queued.container_id == request.container_id
     assert assignments.assignments == [
@@ -1744,8 +1850,10 @@ def test_scheduler_dispatch_records_the_placement_an_image_build_is_priced_from(
     assert assignments.cleared == []
 
 
-def test_scheduler_container_cancellation_cannot_be_dispatched_or_requeued(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_scheduler_container_cancellation_cannot_be_dispatched_or_requeued(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
@@ -1788,7 +1896,7 @@ def test_scheduler_container_cancellation_cannot_be_dispatched_or_requeued(
     cancelled = service.dispatch_ready(now=now, limit=10)
 
     assert cancelled == []
-    assert worker_repo.get_next_container_request("worker-1") is None
+    assert await _worker_delivery_empty(async_redis, worker_repo, "worker-1")
     assert redis.sorted_set_cardinality(worker_repo.keys.container_requests()) == 0
     assert redis.hash_length(worker_repo.keys.container_request_payloads()) == 0
     worker = worker_repo.get_worker("worker-1")
@@ -1810,7 +1918,7 @@ def test_scheduler_container_cancellation_cannot_be_dispatched_or_requeued(
 
 
 def test_scheduler_cancellation_removes_only_owned_backlog_and_preserves_fence(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -1840,7 +1948,7 @@ def test_scheduler_cancellation_removes_only_owned_backlog_and_preserves_fence(
 
 
 def test_workspace_container_state_cleanup_purges_only_owned_terminal_keys(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     repository = RedisSchedulerContainerRepository(real_redis_actors.client())
     owned = SchedulerContainerState(
@@ -1878,7 +1986,7 @@ def test_workspace_container_state_cleanup_purges_only_owned_terminal_keys(
 
 
 def test_workspace_container_state_cleanup_purges_terminal_keys_after_state_deletion(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     repository = RedisSchedulerContainerRepository(redis)
@@ -1898,7 +2006,7 @@ def test_workspace_container_state_cleanup_purges_terminal_keys_after_state_dele
 
 
 def test_workspace_cleanup_discovers_ephemeral_container_after_state_deletion(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     repository = RedisSchedulerContainerRepository(redis)
@@ -1935,8 +2043,10 @@ def test_workspace_cleanup_discovers_ephemeral_container_after_state_deletion(
     ) == {peer.container_id}
 
 
-def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -1979,7 +2089,7 @@ def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
     assert result.pending_request_removed
     assert not result.worker_stop_required
     assert containers.get_container_state(request.container_id) is None
-    assert workers.get_next_container_request("worker-1") is None
+    assert await _worker_delivery_empty(async_redis, workers, "worker-1")
     worker = workers.get_worker("worker-1")
     assert worker is not None
     assert worker.free_cpu_millicores == 1000
@@ -1991,7 +2101,7 @@ def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
 
 
 def test_scheduler_stopping_transition_is_atomic_with_dispatch_state_replacement(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     container_repo = RedisSchedulerContainerRepository(redis)
@@ -2034,8 +2144,10 @@ def test_scheduler_stopping_transition_is_atomic_with_dispatch_state_replacement
         assert state.status is SchedulerContainerStatus.Stopping
 
 
-def test_scheduler_run_once_dispatches_when_pool_state_refresh_fails(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_scheduler_run_once_dispatches_when_pool_state_refresh_fails(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
@@ -2086,13 +2198,19 @@ def test_scheduler_run_once_dispatches_when_pool_state_refresh_fails(
     assert len(result.container_dispatches) == 1
     assert result.container_dispatches[0].status is SchedulerContainerDispatchStatus.Dispatched
     assert result.pool_states == {}
-    queued = worker_repo.get_next_container_request("worker-1")
+    queued = await worker_repo.wait_for_next_container_request(
+        async_redis,
+        "worker-1",
+        timeout_seconds=0.01,
+    )
     assert queued is not None
     assert queued.container_id == "container-1"
 
 
-def test_scheduler_dispatch_resumes_an_expired_claim_after_restart(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_scheduler_dispatch_resumes_an_expired_claim_after_restart(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
@@ -2141,15 +2259,17 @@ def test_scheduler_dispatch_resumes_an_expired_claim_after_restart(
     assert before_expiry == []
     assert len(recovered) == 1
     assert recovered[0].status is SchedulerContainerDispatchStatus.Dispatched
-    assert worker_repo.get_next_container_request("worker-1") == request.model_copy(
-        update={"timestamp": now + timedelta(seconds=6)}
-    )
+    assert await worker_repo.wait_for_next_container_request(
+        async_redis,
+        "worker-1",
+        timeout_seconds=0.01,
+    ) == request.model_copy(update={"timestamp": now + timedelta(seconds=6)})
     assert not worker_repo.acknowledge_container_request(abandoned[0])
 
 
 def test_scheduler_reconciles_confirmed_unrecoverable_sql_container(
     isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
@@ -2219,7 +2339,7 @@ def test_scheduler_reconciles_confirmed_unrecoverable_sql_container(
 
 def test_scheduler_orphan_reconciliation_restores_pod_desired_capacity(
     isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
@@ -2303,7 +2423,7 @@ def test_scheduler_orphan_reconciliation_restores_pod_desired_capacity(
 
 
 def test_scheduler_ready_pop_and_worker_dispatch_are_atomic_under_parallel_schedulers(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
@@ -2367,7 +2487,7 @@ def test_scheduler_ready_pop_and_worker_dispatch_are_atomic_under_parallel_sched
 
 
 def test_worker_capacity_reservation_and_enqueue_are_worker_lock_guarded(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     repo = RedisSchedulerWorkerRepository(redis)
@@ -2420,7 +2540,7 @@ def test_worker_capacity_reservation_and_enqueue_are_worker_lock_guarded(
 
 
 def test_scheduler_container_request_service_bounds_no_capacity_retries(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
@@ -2479,7 +2599,7 @@ def test_scheduler_container_request_service_bounds_no_capacity_retries(
 
 
 def test_scheduler_image_build_failure_persists_coordination_evidence_and_fails_the_container(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
@@ -2530,7 +2650,7 @@ def test_scheduler_image_build_failure_persists_coordination_evidence_and_fails_
 
 
 def test_scheduler_container_request_service_waits_for_pending_worker_without_retry_count(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
@@ -2576,7 +2696,7 @@ def test_scheduler_container_request_service_waits_for_pending_worker_without_re
 
 
 def test_scheduler_container_request_service_reserves_quota_on_submit(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
@@ -2620,7 +2740,7 @@ def test_scheduler_container_request_service_reserves_quota_on_submit(
 
 
 def test_scheduler_container_repository_repairs_concurrency_counter_from_active_state(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     repo = RedisSchedulerContainerRepository(redis)
@@ -2760,7 +2880,7 @@ def test_concurrency_reservation_decisions_cover_repair_and_limits() -> None:
 
 
 def test_worker_network_ip_repository_preserves_ownership_invariants(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     repo = RedisWorkerNetworkIpRepository(redis)
@@ -2818,7 +2938,7 @@ def test_worker_network_ip_repository_preserves_ownership_invariants(
 
 
 def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snapshots(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -2917,7 +3037,7 @@ def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snaps
 
 
 def test_scheduler_pool_state_service_isolates_same_display_name_by_capacity_owner(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -3060,7 +3180,7 @@ class _FailureHandler:
 
 def test_orphan_sweep_settles_the_claims_a_pooled_container_was_holding(
     isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     """A pooled container reaped as orphaned must give back what it claimed.
 

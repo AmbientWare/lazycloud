@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import secrets
 import socket
 import time
-from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -16,6 +17,7 @@ from database.records.apps import StubRecord
 from database.repositories.execution import PodExecutionRepository
 from database.repositories.images import CheckpointRepository
 from database.repositories.orchestration import ContainerRepository
+from database.types import DatabaseSession
 from shared.app_identity import POD_IMAGE
 from shared.autoscaling import PodStubType
 from shared.checkpoints import CheckpointRecord, CheckpointStatus
@@ -78,6 +80,7 @@ from shared.paths import DEFAULT_SANDBOX_WORKDIR
 from shared.routing import AgentBackendRoute, BackendRouteState, parse_backend_route_address
 from shared.scheduling import (
     ContainerSchedulingDirectory,
+    SchedulerContainerAddressMap,
     SchedulerContainerState,
     SchedulerContainerStatus,
 )
@@ -86,6 +89,7 @@ from shared.timestamps import utc_now
 from shared.urls import pod_proxy_url
 from shared.workload_keys import pod_keep_warm_lock_key
 
+from database import AsyncDatabaseClient
 from execution.checkpoints import latest_available_checkpoint
 from execution.config import env_sequence_mapping
 from execution.container_clients import (
@@ -96,7 +100,7 @@ from execution.container_clients import (
     SchedulerContainerClientFactory,
 )
 from execution.containers.planning import ContainerSchedulingOptions
-from execution.containers.readiness import ContainerReadiness
+from execution.containers.readiness import AsyncContainerReadiness
 from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
@@ -116,19 +120,33 @@ from execution.pods.planning import (
 from execution.pods.proxy import (
     DEFAULT_POD_PROXY_TIMEOUT_SECONDS,
     PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS,
-    NullPodProxyConnectionRepository,
-    PodProxyBackendError,
+    AsyncPodProxyForwardClient,
     PodProxyConnectionRepository,
-    PodProxyForwardClient,
     PodProxyHttpRequest,
-    PodProxyHttpResponse,
     PodProxyPortUnavailable,
+    PodProxyResponseStream,
     PodProxySession,
     PodProxySocketClient,
     PodProxyTarget,
     PodProxyUnavailable,
 )
 from execution.services import ExecutionServices
+
+
+class AsyncPodSchedulerContainerDirectory(Protocol):
+    async def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
+
+    async def list_by_stub(self, stub_id: str) -> list[SchedulerContainerState]: ...
+
+    async def get_container_address_map(
+        self,
+        container_id: str,
+    ) -> SchedulerContainerAddressMap: ...
+
+    async def get_container_address_maps(
+        self,
+        container_ids: Sequence[str],
+    ) -> dict[str, SchedulerContainerAddressMap]: ...
 
 
 @dataclass(slots=True)
@@ -138,10 +156,12 @@ class PodControlService:
     gateway_http_url: str = "http://127.0.0.1:9000"
     scheduler_containers: ContainerSchedulingDirectory | None = None
     container_clients: SchedulerContainerClientFactory[PodContainerControlClient] | None = None
-    pod_proxy_http_client: PodProxyForwardClient | None = None
+    async_database: AsyncDatabaseClient | None = None
+    async_scheduler_containers: AsyncPodSchedulerContainerDirectory | None = None
+    async_pod_proxy_http_client: AsyncPodProxyForwardClient | None = None
     pod_proxy_socket_client: PodProxySocketClient | None = None
     pod_proxy_connections: PodProxyConnectionRepository | None = None
-    container_readiness_probe: ContainerReadiness | None = None
+    container_readiness_probe: AsyncContainerReadiness | None = None
     container_connect_timeout_seconds: float = DEFAULT_POD_CONNECTION_TIMEOUT_SECONDS
     pod_proxy_start_timeout_seconds: float = DEFAULT_POD_PROXY_TIMEOUT_SECONDS
     poll_interval_seconds: float = POD_CONTAINER_DISCOVERY_INTERVAL_MS / 1000
@@ -153,8 +173,6 @@ class PodControlService:
             candidate = getattr(self.services.containers, "scheduler_containers", None)
             if isinstance(candidate, ContainerSchedulingDirectory):
                 self.scheduler_containers = candidate
-        if self.pod_proxy_connections is None:
-            self.pod_proxy_connections = NullPodProxyConnectionRepository()
 
     def create_pod(
         self,
@@ -836,38 +854,7 @@ class PodControlService:
         }
         return PodSandboxListUrlsResponse(urls=urls)
 
-    def forward_pod_http_request(
-        self,
-        request: PodProxyHttpRequest,
-    ) -> PodProxyHttpResponse:
-        proxy_client = self._pod_proxy_http_client()
-        session: PodProxySession | None = None
-        try:
-            session = self.prepare_pod_proxy(
-                stub_id=request.stub_id,
-                container_id=request.container_id,
-                port=request.port,
-                path=request.path,
-                query_params=request.query_params,
-                protocol=PodProxyProtocol.Http,
-            )
-            return proxy_client.forward(
-                session.target,
-                request,
-                connect_timeout_seconds=(
-                    PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS if session.pinned else None
-                ),
-            )
-        except (PodProxyUnavailable, PodProxyPortUnavailable):
-            raise
-        except Exception as exc:
-            msg = f"pod proxy backend request failed: {exc}"
-            raise PodProxyBackendError(msg) from exc
-        finally:
-            if session is not None:
-                self.finish_pod_proxy(session)
-
-    def prepare_pod_proxy(
+    async def prepare_pod_proxy(
         self,
         *,
         stub_id: str,
@@ -877,9 +864,11 @@ class PodControlService:
         query_params: dict[str, list[str]],
         protocol: PodProxyProtocol,
     ) -> PodProxySession:
-        stub = self.control_plane.get_stub(stub_id)
+        stub = await self._async_database().run_transaction(
+            lambda session: self.control_plane.get_stub_in_session(session, stub_id)
+        )
+        workspace_id = stub.workspace_id
         config = PodStubConfig.model_validate(stub.config, from_attributes=True)
-        workspace = self.control_plane.get_workspace(stub.workspace_id)
         connections = self._pod_proxy_connections()
         request = PodProxyRequest(
             port=port,
@@ -891,40 +880,55 @@ class PodControlService:
         demand_recorded = False
         try:
             if container_id is not None:
-                target = self._pinned_sandbox_proxy_target(stub, request)
+                target = await self._pinned_sandbox_proxy_target(stub, request)
             else:
-                connections.increment_total_connections(workspace.id, stub_id)
+                await connections.increment_total_connections(workspace_id, stub_id)
                 demand_recorded = True
-                target = self._wait_for_pod_proxy_target(
-                    stub_id,
+                target = await self._wait_for_pod_proxy_target(
+                    stub,
                     request,
                     health_path=config.runtime.health_check_path,
                     health_port=config.runtime.health_check_port,
                 )
             if not demand_recorded:
-                connections.increment_total_connections(workspace.id, stub_id)
+                await connections.increment_total_connections(workspace_id, stub_id)
                 demand_recorded = True
-            connections.increment_container_connections(
-                workspace.id,
+            await connections.increment_container_connections(
+                workspace_id,
                 stub_id,
                 target.container_id,
                 keep_warm_seconds=(config.runtime.keep_warm if stub.kind is StubKind.Pod else None),
             )
         except Exception:
             if demand_recorded:
-                connections.decrement_total_connections(workspace.id, stub_id)
+                await connections.decrement_total_connections(workspace_id, stub_id)
             raise
         return PodProxySession(
-            workspace_id=workspace.id,
+            workspace_id=workspace_id,
             stub_id=stub_id,
             target=target,
             keep_warm_seconds=(config.runtime.keep_warm if stub.kind is StubKind.Pod else None),
             pinned=container_id is not None,
         )
 
-    def open_pod_proxy_socket(self, session: PodProxySession) -> socket.socket:
+    async def open_pod_proxy_http_stream(
+        self,
+        session: PodProxySession,
+        request: PodProxyHttpRequest,
+    ) -> PodProxyResponseStream:
+        return await self._async_pod_proxy_http_client().open_stream(
+            session.target,
+            request,
+            timeout_seconds=self.pod_proxy_start_timeout_seconds,
+            connect_timeout_seconds=(
+                PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS if session.pinned else None
+            ),
+        )
+
+    async def open_pod_proxy_socket(self, session: PodProxySession) -> socket.socket:
         try:
-            return self._pod_proxy_socket_client().open_socket(
+            return await asyncio.to_thread(
+                self._pod_proxy_socket_client().open_socket,
                 session.target,
                 timeout_seconds=(
                     PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS
@@ -937,32 +941,38 @@ class PodControlService:
                 raise PodProxyUnavailable("sandbox backend is unavailable") from exc
             raise
 
-    def finish_pod_proxy(self, session: PodProxySession) -> None:
-        with session.finalization() as should_finalize:
+    async def finish_pod_proxy(self, session: PodProxySession) -> None:
+        async with session.finalization() as should_finalize:
             if not should_finalize:
                 return
             connections = self._pod_proxy_connections()
-            connections.decrement_container_connections(
-                session.workspace_id,
-                session.stub_id,
-                session.target.container_id,
-                keep_warm_seconds=session.keep_warm_seconds,
+            await asyncio.gather(
+                connections.decrement_container_connections(
+                    session.workspace_id,
+                    session.stub_id,
+                    session.target.container_id,
+                    keep_warm_seconds=session.keep_warm_seconds,
+                ),
+                connections.decrement_total_connections(
+                    session.workspace_id,
+                    session.stub_id,
+                ),
             )
-            connections.decrement_total_connections(session.workspace_id, session.stub_id)
 
-    def _wait_for_pod_proxy_target(
+    async def _wait_for_pod_proxy_target(
         self,
-        stub_id: str,
+        stub: StubRecord,
         request: PodProxyRequest,
         *,
         health_path: str,
         health_port: int,
     ) -> PodProxyTarget:
-        deadline = time.monotonic() + max(self.pod_proxy_start_timeout_seconds, 0.0)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(self.pod_proxy_start_timeout_seconds, 0.0)
         while True:
             try:
-                return self._pod_proxy_target(
-                    stub_id,
+                return await self._pod_proxy_target(
+                    stub,
                     request,
                     health_path=health_path,
                     health_port=health_port,
@@ -970,9 +980,9 @@ class PodControlService:
             except PodProxyPortUnavailable:
                 raise
             except PodProxyUnavailable:
-                if time.monotonic() >= deadline:
+                if loop.time() >= deadline:
                     raise
-                time.sleep(max(self.poll_interval_seconds, 0.0))
+                await asyncio.sleep(max(self.poll_interval_seconds, 0.0))
 
     def _container(self, container_id: str) -> ContainerRecord:
         try:
@@ -1121,19 +1131,16 @@ class PodControlService:
             WorkspaceChangeType.Updated,
         )
 
-    def _pod_proxy_target(
+    async def _pod_proxy_target(
         self,
-        stub_id: str,
+        stub: StubRecord,
         request: PodProxyRequest,
         *,
         health_path: str,
         health_port: int,
     ) -> PodProxyTarget:
-        stub = self.control_plane.get_stub(stub_id)
-        workspace = self.control_plane.get_workspace(stub.workspace_id)
-        containers, targets = self._pod_backend_containers(
+        containers, targets = await self._pod_backend_containers(
             workspace_id=stub.workspace_id,
-            workspace_name=workspace.name,
             stub_id=stub.id,
             port=request.port,
             health_path=health_path,
@@ -1155,7 +1162,7 @@ class PodControlService:
             raise PodProxyUnavailable(msg)
         return target
 
-    def _pinned_sandbox_proxy_target(
+    async def _pinned_sandbox_proxy_target(
         self,
         stub: StubRecord,
         request: PodProxyRequest,
@@ -1163,25 +1170,28 @@ class PodControlService:
         container_id = request.container_id
         if stub.kind is not StubKind.Sandbox or container_id is None:
             raise PodProxyUnavailable("sandbox container is unavailable")
-        try:
-            container = self._container(container_id)
-        except NotFoundError as exc:
-            raise PodProxyUnavailable("sandbox container is unavailable") from exc
+        container, port_is_exposed = await self._async_database().run_transaction(
+            lambda session: self._pinned_sandbox_in_session(
+                session,
+                container_id=container_id,
+                workspace_id=stub.workspace_id,
+                port=request.port,
+            )
+        )
         if (
-            container.workspace_id != stub.workspace_id
+            container is None
+            or container.workspace_id != stub.workspace_id
             or container.stub_id != stub.id
             or container.status is not ContainerStatus.Running
         ):
             raise PodProxyUnavailable("sandbox container is unavailable")
-        with self.services.context.database.session() as session:
-            exposure = PodExecutionRepository(session).urls.get(
-                container_id=container.id,
-                port=request.port,
-            )
-        if exposure is None:
+        if not port_is_exposed:
             raise PodProxyPortUnavailable("sandbox port is not exposed")
-        container_clients = self._container_client_factory()
-        state = container_clients.state_for(container)
+        scheduler = self._async_scheduler_container_directory()
+        state, address_map = await asyncio.gather(
+            scheduler.get_container_state(container.id),
+            scheduler.get_container_address_map(container.id),
+        )
         if (
             state is None
             or state.workspace_id != container.workspace_id
@@ -1189,7 +1199,6 @@ class PodControlService:
             or state.status is not SchedulerContainerStatus.Running
         ):
             raise PodProxyUnavailable("sandbox container is unavailable")
-        address_map = container_clients.address_map_for(container.id)
         if address_map.container_id != container.id:
             raise PodProxyUnavailable("sandbox address ownership is invalid")
         address = address_map.address_map.get(request.port, "")
@@ -1208,33 +1217,44 @@ class PodControlService:
             route_id=route_id,
         )
 
-    def _pod_backend_containers(
+    async def _pod_backend_containers(
         self,
         *,
         workspace_id: str,
-        workspace_name: str,
         stub_id: str,
         port: int,
         health_path: str,
         health_port: int,
     ) -> tuple[list[PodBackendContainer], dict[str, PodProxyTarget]]:
-        with self.services.context.database.session() as session:
-            records = ContainerRepository(session).list(
-                workspace_id=workspace_id,
-                statuses=tuple(status.value for status in LIVE_CONTAINER_STATUSES),
-                stub_ids=(stub_id,),
-            )
+        scheduler = self._async_scheduler_container_directory()
+        records, scheduler_states = await asyncio.gather(
+            self._async_database().run_transaction(
+                lambda session: ContainerRepository(session).list(
+                    workspace_id=workspace_id,
+                    statuses=tuple(status.value for status in LIVE_CONTAINER_STATUSES),
+                    stub_ids=(stub_id,),
+                )
+            ),
+            scheduler.list_by_stub(stub_id),
+        )
+        states = {state.container_id: state for state in scheduler_states}
+        address_maps = await scheduler.get_container_address_maps(
+            [container.id for container in records]
+        )
         targets: dict[str, PodProxyTarget] = {}
-        container_clients = self._container_client_factory()
         probe_port = health_port or port
         candidates: list[tuple[str, dict[int, str], PodProxyTarget]] = []
         for container in records:
-            state = container_clients.state_for(container)
+            state = states.get(container.id)
             if state is None:
                 continue
-            if state.stub_id != stub_id or state.status is not SchedulerContainerStatus.Running:
+            if (
+                state.workspace_id != container.workspace_id
+                or state.stub_id != stub_id
+                or state.status is not SchedulerContainerStatus.Running
+            ):
                 continue
-            address_map_record = container_clients.address_map_for(container.id)
+            address_map_record = address_maps[container.id]
             address_map = dict(address_map_record.address_map)
             if not address_map:
                 continue
@@ -1263,17 +1283,36 @@ class PodControlService:
         # means depends on which port went missing. When the probe port is the
         # requested one, the container is already excluded by the port check that
         # follows, and calling it unready as well would turn "this port is not
-        # exposed" — answerable at once — into "nothing is serving yet", which the
+        # exposed", answerable at once, into "nothing is serving yet", which the
         # caller waits out the whole start timeout before hearing. When a declared
         # health port is the one missing, nothing else excludes it, so an
         # unaskable container is unready rather than silently routed to unprobed.
         unprobed_verdict = probe_port == port
-        readiness = self._probe_candidates(
+        readiness = await self._probe_candidates(
             [target for _id, _map, target in candidates if target.address],
             stub_id=stub_id,
             port=probe_port,
             health_path=health_path,
         )
+        # Only a ready container is ever balanced across, so a count for one that
+        # is not costs a Redis round trip nobody reads, and during a cold start
+        # that is every container, every 250ms poll.
+        ready_container_ids = [
+            container_id
+            for container_id, _address_map, _target in candidates
+            if readiness.get(container_id, unprobed_verdict)
+        ]
+        active_counts = await asyncio.gather(
+            *(
+                self._pod_proxy_connections().container_connections(
+                    workspace_id,
+                    stub_id,
+                    container_id,
+                )
+                for container_id in ready_container_ids
+            )
+        )
+        counts_by_container = dict(zip(ready_container_ids, active_counts, strict=True))
         backend_containers: list[PodBackendContainer] = []
         for container_id, address_map, _target in candidates:
             ready = readiness.get(container_id, unprobed_verdict)
@@ -1281,24 +1320,13 @@ class PodControlService:
                 PodBackendContainer(
                     container_id=container_id,
                     address_map=address_map,
-                    # Only a ready container is ever balanced across, so a lookup for
-                    # one that is not costs a Redis round trip nobody reads — and
-                    # during a cold start that is every container, every 250ms poll.
-                    active_connections=(
-                        self._pod_proxy_connections().container_connections(
-                            workspace_name,
-                            stub_id,
-                            container_id,
-                        )
-                        if ready
-                        else 0
-                    ),
+                    active_connections=counts_by_container.get(container_id, 0),
                     ready=ready,
                 )
             )
         return backend_containers, targets
 
-    def _probe_candidates(
+    async def _probe_candidates(
         self,
         targets: list[PodProxyTarget],
         *,
@@ -1306,10 +1334,10 @@ class PodControlService:
         port: int,
         health_path: str,
     ) -> dict[str, bool]:
-        def probe(target: PodProxyTarget) -> tuple[str, bool]:
+        async def probe(target: PodProxyTarget) -> tuple[str, bool]:
             return (
                 target.container_id,
-                self.container_readiness().is_ready(
+                await self._container_readiness().is_ready(
                     container_id=target.container_id,
                     stub_id=stub_id,
                     address=target.address,
@@ -1321,20 +1349,46 @@ class PodControlService:
 
         if not targets:
             return {}
-        with ThreadPoolExecutor(max_workers=len(targets)) as pool:
-            return dict(pool.map(probe, targets))
+        return dict(await asyncio.gather(*(probe(target) for target in targets)))
 
-    def container_readiness(self) -> ContainerReadiness:
+    def _container_readiness(self) -> AsyncContainerReadiness:
         if self.container_readiness_probe is None:
             msg = "container readiness probe is not configured"
             raise RuntimeError(msg)
         return self.container_readiness_probe
 
-    def _pod_proxy_http_client(self) -> PodProxyForwardClient:
-        if self.pod_proxy_http_client is None:
-            msg = "pod proxy HTTP client is not configured"
+    def _async_database(self) -> AsyncDatabaseClient:
+        if self.async_database is None:
+            msg = "pod proxy asynchronous database is not configured"
             raise RuntimeError(msg)
-        return self.pod_proxy_http_client
+        return self.async_database
+
+    def _async_scheduler_container_directory(self) -> AsyncPodSchedulerContainerDirectory:
+        if self.async_scheduler_containers is None:
+            msg = "pod proxy asynchronous scheduler state is not configured"
+            raise RuntimeError(msg)
+        return self.async_scheduler_containers
+
+    def _async_pod_proxy_http_client(self) -> AsyncPodProxyForwardClient:
+        if self.async_pod_proxy_http_client is None:
+            msg = "pod proxy asynchronous HTTP client is not configured"
+            raise RuntimeError(msg)
+        return self.async_pod_proxy_http_client
+
+    @staticmethod
+    def _pinned_sandbox_in_session(
+        session: DatabaseSession,
+        *,
+        container_id: str,
+        workspace_id: str,
+        port: int,
+    ) -> tuple[ContainerRecord | None, bool]:
+        container = ContainerRepository(session).get(container_id, workspace_id=workspace_id)
+        exposure = PodExecutionRepository(session).urls.get(
+            container_id=container_id,
+            port=port,
+        )
+        return container, exposure is not None
 
     def _pod_proxy_socket_client(self) -> PodProxySocketClient:
         if self.pod_proxy_socket_client is None:

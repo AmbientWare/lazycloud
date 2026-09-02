@@ -8,20 +8,24 @@ from datetime import UTC, datetime
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from coordination.redis_client import RedisClient
+from coordination.redis_client import RedisClient, redis_text
 from fastapi.testclient import TestClient
 from observability.workspace_changes import (
     WorkspaceChangeRepository,
     WorkspaceChangeService,
 )
+from pydantic import JsonValue, TypeAdapter
 from redis.typing import EncodableT, FieldT
 from shared.http.workspace_changes import (
     WorkspaceChangeEvent,
     WorkspaceChangeTopic,
     WorkspaceChangeType,
 )
+from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 from tests.service_fixtures import administrator_credential, owned_workspace
+
+_JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
 
 def test_workspace_change_stream_requires_authentication(
@@ -68,15 +72,14 @@ def test_workspace_change_stream_resumes_and_isolates_workspaces(
     assert resumed.headers["content-type"].startswith("text/event-stream")
     assert f"id: {second_default_id}" in resumed.text
     assert "event: workspace.change" in resumed.text
-    assert '"resource_id": "default-second"' in resumed.text
-    assert "default-first" not in resumed.text
-    assert "tenant-only" not in resumed.text
+    assert [
+        (event["workspace_id"], event["resource_id"]) for event in _sse_payloads(resumed.text)
+    ] == [(default.id, "default-second")]
 
     assert tenant_stream.status_code == 200
-    assert '"workspace_id": "' + tenant.id + '"' in tenant_stream.text
-    assert '"resource_id": "tenant-only"' in tenant_stream.text
-    assert "default-first" not in tenant_stream.text
-    assert "default-second" not in tenant_stream.text
+    assert [
+        (event["workspace_id"], event["resource_id"]) for event in _sse_payloads(tenant_stream.text)
+    ] == [(tenant.id, "tenant-only")]
 
 
 def test_workspace_change_stream_starts_at_current_tail(
@@ -87,17 +90,23 @@ def test_workspace_change_stream_starts_at_current_tail(
         workspace_id = isolated_services.context.default_workspace_id(session)
     token, _ = administrator_credential(isolated_services, "admin")
     repository = isolated_services.workspace_changes.repository
-    fake = FakeRedis()
-    repository.redis = RedisClient(fake, key_prefix="test")
     repository.append(_change(workspace_id, "before-connect", event_id="event-before"))
+    broker = isolated_services.require_async_io().realtime
 
-    def publish_after_first_read() -> None:
-        deadline = time.monotonic() + 2
-        while not fake.xread_blocks and time.monotonic() < deadline:
+    # The broker registers the subscriber, and with it the live barrier, before
+    # the response starts, so a change appended once the subscriber count shows
+    # up is the first thing the stream can see.
+    def publish_after_subscribed() -> None:
+        deadline = time.monotonic() + 5
+        while (
+            broker.status().subscribers.get("workspace-changes", 0) == 0
+            and time.monotonic() < deadline
+        ):
             time.sleep(0.001)
+        assert broker.status().subscribers.get("workspace-changes", 0) == 1
         repository.append(_change(workspace_id, "after-connect", event_id="event-after"))
 
-    publisher = threading.Thread(target=publish_after_first_read)
+    publisher = threading.Thread(target=publish_after_subscribed)
     publisher.start()
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
@@ -105,7 +114,7 @@ def test_workspace_change_stream_starts_at_current_tail(
         "/api/v1/events/changes/stream?max_events=1",
         headers=_auth(token),
     )
-    publisher.join(timeout=2)
+    publisher.join(timeout=5)
 
     assert not publisher.is_alive()
     assert response.status_code == 200
@@ -134,26 +143,28 @@ def test_workspace_change_stream_rejects_invalid_resume_cursor(
     }
 
 
-def test_workspace_change_repository_bounds_and_deletes_workspace_streams() -> None:
-    fake = FakeRedis()
-    repository = WorkspaceChangeRepository(
-        RedisClient(fake, key_prefix="test"),
-        max_length=2,
-    )
-    repository.append(_change("workspace-a", "first", event_id="event-first"))
-    repository.append(_change("workspace-a", "second", event_id="event-second"))
-    repository.append(_change("workspace-a", "third", event_id="event-third"))
+def test_workspace_change_repository_bounds_and_deletes_workspace_streams(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    repository = WorkspaceChangeRepository(redis, max_length=25)
+    for index in range(225):
+        repository.append(
+            _change(
+                "workspace-a",
+                f"resource-{index}",
+                event_id=f"event-{index}",
+            )
+        )
     repository.append(_change("workspace-b", "other", event_id="event-other"))
 
-    retained = repository.read_after("workspace-a", "0-0", block_milliseconds=0)
+    retained = _resource_ids(redis, repository, "workspace-a")
 
-    assert [record.event.resource_id for record in retained] == ["second", "third"]
+    assert 0 < len(retained) <= 125
+    assert retained[-1] == "resource-224"
     assert repository.delete_workspace("workspace-a") == 1
-    assert repository.read_after("workspace-a", "0-0", block_milliseconds=0) == ()
-    assert [
-        record.event.resource_id
-        for record in repository.read_after("workspace-b", "0-0", block_milliseconds=0)
-    ] == ["other"]
+    assert _resource_ids(redis, repository, "workspace-a") == []
+    assert _resource_ids(redis, repository, "workspace-b") == ["other"]
 
 
 def test_workspace_change_publication_failure_is_nonfatal() -> None:
@@ -180,6 +191,27 @@ def _change(workspace_id: str, resource_id: str, *, event_id: str) -> WorkspaceC
         change=WorkspaceChangeType.Updated,
         resource_id=resource_id,
     )
+
+
+def _resource_ids(
+    redis: RedisClient,
+    repository: WorkspaceChangeRepository,
+    workspace_id: str,
+) -> list[str]:
+    key = repository.stream_key(workspace_id)
+    return [
+        WorkspaceChangeEvent.model_validate_json(redis_text(fields["event"])).resource_id
+        for _key, entries in redis.stream_read({key: "0-0"}, count=1_000)
+        for _entry_id, fields in entries
+    ]
+
+
+def _sse_payloads(body: str) -> list[dict[str, JsonValue]]:
+    return [
+        _JSON_OBJECT.validate_json(line.removeprefix("data: "))
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
 
 
 def _auth(token: str) -> dict[str, str]:

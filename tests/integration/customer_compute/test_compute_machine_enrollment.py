@@ -3,11 +3,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import shlex
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
 from api.server.workspace_deletion import WorkspaceDeletionService
 from compute.agent_control import agent_machine_worker_id, hash_compute_token
@@ -74,6 +76,16 @@ from tests.service_fixtures import (
 )
 from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
+
+
+@pytest.fixture
+async def async_io(isolated_services: ApiServices) -> AsyncIterator[ApiAsyncIo]:
+    io = isolated_services.require_async_io()
+    await io.start()
+    try:
+        yield io
+    finally:
+        await io.close()
 
 
 class _ProbeConnection:
@@ -890,8 +902,10 @@ def test_machine_join_command_owns_the_account_self_hosted_fleet(
     assert {credential.user_id for credential in credentials} == {user_id}
 
 
-def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_its_owner(
+@pytest.mark.anyio
+async def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_its_owner(
     isolated_services: ApiServices,
+    async_io: ApiAsyncIo,
 ) -> None:
     # Every other enrollment write happens because a heartbeat arrived, which is
     # the one thing a machine that has gone does not do. Without the sweep the row
@@ -915,8 +929,16 @@ def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_its_owne
     )
     silent_at = utc_now() + timedelta(minutes=5)
 
-    marked = gateway.sweep_disconnected_agents(now=silent_at)
-    repeated = gateway.sweep_disconnected_agents(now=silent_at)
+    marked = await gateway.sweep_disconnected_agents(
+        async_io.database,
+        async_io.redis,
+        now=silent_at,
+    )
+    repeated = await gateway.sweep_disconnected_agents(
+        async_io.database,
+        async_io.redis,
+        now=silent_at,
+    )
 
     assert marked == [joined.machine_id]
     assert repeated == []

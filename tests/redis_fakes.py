@@ -330,8 +330,14 @@ class FakeRedis:
         self.published.append((channel, str(message)))
         return 1
 
-    def scan_iter(self, *, match: str, count: int) -> list[RedisWireScalar]:
-        _ = count
+    def scan(
+        self,
+        cursor: int,
+        *,
+        match: str,
+        count: int,
+    ) -> tuple[int, list[RedisWireScalar]]:
+        _ = cursor, count
         keys = (
             set(self.values)
             | set(self.hashes)
@@ -340,7 +346,7 @@ class FakeRedis:
             | set(self.zsets)
             | set(self.streams)
         )
-        return sorted(key for key in keys if fnmatch(key, match))
+        return 0, sorted(key for key in keys if fnmatch(key, match))
 
     def ping(self, **kwargs: RedisWireScalar) -> bool:
         _ = kwargs

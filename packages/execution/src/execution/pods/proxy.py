@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import socket
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from threading import Lock
 from typing import Protocol
 
 from pydantic import Field
@@ -37,12 +37,6 @@ class PodProxyHttpRequest(ContractModel):
     body: bytes = b""
 
 
-class PodProxyHttpResponse(ContractModel):
-    status_code: int = 200
-    headers: dict[str, list[str]] = Field(default_factory=dict)
-    body: bytes = b""
-
-
 @dataclass(frozen=True, slots=True)
 class PodProxyTarget:
     container_id: str
@@ -57,28 +51,17 @@ class PodProxySession:
     target: PodProxyTarget
     keep_warm_seconds: int | None
     pinned: bool = False
-    _finalization_lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _finalization_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _finished: bool = field(default=False, init=False, repr=False)
 
-    @contextmanager
-    def finalization(self) -> Iterator[bool]:
-        with self._finalization_lock:
+    @asynccontextmanager
+    async def finalization(self) -> AsyncIterator[bool]:
+        async with self._finalization_lock:
             if self._finished:
                 yield False
                 return
             yield True
             self._finished = True
-
-
-class PodProxyForwardClient(Protocol):
-    def forward(
-        self,
-        target: PodProxyTarget,
-        request: PodProxyHttpRequest,
-        *,
-        timeout_seconds: float = DEFAULT_POD_PROXY_TIMEOUT_SECONDS,
-        connect_timeout_seconds: float | None = None,
-    ) -> PodProxyHttpResponse: ...
 
 
 class PodProxySocketClient(Protocol):
@@ -91,9 +74,14 @@ class PodProxySocketClient(Protocol):
 
 
 class PodProxyConnectionRepository(Protocol):
-    def container_connections(self, workspace_id: str, stub_id: str, container_id: str) -> int: ...
+    async def container_connections(
+        self,
+        workspace_id: str,
+        stub_id: str,
+        container_id: str,
+    ) -> int: ...
 
-    def increment_container_connections(
+    async def increment_container_connections(
         self,
         workspace_id: str,
         stub_id: str,
@@ -102,7 +90,7 @@ class PodProxyConnectionRepository(Protocol):
         keep_warm_seconds: int | None,
     ) -> int: ...
 
-    def decrement_container_connections(
+    async def decrement_container_connections(
         self,
         workspace_id: str,
         stub_id: str,
@@ -111,43 +99,26 @@ class PodProxyConnectionRepository(Protocol):
         keep_warm_seconds: int | None,
     ) -> int: ...
 
-    def increment_total_connections(self, workspace_id: str, stub_id: str) -> int: ...
+    async def increment_total_connections(self, workspace_id: str, stub_id: str) -> int: ...
 
-    def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int: ...
+    async def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int: ...
 
 
-@dataclass(slots=True)
-class NullPodProxyConnectionRepository:
-    def container_connections(self, workspace_id: str, stub_id: str, container_id: str) -> int:
-        _ = workspace_id, stub_id, container_id
-        return 0
+class PodProxyResponseStream(Protocol):
+    status_code: int
+    headers: dict[str, list[str]]
 
-    def increment_container_connections(
+    def iter_chunks(self) -> AsyncIterator[bytes]: ...
+
+    async def close(self) -> None: ...
+
+
+class AsyncPodProxyForwardClient(Protocol):
+    async def open_stream(
         self,
-        workspace_id: str,
-        stub_id: str,
-        container_id: str,
+        target: PodProxyTarget,
+        request: PodProxyHttpRequest,
         *,
-        keep_warm_seconds: int | None,
-    ) -> int:
-        _ = workspace_id, stub_id, container_id, keep_warm_seconds
-        return 0
-
-    def decrement_container_connections(
-        self,
-        workspace_id: str,
-        stub_id: str,
-        container_id: str,
-        *,
-        keep_warm_seconds: int | None,
-    ) -> int:
-        _ = workspace_id, stub_id, container_id, keep_warm_seconds
-        return 0
-
-    def increment_total_connections(self, workspace_id: str, stub_id: str) -> int:
-        _ = workspace_id, stub_id
-        return 0
-
-    def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int:
-        _ = workspace_id, stub_id
-        return 0
+        timeout_seconds: float = DEFAULT_POD_PROXY_TIMEOUT_SECONDS,
+        connect_timeout_seconds: float | None = None,
+    ) -> PodProxyResponseStream: ...

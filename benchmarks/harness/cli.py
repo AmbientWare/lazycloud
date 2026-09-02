@@ -5,6 +5,20 @@ import os
 import shlex
 from pathlib import Path
 
+from benchmarks.harness.control_plane_stream_setup import (
+    ControlPlaneStreamProvisioningError,
+    run_provisioned_control_plane_stream_benchmark,
+)
+from benchmarks.harness.control_plane_streams import (
+    DEFAULT_CONNECT_SECONDS,
+    DEFAULT_CUSTOMER_STREAMS,
+    DEFAULT_RECOVERY_SECONDS,
+    DEFAULT_RESTART_TIMEOUT_SECONDS,
+    DEFAULT_STEADY_SECONDS,
+    DEFAULT_WORKER_STREAMS,
+    ControlPlaneStreamConfig,
+    run_control_plane_stream_benchmark,
+)
 from benchmarks.harness.latency import (
     DEFAULT_ENDPOINT,
     DEFAULT_RUNS,
@@ -56,15 +70,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the container dispatch-latency benchmark against the Compose stack.",
     )
     parser.add_argument(
+        "--control-plane-streams",
+        action="store_true",
+        help="Run the live customer and worker stream benchmark.",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        help="Use an existing customer and worker manifest instead of provisioning one.",
+    )
+    parser.add_argument(
+        "--restart-command",
+        help="Command that restarts one API replica during the stream benchmark.",
+    )
+    parser.add_argument(
+        "--redis-info-command",
+        default="",
+        help=(
+            "Command printing Redis `INFO clients`; when set, steady-phase client growth "
+            "over the pre-run baseline is sampled and bounded."
+        ),
+    )
+    parser.add_argument("--customer-streams", type=int, default=DEFAULT_CUSTOMER_STREAMS)
+    parser.add_argument("--worker-streams", type=int, default=DEFAULT_WORKER_STREAMS)
+    parser.add_argument("--steady-seconds", type=float, default=DEFAULT_STEADY_SECONDS)
+    parser.add_argument("--connect-seconds", type=float, default=DEFAULT_CONNECT_SECONDS)
+    parser.add_argument("--recovery-seconds", type=float, default=DEFAULT_RECOVERY_SECONDS)
+    parser.add_argument(
+        "--restart-timeout-seconds", type=float, default=DEFAULT_RESTART_TIMEOUT_SECONDS
+    )
+    parser.add_argument(
+        "--run-id",
+        help="Stable benchmark run identifier; defaults to a generated unique value.",
+    )
+    parser.add_argument(
         "--runs",
         type=int,
         help="Latency benchmark deploy-cycle count (per-scenario samples).",
     )
     parser.add_argument(
         "--admin-token",
-        help="Administrator credential for the latency benchmark, required because the "
-        "workspace it creates is owned by the account that creates it. Prefer "
-        "BENCHMARK_ADMIN_TOKEN.",
+        help="Administrator credential for live benchmarks. Prefer BENCHMARK_ADMIN_TOKEN.",
     )
     parser.add_argument(
         "--invoke-timeout-seconds",
@@ -152,12 +198,63 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("--suite cannot be combined with --case")
     if args.sandbox_parallel and (args.suite or args.cases):
         raise SystemExit("--sandbox-parallel cannot be combined with --suite or --case")
-    if args.latency and (args.suite or args.cases or args.sandbox_parallel):
+    if args.latency and (
+        args.suite or args.cases or args.sandbox_parallel or args.control_plane_streams
+    ):
         raise SystemExit("--latency cannot be combined with other benchmark modes")
+    if args.control_plane_streams and (args.suite or args.cases or args.sandbox_parallel):
+        raise SystemExit(
+            "--control-plane-streams cannot be combined with suite, case, or sandbox modes"
+        )
     if args.latency:
         report = run_latency_benchmark(_latency_config(args))
         output = report.to_json() if args.json else report.to_markdown()
         print(output, end="")
+        return
+    if args.control_plane_streams:
+        if not args.run_live:
+            raise SystemExit("--control-plane-streams requires --run-live")
+        if not args.restart_command:
+            raise SystemExit("--control-plane-streams requires --restart-command")
+        try:
+            config = ControlPlaneStreamConfig(
+                endpoint=args.endpoint or os.getenv("BENCHMARK_ENDPOINT") or DEFAULT_ENDPOINT,
+                manifest=args.manifest,
+                restart_command=tuple(shlex.split(args.restart_command)),
+                redis_info_command=tuple(shlex.split(args.redis_info_command)),
+                customer_streams=args.customer_streams,
+                worker_streams=args.worker_streams,
+                steady_seconds=args.steady_seconds,
+                connect_seconds=args.connect_seconds,
+                recovery_seconds=args.recovery_seconds,
+                restart_timeout_seconds=args.restart_timeout_seconds,
+                run_id=args.run_id or "",
+            )
+            report = (
+                run_control_plane_stream_benchmark(config)
+                if args.manifest is not None
+                else run_provisioned_control_plane_stream_benchmark(
+                    config,
+                    admin_token=args.admin_token or os.getenv("BENCHMARK_ADMIN_TOKEN", ""),
+                )
+            )
+        except ControlPlaneStreamProvisioningError as exc:
+            # Provisioning messages are hand-written and name the missing input.
+            raise SystemExit(f"control-plane stream benchmark could not start: {exc}") from None
+        except (OSError, ValueError) as exc:
+            raise SystemExit(
+                f"control-plane stream benchmark could not start: {type(exc).__name__}"
+            ) from None
+        output = report.to_json() if args.json else report.to_markdown()
+        if args.output is not None:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(report.to_json(), encoding="utf-8")
+        if args.report is not None:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(report.to_markdown(), encoding="utf-8")
+        print(output, end="")
+        if not report.passed:
+            raise SystemExit(1)
         return
     if args.sandbox_parallel:
         config = _sandbox_parallel_config(args)

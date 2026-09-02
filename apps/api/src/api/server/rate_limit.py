@@ -4,8 +4,8 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from coordination.rate_limit import try_consume
-from coordination.redis_client import RedisClient
+from coordination.rate_limit import try_consume_async
+from coordination.redis_client import AsyncRedisClient
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from api.server.client_address import client_address
@@ -70,7 +70,7 @@ class UnauthenticatedRateLimitMiddleware:
     app: ASGIApp
     # Resolved per request: services are published on app state at startup,
     # after middleware is registered.
-    redis: Callable[[], RedisClient]
+    redis: Callable[[], AsyncRedisClient]
     client_ip_header: str = ""
     limits: tuple[UnauthenticatedRouteLimit, ...] = field(default=DEFAULT_UNAUTHENTICATED_LIMITS)
 
@@ -82,7 +82,7 @@ class UnauthenticatedRateLimitMiddleware:
             str(scope.get("path") or "/"),
             str(scope.get("method") or ""),
         )
-        if limit is not None and not self._admit(scope, limit):
+        if limit is not None and not await self._admit(scope, limit):
             await _refuse(send)
             return
         await self.app(scope, receive, send)
@@ -93,20 +93,20 @@ class UnauthenticatedRateLimitMiddleware:
                 return limit
         return None
 
-    def _admit(self, scope: Scope, limit: UnauthenticatedRouteLimit) -> bool:
+    async def _admit(self, scope: Scope, limit: UnauthenticatedRouteLimit) -> bool:
         # An unresolvable address shares one bucket rather than escaping the
         # limiter entirely.
         address = client_address(scope, header_name=self.client_ip_header) or "unknown"
         try:
             redis = self.redis()
-            if not try_consume(
+            if not await try_consume_async(
                 redis,
                 f"ratelimit:{limit.prefix}:addr:{address}",
                 limit=limit.per_address_per_minute,
                 window_seconds=_WINDOW_SECONDS,
             ):
                 return False
-            return try_consume(
+            return await try_consume_async(
                 redis,
                 f"ratelimit:{limit.prefix}:global",
                 limit=limit.global_per_minute,

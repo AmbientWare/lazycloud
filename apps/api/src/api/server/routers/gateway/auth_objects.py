@@ -21,8 +21,13 @@ from shared.http.objects import (
 )
 
 from api.server.auth import read_workspace, write_workspace
-from api.server.dependencies import AuthorizationCredentials, authorization_header
+from api.server.dependencies import (
+    AuthorizationCredentials,
+    authorization_header,
+    current_services,
+)
 from api.server.service_dependencies import gateway_service
+from api.server.services import ApiServices
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
 
@@ -71,6 +76,7 @@ async def put_object_stream(
     overwrite: bool = Query(False),
     content_length: int | None = Header(None, ge=0),
     service: GatewayControlService = Depends(gateway_service),
+    services: ApiServices = Depends(current_services),
 ) -> PutObjectResponse:
     if content_length is not None and content_length != size:
         raise InvalidInputError("content length does not match object size")
@@ -93,6 +99,7 @@ async def put_object_stream(
         upload_request,
         request.stream(),
         workspace_id=workspace_id,
+        database=services.require_async_io().database,
     )
 
 

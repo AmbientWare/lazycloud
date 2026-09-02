@@ -6,14 +6,17 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from uuid import uuid4
 
 import uvicorn
+from anyio.to_thread import current_default_thread_limiter
 from compute.aws_connections import AwsAccountConnectionService
 from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
-from coordination.process_presence import RedisProcessPresence, presence_refresh_interval
-from coordination.redis_client import RedisClient
-from coordination.token_lock import renew_token_lock, try_acquire_token_lock
+from coordination.process_presence import AsyncRedisProcessPresence, presence_refresh_interval
+from coordination.redis_client import AsyncRedisClient, RedisPoolStatus
+from coordination.stream_tail import RedisStreamTailStatus
+from coordination.token_lock import renew_token_lock_async, try_acquire_token_lock_async
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.pods.service import PodControlService
@@ -23,7 +26,7 @@ from execution.volumes.control import VolumeControlService
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from gateway.events import (
-    GatewayEventSink,
+    AsyncGatewayEventSink,
     GatewayRequestEventMiddleware,
     authorization_header_from_scope,
 )
@@ -48,6 +51,7 @@ from starlette.types import Scope
 
 from api.control_runtime import ControlPlaneRuntime
 from api.server import include_api_routers, service_dependencies
+from api.server.async_io import ApiAsyncIo
 from api.server.host_routing import GeneratedInvokeHostRoutingMiddleware
 from api.server.rate_limit import UnauthenticatedRateLimitMiddleware
 from api.server.services import (
@@ -59,11 +63,11 @@ from api.server.tcp_ingress import tcp_ingress_server_from_settings
 from api.server.worker_repository_service import WorkerRepositoryService
 from api.settings import PublicIngressSettings
 from api.web_static import mount_web_app
-from database import ControlPlaneRecoveryFence
+from database import AsyncControlPlaneRecoveryFence, DatabasePoolStatus
 
 logger = logging.getLogger(__name__)
 
-# The port the API serves inside its container, which the service forwards to.
+_RUNTIME_PRESSURE_INTERVAL_SECONDS = 1.0
 
 _DOMAIN_ERROR_STATUS: dict[type[DomainError], int] = {
     DomainError: status.HTTP_400_BAD_REQUEST,
@@ -124,98 +128,67 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
         cleanup_failures.clear()
         try:
             async with AsyncExitStack() as cleanup:
-                telemetry = setup_telemetry(runtime.telemetry_config)
-                cleanup.callback(
-                    _capture_cleanup_failure,
-                    cleanup_failures,
-                    telemetry.shutdown,
-                )
-                cleanup.callback(
-                    _capture_cleanup_failure,
-                    cleanup_failures,
-                    runtime.stop,
-                )
-                api_services = runtime.start()
-                cleanup.callback(
-                    _unpublish_api_services,
-                    lifespan_app,
-                    api_services,
+
+                def on_close(release: Callable[[], Awaitable[None]]) -> None:
+                    cleanup.push_async_callback(_capture_cleanup_failure, cleanup_failures, release)
+
+                def spawn(coroutine: Coroutine[None, None, None]) -> None:
+                    on_close(partial(_cancel_task, _create_background_task(coroutine)))
+
+                telemetry = await asyncio.to_thread(setup_telemetry, runtime.telemetry_config)
+                on_close(partial(asyncio.to_thread, telemetry.shutdown))
+                on_close(partial(asyncio.to_thread, runtime.stop))
+                api_services = await asyncio.to_thread(runtime.start)
+                async_io = api_services.require_async_io()
+                on_close(async_io.close)
+                await async_io.start()
+                spawn(_observe_runtime_pressure(api_services, async_io))
+                cleanup.callback(_unpublish_api_services, lifespan_app, api_services)
+                await api_services.workspace_compute_policy_service.reconcile_capacity_at_startup(
+                    async_io.database
                 )
                 route_repository = service_dependencies.worker_repository_service(api_services)
-                tcp_ingress = tcp_ingress_server_from_settings(
+                tcp_ingress = await tcp_ingress_server_from_settings(
                     api_services,
                     service_dependencies.pod_service(api_services),
                     api_services.tcp_ingress_settings,
                 )
-                recovery_fence = ControlPlaneRecoveryFence(api_services.context.database)
-                cleanup.callback(
-                    _capture_cleanup_failure,
-                    cleanup_failures,
-                    recovery_fence.stop_serving,
-                )
-                recovery_fence.start_serving()
+                recovery_fence = AsyncControlPlaneRecoveryFence(async_io.database)
+                on_close(recovery_fence.stop_serving)
+                await recovery_fence.start_serving()
                 if tcp_ingress is not None:
-                    cleanup.push_async_callback(
-                        _capture_async_cleanup_failure,
-                        cleanup_failures,
-                        tcp_ingress.close,
-                    )
+                    on_close(tcp_ingress.close)
                     await tcp_ingress.start()
-                route_reconciliation = _create_background_task(
+                spawn(
                     _reconcile_agent_routes(
                         route_repository,
-                        api_services.redis_client,
+                        async_io,
                         interval_seconds=(
                             api_services.agent_route_reconciliation_settings.interval_seconds
                         ),
                         event_sink=api_services.events,
                     )
                 )
-                cleanup.push_async_callback(
-                    _capture_task_cleanup_failure,
-                    cleanup_failures,
-                    route_reconciliation,
-                )
-                intake_presence = _create_background_task(
-                    _publish_agent_intake_presence(
-                        api_services.redis_client,
-                        utc_now(),
-                    )
-                )
-                cleanup.push_async_callback(
-                    _capture_task_cleanup_failure,
-                    cleanup_failures,
-                    intake_presence,
-                )
-                disconnect_reconciliation = _create_background_task(
+                spawn(_publish_agent_intake_presence(async_io.redis, utc_now()))
+                spawn(
                     _reconcile_agent_disconnects(
                         api_services.gateway_service,
-                        api_services.redis_client,
+                        async_io,
                         interval_seconds=(
                             api_services.agent_disconnect_reconciliation_settings.interval_seconds
                         ),
                         event_sink=api_services.events,
                     )
                 )
-                cleanup.push_async_callback(
-                    _capture_task_cleanup_failure,
-                    cleanup_failures,
-                    disconnect_reconciliation,
-                )
                 if api_services.aws_connections is not None:
                     reconciliation = api_services.aws_capacity_reconciliation_settings
-                    aws_connection_reconciliation = _create_background_task(
+                    spawn(
                         _reconcile_aws_connections(
                             api_services.aws_connections,
                             interval_seconds=reconciliation.interval_seconds,
                             limit=reconciliation.limit,
                             event_sink=api_services.events,
                         )
-                    )
-                    cleanup.push_async_callback(
-                        _capture_task_cleanup_failure,
-                        cleanup_failures,
-                        aws_connection_reconciliation,
                     )
                 _publish_api_services(lifespan_app, api_services)
                 yield
@@ -246,7 +219,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
     )
     app.add_middleware(
         UnauthenticatedRateLimitMiddleware,
-        redis=lambda: services_provider.current().redis(),
+        redis=lambda: services_provider.current().require_async_io().redis,
         client_ip_header=public_ingress.client_ip_header,
     )
     app.add_middleware(
@@ -321,8 +294,8 @@ def create_production_app() -> FastAPI:
     return _create_app(runtime)
 
 
-def _emit_reconciliation_failure(
-    event_sink: GatewayEventSink | None,
+async def _emit_reconciliation_failure(
+    event_sink: AsyncGatewayEventSink | None,
     loop_name: str,
     exc: Exception,
 ) -> None:
@@ -330,7 +303,7 @@ def _emit_reconciliation_failure(
     if event_sink is None:
         return
     with suppress(Exception):
-        event_sink.emit(
+        await event_sink.emit_async(
             f"reconciliation.{loop_name}.failed",
             resource_type="reconciliation-loop",
             resource_id=loop_name,
@@ -342,10 +315,10 @@ def _emit_reconciliation_failure(
 
 async def _reconcile_agent_routes(
     repository: WorkerRepositoryService,
-    redis: RedisClient,
+    async_io: ApiAsyncIo,
     *,
     interval_seconds: float,
-    event_sink: GatewayEventSink | None = None,
+    event_sink: AsyncGatewayEventSink | None = None,
 ) -> None:
     """Remove routes whose backend is gone, from one control plane at a time.
 
@@ -354,6 +327,7 @@ async def _reconcile_agent_routes(
     lease is renewed rather than released, so the winner keeps the work while it
     is alive and another takes over only once its lease expires unrenewed.
     """
+    redis = async_io.redis
     lease_key = redis.key("control-plane", "leases", "agent-routes")
     holder = str(uuid4())
     lease_seconds = max(int(interval_seconds * 3), 2)
@@ -363,15 +337,15 @@ async def _reconcile_agent_routes(
             # Renewing is not the same call as acquiring. Acquisition is `nx`, so
             # a holder asking for its own live lease is refused and would hand
             # the work to nobody every other cycle.
-            holding = holding and renew_token_lock(
+            holding = holding and await renew_token_lock_async(
                 redis, lease_key, holder, ttl_seconds=lease_seconds
             )
             if not holding:
-                holding = try_acquire_token_lock(
+                holding = await try_acquire_token_lock_async(
                     redis, lease_key, holder, ttl_seconds=lease_seconds
                 )
             if holding:
-                result = await asyncio.to_thread(repository.reconcile_orphan_agent_routes)
+                result = await repository.reconcile_orphan_agent_routes(async_io)
                 if result.removed:
                     logger.info(
                         "reconciled agent route registry: scanned=%s removed=%s",
@@ -381,12 +355,12 @@ async def _reconcile_agent_routes(
         except Exception as exc:
             holding = False
             logger.exception("agent route registry reconciliation failed")
-            _emit_reconciliation_failure(event_sink, "agent-routes", exc)
+            await _emit_reconciliation_failure(event_sink, "agent-routes", exc)
         await asyncio.sleep(max(interval_seconds, 0.1))
 
 
 async def _publish_agent_intake_presence(
-    redis: RedisClient,
+    redis: AsyncRedisClient,
     started_at: datetime,
 ) -> None:
     """Say that this process is receiving agent heartbeats, and keep saying it.
@@ -401,12 +375,12 @@ async def _publish_agent_intake_presence(
     start, because the question readers ask is whether *some* intake was up.
     """
 
-    presence = RedisProcessPresence(redis, AGENT_INTAKE_PRESENCE_ROLE)
+    presence = AsyncRedisProcessPresence(redis, AGENT_INTAKE_PRESENCE_ROLE)
     interval_seconds = presence_refresh_interval(presence.ttl_seconds)
     try:
         while True:
             try:
-                await asyncio.to_thread(presence.publish, started_at)
+                await presence.publish(started_at)
             except Exception:
                 # Reported and retried: the key carries a TTL, so a failed
                 # refresh is a countdown rather than a disappearance, and the
@@ -415,15 +389,15 @@ async def _publish_agent_intake_presence(
             await asyncio.sleep(interval_seconds)
     finally:
         with suppress(Exception):
-            await asyncio.to_thread(presence.withdraw)
+            await presence.withdraw()
 
 
 async def _reconcile_agent_disconnects(
     gateway: GatewayControlService,
-    redis: RedisClient,
+    async_io: ApiAsyncIo,
     *,
     interval_seconds: float,
-    event_sink: GatewayEventSink | None = None,
+    event_sink: AsyncGatewayEventSink | None = None,
 ) -> None:
     """Write off machines that stopped reporting, from one control plane at a time.
 
@@ -436,21 +410,25 @@ async def _reconcile_agent_disconnects(
     under its own row lock. Renewed rather than released, so the winner keeps
     the work while it is alive.
     """
+    redis = async_io.redis
     lease_key = redis.key("control-plane", "leases", "agent-disconnects")
     holder = str(uuid4())
     lease_seconds = max(int(interval_seconds * 3), 2)
     holding = False
     while True:
         try:
-            holding = holding and renew_token_lock(
+            holding = holding and await renew_token_lock_async(
                 redis, lease_key, holder, ttl_seconds=lease_seconds
             )
             if not holding:
-                holding = try_acquire_token_lock(
+                holding = await try_acquire_token_lock_async(
                     redis, lease_key, holder, ttl_seconds=lease_seconds
                 )
             if holding:
-                marked = await asyncio.to_thread(gateway.sweep_disconnected_agents)
+                marked = await gateway.sweep_disconnected_agents(
+                    async_io.database,
+                    async_io.redis,
+                )
                 if marked:
                     logger.info(
                         "marked agent machines disconnected: %s",
@@ -459,7 +437,7 @@ async def _reconcile_agent_disconnects(
         except Exception as exc:
             holding = False
             logger.exception("agent disconnect reconciliation failed")
-            _emit_reconciliation_failure(event_sink, "agent-disconnects", exc)
+            await _emit_reconciliation_failure(event_sink, "agent-disconnects", exc)
         await asyncio.sleep(max(interval_seconds, 0.1))
 
 
@@ -468,7 +446,7 @@ async def _reconcile_aws_connections(
     *,
     interval_seconds: float,
     limit: int,
-    event_sink: GatewayEventSink | None = None,
+    event_sink: AsyncGatewayEventSink | None = None,
 ) -> None:
     while True:
         try:
@@ -483,8 +461,164 @@ async def _reconcile_aws_connections(
                 )
         except Exception as exc:
             logger.exception("AWS connection reconciliation failed")
-            _emit_reconciliation_failure(event_sink, "aws-connections", exc)
+            await _emit_reconciliation_failure(event_sink, "aws-connections", exc)
         await asyncio.sleep(max(interval_seconds, 0.1))
+
+
+async def _observe_runtime_pressure(services: ApiServices, async_io: ApiAsyncIo) -> None:
+    loop = asyncio.get_running_loop()
+    sample_at = loop.time() + _RUNTIME_PRESSURE_INTERVAL_SECONDS
+    while True:
+        await asyncio.sleep(max(sample_at - loop.time(), 0))
+        observed_at = loop.time()
+        lag_seconds = max(observed_at - sample_at, 0)
+        try:
+            _record_runtime_pressure(services, async_io, lag_seconds)
+        except Exception:
+            logger.exception("API runtime pressure metrics were not recorded")
+        sample_at = observed_at + _RUNTIME_PRESSURE_INTERVAL_SECONDS
+
+
+def _record_runtime_pressure(
+    services: ApiServices,
+    async_io: ApiAsyncIo,
+    lag_seconds: float,
+) -> None:
+    services.metrics.set_gauge("api_event_loop_lag_seconds", lag_seconds)
+    services.metrics.observe_histogram("api_event_loop_lag_seconds_histogram", lag_seconds)
+
+    thread_pool = current_default_thread_limiter().statistics()
+    capacity = float(thread_pool.total_tokens)
+    services.metrics.set_gauge(
+        "api_threadpool_threads",
+        thread_pool.borrowed_tokens,
+        labels={"state": "borrowed"},
+    )
+    services.metrics.set_gauge(
+        "api_threadpool_threads",
+        capacity,
+        labels={"state": "capacity"},
+    )
+    services.metrics.set_gauge(
+        "api_threadpool_waiting_tasks",
+        thread_pool.tasks_waiting,
+    )
+    services.metrics.set_gauge(
+        "api_threadpool_pressure_ratio",
+        thread_pool.borrowed_tokens / capacity if capacity > 0 else 1,
+    )
+
+    _record_database_pool_metrics(
+        services,
+        client="sync",
+        status=services.context.database.pool_status(),
+    )
+    _record_database_pool_metrics(
+        services,
+        client="async",
+        status=async_io.database.pool_status(),
+    )
+    _record_redis_pool_metrics(
+        services,
+        client="sync-text",
+        status=services.redis().pool_status(),
+    )
+    _record_redis_pool_metrics(
+        services,
+        client="sync-binary",
+        status=services.binary_redis().pool_status(),
+    )
+    _record_redis_pool_metrics(
+        services,
+        client="async-text",
+        status=async_io.redis.pool_status(),
+    )
+    _record_redis_pool_metrics(
+        services,
+        client="async-binary",
+        status=async_io.binary_redis.pool_status(),
+    )
+    _record_realtime_metrics(services, async_io.realtime.status())
+
+
+def _record_realtime_metrics(services: ApiServices, status: RedisStreamTailStatus) -> None:
+    services.metrics.set_gauge("api_realtime_stream_sources", status.sources)
+    for kind, count in status.subscribers.items():
+        services.metrics.set_gauge(
+            "api_realtime_stream_subscribers",
+            count,
+            labels={"kind": kind},
+        )
+    for kind, count in status.overflows.items():
+        services.metrics.set_gauge(
+            "api_realtime_stream_overflows_total",
+            count,
+            labels={"kind": kind},
+        )
+    services.metrics.set_gauge("api_realtime_stream_reader_failures_total", status.reader_failures)
+    services.metrics.set_gauge("api_realtime_stream_healthy", float(status.healthy))
+
+
+def _record_database_pool_metrics(
+    services: ApiServices,
+    *,
+    client: str,
+    status: DatabasePoolStatus | None,
+) -> None:
+    if status is None:
+        return
+    labels = {"backend": "database", "client": client}
+    for state, value in (
+        ("in_use", status.checked_out),
+        ("available", status.available),
+        ("capacity", status.capacity),
+    ):
+        services.metrics.set_gauge(
+            "api_io_pool_connections",
+            value,
+            labels=labels | {"state": state},
+        )
+    services.metrics.set_gauge(
+        "api_io_pool_exhausted",
+        float(status.exhausted),
+        labels=labels,
+    )
+    services.metrics.set_gauge(
+        "api_io_pool_exhaustions_total",
+        status.exhaustions_total,
+        labels=labels,
+    )
+
+
+def _record_redis_pool_metrics(
+    services: ApiServices,
+    *,
+    client: str,
+    status: RedisPoolStatus | None,
+) -> None:
+    if status is None:
+        return
+    labels = {"backend": "redis", "client": client}
+    for state, value in (
+        ("in_use", status.in_use),
+        ("idle", status.idle),
+        ("capacity", status.capacity),
+    ):
+        services.metrics.set_gauge(
+            "api_io_pool_connections",
+            value,
+            labels=labels | {"state": state},
+        )
+    services.metrics.set_gauge(
+        "api_io_pool_exhausted",
+        float(status.exhausted),
+        labels=labels,
+    )
+    services.metrics.set_gauge(
+        "api_io_pool_exhaustions_total",
+        status.exhaustions_total,
+        labels=labels,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -502,7 +636,7 @@ class _FastApiServicesProvider:
 class _CurrentGatewayEventSink:
     services_provider: _FastApiServicesProvider
 
-    def emit(
+    async def emit_async(
         self,
         action: str,
         *,
@@ -513,7 +647,7 @@ class _CurrentGatewayEventSink:
         data: dict[str, JsonValue] | None = None,
         workspace_id: str | None = None,
     ) -> Event:
-        return self.services_provider.current().events.emit(
+        return await self.services_provider.current().events.emit_async(
             action,
             resource_type=resource_type,
             resource_id=resource_id,
@@ -548,37 +682,38 @@ class _CurrentGatewayMetricsSink:
             name, value, labels=labels
         )
 
+    def set_gauge(
+        self,
+        name: str,
+        value: float,
+        *,
+        labels: dict[str, str] | None = None,
+    ) -> object:
+        return self.services_provider.current().metrics.set_gauge(name, value, labels=labels)
+
 
 @dataclass(frozen=True, slots=True)
 class _CurrentWorkspaceResolver:
     services_provider: _FastApiServicesProvider
 
-    def __call__(self, scope: Scope) -> str:
+    async def __call__(self, scope: Scope) -> str:
         services = self.services_provider.current()
         authorization = authorization_header_from_scope(scope)
         if not authorization:
             return ""
         try:
-            token = services.auth.authenticate_header(
+            async_io = services.require_async_io()
+            token = await services.auth.authenticate_header_async(
+                async_io.database,
+                async_io.auth_invalidation,
                 authorization,
-                allow_if_no_tokens=False,
             )
         except AuthError:
             return ""
-        return token.workspace_id if token is not None else ""
+        return token.workspace_id
 
 
-def _capture_cleanup_failure(
-    failures: list[Exception],
-    cleanup: Callable[[], None],
-) -> None:
-    try:
-        cleanup()
-    except Exception as exc:
-        failures.append(exc)
-
-
-async def _capture_async_cleanup_failure(
+async def _capture_cleanup_failure(
     failures: list[Exception],
     cleanup: Callable[[], Awaitable[None]],
 ) -> None:
@@ -588,16 +723,10 @@ async def _capture_async_cleanup_failure(
         failures.append(exc)
 
 
-async def _capture_task_cleanup_failure(
-    failures: list[Exception],
-    task: asyncio.Task[None],
-) -> None:
-    try:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-    except Exception as exc:
-        failures.append(exc)
+async def _cancel_task(task: asyncio.Task[None]) -> None:
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
 
 
 def _create_background_task(

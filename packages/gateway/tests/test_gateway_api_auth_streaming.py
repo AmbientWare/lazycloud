@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import sys
+import threading
 from collections.abc import Iterator
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 import pytest
 from api.fastapi_app import create_app
@@ -24,11 +28,11 @@ from shared.compute_policy import (
 )
 from shared.contracts import ContractModel
 from shared.events import EventLevel
-from shared.identity import AuthScope, TokenKind
+from shared.identity import TokenKind
 from shared.worker_events import GATEWAY_REQUEST_EVENT_ACTION
 from starlette.types import Receive, Scope, Send
 from storage.service import ObjectStorage
-from storage_client.s3 import S3ObjectInfo
+from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
 from tests.redis_fakes import FakeRedis
 from tests.service_fixtures import owned_workspace
 from worker.container_client import models
@@ -42,10 +46,8 @@ _GATEWAY_RPC_PATHS = {
     "/gateway/agents/routes",
     "/gateway/agents/routes/status",
     "/gateway/agents/stream",
-    "/gateway/agents/stream/events",
     "/gateway/agents/private-network",
     "/gateway/agents/telemetry",
-    "/gateway/agents/telemetry/stream",
     "/gateway/agents/transport-credential",
     "/gateway/authorize",
     "/gateway/client-manifests",
@@ -215,11 +217,12 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
     assert denied.status_code == 403
 
 
-def test_gateway_raw_object_upload_uses_file_spool_and_download_redirect(
+def test_gateway_raw_object_upload_streams_to_object_store_and_download_redirect(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
     object_client = _ObjectClient()
+    object_client.upload_origin = client_stack.enter_context(_serve_object_uploads(object_client))
     object_storage = ObjectStorage(isolated_services.context, object_client=object_client)
     gateway_service = replace(
         isolated_services.gateway_service,
@@ -268,8 +271,7 @@ def test_gateway_raw_object_upload_uses_file_spool_and_download_redirect(
 
     assert uploaded.status_code == 200
     assert _response_string(uploaded, "object_id") == _response_string(repeated, "object_id")
-    assert object_client.put_file_payloads == [content]
-    assert object_client.put_bytes_called is False
+    assert object_client.http_upload_payloads == [content, content]
     assert object_client.exists(physical_key, bucket=physical_bucket)
     assert redirected.status_code == 307
     assert redirected.headers["location"].endswith(f"/{physical_bucket}/{physical_key}")
@@ -284,7 +286,7 @@ def test_gateway_raw_object_upload_uses_file_spool_and_download_redirect(
 
     assert repaired.status_code == 200
     assert _response_string(repaired, "object_id") == _response_string(uploaded, "object_id")
-    assert object_client.put_file_payloads == [content, content]
+    assert object_client.http_upload_payloads == [content, content, content]
     assert object_client.exists(physical_key, bucket=physical_bucket)
 
 
@@ -293,6 +295,7 @@ def test_gateway_object_stream_requires_auth_and_exact_content_proof(
     client_stack: ExitStack,
 ) -> None:
     object_client = _ObjectClient()
+    object_client.upload_origin = client_stack.enter_context(_serve_object_uploads(object_client))
     gateway_service = replace(
         isolated_services.gateway_service,
         compute_state=RedisComputeStateRepository(_redis()),
@@ -374,10 +377,10 @@ def test_gateway_object_stream_requires_auth_and_exact_content_proof(
 
     assert created.status_code == 200
     assert conflicted.status_code == 409
-    assert object_client.put_file_payloads == [content]
+    assert object_client.http_upload_payloads == [content]
 
 
-def test_gateway_attach_and_agent_streams_emit_sse(
+def test_gateway_container_attach_emits_sse(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
@@ -409,22 +412,10 @@ def test_gateway_attach_and_agent_streams_emit_sse(
         json={"container_id": container.id},
         headers=_auth(admin_token),
     )
-    machine_token, _ = AuthService(isolated_services.context).create_token(
-        "agent-machine",
-        scopes=[AuthScope.Machine.value],
-        kind=TokenKind.WorkerPrivate,
-    )
-    agent = client.get(
-        "/gateway/agents/stream/events?agent_token=missing&max_events=1",
-        headers=_auth(machine_token),
-    )
-
     assert attach.status_code == 200
     assert ": connected" in attach.text
     assert _response_object(attach_snapshot)["input_supported"] is False
     assert _response_string(attach_snapshot, "attach_contract") == "sse-output-only"
-    assert agent.status_code == 200
-    assert "event: agent.error" in agent.text
 
 
 def test_gateway_task_routes_do_not_cross_workspace_boundaries(
@@ -456,26 +447,6 @@ def test_gateway_task_routes_do_not_cross_workspace_boundaries(
     assert _response_object(stopped)["stopped"] == []
     assert _response_object(stopped)["skipped"] == [task_b.id]
     assert fetched.status_code == 404
-
-
-def _services_with_redis(
-    isolated_services: ApiServices,
-    redis: RedisClient,
-    request: pytest.FixtureRequest,
-) -> ApiServices:
-    services = ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        create_schema=False,
-        workspace_storage_issuer=isolated_services.workspace_storage_issuer,
-        volume_filesystem=isolated_services.volume_filesystem,
-        redis_client=redis,
-        binary_redis_client=isolated_services.binary_redis_client,
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-    )
-    request.addfinalizer(services.close)
-    return services
 
 
 def test_gateway_request_events_persist_only_server_errors(
@@ -588,10 +559,10 @@ class _RecordingTransportFactory:
 
 @dataclass
 class _ObjectClient:
-    put_file_payloads: list[bytes] = field(default_factory=list)
+    http_upload_payloads: list[bytes] = field(default_factory=list)
     objects: dict[tuple[str, str], bytes] = field(default_factory=dict)
     object_metadata: dict[tuple[str, str], dict[str, str]] = field(default_factory=dict)
-    put_bytes_called: bool = False
+    upload_origin: str = ""
 
     def put_bytes(
         self,
@@ -602,9 +573,11 @@ class _ObjectClient:
         content_type: str = "application/octet-stream",
         metadata: dict[str, str] | None = None,
     ) -> S3ObjectInfo:
-        del key, data, bucket, content_type, metadata
-        self.put_bytes_called = True
-        raise AssertionError("raw upload should not use put_bytes")
+        del content_type
+        location = (bucket or "default", key)
+        self.objects[location] = data
+        self.object_metadata[location] = dict(metadata or {})
+        return S3ObjectInfo(bucket=location[0], key=key, size=len(data))
 
     def put_file(
         self,
@@ -615,13 +588,13 @@ class _ObjectClient:
         content_type: str = "application/octet-stream",
         metadata: dict[str, str] | None = None,
     ) -> S3ObjectInfo:
-        del content_type
-        payload = Path(source).read_bytes()
-        self.put_file_payloads.append(payload)
-        location = (bucket or "default", key)
-        self.objects[location] = payload
-        self.object_metadata[location] = dict(metadata or {})
-        return S3ObjectInfo(bucket=bucket or "default", key=key, size=len(payload))
+        return self.put_bytes(
+            key,
+            Path(source).read_bytes(),
+            bucket=bucket,
+            content_type=content_type,
+            metadata=metadata,
+        )
 
     def read_bytes(self, key: str, *, bucket: str | None = None) -> bytes:
         return self.objects[(bucket or "default", key)]
@@ -660,8 +633,39 @@ class _ObjectClient:
         content_length: int = 0,
         content_type: str = "application/octet-stream",
     ) -> str:
-        del bucket, expires_seconds, content_length, content_type
-        return f"https://objects.test/put/{key}"
+        del expires_seconds, content_length, content_type
+        if not self.upload_origin:
+            raise RuntimeError("test object upload receiver is not running")
+        encoded_bucket = quote(bucket or "default", safe="")
+        encoded_key = quote(key, safe="")
+        return f"{self.upload_origin}/{encoded_bucket}/{encoded_key}"
+
+    def generate_presigned_put(
+        self,
+        key: str,
+        *,
+        bucket: str | None = None,
+        expires_seconds: int = 3600,
+        content_length: int,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+        checksum_sha256: str = "",
+    ) -> S3PresignedUpload:
+        return S3PresignedUpload(
+            url=self.generate_presigned_put_url(
+                key,
+                bucket=bucket,
+                expires_seconds=expires_seconds,
+                content_length=content_length,
+                content_type=content_type,
+            ),
+            headers={
+                "content-length": str(content_length),
+                "content-type": content_type,
+                **({"x-amz-checksum-sha256": checksum_sha256} if checksum_sha256 else {}),
+                **{f"x-amz-meta-{name}": value for name, value in (metadata or {}).items()},
+            },
+        )
 
     def generate_presigned_get_url(
         self,
@@ -677,3 +681,46 @@ class _ObjectClient:
         location = (bucket or "default", key)
         self.objects.pop(location, None)
         self.object_metadata.pop(location, None)
+
+
+@contextmanager
+def _serve_object_uploads(client: _ObjectClient) -> Iterator[str]:
+    class UploadHandler(BaseHTTPRequestHandler):
+        def do_PUT(self) -> None:
+            encoded_bucket, separator, encoded_key = self.path.removeprefix("/").partition("/")
+            if not separator:
+                self.send_error(400)
+                return
+            content_length = int(self.headers.get("content-length", "0"))
+            payload = self.rfile.read(content_length)
+            checksum = self.headers.get("x-amz-checksum-sha256", "")
+            actual_checksum = base64.b64encode(hashlib.sha256(payload).digest()).decode("ascii")
+            if checksum and checksum != actual_checksum:
+                self.send_error(400)
+                return
+            location = (unquote(encoded_bucket), unquote(encoded_key))
+            client.http_upload_payloads.append(payload)
+            client.objects[location] = payload
+            client.object_metadata[location] = {
+                name.lower().removeprefix("x-amz-meta-"): value
+                for name, value in self.headers.items()
+                if name.lower().startswith("x-amz-meta-")
+            }
+            self.send_response(200)
+            self.send_header("content-length", "0")
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), UploadHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host = str(server.server_address[0])
+        port = int(server.server_address[1])
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

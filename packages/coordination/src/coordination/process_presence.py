@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from shared.timestamps import to_utc, utc_now
 
-from coordination.redis_client import RedisClient, redis_text
+from coordination.redis_client import AsyncRedisClient, RedisClient, redis_text
 from coordination.redis_serialization import redis_strings
 
 PROCESS_PRESENCE_NAMESPACE = "process-presence"
@@ -38,26 +38,6 @@ class RedisProcessPresence:
 
     redis: RedisClient
     role: str
-    ttl_seconds: int = DEFAULT_PRESENCE_TTL_SECONDS
-    process_id: str = field(default_factory=lambda: str(uuid4()))
-
-    def key(self) -> str:
-        return self._key_for(self.process_id)
-
-    def index_key(self) -> str:
-        return self.redis.key(PROCESS_PRESENCE_NAMESPACE, self._role(), "index")
-
-    def publish(self, started_at: datetime) -> None:
-        """Announce this process, and keep announcing it on every call."""
-
-        key = self.key()
-        self.redis.set(key, to_utc(started_at).isoformat(), ex=self.ttl_seconds)
-        self.redis.set_add(self.index_key(), key)
-
-    def withdraw(self) -> None:
-        key = self.key()
-        self.redis.delete(key)
-        self.redis.set_remove(self.index_key(), key)
 
     def observing_since(self, *, now: datetime | None = None) -> datetime | None:
         """The oldest live start time, or None when nothing of this role answers.
@@ -69,7 +49,7 @@ class RedisProcessPresence:
         """
 
         current_time = now or utc_now()
-        index = self.index_key()
+        index = _index_key(self.redis, self.role)
         oldest: datetime | None = None
         for member in redis_strings(self.redis.set_members(index)):
             raw = self.redis.get(member)
@@ -85,14 +65,23 @@ class RedisProcessPresence:
                 oldest = started_at
         return oldest
 
-    def _role(self) -> str:
-        role = self.role.strip()
-        if not role:
-            raise ValueError("process presence role is required")
-        return role
 
-    def _key_for(self, process_id: str) -> str:
-        return self.redis.key(PROCESS_PRESENCE_NAMESPACE, self._role(), process_id)
+@dataclass(frozen=True, slots=True)
+class AsyncRedisProcessPresence:
+    redis: AsyncRedisClient
+    role: str
+    ttl_seconds: int = DEFAULT_PRESENCE_TTL_SECONDS
+    process_id: str = field(default_factory=lambda: str(uuid4()))
+
+    async def publish(self, started_at: datetime) -> None:
+        key = _presence_key(self.redis, self.role, self.process_id)
+        await self.redis.set(key, to_utc(started_at).isoformat(), ex=self.ttl_seconds)
+        await self.redis.set_add(_index_key(self.redis, self.role), key)
+
+    async def withdraw(self) -> None:
+        key = _presence_key(self.redis, self.role, self.process_id)
+        await self.redis.delete(key)
+        await self.redis.set_remove(_index_key(self.redis, self.role), key)
 
 
 def presence_refresh_interval(ttl_seconds: int) -> float:
@@ -116,6 +105,21 @@ def observed_for(
     return current_time - since >= window
 
 
+def _index_key(redis: RedisClient | AsyncRedisClient, role: str) -> str:
+    return redis.key(PROCESS_PRESENCE_NAMESPACE, _role_name(role), "index")
+
+
+def _presence_key(redis: RedisClient | AsyncRedisClient, role: str, process_id: str) -> str:
+    return redis.key(PROCESS_PRESENCE_NAMESPACE, _role_name(role), process_id)
+
+
+def _role_name(role: str) -> str:
+    name = role.strip()
+    if not name:
+        raise ValueError("process presence role is required")
+    return name
+
+
 def _parse_started_at(value: str) -> datetime | None:
     try:
         return to_utc(datetime.fromisoformat(value))
@@ -126,6 +130,7 @@ def _parse_started_at(value: str) -> datetime | None:
 __all__ = [
     "DEFAULT_PRESENCE_TTL_SECONDS",
     "PROCESS_PRESENCE_NAMESPACE",
+    "AsyncRedisProcessPresence",
     "ProcessPresenceReader",
     "RedisProcessPresence",
     "observed_for",

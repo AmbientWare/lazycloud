@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -16,7 +17,7 @@ from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
 from foundation.ids import optional_uuid, required_uuid
 from observability.events import EventService
-from observability.workspace_changes import WorkspaceChangePublisher
+from observability.workspace_changes import AsyncWorkspaceChangeService, WorkspaceChangePublisher
 from pydantic import JsonValue
 from shared.containers import TERMINAL_CONTAINER_STATUSES
 from shared.errors import ConflictError, NotFoundError
@@ -37,6 +38,7 @@ from shared.tasks import (
 )
 from shared.timestamps import utc_now
 
+from database import AsyncDatabaseClient
 from execution.callbacks import TaskCallbackDispatcher, TaskCallbackService
 from execution.context import ExecutionContext
 
@@ -48,12 +50,21 @@ class TaskFinishOutcome:
     state_changed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _TaskStartPersistence:
+    task: Task
+    attempt_started: bool
+    attempt_container_id: str | None
+
+
 @dataclass(slots=True)
 class TaskService:
     context: ExecutionContext
     events: EventService
     workspace_changes: WorkspaceChangePublisher | None = None
     callback_dispatcher: TaskCallbackDispatcher | None = None
+    async_database: AsyncDatabaseClient | None = None
+    async_workspace_changes: AsyncWorkspaceChangeService | None = None
 
     def create(
         self,
@@ -205,8 +216,8 @@ class TaskService:
         """Move a task to its next status, from whatever the row currently holds.
 
         The caller's copy is not what gets written. A task is advanced by more
-        than one party — the dispatcher marks it running and binds it to a
-        container, the caller finishes it — so saving the object the caller
+        than one party, the dispatcher marking it running and binding it to a
+        container and the caller finishing it, so saving the object the caller
         happens to be holding silently reverts every field written since it was
         read. That is how endpoint tasks lost the container and start time the
         dispatcher had already recorded.
@@ -216,140 +227,222 @@ class TaskService:
                 task, container_id=container_id or task.container_id, claim=True
             )
         with self.context.database.session() as session:
-            task_repository = TaskRepository(session)
-            current = task_repository.get_for_update_across_workspaces(task.id)
-            if current is None:
-                msg = f"task not found: {task.id}"
-                raise NotFoundError(msg)
-            current.status = status
-            if is_terminal_task_status(status):
-                current.finished_at = utc_now()
-            current.result = result
-            current.function_result = function_result
-            current.error = error
-            current.exit_code = exit_code
-            updated = task_repository.records.upsert_across_workspaces(
-                current,
-                workspace_id=current.workspace_id,
-                name=current.name,
-                status=status.value,
+            updated = self._transition_in_session(
+                session,
+                task,
+                status,
+                result=result,
+                function_result=function_result,
+                error=error,
+                exit_code=exit_code,
             )
-        self._sync_latest_attempt(
-            updated,
-            status,
-            result=result,
-            error=error,
-            exit_code=exit_code,
-        )
-        event_level = (
-            EventLevel.Error
-            if status in {TaskStatus.Failed, TaskStatus.Timeout}
-            else EventLevel.Info
-        )
         self.events.emit(
             f"task.{status.value}",
             resource_type="task",
             resource_id=task.id,
             message=f"task {task.name} {status.value}",
-            level=event_level,
+            level=_task_event_level(status),
             workspace_id=task.workspace_id,
         )
         self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)
         self._deliver_callback(updated)
         return updated
 
+    async def transition_async(
+        self,
+        task: Task,
+        status: TaskStatus,
+        *,
+        container_id: str | None = None,
+        result: JsonValue = None,
+        function_result: FunctionResultPayload | None = None,
+        error: str | None = None,
+        exit_code: int | None = None,
+    ) -> Task:
+        if status is TaskStatus.Running:
+            return await self._start_task_async(
+                task,
+                container_id=container_id or task.container_id,
+                claim=True,
+            )
+        database = self._async_database()
+        updated = await database.run_transaction(
+            lambda session: self._transition_in_session(
+                session,
+                task,
+                status,
+                result=result,
+                function_result=function_result,
+                error=error,
+                exit_code=exit_code,
+            )
+        )
+        await self.events.emit_async(
+            f"task.{status.value}",
+            resource_type="task",
+            resource_id=task.id,
+            message=f"task {task.name} {status.value}",
+            level=_task_event_level(status),
+            workspace_id=task.workspace_id,
+        )
+        await self.publish_lifecycle_change_async(updated, WorkspaceChangeType.Updated)
+        await asyncio.to_thread(self._deliver_callback, updated)
+        return updated
+
+    @staticmethod
+    def _transition_in_session(
+        session: DatabaseSession,
+        task: Task,
+        status: TaskStatus,
+        *,
+        result: JsonValue,
+        function_result: FunctionResultPayload | None,
+        error: str | None,
+        exit_code: int | None,
+    ) -> Task:
+        task_repository = TaskRepository(session)
+        current = task_repository.get_for_update_across_workspaces(task.id)
+        if current is None:
+            raise NotFoundError(f"task not found: {task.id}")
+        current.status = status
+        if is_terminal_task_status(status):
+            current.finished_at = utc_now()
+        current.result = result
+        current.function_result = function_result
+        current.error = error
+        current.exit_code = exit_code
+        updated = task_repository.records.upsert_across_workspaces(
+            current,
+            workspace_id=current.workspace_id,
+            name=current.name,
+            status=status.value,
+        )
+        if status is not TaskStatus.Pending:
+            attempts = TaskAttemptRepository(session)
+            latest = attempts.latest_for_task(task.id)
+            if latest is not None:
+                latest.status = status
+                if updated.container_id:
+                    latest.container_id = updated.container_id
+                if status is TaskStatus.Running and latest.started_at is None:
+                    latest.started_at = utc_now()
+                if status is TaskStatus.Retry or is_terminal_task_status(status):
+                    latest.finished_at = utc_now()
+                    latest.result = result
+                    latest.error = error
+                    latest.exit_code = exit_code
+                attempts.upsert(latest)
+        return updated
+
     def _start_task(self, task: Task, *, container_id: str | None = None, claim: bool) -> Task:
         resolved_container_id = optional_uuid(container_id, field="container_id")
-        attempt_started = False
         with self.context.database.session() as session:
-            task_repository = TaskRepository(session)
-            current = task_repository.get_for_update_across_workspaces(task.id)
-            if current is None:
-                msg = f"task not found: {task.id}"
-                raise NotFoundError(msg)
-            if is_terminal_task_status(current.status):
-                msg = f"task {current.id} is already {current.status.value}"
-                raise ConflictError(msg)
-            assigned_container_id = current.container_id or ""
-            if (
-                claim
-                and resolved_container_id
-                and assigned_container_id
-                and assigned_container_id != resolved_container_id
-            ):
-                msg = (
-                    f"task {current.id} is assigned to container {assigned_container_id}, "
-                    f"not {resolved_container_id}"
-                )
-                raise ConflictError(msg)
-            # A claim from a container that is already terminal is refused rather
-            # than written. The claim is the only record of who owns an
-            # invocation, and every path that gives one back runs when a
-            # container ends: one written afterwards is settled by nothing, sees
-            # no claim query because the row is no longer free, and leaves its
-            # caller waiting on a container that is gone. It happens when a stop
-            # releases the claim while the container is still alive enough to
-            # report the start it had already begun.
-            container = (
-                ContainerRepository(session).records.get_across_workspaces(resolved_container_id)
-                if resolved_container_id
-                else None
+            persisted = self._start_task_in_session(
+                session,
+                task,
+                resolved_container_id=resolved_container_id,
+                claim=claim,
             )
-            if claim and container is not None and container.status in TERMINAL_CONTAINER_STATUSES:
-                msg = (
-                    f"container {resolved_container_id} is no longer running and "
-                    f"cannot claim task {current.id}"
-                )
-                raise ConflictError(msg)
-            persisted_container_id = resolved_container_id if container is not None else None
-            attempt_repository = TaskAttemptRepository(session)
-            latest = attempt_repository.latest_for_task(current.id)
-            active_attempt = latest is not None and latest.status in {
-                TaskStatus.Pending,
-                TaskStatus.Running,
-            }
-            if current.status is TaskStatus.Running and active_attempt:
-                return current
-            now = utc_now()
-            if not active_attempt:
-                current.attempt_number = max(current.attempt_number, 0) + 1
-            current.next_retry_at = None
-            if persisted_container_id:
-                current.container_id = persisted_container_id
-            attempt_container_id = current.container_id
-            current.status = TaskStatus.Running
-            current.started_at = current.started_at or now
-            current.result = None
-            current.function_result = None
-            current.error = None
-            current.exit_code = None
-            saved = task_repository.records.upsert_across_workspaces(
-                current,
-                workspace_id=current.workspace_id,
-                name=current.name,
+        self._publish_task_started(persisted)
+        return persisted.task
+
+    @staticmethod
+    def _start_task_in_session(
+        session: DatabaseSession,
+        task: Task,
+        *,
+        resolved_container_id: str | None,
+        claim: bool,
+    ) -> _TaskStartPersistence:
+        task_repository = TaskRepository(session)
+        current = task_repository.get_for_update_across_workspaces(task.id)
+        if current is None:
+            raise NotFoundError(f"task not found: {task.id}")
+        if is_terminal_task_status(current.status):
+            raise ConflictError(f"task {current.id} is already {current.status.value}")
+        assigned_container_id = current.container_id or ""
+        if (
+            claim
+            and resolved_container_id
+            and assigned_container_id
+            and assigned_container_id != resolved_container_id
+        ):
+            raise ConflictError(
+                f"task {current.id} is assigned to container {assigned_container_id}, "
+                f"not {resolved_container_id}"
+            )
+        container = (
+            ContainerRepository(session).records.get_across_workspaces(resolved_container_id)
+            if resolved_container_id
+            else None
+        )
+        if claim and container is not None and container.status in TERMINAL_CONTAINER_STATUSES:
+            raise ConflictError(
+                f"container {resolved_container_id} is no longer running and "
+                f"cannot claim task {current.id}"
+            )
+        persisted_container_id = resolved_container_id if container is not None else None
+        attempt_repository = TaskAttemptRepository(session)
+        latest = attempt_repository.latest_for_task(current.id)
+        active_attempt = latest is not None and latest.status in {
+            TaskStatus.Pending,
+            TaskStatus.Running,
+        }
+        if current.status is TaskStatus.Running and active_attempt:
+            return _TaskStartPersistence(
+                task=current,
+                attempt_started=False,
+                attempt_container_id=current.container_id,
+            )
+        now = utc_now()
+        if not active_attempt:
+            current.attempt_number = max(current.attempt_number, 0) + 1
+        current.next_retry_at = None
+        if persisted_container_id:
+            current.container_id = persisted_container_id
+        attempt_container_id = current.container_id
+        current.status = TaskStatus.Running
+        current.started_at = current.started_at or now
+        current.result = None
+        current.function_result = None
+        current.error = None
+        current.exit_code = None
+        saved = task_repository.records.upsert_across_workspaces(
+            current,
+            workspace_id=current.workspace_id,
+            name=current.name,
+            status=TaskStatus.Running.value,
+        )
+        attempt_started = False
+        if active_attempt and latest is not None:
+            latest.status = TaskStatus.Running
+            latest.started_at = latest.started_at or now
+            if attempt_container_id:
+                latest.container_id = attempt_container_id
+            attempt_repository.upsert(latest)
+        else:
+            attempt_repository.records.create_across_workspaces(
+                {
+                    "task_id": required_uuid(saved.id, field="task_id"),
+                    "workspace_id": saved.workspace_id,
+                    "container_id": attempt_container_id,
+                    "attempt_number": saved.attempt_number,
+                    "status": TaskStatus.Running.value,
+                    "started_at": now,
+                },
+                workspace_id=saved.workspace_id,
                 status=TaskStatus.Running.value,
             )
-            if active_attempt and latest is not None:
-                latest.status = TaskStatus.Running
-                latest.started_at = latest.started_at or now
-                if attempt_container_id:
-                    latest.container_id = attempt_container_id
-                attempt_repository.upsert(latest)
-            else:
-                attempt_repository.records.create_across_workspaces(
-                    {
-                        "task_id": required_uuid(saved.id, field="task_id"),
-                        "workspace_id": saved.workspace_id,
-                        "container_id": attempt_container_id,
-                        "attempt_number": saved.attempt_number,
-                        "status": TaskStatus.Running.value,
-                        "started_at": now,
-                    },
-                    workspace_id=saved.workspace_id,
-                    status=TaskStatus.Running.value,
-                )
-                attempt_started = True
-        if attempt_started:
+            attempt_started = True
+        return _TaskStartPersistence(
+            task=saved,
+            attempt_started=attempt_started,
+            attempt_container_id=attempt_container_id,
+        )
+
+    def _publish_task_started(self, persisted: _TaskStartPersistence) -> None:
+        saved = persisted.task
+        if persisted.attempt_started:
             self.events.emit(
                 "task.attempt.started",
                 resource_type="task",
@@ -357,7 +450,7 @@ class TaskService:
                 message=f"started attempt {saved.attempt_number} for task {saved.name}",
                 data={
                     "attempt_number": saved.attempt_number,
-                    "container_id": attempt_container_id or "",
+                    "container_id": persisted.attempt_container_id or "",
                     "max_attempts": saved.max_attempts,
                 },
                 workspace_id=saved.workspace_id,
@@ -370,6 +463,45 @@ class TaskService:
             workspace_id=saved.workspace_id,
         )
         self.publish_lifecycle_change(saved, WorkspaceChangeType.Updated)
+
+    async def _start_task_async(
+        self,
+        task: Task,
+        *,
+        container_id: str | None = None,
+        claim: bool,
+    ) -> Task:
+        resolved_container_id = optional_uuid(container_id, field="container_id")
+        persisted = await self._async_database().run_transaction(
+            lambda session: self._start_task_in_session(
+                session,
+                task,
+                resolved_container_id=resolved_container_id,
+                claim=claim,
+            )
+        )
+        saved = persisted.task
+        if persisted.attempt_started:
+            await self.events.emit_async(
+                "task.attempt.started",
+                resource_type="task",
+                resource_id=saved.id,
+                message=f"started attempt {saved.attempt_number} for task {saved.name}",
+                data={
+                    "attempt_number": saved.attempt_number,
+                    "container_id": persisted.attempt_container_id or "",
+                    "max_attempts": saved.max_attempts,
+                },
+                workspace_id=saved.workspace_id,
+            )
+        await self.events.emit_async(
+            "task.running",
+            resource_type="task",
+            resource_id=saved.id,
+            message=f"task {saved.name} running",
+            workspace_id=saved.workspace_id,
+        )
+        await self.publish_lifecycle_change_async(saved, WorkspaceChangeType.Updated)
         return saved
 
     def latest_attempt(self, task_id: str) -> TaskAttempt | None:
@@ -393,82 +525,31 @@ class TaskService:
         retry_allowed: bool = True,
     ) -> TaskFinishOutcome:
         with self.context.database.session() as session:
-            task_repository = TaskRepository(session)
-            current = task_repository.get_for_update_across_workspaces(task_id)
-            if current is None:
-                msg = f"task not found: {task_id}"
-                raise NotFoundError(msg)
-            assigned_container_id = current.container_id or ""
-            attempt_container_id = current.container_id
-            if is_terminal_task_status(current.status):
-                return _unchanged_finish_outcome(current, "task is already terminal")
-            if current.status is TaskStatus.Retry:
-                return _unchanged_finish_outcome(current, "task retry is already recorded")
-            if container_id and assigned_container_id != container_id:
-                return _unchanged_finish_outcome(
-                    current,
-                    "completion does not own the active task container",
-                )
-
-            policy = current.retry_policy or RetryPolicy(max_attempts=current.max_attempts)
-            decision = (
-                plan_retry(
-                    policy,
-                    current_attempt_number=max(current.attempt_number, 1),
-                    status=status,
-                )
-                if retry_allowed
-                else RetryDecision(
-                    should_retry=False,
-                    final_status=status,
-                    reason="retry is disabled for this workload outcome",
-                )
+            outcome = self._finish_with_retry_in_session(
+                session,
+                task_id,
+                status,
+                container_id=container_id,
+                result=result,
+                function_result=function_result,
+                error=error,
+                exit_code=exit_code,
+                retry_allowed=retry_allowed,
             )
-            now = utc_now()
-            next_status = TaskStatus.Retry if decision.should_retry else status
-            current.status = next_status
-            current.result = result
-            current.function_result = function_result
-            current.error = (error or status.value) if decision.should_retry else error
-            current.exit_code = exit_code
-            if decision.should_retry:
-                current.next_retry_at = now + timedelta(seconds=decision.delay_seconds)
-                current.container_id = None
-            elif is_terminal_task_status(next_status):
-                current.finished_at = now
-
-            updated = task_repository.records.upsert_across_workspaces(
-                current,
-                workspace_id=current.workspace_id,
-                name=current.name,
-                status=next_status.value,
-            )
-            attempt_repository = TaskAttemptRepository(session)
-            latest_attempt = attempt_repository.latest_for_task(updated.id)
-            if latest_attempt is not None:
-                latest_attempt.status = next_status
-                if attempt_container_id:
-                    latest_attempt.container_id = attempt_container_id
-                latest_attempt.finished_at = now
-                latest_attempt.result = result
-                latest_attempt.error = current.error
-                latest_attempt.exit_code = exit_code
-                attempt_repository.upsert(latest_attempt)
-
-        event_level = (
-            EventLevel.Error
-            if next_status in {TaskStatus.Failed, TaskStatus.Timeout}
-            else EventLevel.Info
-        )
+        if not outcome.state_changed:
+            return outcome
+        updated = outcome.task
+        decision = outcome.retry_decision
         self.events.emit(
-            f"task.{next_status.value}",
+            f"task.{updated.status.value}",
             resource_type="task",
             resource_id=updated.id,
-            message=f"task {updated.name} {next_status.value}",
-            level=event_level,
+            message=f"task {updated.name} {updated.status.value}",
+            level=_task_event_level(updated.status),
             workspace_id=updated.workspace_id,
         )
         if decision.should_retry:
+            policy = updated.retry_policy or RetryPolicy(max_attempts=updated.max_attempts)
             self.events.emit(
                 "task.retry.scheduled",
                 resource_type="task",
@@ -488,6 +569,139 @@ class TaskService:
             )
         self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)
         self._deliver_callback(updated)
+        return outcome
+
+    async def finish_with_retry_async(
+        self,
+        task_id: str,
+        status: TaskStatus,
+        *,
+        container_id: str | None = None,
+        result: JsonValue = None,
+        function_result: FunctionResultPayload | None = None,
+        error: str | None = None,
+        exit_code: int | None = None,
+        retry_allowed: bool = True,
+    ) -> TaskFinishOutcome:
+        outcome = await self._async_database().run_transaction(
+            lambda session: self._finish_with_retry_in_session(
+                session,
+                task_id,
+                status,
+                container_id=container_id,
+                result=result,
+                function_result=function_result,
+                error=error,
+                exit_code=exit_code,
+                retry_allowed=retry_allowed,
+            )
+        )
+        if not outcome.state_changed:
+            return outcome
+        updated = outcome.task
+        decision = outcome.retry_decision
+        await self.events.emit_async(
+            f"task.{updated.status.value}",
+            resource_type="task",
+            resource_id=updated.id,
+            message=f"task {updated.name} {updated.status.value}",
+            level=_task_event_level(updated.status),
+            workspace_id=updated.workspace_id,
+        )
+        if decision.should_retry:
+            policy = updated.retry_policy or RetryPolicy(max_attempts=updated.max_attempts)
+            await self.events.emit_async(
+                "task.retry.scheduled",
+                resource_type="task",
+                resource_id=updated.id,
+                message=f"scheduled retry for task {updated.name}",
+                data={
+                    "attempt_number": updated.attempt_number,
+                    "next_attempt_number": decision.next_attempt_number,
+                    "max_attempts": policy.max_attempts,
+                    "delay_seconds": decision.delay_seconds,
+                    "next_retry_at": (
+                        updated.next_retry_at.isoformat() if updated.next_retry_at else ""
+                    ),
+                    "failed_status": status.value,
+                },
+                workspace_id=updated.workspace_id,
+            )
+        await self.publish_lifecycle_change_async(updated, WorkspaceChangeType.Updated)
+        await asyncio.to_thread(self._deliver_callback, updated)
+        return outcome
+
+    @staticmethod
+    def _finish_with_retry_in_session(
+        session: DatabaseSession,
+        task_id: str,
+        status: TaskStatus,
+        *,
+        container_id: str | None,
+        result: JsonValue,
+        function_result: FunctionResultPayload | None,
+        error: str | None,
+        exit_code: int | None,
+        retry_allowed: bool,
+    ) -> TaskFinishOutcome:
+        task_repository = TaskRepository(session)
+        current = task_repository.get_for_update_across_workspaces(task_id)
+        if current is None:
+            raise NotFoundError(f"task not found: {task_id}")
+        assigned_container_id = current.container_id or ""
+        attempt_container_id = current.container_id
+        if is_terminal_task_status(current.status):
+            return _unchanged_finish_outcome(current, "task is already terminal")
+        if current.status is TaskStatus.Retry:
+            return _unchanged_finish_outcome(current, "task retry is already recorded")
+        if container_id and assigned_container_id != container_id:
+            return _unchanged_finish_outcome(
+                current,
+                "completion does not own the active task container",
+            )
+        policy = current.retry_policy or RetryPolicy(max_attempts=current.max_attempts)
+        decision = (
+            plan_retry(
+                policy,
+                current_attempt_number=max(current.attempt_number, 1),
+                status=status,
+            )
+            if retry_allowed
+            else RetryDecision(
+                should_retry=False,
+                final_status=status,
+                reason="retry is disabled for this workload outcome",
+            )
+        )
+        now = utc_now()
+        next_status = TaskStatus.Retry if decision.should_retry else status
+        current.status = next_status
+        current.result = result
+        current.function_result = function_result
+        current.error = (error or status.value) if decision.should_retry else error
+        current.exit_code = exit_code
+        if decision.should_retry:
+            current.next_retry_at = now + timedelta(seconds=decision.delay_seconds)
+            current.container_id = None
+        elif is_terminal_task_status(next_status):
+            current.finished_at = now
+        updated = task_repository.records.upsert_across_workspaces(
+            current,
+            workspace_id=current.workspace_id,
+            name=current.name,
+            status=next_status.value,
+        )
+        attempts = TaskAttemptRepository(session)
+        latest = attempts.latest_for_task(updated.id)
+        if latest is not None:
+            latest.status = next_status
+            if attempt_container_id:
+                latest.container_id = attempt_container_id
+            latest.finished_at = now
+            latest.result = result
+            latest.error = current.error
+            latest.exit_code = exit_code
+            attempts.upsert(latest)
         return TaskFinishOutcome(
             task=updated,
             retry_decision=decision,
@@ -533,6 +747,9 @@ class TaskService:
 
         return self._start_task(task, container_id=container_id, claim=False)
 
+    async def assign_async(self, task: Task, *, container_id: str) -> Task:
+        return await self._start_task_async(task, container_id=container_id, claim=False)
+
     def start(self, task_id: str, *, container_id: str | None = None) -> Task:
         """Record a container's own claim on a task it was handed.
 
@@ -557,11 +774,19 @@ class TaskService:
     def get(self, task_id: str) -> Task:
         """System-authority lookup for the execution engine's own control flow."""
         with self.context.database.session() as session:
-            task = TaskRepository(session).get_across_workspaces(task_id)
+            return self.get_in_session(session, task_id)
+
+    @staticmethod
+    def get_in_session(session: DatabaseSession, task_id: str) -> Task:
+        task = TaskRepository(session).get_across_workspaces(task_id)
         if task is None:
-            msg = f"task not found: {task_id}"
-            raise NotFoundError(msg)
+            raise NotFoundError(f"task not found: {task_id}")
         return task
+
+    async def get_async(self, task_id: str) -> Task:
+        return await self._async_database().run_transaction(
+            lambda session: self.get_in_session(session, task_id)
+        )
 
     def cancel(self, task_id: str) -> Task:
         task = self.get(task_id)
@@ -580,60 +805,30 @@ class TaskService:
         cursor: LogPageCursor | None = None,
     ) -> LogPage:
         with self.context.database.session() as session:
-            task = TaskRepository(session).get_across_workspaces(task_id)
-            if task is None:
-                raise NotFoundError(f"task not found: {task_id}")
-            workspace_id = task.workspace_id
-            if not workspace_id:
-                raise ConflictError(f"task logs require a workspace-owned task: {task_id}")
-            repository = LogRepository(session)
-            query = LogStreamQuery(workspace_id=workspace_id, task_id=task.id)
-            if cursor is not None:
-                return repository.page_after(
-                    query,
-                    workspace_id=workspace_id,
-                    limit=limit,
-                    cursor=cursor,
-                )
-            return repository.page(
+            task = self.get_in_session(session, task_id)
+            return self.log_page_in_session(session, task, limit=limit, cursor=cursor)
+
+    @staticmethod
+    def log_page_in_session(
+        session: DatabaseSession,
+        task: Task,
+        *,
+        limit: int,
+        cursor: LogPageCursor | None,
+    ) -> LogPage:
+        workspace_id = task.workspace_id
+        if not workspace_id:
+            raise ConflictError(f"task logs require a workspace-owned task: {task.id}")
+        repository = LogRepository(session)
+        query = LogStreamQuery(workspace_id=workspace_id, task_id=task.id)
+        if cursor is not None:
+            return repository.page_after(
                 query,
                 workspace_id=workspace_id,
                 limit=limit,
+                cursor=cursor,
             )
-
-    def _sync_latest_attempt(
-        self,
-        task: Task,
-        status: TaskStatus,
-        *,
-        result: JsonValue = None,
-        error: str | None = None,
-        exit_code: int | None = None,
-    ) -> None:
-        if status is TaskStatus.Pending:
-            return
-        with self.context.database.session() as session:
-            repository = TaskAttemptRepository(session)
-            latest = repository.latest_for_task(task.id)
-            if latest is None:
-                return
-            latest.status = status
-            if task.container_id:
-                latest.container_id = task.container_id
-            if status is TaskStatus.Running and latest.started_at is None:
-                latest.started_at = utc_now()
-            if status is TaskStatus.Retry or is_terminal_task_status(status):
-                latest.finished_at = utc_now()
-                latest.result = result
-                latest.error = error
-                latest.exit_code = exit_code
-            repository.upsert(latest)
-
-    def _container_exists(self, container_id: str | None) -> bool:
-        if not container_id:
-            return False
-        with self.context.database.session() as session:
-            return _container_exists(session, container_id)
+        return repository.page(query, workspace_id=workspace_id, limit=limit)
 
     def publish_lifecycle_change(self, task: Task, change: WorkspaceChangeType) -> None:
         if self.workspace_changes is None or not task.workspace_id:
@@ -650,6 +845,41 @@ class TaskService:
             root_task_id=task.root_task_id,
             container_id=task.container_id,
         )
+
+    async def publish_lifecycle_change_async(
+        self,
+        task: Task,
+        change: WorkspaceChangeType,
+    ) -> None:
+        if self.async_workspace_changes is None or not task.workspace_id:
+            return
+        await self.async_workspace_changes.emit_change(
+            workspace_id=task.workspace_id,
+            topic=WorkspaceChangeTopic.Tasks,
+            change=change,
+            resource_id=task.id,
+            app_id=task.app_id,
+            deployment_id=task.deployment_id,
+            stub_id=task.stub_id,
+            task_id=task.id,
+            root_task_id=task.root_task_id,
+            container_id=task.container_id,
+        )
+
+    async def publish_created_async(self, task: Task) -> None:
+        await self.events.emit_async(
+            "task.created",
+            resource_type="task",
+            resource_id=task.id,
+            message=f"created task {task.name}",
+            workspace_id=task.workspace_id,
+        )
+        await self.publish_lifecycle_change_async(task, WorkspaceChangeType.Created)
+
+    def _async_database(self) -> AsyncDatabaseClient:
+        if self.async_database is None:
+            raise RuntimeError("asynchronous task database is not configured")
+        return self.async_database
 
     def _deliver_callback(self, task: Task) -> None:
         dispatcher = self.callback_dispatcher
@@ -671,6 +901,12 @@ class TaskService:
                 },
                 workspace_id=task.workspace_id,
             )
+
+
+def _task_event_level(status: TaskStatus) -> EventLevel:
+    if status in {TaskStatus.Failed, TaskStatus.Timeout}:
+        return EventLevel.Error
+    return EventLevel.Info
 
 
 def _container_exists(session: DatabaseSession, container_id: str | None) -> bool:

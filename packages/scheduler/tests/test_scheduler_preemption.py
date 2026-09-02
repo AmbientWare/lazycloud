@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Protocol
 
-from coordination.redis_client import RedisClient
+import pytest
+from coordination.redis_client import AsyncRedisClient, RedisSettings
 from scheduler.preemption import (
     CapacityInterruption,
     SchedulerCapacityInterruptionService,
@@ -25,13 +26,23 @@ from shared.scheduling import (
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
 )
+from tests.real_redis import RealRedisActors
 
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-class _RealRedisActors(Protocol):
-    def client(self) -> RedisClient: ...
+@pytest.fixture
+async def async_redis(
+    real_redis_actors: RealRedisActors,
+) -> AsyncIterator[AsyncRedisClient]:
+    client = AsyncRedisClient.from_settings(
+        RedisSettings(url=real_redis_actors.url, key_prefix=real_redis_actors.prefix)
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
 
 
 @dataclass(slots=True)
@@ -76,8 +87,10 @@ def _container(
     )
 
 
-def test_preemption_atomically_cordons_and_requeues_unstarted_work_once(
-    real_redis_actors: _RealRedisActors,
+@pytest.mark.anyio
+async def test_preemption_atomically_cordons_and_requeues_unstarted_work_once(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -98,13 +111,13 @@ def test_preemption_atomically_cordons_and_requeues_unstarted_work_once(
         ),
         now=NOW,
     )
-    workers.enqueue_worker_request("worker-1", _request("queued"))
-    workers.enqueue_worker_request("worker-1", _request("cancelled"))
+    await workers.enqueue_worker_request(async_redis, "worker-1", _request("queued"))
+    await workers.enqueue_worker_request(async_redis, "worker-1", _request("cancelled"))
     # Two requests the worker acted on without acknowledging. Neither may come
     # back: the second's container has already run, and requeueing a request on
     # the strength of its container having finished runs that work twice.
-    workers.enqueue_worker_request("worker-1", _request("running"))
-    workers.enqueue_worker_request("worker-1", _request("finished"))
+    await workers.enqueue_worker_request(async_redis, "worker-1", _request("running"))
+    await workers.enqueue_worker_request(async_redis, "worker-1", _request("finished"))
     containers.set_container_state(_container("queued", SchedulerContainerStatus.Pending))
     containers.set_container_state(_container("cancelled", SchedulerContainerStatus.Pending))
     containers.set_container_state(_container("running", SchedulerContainerStatus.Running))
@@ -148,7 +161,7 @@ def test_preemption_atomically_cordons_and_requeues_unstarted_work_once(
 
 
 def test_preemption_rejects_stale_worker_session_fence(
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     workers = RedisSchedulerWorkerRepository(real_redis_actors.client())
     workers.add_worker(

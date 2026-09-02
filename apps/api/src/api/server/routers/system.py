@@ -99,6 +99,7 @@ def health(
     checks = {
         "database": _health_check(services.context.database.ping),
         "redis": _health_check(services.redis().ping),
+        "realtime": _health_check(lambda: services.require_async_io().realtime.status().healthy),
     }
     ok = all(check.ok for check in checks.values())
     if not ok:

@@ -9,9 +9,10 @@ from uuid import uuid4
 
 import pytest
 from agent.binary import AgentBinarySettings
+from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from coordination.redis_client import RedisClient
+from coordination.redis_client import RedisClient, RedisSettings
 from database.context import ServiceContext
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
@@ -45,7 +46,7 @@ from storage_client.s3 import S3ObjectStoreSettings
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 from tests.fakes import FakeObjectClient
-from tests.redis_fakes import FakeRedis
+from tests.real_redis import RealRedisActors
 
 
 def _fixture_account(database: DatabaseClient, display_name: str) -> str:
@@ -123,27 +124,34 @@ class _InMemoryWorkspaceBuckets:
 
 
 @contextmanager
-def service_graph(database: DatabaseClient, tmp_path: Path) -> Iterator[ApiServices]:
-    """The production service graph over whichever database is handed in.
+def service_graph(
+    database: DatabaseClient,
+    tmp_path: Path,
+    *,
+    redis_client: RedisClient,
+    binary_redis_client: RedisClient,
+    async_io: ApiAsyncIo,
+) -> Iterator[ApiServices]:
+    """The production service graph over the database and Redis handed in.
 
     Separate from the fixture so a test needing a real PostgreSQL backend gets
-    the same wiring rather than assembling its own. Only the database differs;
-    everything a workspace needs before it can run anything — the account and
-    provisioned storage — is set up here, and a
-    graph missing any of it refuses work for a reason the test did not intend.
+    the same wiring rather than assembling its own. Only the backends differ.
+    Everything a workspace needs before it can run anything, the account and
+    provisioned storage, is set up here, because a graph missing any of it
+    refuses work for a reason the test did not intend. The caller owns
+    `async_io` and closes it on the loop that used it.
     """
 
-    redis = RedisClient(FakeRedis(), key_prefix="test")
-    binary_redis = redis.with_key_prefix("test")
-    maps = RedisMapService(binary_redis)
-    simple_queues = RedisSimpleQueueService(binary_redis)
+    maps = RedisMapService(binary_redis_client)
+    simple_queues = RedisSimpleQueueService(binary_redis_client)
     volume_filesystem = LocalVolumeFilesystem(tmp_path / "volumes")
 
     services = ApiServices.create(
         database,
         root=tmp_path,
-        redis_client=redis,
-        binary_redis_client=binary_redis,
+        redis_client=redis_client,
+        binary_redis_client=binary_redis_client,
+        async_io=async_io,
         owns_redis_client=False,
         owns_binary_redis_client=False,
         map_service=maps,
@@ -181,14 +189,38 @@ def service_graph(database: DatabaseClient, tmp_path: Path) -> Iterator[ApiServi
 
 
 @pytest.fixture
-def isolated_services(tmp_path: Path) -> Iterator[ApiServices]:
+def isolated_services(
+    tmp_path: Path,
+    real_redis_actors: RealRedisActors,
+) -> Iterator[ApiServices]:
+    database_path = tmp_path / "services.sqlite3"
     database = DatabaseClient.from_settings(
         DatabaseSettings(
-            url="sqlite+pysqlite:///:memory:",
+            url=f"sqlite+pysqlite:///{database_path}",
             application_name=DatabaseApplicationName.Test,
         )
     )
-    with service_graph(database, tmp_path) as services:
+    redis = real_redis_actors.client()
+    binary_redis = real_redis_actors.client(decode_responses=False)
+    async_io = ApiAsyncIo.from_settings(
+        DatabaseSettings(
+            url=f"sqlite+aiosqlite:///{database_path}",
+            application_name=DatabaseApplicationName.Test,
+        ),
+        RedisSettings(
+            url=real_redis_actors.url,
+            key_prefix=real_redis_actors.prefix,
+            socket_timeout_seconds=2.0,
+            health_check_interval_seconds=1,
+        ),
+    )
+    with service_graph(
+        database,
+        tmp_path,
+        redis_client=redis,
+        binary_redis_client=binary_redis,
+        async_io=async_io,
+    ) as services:
         yield services
 
 

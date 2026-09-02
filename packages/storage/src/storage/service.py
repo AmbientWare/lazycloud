@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import logging
 import os
@@ -38,9 +40,11 @@ from storage_client.s3 import (
     S3ObjectInfo,
     S3ObjectStoreClient,
     S3ObjectStoreSettings,
+    S3PresignedUpload,
     default_s3_object_store_client,
 )
 
+from database import AsyncDatabaseClient
 from storage.context import StorageContext
 
 OBJECT_SHA256_METADATA_KEY = "artifact-sha256"
@@ -134,6 +138,18 @@ class ObjectByteClient(Protocol):
         content_type: str = "application/octet-stream",
     ) -> str: ...
 
+    def generate_presigned_put(
+        self,
+        key: str,
+        *,
+        bucket: str | None = None,
+        expires_seconds: int = 3600,
+        content_length: int,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+        checksum_sha256: str = "",
+    ) -> S3PresignedUpload: ...
+
     def delete(self, key: str, *, bucket: str | None = None) -> None: ...
 
 
@@ -159,6 +175,13 @@ class CacheMaterialization:
 class CacheReconciliationResult:
     records_removed: int = 0
     objects_removed: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectStreamUpload:
+    workspace_id: str
+    claim: ObjectWriteClaim
+    upload: S3PresignedUpload
 
 
 class MountedCacheSettings(BaseSettings):
@@ -405,16 +428,14 @@ class ObjectStorage:
             msg = f"object source path is not a file: {source_path}"
             raise IsADirectoryError(msg)
 
-        stat = source_path.stat()
-        sha256 = _sha256_file(source_path)
         physical_bucket = self.physical_bucket(bucket)
         physical_key = self.physical_key_for_workspace(workspace_id, bucket=bucket, key=key)
         command = ObjectWriteCommand(
             bucket=bucket,
             key=key,
             path=f"s3://{physical_bucket}/{physical_key}",
-            size=stat.st_size,
-            sha256=sha256,
+            size=source_path.stat().st_size,
+            sha256=_sha256_file(source_path),
             content_type=content_type,
             metadata=metadata or {},
         )
@@ -450,6 +471,91 @@ class ObjectStorage:
             raise
         with self.context.database.session() as session:
             return ObjectRepository(session).complete_write(claim, workspace_id=workspace_id)
+
+    async def prepare_stream_upload(
+        self,
+        database: AsyncDatabaseClient,
+        *,
+        workspace_id: str,
+        bucket: str,
+        key: str,
+        size: int,
+        sha256: str,
+        content_type: str,
+        metadata: dict[str, str] | None,
+        overwrite: bool,
+    ) -> ObjectStreamUpload:
+        self._validate_bucket(bucket)
+        physical_bucket = self.physical_bucket(bucket)
+        physical_key = self.physical_key_for_workspace(workspace_id, bucket=bucket, key=key)
+        command = ObjectWriteCommand(
+            bucket=bucket,
+            key=key,
+            path=f"s3://{physical_bucket}/{physical_key}",
+            size=size,
+            sha256=sha256,
+            content_type=content_type,
+            metadata=metadata or {},
+        )
+        claim = await database.run_transaction(
+            lambda session: ObjectRepository(session).begin_write(
+                command,
+                workspace_id=workspace_id,
+                overwrite=overwrite,
+            )
+        )
+        try:
+            upload = await asyncio.to_thread(
+                self.object_client.generate_presigned_put,
+                physical_key,
+                bucket=physical_bucket,
+                expires_seconds=3600,
+                content_length=size,
+                content_type=content_type,
+                metadata={**(metadata or {}), OBJECT_SHA256_METADATA_KEY: sha256},
+                checksum_sha256=base64.b64encode(bytes.fromhex(sha256)).decode("ascii"),
+            )
+        except BaseException:
+            await self._abort_stream_claim(database, workspace_id=workspace_id, claim=claim)
+            raise
+        return ObjectStreamUpload(workspace_id=workspace_id, claim=claim, upload=upload)
+
+    async def complete_stream_upload(
+        self,
+        database: AsyncDatabaseClient,
+        upload: ObjectStreamUpload,
+    ) -> ObjectRecord:
+        return await database.run_transaction(
+            lambda session: ObjectRepository(session).complete_write(
+                upload.claim,
+                workspace_id=upload.workspace_id,
+            )
+        )
+
+    async def abort_stream_upload(
+        self,
+        database: AsyncDatabaseClient,
+        upload: ObjectStreamUpload,
+    ) -> None:
+        await self._abort_stream_claim(
+            database,
+            workspace_id=upload.workspace_id,
+            claim=upload.claim,
+        )
+
+    @staticmethod
+    async def _abort_stream_claim(
+        database: AsyncDatabaseClient,
+        *,
+        workspace_id: str,
+        claim: ObjectWriteClaim,
+    ) -> None:
+        await database.run_transaction(
+            lambda session: ObjectRepository(session).abort_write(
+                claim,
+                workspace_id=workspace_id,
+            )
+        )
 
     def object_is_complete(self, record: ObjectRecord) -> bool:
         """Confirm physical bytes match the durable immutable object identity."""

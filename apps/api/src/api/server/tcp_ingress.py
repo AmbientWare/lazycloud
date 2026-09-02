@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from control.service import ControlPlaneService, StubKind, StubRecord
-from coordination.redis_client import RedisClient, redis_text
+from coordination.redis_client import AsyncRedisClient, redis_text
 from execution.pods.config import PodStubConfig
 from execution.pods.planning import PodProxyProtocol
 from execution.pods.proxy import PodProxySession
@@ -20,6 +20,7 @@ from execution.pods.service import PodControlService
 from pydantic import Field
 from shared.contracts import ContractModel
 from shared.errors import NotFoundError
+from sqlalchemy.orm import Session
 
 from api.server.services import ApiServices
 from api.settings import TcpIngressSettings
@@ -49,7 +50,7 @@ class TcpIngressRoute(ContractModel):
 
 
 class TcpIngressRouteResolver(Protocol):
-    def resolve(self, sni: str) -> TcpIngressRoute: ...
+    async def resolve(self, sni: str) -> TcpIngressRoute: ...
 
 
 def tcp_ingress_hostname(stub_id: str, port: int, external_host: str) -> str:
@@ -65,7 +66,7 @@ def tcp_ingress_hostname(stub_id: str, port: int, external_host: str) -> str:
 @dataclass(slots=True)
 class RedisTcpIngressRouteResolver:
     services: ApiServices
-    redis: RedisClient
+    redis: AsyncRedisClient
     external_host: str
     cache_ttl_seconds: int = 300
     control_plane: ControlPlaneService = field(init=False)
@@ -74,19 +75,26 @@ class RedisTcpIngressRouteResolver:
         self.external_host = self.external_host.strip(".").lower()
         self.control_plane = ControlPlaneService(self.services.context)
 
-    def resolve(self, sni: str) -> TcpIngressRoute:
+    async def resolve(self, sni: str) -> TcpIngressRoute:
         normalized = sni.strip(".").lower()
         cache_key = self._cache_key(normalized)
-        cached = self.redis.get(cache_key)
+        cached = await self.redis.get(cache_key)
         if cached is not None:
             try:
                 route = TcpIngressRoute.model_validate_json(redis_text(cached))
-                return self._validated_route(route)
+                return await self._validated_route(route)
             except (KeyError, ValueError, TcpIngressRouteNotFound):
-                self.redis.delete(cache_key)
+                await self.redis.delete(cache_key)
         stub_id, port = self._parse_sni(normalized)
-        route = self._route_for_stub(normalized, stub_id, port)
-        self.redis.set(
+        route = await self.services.require_async_io().database.run_transaction(
+            lambda session: self._route_for_stub_in_session(
+                session,
+                normalized,
+                stub_id,
+                port,
+            )
+        )
+        await self.redis.set(
             cache_key,
             route.model_dump_json(),
             ex=max(self.cache_ttl_seconds, 1),
@@ -106,15 +114,22 @@ class RedisTcpIngressRouteResolver:
             raise TcpIngressRouteNotFound("SNI port is outside the valid TCP range")
         return stub_id, port
 
-    def _route_for_stub(self, sni: str, stub_id: str, port: int) -> TcpIngressRoute:
+    def _route_for_stub_in_session(
+        self,
+        session: Session,
+        sni: str,
+        stub_id: str,
+        port: int,
+    ) -> TcpIngressRoute:
         try:
-            stub = self.control_plane.get_stub(stub_id)
+            stub = self.control_plane.get_stub_in_session(session, stub_id)
         except NotFoundError as exc:
             raise TcpIngressRouteNotFound("TCP workload was not found") from exc
         self._validate_stub(stub, port)
         resources = [
             resource
-            for resource in self.services.deployment_resources.list(
+            for resource in self.services.deployment_resources.list_in_session(
+                session,
                 workspace=stub.workspace_id,
                 active=True,
             )
@@ -123,7 +138,7 @@ class RedisTcpIngressRouteResolver:
         if not resources:
             raise TcpIngressRouteNotFound("TCP workload has no active deployment")
         resource = max(resources, key=lambda item: item.deployment.version)
-        workspace = self.control_plane.get_workspace(stub.workspace_id)
+        workspace = self.services.context.workspace(session, stub.workspace_id)
         return TcpIngressRoute(
             sni=sni,
             workspace_id=workspace.id,
@@ -137,15 +152,25 @@ class RedisTcpIngressRouteResolver:
             port=port,
         )
 
-    def _validated_route(self, route: TcpIngressRoute) -> TcpIngressRoute:
+    async def _validated_route(self, route: TcpIngressRoute) -> TcpIngressRoute:
         if route.sni != tcp_ingress_hostname(route.stub_id, route.port, self.external_host):
             raise TcpIngressRouteNotFound("cached TCP route does not match SNI")
+        return await self.services.require_async_io().database.run_transaction(
+            lambda session: self._validated_route_in_session(session, route)
+        )
+
+    def _validated_route_in_session(
+        self,
+        session: Session,
+        route: TcpIngressRoute,
+    ) -> TcpIngressRoute:
         try:
-            stub = self.control_plane.get_stub(route.stub_id)
+            stub = self.control_plane.get_stub_in_session(session, route.stub_id)
         except NotFoundError as exc:
             raise TcpIngressRouteNotFound("cached TCP workload was deleted") from exc
         self._validate_stub(stub, route.port)
-        active = self.services.deployment_resources.list(
+        active = self.services.deployment_resources.list_in_session(
+            session,
             workspace=route.workspace_id,
             app=route.app_id,
             name=route.workload_name,
@@ -172,16 +197,21 @@ class RedisTcpIngressRouteResolver:
 
 
 class ReloadingTlsContext:
-    def __init__(self, certificate_file: Path, key_file: Path) -> None:
+    def __init__(
+        self,
+        certificate_file: Path,
+        key_file: Path,
+        context: ssl.SSLContext,
+        signature: tuple[int, int, int, int],
+    ) -> None:
         self.certificate_file = certificate_file
         self.key_file = key_file
         self._lock = threading.Lock()
         self._server_names: weakref.WeakKeyDictionary[ssl.SSLObject | ssl.SSLSocket, str] = (
             weakref.WeakKeyDictionary()
         )
-        self._signature: tuple[int, int, int, int] | None = None
-        self._context = self._load_context()
-        self.server_context = self._context
+        self._signature = signature
+        self._context = context
 
         def select_context(
             ssl_object: ssl.SSLObject | ssl.SSLSocket,
@@ -190,7 +220,20 @@ class ReloadingTlsContext:
         ) -> None:
             self._select_context(ssl_object, server_name)
 
-        self.server_context.set_servername_callback(select_context)
+        self._context.set_servername_callback(select_context)
+
+    @classmethod
+    async def create(cls, certificate_file: Path, key_file: Path) -> ReloadingTlsContext:
+        context, signature = await asyncio.to_thread(
+            cls._load_context,
+            certificate_file,
+            key_file,
+        )
+        return cls(certificate_file, key_file, context, signature)
+
+    @property
+    def server_context(self) -> ssl.SSLContext:
+        return self._context
 
     def server_name(self, ssl_object: ssl.SSLObject | ssl.SSLSocket | None) -> str:
         if ssl_object is None:
@@ -204,38 +247,50 @@ class ReloadingTlsContext:
         server_name: str | None,
     ) -> None:
         with self._lock:
-            self._reload_if_changed()
             ssl_object.context = self._context
             self._server_names[ssl_object] = (server_name or "").lower()
 
-    def _reload_if_changed(self) -> None:
-        signature = self._file_signature()
+    async def reload_if_changed(self) -> None:
+        try:
+            signature = await asyncio.to_thread(
+                _file_signature,
+                self.certificate_file,
+                self.key_file,
+            )
+        except OSError:
+            logger.exception("TCP ingress certificate metadata read failed")
+            return
         if signature == self._signature:
             return
         try:
-            context = self._build_context()
+            context, loaded_signature = await asyncio.to_thread(
+                self._load_context,
+                self.certificate_file,
+                self.key_file,
+            )
         except (OSError, ssl.SSLError):
             logger.exception("TCP ingress certificate reload failed; retaining last known pair")
             return
-        self._context = context
-        self._signature = signature
+        with self._lock:
+            self._context = context
+            self._signature = loaded_signature
         logger.info("TCP ingress certificate reloaded")
 
-    def _load_context(self) -> ssl.SSLContext:
-        context = self._build_context()
-        self._signature = self._file_signature()
-        return context
-
-    def _build_context(self) -> ssl.SSLContext:
+    @staticmethod
+    def _load_context(
+        certificate_file: Path,
+        key_file: Path,
+    ) -> tuple[ssl.SSLContext, tuple[int, int, int, int]]:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
-        context.load_cert_chain(self.certificate_file, self.key_file)
-        return context
+        context.load_cert_chain(certificate_file, key_file)
+        return context, _file_signature(certificate_file, key_file)
 
-    def _file_signature(self) -> tuple[int, int, int, int]:
-        certificate = self.certificate_file.stat()
-        key = self.key_file.stat()
-        return (certificate.st_mtime_ns, certificate.st_size, key.st_mtime_ns, key.st_size)
+
+def _file_signature(certificate_file: Path, key_file: Path) -> tuple[int, int, int, int]:
+    certificate = certificate_file.stat()
+    key = key_file.stat()
+    return (certificate.st_mtime_ns, certificate.st_size, key.st_mtime_ns, key.st_size)
 
 
 class TlsStreamWriter(Protocol):
@@ -258,35 +313,52 @@ class TlsStreamWriter(Protocol):
 class TcpIngressServer:
     route_resolver: TcpIngressRouteResolver
     pod_service: PodControlService
+    tls: ReloadingTlsContext
     host: str
     port: int
-    certificate_file: Path
-    key_file: Path
     max_connections: int = 1024
     tls_handshake_timeout_seconds: float = 10.0
     _server: asyncio.Server | None = field(default=None, init=False)
-    _tls: ReloadingTlsContext = field(init=False)
+    _certificate_reload_task: asyncio.Task[None] | None = field(default=None, init=False)
     _active_connections: int = field(default=0, init=False)
-
-    def __post_init__(self) -> None:
-        self._tls = ReloadingTlsContext(self.certificate_file, self.key_file)
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
             self._handle_connection,
             host=self.host,
             port=self.port,
-            ssl=self._tls.server_context,
+            ssl=self.tls.server_context,
             ssl_handshake_timeout=self.tls_handshake_timeout_seconds,
         )
+        self._certificate_reload_task = asyncio.create_task(self._reload_certificates())
         logger.info("TCP ingress listening on %s:%s", self.host, self.port)
 
     async def close(self) -> None:
-        if self._server is None:
-            return
-        self._server.close()
-        await self._server.wait_closed()
+        failures: list[BaseException] = []
+        reload_task = self._certificate_reload_task
+        self._certificate_reload_task = None
+        if reload_task is not None:
+            reload_task.cancel()
+            try:
+                with suppress(asyncio.CancelledError):
+                    await reload_task
+            except BaseException as exc:
+                failures.append(exc)
+        server = self._server
         self._server = None
+        if server is not None:
+            try:
+                server.close()
+                await server.wait_closed()
+            except BaseException as exc:
+                failures.append(exc)
+        if failures:
+            raise BaseExceptionGroup("TCP ingress shutdown was incomplete", failures)
+
+    async def _reload_certificates(self) -> None:
+        while True:
+            await asyncio.sleep(1)
+            await self.tls.reload_if_changed()
 
     async def _handle_connection(
         self,
@@ -301,19 +373,18 @@ class TcpIngressServer:
         backend: socket.socket | None = None
         try:
             ssl_object: ssl.SSLObject | ssl.SSLSocket | None = writer.get_extra_info("ssl_object")
-            sni = self._tls.server_name(ssl_object)
+            sni = self.tls.server_name(ssl_object)
             if not sni:
                 raise TcpIngressRouteNotFound("TLS SNI is required")
-            route = await asyncio.to_thread(self.route_resolver.resolve, sni)
-            session = await asyncio.to_thread(
-                self.pod_service.prepare_pod_proxy,
+            route = await self.route_resolver.resolve(sni)
+            session = await self.pod_service.prepare_pod_proxy(
                 stub_id=route.stub_id,
                 port=route.port,
                 path="",
                 query_params={},
                 protocol=PodProxyProtocol.Tcp,
             )
-            backend = await asyncio.to_thread(self.pod_service.open_pod_proxy_socket, session)
+            backend = await self.pod_service.open_pod_proxy_socket(session)
             backend.setblocking(False)
             await _proxy_bidirectional(reader, writer, backend)
         except TcpIngressError as exc:
@@ -324,7 +395,7 @@ class TcpIngressServer:
             if backend is not None:
                 backend.close()
             if session is not None:
-                await asyncio.to_thread(self.pod_service.finish_pod_proxy, session)
+                await self.pod_service.finish_pod_proxy(session)
             await _close_writer(writer)
             self._active_connections -= 1
 
@@ -379,7 +450,7 @@ async def _close_writer(writer: TlsStreamWriter) -> None:
         return
 
 
-def tcp_ingress_server_from_settings(
+async def tcp_ingress_server_from_settings(
     services: ApiServices,
     pod_service: PodControlService,
     settings: TcpIngressSettings,
@@ -392,17 +463,16 @@ def tcp_ingress_server_from_settings(
         raise ValueError("TCP ingress certificate and key files are required")
     resolver = RedisTcpIngressRouteResolver(
         services=services,
-        redis=services.redis(),
+        redis=services.require_async_io().redis,
         external_host=settings.external_host,
         cache_ttl_seconds=settings.route_cache_ttl_seconds,
     )
     return TcpIngressServer(
         route_resolver=resolver,
         pod_service=pod_service,
+        tls=await ReloadingTlsContext.create(certificate_file, key_file),
         host=settings.host,
         port=settings.port,
-        certificate_file=certificate_file,
-        key_file=key_file,
         max_connections=settings.max_connections,
         tls_handshake_timeout_seconds=settings.tls_handshake_timeout_seconds,
     )

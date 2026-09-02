@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 
 import pytest
 from api.fastapi_app import create_app
+from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
 from coordination.redis_client import RedisClient
 from fastapi.testclient import TestClient
 from observability.stream_state import (
+    AsyncRedisEventStreamRepository,
     RealtimeStreamRetention,
     RedisEventStreamRepository,
+    RedisStreamRecord,
 )
 from pydantic import JsonValue
 from shared.errors import ExpiredCursorError
@@ -21,6 +25,16 @@ from shared.realtime.contracts import (
 from shared.realtime.streams import EventHistoryQuery, LogStreamQuery
 from tests.real_redis import RealRedisActors
 from tests.service_fixtures import administrator_credential
+
+
+@pytest.fixture
+async def async_io(isolated_services: ApiServices) -> AsyncIterator[ApiAsyncIo]:
+    io = isolated_services.require_async_io()
+    await io.start()
+    try:
+        yield io
+    finally:
+        await io.close()
 
 
 def test_real_redis_single_and_batch_appends_bound_every_stream_and_cleanup(
@@ -87,13 +101,16 @@ def test_real_redis_single_and_batch_appends_bound_every_stream_and_cleanup(
     assert all(redis.exists(key) for key in single_streams)
 
 
-def test_real_redis_expired_cursors_clamp_or_raise_typed_conflict(
+@pytest.mark.anyio
+async def test_real_redis_expired_cursors_clamp_or_raise_typed_conflict(
+    async_io: ApiAsyncIo,
     real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
+    retention = RealtimeStreamRetention(ttl_seconds=30, max_entries=25)
     repository = RedisEventStreamRepository(
         redis,
-        retention=RealtimeStreamRetention(ttl_seconds=30, max_entries=25),
+        retention=retention,
     )
     workspace_id = "cursor-workspace"
 
@@ -115,14 +132,19 @@ def test_real_redis_expired_cursors_clamp_or_raise_typed_conflict(
     )
     assert clamped_logs
     assert clamped_logs[0].entry_id != old_log_cursor
-    followed_logs = tuple(
-        repository.stream_logs(
+    async_repository = AsyncRedisEventStreamRepository(
+        async_io.redis,
+        retention=retention,
+    )
+    followed_log = await _first_record(
+        await async_repository.follow_logs(
+            async_io.realtime,
             LogStreamQuery(workspace_id=workspace_id, cursor=old_log_cursor),
-            block_milliseconds=1,
             max_events=1,
+            heartbeat_seconds=1.0,
         )
     )
-    assert followed_logs[0].entry_id == clamped_logs[0].entry_id
+    assert followed_log.entry_id == clamped_logs[0].entry_id
     with pytest.raises(
         ExpiredCursorError,
         match="realtime cursor is older than retained history",
@@ -155,42 +177,42 @@ def test_real_redis_expired_cursors_clamp_or_raise_typed_conflict(
     )
     assert clamped_events
     assert clamped_events[0].entry_id != old_event_cursor
-    followed_events = tuple(
-        repository.stream_event_history(
+    followed_event = await _first_record(
+        await async_repository.follow_event_history(
+            async_io.realtime,
             event_query,
             last_event_id=old_event_cursor,
-            block_milliseconds=1,
             max_events=1,
+            heartbeat_seconds=1.0,
         )
     )
-    assert followed_events[0].entry_id == clamped_events[0].entry_id
+    assert followed_event.entry_id == clamped_events[0].entry_id
     with pytest.raises(
         ExpiredCursorError,
         match="realtime cursor is older than retained history",
     ):
-        repository.stream_event_history(
+        await async_repository.follow_event_history(
+            async_io.realtime,
             event_query,
             last_event_id=old_event_cursor,
             clamp=False,
-            block_milliseconds=1,
             max_events=1,
+            heartbeat_seconds=1.0,
         )
 
 
 def test_api_maps_expired_event_cursor_to_409(
     isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
-    request: pytest.FixtureRequest,
     client_stack: ExitStack,
 ) -> None:
     redis = real_redis_actors.client()
-    services = _services_with_redis(isolated_services, redis, request)
     repository = RedisEventStreamRepository(
         redis,
         retention=RealtimeStreamRetention(ttl_seconds=30, max_entries=25),
     )
-    with services.context.database.session() as session:
-        workspace_id = services.context.default_workspace_id(session)
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
 
     repository.append_event(
         EventRecordType.TaskUpdated,
@@ -206,7 +228,7 @@ def test_api_maps_expired_event_cursor_to_409(
             event_id=f"api-event-{index}",
         )
 
-    client = client_stack.enter_context(TestClient(create_app(services)))
+    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     token, _record = administrator_credential(isolated_services, "cursor-admin")
     headers = {"Authorization": f"Bearer {token}"}
     event_response = client.get(
@@ -228,24 +250,11 @@ def test_api_maps_expired_event_cursor_to_409(
     }
 
 
-def _services_with_redis(
-    isolated_services: ApiServices,
-    redis: RedisClient,
-    request: pytest.FixtureRequest,
-) -> ApiServices:
-    services = ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        create_schema=False,
-        workspace_storage_issuer=isolated_services.workspace_storage_issuer,
-        volume_filesystem=isolated_services.volume_filesystem,
-        redis_client=redis,
-        binary_redis_client=isolated_services.binary_redis_client,
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-    )
-    request.addfinalizer(services.close)
-    return services
+async def _first_record(records: AsyncIterator[RedisStreamRecord | None]) -> RedisStreamRecord:
+    async for record in records:
+        if record is not None:
+            return record
+    raise AssertionError("followed stream ended without a record")
 
 
 def _log_data(workspace_id: str, container_id: str, index: int) -> dict[str, JsonValue]:

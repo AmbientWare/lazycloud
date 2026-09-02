@@ -11,12 +11,12 @@ class RealRedisActors:
     prefix: str
     clients: list[RedisClient] = field(default_factory=list)
 
-    def client(self) -> RedisClient:
+    def client(self, *, decode_responses: bool = True) -> RedisClient:
         client = RedisClient.from_settings(
             RedisSettings(
                 url=self.url,
                 key_prefix=self.prefix,
-                decode_responses=True,
+                decode_responses=decode_responses,
                 socket_timeout_seconds=2.0,
                 health_check_interval_seconds=1,
             )

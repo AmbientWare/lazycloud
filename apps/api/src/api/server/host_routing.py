@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from ipaddress import ip_address
 from typing import Protocol
 
 from control.service import ControlPlaneService, StubKind, StubRecord
+from database.types import DatabaseSession
 from shared.deployment_subdomains import parse_deployment_host
 from shared.errors import NotFoundError
 from shared.urls import handler_prefix
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from api.server.deployed_stubs import stub_is_public
+from api.server.deployed_stubs import stub_is_public_in_session
 from api.server.services import ApiServices
 
 PORT_HOST_PATTERN = re.compile(r"^(?P<target>.+)-(?P<port>[1-9][0-9]{0,4})$")
@@ -43,17 +45,26 @@ class GeneratedInvokeHostRoutingMiddleware:
         if scope["type"] not in {"http", "websocket"}:
             await self.app(scope, receive, send)
             return
+        if scope.get("path") == "/livez":
+            await self.app(scope, receive, send)
+            return
         services = self.services_provider.current()
         base_host = services.gateway_settings.public_base_domain
         if not base_host:
             await self.app(scope, receive, send)
             return
         host = _scope_host(scope).split(":", 1)[0].strip(".").lower()
-        handler_path = _resolve_handler_path(
-            services,
-            host,
-            base_host=base_host,
-            original_path=str(scope.get("path") or "/"),
+        if not _is_routable_host(host, base_host=base_host):
+            await self.app(scope, receive, send)
+            return
+        handler_path = await services.require_async_io().database.run_transaction(
+            lambda session: _resolve_handler_path(
+                services,
+                session,
+                host,
+                base_host=base_host,
+                original_path=str(scope.get("path") or "/"),
+            )
         )
         if handler_path is None:
             # A host that names nothing falls through to the platform's own routes,
@@ -69,9 +80,17 @@ class GeneratedInvokeHostRoutingMiddleware:
         await self.app(rewritten, receive, send)
 
 
+def _is_routable_host(host: str, *, base_host: str) -> bool:
+    if not host or host == base_host or "." not in host:
+        return False
+    try:
+        ip_address(host)
+    except ValueError:
+        return True
+    return False
+
+
 def _host_label(host: str, *, base_host: str) -> str:
-    if not host or host == base_host:
-        return ""
     suffix = f".{base_host}"
     if not host.endswith(suffix):
         return ""
@@ -90,12 +109,13 @@ class _HostTarget:
 
 def _resolve_handler_path(
     services: ApiServices,
+    session: DatabaseSession,
     host: str,
     *,
     base_host: str,
     original_path: str,
 ) -> str | None:
-    target = _resolve_host_target(services, host, base_host=base_host)
+    target = _resolve_host_target(services, session, host, base_host=base_host)
     if target is None:
         return None
     prefix = _kind_path(target.stub.kind)
@@ -104,7 +124,7 @@ def _resolve_handler_path(
     if target.stub.kind in PROXY_STUB_KINDS and target.port is None:
         return None
     route_id = target.container_id or target.stub.id
-    if stub_is_public(services.apps, target.stub):
+    if stub_is_public_in_session(services, session, target.stub):
         base_path = f"/{prefix}/public/{route_id}"
     elif target.stub_id_route:
         base_path = f"/{prefix}/id/{route_id}"
@@ -119,6 +139,7 @@ def _resolve_handler_path(
 
 def _resolve_host_target(
     services: ApiServices,
+    session: DatabaseSession,
     host: str,
     *,
     base_host: str,
@@ -131,25 +152,29 @@ def _resolve_host_target(
 
     label = _host_label(host, base_host=base_host)
     if not label:
-        return _custom_hostname_target(services, host) if host else None
+        return _custom_hostname_target(services, session, host)
 
     control_plane = ControlPlaneService(services.context)
     try:
-        stub = control_plane.get_stub(label)
+        stub = control_plane.get_stub_in_session(session, label)
     except NotFoundError:
         stub = None
     if stub is not None:
         return _HostTarget(stub=stub, stub_id_route=True)
 
-    port_target = _port_host_target(services, control_plane, label)
+    port_target = _port_host_target(services, session, control_plane, label)
     if port_target is not None:
         return port_target
 
-    return _deployment_host_target(services, label)
+    return _deployment_host_target(services, session, label)
 
 
-def _custom_hostname_target(services: ApiServices, host: str) -> _HostTarget | None:
-    resource = services.deployment_resources.get_by_custom_hostname(host)
+def _custom_hostname_target(
+    services: ApiServices,
+    session: DatabaseSession,
+    host: str,
+) -> _HostTarget | None:
+    resource = services.deployment_resources.get_by_custom_hostname_in_session(session, host)
     if resource is None:
         return None
     return _HostTarget(stub=resource.stub, deployment_name=resource.deployment.name)
@@ -157,6 +182,7 @@ def _custom_hostname_target(services: ApiServices, host: str) -> _HostTarget | N
 
 def _port_host_target(
     services: ApiServices,
+    session: DatabaseSession,
     control_plane: ControlPlaneService,
     label: str,
 ) -> _HostTarget | None:
@@ -170,12 +196,16 @@ def _port_host_target(
         return None
     routed_name = port_match.group("target")
     try:
-        container = services.containers.get(routed_name)
+        container = services.containers.get_in_session(session, routed_name)
     except NotFoundError:
         container = None
     if container is not None and container.stub_id is not None:
         try:
-            stub = control_plane.get_stub(container.stub_id, workspace=container.workspace_id)
+            stub = control_plane.get_stub_in_session(
+                session,
+                container.stub_id,
+                workspace=container.workspace_id,
+            )
         except NotFoundError:
             stub = None
         if (
@@ -190,7 +220,7 @@ def _port_host_target(
                 stub_id_route=True,
             )
     try:
-        stub = control_plane.get_stub(routed_name)
+        stub = control_plane.get_stub_in_session(session, routed_name)
     except NotFoundError:
         stub = None
     if stub is not None and stub.kind is StubKind.Pod:
@@ -198,11 +228,16 @@ def _port_host_target(
     return None
 
 
-def _deployment_host_target(services: ApiServices, label: str) -> _HostTarget | None:
+def _deployment_host_target(
+    services: ApiServices,
+    session: DatabaseSession,
+    label: str,
+) -> _HostTarget | None:
     parsed = parse_deployment_host(label)
     if parsed is None:
         return None
-    resource = services.deployment_resources.get_by_subdomain(
+    resource = services.deployment_resources.get_by_subdomain_in_session(
+        session,
         parsed.subdomain,
         version=parsed.version,
     )

@@ -24,7 +24,7 @@ DEFAULT_READINESS_PROBE_TIMEOUT_SECONDS = 2.0
 DEFAULT_READINESS_CACHE_TTL_MS = 500
 
 
-class ContainerReadiness(Protocol):
+class AsyncContainerReadiness(Protocol):
     """Ask whether one backend is serving.
 
     An empty `health_path` means a TCP connect, which proves only that something
@@ -32,7 +32,7 @@ class ContainerReadiness(Protocol):
     itself, which is the only form that tells a bound socket from a working one.
     """
 
-    def is_ready(
+    async def is_ready(
         self,
         *,
         container_id: str,
@@ -47,5 +47,5 @@ class ContainerReadiness(Protocol):
 __all__ = [
     "DEFAULT_READINESS_CACHE_TTL_MS",
     "DEFAULT_READINESS_PROBE_TIMEOUT_SECONDS",
-    "ContainerReadiness",
+    "AsyncContainerReadiness",
 ]

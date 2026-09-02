@@ -69,6 +69,7 @@ def services_with_redis_container_control(
         volume_metering=services.volume_metering,
         redis_client=redis,
         binary_redis_client=redis,
+        async_io=services.require_async_io(),
     )
 
 

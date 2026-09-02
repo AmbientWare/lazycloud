@@ -90,6 +90,7 @@ def test_liveness_answers_without_the_service_graph(
         create_schema=False,
         redis_client=redis,
         binary_redis_client=redis,
+        async_io=isolated_services.require_async_io(),
     )
     app = create_app(services)
     # Read before any request, because a dependency resolved at import time
@@ -111,6 +112,7 @@ def test_control_plane_health_endpoint_reports_dependency_failure(
         create_schema=False,
         redis_client=redis,
         binary_redis_client=redis,
+        async_io=isolated_services.require_async_io(),
     )
     with TestClient(create_app(services)) as client:
         response = client.get("/health")

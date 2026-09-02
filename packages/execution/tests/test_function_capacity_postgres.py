@@ -10,17 +10,20 @@ an unlocked read looks correct.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from threading import Barrier
 from uuid import uuid4
 
+import pytest
+from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
+from coordination.redis_client import RedisSettings
 from database.tables.orchestration import ContainerTable
 from execution.functions.service import FunctionControlService
 from shared.function_payloads import FunctionJsonInvocation
@@ -32,6 +35,7 @@ from shared.scheduling import (
 )
 from sqlalchemy import func, select, text
 from tests.backing_services import postgres_url
+from tests.real_redis import RealRedisActors
 from tests.service_fixtures import service_graph
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -54,8 +58,12 @@ class _AcceptingScheduler:
         )
 
 
-def test_postgresql_function_capacity_is_bounded_when_starts_race(tmp_path: Path) -> None:
-    with _postgres_services(tmp_path) as services:
+@pytest.mark.anyio
+async def test_postgresql_function_capacity_is_bounded_when_starts_race(
+    tmp_path: Path,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    async with _postgres_services(tmp_path, real_redis_actors) as services:
         _prove_a_simultaneous_burst_starts_one_container(services)
         _prove_the_autoscaler_stops_at_the_ceiling(services)
 
@@ -146,8 +154,11 @@ def _container_count(services: ApiServices, *, stub_id: str) -> int:
     return count
 
 
-@contextmanager
-def _postgres_services(tmp_path: Path) -> Iterator[ApiServices]:
+@asynccontextmanager
+async def _postgres_services(
+    tmp_path: Path,
+    real_redis_actors: RealRedisActors,
+) -> AsyncIterator[ApiServices]:
     base_url = postgres_url()
     database_name = f"function_capacity_{uuid4().hex}"
     admin = DatabaseClient.from_settings(
@@ -159,22 +170,39 @@ def _postgres_services(tmp_path: Path) -> Iterator[ApiServices]:
     try:
         with admin.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
             connection.execute(text(f'CREATE DATABASE "{database_name}"'))
-        database = DatabaseClient.from_settings(
-            DatabaseSettings(
-                url=base_url.set(database=database_name).render_as_string(hide_password=False),
-                # Every contender holds a session while it waits on the capacity
-                # lock, so a pool shallower than the burst would serialize them
-                # in the pool and prove nothing about the lock.
-                pool_size=CONTENDERS + 2,
-                max_overflow=0,
-                application_name=DatabaseApplicationName.Test,
-            )
+        database_settings = DatabaseSettings(
+            url=base_url.set(database=database_name).render_as_string(hide_password=False),
+            # Every contender holds a session while it waits on the capacity
+            # lock, so a pool shallower than the burst would serialize them
+            # in the pool and prove nothing about the lock.
+            pool_size=CONTENDERS + 2,
+            max_overflow=0,
+            application_name=DatabaseApplicationName.Test,
         )
-        with service_graph(database, tmp_path) as graph:
-            yield replace(
-                graph,
-                containers=replace(graph.containers, scheduler=_AcceptingScheduler()),
-            )
+        database = DatabaseClient.from_settings(database_settings)
+        async_io = ApiAsyncIo.from_settings(
+            database_settings,
+            RedisSettings(
+                url=real_redis_actors.url,
+                key_prefix=real_redis_actors.prefix,
+                socket_timeout_seconds=2.0,
+                health_check_interval_seconds=1,
+            ),
+        )
+        try:
+            with service_graph(
+                database,
+                tmp_path,
+                redis_client=real_redis_actors.client(),
+                binary_redis_client=real_redis_actors.client(decode_responses=False),
+                async_io=async_io,
+            ) as graph:
+                yield replace(
+                    graph,
+                    containers=replace(graph.containers, scheduler=_AcceptingScheduler()),
+                )
+        finally:
+            await async_io.close()
     finally:
         with admin.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
             connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'))

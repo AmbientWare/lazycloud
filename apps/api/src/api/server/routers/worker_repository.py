@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from identity.auth import AuthError, AuthorizationDeniedError
 from identity.authz import worker_requirement
+from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.identity import AuthScope
+from worker.events import WorkerStreamEvent
 from worker.origin_access import (
     CacheOriginCredentialRequest,
     ImageArchiveUploadCredentialRequest,
@@ -48,6 +51,7 @@ from worker.repository_payloads import (
     GetImageBuildCredentialsRequest,
     GetImageBuildCredentialsResponse,
     GetNextContainerRequestRequest,
+    GetNextContainerRequestResponse,
     GetWorkerAddressRequest,
     GetWorkerAddressResponse,
     GetWorkerByIdResponse,
@@ -124,12 +128,15 @@ from api.server.worker_repository_service import WorkerRepositoryService
 router = APIRouter(tags=["worker-repository"])
 
 
-def worker_repository_principal(
+async def worker_repository_principal(
     services: Annotated[ApiServices, Depends(current_services)],
     credentials: AuthorizationCredentials = None,
 ) -> WorkerRepositoryPrincipal:
     try:
-        token = services.auth.authorize_header(
+        io = services.require_async_io()
+        principal = await services.auth.authorize_principal_async(
+            io.database,
+            io.auth_invalidation,
             authorization_header(credentials),
             worker_requirement(action=AuthScope.Worker),
             allow_if_no_tokens=False,
@@ -138,9 +145,9 @@ def worker_repository_principal(
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except AuthError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
-    if token is None:
+    if principal is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "worker token is required")
-    return WorkerRepositoryPrincipal.from_token(token)
+    return WorkerRepositoryPrincipal.from_token(principal.token)
 
 
 WorkerPrincipal = Annotated[WorkerRepositoryPrincipal, Depends(worker_repository_principal)]
@@ -168,27 +175,46 @@ def get_next_container_request(
     request: GetNextContainerRequestRequest,
     service: WorkerRepo,
     principal: WorkerPrincipal,
+    services: Annotated[ApiServices, Depends(current_services)],
 ) -> StreamingResponse:
     _require_worker_subject(principal, request.worker_id, action="worker request stream")
     return sse_response(
-        ("container-request", "", item)
-        for item in service.stream_next_container_requests(request, principal=principal)
+        _container_request_items(
+            service.stream_next_container_requests(
+                services.require_async_io(),
+                request,
+                principal=principal,
+            )
+        )
     )
+
+
+async def _container_request_items(
+    requests: AsyncIterator[GetNextContainerRequestResponse],
+) -> AsyncIterator[tuple[str, str, object]]:
+    # The response has already started, so these cannot become a 409 or 503;
+    # the worker reconnects and the next stream revalidates it.
+    try:
+        async for item in requests:
+            yield ("container-request", "", item)
+    except (ConflictError, UpstreamUnavailableError):
+        return
 
 
 @router.post(
     "/worker-repository/acknowledge-container-request",
     response_model=AcknowledgeContainerRequestResponse,
 )
-def acknowledge_container_request(
+async def acknowledge_container_request(
     request: AcknowledgeContainerRequestRequest,
     service: WorkerRepo,
     principal: WorkerPrincipal,
+    services: Annotated[ApiServices, Depends(current_services)],
 ) -> AcknowledgeContainerRequestResponse:
     _require_worker_subject(
         principal, request.worker_id, action="container request acknowledgement"
     )
-    return service.acknowledge_container_request(request)
+    return await service.acknowledge_container_request(services.require_async_io(), request)
 
 
 @router.post("/worker-repository/stream-worker-events", response_class=StreamingResponse)
@@ -196,24 +222,33 @@ def stream_worker_events(
     request: StreamWorkerEventsRequest,
     service: WorkerRepo,
     principal: WorkerPrincipal,
+    services: Annotated[ApiServices, Depends(current_services)],
 ) -> StreamingResponse:
     _require_worker_subject(principal, request.worker_id, action="worker event stream")
     return sse_response(
-        ("worker-event", "", item) for item in service.stream_worker_events(request)
+        _worker_event_items(service.stream_worker_events(services.require_async_io(), request))
     )
+
+
+async def _worker_event_items(
+    events: AsyncIterator[WorkerStreamEvent],
+) -> AsyncIterator[tuple[str, str, object]]:
+    async for item in events:
+        yield ("worker-event", "", item)
 
 
 @router.post(
     "/worker-repository/acknowledge-worker-event",
     response_model=AcknowledgeWorkerEventResponse,
 )
-def acknowledge_worker_event(
+async def acknowledge_worker_event(
     request: AcknowledgeWorkerEventRequest,
     service: WorkerRepo,
     principal: WorkerPrincipal,
+    services: Annotated[ApiServices, Depends(current_services)],
 ) -> AcknowledgeWorkerEventResponse:
     _require_worker_subject(principal, request.worker_id, action="worker event acknowledgement")
-    return service.acknowledge_worker_event(request)
+    return await service.acknowledge_worker_event(services.require_async_io(), request)
 
 
 @router.post(

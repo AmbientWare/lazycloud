@@ -224,7 +224,26 @@ class WorkerSourceCacheService:
         generation_id: str,
         session_fence: int,
     ) -> WorkerCacheGenerationRecord:
-        generation = self.current(
+        with self.context.database.session() as session:
+            return self.require_available_in_session(
+                session,
+                principal=principal,
+                worker_id=worker_id,
+                generation_id=generation_id,
+                session_fence=session_fence,
+            )
+
+    def require_available_in_session(
+        self,
+        session: DatabaseSession,
+        *,
+        principal: WorkerRepositoryPrincipal,
+        worker_id: str,
+        generation_id: str,
+        session_fence: int,
+    ) -> WorkerCacheGenerationRecord:
+        generation = self.current_in_session(
+            session,
             principal=principal,
             worker_id=worker_id,
             generation_id=generation_id,
@@ -247,25 +266,42 @@ class WorkerSourceCacheService:
         generation_id: str,
         session_fence: int,
     ) -> WorkerCacheGenerationRecord:
-        self._authorize_worker(principal, worker_id)
-        now = utc_now()
         with self.context.database.session() as session:
-            repository = SourceCacheCleanupRepository(session)
-            generation = self._require_generation(
-                repository,
+            return self.current_in_session(
+                session,
                 principal=principal,
                 worker_id=worker_id,
                 generation_id=generation_id,
                 session_fence=session_fence,
             )
-            if not repository.touch_generation(
-                generation_id,
-                worker_id=worker_id,
-                session_fence=session_fence,
-                now=now,
-            ):
-                raise ConflictError("worker source cache session is no longer current")
-            return generation.model_copy(update={"last_seen_at": now, "updated_at": now})
+
+    def current_in_session(
+        self,
+        session: DatabaseSession,
+        *,
+        principal: WorkerRepositoryPrincipal,
+        worker_id: str,
+        generation_id: str,
+        session_fence: int,
+    ) -> WorkerCacheGenerationRecord:
+        self._authorize_worker(principal, worker_id)
+        now = utc_now()
+        repository = SourceCacheCleanupRepository(session)
+        generation = self._require_generation(
+            repository,
+            principal=principal,
+            worker_id=worker_id,
+            generation_id=generation_id,
+            session_fence=session_fence,
+        )
+        if not repository.touch_generation(
+            generation_id,
+            worker_id=worker_id,
+            session_fence=session_fence,
+            now=now,
+        ):
+            raise ConflictError("worker source cache session is no longer current")
+        return generation.model_copy(update={"last_seen_at": now, "updated_at": now})
 
     @staticmethod
     def _workspace_scope(principal: WorkerRepositoryPrincipal) -> str | None:
