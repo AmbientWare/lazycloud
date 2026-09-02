@@ -15,7 +15,7 @@ from shared.managed_runtime_integrity import (
     managed_runtime_artifact_digest,
 )
 
-MANAGED_DISTRIBUTIONS = ("foundation", "runner", "lazycloud", "lazycloud-shared")
+MANAGED_DISTRIBUTIONS = ("foundation", "runner", "lazycloud-client", "lazycloud-shared")
 SUPPORTED_PYTHON_VERSIONS = ("3.10", "3.11", "3.12")
 SUPPORTED_ARCHITECTURES = ("amd64", "arm64")
 SCHEMA_VERSION = 3

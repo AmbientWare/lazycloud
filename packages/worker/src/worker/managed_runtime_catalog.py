@@ -20,7 +20,7 @@ MANAGED_RUNTIME_ARCHITECTURES = (
     LinuxArchitecture.Amd64,
     LinuxArchitecture.Arm64,
 )
-MANAGED_RUNTIME_DISTRIBUTIONS = ("foundation", "runner", "lazycloud", "lazycloud-shared")
+MANAGED_RUNTIME_DISTRIBUTIONS = ("foundation", "runner", "lazycloud-client", "lazycloud-shared")
 MANAGED_RUNTIME_CATALOG_FILE = "catalog.json"
 MANAGED_RUNTIME_LAUNCHER_FILE = "launcher.py"
 
