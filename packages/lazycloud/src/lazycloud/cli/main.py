@@ -33,6 +33,7 @@ from lazycloud.cli.resources import (
 )
 from lazycloud.cli.secrets import secret_app
 from lazycloud.cli.serve import serve
+from lazycloud.cli.update import update
 from lazycloud.cli.volumes import volume_app, volume_cp, volume_ls, volume_mv, volume_rm
 from lazycloud.cli.workspaces import workspace_app
 
@@ -193,6 +194,7 @@ def _register_public_commands(registry: PublicCliRegistry) -> None:
     registry.add_root_command("logs", _register_logs)
     registry.add_root_command("quickstart", _register_quickstart)
     registry.add_root_command("create-app", _register_create_app)
+    registry.add_root_command("update", _register_update)
     registry.add_root_command("ls", _register_volume_ls)
     registry.add_root_command("cp", _register_volume_cp)
     registry.add_root_command("rm", _register_volume_rm)
@@ -225,6 +227,10 @@ def _register_serve(application: typer.Typer) -> None:
 
 def _register_login(application: typer.Typer) -> None:
     application.command("login", help="Authenticate the CLI profile.")(login)
+
+
+def _register_update(application: typer.Typer) -> None:
+    application.command("update", help="Upgrade the installed lazycloud client.")(update)
 
 
 def _register_dev(application: typer.Typer) -> None:

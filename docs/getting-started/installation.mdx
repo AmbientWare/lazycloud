@@ -22,6 +22,16 @@ Check the install:
 lazycloud --help
 ```
 
+Upgrade later with the CLI itself. It upgrades through whichever installer
+put it there (`uv tool`, `pipx`, `uv`, or `pip`):
+
+```bash
+lazycloud update
+```
+
+`lazycloud update --check` reports the installed and latest versions without
+changing anything.
+
 The CLI keeps its sign-in state under `~/.lazycloud`. Set `LAZYCLOUD_HOME` to
 put it somewhere else.
 
