@@ -452,7 +452,14 @@ class ContainerService:
     def get(self, container_id: str) -> ContainerRecord:
         """System-authority lookup for the execution engine's own control flow."""
         with self.context.database.session() as session:
-            record = ContainerRepository(session).get_across_workspaces(container_id)
+            return self.get_in_session(session, container_id)
+
+    def get_in_session(
+        self,
+        session: DatabaseSession,
+        container_id: str,
+    ) -> ContainerRecord:
+        record = ContainerRepository(session).get_across_workspaces(container_id)
         if record is None:
             msg = f"container not found: {container_id}"
             raise NotFoundError(msg)

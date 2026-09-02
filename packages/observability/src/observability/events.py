@@ -15,6 +15,7 @@ from shared.realtime.streams import EventHistoryQuery
 from shared.timestamps import utc_now
 from shared.worker_events import TELEMETRY_EVENT_ACTIONS
 
+from database import AsyncDatabaseClient
 from observability.context import ObservabilityContext
 from observability.event_summary import (
     ContainerEventsBatchRequest,
@@ -32,6 +33,7 @@ TELEMETRY_EVENT_RETENTION = timedelta(days=1)
 class EventService:
     context: ObservabilityContext
     stream_events: RedisEventStreamRepository | None = None
+    async_database: AsyncDatabaseClient | None = None
 
     def emit(
         self,
@@ -45,17 +47,68 @@ class EventService:
         workspace_id: str | None = None,
     ) -> Event:
         with self.context.database.session() as session:
-            return EventRepository(session).records.create_across_workspaces(
-                {
-                    "action": action,
-                    "level": level.value,
-                    "resource_type": resource_type,
-                    "resource_id": resource_id,
-                    "message": message,
-                    "data": data or {},
-                },
+            return self.emit_in_session(
+                session,
+                action,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                message=message,
+                level=level,
+                data=data,
                 workspace_id=workspace_id,
             )
+
+    async def emit_async(
+        self,
+        action: str,
+        *,
+        resource_type: str,
+        resource_id: str,
+        message: str,
+        level: EventLevel = EventLevel.Info,
+        data: dict[str, JsonValue] | None = None,
+        workspace_id: str | None = None,
+    ) -> Event:
+        database = self.async_database
+        if database is None:
+            raise RuntimeError("asynchronous event database is not configured")
+        return await database.run_transaction(
+            lambda session: self.emit_in_session(
+                session,
+                action,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                message=message,
+                level=level,
+                data=data,
+                workspace_id=workspace_id,
+            )
+        )
+
+    @staticmethod
+    def emit_in_session(
+        session: DatabaseSession,
+        action: str,
+        *,
+        resource_type: str,
+        resource_id: str,
+        message: str,
+        level: EventLevel = EventLevel.Info,
+        data: dict[str, JsonValue] | None = None,
+        workspace_id: str | None = None,
+    ) -> Event:
+        """Write the event on the caller's session so it commits with the caller's change."""
+        return EventRepository(session).records.create_across_workspaces(
+            {
+                "action": action,
+                "level": level.value,
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "message": message,
+                "data": data or {},
+            },
+            workspace_id=workspace_id,
+        )
 
     def list(
         self,

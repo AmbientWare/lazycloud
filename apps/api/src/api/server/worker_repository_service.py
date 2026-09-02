@@ -3,8 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import tempfile
-import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -12,15 +11,14 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from compute.state import RedisComputeStateRepository
+from compute.state import AsyncRedisComputeStateRepository, RedisComputeStateRepository
 from control.deployment_resources import DeploymentResourceService
 from coordination.event_bus import (
     EventBusEvent,
     EventBusEventType,
     RedisEventBus,
-    event_channel_key,
 )
-from coordination.redis_client import RedisClient, redis_text
+from coordination.redis_client import AsyncRedisClient, RedisClient, redis_text
 from database.context import ServiceContext
 from database.repositories.compute import ComputeUnitRepository
 from database.repositories.execution import TaskRepository
@@ -42,11 +40,12 @@ from observability.container_logs import (
     ContainerLogIngestionService,
     ContainerLogRuntimeAttribution,
 )
-from observability.stream_state import RedisEventStreamRepository
+from observability.stream_state import AsyncRedisEventStreamRepository, RedisEventStreamRepository
 from observability.usage import UsageService, WorkerEventService
 from observability.workspace_changes import WorkspaceChangeService
 from pydantic import JsonValue
 from scheduler.state import (
+    AsyncRedisSchedulerContainerReader,
     ContainerStateNotFoundError,
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
@@ -222,6 +221,9 @@ from worker_repository.source_cache import (
     WorkerSourceCacheService,
     WorkerSourceCacheUnavailableError,
 )
+
+from api.server.async_io import ApiAsyncIo
+from api.server.worker_event_broker import worker_event_target
 
 LOGGER = logging.getLogger(__name__)
 WORKER_REQUEST_BLOCK_SECONDS = 1.0
@@ -437,6 +439,17 @@ class WorkerRepositoryService:
         # A workspace with no owner answers empty, which no private worker matches.
         return owner.user_id if owner is not None else ""
 
+    async def _workspace_owner_user_id_async(
+        self,
+        io: ApiAsyncIo,
+        workspace_id: str,
+    ) -> str:
+        def owner_user_id(session: DatabaseSession) -> str:
+            owner = WorkspaceMemberRepository(session).owner(workspace_id)
+            return owner.user_id if owner is not None else ""
+
+        return await io.database.run_transaction(owner_user_id)
+
     def _validate_worker_stream(
         self,
         worker_id: str,
@@ -446,6 +459,27 @@ class WorkerRepositoryService:
         worker = self.workers.get_worker(worker_id)
         if worker is None:
             raise UpstreamUnavailableError(f"assigned worker state is unavailable: {worker_id}")
+        private_principal = self._validate_worker_stream_record(
+            worker,
+            worker_id=worker_id,
+            principal=principal,
+        )
+        if private_principal is not None:
+            if self.services is None:
+                raise UpstreamUnavailableError(
+                    "service dependencies are required for private worker admission"
+                )
+            with self.services.context.database.session() as session:
+                self._require_durable_worker_match(session, worker, private_principal)
+        return worker
+
+    @staticmethod
+    def _validate_worker_stream_record(
+        worker: SchedulerWorkerRecord,
+        *,
+        worker_id: str,
+        principal: WorkerRepositoryPrincipal | None,
+    ) -> WorkerRepositoryPrincipal | None:
         if principal is not None and principal.worker_id != worker_id:
             raise ConflictError("worker request does not match the authenticated worker")
         private_principal = (
@@ -458,34 +492,60 @@ class WorkerRepositoryService:
                 raise UpstreamUnavailableError(
                     f"private worker machine identity is unavailable: {worker_id}"
                 )
-            if self.services is None:
-                raise UpstreamUnavailableError(
-                    "service dependencies are required for private worker admission"
+        return private_principal
+
+    @staticmethod
+    def _require_durable_worker_match(
+        session: DatabaseSession,
+        worker: SchedulerWorkerRecord,
+        principal: WorkerRepositoryPrincipal,
+    ) -> None:
+        durable_worker = WorkerRepository(session).get(
+            worker.worker_id,
+            workspace_id=principal.workspace_id,
+        )
+        if durable_worker is None or durable_worker.pool != worker.pool:
+            raise ConflictError(
+                f"worker {worker.worker_id} enrollment does not match scheduler state"
+            )
+
+    async def _validate_worker_stream_async(
+        self,
+        io: ApiAsyncIo,
+        worker_id: str,
+        *,
+        principal: WorkerRepositoryPrincipal | None,
+    ) -> SchedulerWorkerRecord:
+        worker = await self.workers.get_worker_async(io.redis, worker_id)
+        if worker is None:
+            raise UpstreamUnavailableError(f"assigned worker state is unavailable: {worker_id}")
+        private_principal = self._validate_worker_stream_record(
+            worker,
+            worker_id=worker_id,
+            principal=principal,
+        )
+        if private_principal is not None:
+            await io.database.run_transaction(
+                lambda session: self._require_durable_worker_match(
+                    session,
+                    worker,
+                    private_principal,
                 )
-            with self.services.context.database.session() as session:
-                durable_worker = WorkerRepository(session).get(
-                    worker_id,
-                    workspace_id=private_principal.workspace_id,
-                )
-                if durable_worker is None or durable_worker.pool != worker.pool:
-                    raise ConflictError(
-                        f"worker {worker_id} enrollment does not match scheduler state"
-                    )
+            )
         return worker
 
-    def _record_worker_queue_lifecycle(
+    async def _record_worker_queue_lifecycle(
         self,
+        io: ApiAsyncIo,
         request: SchedulerWorkerRequest,
         *,
         worker_id: str,
     ) -> None:
-        events = self._event_streams()
-        if events is None:
-            return
+        events = AsyncRedisEventStreamRepository(io.redis)
         received_at = utc_now()
         duration_ms = max(int((received_at - request.timestamp).total_seconds() * 1000), 0)
         try:
-            events.append_event(
+            await events.append_event(
                 EventRecordType.ContainerLifecycle,
                 {
                     "id": "worker.queue",
@@ -508,8 +568,9 @@ class WorkerRepositoryService:
                 extra={"container_id": request.container_id, "worker_id": worker_id},
             )
 
-    def _return_request_to_scheduler(
+    async def _return_request_to_scheduler(
         self,
+        io: ApiAsyncIo,
         request: SchedulerWorkerRequest,
         *,
         worker_id: str,
@@ -525,7 +586,8 @@ class WorkerRepositoryService:
         forever.
         """
 
-        self.workers.return_worker_request(
+        await self.workers.return_worker_request(
+            io.redis,
             worker_id,
             request.model_copy(update={"retry_count": request.retry_count + 1}),
             ready_at=utc_now(),
@@ -539,16 +601,25 @@ class WorkerRepositoryService:
             },
         )
 
-    def stream_next_container_requests(
+    async def stream_next_container_requests(
         self,
+        io: ApiAsyncIo,
         request: GetNextContainerRequestRequest,
         *,
         principal: WorkerRepositoryPrincipal | None = None,
-    ) -> Iterator[GetNextContainerRequestResponse]:
+    ) -> AsyncIterator[GetNextContainerRequestResponse]:
         while True:
-            worker = self._validate_worker_stream(request.worker_id, principal=principal)
+            worker = await self._validate_worker_stream_async(
+                io,
+                request.worker_id,
+                principal=principal,
+            )
             try:
-                self._require_source_cache_available(request, principal=principal)
+                await self._require_source_cache_available_async(
+                    io,
+                    request,
+                    principal=principal,
+                )
             except WorkerSourceCacheUnavailableError:
                 # A cache generation that is still initializing is an expected
                 # transient, not a server fault. Raising here escapes as an
@@ -557,7 +628,8 @@ class WorkerRepositoryService:
                 # failures under repeated tracebacks. Ending the stream lets the
                 # worker poll again once its generation is available.
                 return
-            container_request = self.workers.wait_for_next_container_request(
+            container_request = await self.workers.wait_for_next_container_request(
+                io.redis,
                 request.worker_id,
                 timeout_seconds=WORKER_REQUEST_BLOCK_SECONDS,
             )
@@ -565,9 +637,17 @@ class WorkerRepositoryService:
                 yield GetNextContainerRequestResponse()
                 continue
             try:
-                self._require_source_cache_available(request, principal=principal)
+                await self._require_source_cache_available_async(
+                    io,
+                    request,
+                    principal=principal,
+                )
             except Exception:
-                self.workers.enqueue_worker_request(request.worker_id, container_request)
+                await self.workers.enqueue_worker_request(
+                    io.redis,
+                    request.worker_id,
+                    container_request,
+                )
                 raise
             try:
                 require_admissible_worker_request(
@@ -577,13 +657,17 @@ class WorkerRepositoryService:
                     # Only the private-worker branch reads it, so the shared fleet
                     # does not pay a membership query per dispatched container.
                     request_owner_user_id=(
-                        self._workspace_owner_user_id(container_request.workspace_id)
+                        await self._workspace_owner_user_id_async(
+                            io,
+                            container_request.workspace_id,
+                        )
                         if principal is not None and principal.is_private_worker
                         else ""
                     ),
                 )
             except WorkerRequestNotAdmissibleError as exc:
-                self._return_request_to_scheduler(
+                await self._return_request_to_scheduler(
+                    io,
                     container_request,
                     worker_id=request.worker_id,
                     reason=str(exc),
@@ -591,7 +675,11 @@ class WorkerRepositoryService:
                 # Ending the stream rather than raising, for the reason recorded above:
                 # the response has already started, so a raise escapes unmapped.
                 return
-            self._record_worker_queue_lifecycle(container_request, worker_id=request.worker_id)
+            await self._record_worker_queue_lifecycle(
+                io,
+                container_request,
+                worker_id=request.worker_id,
+            )
             yield GetNextContainerRequestResponse(container_request=container_request)
             # One request per stream. It is in flight until the worker
             # acknowledges it, and the take returns an unacknowledged request
@@ -599,8 +687,9 @@ class WorkerRepositoryService:
             # in a loop instead of waiting for the worker to resolve it.
             return
 
-    def acknowledge_container_request(
+    async def acknowledge_container_request(
         self,
+        io: ApiAsyncIo,
         request: AcknowledgeContainerRequestRequest,
     ) -> AcknowledgeContainerRequestResponse:
         """Record that the worker has taken the container this request names.
@@ -612,35 +701,34 @@ class WorkerRepositoryService:
         """
 
         return AcknowledgeContainerRequestResponse(
-            acknowledged=self.workers.acknowledge_worker_request(
+            acknowledged=await self.workers.acknowledge_worker_request(
+                io.redis,
                 request.worker_id,
                 request.container_id,
             )
         )
 
-    def stream_worker_events(
+    async def stream_worker_events(
         self,
+        io: ApiAsyncIo,
         request: StreamWorkerEventsRequest,
-    ) -> Iterator[WorkerStreamEvent]:
+    ) -> AsyncIterator[WorkerStreamEvent]:
         emitted = 0
-        for event_id in self._pending_worker_event_ids(request.worker_id):
-            if not self._event_targets_worker(event_id, request.worker_id):
-                if self.redis is not None:
-                    self.redis.set_remove(self._pending_event_key(request.worker_id), event_id)
-                continue
-            event = self._worker_event_from_id(event_id)
+        pending_key = _pending_event_key(io.redis, request.worker_id)
+        pending_event_ids = sorted(
+            redis_text(event_id) for event_id in await io.redis.set_members(pending_key)
+        )
+        for event_id in pending_event_ids:
+            event = await self._worker_event_for_worker(io, event_id, request.worker_id)
             if event is None:
-                if self.redis is not None:
-                    self.redis.set_remove(self._pending_event_key(request.worker_id), event_id)
+                await io.redis.set_remove(pending_key, event_id)
                 continue
             yield event
             emitted += 1
             if request.max_events > 0 and emitted >= request.max_events:
                 return
         for event_id in request.event_ids:
-            if not self._event_targets_worker(event_id, request.worker_id):
-                continue
-            event = self._worker_event_from_id(event_id)
+            event = await self._worker_event_for_worker(io, event_id, request.worker_id)
             if event is None:
                 continue
             yield event
@@ -651,10 +739,13 @@ class WorkerRepositoryService:
         if request.max_events > 0 and emitted >= request.max_events:
             return
 
-        yielded_pubsub = False
-        for event_id in self._pubsub_worker_event_ids(request):
-            yielded_pubsub = True
-            event = self._worker_event_from_id(event_id)
+        remaining = 0 if request.max_events <= 0 else request.max_events - emitted
+        async for event_id in io.worker_events.stream_event_ids(
+            request.worker_id,
+            heartbeat_interval_seconds=request.heartbeat_interval_seconds,
+            max_events=remaining,
+        ):
+            event = await self._worker_event_for_worker(io, event_id, request.worker_id)
             if event is None:
                 continue
             yield event
@@ -662,18 +753,20 @@ class WorkerRepositoryService:
             if request.max_events > 0 and emitted >= request.max_events:
                 return
 
-        if not yielded_pubsub and (request.max_events <= 0 or emitted < request.max_events):
-            yield _heartbeat_event()
-
-    def acknowledge_worker_event(
+    async def acknowledge_worker_event(
         self,
+        io: ApiAsyncIo,
         request: AcknowledgeWorkerEventRequest,
     ) -> AcknowledgeWorkerEventResponse:
-        if self.redis is None or self.workers.get_worker(request.worker_id) is None:
+        if await self.workers.get_worker_async(io.redis, request.worker_id) is None:
             return AcknowledgeWorkerEventResponse(acknowledged=False)
-        self.redis.set_add(self._event_ack_key(request.event_id), request.worker_id)
-        self.redis.expire(self._event_ack_key(request.event_id), 300)
-        self.redis.set_remove(self._pending_event_key(request.worker_id), request.event_id)
+        ack_key = io.redis.key("worker-events", "ack", request.event_id)
+        await io.redis.set_add(ack_key, request.worker_id)
+        await io.redis.expire(ack_key, 300)
+        await io.redis.set_remove(
+            _pending_event_key(io.redis, request.worker_id),
+            request.event_id,
+        )
         return AcknowledgeWorkerEventResponse(acknowledged=True)
 
     def wake_source_cache_cleanup(self, workspace_id: str) -> None:
@@ -1123,6 +1216,30 @@ class WorkerRepositoryService:
             self._project_source_cache_unavailable(request.worker_id)
             raise
 
+    async def _require_source_cache_available_async(
+        self,
+        io: ApiAsyncIo,
+        request: WorkerCacheSessionRequest | GetNextContainerRequestRequest,
+        *,
+        principal: WorkerRepositoryPrincipal | None,
+    ) -> None:
+        if principal is None:
+            raise AuthorizationDeniedError("worker source cache session requires a principal")
+        source_cache = self._source_cache_service()
+        try:
+            await io.database.run_transaction(
+                lambda session: source_cache.require_available_in_session(
+                    session,
+                    principal=principal,
+                    worker_id=request.worker_id,
+                    generation_id=request.cache_generation_id,
+                    session_fence=request.cache_session_fence,
+                )
+            )
+        except WorkerSourceCacheUnavailableError:
+            await self._project_source_cache_unavailable_async(io, request.worker_id)
+            raise
+
     def _project_source_cache_unavailable(self, worker_id: str) -> None:
         try:
             worker = self.workers.get_worker(worker_id)
@@ -1133,6 +1250,26 @@ class WorkerRepositoryService:
                 self.workers.disable_worker(
                     worker_id,
                     reason=WorkerUnavailableReason.SourceCacheUnavailable,
+                )
+        except SchedulerRepositoryError:
+            return
+
+    async def _project_source_cache_unavailable_async(
+        self,
+        io: ApiAsyncIo,
+        worker_id: str,
+    ) -> None:
+        try:
+            worker = await self.workers.get_worker_async(io.redis, worker_id)
+            if worker is not None and worker.status in {
+                SchedulerWorkerStatus.Available,
+                SchedulerWorkerStatus.Pending,
+            }:
+                await self.workers.update_worker_status_async(
+                    io.redis,
+                    worker_id,
+                    SchedulerWorkerStatus.Unavailable,
+                    unavailable_reason=WorkerUnavailableReason.SourceCacheUnavailable,
                 )
         except SchedulerRepositoryError:
             return
@@ -1230,19 +1367,18 @@ class WorkerRepositoryService:
             deleted=self.containers.delete_container_state(request.container_id)
         )
 
-    def reconcile_orphan_agent_routes(self) -> AgentRouteReconciliationResult:
-        if self.redis is None:
-            return AgentRouteReconciliationResult()
-        compute = RedisComputeStateRepository(self.redis)
-        routes = compute.scan_agent_route_states()
+    async def reconcile_orphan_agent_routes(self, io: ApiAsyncIo) -> AgentRouteReconciliationResult:
+        compute = AsyncRedisComputeStateRepository(io.redis)
+        containers = AsyncRedisSchedulerContainerReader(io.redis)
+        routes = await compute.scan_agent_route_states()
         active_routes: dict[str, set[str]] = {}
         removed = 0
         for route in routes:
             route_ids = active_routes.get(route.container_id)
             if route_ids is None:
-                state = self.containers.get_container_state(route.container_id)
+                state = await containers.get_container_state(route.container_id)
                 route_ids = (
-                    self._container_agent_route_ids(route.container_id)
+                    await containers.agent_route_ids(route.container_id)
                     if state is not None
                     and state.status
                     not in {
@@ -1259,7 +1395,7 @@ class WorkerRepositoryService:
             # key that was actually written. Passing the pool here made the orphan
             # sweep a no-op: the delete missed, the index kept the route, and the
             # agent went on dialing dead backends every stream iteration.
-            if compute.delete_agent_route_state(
+            if await compute.delete_agent_route_state(
                 workspace_id=route.workspace_id,
                 capacity_owner_id=route.capacity_owner_id,
                 machine_id=route.machine_id,
@@ -1382,11 +1518,6 @@ class WorkerRepositoryService:
         if worker_address is not None and worker_address.route is not None:
             routes.append(worker_address.route)
         return routes
-
-    def _container_agent_route_ids(self, container_id: str) -> set[str]:
-        return {
-            route.route_id for route in self._container_agent_routes(container_id) if route.route_id
-        }
 
     def get_container_address_map(
         self,
@@ -2289,79 +2420,25 @@ class WorkerRepositoryService:
                 return
         raise AuthorizationDeniedError("network mutation is bound to the assigned worker container")
 
-    def _worker_event_from_id(self, event_id: str) -> WorkerStreamEvent | None:
+    async def _worker_event_for_worker(
+        self,
+        io: ApiAsyncIo,
+        event_id: str,
+        worker_id: str,
+    ) -> WorkerStreamEvent | None:
         if event_id == WORKER_EVENT_HEARTBEAT_ID:
             return _heartbeat_event()
-        claim = self.events.claim(event_id)
-        plan = worker_stream_event_from_bus_event(event_id=event_id, event=claim.event)
+        event = await io.worker_events.event(event_id)
+        if event is None or not self._event_targets_worker(event, worker_id):
+            return None
+        plan = worker_stream_event_from_bus_event(event_id=event_id, event=event)
         if not plan.converted or plan.event is None:
             return None
         return plan.event
 
-    def _pending_worker_event_ids(self, worker_id: str) -> list[str]:
-        if self.redis is None or not worker_id:
-            return []
-        return sorted(
-            redis_text(event_id)
-            for event_id in self.redis.set_members(self._pending_event_key(worker_id))
-        )
-
-    def _pending_event_key(self, worker_id: str) -> str:
-        if self.redis is None:
-            return ""
-        return self.redis.key("worker-events", "pending", worker_id)
-
-    def _event_ack_key(self, event_id: str) -> str:
-        if self.redis is None:
-            return ""
-        return self.redis.key("worker-events", "ack", event_id)
-
-    def _pubsub_worker_event_ids(
-        self,
-        request: StreamWorkerEventsRequest,
-    ) -> Iterator[str]:
-        if self.redis is None:
-            return
-        pubsub = self.redis.pubsub(ignore_subscribe_messages=True)
-        channels = [
-            self.redis.key(event_channel_key(EventBusEventType.StopContainer)),
-            self.redis.key(event_channel_key(EventBusEventType.StopBuild)),
-            self.redis.key(event_channel_key(EventBusEventType.PurgeSourceCache)),
-        ]
-        pubsub.subscribe(*channels)
-        emitted = 0
-        deadline = time.monotonic() + max(request.heartbeat_interval_seconds, 0.1)
-        try:
-            while request.max_events <= 0 or emitted < request.max_events:
-                message = pubsub.get_message(timeout=max(request.pubsub_timeout_seconds, 0.01))
-                if not message:
-                    if time.monotonic() >= deadline:
-                        yield WORKER_EVENT_HEARTBEAT_ID
-                        emitted += 1
-                        deadline = time.monotonic() + max(
-                            request.heartbeat_interval_seconds,
-                            0.1,
-                        )
-                    continue
-                if redis_text(message.type) != "message":
-                    continue
-                event_id = redis_text(message.data)
-                if not self._event_targets_worker(event_id, request.worker_id):
-                    continue
-                yield event_id
-                emitted += 1
-        finally:
-            pubsub.close()
-
-    def _event_targets_worker(self, event_id: str, worker_id: str) -> bool:
-        claim = self.events.claim(event_id)
-        event = claim.event
-        if event is None:
-            return False
-        target = event.args.get("worker_id")
-        if event.type == EventBusEventType.StopContainer:
-            return isinstance(target, str) and bool(target.strip()) and target == worker_id
-        return not isinstance(target, str) or not target.strip() or target == worker_id
+    @staticmethod
+    def _event_targets_worker(event: EventBusEvent, worker_id: str) -> bool:
+        return worker_event_target(event) in {"", worker_id}
 
     def _event_streams(self) -> RedisEventStreamRepository | None:
         if self.redis is None:
@@ -2787,6 +2864,10 @@ def _sha256_file(path: Path) -> tuple[str, int]:
             digest.update(chunk)
             size += len(chunk)
     return digest.hexdigest(), size
+
+
+def _pending_event_key(redis: AsyncRedisClient, worker_id: str) -> str:
+    return redis.key("worker-events", "pending", worker_id)
 
 
 def _heartbeat_event() -> WorkerStreamEvent:

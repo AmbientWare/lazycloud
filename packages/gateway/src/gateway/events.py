@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Protocol
 from uuid import uuid4
 
@@ -32,7 +32,21 @@ class GatewayEventSink(Protocol):
     ) -> Event: ...
 
 
-WorkspaceResolver = Callable[[Scope], str]
+class AsyncGatewayEventSink(Protocol):
+    async def emit_async(
+        self,
+        action: str,
+        *,
+        resource_type: str,
+        resource_id: str,
+        message: str,
+        level: EventLevel = EventLevel.Info,
+        data: dict[str, JsonValue] | None = None,
+        workspace_id: str | None = None,
+    ) -> Event: ...
+
+
+WorkspaceResolver = Callable[[Scope], Awaitable[str]]
 
 
 class GatewayMetricsSink(Protocol):
@@ -52,6 +66,14 @@ class GatewayMetricsSink(Protocol):
         labels: dict[str, str] | None = None,
     ) -> object: ...
 
+    def set_gauge(
+        self,
+        name: str,
+        value: float,
+        *,
+        labels: dict[str, str] | None = None,
+    ) -> object: ...
+
 
 @dataclass(slots=True)
 class GatewayRequestEventMiddleware:
@@ -64,21 +86,33 @@ class GatewayRequestEventMiddleware:
     """
 
     app: ASGIApp
-    event_sink: GatewayEventSink
+    event_sink: AsyncGatewayEventSink
     workspace_resolver: WorkspaceResolver | None = None
     metrics_sink: GatewayMetricsSink | None = None
+    _active_streams: dict[str, int] = field(default_factory=dict, init=False)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") == "websocket":
+            self._stream_started("websocket")
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                self._stream_finished("websocket")
+            return
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
 
         status_code = 500
+        stream_kind: str | None = None
 
         async def send_wrapper(message: Message) -> None:
-            nonlocal status_code
+            nonlocal status_code, stream_kind
             if message.get("type") == "http.response.start":
                 status_code = int(message.get("status") or status_code)
+                stream_kind = _response_stream_kind(message)
+                if stream_kind is not None:
+                    self._stream_started(stream_kind)
             await send(message)
 
         started = time.monotonic()
@@ -86,7 +120,23 @@ class GatewayRequestEventMiddleware:
             await self.app(scope, receive, send_wrapper)
         finally:
             self._emit_request_metrics(scope, status_code, time.monotonic() - started)
-            self._emit_request_event(scope, status_code)
+            await self._emit_request_event(scope, status_code)
+            if stream_kind is not None:
+                self._stream_finished(stream_kind)
+
+    def _stream_started(self, kind: str) -> None:
+        if self.metrics_sink is None:
+            return
+        active = self._active_streams.get(kind, 0) + 1
+        self._active_streams[kind] = active
+        self.metrics_sink.set_gauge("api_active_streams", active, labels={"kind": kind})
+
+    def _stream_finished(self, kind: str) -> None:
+        if self.metrics_sink is None:
+            return
+        active = max(self._active_streams.get(kind, 1) - 1, 0)
+        self._active_streams[kind] = active
+        self.metrics_sink.set_gauge("api_active_streams", active, labels={"kind": kind})
 
     def _emit_request_metrics(
         self,
@@ -117,15 +167,15 @@ class GatewayRequestEventMiddleware:
             LOGGER.debug("request metrics were not recorded", exc_info=True)
             return
 
-    def _emit_request_event(self, scope: Scope, status_code: int) -> None:
+    async def _emit_request_event(self, scope: Scope, status_code: int) -> None:
         if status_code < 500:
             return
         try:
             path = str(scope.get("path") or "/")
             method = str(scope.get("method") or "GET")
             request_id = _header(scope, "x-request-id") or uuid4().hex
-            workspace_id = self.workspace_resolver(scope) if self.workspace_resolver else ""
-            self.event_sink.emit(
+            workspace_id = await self.workspace_resolver(scope) if self.workspace_resolver else ""
+            await self.event_sink.emit_async(
                 GATEWAY_REQUEST_EVENT_ACTION,
                 resource_type="gateway-request",
                 resource_id=request_id,
@@ -161,6 +211,19 @@ def _header(scope: Scope, name: str) -> str:
         if raw_name.lower() == expected:
             return raw_value.decode("latin-1")
     return ""
+
+
+def _response_stream_kind(message: Message) -> str | None:
+    for raw_name, raw_value in _ASGI_HEADERS.validate_python(message.get("headers", [])):
+        if raw_name.lower() != b"content-type":
+            continue
+        content_type = raw_value.decode("latin-1").lower()
+        if content_type.startswith("text/event-stream"):
+            return "sse"
+        if content_type.startswith("application/x-ndjson"):
+            return "ndjson"
+        return None
+    return None
 
 
 def _client(scope: Scope) -> str:

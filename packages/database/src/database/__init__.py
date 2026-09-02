@@ -1,4 +1,4 @@
-from database.client import AsyncDatabaseClient, DatabaseClient
+from database.client import AsyncDatabaseClient, DatabaseClient, DatabasePoolStatus
 from database.migrations import (
     DatabaseReadiness,
     DatabaseReadinessProbe,
@@ -14,17 +14,19 @@ from database.migrations import (
     repository_database_head,
     wait_for_database_head,
 )
-from database.recovery import ControlPlaneRecoveryFence
+from database.recovery import AsyncControlPlaneRecoveryFence, ControlPlaneRecoveryFence
 from database.settings import DatabaseApplicationName, DatabaseSettings
 from database.tables import DatabaseBase
 from database.workspace_deletion import WorkspaceDeletionFence
 
 __all__ = [
+    "AsyncControlPlaneRecoveryFence",
     "AsyncDatabaseClient",
     "ControlPlaneRecoveryFence",
     "DatabaseApplicationName",
     "DatabaseBase",
     "DatabaseClient",
+    "DatabasePoolStatus",
     "DatabaseReadiness",
     "DatabaseReadinessProbe",
     "DatabaseReadinessTimeoutError",

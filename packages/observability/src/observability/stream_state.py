@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from coordination.redis_client import RedisClient, redis_text
+from coordination.redis_client import (
+    AsyncRedisClient,
+    RedisClient,
+    RedisStreamEntry,
+    RedisWireScalar,
+    redis_text,
+)
+from coordination.stream_tail import RedisStreamTailBroker, RedisStreamTailSubscription
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.errors import ExpiredCursorError, InvalidInputError
 from shared.http.observability import LogRecord
@@ -32,17 +38,9 @@ from shared.realtime.streams import (
 from shared.serialization import to_json_value
 
 DEFAULT_REDIS_EVENT_STREAM_READ_LIMIT = 10_000
-DEFAULT_REDIS_BLOCK_MILLISECONDS = 1_000
 REALTIME_STREAM_TTL_SECONDS = 7 * 24 * 60 * 60
 REALTIME_STREAM_MAX_ENTRIES = 50_000
 
-type RedisWireScalar = str | bytes | int | float
-type RedisStreamFields = dict[RedisWireScalar, RedisWireScalar]
-type RedisStreamEntry = tuple[RedisWireScalar, RedisStreamFields]
-type RedisStreamPage = tuple[RedisWireScalar, list[RedisStreamEntry]]
-
-_REDIS_STREAM_ENTRIES_ADAPTER = TypeAdapter(list[RedisStreamEntry])
-_REDIS_STREAM_PAGES_ADAPTER = TypeAdapter(list[RedisStreamPage])
 _CONTAINER_LOG_SCRIPT_RESULT_ADAPTER = TypeAdapter(tuple[int, int, int])
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
@@ -222,17 +220,13 @@ class RedisEventStreamRepository:
         *,
         event_id: str | None = None,
     ) -> CloudEventRecord:
-        event = create_cloud_event_record(
+        event, streams, body, headers = _event_append_data(
+            self.planner,
             event_type,
             data,
-            event_id=event_id or str(uuid4()),
+            event_id=event_id,
         )
-        plan = self.planner.append_record_for_event(event)
-        entry = {
-            "body": _json(plan.body),
-            "headers": _json(plan.headers),
-        }
-        stream_keys = tuple(self._stream_key(stream) for stream in plan.streams)
+        stream_keys = tuple(self._stream_key(stream) for stream in streams)
         if stream_keys:
             self.redis.eval_int(
                 _APPEND_EVENT_SCRIPT,
@@ -240,8 +234,8 @@ class RedisEventStreamRepository:
                 *stream_keys,
                 self.retention.max_entries,
                 self.retention.ttl_seconds,
-                entry["body"],
-                entry["headers"],
+                body,
+                headers,
             )
         return event
 
@@ -276,28 +270,20 @@ class RedisEventStreamRepository:
             )
         normalized_cursor = _normalize_entry_id(cursor) if cursor is not None else None
         read_limit = limit or plan.read_limit
-        records = self._read_stream_records(plan.initial_streams, limit=read_limit)
-        records = tuple(
-            record
-            for record in records
-            if not event_record_headers_skip(_sequenced(record), plan.query)
-            and (
-                normalized_cursor is None
-                or _entry_id_parts(record.entry_id) > _entry_id_parts(normalized_cursor)
-            )
+        records = _filter_event_records(
+            self._read_stream_records(plan.initial_streams, limit=read_limit),
+            query=plan.query,
+            cursor=normalized_cursor,
+            limit=read_limit,
         )
         if records or not plan.fallback_streams:
-            return records[:read_limit]
-        fallback = self._read_stream_records(plan.fallback_streams, limit=read_limit)
-        return tuple(
-            record
-            for record in fallback
-            if not event_record_headers_skip(_sequenced(record), plan.query)
-            and (
-                normalized_cursor is None
-                or _entry_id_parts(record.entry_id) > _entry_id_parts(normalized_cursor)
-            )
-        )[:read_limit]
+            return records
+        return _filter_event_records(
+            self._read_stream_records(plan.fallback_streams, limit=read_limit),
+            query=plan.query,
+            cursor=normalized_cursor,
+            limit=read_limit,
+        )
 
     def read_logs(
         self,
@@ -317,116 +303,19 @@ class RedisEventStreamRepository:
         )
         return filtered[-read_limit:]
 
-    def stream_event_history(
-        self,
-        query: EventHistoryQuery,
-        *,
-        last_event_id: str | None = None,
-        clamp: bool | None = None,
-        block_milliseconds: int = DEFAULT_REDIS_BLOCK_MILLISECONDS,
-        max_events: int = 0,
-    ) -> Iterator[RedisStreamRecord]:
-        plan = self.planner.plan_event_history_read(query)
-        if last_event_id is not None:
-            self._raise_if_cursor_expired(
-                plan.initial_streams,
-                cursor=last_event_id,
-                clamp=clamp,
-            )
-        return self._stream_filtered_records(
-            plan.initial_streams,
-            last_event_id=last_event_id,
-            block_milliseconds=block_milliseconds,
-            max_events=max_events,
-            skip=lambda record: event_record_headers_skip(_sequenced(record), plan.query),
-        )
-
-    def stream_logs(
-        self,
-        query: LogStreamQuery,
-        *,
-        last_event_id: str | None = None,
-        block_milliseconds: int = DEFAULT_REDIS_BLOCK_MILLISECONDS,
-        max_events: int = 0,
-    ) -> Iterator[RedisStreamRecord]:
-        plan = self.planner.plan_log_page(query)
-        self._raise_if_log_cursor_expired(plan.streams, plan.query)
-        return self._stream_filtered_records(
-            plan.streams,
-            last_event_id=last_event_id,
-            block_milliseconds=block_milliseconds,
-            max_events=max_events,
-            query=plan.query,
-            skip=lambda record: not _log_record_matches_query(record, plan.query),
-        )
-
     def _read_stream_records(
         self,
         streams: Iterable[str],
         *,
         limit: int,
     ) -> tuple[RedisStreamRecord, ...]:
-        read_limit = limit if limit > 0 else DEFAULT_REDIS_EVENT_STREAM_READ_LIMIT
-        records: list[RedisStreamRecord] = []
-        for stream in streams:
-            if not stream:
-                continue
-            entries = _redis_stream_entries(
-                self.redis.stream_reverse_range(self._stream_key(stream), count=read_limit)
-            )
-            for entry in entries:
-                record = _record_from_entry(stream, entry)
-                if record is not None:
-                    records.append(record)
-        records.sort(key=_record_sort_key)
-        return tuple(records[-read_limit:])
-
-    def _stream_filtered_records(
-        self,
-        streams: Iterable[str],
-        *,
-        last_event_id: str | None,
-        block_milliseconds: int,
-        max_events: int,
-        query: LogStreamQuery | None = None,
-        skip: Callable[[RedisStreamRecord], bool],
-    ) -> Iterator[RedisStreamRecord]:
-        stream_names = tuple(stream for stream in streams if stream)
-        if not stream_names:
-            return
-        block_ms = max(block_milliseconds, 0)
-        emitted = 0
-        start_id = _stream_start_id(last_event_id=last_event_id, query=query)
-        stream_ids = {self._stream_key(stream): start_id for stream in stream_names}
-        key_to_stream = {self._stream_key(stream): stream for stream in stream_names}
-
-        while max_events <= 0 or emitted < max_events:
-            response = _redis_stream_pages(
-                self.redis.stream_read(
-                    stream_ids,
-                    count=1,
-                    block=block_ms or None,
-                )
-            )
-            if not response:
-                if max_events > 0:
-                    return
-                time.sleep(0.05)
-                continue
-            for raw_stream, entries in response:
-                stream_key = redis_text(raw_stream)
-                stream = key_to_stream.get(stream_key, stream_key)
-                for entry in entries:
-                    record = _record_from_entry(stream, entry)
-                    if record is None:
-                        continue
-                    stream_ids[stream_key] = record.entry_id
-                    if skip(record):
-                        continue
-                    yield record
-                    emitted += 1
-                    if max_events > 0 and emitted >= max_events:
-                        return
+        read_limit = _stream_read_limit(limit)
+        pages = [
+            (stream, self.redis.stream_reverse_range(self._stream_key(stream), count=read_limit))
+            for stream in streams
+            if stream
+        ]
+        return _latest_records(pages, limit=read_limit)
 
     def _stream_key(self, stream: str) -> str:
         return self.redis.key(stream)
@@ -442,10 +331,8 @@ class RedisEventStreamRepository:
         streams: Iterable[str],
         query: LogStreamQuery,
     ) -> None:
-        cursor = query.cursor
-        if not cursor and query.seq_num is not None:
-            cursor = f"{query.seq_num}-0"
-        if cursor:
+        cursor = _log_query_cursor(query)
+        if cursor is not None:
             self._raise_if_cursor_expired(streams, cursor=cursor, clamp=query.clamp)
 
     def _raise_if_cursor_expired(
@@ -455,8 +342,8 @@ class RedisEventStreamRepository:
         cursor: str,
         clamp: bool | None,
     ) -> None:
-        normalized_cursor = _normalize_entry_id(cursor)
-        if clamp is not False:
+        cursor_parts = _unclamped_cursor_parts(cursor, clamp=clamp)
+        if cursor_parts is None:
             return
         for stream in streams:
             if not stream:
@@ -466,10 +353,279 @@ class RedisEventStreamRepository:
                 1,
                 self._stream_key(stream),
             )
-            if first_entry_id is None:
+            _raise_if_cursor_precedes(cursor_parts, first_entry_id)
+
+
+@dataclass(slots=True)
+class AsyncRedisEventStreamRepository:
+    redis: AsyncRedisClient
+    planner: EventStreamPlanner = field(default_factory=EventStreamPlanner)
+    retention: RealtimeStreamRetention = field(default_factory=RealtimeStreamRetention)
+
+    async def append_event(
+        self,
+        event_type: str | EventRecordType,
+        data: EventDataInput,
+        *,
+        event_id: str | None = None,
+    ) -> CloudEventRecord:
+        event, streams, body, headers = _event_append_data(
+            self.planner,
+            event_type,
+            data,
+            event_id=event_id,
+        )
+        stream_keys = tuple(self._stream_key(stream) for stream in streams)
+        if stream_keys:
+            await self.redis.eval_int(
+                _APPEND_EVENT_SCRIPT,
+                len(stream_keys),
+                *stream_keys,
+                self.retention.max_entries,
+                self.retention.ttl_seconds,
+                body,
+                headers,
+            )
+        return event
+
+    async def read_event_history(
+        self,
+        query: EventHistoryQuery,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+        clamp: bool | None = None,
+    ) -> tuple[RedisStreamRecord, ...]:
+        plan = self.planner.plan_event_history_read(query)
+        if cursor is not None:
+            await self._raise_if_cursor_expired(
+                (*plan.initial_streams, *plan.fallback_streams),
+                cursor=cursor,
+                clamp=clamp,
+            )
+        normalized_cursor = _normalize_entry_id(cursor) if cursor is not None else None
+        read_limit = limit or plan.read_limit
+        records = _filter_event_records(
+            await self._read_stream_records(plan.initial_streams, limit=read_limit),
+            query=plan.query,
+            cursor=normalized_cursor,
+            limit=read_limit,
+        )
+        if records or not plan.fallback_streams:
+            return records
+        return _filter_event_records(
+            await self._read_stream_records(plan.fallback_streams, limit=read_limit),
+            query=plan.query,
+            cursor=normalized_cursor,
+            limit=read_limit,
+        )
+
+    async def read_logs(
+        self,
+        query: LogStreamQuery,
+        *,
+        limit: int | None = None,
+    ) -> tuple[RedisStreamRecord, ...]:
+        plan = self.planner.plan_log_page(query)
+        await self._raise_if_log_cursor_expired(plan.streams, plan.query)
+        read_limit = limit or plan.limit
+        records = await self._read_stream_records(plan.streams, limit=plan.scan_limit)
+        filtered = tuple(
+            record for record in records if _log_record_matches_query(record, plan.query)
+        )
+        return filtered[-read_limit:]
+
+    async def follow_event_history(
+        self,
+        tail: RedisStreamTailBroker,
+        query: EventHistoryQuery,
+        *,
+        last_event_id: str | None = None,
+        clamp: bool | None = None,
+        max_events: int = 0,
+        heartbeat_seconds: float,
+    ) -> AsyncIterator[RedisStreamRecord | None]:
+        plan = self.planner.plan_event_history_read(query)
+        if last_event_id is not None:
+            await self._raise_if_cursor_expired(
+                plan.initial_streams,
+                cursor=last_event_id,
+                clamp=clamp,
+            )
+        return await self._follow(
+            tail,
+            plan.initial_streams,
+            start=_stream_start_id(last_event_id=last_event_id, query=None),
+            label="events",
+            max_events=max_events,
+            heartbeat_seconds=heartbeat_seconds,
+            skip=lambda item: event_record_headers_skip(_sequenced(item), plan.query),
+        )
+
+    async def follow_logs(
+        self,
+        tail: RedisStreamTailBroker,
+        query: LogStreamQuery,
+        *,
+        last_event_id: str | None = None,
+        max_events: int = 0,
+        heartbeat_seconds: float,
+    ) -> AsyncIterator[RedisStreamRecord | None]:
+        plan = self.planner.plan_log_page(query)
+        if last_event_id is not None:
+            await self._raise_if_cursor_expired(
+                plan.streams,
+                cursor=last_event_id,
+                clamp=plan.query.clamp,
+            )
+        else:
+            await self._raise_if_log_cursor_expired(plan.streams, plan.query)
+        return await self._follow(
+            tail,
+            plan.streams,
+            start=_stream_start_id(last_event_id=last_event_id, query=plan.query),
+            label="logs",
+            max_events=max_events,
+            heartbeat_seconds=heartbeat_seconds,
+            skip=lambda item: not _log_record_matches_query(item, plan.query),
+        )
+
+    async def _follow(
+        self,
+        tail: RedisStreamTailBroker,
+        streams: Iterable[str],
+        *,
+        start: str | None,
+        label: str,
+        max_events: int,
+        heartbeat_seconds: float,
+        skip: Callable[[RedisStreamRecord], bool],
+    ) -> AsyncIterator[RedisStreamRecord | None]:
+        stream_names = tuple(stream for stream in streams if stream)
+        if not stream_names:
+            return _no_records()
+        subscription = await tail.subscribe(
+            stream_names,
+            after=dict.fromkeys(stream_names, start),
+            label=label,
+        )
+        return _followed_records(
+            subscription,
+            max_events=max_events,
+            heartbeat_seconds=heartbeat_seconds,
+            skip=skip,
+        )
+
+    async def _read_stream_records(
+        self,
+        streams: Iterable[str],
+        *,
+        limit: int,
+    ) -> tuple[RedisStreamRecord, ...]:
+        read_limit = _stream_read_limit(limit)
+        pages: list[tuple[str, list[RedisStreamEntry]]] = []
+        for stream in streams:
+            if not stream:
                 continue
-            if _entry_id_parts(normalized_cursor) < _entry_id_parts(redis_text(first_entry_id)):
-                raise ExpiredCursorError("realtime cursor is older than retained history")
+            entries = await self.redis.stream_reverse_range(
+                self._stream_key(stream),
+                count=read_limit,
+            )
+            pages.append((stream, entries))
+        return _latest_records(pages, limit=read_limit)
+
+    def _stream_key(self, stream: str) -> str:
+        return self.redis.key(stream)
+
+    async def _raise_if_log_cursor_expired(
+        self,
+        streams: Iterable[str],
+        query: LogStreamQuery,
+    ) -> None:
+        cursor = _log_query_cursor(query)
+        if cursor is not None:
+            await self._raise_if_cursor_expired(streams, cursor=cursor, clamp=query.clamp)
+
+    async def _raise_if_cursor_expired(
+        self,
+        streams: Iterable[str],
+        *,
+        cursor: str,
+        clamp: bool | None,
+    ) -> None:
+        cursor_parts = _unclamped_cursor_parts(cursor, clamp=clamp)
+        if cursor_parts is None:
+            return
+        for stream in streams:
+            if not stream:
+                continue
+            first_entry_id = await self.redis.eval_scalar(
+                _FIRST_STREAM_ENTRY_ID_SCRIPT,
+                1,
+                self._stream_key(stream),
+            )
+            _raise_if_cursor_precedes(cursor_parts, first_entry_id)
+
+
+async def _followed_records(
+    subscription: RedisStreamTailSubscription,
+    *,
+    max_events: int,
+    heartbeat_seconds: float,
+    skip: Callable[[RedisStreamRecord], bool],
+) -> AsyncIterator[RedisStreamRecord | None]:
+    emitted = 0
+    try:
+        async for item in subscription.items(heartbeat_seconds=heartbeat_seconds):
+            if item is None:
+                yield None
+                continue
+            stream, entry = item
+            record = _record_from_entry(stream, entry)
+            if record is None or skip(record):
+                continue
+            yield record
+            emitted += 1
+            if max_events > 0 and emitted >= max_events:
+                return
+    finally:
+        await subscription.close()
+
+
+async def _no_records() -> AsyncIterator[RedisStreamRecord | None]:
+    return
+    yield
+
+
+def _filter_event_records(
+    records: Iterable[RedisStreamRecord],
+    *,
+    query: EventHistoryQuery,
+    cursor: str | None,
+    limit: int,
+) -> tuple[RedisStreamRecord, ...]:
+    return tuple(
+        record
+        for record in records
+        if not event_record_headers_skip(_sequenced(record), query)
+        and (cursor is None or _entry_id_parts(record.entry_id) > _entry_id_parts(cursor))
+    )[:limit]
+
+
+def _event_append_data(
+    planner: EventStreamPlanner,
+    event_type: str | EventRecordType,
+    data: EventDataInput,
+    *,
+    event_id: str | None,
+) -> tuple[CloudEventRecord, tuple[str, ...], str, str]:
+    event = create_cloud_event_record(
+        event_type,
+        data,
+        event_id=event_id or str(uuid4()),
+    )
+    plan = planner.append_record_for_event(event)
+    return event, plan.streams, _json(plan.body), _json(plan.headers)
 
 
 def _record_from_entry(stream: str, entry: RedisStreamEntry) -> RedisStreamRecord | None:
@@ -577,12 +733,8 @@ def _sequenced(record: RedisStreamRecord) -> EventSequencedRecord:
     return EventSequencedRecord(
         seq_num=_entry_seq_num(record.entry_id),
         headers={str(key): str(value) for key, value in record.headers.items()},
-        body=_json_mapping(record.body),
+        body=dict(record.body),
     )
-
-
-def _json_mapping(value: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
-    return dict(value)
 
 
 def _entry_id_order(entry_id: str) -> tuple[int, int]:
@@ -607,6 +759,26 @@ def _entry_seq_num(entry_id: str) -> int:
 def _record_sort_key(record: RedisStreamRecord) -> tuple[int, int, str]:
     milliseconds, sequence = _entry_id_order(record.entry_id)
     return (milliseconds, sequence, record.stream)
+
+
+def _stream_read_limit(limit: int) -> int:
+    return limit if limit > 0 else DEFAULT_REDIS_EVENT_STREAM_READ_LIMIT
+
+
+def _latest_records(
+    pages: Iterable[tuple[str, list[RedisStreamEntry]]],
+    *,
+    limit: int,
+) -> tuple[RedisStreamRecord, ...]:
+    """The newest `limit` records across streams, oldest first."""
+    records = [
+        record
+        for stream, entries in pages
+        for entry in entries
+        if (record := _record_from_entry(stream, entry)) is not None
+    ]
+    records.sort(key=_record_sort_key)
+    return tuple(records[-limit:])
 
 
 def _log_record_matches_query(record: RedisStreamRecord, query: LogStreamQuery) -> bool:
@@ -650,21 +822,45 @@ def _stream_start_id(
     *,
     last_event_id: str | None,
     query: LogStreamQuery | None,
-) -> str:
+) -> str | None:
+    """Entry ID a follow replays after, or `None` to deliver only new entries."""
     if query is not None and query.cursor:
         return _normalize_entry_id(query.cursor)
     if query is not None and query.seq_num is not None:
-        return _entry_id_before_seq(query.seq_num)
+        return f"{max(query.seq_num - 1, 0)}-0"
     if last_event_id:
         return _normalize_entry_id(last_event_id)
     if query is not None and query.start_time is not None:
         return "0-0"
-    return "$"
+    return None
 
 
-def _entry_id_before_seq(seq_num: int) -> str:
-    previous = max(seq_num - 1, 0)
-    return f"{previous}-0"
+def _log_query_cursor(query: LogStreamQuery) -> str | None:
+    if query.cursor:
+        return query.cursor
+    if query.seq_num is not None:
+        return f"{query.seq_num}-0"
+    return None
+
+
+def _unclamped_cursor_parts(cursor: str, *, clamp: bool | None) -> tuple[int, int] | None:
+    """Parsed cursor when a reader refused clamping, else `None`.
+
+    The cursor is validated either way, so a malformed one is rejected before
+    clamping could hide it.
+    """
+    parts = _entry_id_parts(_normalize_entry_id(cursor))
+    return parts if clamp is False else None
+
+
+def _raise_if_cursor_precedes(
+    cursor_parts: tuple[int, int],
+    first_entry_id: RedisWireScalar | None,
+) -> None:
+    if first_entry_id is None:
+        return
+    if cursor_parts < _entry_id_parts(redis_text(first_entry_id)):
+        raise ExpiredCursorError("realtime cursor is older than retained history")
 
 
 def _normalize_entry_id(value: str) -> str:
@@ -745,17 +941,3 @@ def _text_tuple(value: JsonValue) -> tuple[str, ...]:
     if isinstance(value, list | tuple):
         return tuple(str(item) for item in value)
     return ()
-
-
-def _redis_stream_entries(value: list[RedisStreamEntry]) -> list[RedisStreamEntry]:
-    try:
-        return _REDIS_STREAM_ENTRIES_ADAPTER.validate_python(value)
-    except ValidationError as exc:
-        raise RuntimeError("Redis event stream entries have an invalid shape") from exc
-
-
-def _redis_stream_pages(value: list[RedisStreamPage]) -> list[RedisStreamPage]:
-    try:
-        return _REDIS_STREAM_PAGES_ADAPTER.validate_python(value)
-    except ValidationError as exc:
-        raise RuntimeError("Redis event stream response has an invalid shape") from exc

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import socket
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -40,13 +40,12 @@ from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.collections.service import CollectionService
 from execution.containers.preemption import PreemptedContainerService
-from execution.containers.readiness import ContainerReadiness
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
 from execution.endpoints.dispatch import (
-    EndpointInstanceDispatcher,
-    EndpointResponseStream,
+    AsyncEndpointInstanceDispatcher,
+    AsyncEndpointResponseStream,
 )
 from execution.endpoints.service import (
     EndpointControlService,
@@ -62,10 +61,14 @@ from execution.task_rerun import TaskRerunService
 from execution.tasks import TaskService
 from execution.volumes.control import VolumeControlService
 from execution.volumes.records import VolumeService
-from gateway.container_readiness import RedisContainerReadiness
+from gateway.container_readiness import AsyncRedisContainerReadiness
 from gateway.container_transport import HttpContainerServiceTransportFactory
 from gateway.machine_lifecycle import MachineLifecycleService
-from gateway.pod_proxy import PodProxyHttpClient, RedisPodProxyConnectionRepository
+from gateway.pod_proxy import (
+    AsyncPodProxyHttpClient,
+    AsyncRedisPodProxyConnectionRepository,
+    PodProxySocketClient,
+)
 from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
 from gateway.route_prewarm import RoutePrewarmService
@@ -94,6 +97,7 @@ from images.settings import (
     ImageBuildExecutionSettings,
     ImageBuildRegistrySettings,
 )
+from networking.async_http import AsyncBackendHttpClient
 from networking.dialer import (
     BackendRouteDialer,
     BackendRouteDialerConfig,
@@ -107,7 +111,11 @@ from observability.settings import (
 )
 from observability.stream_state import RedisEventStreamRepository
 from observability.usage import UsageService, WorkerEventService
-from observability.workspace_changes import WorkspaceChangeRepository, WorkspaceChangeService
+from observability.workspace_changes import (
+    AsyncWorkspaceChangeService,
+    WorkspaceChangeRepository,
+    WorkspaceChangeService,
+)
 from operations.app_lifecycle import ProductionAppExecutionLifecycleEffects
 from operations.container_shutdown import (
     ContainerShutdownService,
@@ -156,6 +164,7 @@ from scheduler.preemption import (
 from scheduler.routes import SchedulerBackendRouteResolver
 from scheduler.services import SchedulerWorkloadDirectory
 from scheduler.state import (
+    AsyncRedisSchedulerContainerReader,
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
     RedisWorkerNetworkIpRepository,
@@ -220,6 +229,7 @@ from worker_repository.origin_credentials import (
 )
 from worker_repository.source_cache import WorkerSourceCacheService
 
+from api.server.async_io import ApiAsyncIo
 from api.server.provider_compute import (
     BoundedProviderNodeIdentityHttpClient,
     RedisProviderNodeIdentityReplayGuard,
@@ -240,7 +250,7 @@ from api.settings import (
     TcpIngressSettings,
 )
 from billing import BillingAccountService, DatabaseBillingAdmission
-from database import DatabaseClient
+from database import AsyncDatabaseClient, DatabaseClient
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,11 +285,12 @@ class FunctionApiService(Protocol):
 
     def function_invoke_stream(
         self,
-        request: FunctionInvokeBody,
+        initial: FunctionInvokeResponse,
         *,
+        headless: bool = False,
         poll_interval_seconds: float = 0.25,
         keepalive_interval_seconds: float = 5.0,
-    ) -> Iterable[FunctionInvokeResponse]: ...
+    ) -> AsyncIterator[FunctionInvokeResponse]: ...
 
     def assert_may_accept_invocation(self, stub_id: str) -> None: ...
 
@@ -302,40 +313,40 @@ class EndpointApiService(Protocol):
         request: StartEndpointServeRequest,
     ) -> StartEndpointServeResponse: ...
 
-    def forward_endpoint_request(
+    async def forward_endpoint_request(
         self,
         request: EndpointForwardRequest,
     ) -> EndpointForwardResponse: ...
 
-    def forward_endpoint_health(
+    async def forward_endpoint_health(
         self,
         request: EndpointForwardRequest,
     ) -> EndpointForwardResponse: ...
 
-    def prepare_asgi_websocket(
+    async def prepare_asgi_websocket(
         self,
         request: EndpointForwardRequest,
     ) -> EndpointIngressDispatchSession: ...
 
-    def prepare_asgi_http(
+    async def prepare_asgi_http(
         self,
         request: EndpointForwardRequest,
     ) -> EndpointIngressDispatchSession: ...
 
-    def heartbeat_asgi_websocket(self, task_id: str) -> None: ...
+    async def heartbeat_asgi_websocket(self, task_id: str) -> None: ...
 
-    def open_asgi_websocket_socket(
+    async def open_asgi_websocket_socket(
         self,
         session: EndpointIngressDispatchSession,
     ) -> socket.socket | None: ...
 
-    def open_asgi_http_stream(
+    async def open_asgi_http_stream(
         self,
         session: EndpointIngressDispatchSession,
         request: EndpointForwardRequest,
-    ) -> EndpointResponseStream: ...
+    ) -> AsyncEndpointResponseStream: ...
 
-    def finish_asgi_http(
+    async def finish_asgi_http(
         self,
         task_id: str,
         *,
@@ -345,7 +356,7 @@ class EndpointApiService(Protocol):
         error: str | None = None,
     ) -> None: ...
 
-    def finish_asgi_websocket(
+    async def finish_asgi_websocket(
         self,
         task_id: str,
         *,
@@ -485,6 +496,7 @@ class ApiServiceCore:
     payment_admission: DatabaseBillingAdmission
     redis_client: RedisClient
     binary_redis_client: RedisClient
+    async_io: ApiAsyncIo | None
     aws_connections: AwsAccountConnectionService | None
     owns_redis_client: bool
     owns_binary_redis_client: bool
@@ -503,6 +515,11 @@ class ApiServiceCore:
 
     def binary_redis(self) -> RedisClient:
         return self.binary_redis_client
+
+    def require_async_io(self) -> ApiAsyncIo:
+        if self.async_io is None:
+            raise RuntimeError("API asynchronous I/O resources were not composed")
+        return self.async_io
 
 
 @dataclass(frozen=True, slots=True)
@@ -567,6 +584,7 @@ class ApiServices(ApiServiceCore):
         image_build_container_transport_factory: ContainerServiceTransportFactory | None = None,
         redis_client: RedisClient,
         binary_redis_client: RedisClient,
+        async_io: ApiAsyncIo | None = None,
         owns_redis_client: bool = False,
         owns_binary_redis_client: bool = False,
         signal_service: RedisSignalService | None = None,
@@ -624,7 +642,20 @@ class ApiServices(ApiServiceCore):
         volume_metering_config = volume_metering_settings or VolumeMeteringSettings()
         redis = redis_client
         stream_events = RedisEventStreamRepository(redis)
-        events = EventService(context, stream_events=stream_events)
+        async_database = async_io.database if async_io is not None else None
+        async_workspace_changes = (
+            AsyncWorkspaceChangeService(
+                async_io.redis,
+                max_length=workspace_change_stream_config.max_length,
+            )
+            if async_io is not None
+            else None
+        )
+        events = EventService(
+            context,
+            stream_events=stream_events,
+            async_database=async_database,
+        )
         workspace_changes = WorkspaceChangeService(
             WorkspaceChangeRepository(
                 redis,
@@ -635,6 +666,8 @@ class ApiServices(ApiServiceCore):
             context,
             events,
             workspace_changes=workspace_changes,
+            async_database=async_database,
+            async_workspace_changes=async_workspace_changes,
         )
         secrets = SecretService(context, events, workspace_changes=workspace_changes)
         # Same decision as the provider resolver below: a deployment without
@@ -750,6 +783,8 @@ class ApiServices(ApiServiceCore):
         usage = UsageService(
             context,
             workspace_changes=workspace_changes,
+            async_database=async_database,
+            async_workspace_changes=async_workspace_changes,
         )
         volume_metering_service = volume_metering or (
             PersistentVolumeMeteringService.from_settings(
@@ -1009,6 +1044,7 @@ class ApiServices(ApiServiceCore):
             aws_connections=aws_composition.service if aws_composition is not None else None,
             redis_client=redis,
             binary_redis_client=binary_redis_client,
+            async_io=async_io,
             owns_redis_client=owns_redis_client,
             owns_binary_redis_client=owns_binary_redis_client,
             owned_resources=tuple(owned_runtime_resources),
@@ -1150,24 +1186,40 @@ def _compose_api_services(
         transport_factory=transport_factory,
         service_token=core.container_service_settings.token.get_secret_value(),
     )
-    proxy_client = PodProxyHttpClient(
+    proxy_client = PodProxySocketClient(
         route_resolver=route_resolver,
         route_dialer_config=route_dialer_config,
     )
-    container_readiness = RedisContainerReadiness(redis, proxy_client, proxy_client)
-    endpoint = endpoint_service or EndpointControlService(
-        core,
-        dispatcher=EndpointInstanceDispatcher(
-            scheduler_containers,
+    async_io = core.async_io
+    async_database = async_io.database if async_io is not None else None
+    async_scheduler_containers: AsyncRedisSchedulerContainerReader | None = None
+    async_http: AsyncBackendHttpClient | None = None
+    async_container_readiness: AsyncRedisContainerReadiness | None = None
+    async_dispatcher: AsyncEndpointInstanceDispatcher | None = None
+    if async_io is not None:
+        async_scheduler_containers = AsyncRedisSchedulerContainerReader(async_io.redis)
+        async_http = AsyncBackendHttpClient(
             route_resolver=route_resolver,
             route_dialer_config=route_dialer_config,
-            readiness_probe=container_readiness,
-        ),
+        )
+        async_container_readiness = AsyncRedisContainerReadiness(async_io.redis, async_http)
+        async_dispatcher = AsyncEndpointInstanceDispatcher(
+            async_scheduler_containers,
+            async_http,
+            async_container_readiness,
+            route_resolver=route_resolver,
+            route_dialer_config=route_dialer_config,
+        )
+    endpoint = endpoint_service or EndpointControlService(
+        core,
+        async_database=async_database,
+        async_dispatcher=async_dispatcher,
         gateway_http_url=lambda: core.gateway_settings.public_http_url,
     )
     function = function_service or FunctionControlService(
         core,
         gateway_http_url=lambda: core.gateway_settings.public_http_url,
+        async_database=async_database,
     )
     gateway = gateway_service or _gateway_control_service(
         core,
@@ -1175,6 +1227,7 @@ def _compose_api_services(
         scheduler_containers=scheduler_containers,
         scheduler_pool_states=scheduler_pool_states,
         container_clients=container_clients,
+        async_http=async_http,
     )
     image = image_service or ImageControlService(
         core,
@@ -1187,7 +1240,10 @@ def _compose_api_services(
         scheduler_containers=scheduler_containers,
         container_clients=container_clients,
         proxy_client=proxy_client,
-        container_readiness=container_readiness,
+        async_database=async_database,
+        async_scheduler_containers=async_scheduler_containers,
+        async_http=async_http,
+        async_container_readiness=async_container_readiness,
     )
     shell = shell_service or ShellControlService(
         core,
@@ -1198,6 +1254,8 @@ def _compose_api_services(
             route_resolver=route_resolver,
             route_dialer_config=route_dialer_config,
         ),
+        async_database=async_database,
+        async_scheduler_containers=async_scheduler_containers,
     )
     worker_repository = worker_repository_service or _worker_repository_service(
         core,
@@ -1325,6 +1383,7 @@ def _compose_api_services(
         volume_filesystem=core.volume_filesystem,
         redis_client=core.redis_client,
         binary_redis_client=core.binary_redis_client,
+        async_io=core.async_io,
         aws_connections=core.aws_connections,
         owns_redis_client=core.owns_redis_client,
         owns_binary_redis_client=core.owns_binary_redis_client,
@@ -1370,6 +1429,7 @@ def _gateway_control_service(
     scheduler_containers: RedisSchedulerContainerRepository,
     scheduler_pool_states: RedisWorkerPoolStateRepository,
     container_clients: SchedulerContainerClientFactory,
+    async_http: AsyncBackendHttpClient | None,
 ) -> GatewayControlService:
     compute_states = RedisComputeStateRepository(core.redis())
     route_dialer = BackendRouteDialer(
@@ -1408,6 +1468,7 @@ def _gateway_control_service(
                 scheduler_workers,
             )
         ),
+        async_http_client=async_http,
     )
 
 
@@ -1416,18 +1477,28 @@ def _pod_control_service(
     *,
     scheduler_containers: RedisSchedulerContainerRepository,
     container_clients: SchedulerContainerClientFactory,
-    proxy_client: PodProxyHttpClient,
-    container_readiness: ContainerReadiness,
+    proxy_client: PodProxySocketClient,
+    async_database: AsyncDatabaseClient | None,
+    async_scheduler_containers: AsyncRedisSchedulerContainerReader | None,
+    async_http: AsyncBackendHttpClient | None,
+    async_container_readiness: AsyncRedisContainerReadiness | None,
 ) -> PodControlService:
+    async_io = core.async_io
     return PodControlService(
         core,
         gateway_http_url=core.gateway_settings.public_http_url,
         scheduler_containers=scheduler_containers,
         container_clients=container_clients,
-        pod_proxy_http_client=proxy_client,
+        async_database=async_database,
+        async_scheduler_containers=async_scheduler_containers,
+        async_pod_proxy_http_client=(
+            AsyncPodProxyHttpClient(async_http) if async_http is not None else None
+        ),
         pod_proxy_socket_client=proxy_client,
-        pod_proxy_connections=RedisPodProxyConnectionRepository(core.redis()),
-        container_readiness_probe=container_readiness,
+        pod_proxy_connections=(
+            AsyncRedisPodProxyConnectionRepository(async_io.redis) if async_io is not None else None
+        ),
+        container_readiness_probe=async_container_readiness,
         redis=core.redis(),
     )
 

@@ -24,8 +24,11 @@ from shared.http.gateway_tasks import (
     StartTaskResponse,
 )
 
+from api.server.async_io import ApiAsyncIo
 from api.server.auth import read_workspace, write_workspace
+from api.server.dependencies import current_services
 from api.server.service_dependencies import gateway_service
+from api.server.services import ApiServices
 from api.server.sse import sse_event
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
@@ -41,12 +44,19 @@ def checkpoint_container(
 
 
 @router.post("/containers/attach", response_model=AttachToContainerResponse)
-def attach_to_container(
+async def attach_to_container(
     request: AttachToContainerRequest,
     workspace_id: read_workspace,
+    services: ApiServices = Depends(current_services),
     service: GatewayControlService = Depends(gateway_service),
 ) -> AttachToContainerResponse:
-    return service.attach_to_container(request, workspace_id=workspace_id)
+    async_io = services.require_async_io()
+    return await service.attach_to_container(
+        request,
+        workspace_id=workspace_id,
+        database=async_io.database,
+        redis=async_io.redis,
+    )
 
 
 @router.post("/containers/sync-workspace", response_model=SyncContainerWorkspaceResponse)
@@ -66,11 +76,13 @@ def attach_to_container_stream(
     poll_interval_seconds: float = Query(0.25, ge=0.05, le=30),
     *,
     workspace_id: read_workspace,
+    services: ApiServices = Depends(current_services),
     service: GatewayControlService = Depends(gateway_service),
 ) -> StreamingResponse:
     return StreamingResponse(
         _attach_events(
             service,
+            services.require_async_io(),
             container_id,
             poll_interval_seconds,
             workspace_id=workspace_id,
@@ -110,6 +122,7 @@ def end_task(
 
 async def _attach_events(
     service: GatewayControlService,
+    async_io: ApiAsyncIo,
     container_id: str,
     poll_interval_seconds: float,
     *,
@@ -123,9 +136,11 @@ async def _attach_events(
     idle_polls = 0
     while True:
         try:
-            response = service.attach_to_container(
+            response = await service.attach_to_container(
                 AttachToContainerRequest(container_id=container_id),
                 workspace_id=workspace_id,
+                database=async_io.database,
+                redis=async_io.redis,
             )
         except NotFoundError as exc:
             yield sse_event(

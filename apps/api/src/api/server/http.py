@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterable, Mapping
 
 from fastapi import Request, Response, WebSocket
 from foundation.http import HOP_BY_HOP_REQUEST_HEADERS
+from starlette.responses import StreamingResponse
 from websockets.typing import Subprotocol
 
 HOP_BY_HOP_RESPONSE_HEADERS = {
@@ -89,7 +90,25 @@ def forwarded_response(
     headers: Mapping[str, list[str]],
     body: bytes,
 ) -> Response:
-    response = Response(content=body, status_code=status_code)
+    return _with_forwarded_headers(Response(content=body, status_code=status_code), headers)
+
+
+def forwarded_streaming_response(
+    *,
+    status_code: int,
+    headers: Mapping[str, list[str]],
+    body: AsyncIterable[bytes],
+) -> StreamingResponse:
+    return _with_forwarded_headers(
+        StreamingResponse(content=body, status_code=status_code),
+        headers,
+    )
+
+
+def _with_forwarded_headers[ResponseT: Response](
+    response: ResponseT,
+    headers: Mapping[str, list[str]],
+) -> ResponseT:
     for key, values in headers.items():
         if key.lower() in HOP_BY_HOP_RESPONSE_HEADERS:
             continue

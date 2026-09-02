@@ -2,23 +2,26 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+import asyncio
+import socket
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from threading import Barrier
 from uuid import uuid4
 
+import pytest
+from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
+from coordination.redis_client import RedisSettings
 from database.tables.endpoint_dispatch import EndpointDispatchTable
 from execution.endpoints.dispatch import (
-    EndpointContainerAddress,
-    EndpointContainerAddressMap,
+    DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
+    AsyncEndpointResponseStream,
     EndpointContainerState,
-    EndpointInstanceDispatcher,
+    EndpointDispatchTarget,
 )
 from execution.endpoints.service import EndpointControlService
 from shared.http.endpoints import EndpointForwardRequest, EndpointForwardResponse
@@ -29,9 +32,14 @@ from shared.scheduling import (
 )
 from sqlalchemy import func, select, text
 from tests.backing_services import postgres_url
+from tests.real_redis import RealRedisActors
 from tests.service_fixtures import service_graph
 
-from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
+from database import (
+    DatabaseApplicationName,
+    DatabaseClient,
+    DatabaseSettings,
+)
 
 CONTENDERS = 8
 
@@ -50,23 +58,45 @@ class _AcceptingScheduler:
         )
 
 
-class _NoEndpointContainers:
-    def list_by_stub(self, stub_id: str) -> Sequence[EndpointContainerState]:
+class _NoEndpointDispatcher:
+    async def select_target(
+        self,
+        stub_id: str,
+        *,
+        container_loads: Mapping[str, int] | None = None,
+        max_inflight_per_container: int = 1,
+    ) -> EndpointDispatchTarget | None:
+        del stub_id, container_loads, max_inflight_per_container
+        return None
+
+    async def unprobed_target(self, stub_id: str) -> EndpointDispatchTarget | None:
+        del stub_id
+        return None
+
+    async def container_states(self, stub_id: str) -> Sequence[EndpointContainerState]:
         del stub_id
         return ()
 
-    def get_container_address(self, container_id: str) -> EndpointContainerAddress | None:
-        del container_id
-        return None
+    async def open_backend_socket(self, target: EndpointDispatchTarget) -> socket.socket | None:
+        raise AssertionError(f"container has no backend socket: {target.container_id}")
 
-    def get_container_address_map(self, container_id: str) -> EndpointContainerAddressMap:
-        raise AssertionError(f"container has no address: {container_id}")
+    async def open_http_stream(
+        self,
+        target: EndpointDispatchTarget,
+        request: EndpointForwardRequest,
+        *,
+        timeout_seconds: float = DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
+    ) -> AsyncEndpointResponseStream:
+        del request, timeout_seconds
+        raise AssertionError(f"container has no HTTP stream: {target.container_id}")
 
 
-def test_postgresql_endpoint_admission_holds_one_buffer_slot_across_replicas(
+@pytest.mark.anyio
+async def test_postgresql_endpoint_admission_holds_one_buffer_slot_across_replicas(
     tmp_path: Path,
+    real_redis_actors: RealRedisActors,
 ) -> None:
-    with _postgres_services(tmp_path) as services:
+    async with _postgres_services(tmp_path, real_redis_actors) as services:
         stub = ControlPlaneService(services.context).create_stub(
             "concurrent-endpoint-admission",
             kind=StubKind.Endpoint,
@@ -76,23 +106,22 @@ def test_postgresql_endpoint_admission_holds_one_buffer_slot_across_replicas(
                 "max_pending_tasks": 1,
             },
         )
-        start = Barrier(CONTENDERS)
+        start = asyncio.Event()
 
-        def invoke() -> EndpointForwardResponse:
+        async def invoke() -> EndpointForwardResponse:
             service = EndpointControlService(
                 services,
-                dispatcher=EndpointInstanceDispatcher(_NoEndpointContainers()),
+                async_database=services.require_async_io().database,
+                async_dispatcher=_NoEndpointDispatcher(),
             )
-            start.wait(timeout=30)
-            return service.forward_endpoint_request(
+            await start.wait()
+            return await service.forward_endpoint_request(
                 EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
             )
 
-        with ThreadPoolExecutor(max_workers=CONTENDERS) as executor:
-            responses = [
-                future.result(timeout=30)
-                for future in [executor.submit(invoke) for _ in range(CONTENDERS)]
-            ]
+        invocations = [asyncio.create_task(invoke()) for _ in range(CONTENDERS)]
+        start.set()
+        responses = await asyncio.gather(*invocations)
 
         assert [response.status_code for response in responses].count(504) == 1
         assert [response.status_code for response in responses].count(429) == CONTENDERS - 1
@@ -103,8 +132,11 @@ def test_postgresql_endpoint_admission_holds_one_buffer_slot_across_replicas(
         assert dispatch_count == 1
 
 
-@contextmanager
-def _postgres_services(tmp_path: Path) -> Iterator[ApiServices]:
+@asynccontextmanager
+async def _postgres_services(
+    tmp_path: Path,
+    real_redis_actors: RealRedisActors,
+) -> AsyncIterator[ApiServices]:
     base_url = postgres_url()
     database_name = f"endpoint_admission_{uuid4().hex}"
     admin = DatabaseClient.from_settings(
@@ -116,19 +148,36 @@ def _postgres_services(tmp_path: Path) -> Iterator[ApiServices]:
     try:
         with admin.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
             connection.execute(text(f'CREATE DATABASE "{database_name}"'))
-        database = DatabaseClient.from_settings(
-            DatabaseSettings(
-                url=base_url.set(database=database_name).render_as_string(hide_password=False),
-                pool_size=CONTENDERS + 2,
-                max_overflow=0,
-                application_name=DatabaseApplicationName.Test,
-            )
+        database_settings = DatabaseSettings(
+            url=base_url.set(database=database_name).render_as_string(hide_password=False),
+            pool_size=CONTENDERS + 2,
+            max_overflow=0,
+            application_name=DatabaseApplicationName.Test,
         )
-        with service_graph(database, tmp_path) as graph:
-            yield replace(
-                graph,
-                containers=replace(graph.containers, scheduler=_AcceptingScheduler()),
-            )
+        database = DatabaseClient.from_settings(database_settings)
+        async_io = ApiAsyncIo.from_settings(
+            database_settings,
+            RedisSettings(
+                url=real_redis_actors.url,
+                key_prefix=real_redis_actors.prefix,
+                socket_timeout_seconds=2.0,
+                health_check_interval_seconds=1,
+            ),
+        )
+        try:
+            with service_graph(
+                database,
+                tmp_path,
+                redis_client=real_redis_actors.client(),
+                binary_redis_client=real_redis_actors.client(decode_responses=False),
+                async_io=async_io,
+            ) as graph:
+                yield replace(
+                    graph,
+                    containers=replace(graph.containers, scheduler=_AcceptingScheduler()),
+                )
+        finally:
+            await async_io.close()
     finally:
         with admin.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
             connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'))

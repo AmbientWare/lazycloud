@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import threading
-from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -13,6 +13,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
 from api.fastapi_app import create_app
+from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
 from api.server.worker_repository_service import (
     WorkerRepositoryCacheStorage,
@@ -47,6 +48,7 @@ from database.repositories.images import (
 from database.repositories.orchestration import (
     ContainerRepository,
 )
+from database.types import DatabaseSession
 from execution.containers.preemption import PreemptedContainerService
 from fastapi.testclient import TestClient
 from foundation.network import worker_network_prefix
@@ -133,6 +135,7 @@ from worker.repository_payloads import (
     GetContainerCredentialsResponse,
     GetImageBuildCredentialsRequest,
     GetNextContainerRequestRequest,
+    GetNextContainerRequestResponse,
     PersistCheckpointArchiveRequest,
     PrepareCheckpointArchiveUploadRequest,
     PrepareImageBuildContextDownloadRequest,
@@ -159,6 +162,17 @@ from worker_repository.source_cache import (
     WorkerSourceCacheService,
     WorkerSourceCacheUnavailableError,
 )
+
+
+@pytest.fixture
+async def async_io(isolated_services: ApiServices) -> AsyncIterator[ApiAsyncIo]:
+    io = isolated_services.require_async_io()
+    await io.start()
+    try:
+        yield io
+    finally:
+        await io.close()
+
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
@@ -1042,8 +1056,10 @@ def test_worker_network_mutations_are_bound_to_authenticated_worker_assignment(
     assert repository.network.get_container_ip(network_scope, "container-other-worker") is None
 
 
-def test_worker_repository_stream_blocks_until_scheduler_assignment(
+@pytest.mark.anyio
+async def test_worker_repository_stream_blocks_until_scheduler_assignment(
     isolated_services: ApiServices,
+    async_io: ApiAsyncIo,
     real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
@@ -1091,6 +1107,7 @@ def test_worker_repository_stream_blocks_until_scheduler_assignment(
     )
     cache_session = _activate_test_source_cache(service, principal, worker_id)
     stream = service.stream_next_container_requests(
+        async_io,
         GetNextContainerRequestRequest(
             worker_id=worker_id,
             cache_generation_id=cache_session.generation_id,
@@ -1099,34 +1116,42 @@ def test_worker_repository_stream_blocks_until_scheduler_assignment(
         principal=principal,
     )
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        waiting = executor.submit(next, stream)
-        _dispatch_worker_request(
-            isolated_services,
-            workers,
-            containers,
-            SchedulerWorkerRequest(
-                workspace_id=workspace_id,
-                stub_id=str(uuid4()),
-                container_id=container_id,
-                cpu_millicores=100,
-                memory_mib=128,
-                pool_selector="default",
-            ),
-        )
-        response = waiting.result(timeout=1.0)
+    async def next_response() -> GetNextContainerRequestResponse:
+        return await anext(stream)
+
+    waiting = asyncio.create_task(next_response())
+    await asyncio.sleep(0)
+    assert not waiting.done()
+    await asyncio.to_thread(
+        _dispatch_worker_request,
+        isolated_services,
+        workers,
+        containers,
+        SchedulerWorkerRequest(
+            workspace_id=workspace_id,
+            stub_id=str(uuid4()),
+            container_id=container_id,
+            cpu_millicores=100,
+            memory_mib=128,
+            pool_selector="default",
+        ),
+    )
+    response = await asyncio.wait_for(waiting, timeout=1.0)
 
     assert response.container_request is not None
     assert response.container_request.container_id == container_id
     # Delivered, not destroyed: the request stays reachable until the worker says
     # it holds the container, and the acknowledgement is what retires it.
     assert workers.has_recoverable_container_request(container_id, worker_id=worker_id)
-    assert service.acknowledge_container_request(
-        AcknowledgeContainerRequestRequest(worker_id=worker_id, container_id=container_id)
+    assert (
+        await service.acknowledge_container_request(
+            async_io,
+            AcknowledgeContainerRequestRequest(worker_id=worker_id, container_id=container_id),
+        )
     ).acknowledged
-    assert workers.get_next_container_request(worker_id) is None
-    with pytest.raises(StopIteration):
-        next(stream)
+    assert not workers.has_recoverable_container_request(container_id, worker_id=worker_id)
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
 
 
 def test_stale_source_cache_session_cannot_change_current_worker_availability(
@@ -1198,8 +1223,10 @@ def test_stale_source_cache_session_cannot_change_current_worker_availability(
     assert initializing_worker.status is not SchedulerWorkerStatus.Available
 
 
-def test_worker_stream_rechecks_cache_after_dequeue_and_requeues_on_drain(
+@pytest.mark.anyio
+async def test_worker_stream_rechecks_cache_after_dequeue_and_requeues_on_drain(
     isolated_services: ApiServices,
+    async_io: ApiAsyncIo,
     real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
@@ -1218,7 +1245,7 @@ def test_worker_stream_rechecks_cache_after_dequeue_and_requeues_on_drain(
         stub_id="stub-1",
         container_id="container-1",
     )
-    workers.enqueue_worker_request(worker_id, request)
+    await workers.enqueue_worker_request(async_io.redis, worker_id, request)
     service = _worker_repository_service(isolated_services, redis)
     source_cache = _SecondCheckUnavailableSourceCache(isolated_services.context)
     service.source_cache = source_cache
@@ -1229,6 +1256,7 @@ def test_worker_stream_rechecks_cache_after_dequeue_and_requeues_on_drain(
     )
     cache_session = _activate_test_source_cache(service, principal, worker_id)
     stream = service.stream_next_container_requests(
+        async_io,
         GetNextContainerRequestRequest(
             worker_id=worker_id,
             cache_generation_id=cache_session.generation_id,
@@ -1238,10 +1266,17 @@ def test_worker_stream_rechecks_cache_after_dequeue_and_requeues_on_drain(
     )
 
     with pytest.raises(WorkerSourceCacheUnavailableError, match="became draining"):
-        next(stream)
+        await anext(stream)
 
     assert source_cache.checks == 2
-    assert workers.get_next_container_request(worker_id) == request
+    assert (
+        await workers.wait_for_next_container_request(
+            async_io.redis,
+            worker_id,
+            timeout_seconds=0.1,
+        )
+        == request
+    )
     current_worker = workers.get_worker(worker_id)
     assert current_worker is not None
     assert current_worker.status is not SchedulerWorkerStatus.Available
@@ -1756,30 +1791,28 @@ def test_worker_repository_filters_targeted_stop_events_by_assigned_worker(
     fake = FakeRedis()
     redis = RedisClient(fake, key_prefix="test")
     service = _worker_repository_service(isolated_services, redis)
-    sent = service.events.send(
-        EventBusEvent(
-            type=EventBusEventType.StopContainer,
-            args={
-                "container_id": "ctr-1",
-                "worker_id": "worker-1",
-                "reason": StopContainerReason.User.value,
-            },
-        )
+    targeted = EventBusEvent(
+        type=EventBusEventType.StopContainer,
+        args={
+            "container_id": "ctr-1",
+            "worker_id": "worker-1",
+            "reason": StopContainerReason.User.value,
+        },
     )
+    service.events.send(targeted)
 
-    assert service._event_targets_worker(sent.event_id, "worker-1")
-    assert not service._event_targets_worker(sent.event_id, "worker-2")
+    assert service._event_targets_worker(targeted, "worker-1")
+    assert not service._event_targets_worker(targeted, "worker-2")
 
-    untargeted = service.events.send(
-        EventBusEvent(
-            type=EventBusEventType.StopContainer,
-            args={
-                "container_id": "ctr-2",
-                "reason": StopContainerReason.User.value,
-            },
-        )
+    untargeted = EventBusEvent(
+        type=EventBusEventType.StopContainer,
+        args={
+            "container_id": "ctr-2",
+            "reason": StopContainerReason.User.value,
+        },
     )
-    assert not service._event_targets_worker(untargeted.event_id, "worker-1")
+    service.events.send(untargeted)
+    assert not service._event_targets_worker(untargeted, "worker-1")
 
 
 def test_worker_repository_service_persists_checkpoint_archive_and_state(
@@ -2215,8 +2248,10 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
     assert containers.get_exit_code(container_id) == 0
 
 
-def test_worker_repository_reconciles_orphan_routes_without_removing_active_routes(
+@pytest.mark.anyio
+async def test_worker_repository_reconciles_orphan_routes_without_removing_active_routes(
     isolated_services: ApiServices,
+    async_io: ApiAsyncIo,
     real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
@@ -2282,7 +2317,7 @@ def test_worker_repository_reconciles_orphan_routes_without_removing_active_rout
     )
     compute_states.save_agent_route_state(orphan_route)
 
-    result = service.reconcile_orphan_agent_routes()
+    result = await service.reconcile_orphan_agent_routes(async_io)
 
     assert result.scanned == 2
     assert result.removed == 1
@@ -2629,15 +2664,17 @@ class _SecondCheckUnavailableSourceCache(WorkerSourceCacheService):
         super().__init__(context)
         self.checks = 0
 
-    def require_available(
+    def require_available_in_session(
         self,
+        session: DatabaseSession,
         *,
         principal: WorkerRepositoryPrincipal,
         worker_id: str,
         generation_id: str,
         session_fence: int,
     ) -> WorkerCacheGenerationRecord:
-        generation = super().require_available(
+        generation = super().require_available_in_session(
+            session,
             principal=principal,
             worker_id=worker_id,
             generation_id=generation_id,

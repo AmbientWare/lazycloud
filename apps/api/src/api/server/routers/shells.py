@@ -21,6 +21,7 @@ from gateway.shell_proxy import connect_shell_backend
 from identity.auth import AuthError
 from identity.authz import AuthzRequirement
 from identity.websocket_tickets import (
+    AsyncWebSocketTicketService,
     ShellWebSocketAudience,
     ShellWebSocketAuthorization,
     WebSocketTicketService,
@@ -159,7 +160,7 @@ async def shell_connect_tunnel(
     route_resolver: BackendRouteResolver = Depends(backend_route_resolver),
     route_dialer_config: BackendRouteDialerConfig = Depends(backend_route_dialer_config),
 ) -> StreamingResponse:
-    target = service.shell_backend_target(
+    target = await service.shell_backend_target_async(
         stub_id=stub_id,
         container_id=container_id,
         workspace_id=workspace_id,
@@ -190,7 +191,7 @@ async def shell_connect_websocket(
     route_resolver: BackendRouteResolver = Depends(backend_route_resolver),
     route_dialer_config: BackendRouteDialerConfig = Depends(backend_route_dialer_config),
 ) -> None:
-    authorization = _authorize_shell_websocket(
+    authorization = await _authorize_shell_websocket(
         websocket,
         services,
         stub_id=stub_id,
@@ -199,7 +200,7 @@ async def shell_connect_websocket(
     await websocket.accept()
     target = None
     try:
-        target = service.shell_backend_target(
+        target = await service.shell_backend_target_async(
             stub_id=stub_id,
             container_id=container_id,
             workspace_id=authorization.audience.workspace_id,
@@ -347,7 +348,7 @@ def _mint_shell_ticket(
     )
 
 
-def _authorize_shell_websocket(
+async def _authorize_shell_websocket(
     websocket: WebSocket,
     services: ApiServices,
     *,
@@ -359,15 +360,21 @@ def _authorize_shell_websocket(
         if ticket is not None:
             if not ticket:
                 raise AuthError("missing WebSocket ticket")
-            return WebSocketTicketService(
-                services.context,
-                services.redis_client,
+            async_io = services.require_async_io()
+            return await AsyncWebSocketTicketService(
+                auth=services.auth,
+                database=async_io.database,
+                redis=async_io.redis,
+                invalidation=async_io.auth_invalidation,
             ).consume_shell_ticket(
                 ticket,
                 stub_id=stub_id,
                 container_id=container_id,
             )
-        principal = services.auth.authorize_principal(
+        async_io = services.require_async_io()
+        principal = await services.auth.authorize_principal_async(
+            async_io.database,
+            async_io.auth_invalidation,
             websocket_authorization_header(websocket),
             AuthzRequirement(action=AuthScope.Read),
             allow_if_no_tokens=False,
@@ -385,7 +392,12 @@ def _authorize_shell_websocket(
     return ShellWebSocketAuthorization(
         token=principal.token,
         audience=ShellWebSocketAudience(
-            workspace_id=websocket_workspace(services, websocket, principal, AuthScope.Read),
+            workspace_id=await websocket_workspace(
+                services,
+                websocket,
+                principal,
+                AuthScope.Read,
+            ),
             stub_id=stub_id,
             container_id=container_id,
         ),

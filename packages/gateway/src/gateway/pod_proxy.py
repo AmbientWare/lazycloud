@@ -1,21 +1,18 @@
 from __future__ import annotations
 
-import http.client
 import socket
 from dataclasses import dataclass, field
 
-from coordination.redis_client import RedisClient, RedisWireScalar
+from coordination.redis_client import AsyncRedisClient, RedisWireScalar
 from execution.pods.proxy import (
     DEFAULT_POD_PROXY_TIMEOUT_SECONDS,
+    PodProxyBackendError,
     PodProxyHttpRequest,
-    PodProxyHttpResponse,
+    PodProxyResponseStream,
     PodProxyTarget,
 )
-from foundation.http import (
-    forwarded_request_headers,
-    forwarded_request_path,
-    grouped_response_headers,
-)
+from foundation.http import forwarded_request_headers, forwarded_request_path
+from networking.async_http import AsyncBackendHttpClient, AsyncBackendHttpError
 from networking.dialer import (
     BackendRouteDialer,
     BackendRouteDialerConfig,
@@ -79,14 +76,19 @@ return redis.call("DECR", KEYS[1])
 
 
 @dataclass(slots=True)
-class RedisPodProxyConnectionRepository:
-    redis: RedisClient
+class AsyncRedisPodProxyConnectionRepository:
+    redis: AsyncRedisClient
 
-    def container_connections(self, workspace_id: str, stub_id: str, container_id: str) -> int:
-        raw = self.redis.get(self._container_key(workspace_id, stub_id, container_id))
+    async def container_connections(
+        self,
+        workspace_id: str,
+        stub_id: str,
+        container_id: str,
+    ) -> int:
+        raw = await self.redis.get(self._container_key(workspace_id, stub_id, container_id))
         return _non_negative_int(raw)
 
-    def increment_container_connections(
+    async def increment_container_connections(
         self,
         workspace_id: str,
         stub_id: str,
@@ -94,7 +96,7 @@ class RedisPodProxyConnectionRepository:
         *,
         keep_warm_seconds: int | None,
     ) -> int:
-        return self.redis.eval_int(
+        return await self.redis.eval_int(
             _INCREMENT_CONTAINER_CONNECTIONS,
             2,
             self._container_key(workspace_id, stub_id, container_id),
@@ -102,7 +104,7 @@ class RedisPodProxyConnectionRepository:
             _keep_warm_argument(keep_warm_seconds),
         )
 
-    def decrement_container_connections(
+    async def decrement_container_connections(
         self,
         workspace_id: str,
         stub_id: str,
@@ -110,7 +112,7 @@ class RedisPodProxyConnectionRepository:
         *,
         keep_warm_seconds: int | None,
     ) -> int:
-        return self.redis.eval_int(
+        return await self.redis.eval_int(
             _FINISH_CONTAINER_CONNECTION,
             2,
             self._container_key(workspace_id, stub_id, container_id),
@@ -118,14 +120,14 @@ class RedisPodProxyConnectionRepository:
             _keep_warm_argument(keep_warm_seconds),
         )
 
-    def increment_total_connections(self, workspace_id: str, stub_id: str) -> int:
-        return _non_negative_int(self.redis.increment(self._total_key(workspace_id, stub_id)))
+    async def increment_total_connections(self, workspace_id: str, stub_id: str) -> int:
+        return _non_negative_int(await self.redis.increment(self._total_key(workspace_id, stub_id)))
 
-    def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int:
-        return self._decrement_or_delete(self._total_key(workspace_id, stub_id))
+    async def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int:
+        return await self._decrement_or_delete(self._total_key(workspace_id, stub_id))
 
-    def _decrement_or_delete(self, key: str) -> int:
-        return self.redis.eval_int(
+    async def _decrement_or_delete(self, key: str) -> int:
+        return await self.redis.eval_int(
             _DECREMENT_OR_DELETE_CONNECTION_COUNTER,
             1,
             key,
@@ -145,38 +147,38 @@ class RedisPodProxyConnectionRepository:
 
 
 @dataclass(slots=True)
-class PodProxyHttpClient:
-    route_resolver: BackendRouteResolver | None = None
-    route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
+class AsyncPodProxyHttpClient:
+    client: AsyncBackendHttpClient
 
-    def forward(
+    async def open_stream(
         self,
         target: PodProxyTarget,
         request: PodProxyHttpRequest,
         *,
         timeout_seconds: float = DEFAULT_POD_PROXY_TIMEOUT_SECONDS,
         connect_timeout_seconds: float | None = None,
-    ) -> PodProxyHttpResponse:
-        connection = self._connection(
-            target,
-            timeout_seconds=timeout_seconds,
-            connect_timeout_seconds=connect_timeout_seconds,
-        )
+    ) -> PodProxyResponseStream:
+        route_id = target.route_id or parse_backend_route_address(target.address)[0]
         try:
-            connection.request(
-                request.method,
-                forwarded_request_path(request.path, request.query_params),
-                body=request.body,
+            return await self.client.open_stream(
+                address=target.address,
+                route_id=route_id,
+                method=request.method,
+                path=forwarded_request_path(request.path, request.query_params),
                 headers=forwarded_request_headers(request.headers),
+                body=request.body,
+                timeout_seconds=timeout_seconds,
+                connect_timeout_seconds=connect_timeout_seconds,
+                resource="pod",
             )
-            response = connection.getresponse()
-            return PodProxyHttpResponse(
-                status_code=response.status,
-                headers=grouped_response_headers(response.getheaders()),
-                body=response.read(),
-            )
-        finally:
-            connection.close()
+        except (AsyncBackendHttpError, ValueError) as exc:
+            raise PodProxyBackendError(f"pod proxy backend request failed: {exc}") from exc
+
+
+@dataclass(slots=True)
+class PodProxySocketClient:
+    route_resolver: BackendRouteResolver | None = None
+    route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
 
     def open_socket(
         self,
@@ -210,51 +212,6 @@ class PodProxyHttpClient:
             (parsed.hostname or "", parsed.port or 80),
             timeout=timeout,
         )
-
-    def _connection(
-        self,
-        target: PodProxyTarget,
-        *,
-        timeout_seconds: float,
-        connect_timeout_seconds: float | None,
-    ) -> http.client.HTTPConnection:
-        timeout = timeout_seconds or self.route_dialer_config.timeout_seconds
-        connect_timeout = connect_timeout_seconds or timeout
-        route_id = target.route_id or parse_backend_route_address(target.address)[0]
-        if route_id:
-            backend_connection = self.open_socket(
-                target,
-                timeout_seconds=connect_timeout,
-            )
-            backend_connection.settimeout(timeout)
-            return _RouteHttpConnection(backend_connection, timeout=timeout)
-
-        parsed = parse_container_address(target.address, resource="pod")
-        if parsed.scheme == "https":
-            connection: http.client.HTTPConnection = http.client.HTTPSConnection(
-                parsed.hostname or "",
-                parsed.port,
-                timeout=connect_timeout,
-            )
-        else:
-            connection = http.client.HTTPConnection(
-                parsed.hostname or "",
-                parsed.port,
-                timeout=connect_timeout,
-            )
-        connection.connect()
-        if connection.sock is not None:
-            connection.sock.settimeout(timeout)
-        return connection
-
-
-class _RouteHttpConnection(http.client.HTTPConnection):
-    def __init__(self, backend_socket: socket.socket, *, timeout: float) -> None:
-        super().__init__("backend.route", timeout=timeout)
-        self._socket = backend_socket
-
-    def connect(self) -> None:
-        self.sock = self._socket
 
 
 def _non_negative_int(value: RedisWireScalar | None) -> int:

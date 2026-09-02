@@ -744,23 +744,34 @@ class ControlPlaneService:
             return StubRepository(session).app_ids_by_id(stub_ids, workspace_id=workspace_id)
 
     def get_stub(self, stub_id_or_name: str, *, workspace: str | None = None) -> StubRecord:
-        workspace_id = self.get_workspace(workspace).id if workspace is not None else None
         with self.context.database.session() as session:
-            repository = _stub_records(session)
-            stub_id = try_uuid(stub_id_or_name)
-            if stub_id is not None:
-                record = (
-                    repository.get(stub_id, workspace_id=workspace_id)
-                    if workspace_id is not None
-                    else repository.get_across_workspaces(stub_id)
-                )
-                if record is not None:
-                    return record
-            records = (
-                repository.list(workspace_id=workspace_id)
+            return self.get_stub_in_session(session, stub_id_or_name, workspace=workspace)
+
+    def get_stub_in_session(
+        self,
+        session: Session,
+        stub_id_or_name: str,
+        *,
+        workspace: str | None = None,
+    ) -> StubRecord:
+        workspace_id = (
+            self.context.workspace(session, workspace).id if workspace is not None else None
+        )
+        repository = _stub_records(session)
+        stub_id = try_uuid(stub_id_or_name)
+        if stub_id is not None:
+            record = (
+                repository.get(stub_id, workspace_id=workspace_id)
                 if workspace_id is not None
-                else repository.list_across_workspaces()
+                else repository.get_across_workspaces(stub_id)
             )
+            if record is not None:
+                return record
+        records = (
+            repository.list(workspace_id=workspace_id)
+            if workspace_id is not None
+            else repository.list_across_workspaces()
+        )
         record = _stub_by_name(records, stub_id_or_name)
         if record is None:
             msg = f"stub not found: {stub_id_or_name}"

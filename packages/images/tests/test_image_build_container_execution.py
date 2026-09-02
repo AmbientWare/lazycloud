@@ -349,7 +349,6 @@ def test_scheduler_image_build_executor_tombstone_drops_queued_request_after_tim
     assert containers.is_container_cancelled(request.session.container_id)
     assert workers.claim_ready_container_requests(limit=1) == []
     assert workers.list_workers() == []
-    assert workers.get_next_container_request("unassigned-worker") is None
     assert redis.sorted_set_cardinality(workers.keys.container_requests()) == 0
     assert redis.sorted_set_cardinality(workers.keys.container_request_claims()) == 0
     assert redis.hash_length(workers.keys.container_request_payloads()) == 0

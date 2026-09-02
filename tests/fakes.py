@@ -16,7 +16,7 @@ from shared.http.gateway import (
     ResolveDeploymentTargetRequest,
     ResolveDeploymentTargetResponse,
 )
-from storage_client.s3 import S3ObjectInfo
+from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
 
 
 def http_api_error(detail: str, *, status_code: int = 400) -> HttpApiError:
@@ -239,6 +239,29 @@ class FakeObjectClient:
     ) -> str:
         del content_length, content_type
         return f"memory://{bucket or 'default'}/{key}?expires={expires_seconds}"
+
+    def generate_presigned_put(
+        self,
+        key: str,
+        *,
+        bucket: str | None = None,
+        expires_seconds: int = 3600,
+        content_length: int,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+        checksum_sha256: str = "",
+    ) -> S3PresignedUpload:
+        headers = {
+            "content-length": str(content_length),
+            "content-type": content_type,
+            **{f"x-amz-meta-{name}": value for name, value in (metadata or {}).items()},
+        }
+        if checksum_sha256:
+            headers["x-amz-checksum-sha256"] = checksum_sha256
+        return S3PresignedUpload(
+            url=f"memory://{bucket or 'default'}/{key}?expires={expires_seconds}",
+            headers=headers,
+        )
 
     def delete(self, key: str, *, bucket: str | None = None) -> None:
         self.objects.pop((bucket or "default", key), None)

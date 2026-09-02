@@ -106,11 +106,16 @@ One job's worth, not every job's: the three that open a database are each in a
 sync wave of their own and the fourth opens none, so they never hold connections
 at once. The worst moment is a job running while the previous release's pods
 still serve, which this counts.
+
+Each API process owns two SQLAlchemy engines: the synchronous engine retained by
+sync services and the asynchronous engine used by async request paths. Both read
+the same pool settings and may reach their maxima at once, so both count.
 */}}
 {{- define "lazycloud.databaseBudget" -}}
 {{- $ceiling := int .Values.database.maxConnections -}}
 {{- $reserved := int .Values.database.reserved -}}
-{{- $api := mul (int .Values.controlPlane.replicas) (add (int .Values.controlPlane.database.poolSize) (int .Values.controlPlane.database.maxOverflow)) -}}
+{{- $apiEngine := add (int .Values.controlPlane.database.poolSize) (int .Values.controlPlane.database.maxOverflow) -}}
+{{- $api := mul 2 (mul (int .Values.controlPlane.replicas) $apiEngine) -}}
 {{- $scheduler := mul (int .Values.scheduler.replicas) (add (int .Values.scheduler.database.poolSize) (int .Values.scheduler.database.maxOverflow)) -}}
 {{- $jobs := add (int .Values.bootstrap.database.poolSize) (int .Values.bootstrap.database.maxOverflow) -}}
 {{- $total := add $api $scheduler $jobs -}}

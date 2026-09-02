@@ -5,14 +5,16 @@ import secrets
 from contextlib import suppress
 from dataclasses import dataclass
 
-from coordination.redis_client import RedisClient
+from coordination.redis_client import AsyncRedisClient, RedisClient
 from database.repositories.identity import WorkspaceMemberRepository
 from pydantic import ValidationError
 from shared.contracts import ContractModel
 from shared.identity import AuthScope, AuthTokenRecord, WorkspaceMemberRecord
 
+from database import AsyncDatabaseClient
 from identity.auth import AuthError, AuthorizationDeniedError, AuthService, IdentityContext
 from identity.authz import decide_authorization, workspace_requirement
+from identity.token_invalidation import AsyncAuthTokenInvalidation
 
 WEBSOCKET_TICKET_TTL_SECONDS = 30
 _WEBSOCKET_TICKET_PREFIX = "wst_"
@@ -78,7 +80,7 @@ class WebSocketTicketService:
         ).model_dump_json()
         for _attempt in range(3):
             ticket = f"{_WEBSOCKET_TICKET_PREFIX}{secrets.token_urlsafe(32)}"
-            ticket_key = self._ticket_key(ticket)
+            ticket_key = _ticket_key(self.redis, ticket)
             try:
                 stored = self.redis.set_single_use(
                     ticket_key,
@@ -95,7 +97,28 @@ class WebSocketTicketService:
                 return ticket
         raise WebSocketTicketStoreError("WebSocket ticket storage is temporarily unavailable")
 
-    def consume_shell_ticket(
+    def _membership(
+        self,
+        token: AuthTokenRecord,
+        workspace_id: str,
+    ) -> WorkspaceMemberRecord | None:
+        if not token.names_user or not token.user_id:
+            return None
+        with self.context.database.session() as session:
+            return WorkspaceMemberRepository(session).membership(
+                workspace_id=workspace_id,
+                user_id=token.user_id,
+            )
+
+
+@dataclass(slots=True)
+class AsyncWebSocketTicketService:
+    auth: AuthService
+    database: AsyncDatabaseClient
+    redis: AsyncRedisClient
+    invalidation: AsyncAuthTokenInvalidation
+
+    async def consume_shell_ticket(
         self,
         ticket: str,
         *,
@@ -103,9 +126,9 @@ class WebSocketTicketService:
         container_id: str,
         required_scope: AuthScope = AuthScope.Read,
     ) -> ShellWebSocketAuthorization:
-        # GETDEL is intentionally first. Invalid payloads, wrong audiences, and
-        # failed durable authorization all consume the credential permanently.
-        encoded = self.redis.getdel(self._ticket_key(ticket))
+        # GETDEL comes first: an invalid payload, a wrong audience, and a failed
+        # durable authorization all consume the ticket for good.
+        encoded = await self.redis.getdel(_ticket_key(self.redis, ticket))
         if encoded is None:
             raise AuthError("invalid or expired WebSocket ticket")
         try:
@@ -116,48 +139,39 @@ class WebSocketTicketService:
             raise AuthError("WebSocket ticket audience does not match")
         if payload.required_scope is not required_scope:
             raise AuthError("WebSocket ticket scope does not match")
-        token = AuthService(self.context).authorize_token_identity(
+        membership = await self.database.run_transaction(
+            lambda session: (
+                WorkspaceMemberRepository(session).membership(
+                    workspace_id=payload.audience.workspace_id,
+                    user_id=payload.token_user_id,
+                )
+                if payload.token_user_id
+                else None
+            )
+        )
+        token = await self.auth.authorize_token_identity(
+            self.database,
+            self.invalidation,
             payload.token_id,
             token_user_id=payload.token_user_id,
             token_workspace_id=payload.token_workspace_id,
             requirement=workspace_requirement(
                 payload.audience.workspace_id,
                 action=payload.required_scope,
-                membership=self._membership_for(
-                    payload.token_user_id,
-                    payload.audience.workspace_id,
-                ),
+                membership=membership,
             ),
         )
         return ShellWebSocketAuthorization(token=token, audience=payload.audience)
 
-    def _membership(
-        self,
-        token: AuthTokenRecord,
-        workspace_id: str,
-    ) -> WorkspaceMemberRecord | None:
-        return self._membership_for(token.user_id if token.names_user else "", workspace_id)
 
-    def _membership_for(
-        self,
-        user_id: str,
-        workspace_id: str,
-    ) -> WorkspaceMemberRecord | None:
-        if not user_id:
-            return None
-        with self.context.database.session() as session:
-            return WorkspaceMemberRepository(session).membership(
-                workspace_id=workspace_id,
-                user_id=user_id,
-            )
-
-    def _ticket_key(self, ticket: str) -> str:
-        digest = hashlib.sha256(ticket.encode("utf-8")).hexdigest()
-        return self.redis.key(_WEBSOCKET_TICKET_KEY_NAMESPACE, digest)
+def _ticket_key(redis: RedisClient | AsyncRedisClient, ticket: str) -> str:
+    digest = hashlib.sha256(ticket.encode("utf-8")).hexdigest()
+    return redis.key(_WEBSOCKET_TICKET_KEY_NAMESPACE, digest)
 
 
 __all__ = [
     "WEBSOCKET_TICKET_TTL_SECONDS",
+    "AsyncWebSocketTicketService",
     "ShellWebSocketAudience",
     "ShellWebSocketAuthorization",
     "WebSocketTicketService",

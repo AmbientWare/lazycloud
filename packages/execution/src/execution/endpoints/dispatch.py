@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import http.client
+import asyncio
 import socket
 import sys
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -12,25 +12,27 @@ from typing import Protocol
 from foundation.http import (
     forwarded_request_headers,
     forwarded_request_path,
-    grouped_response_headers,
+)
+from networking.async_http import (
+    AsyncBackendConnectError,
+    AsyncBackendHttpClient,
 )
 from networking.dialer import (
     BackendRouteDialer,
     BackendRouteDialerConfig,
     BackendRouteResolver,
-    BackendRouteUnavailable,
 )
 from networking.routing import build_backend_route_dial_plan
 from pydantic import Field
 from shared.container_requests import CONTAINER_HEALTH_PATH, CONTAINER_INNER_PORT
 from shared.contracts import ContractModel
 from shared.deployment_records import DEFAULT_MAX_PENDING_TASKS
-from shared.http.endpoints import EndpointForwardRequest, EndpointForwardResponse
+from shared.http.endpoints import EndpointForwardRequest
 from shared.scheduling import SchedulerContainerStatus
 from shared.timestamps import utc_now
 from shared.urls import parse_container_address
 
-from execution.containers.readiness import ContainerReadiness
+from execution.containers.readiness import AsyncContainerReadiness
 
 DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS = 175.0
 DEFAULT_ENDPOINT_QUEUE_TIMEOUT_SECONDS = 600.0
@@ -185,54 +187,18 @@ class EndpointContainerAddressMap(Protocol):
     def routes(self) -> Iterable[EndpointBackendRoute]: ...
 
 
-class EndpointContainerRepository(Protocol):
-    def list_by_stub(self, stub_id: str) -> Sequence[EndpointContainerState]: ...
+class AsyncEndpointContainerRepository(Protocol):
+    async def list_by_stub(self, stub_id: str) -> Sequence[EndpointContainerState]: ...
 
-    def get_container_address(self, container_id: str) -> EndpointContainerAddress | None: ...
-
-    def get_container_address_map(self, container_id: str) -> EndpointContainerAddressMap: ...
-
-
-class EndpointRequestDispatcher(Protocol):
-    def forward(
+    async def get_container_address(
         self,
-        *,
-        stub_id: str,
-        request: EndpointForwardRequest,
-        timeout_seconds: float = DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
-        container_loads: Mapping[str, int] | None = None,
-        max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
-    ) -> EndpointForwardResponse: ...
+        container_id: str,
+    ) -> EndpointContainerAddress | None: ...
 
-    def forward_target(
+    async def get_container_address_maps(
         self,
-        target: EndpointDispatchTarget,
-        request: EndpointForwardRequest,
-        *,
-        timeout_seconds: float = DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
-    ) -> EndpointForwardResponse: ...
-
-    def select_target(
-        self,
-        stub_id: str,
-        *,
-        container_loads: Mapping[str, int] | None = None,
-        max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
-    ) -> EndpointDispatchTarget | None: ...
-
-    def unprobed_target(self, stub_id: str) -> EndpointDispatchTarget | None: ...
-
-    def container_states(self, stub_id: str) -> Sequence[EndpointContainerState]: ...
-
-    def open_backend_socket(self, target: EndpointDispatchTarget) -> socket.socket | None: ...
-
-    def open_http_stream(
-        self,
-        target: EndpointDispatchTarget,
-        request: EndpointForwardRequest,
-        *,
-        timeout_seconds: float = DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
-    ) -> EndpointResponseStream: ...
+        container_ids: Sequence[str],
+    ) -> Mapping[str, EndpointContainerAddressMap]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,194 +208,119 @@ class EndpointDispatchTarget:
     route: EndpointBackendRoute | None = None
 
 
-class EndpointResponseStream(Protocol):
+class AsyncEndpointResponseStream(Protocol):
     @property
     def status_code(self) -> int: ...
 
     @property
     def headers(self) -> dict[str, list[str]]: ...
 
-    def iter_chunks(self, chunk_size: int = 64 * 1024) -> Iterable[bytes]: ...
+    def iter_chunks(self) -> AsyncIterator[bytes]: ...
 
-    def close(self) -> None: ...
-
-
-@dataclass(slots=True)
-class EndpointHttpResponseStream:
-    connection: http.client.HTTPConnection
-    response: http.client.HTTPResponse
-
-    @property
-    def status_code(self) -> int:
-        return self.response.status
-
-    @property
-    def headers(self) -> dict[str, list[str]]:
-        return grouped_response_headers(self.response.getheaders())
-
-    def iter_chunks(self, chunk_size: int = 64 * 1024) -> Iterable[bytes]:
-        while chunk := self.response.read1(chunk_size):
-            yield chunk
-
-    def close(self) -> None:
-        self.connection.close()
+    async def close(self) -> None: ...
 
 
-@dataclass(slots=True)
-class EndpointInstanceDispatcher:
-    containers: EndpointContainerRepository
-    route_resolver: BackendRouteResolver | None = None
-    route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
-    endpoint_port: int = CONTAINER_INNER_PORT
-    http_client: EndpointHttpClient | None = None
-    readiness_probe: ContainerReadiness | None = None
-
-    def forward(
+class AsyncEndpointRequestDispatcher(Protocol):
+    async def select_target(
         self,
-        *,
         stub_id: str,
-        request: EndpointForwardRequest,
-        timeout_seconds: float = DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
+        *,
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
-    ) -> EndpointForwardResponse:
-        targets = self.targets(
-            stub_id,
-            container_loads=container_loads,
-            max_inflight_per_container=max_inflight_per_container,
-        )
-        if not targets:
-            msg = f"no running endpoint containers for stub {stub_id}"
-            raise EndpointDispatchUnavailable(msg)
+    ) -> EndpointDispatchTarget | None: ...
 
-        errors: list[str] = []
-        client = self.http_client or EndpointHttpClient(
-            route_resolver=self.route_resolver,
-            route_dialer_config=self.route_dialer_config,
-        )
-        for target in targets:
-            try:
-                return client.forward(target, request, timeout_seconds=timeout_seconds)
-            except Exception as exc:
-                errors.append(f"{target.container_id}: {type(exc).__name__}: {exc}")
-        msg = "all endpoint containers failed"
-        if errors:
-            msg = f"{msg}: {'; '.join(errors)}"
-        raise EndpointDispatchError(msg)
+    async def unprobed_target(self, stub_id: str) -> EndpointDispatchTarget | None: ...
 
-    def forward_target(
+    async def container_states(self, stub_id: str) -> Sequence[EndpointContainerState]: ...
+
+    async def open_backend_socket(self, target: EndpointDispatchTarget) -> socket.socket | None: ...
+
+    async def open_http_stream(
         self,
         target: EndpointDispatchTarget,
         request: EndpointForwardRequest,
         *,
         timeout_seconds: float = DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
-    ) -> EndpointForwardResponse:
-        client = self.http_client or EndpointHttpClient(
-            route_resolver=self.route_resolver,
-            route_dialer_config=self.route_dialer_config,
-        )
-        return client.forward(target, request, timeout_seconds=timeout_seconds)
+    ) -> AsyncEndpointResponseStream: ...
 
-    def select_target(
+
+@dataclass(slots=True)
+class AsyncEndpointInstanceDispatcher:
+    containers: AsyncEndpointContainerRepository
+    http_client: AsyncBackendHttpClient
+    readiness_probe: AsyncContainerReadiness
+    route_resolver: BackendRouteResolver | None = None
+    route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
+    endpoint_port: int = CONTAINER_INNER_PORT
+
+    async def select_target(
         self,
         stub_id: str,
         *,
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
     ) -> EndpointDispatchTarget | None:
-        return next(
-            self._candidate_targets(
-                stub_id,
-                container_loads=container_loads,
-                max_inflight_per_container=max_inflight_per_container,
-            ),
-            None,
-        )
+        # Probed one at a time in load order rather than all at once: the slowest
+        # probe is the container that is not answering, and it would otherwise put
+        # its full timeout in front of a healthy container's request.
+        for target in await self._ordered_targets(
+            stub_id,
+            container_loads=container_loads,
+            max_inflight_per_container=max_inflight_per_container,
+        ):
+            if await self._is_ready(target, stub_id):
+                return target
+        return None
 
-    def unprobed_target(self, stub_id: str) -> EndpointDispatchTarget | None:
-        """The least loaded running backend, without asking whether it serves.
-
-        For a caller whose own request answers that question. Concurrency limits
-        are not applied either: a health probe runs no handler, so a container
-        already at its limit can still answer one.
-        """
-
-        targets = self._ordered_targets(
+    async def unprobed_target(self, stub_id: str) -> EndpointDispatchTarget | None:
+        targets = await self._ordered_targets(
             stub_id,
             container_loads=None,
             max_inflight_per_container=UNLIMITED_ENDPOINT_CONTAINER_CONCURRENCY,
         )
         return targets[0] if targets else None
 
-    def container_states(self, stub_id: str) -> Sequence[EndpointContainerState]:
-        return self.containers.list_by_stub(stub_id)
+    async def container_states(self, stub_id: str) -> Sequence[EndpointContainerState]:
+        return await self.containers.list_by_stub(stub_id)
 
-    def open_backend_socket(self, target: EndpointDispatchTarget) -> socket.socket | None:
+    async def open_backend_socket(self, target: EndpointDispatchTarget) -> socket.socket | None:
         route = target.route
         if route is None or not route.route_id:
             return None
-        connection = BackendRouteDialer(
-            resolver=self.route_resolver,
-            config=self.route_dialer_config,
-        ).dial_plan(build_backend_route_dial_plan(route.route_id))
+        connection = await asyncio.to_thread(
+            BackendRouteDialer(
+                resolver=self.route_resolver,
+                config=self.route_dialer_config,
+            ).dial_plan,
+            build_backend_route_dial_plan(route.route_id),
+        )
         if not isinstance(connection, socket.socket):
             connection.close()
-            msg = "endpoint backend dialer returned a non-socket connection"
-            raise TypeError(msg)
+            raise TypeError("endpoint backend dialer returned a non-socket connection")
         return connection
 
-    def open_http_stream(
+    async def open_http_stream(
         self,
         target: EndpointDispatchTarget,
         request: EndpointForwardRequest,
         *,
         timeout_seconds: float = DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
-    ) -> EndpointResponseStream:
-        client = self.http_client or EndpointHttpClient(
-            route_resolver=self.route_resolver,
-            route_dialer_config=self.route_dialer_config,
-        )
-        return client.open_stream(target, request, timeout_seconds=timeout_seconds)
-
-    def targets(
-        self,
-        stub_id: str,
-        *,
-        container_loads: Mapping[str, int] | None = None,
-        max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
-    ) -> list[EndpointDispatchTarget]:
-        return list(
-            self._candidate_targets(
-                stub_id,
-                container_loads=container_loads,
-                max_inflight_per_container=max_inflight_per_container,
+    ) -> AsyncEndpointResponseStream:
+        try:
+            return await self.http_client.open_stream(
+                address=target.address,
+                route_id=target.route.route_id if target.route is not None else "",
+                method=request.method,
+                path=forwarded_request_path(request.path, request.query_params),
+                headers=forwarded_request_headers(request.headers),
+                body=request.body,
+                timeout_seconds=timeout_seconds,
+                resource="endpoint",
             )
-        )
+        except AsyncBackendConnectError as exc:
+            raise EndpointBackendUnreachable(str(exc)) from exc
 
-    def _candidate_targets(
-        self,
-        stub_id: str,
-        *,
-        container_loads: Mapping[str, int] | None,
-        max_inflight_per_container: int,
-    ) -> Iterator[EndpointDispatchTarget]:
-        """Load-ordered candidates, probed one at a time as they are consumed.
-
-        A caller that needs only the first ready backend should not wait on a
-        probe of the ones behind it: the slowest to answer is the one that is not
-        answering, so probing the whole set eagerly would put an unreachable
-        container's full timeout in front of a healthy container's request.
-        """
-
-        for target in self._ordered_targets(
-            stub_id,
-            container_loads=container_loads,
-            max_inflight_per_container=max_inflight_per_container,
-        ):
-            if self._is_ready(target, stub_id):
-                yield target
-
-    def _ordered_targets(
+    async def _ordered_targets(
         self,
         stub_id: str,
         *,
@@ -438,7 +329,7 @@ class EndpointInstanceDispatcher:
     ) -> list[EndpointDispatchTarget]:
         states = [
             state
-            for state in self.containers.list_by_stub(stub_id)
+            for state in await self.containers.list_by_stub(stub_id)
             if state.status is SchedulerContainerStatus.Running
         ]
         loads = dict(container_loads or {})
@@ -448,23 +339,50 @@ class EndpointInstanceDispatcher:
             if loads.get(state.container_id, 0) < max(max_inflight_per_container, 1)
         ]
         states.sort(key=lambda state: _state_sort_key(state, loads))
+        addresses = await asyncio.gather(
+            *(self.containers.get_container_address(state.container_id) for state in states)
+        )
+        unaddressed = [
+            state.container_id
+            for state, primary in zip(states, addresses, strict=True)
+            if primary is None or not primary.address
+        ]
+        address_maps: Mapping[str, EndpointContainerAddressMap] = (
+            await self.containers.get_container_address_maps(unaddressed) if unaddressed else {}
+        )
         targets: list[EndpointDispatchTarget] = []
-        for state in states:
-            target = self._target_for_state(state)
-            if target is not None:
-                targets.append(target)
+        for state, primary in zip(states, addresses, strict=True):
+            if primary is not None and primary.address:
+                targets.append(
+                    EndpointDispatchTarget(
+                        container_id=state.container_id,
+                        address=primary.address,
+                        route=primary.route,
+                    )
+                )
+                continue
+            address_map = address_maps[state.container_id]
+            address = address_map.address_map.get(self.endpoint_port, "")
+            if not address:
+                continue
+            targets.append(
+                EndpointDispatchTarget(
+                    container_id=state.container_id,
+                    address=address,
+                    route=next(
+                        (item for item in address_map.routes if item.port == self.endpoint_port),
+                        None,
+                    ),
+                )
+            )
         return targets
 
-    def _is_ready(self, target: EndpointDispatchTarget, stub_id: str) -> bool:
-        """Whether the runner in this container is answering yet.
-
-        A container reaching `Running` has started, not bound its port, and the
-        load sort would otherwise hand a caller the least loaded backend
-        precisely because nothing has reached it.
-        """
-
+    async def _is_ready(self, target: EndpointDispatchTarget, stub_id: str) -> bool:
+        # `Running` means the container started, not that the runner bound its
+        # port, and the load sort would otherwise favour the container nothing
+        # has reached yet.
         route = target.route
-        return self.readiness().is_ready(
+        return await self.readiness_probe.is_ready(
             container_id=target.container_id,
             stub_id=stub_id,
             address=target.address,
@@ -472,131 +390,6 @@ class EndpointInstanceDispatcher:
             port=self.endpoint_port,
             health_path=CONTAINER_HEALTH_PATH,
         )
-
-    def readiness(self) -> ContainerReadiness:
-        if self.readiness_probe is None:
-            msg = "endpoint container readiness probe is not configured"
-            raise RuntimeError(msg)
-        return self.readiness_probe
-
-    def _target_for_state(
-        self,
-        state: EndpointContainerState,
-    ) -> EndpointDispatchTarget | None:
-        primary = self.containers.get_container_address(state.container_id)
-        if primary is not None and primary.address:
-            return EndpointDispatchTarget(
-                container_id=state.container_id,
-                address=primary.address,
-                route=primary.route,
-            )
-
-        address_map = self.containers.get_container_address_map(state.container_id)
-        address = address_map.address_map.get(self.endpoint_port, "")
-        route = next((item for item in address_map.routes if item.port == self.endpoint_port), None)
-        if not address:
-            return None
-        return EndpointDispatchTarget(
-            container_id=state.container_id,
-            address=address,
-            route=route,
-        )
-
-
-@dataclass(slots=True)
-class EndpointHttpClient:
-    route_resolver: BackendRouteResolver | None = None
-    route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
-
-    def forward(
-        self,
-        target: EndpointDispatchTarget,
-        request: EndpointForwardRequest,
-        *,
-        timeout_seconds: float = DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
-    ) -> EndpointForwardResponse:
-        stream = self.open_stream(target, request, timeout_seconds=timeout_seconds)
-        try:
-            body = b"".join(stream.iter_chunks())
-            return EndpointForwardResponse(
-                status_code=stream.status_code,
-                headers=stream.headers,
-                body=body,
-            )
-        finally:
-            stream.close()
-
-    def open_stream(
-        self,
-        target: EndpointDispatchTarget,
-        request: EndpointForwardRequest,
-        *,
-        timeout_seconds: float = DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
-    ) -> EndpointHttpResponseStream:
-        connection = self._connection(target, timeout_seconds)
-        headers = forwarded_request_headers(request.headers)
-        try:
-            connection.request(
-                request.method,
-                forwarded_request_path(request.path, request.query_params),
-                body=request.body,
-                headers=headers,
-            )
-            response = connection.getresponse()
-        except Exception:
-            connection.close()
-            raise
-        return EndpointHttpResponseStream(connection=connection, response=response)
-
-    def _connection(
-        self,
-        target: EndpointDispatchTarget,
-        timeout_seconds: float,
-    ) -> http.client.HTTPConnection:
-        try:
-            connection = self._unconnected(target, timeout_seconds)
-        except (OSError, BackendRouteUnavailable) as exc:
-            raise EndpointBackendUnreachable(str(exc)) from exc
-        # Connect here rather than leaving it to the first write: the handshake is
-        # the last moment at which nothing has been sent, so it is the only place a
-        # failure can still be told apart from one that may have been acted on.
-        try:
-            connection.connect()
-        except OSError as exc:
-            connection.close()
-            raise EndpointBackendUnreachable(str(exc)) from exc
-        return connection
-
-    def _unconnected(
-        self,
-        target: EndpointDispatchTarget,
-        timeout_seconds: float,
-    ) -> http.client.HTTPConnection:
-        timeout = timeout_seconds or self.route_dialer_config.timeout_seconds
-        if target.route is not None and target.route.route_id:
-            connection = BackendRouteDialer(
-                resolver=self.route_resolver,
-                config=self.route_dialer_config,
-            ).dial_plan(build_backend_route_dial_plan(target.route.route_id))
-            if not isinstance(connection, socket.socket):
-                connection.close()
-                msg = "endpoint HTTP dialer returned a non-socket connection"
-                raise TypeError(msg)
-            return _RouteHttpConnection(connection, timeout=timeout)
-
-        parsed = parse_container_address(target.address, resource="endpoint")
-        if parsed.scheme == "https":
-            return http.client.HTTPSConnection(parsed.hostname or "", parsed.port, timeout=timeout)
-        return http.client.HTTPConnection(parsed.hostname or "", parsed.port, timeout=timeout)
-
-
-class _RouteHttpConnection(http.client.HTTPConnection):
-    def __init__(self, route_socket: socket.socket, *, timeout: float) -> None:
-        super().__init__("backend.route", timeout=timeout)
-        self._route_socket = route_socket
-
-    def connect(self) -> None:
-        self.sock = self._route_socket
 
 
 def _state_sort_key(

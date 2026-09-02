@@ -7,10 +7,12 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from typing import Protocol
 from uuid import uuid4
 
 from control.service import ControlPlaneService, StubRecord
 from database.repositories.orchestration import ContainerRepository
+from database.types import DatabaseSession
 from shared.app_identity import SHELL_IMAGE, SHELL_LOG_PATH
 from shared.container_requests import WorkerStartupKind
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
@@ -22,7 +24,11 @@ from shared.http.shells import (
     StandaloneShellSession,
 )
 from shared.http.workspace_changes import WorkspaceChangeType
-from shared.scheduling import ContainerSchedulingDirectory, SchedulerContainerStatus
+from shared.scheduling import (
+    ContainerSchedulingDirectory,
+    SchedulerContainerAddressMap,
+    SchedulerContainerStatus,
+)
 from shared.shell_protocol import (
     SHELL_FRAME_HEADER_SIZE,
     SHELL_FRAME_MAX_PAYLOAD_BYTES,
@@ -32,6 +38,7 @@ from shared.shell_protocol import (
 )
 from shared.timestamps import utc_now
 
+from database import AsyncDatabaseClient
 from execution.container_clients import (
     PodContainerControlClient,
     SchedulerContainerClientFactory,
@@ -71,6 +78,13 @@ class ShellTicketCompensationStatus(StrEnum):
 LOGGER = logging.getLogger(__name__)
 
 
+class AsyncShellContainerDirectory(Protocol):
+    async def get_container_address_map(
+        self,
+        container_id: str,
+    ) -> SchedulerContainerAddressMap: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ShellTicketCompensationResult:
     container_id: str
@@ -92,6 +106,8 @@ class ShellControlService:
         scheduler_containers: ContainerSchedulingDirectory | None = None,
         container_clients: SchedulerContainerClientFactory[PodContainerControlClient] | None = None,
         backend_connector: Callable[[ShellBackendTarget], socket.socket] | None = None,
+        async_database: AsyncDatabaseClient | None = None,
+        async_scheduler_containers: AsyncShellContainerDirectory | None = None,
         poll_interval_seconds: float = 1.0,
     ) -> None:
         self.services = services
@@ -102,6 +118,8 @@ class ShellControlService:
         )
         self.container_clients = container_clients
         self.backend_connector = backend_connector or _connect_direct_shell_backend
+        self.async_database = async_database
+        self.async_scheduler_containers = async_scheduler_containers
         self.poll_interval_seconds = poll_interval_seconds
 
     def create_standalone_shell(
@@ -494,8 +512,37 @@ class ShellControlService:
             container_id=container_id,
             workspace_id=workspace_id,
         )
-        plan = plan_shell_proxy(stub_id, container_id)
         address_map = self._container_client_factory().address_map_for(container_id)
+        return self._shell_backend_target(container, address_map, stub_id=stub_id)
+
+    async def shell_backend_target_async(
+        self,
+        *,
+        stub_id: str,
+        container_id: str,
+        workspace_id: str | None = None,
+    ) -> ShellBackendTarget:
+        if self.async_database is None or self.async_scheduler_containers is None:
+            raise RuntimeError("asynchronous shell routing is not configured")
+        container = await self.async_database.run_transaction(
+            lambda session: self._shell_container_in_session(
+                session,
+                stub_id=stub_id,
+                container_id=container_id,
+                workspace_id=workspace_id,
+            )
+        )
+        address_map = await self.async_scheduler_containers.get_container_address_map(container_id)
+        return self._shell_backend_target(container, address_map, stub_id=stub_id)
+
+    @staticmethod
+    def _shell_backend_target(
+        container: ContainerRecord,
+        address_map: SchedulerContainerAddressMap,
+        *,
+        stub_id: str,
+    ) -> ShellBackendTarget:
+        plan = plan_shell_proxy(stub_id, container.id)
         address = address_map.address_map.get(SHELL_WORKER_PORT, "")
         if not address:
             msg = "shell port is not published for container"
@@ -513,6 +560,32 @@ class ShellControlService:
             buffer_size_bytes=plan.buffer_size_bytes,
             dial_timeout_seconds=plan.dial_timeout_seconds,
         )
+
+    def _shell_container_in_session(
+        self,
+        session: DatabaseSession,
+        *,
+        stub_id: str,
+        container_id: str,
+        workspace_id: str | None,
+    ) -> ContainerRecord:
+        try:
+            stub = self.control_plane.get_stub_in_session(
+                session,
+                stub_id,
+                workspace=workspace_id,
+            )
+        except NotFoundError as exc:
+            raise ShellTargetNotFoundError("Container not found") from exc
+        if stub.id != stub_id:
+            raise ShellTargetNotFoundError("Container not found")
+        repository = ContainerRepository(session)
+        container = (
+            repository.get(container_id, workspace_id=stub.workspace_id)
+            if workspace_id is not None
+            else repository.get_across_workspaces(container_id)
+        )
+        return self._validated_shell_container(stub, container)
 
     def _container_client_factory(
         self,
@@ -656,28 +729,24 @@ class ShellControlService:
         container_id: str,
         workspace_id: str | None,
     ) -> ContainerRecord:
-        if workspace_id is not None:
-            try:
-                stub = self.control_plane.get_stub(stub_id, workspace=workspace_id)
-            except NotFoundError as exc:
-                raise ShellTargetNotFoundError("Container not found") from exc
-            if stub.id != stub_id:
-                raise ShellTargetNotFoundError("Container not found")
-            target_workspace_id = stub.workspace_id
-        else:
-            try:
-                stub = self.control_plane.get_stub(stub_id)
-            except NotFoundError as exc:
-                raise ShellTargetNotFoundError("Container not found") from exc
-            if stub.id != stub_id:
-                raise ShellTargetNotFoundError("Container not found")
-            target_workspace_id = ""
-        container = self._container(container_id)
+        with self.services.context.database.session() as session:
+            return self._shell_container_in_session(
+                session,
+                stub_id=stub_id,
+                container_id=container_id,
+                workspace_id=workspace_id,
+            )
+
+    @staticmethod
+    def _validated_shell_container(
+        stub: StubRecord,
+        container: ContainerRecord | None,
+    ) -> ContainerRecord:
         if container is None:
             raise ShellTargetNotFoundError("Container not found")
-        if target_workspace_id and container.workspace_id != target_workspace_id:
+        if container.workspace_id != stub.workspace_id:
             raise ShellTargetNotFoundError("Container not found")
-        if container.stub_id not in {None, stub_id}:
+        if container.stub_id not in {None, stub.id}:
             raise ShellTargetNotFoundError("Container not found")
         if container.status is not ContainerStatus.Running:
             raise ShellTargetUnavailableError("Container is not running")

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
-from typing import Never, Protocol
+from typing import Never
 
 import pytest
-from coordination.redis_client import RedisClient
+from coordination.redis_client import AsyncRedisClient, RedisClient, RedisSettings
 from scheduler.state import (
     ConcurrencyReservationStatus,
     RedisSchedulerContainerRepository,
@@ -18,11 +20,21 @@ from scheduler.state import (
     SchedulerWorkerStatus,
 )
 from shared.compute_policy import MachinePool
+from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 
 
-class RealRedisActors(Protocol):
-    def client(self) -> RedisClient: ...
+@pytest.fixture
+async def async_redis(
+    real_redis_actors: RealRedisActors,
+) -> AsyncIterator[AsyncRedisClient]:
+    client = AsyncRedisClient.from_settings(
+        RedisSettings(url=real_redis_actors.url, key_prefix=real_redis_actors.prefix)
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
 
 
 class _FailingEvalRedis(FakeRedis):
@@ -130,8 +142,10 @@ def test_real_redis_claims_are_unique_and_expired_leases_recover(
     assert repositories[2].acknowledge_container_request(final)
 
 
-def test_real_redis_dispatch_and_cancellation_have_one_terminal_winner(
+@pytest.mark.anyio
+async def test_real_redis_dispatch_and_cancellation_have_one_terminal_winner(
     real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
     repositories = [
@@ -155,64 +169,113 @@ def test_real_redis_dispatch_and_cancellation_have_one_terminal_winner(
         dispatched = list(executor.map(dispatch, repositories))
     assert dispatched.count(True) == 1
     assert dispatched.count(False) == 1
-    assert repositories[0].get_next_container_request("worker-1") == request
+    assert (
+        await repositories[0].wait_for_next_container_request(
+            async_redis,
+            "worker-1",
+            timeout_seconds=0.01,
+        )
+        == request
+    )
     # Delivery is at least once: a take nobody acknowledged is handed out again
     # rather than destroyed, and only the acknowledgement retires it.
-    assert repositories[1].get_next_container_request("worker-1") == request
-    assert repositories[0].acknowledge_worker_request("worker-1", request.container_id)
-    assert repositories[1].get_next_container_request("worker-1") is None
+    assert (
+        await repositories[1].wait_for_next_container_request(
+            async_redis,
+            "worker-1",
+            timeout_seconds=0.01,
+        )
+        == request
+    )
+    assert await repositories[0].acknowledge_worker_request(
+        async_redis,
+        "worker-1",
+        request.container_id,
+    )
+    assert not repositories[1].has_recoverable_container_request(
+        request.container_id,
+        worker_id="worker-1",
+    )
 
     cancellable = _request("cancel-1", now=now)
-    repositories[0].enqueue_worker_request("worker-1", cancellable)
-    barrier = Barrier(2)
+    await repositories[0].enqueue_worker_request(async_redis, "worker-1", cancellable)
+    start = asyncio.Event()
 
-    def cancel() -> bool:
-        barrier.wait()
-        return repositories[0].cancel_worker_request("worker-1", cancellable.container_id)
+    async def cancel() -> bool:
+        await start.wait()
+        return await asyncio.to_thread(
+            repositories[0].cancel_worker_request,
+            "worker-1",
+            cancellable.container_id,
+        )
 
-    def dequeue() -> SchedulerWorkerRequest | None:
-        barrier.wait()
-        return repositories[1].get_next_container_request("worker-1")
+    async def dequeue() -> SchedulerWorkerRequest | None:
+        await start.wait()
+        return await repositories[1].wait_for_next_container_request(
+            async_redis,
+            "worker-1",
+            timeout_seconds=0.01,
+        )
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        cancelled = executor.submit(cancel)
-        dequeued = executor.submit(dequeue)
-        cancel_won = cancelled.result()
-        delivered = dequeued.result()
+    cancelled = asyncio.create_task(cancel())
+    dequeued = asyncio.create_task(dequeue())
+    start.set()
+    cancel_won, delivered = await asyncio.gather(cancelled, dequeued)
     # The cancellation reaches the request on whichever of the worker's two lists
     # it is on, so a request already handed out is still cancellable.
     assert cancel_won
     assert delivered is None or delivered.container_id == cancellable.container_id
-    assert repositories[0].get_next_container_request("worker-1") is None
+    assert not repositories[0].has_recoverable_container_request(
+        cancellable.container_id,
+        worker_id="worker-1",
+    )
 
 
-def test_real_redis_unacknowledged_take_survives_the_consumer(
+@pytest.mark.anyio
+async def test_real_redis_unacknowledged_take_survives_the_consumer(
     real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
 ) -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
     repositories = [
         RedisSchedulerWorkerRepository(real_redis_actors.client()) for _index in range(2)
     ]
     request = _request("take-1", now=now)
-    repositories[0].enqueue_worker_request("worker-1", request)
+    await repositories[0].enqueue_worker_request(async_redis, "worker-1", request)
 
-    taken = repositories[0].wait_for_next_container_request("worker-1", timeout_seconds=1.0)
+    taken = await repositories[0].wait_for_next_container_request(
+        async_redis,
+        "worker-1",
+        timeout_seconds=1.0,
+    )
 
     assert taken == request
     assert repositories[0].has_recoverable_container_request(
         request.container_id,
         worker_id="worker-1",
     )
-    assert repositories[1].wait_for_next_container_request("worker-1", timeout_seconds=1.0) == (
-        request
+    assert (
+        await repositories[1].wait_for_next_container_request(
+            async_redis,
+            "worker-1",
+            timeout_seconds=1.0,
+        )
+        == request
     )
-    assert repositories[1].acknowledge_worker_request("worker-1", request.container_id)
-    assert not repositories[0].acknowledge_worker_request("worker-1", request.container_id)
+    assert await repositories[1].acknowledge_worker_request(
+        async_redis,
+        "worker-1",
+        request.container_id,
+    )
+    assert not await repositories[0].acknowledge_worker_request(
+        async_redis,
+        "worker-1",
+        request.container_id,
+    )
     assert not repositories[0].has_recoverable_container_request(
         request.container_id,
         worker_id="worker-1",
     )
-    assert repositories[0].wait_for_next_container_request("worker-1", timeout_seconds=1.0) is None
 
 
 def test_real_redis_concurrency_reserve_and_release_are_bounded_and_idempotent(

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from database.records.apps import AppRecord, StubRecord
 from database.repositories.apps import DeploymentResourceRepository, DeploymentResourceRow
+from database.types import DatabaseSession
 from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind
 from shared.errors import InvalidInputError, NotFoundError
@@ -80,22 +81,49 @@ class DeploymentResourceService:
         latest_per_resource: bool = False,
     ) -> list[DeploymentResource]:
         with self.context.database.session() as session:
-            workspace_id = (
-                self.context.workspace(session, workspace).id if workspace is not None else None
+            return self.list_in_session(
+                session,
+                workspace=workspace,
+                app=app,
+                app_id=app_id,
+                deployment_id=deployment_id,
+                name=name,
+                kinds=kinds,
+                version=version,
+                active=active,
+                latest_per_resource=latest_per_resource,
             )
-            resources = [
-                _deployment_resource(row)
-                for row in DeploymentResourceRepository(session).list(
-                    workspace_id=workspace_id,
-                    app=app,
-                    app_id=app_id,
-                    deployment_id=deployment_id,
-                    name=name,
-                    kinds=kinds,
-                    version=version,
-                    active=active,
-                )
-            ]
+
+    def list_in_session(
+        self,
+        session: DatabaseSession,
+        *,
+        workspace: str | None = "default",
+        app: str | None = None,
+        app_id: str | None = None,
+        deployment_id: str | None = None,
+        name: str | None = None,
+        kinds: frozenset[DeploymentKind] | set[DeploymentKind] | None = None,
+        version: int | None = None,
+        active: bool | None = True,
+        latest_per_resource: bool = False,
+    ) -> list[DeploymentResource]:
+        workspace_id = (
+            self.context.workspace(session, workspace).id if workspace is not None else None
+        )
+        resources = [
+            _deployment_resource(row)
+            for row in DeploymentResourceRepository(session).list(
+                workspace_id=workspace_id,
+                app=app,
+                app_id=app_id,
+                deployment_id=deployment_id,
+                name=name,
+                kinds=kinds,
+                version=version,
+                active=active,
+            )
+        ]
         if latest_per_resource:
             resources = _latest_per_resource(resources)
         resources.sort(
@@ -123,7 +151,28 @@ class DeploymentResourceService:
         exactly that version. A stopped target is a client error, never a
         silent fallback to an older active version.
         """
-        candidates = self.list(
+        with self.context.database.session() as session:
+            return self.resolve_invoke_target_in_session(
+                session,
+                name,
+                kind,
+                workspace=workspace,
+                version=version,
+                app_id=app_id,
+            )
+
+    def resolve_invoke_target_in_session(
+        self,
+        session: DatabaseSession,
+        name: str,
+        kind: DeploymentKind,
+        *,
+        workspace: str,
+        version: int | None = None,
+        app_id: str | None = None,
+    ) -> DeploymentResource:
+        candidates = self.list_in_session(
+            session,
             workspace=workspace,
             app_id=app_id,
             name=name,
@@ -166,10 +215,19 @@ class DeploymentResourceService:
         """
 
         with self.context.database.session() as session:
-            row = DeploymentResourceRepository(session).get_by_subdomain(
-                subdomain,
-                version=version,
-            )
+            return self.get_by_subdomain_in_session(session, subdomain, version=version)
+
+    def get_by_subdomain_in_session(
+        self,
+        session: DatabaseSession,
+        subdomain: str,
+        *,
+        version: int | None = None,
+    ) -> DeploymentResource | None:
+        row = DeploymentResourceRepository(session).get_by_subdomain(
+            subdomain,
+            version=version,
+        )
         return _deployment_resource(row) if row is not None else None
 
     def get_by_custom_hostname(self, hostname: str) -> DeploymentResource | None:
@@ -181,7 +239,14 @@ class DeploymentResourceService:
         """
 
         with self.context.database.session() as session:
-            row = DeploymentResourceRepository(session).get_by_custom_hostname(hostname)
+            return self.get_by_custom_hostname_in_session(session, hostname)
+
+    def get_by_custom_hostname_in_session(
+        self,
+        session: DatabaseSession,
+        hostname: str,
+    ) -> DeploymentResource | None:
+        row = DeploymentResourceRepository(session).get_by_custom_hostname(hostname)
         return _deployment_resource(row) if row is not None else None
 
 

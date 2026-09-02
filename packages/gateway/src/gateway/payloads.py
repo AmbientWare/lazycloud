@@ -21,27 +21,13 @@ class GatewayTaskLogEntry(Protocol):
     def message(self) -> str: ...
 
 
-class GatewayTaskLogProvider(Protocol):
-    def logs(
-        self,
-        task_id: str,
-        *,
-        limit: int,
-    ) -> Iterable[GatewayTaskLogEntry]: ...
-
-
 class GatewayContainerLogProvider(Protocol):
-    def read_logs(
+    async def read_logs(
         self,
         query: LogStreamQuery,
         *,
         limit: int | None = None,
     ) -> tuple[RedisStreamRecord, ...]: ...
-
-
-class GatewayOutputSource(Protocol):
-    @property
-    def tasks(self) -> GatewayTaskLogProvider: ...
 
 
 def object_key(metadata: ObjectMetadata, object_hash: str) -> str:
@@ -52,31 +38,29 @@ def object_key(metadata: ObjectMetadata, object_hash: str) -> str:
     return key
 
 
-def container_output(
-    source: GatewayOutputSource,
+async def container_output(
     container: ContainerRecord,
     *,
+    task_logs: Iterable[GatewayTaskLogEntry],
     logs: GatewayContainerLogProvider,
 ) -> str:
     """What the container has written, from whichever store holds it.
 
     A workload that runs invocations writes through its task, and that record is
-    preferred because it is the one attributed to the caller. Everything else —
-    a pod, a sandbox, anything with no task at all — is captured by the worker
+    preferred because it is the one attributed to the caller. Everything else,
+    a pod, a sandbox, anything with no task at all, is captured by the worker
     and appended to the container's log stream, which is the only place that
     output exists.
     """
 
     if container.task_id:
         task_output = "\n".join(
-            entry.message
-            for entry in source.tasks.logs(container.task_id, limit=CONTAINER_OUTPUT_LOG_LIMIT)
-            if entry.stream in {"stdout", "stderr"}
+            entry.message for entry in task_logs if entry.stream in {"stdout", "stderr"}
         )
         if task_output:
             return task_output
 
-    records = logs.read_logs(
+    records = await logs.read_logs(
         LogStreamQuery(
             workspace_id=container.workspace_id,
             stub_id=container.stub_id or "",
@@ -103,9 +87,7 @@ def task_result_value(request: EndTaskRequest) -> JsonValue:
 
 __all__ = [
     "GatewayContainerLogProvider",
-    "GatewayOutputSource",
     "GatewayTaskLogEntry",
-    "GatewayTaskLogProvider",
     "container_output",
     "object_key",
     "task_result_value",
