@@ -1,20 +1,19 @@
 ---
 title: "Parallel Parquet processing on S3"
-description: "Fan Parquet partitions out through a Function, aggregate real results, and write a JSON summary to an S3-compatible bucket."
+description: "Fan Parquet partitions out through a function, aggregate the results, and write a JSON summary back to your bucket."
 ---
 
-This example reads Parquet partitions directly from a bucket you own. A typed
-A pooled Function processes the partitions in parallel, the local coordinator rejects
-the whole batch if any Task fails, and a final remote Function writes the
-aggregate JSON document through the same CloudBucket mount.
+This example reads Parquet partitions from a bucket you own. A function
+processes partitions in parallel, the coordinator rejects the whole batch if
+any task fails, and a final function writes the aggregate JSON through the
+same `CloudBucket` mount.
 
-The complete runnable source is the `examples.parallel_parquet.app` module in
-the LazyCloud repository. PyArrow is pinned inside the workload Image and is
-not installed in the contributor environment.
+The source is `examples/parallel_parquet/app.py` in the LazyCloud repository.
+PyArrow is pinned inside the image; nothing is installed locally.
 
 ## Configure the bucket
 
-Set these values before both deploy and run:
+Export these before deploying and running:
 
 ```bash
 export LAZYCLOUD_PARQUET_BUCKET="my-analytics-bucket"
@@ -23,33 +22,27 @@ export LAZYCLOUD_PARQUET_INPUT_PREFIX="examples/parallel-parquet/input"
 export LAZYCLOUD_PARQUET_OUTPUT_KEY="examples/parallel-parquet/output/summary.json"
 ```
 
-The input prefix and output key must be canonical relative object keys. The
-example rejects absolute paths, `..`, `.`, repeated separators, trailing
-separators, backslashes, surrounding whitespace, and partition keys outside
-the configured input prefix. The output key must end in `.json` and cannot be
-inside the input prefix.
+The prefix and key must be plain relative object keys. The example rejects
+absolute paths, `..`, `.`, repeated or trailing separators, backslashes, and
+partition keys outside the input prefix. The output key must end in `.json`
+and cannot sit inside the input prefix.
 
-### Ambient IAM (recommended)
+### Credentials from your AWS account
 
-Leave the two credential-secret settings unset. The CloudBucket then uses the
-compute environment's ambient AWS identity. Grant that identity only the
-bucket and prefixes it needs, then deploy onto connected AWS compute:
+If you have connected your AWS account, leave the two credential settings
+unset and deploy to the AWS pool. The mount then uses the instance's own IAM
+identity. Grant it read and list on the input prefix and write on the output
+key (plus write on the input prefix if you use the seed step):
 
 ```bash
-unset LAZYCLOUD_PARQUET_ACCESS_KEY_SECRET
-unset LAZYCLOUD_PARQUET_SECRET_KEY_SECRET
-
+unset LAZYCLOUD_PARQUET_ACCESS_KEY_SECRET LAZYCLOUD_PARQUET_SECRET_KEY_SECRET
 lazycloud deploy examples.parallel_parquet.app:app --pool aws
 ```
 
-The identity needs read and list access to the input prefix plus write access
-to the output key. It also needs write access to the input prefix when you use
-the optional seed workflow.
+### Credentials from secrets
 
-### Named workspace secrets
-
-For an S3-compatible service without ambient IAM, store the access-key pair as
-workspace Secrets and configure the CloudBucket with their **names**:
+Otherwise, store the access key pair as workspace secrets and point the
+example at their names:
 
 ```bash
 read -rsp "S3 access key ID: " PARQUET_S3_ACCESS_KEY_ID && echo
@@ -62,55 +55,26 @@ export LAZYCLOUD_PARQUET_ACCESS_KEY_SECRET="PARQUET_S3_ACCESS_KEY_ID"
 export LAZYCLOUD_PARQUET_SECRET_KEY_SECRET="PARQUET_S3_SECRET_ACCESS_KEY"
 ```
 
-Set both names or neither. Never put credential values in these environment
-variables, source code, commands, or deployment metadata.
+Set both names or neither. Never put credential values in these variables,
+in source, or on a command line.
 
-For a non-AWS endpoint, also set an absolute HTTP(S) URL. The example enables
-path-style addressing when this value is present:
+For a non-AWS S3-compatible service, also set the endpoint. The example
+switches to path-style addressing when it is present:
 
 ```bash
 export LAZYCLOUD_PARQUET_ENDPOINT="https://objects.example.com"
-lazycloud deploy examples.parallel_parquet.app:app
 ```
 
-An endpoint URL cannot contain embedded credentials, a query, or a fragment.
-Use TLS for any service reached over an untrusted network.
+The URL cannot carry credentials, a query, or a fragment. The bucket must
+already exist. If the endpoint host does not resolve from the worker, the
+mount fails immediately and names the host.
 
-### Against a local object store
+## The functions
 
-Workers run on the host network, so they cannot resolve a container-network
-service name. Point the endpoint at the published host port instead, create the
-bucket, and grant the key that the injected secrets carry:
-
-```bash
-docker compose exec object-store /garage bucket create lazycloud-examples
-docker compose exec object-store /garage bucket allow \
-  --read --write --owner lazycloud-examples --key lazycloud-local
-
-lazycloud secret create PARQUET_S3_ACCESS_KEY_ID "lazycloud-local"
-lazycloud secret create PARQUET_S3_SECRET_ACCESS_KEY "lazycloud-local-secret"
-
-export LAZYCLOUD_PARQUET_BUCKET="lazycloud-examples"
-export LAZYCLOUD_PARQUET_REGION="us-east-1"
-export LAZYCLOUD_PARQUET_ENDPOINT="http://object-store.localhost:9002"
-export LAZYCLOUD_PARQUET_ACCESS_KEY_SECRET="PARQUET_S3_ACCESS_KEY_ID"
-export LAZYCLOUD_PARQUET_SECRET_KEY_SECRET="PARQUET_S3_SECRET_ACCESS_KEY"
-```
-
-A bucket must already exist; a mount never creates one. If the endpoint host
-does not resolve from the worker, the mount fails immediately and names the host
-rather than timing out.
-
-## Define the remote work
-
-Every remote resource receives the same mounted bucket and the same pinned
-Image:
+Every function gets the same mount and the same pinned image:
 
 ```python
-parquet_image = Image(
-    python_version="3.12",
-    python_packages=["pyarrow==25.0.0"],
-)
+parquet_image = Image(python_version="3.12", python_packages=["pyarrow==25.0.0"])
 
 data_bucket = CloudBucket(
     CONFIG.bucket,
@@ -124,33 +88,19 @@ data_bucket = CloudBucket(
         secret_key=CONFIG.secret_key_secret or None,
     ),
 )
-```
 
-The partition Function accepts one validated partition key and returns JSON-safe
-statistics:
 
-```python
-@app.function(
-    name="process-partition",
-    image=parquet_image,
-    concurrency=4,
-    retries=1,
-    max_pending_tasks=100,
-    volumes=[data_bucket],
-)
+@app.function(name="process-partition", image=parquet_image, concurrency=4, retries=1, volumes=[data_bucket])
 def process_partition(key: str) -> PartitionResult:
     ...
 ```
 
-The coordinator uses the production Task APIs. `spawn_map` creates one durable
-Task per key, and each call's `result(wait=True)` returns its terminal result:
+The coordinator fans out with `spawn_map`, one task per key, and waits on
+each handle:
 
 ```python
 calls = process_partition.spawn_map(partition_keys)
-results = [
-    call.result(wait=True, timeout_seconds=1800, poll_interval_seconds=1)
-    for call in calls
-]
+results = [call.result(wait=True, timeout_seconds=1800) for call in calls]
 
 if any(not result.ok for result in results):
     raise RuntimeError("partition fan-out failed; summary was not written")
@@ -158,62 +108,50 @@ if any(not result.ok for result in results):
 summary = write_summary.remote(partitions, task_ids)
 ```
 
-The complete source validates every returned payload and key before the final
-Function writes the summary. It does not report partial success or fabricate a
-result when a partition fails.
+Every returned payload and key is validated before the summary is written.
+A failed partition is never reported as partial success.
 
 ## Deploy and run
-
-Run from the repository root after exporting the bucket configuration:
 
 ```bash
 lazycloud deploy examples.parallel_parquet.app:app
 ```
 
-If the input prefix already contains compatible Parquet files with
-`record_id`, `amount_cents`, and `category` columns, process them directly:
+If the input prefix already holds Parquet files with `record_id`,
+`amount_cents`, and `category` columns, process them:
 
 ```bash
 lazycloud run examples.parallel_parquet.app:run_batch false
 ```
 
-For a small self-contained first run, ask the remote seed Function to create
-four ten-row partitions before fan-out:
+For a self-contained first run, have the seed function write four ten-row
+partitions first:
 
 ```bash
 lazycloud run examples.parallel_parquet.app:run_batch true 4 10 false
 ```
 
-The final `false` protects existing seed objects. Pass `true` only when the
-configured input prefix contains disposable example data you intend to
-replace:
+The last argument protects existing seed objects. Pass `true` only when the
+input prefix holds disposable example data you mean to replace.
 
-```bash
-lazycloud run examples.parallel_parquet.app:run_batch true 4 10 true
-```
+The command prints the aggregate `write-summary` returned: partition task
+ids, row count, amount total, per-partition statistics, and the output key.
 
-The command prints the real aggregate returned by `write-summary`, including
-partition Task IDs, row count, amount total, per-partition statistics, and the
-configured output key.
-
-## Inspect Tasks and logs
+## Inspect
 
 ```bash
 lazycloud task list --limit 20
 lazycloud task show <task-id>
 lazycloud task result <task-id> --timeout 900
 lazycloud task logs <task-id> --limit 250
-lazycloud logs --deployment-id <process-partition-deployment-id> --follow --show-timestamp
+lazycloud logs --deployment process-partition --follow --show-timestamp
 ```
 
-If one partition exhausts its retry, `run_batch` names the failed Task and
-exits without calling `write-summary`. Successful sibling results remain
-inspectable as durable Tasks; rerun only after correcting the input or
-configuration.
+If a partition exhausts its retry, `run_batch` names the failed task and
+exits without calling `write-summary`. The other results stay inspectable as
+tasks; rerun after fixing the input or configuration.
 
-## Retrieve the output
-
-Read the persisted JSON with tooling for the bucket you configured:
+## Read the output
 
 ```bash
 aws s3 cp \
@@ -221,31 +159,26 @@ aws s3 cp \
   --region "$LAZYCLOUD_PARQUET_REGION"
 ```
 
-For an S3-compatible endpoint, add
-`--endpoint-url "$LAZYCLOUD_PARQUET_ENDPOINT"` and provide that CLI with its
-own credentials. The example itself never uses boto3 or a local storage
-bypass; every remote read and write goes through the production CloudBucket mount.
+For an S3-compatible endpoint, add `--endpoint-url "$LAZYCLOUD_PARQUET_ENDPOINT"`
+and give the AWS CLI its own credentials.
 
-## Retention, cost, and cleanup
+## Cost and cleanup
 
-Task records and logs follow the workspace's normal retention policy. Input
-partitions and the JSON summary remain in your bucket until you remove them,
-so bucket storage and request charges continue independently of LazyCloud
-deployments. Function containers consume compute while processing and scale
-out to the backlog, up to the configured container ceiling.
+Input partitions and the summary stay in your bucket until you remove them,
+so bucket storage and request charges continue independently of LazyCloud.
+Function containers cost compute while processing.
 
-First list the app's deployments, then delete all four by the exact IDs shown:
+Delete the four deployments:
 
 ```bash
-lazycloud deployment list --app parallel_parquet
-lazycloud deployment delete <seed-partitions-deployment-id>
-lazycloud deployment delete <list-partitions-deployment-id>
-lazycloud deployment delete <process-partition-deployment-id>
-lazycloud deployment delete <write-summary-deployment-id>
+lazycloud deployment delete seed-partitions
+lazycloud deployment delete list-partitions
+lazycloud deployment delete process-partition
+lazycloud deployment delete write-summary
 ```
 
-Remove only the example-owned objects after checking the exported prefix and
-bucket:
+Remove only the example's objects, after checking the exported prefix and
+key:
 
 ```bash
 aws s3 rm \
@@ -256,29 +189,18 @@ aws s3 rm \
   --region "$LAZYCLOUD_PARQUET_REGION"
 ```
 
-Add the configured `--endpoint-url` to both commands when applicable. If you
-created the alternative credentials only for this example, remove them last:
+If you created secrets only for this example, delete them, then clear the
+configuration:
 
 ```bash
 lazycloud secret delete PARQUET_S3_ACCESS_KEY_ID
 lazycloud secret delete PARQUET_S3_SECRET_ACCESS_KEY
-```
 
-Finally clear the example configuration from the shell:
-
-```bash
 unset LAZYCLOUD_PARQUET_BUCKET LAZYCLOUD_PARQUET_REGION
 unset LAZYCLOUD_PARQUET_INPUT_PREFIX LAZYCLOUD_PARQUET_OUTPUT_KEY
 unset LAZYCLOUD_PARQUET_ENDPOINT
 unset LAZYCLOUD_PARQUET_ACCESS_KEY_SECRET LAZYCLOUD_PARQUET_SECRET_KEY_SECRET
 ```
 
-Do not delete a shared bucket, shared IAM role, or objects outside the two
-explicitly configured example paths.
-
-<Note>
-  Local import and specification tests do not prove S3 behavior.
-  Live acceptance requires a current LazyCloud stack, an authorized S3-compatible
-  bucket, successful seed/read/fan-out/write/retrieval, an intentional failed
-  partition proving no summary write, and exact object/deployment cleanup.
-</Note>
+Do not delete a shared bucket, a shared IAM role, or objects outside the two
+configured paths.

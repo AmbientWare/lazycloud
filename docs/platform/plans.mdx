@@ -1,0 +1,53 @@
+---
+title: "Plans and limits"
+description: "What your plan includes, what usage costs, and what happens when you reach a limit."
+---
+
+Your plan belongs to your account and covers every workspace you own. See it,
+change it, and add a payment method in the dashboard under Settings. Current
+prices and per-plan limits are on the
+[pricing page](https://lazycloud.dev/pricing).
+
+## What you pay for
+
+Compute is metered per second for each running container: a base rate per
+container, plus rates per CPU core, per GiB of memory, and per GPU. Volumes
+are billed by the GiB-month stored. Each plan includes an amount of usage per
+billing period; usage beyond that is invoiced monthly and charged to the card
+on file. The Usage page in the dashboard shows spend over time, broken down by
+app and workload.
+
+## Plans
+
+Free has no subscription and no minimum term. It includes a small monthly
+usage allowance and caps how many apps, members, and simultaneously running
+containers your account can have.
+
+Team is a monthly subscription with a larger included allowance, higher
+limits, unlimited members, and two features Free does not have: connecting
+your own AWS account and serving deployments from custom domains. Joining your
+own machines is available on both plans.
+
+Change plans from Settings, then Manage subscription. You cannot move to a
+plan whose limits your account already exceeds; the dashboard names what has
+to go first. While a plan change is processing, you cannot add plan-limited
+resources.
+
+## Without a payment method
+
+An account with no card on file gets a small one-time spending allowance and a
+low cap on running containers, whatever plan it is on. When that allowance is
+spent, new work is refused and running containers are stopped. Adding a card
+lifts both immediately and moves the account onto its plan's terms.
+
+## When you reach a limit
+
+Limits are checked when something new starts, never against work that is
+already running.
+
+Starting a container past your concurrency limit fails with a message naming
+the limit. Creating an app past the app limit, or adding a member past the
+member limit, fails the same way. Nothing that is running is affected.
+
+If a payment fails, the account is past due. New work is refused until you
+update the card; running work is left alone.

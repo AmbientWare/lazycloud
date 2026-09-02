@@ -7,7 +7,7 @@ const QUICKSTART_STEPS = [
   {
     title: "Install and sign in",
     detail: "The login command prints a code to approve in this browser.",
-    commands: ["uv tool install lazycloud", "lazycloud login"],
+    commands: ["uv tool install lazycloud-client", "lazycloud login"],
   },
   {
     title: "Create and deploy",

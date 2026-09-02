@@ -21,7 +21,7 @@ members = [
     "gateway",
     "identity",
     "images",
-    "lazycloud",
+    "lazycloud-client",
     "lazycloud-shared",
     "networking",
     "observability",
@@ -522,7 +522,7 @@ dependencies = [
     { name = "database" },
     { name = "foundation" },
     { name = "identity" },
-    { name = "lazycloud" },
+    { name = "lazycloud-client" },
     { name = "lazycloud-shared" },
     { name = "networking" },
     { name = "provider-aws" },
@@ -542,7 +542,7 @@ requires-dist = [
     { name = "database", editable = "packages/database" },
     { name = "foundation", editable = "packages/foundation" },
     { name = "identity", editable = "packages/identity" },
-    { name = "lazycloud", editable = "packages/lazycloud" },
+    { name = "lazycloud-client", editable = "packages/lazycloud" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "networking", editable = "packages/networking" },
     { name = "provider-aws", editable = "packages/providers/aws" },
@@ -1109,7 +1109,7 @@ wheels = [
 ]
 
 [[package]]
-name = "lazycloud"
+name = "lazycloud-client"
 version = "0.1.0"
 source = { editable = "packages/lazycloud" }
 dependencies = [
@@ -2525,7 +2525,7 @@ dev = [
     { name = "httpx2" },
     { name = "identity" },
     { name = "images" },
-    { name = "lazycloud" },
+    { name = "lazycloud-client" },
     { name = "lazycloud-shared" },
     { name = "lupa" },
     { name = "networking" },
@@ -2566,7 +2566,7 @@ workspace = [
     { name = "gateway" },
     { name = "identity" },
     { name = "images" },
-    { name = "lazycloud" },
+    { name = "lazycloud-client" },
     { name = "lazycloud-shared" },
     { name = "networking" },
     { name = "observability" },
@@ -2612,7 +2612,7 @@ dev = [
     { name = "httpx2", specifier = ">=2.4.0" },
     { name = "identity", editable = "packages/identity" },
     { name = "images", editable = "packages/images" },
-    { name = "lazycloud", editable = "packages/lazycloud" },
+    { name = "lazycloud-client", editable = "packages/lazycloud" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "lupa", specifier = ">=2.8" },
     { name = "networking", editable = "packages/networking" },
@@ -2653,7 +2653,7 @@ workspace = [
     { name = "gateway", editable = "packages/gateway" },
     { name = "identity", editable = "packages/identity" },
     { name = "images", editable = "packages/images" },
-    { name = "lazycloud", editable = "packages/lazycloud" },
+    { name = "lazycloud-client", editable = "packages/lazycloud" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "networking", editable = "packages/networking" },
     { name = "observability", editable = "packages/observability" },

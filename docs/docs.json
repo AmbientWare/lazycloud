@@ -10,13 +10,33 @@
   },
   "logo": {
     "light": "/logo.png",
-    "dark": "/logo.png"
+    "dark": "/logo.png",
+    "href": "https://lazycloud.dev"
   },
   "favicon": "/favicon.png",
+  "navbar": {
+    "links": [
+      {
+        "label": "lazycloud.dev",
+        "href": "https://lazycloud.dev"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Open dashboard",
+      "href": "https://lazycloud.dev/dashboard"
+    }
+  },
+  "contextual": {
+    "options": [
+      "copy",
+      "view"
+    ]
+  },
   "navigation": {
     "groups": [
       {
-        "group": "Getting Started",
+        "group": "Getting started",
         "pages": [
           "index",
           "getting-started/installation",
@@ -36,7 +56,7 @@
         ]
       },
       {
-        "group": "Core Concepts",
+        "group": "Workloads",
         "pages": [
           "concepts/apps",
           "concepts/functions",
@@ -48,7 +68,7 @@
         ]
       },
       {
-        "group": "Data and State",
+        "group": "Data and state",
         "pages": [
           "concepts/volumes",
           "concepts/secrets",
@@ -58,15 +78,17 @@
         ]
       },
       {
-        "group": "Platform",
+        "group": "Account",
         "pages": [
           "platform/auth",
+          "platform/plans",
           "platform/compute",
+          "platform/domains",
           "platform/dashboard"
         ]
       },
       {
-        "group": "CLI Reference",
+        "group": "CLI reference",
         "pages": [
           "cli/overview",
           "cli/deploy-and-run",
@@ -76,12 +98,6 @@
           "cli/compute",
           "cli/auth",
           "cli/scaffolding"
-        ]
-      },
-      {
-        "group": "Reference",
-        "pages": [
-          "reference/limitations"
         ]
       }
     ]

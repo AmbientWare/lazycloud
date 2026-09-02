@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated
 
-from foundation.resources import parse_memory_mib
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from shared.autoscaling import QueueDepthAutoscaler
@@ -15,6 +14,7 @@ from shared.deployments import DeploymentKind
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageSpec
 from shared.lifecycle import LifecycleHooks
+from shared.resources import parse_memory_mib
 from shared.tasks import RetryPolicy
 from shared.timestamps import utc_now
 

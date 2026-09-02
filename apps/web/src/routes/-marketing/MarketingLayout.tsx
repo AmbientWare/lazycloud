@@ -16,13 +16,13 @@ import {
 
 import "./marketing.css";
 
-/* Only what this build can actually reach. Examples and docs live outside this
-   app and are absent from some deployments, so each is configured or left out —
+/* Only what this build can actually reach. The examples gallery lives outside
+   this app and is absent from some deployments, so it is configured or left out —
    a menu entry that goes nowhere is worse than a shorter menu. */
 const navigation: readonly { label: string; to?: MarketingRoute; href?: string }[] = [
   ...(EXAMPLES_URL ? [{ label: "Examples", href: EXAMPLES_URL }] : []),
   { label: "Pricing", to: "/pricing" },
-  ...(DOCS_URL ? [{ label: "Docs", href: DOCS_URL }] : []),
+  { label: "Docs", href: DOCS_URL },
 ];
 
 const navLink =
@@ -161,13 +161,11 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
                 Pricing
               </Link>
             </FooterColumn>
-            {DOCS_URL ? (
-              <FooterColumn title="Developers">
-                <a className={footerLink} href={DOCS_URL}>
-                  Docs
-                </a>
-              </FooterColumn>
-            ) : null}
+            <FooterColumn title="Developers">
+              <a className={footerLink} href={DOCS_URL}>
+                Docs
+              </a>
+            </FooterColumn>
             <FooterColumn title="Workloads">
               <PendingLink className={footerLink}>Applications + APIs</PendingLink>
               <PendingLink className={footerLink}>Background work</PendingLink>

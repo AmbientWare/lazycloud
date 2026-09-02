@@ -1,12 +1,10 @@
 ---
 title: "Apps"
-description: "An App owns the deployable resources registered under one application slug."
+description: "An App groups the workloads you deploy together under one name."
 ---
 
-An `App` is the unit of organization. Every workload — functions, endpoints,
-ASGI apps, pods, and sandboxes — is registered under an
-app slug, which is the stable production identity used by deploy, serve, the
-dashboard, and generated client handles.
+An `App` is the unit you deploy. Every workload registers under an app slug,
+and the slug is how the dashboard, the CLI, and generated clients refer to it.
 
 ```python
 from lazycloud import App
@@ -14,27 +12,26 @@ from lazycloud import App
 app = App("billing")
 ```
 
-Slugs must start with a lowercase letter and contain only lowercase letters,
-digits, and underscores (up to 63 characters) — for example `"billing"` or
-`"reporting_api"`.
+A slug starts with a lowercase letter and contains only lowercase letters,
+digits, and underscores, up to 63 characters: `"billing"`, `"reporting_api"`.
 
-## Registering resources
+## Register workloads
 
-| Method | Registers |
-| --- | --- |
-| `@app.function(...)` | A remote [function](/concepts/functions) |
-| `@app.endpoint(...)` | An HTTP [endpoint](/concepts/endpoints) |
-| `@app.asgi(...)` | An ASGI application |
-| `@app.realtime(...)` | A realtime WebSocket-style handler |
-| `app.pod(...)` | A long-running [pod](/concepts/pods) |
-| `app.sandbox(...)` | An on-demand [sandbox](/concepts/sandboxes) |
+```python
+@app.function(...)      # a remote function
+@app.endpoint(...)      # an HTTP endpoint
+@app.asgi(...)          # a FastAPI, Starlette, or raw ASGI app
+@app.realtime(...)      # a WebSocket-style handler
+web = app.pod(...)      # a long-running container command
+box = app.sandbox(...)  # an on-demand container
+```
 
-Resource names must be unique per kind within an app; registering a duplicate
+Names must be unique per kind within an app. Registering the same name twice
 raises an error.
 
-## Deploying an app
+## Deploy
 
-Deploy every deployable resource in the app:
+Deploy everything the app registers:
 
 ```bash
 lazycloud deploy billing_app.py:app
@@ -43,27 +40,39 @@ lazycloud deploy billing_app.py:app
 Or from Python:
 
 ```python
-result = app.deploy()
+app.deploy()
 ```
 
-`App.deploy` accepts a `resource` selector to deploy a single resource. Pass
-the resource name, or `"kind:name"` when names overlap across kinds — for
-example `"endpoint:api"` or `"asgi:site"`:
+Deploy one resource with a selector. Pass its name, or `"kind:name"` when the
+name exists in more than one kind:
+
+```bash
+lazycloud deploy billing_app.py:app --resource endpoint:api
+```
 
 ```python
 app.deploy(resource="endpoint:api")
 ```
 
-The same selector is available on the CLI as `lazycloud deploy <handler> --resource
-<selector>`. Sandboxes are created on demand and are not deployed by
-`app.deploy()`.
+Sandboxes are created on demand and are not deployed.
 
-## Serving an app
+## Preview
 
-`App.serve` (or `lazycloud serve`) previews one endpoint or ASGI app
-resource on remote compute with live logs. When an app has more than one
-serveable resource, select one:
+`lazycloud serve` runs one endpoint or ASGI app on LazyCloud with a temporary
+URL and live logs. When an app has more than one, pick one:
 
-```python
-app.serve(resource="endpoint:api")
+```bash
+lazycloud serve billing_app.py:app --resource endpoint:api
 ```
+
+## Manage a deployed app
+
+```bash
+lazycloud app list
+lazycloud app show billing
+lazycloud app pause billing     # stop every workload in the app
+lazycloud app resume billing
+lazycloud app delete billing
+```
+
+The same actions are on the app's page in the dashboard.

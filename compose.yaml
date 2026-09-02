@@ -150,8 +150,8 @@ x-database-bootstrap-env: &database-bootstrap-env
 
 x-lazycloud-build-args: &lazycloud-build-args
   # Where the examples and the docs live, baked into the web bundle at build
-  # time. Empty by default, and empty means the marketing pages render no entry
-  # point for them rather than one that goes nowhere.
+  # time. Empty examples means the marketing pages render no entry point rather
+  # than one that goes nowhere; empty docs means the published site.
   VITE_LAZYCLOUD_EXAMPLES_URL: "${LAZYCLOUD_EXAMPLES_URL:-}"
   VITE_LAZYCLOUD_DOCS_URL: "${LAZYCLOUD_DOCS_URL:-}"
 

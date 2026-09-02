@@ -1,10 +1,10 @@
 ---
 title: "Schedules"
-description: "Run a function on a schedule with cron expressions, aliases, or interval shorthand."
+description: "Run a function on a schedule with a cron expression, an alias, or an interval."
 ---
 
-A schedule is something a function has, not a different kind of workload. Pass
-`cron` to `@app.function` and every run is an ordinary invocation of it.
+A schedule is a property of a function, not a separate workload. Pass `cron`
+to `@app.function` and each run is an ordinary invocation.
 
 ```python
 from lazycloud import App, Image
@@ -13,12 +13,10 @@ app = App("maintenance")
 image = Image(python_version="3.12")
 
 
-@app.function(cron="0 3 * * *", name="nightly-cleanup", image=image)
+@app.function(cron="0 3 * * *", name="nightly_cleanup", image=image)
 def cleanup() -> dict[str, str]:
     return {"status": "clean"}
 ```
-
-Deploy it like any other resource:
 
 ```bash
 lazycloud deploy maintenance.py:cleanup
@@ -26,40 +24,36 @@ lazycloud deploy maintenance.py:cleanup
 
 ## Schedule syntax
 
-Three forms are accepted:
+Three forms work:
 
-| Form | Examples |
-| --- | --- |
-| Five-field cron expression | `"*/15 * * * *"`, `"0 3 * * 1"` |
-| Cron alias | `"@hourly"`, `"@daily"`, `"@midnight"`, `"@weekly"`, `"@monthly"`, `"@yearly"`, `"@annually"` |
-| Interval shorthand | `"every 5m"` (max 59m), `"every 2h"` (max 23h), `"every 3d"` (max 31d) |
+- A five-field cron expression: `"*/15 * * * *"`, `"0 3 * * 1"`.
+- An alias: `"@hourly"`, `"@daily"`, `"@midnight"`, `"@weekly"`,
+  `"@monthly"`, `"@yearly"`, `"@annually"`.
+- An interval: `"every 5m"` (up to 59m), `"every 2h"` (up to 23h),
+  `"every 3d"` (up to 31d).
 
-Schedules are evaluated in UTC. An invalid expression is rejected at deploy
-time, in the same call that creates the deployment.
+Schedules run in UTC. An invalid expression is rejected at deploy time.
 
-## Options and behavior
+## Behavior
 
-A scheduled function accepts everything any other function does — resources,
-image, timeouts, `retries`/`retry_policy`, `env`/`secrets`/`volumes`, lifecycle
-hooks, and the pool. Each run is a durable task: a failing one is retried per the
-retry configuration, and terminal failures show up in
+A scheduled function takes every option a function does: resources, image,
+timeout, retries, secrets, volumes, hooks, and pool. Each run is a durable
+task, so a failing run retries per its retry settings and shows up in
 [task history](/concepts/tasks-and-logs) and the dashboard.
 
-It is still a function in every other respect. `.local(...)` runs it in-process,
-and `.remote(...)`/`.spawn(...)` trigger runs outside the schedule on the
-deployed compute.
+You can still call it directly. `.local()` runs it in your process, and
+`.remote()` or `.spawn()` trigger a run outside the schedule.
 
-`keep_warm` defaults to `0` for a scheduled function, because the next run is
-usually further away than any window worth paying for. Set it explicitly if runs
-are close enough together to reuse a warm container.
+`keep_warm` defaults to `0` for a scheduled function, since the next run is
+usually further away than a warm window is worth. Set it if runs are close
+together.
 
-Deploying again replaces the schedule: one fires per resource, whatever version
-it came from. Removing `cron` and deploying again removes it — the function stays
-deployed and callable, it just stops firing on its own. Pause or remove the whole
-resource through its deployment.
+Deploying again replaces the schedule; one fires per resource. Removing `cron`
+and deploying again removes the schedule while keeping the function deployed
+and callable. To stop the runs entirely, stop or delete the deployment:
 
 ```bash
 lazycloud deployment list --app maintenance
-lazycloud deployment stop <deployment-id-or-name>
-lazycloud deployment delete <deployment-id-or-name>
+lazycloud deployment stop nightly_cleanup
+lazycloud deployment delete nightly_cleanup
 ```

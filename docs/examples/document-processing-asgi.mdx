@@ -1,43 +1,40 @@
 ---
-title: "Document-processing ASGI application"
-description: "Build a complete FastAPI upload UI with durable OCR Tasks, signed job tokens, and Volume-backed results."
+title: "Document processing with FastAPI"
+description: "A FastAPI upload service with background OCR on a function, polling over durable tasks, and results in a volume."
 ---
 
-This example is a complete FastAPI application rather than a single handler.
-It accepts a streamed raw upload, spawns OCR on a durable Function, polls the
-Task through a signed capability token, and stores files in a LazyCloud Volume.
-The included browser UI uses the same HTTP endpoints documented below.
+This example is a complete FastAPI application. It accepts a raw upload, runs
+OCR on a function in the background, lets the client poll the task through a
+signed job token, and keeps files in a volume. The included browser UI uses
+the same HTTP routes shown below.
 
-The complete source lives in `examples/document_processing/` and includes the
-resource declarations, API, worker, validation and token helpers, tests, and
-static assets.
+The source is `examples/document_processing/` in the LazyCloud repository:
+resource declarations, the API, the worker, validation and token helpers, and
+the static UI.
 
-## Architecture
+## How it works
 
-The public ASGI deployment and private OCR queue share one Volume:
+The public ASGI app and the private OCR function share one volume.
 
-1. `PUT /api/documents/{filename}` streams a PDF, JPEG, or PNG to an atomic
-   temporary file and enforces a 10 MiB limit.
-2. The ASGI app submits the generated document ID and validated suffix to the
-   deployed `ocr-worker` function.
-3. The response returns an HMAC-signed, 24-hour job token. The browser keeps it
-   in memory and sends it in `X-Job-Token`; it is never placed in a URL.
-4. Status comes from the durable LazyCloud Task record. The API cannot select
-   an arbitrary Task ID because it only accepts a verified token.
-5. The worker uses Poppler for bounded PDF rendering and Tesseract for real
-   OCR, atomically writes JSON to the Volume, and removes the raw upload in
-   `finally` on both success and failure.
-6. The client explicitly deletes the result after reading it.
+1. `PUT /api/documents/{filename}` streams a PDF, JPEG, or PNG to a temporary
+   file, with a 10 MiB limit.
+2. The API submits the document id and validated suffix to the deployed
+   `ocr-worker` function.
+3. The response carries an HMAC-signed job token that expires after 24 hours.
+   The browser keeps it in memory and sends it in `X-Job-Token`; it never
+   appears in a URL.
+4. Status comes from the task record. The API only accepts a verified token,
+   so a client cannot read an arbitrary task.
+5. The worker renders PDFs with Poppler, runs Tesseract, writes JSON to the
+   volume, and removes the raw upload whether OCR succeeded or failed.
+6. The client deletes the result after reading it.
 
-There is no in-memory job dictionary, local JSON registry, fake OCR path, or
-browser-visible workspace credential.
+There is no in-memory job table and no workspace credential in the browser.
 
 ## Prerequisites
 
-- Install the `lazycloud` CLI and log in to a workspace.
-- Have `curl` and a PDF, JPEG, or PNG document available locally.
-- Generate a new token-signing secret. Do not reuse an API key or commit the
-  value:
+Sign in with `lazycloud login`, have `curl` and a PDF, JPEG, or PNG at hand,
+and create the volume and a fresh signing secret. Do not reuse an API key:
 
 ```bash
 export DOCUMENT_JOB_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
@@ -46,13 +43,12 @@ unset DOCUMENT_JOB_TOKEN_SECRET
 lazycloud volume create document-processing-data
 ```
 
-The secret is injected only into the ASGI workload. It is not injected into
-the OCR worker, returned to the browser, printed, or persisted in a URL.
+Only the ASGI workload receives the secret. The OCR worker does not.
 
-## Resource declarations
+## The resources
 
-The runtime image pins FastAPI and installs Tesseract and Poppler inside the
-workload image. Contributor machines do not need either OCR binary.
+The image pins FastAPI and installs Tesseract and Poppler. Your machine needs
+neither.
 
 ```python
 from lazycloud import App, Image, Volume
@@ -69,16 +65,11 @@ image = (
     ])
 )
 
-@app.function(
-    name="ocr-worker",
-    image=image,
-    timeout_seconds=600,
-    retries=0,
-    max_pending_tasks=50,
-    volumes=[data],
-)
+
+@app.function(name="ocr-worker", image=image, timeout_seconds=600, retries=0, volumes=[data])
 def ocr_document(document_id: str, suffix: str) -> dict[str, object]:
     ...
+
 
 web = app.asgi(
     name="document-api",
@@ -90,31 +81,28 @@ web = app.asgi(
 )(api)
 ```
 
-The complete worker uses list-form `subprocess.run(..., check=True)` calls,
-generated storage paths, a 20-page PDF limit, per-command timeouts, and a
-200,000-character result limit. It never evaluates a filename as a shell
-command.
+The worker calls `subprocess.run` with argument lists, caps PDFs at 20 pages,
+times out each command, and caps results at 200,000 characters. A filename is
+never evaluated as a shell command.
 
 ## Deploy
-
-Deploy both resources from the repository root:
 
 ```bash
 lazycloud deploy examples.document_processing.app:app
 ```
 
-Copy the `document-api` URL from the deploy output and omit a trailing slash:
+Copy the `document-api` URL from the deploy output, without a trailing slash:
 
 ```bash
 export DOCUMENT_API_URL="<document-api-url>"
 curl --fail --show-error "$DOCUMENT_API_URL/health"
 ```
 
-Opening `$DOCUMENT_API_URL` in a browser loads the included static upload UI.
+Opening `$DOCUMENT_API_URL` in a browser loads the upload UI.
 
 ## Upload a document
 
-Uploads use a raw request body, so the service does not need a multipart parser:
+The body is the raw file, so no multipart parser is needed:
 
 ```bash
 curl --fail --show-error \
@@ -123,9 +111,8 @@ curl --fail --show-error \
   --data-binary @sample.pdf
 ```
 
-Save the returned `job_token` in a shell variable without printing it or
-placing it on the command line. The examples below use `<job-token>` as a
-placeholder; replace it through your shell or secret-handling tooling.
+Keep the returned `job_token` in a shell variable rather than printing it.
+The commands below use `<job-token>` as a placeholder.
 
 ## Poll and read the result
 
@@ -137,18 +124,14 @@ curl --fail --show-error "$DOCUMENT_API_URL/api/jobs/result" \
   -H "X-Job-Token: <job-token>"
 ```
 
-Status is `pending`, `running`, `retry`, or a terminal Task state. The result
-endpoint returns `409` until the Task is complete. It returns actual OCR text;
-this guide does not include fabricated output.
+Status is `pending`, `running`, `retry`, or a terminal task state. The result
+route returns `409` until the task is complete.
 
-The job token is a bearer capability. Although it is HMAC-signed and expires,
-anyone who obtains it can read or delete that job until expiration. Do not log
-it, put it in a query string, store it in browser local storage, or share it.
+The job token is a bearer capability. Anyone holding it can read or delete
+that job until it expires, so do not log it, put it in a query string, or
+store it in browser local storage.
 
 ## Delete a result
-
-After consuming the OCR text, remove the uploaded/result files associated with
-the verified token:
 
 ```bash
 curl --fail --show-error \
@@ -156,51 +139,35 @@ curl --fail --show-error \
   -H "X-Job-Token: <job-token>"
 ```
 
-Deletion returns `409` while a Task is still active. Raw files are also removed
-by the worker in `finally`, by failed-submission handling, and when polling a
-terminal failed Task. The Volume remains the durable owner until explicit
-deletion; operators should apply a retention policy for clients that abandon
-results or let tokens expire.
+Deletion returns `409` while the task is still running. The worker removes raw
+uploads itself; result files stay in the volume until deleted, so add a
+retention job if clients may abandon results.
 
 ## Inspect
 
 ```bash
 lazycloud deployment list --app document_processing
 lazycloud task list --limit 20
-lazycloud logs --deployment-id <ocr-deployment-id> --follow --show-timestamp
+lazycloud logs --deployment ocr-worker --follow --show-timestamp
 lazycloud ls document-processing-data/results
 ```
 
-## Public-demo security boundary
+## What this does not protect
 
-`document-api` deliberately sets `authorized=False` so the static browser UI
-can upload and poll without receiving a LazyCloud access token. The private
-OCR function still requires authenticated internal submission. Signed job tokens
-provide per-job access, but they are not user authentication.
-
-Before exposing this pattern to the internet, put the ASGI service behind your
-application's external authentication, tenant authorization, request/body
-limits at the edge, rate limiting, abuse controls, malware scanning, retention
-jobs, and monitoring. Rotate `DOCUMENT_JOB_TOKEN_SECRET` under a planned policy;
-rotation invalidates outstanding tokens. The demo accepts untrusted documents
-and must not be treated as a hardened document-security boundary.
+`document-api` sets `authorized=False` so the browser UI can upload and poll
+without a LazyCloud token. Job tokens give per-job access; they are not user
+authentication. Before exposing this pattern to the internet, put it behind
+your own authentication and tenant checks, add edge rate and body limits,
+malware scanning, retention, and monitoring, and rotate
+`DOCUMENT_JOB_TOKEN_SECRET` on a schedule. Rotation invalidates outstanding
+tokens.
 
 ## Clean up
 
-List the two deployment IDs, delete both, then remove the Volume and signing
-secret:
-
 ```bash
-lazycloud deployment list --app document_processing
-lazycloud deployment delete <document-api-deployment-id>
-lazycloud deployment delete <ocr-worker-deployment-id>
+lazycloud deployment delete document-api
+lazycloud deployment delete ocr-worker
 lazycloud volume delete document-processing-data --yes
 lazycloud secret delete DOCUMENT_JOB_TOKEN_SECRET
 unset DOCUMENT_API_URL
 ```
-
-Live acceptance must deploy against the current Compose stack and prove the
-public workflow end to end: health, bounded upload, `202`, durable pending and
-terminal status, real OCR text, forged-token rejection, content-type and size
-rejection, raw-file removal, result deletion, deployment cleanup, and empty
-example-owned Volume state. Import/spec tests alone are not live acceptance.

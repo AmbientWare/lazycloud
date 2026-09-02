@@ -7,37 +7,38 @@ import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
 ## lazycloud task
 
-| Command | Description |
-| --- | --- |
-| `lazycloud task list [--limit <n>]` | Recent tasks (default limit 100). |
-| `lazycloud task show TASK_ID` | Task detail: status, timing, deployment, container. |
-| `lazycloud task result TASK_ID [--wait/--no-wait] [--timeout <s>]` | Print the task result; waits for completion by default. |
-| `lazycloud task logs TASK_ID [--limit <n>]` | Recent log lines for the task (default 250). |
-| `lazycloud task stop TASK_IDS...` | Stop one or more running tasks. |
-| `lazycloud task cancel TASK_ID` | Cancel a pending task. |
+```bash
+lazycloud task list [--limit <n>] [--app <name>]          # recent tasks, default 100
+lazycloud task show TASK_ID                                # status, timing, deployment, container
+lazycloud task result TASK_ID [--no-wait] [--timeout <s>]  # waits for completion by default
+lazycloud task logs TASK_ID [--limit <n>]                  # recent log lines, default 250
+lazycloud task stop TASK_IDS...                            # stop running tasks
+lazycloud task cancel TASK_ID                              # cancel a pending task
+```
 
 ```bash
-lazycloud task list --limit 20
+lazycloud task list --limit 20 --app api_demo
 lazycloud task result 019...abc --timeout 60
 ```
 
 ## lazycloud logs
 
 ```bash
-lazycloud logs [--task-id <id>] [--container-id <id>] [--deployment-id <id>] [--stub-id <id>]
+lazycloud logs (--deployment <name-or-id> | --task-id <id> | --container-id <id>) [options]
 ```
 
-Selects logs by exactly one source and prints or streams them:
+Prints logs for exactly one source, or streams them with `--follow`.
 
-| Flag | Description |
+| Flag | What it does |
 | --- | --- |
-| `-n`, `--lines <n>` | Show the last N lines (default 250). |
+| `-n`, `--lines <n>` | Last N lines, 1 to 1000, default 250. |
 | `-f`, `--follow` | Stream new logs as they arrive. |
-| `--show-timestamp` | Include log timestamps. |
-| `--max-events <n>` | Stop after N streamed log events (0 = unlimited). |
+| `--show-timestamp` | Prefix each line with its timestamp. |
+| `--max-events <n>` | Stop after N streamed events. `0`, the default, is unlimited. |
 
 ```bash
-lazycloud logs --deployment-id dep-123 --follow --show-timestamp
+lazycloud logs --deployment predict --follow --show-timestamp
+lazycloud logs --task-id 019...abc -n 1000
 ```
 
 <WorkspaceFlag />

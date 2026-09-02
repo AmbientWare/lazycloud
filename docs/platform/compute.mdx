@@ -1,161 +1,130 @@
 ---
-title: "Compute and pools"
-description: "LazyCloud compute, your connected AWS account, self-hosted machines, and pools."
+title: "Compute"
+description: "Where your workloads run: LazyCloud's compute, your own AWS account, or machines you join."
 ---
 
-Workspaces schedule workloads onto three kinds of compute:
+Your workloads run on LazyCloud's compute by default. You choose CPU, memory,
+and GPU per workload, and pay per second while a container runs. Nothing else
+is needed.
 
-1. **Managed compute** — capacity operated by the platform. The default.
-2. **Connected cloud** — instances launched in the AWS account you connect.
-3. **Self-hosted machines** — servers you own, joined with an agent.
+```python
+@app.function(cpu=2.0, memory="4Gi", gpu="l4", gpu_count=1)
+def embed(text: str) -> list[float]: ...
+```
 
-The connected account and the machines you join belong to your account rather
-than to one workspace. They back every workspace you own, and a workspace
-reaches them by naming their pool.
+Available GPU models are `t4`, `a10g`, `l4`, `l40s`, `a100-40`, `a100-80`,
+`h100`, and `h200`. Pass a list to state a preference, best first, and `"any"`
+last to take whatever is free.
+
+Check what your workspace is using:
+
+```bash
+lazycloud compute status
+lazycloud compute instances
+lazycloud compute workloads
+```
 
 ## Pools
 
-A workload names the pool it runs in with `pool="..."`; the CLI equivalent is
-`--pool` on `deploy`, `run`, `serve`, `shell`, and `dev`. Omit it to use the
-workspace's default pool. `lazycloud` is the platform's own fleet and the
-default a workspace starts with; a machine joined without `--pool` lands in
-`self-hosted`.
-
-Naming a pool creates it. A pool may be fed by several sources at once — an
-auto-scaling group in each of two regions and machines you joined yourself —
-and the control plane arbitrates between them, failing over when one is full
-or unhealthy.
+Every workload runs in a pool. The default pool is LazyCloud's own compute.
+Connecting an AWS account or joining a machine adds capacity you own, and a
+workload reaches it by naming the pool:
 
 ```python
 @app.function(gpu="a10g", gpu_count=1, pool="aws")
 def train(step: int) -> float: ...
 ```
 
-Inspect what the workspace is doing:
+The CLI equivalent is `--pool` on `deploy`, `run`, `serve`, `shell`, and
+`dev`. To send every workload in a workspace to a pool without naming it each
+time, set the workspace default:
 
 ```bash
-lazycloud compute status       # default pool and capacity
-lazycloud compute instances    # running instances
-lazycloud compute workloads    # workloads and the pool each runs in
+lazycloud compute policy show
+lazycloud compute policy update --default-pool aws
+lazycloud compute pools
 ```
 
-## Connected cloud (AWS)
+## Your own AWS account
 
-Connect your AWS account so GPU and CPU instances launch inside it — data and
-compute stay in your account, and you pay AWS directly. You connect one cloud
-account, and it provides capacity to every workspace you own:
+On the Team plan you can connect one AWS account. LazyCloud then launches
+instances inside your account when a workload asks for that pool, and shuts
+them down when they go idle. Your data and containers stay in your account,
+AWS bills you for the instances, and LazyCloud charges a management fee per
+container instead of its compute rate. Volumes and egress are billed the same
+as everywhere else.
+
+The connection belongs to your account and serves every workspace you own.
 
 ```bash
 lazycloud cloud connect aws --account-id 123456789012
 ```
 
-The command starts a cross-account authorization: it prints an AWS
-authorization link (add `--open` to launch a browser), or accepts an existing
-management role with `--role-arn`. Then:
+The command prints an AWS authorization link (`--open` launches it in a
+browser). Approving it creates a management role in your account. Then:
 
 ```bash
 lazycloud cloud status --watch --until ready
-lazycloud cloud validate
 ```
 
-Connection lifecycle commands:
+The dashboard shows the same connection under Settings, then Compute. Once it
+is ready, name the pool on a workload or make it the workspace default.
 
-| Command | Purpose |
-| --- | --- |
-| `lazycloud cloud status` | Show the connection phase; `--watch --until <phase>` waits for it. |
-| `lazycloud cloud validate` | Validate the pending or active authorization. |
-| `lazycloud cloud reconnect` | Start a replacement authorization (for example after rotating roles). |
-| `lazycloud cloud cancel-reconnect` | Cancel a pending replacement authorization. |
-| `lazycloud cloud retry` | Retry the connection's current pending action. |
-| `lazycloud cloud disconnect` | Disconnect the account and remove its managed compute; `--wait` blocks until removal completes. |
-
-<Note>
-  The AWS connected-cloud path is implemented end to end; the final live
-  acceptance pass on a production AWS account is still pending. See
-  [Known limitations](/reference/limitations).
-</Note>
-
-## Compute policy
-
-A workspace's compute policy is the pool its workloads land in when they name
-none:
-
-```bash
-lazycloud compute policy show
-lazycloud compute policy update --default-pool aws
-```
-
-The guardrails on what connected-cloud capacity may launch belong to the
-connected account, so one set of limits applies wherever it provides capacity:
+Limits on what LazyCloud may launch live with the connection, so one set of
+limits applies to every workspace it backs:
 
 ```bash
 lazycloud cloud compute show
 lazycloud cloud compute update \
   --default-region us-east-1 \
-  --max-cpu 64 --max-gpu 8 \
+  --max-cpu 20 --max-gpu 4 \
   --allowed-region us-east-1 --allowed-region us-west-2 \
-  --allowed-instance-type g5.xlarge \
-  --idle-timeout 900 \
-  --root-volume-gib 100
+  --idle-timeout 600
 ```
 
-Idle instances are reclaimed after `--idle-timeout` seconds (60–86400).
+You can cap CPU and GPU instance counts, restrict regions and instance types,
+set the idle timeout before an instance is shut down, and set the root disk
+size. Options you leave out keep their current values.
 
-## Self-hosted machines
+If the authorization stops working, for example after a role change in AWS,
+`lazycloud cloud status` says so. `lazycloud cloud reconnect` starts a
+replacement authorization, and `lazycloud cloud validate` rechecks the current
+one. `lazycloud cloud disconnect` drains instances and removes the connection;
+add `--wait` to block until it is gone.
 
-Join a supported Linux server to your account as schedulable capacity. This can
-be an on-premises GPU box, a bare-metal host, or a VM:
+## Your own machines
+
+You can join a Linux server you own as capacity for every workspace you own.
+This suits an on-premises GPU box, a bare-metal host, or a VM. Containers on
+your own machines are not charged compute; volumes and egress still are.
+
+The host needs:
+
+- Linux on amd64 or arm64, with systemd and root or sudo access.
+- A rootful Docker daemon and WireGuard tools. The installer can add the
+  WireGuard tools on hosts with `apt-get` or `dnf`.
+- Outbound DNS, HTTPS, and UDP port 51820 with stateful return traffic. No
+  inbound port, port forwarding, or static IP is needed.
+- No existing route that overlaps `100.96.0.0/11`.
+- Host firewall rules that allow traffic arriving on `wg-lazycloud` from
+  `100.96.0.0/24` to TCP port 29443.
+
+Run the join on the machine itself:
 
 ```bash
 lazycloud machine join --pool on-prem --gpu a100-80 --max-gpus 4 --max-cpu 32 --max-memory 128Gi
 ```
 
-The machine joins the pool `--pool` names, `self-hosted` when it names none,
-and it serves only the workspaces your account owns. Point a workspace at it
-with `compute policy update --default-pool`, or name the pool on the workload.
+The command installs the agent as a background service. `--foreground` runs it
+in the terminal instead, and `--print-only` prints the install command so you
+can run it on another host. The command contains a short-lived credential; do
+not share it. The machine joins the pool you name (`self-hosted` if you name
+none) and creates the pool if it is new.
 
-`machine join` generates a single-use join token (lifetime `--ttl`) and
-installs the agent on the current machine as a background service by
-default (`--service-manager`, `--service-name`, `--state-dir` to customize)
-or in the foreground with `--foreground`. Use `--print-only` to print the
-generated join command for running on another host. `--gpu-ids` limits which
-GPU devices are exposed.
-
-### Host requirements
-
-A supported host has:
-
-- Linux on amd64 or arm64.
-- systemd and root or sudo access for the default background installation.
-- a rootful Docker daemon.
-- WireGuard, `ip`, and `iptables` command-line tools. When you run the installer
-  as root, it can install missing WireGuard tools through `apt-get` or `dnf`.
-
-The host must allow:
-
-- DNS lookups and outbound HTTPS to the hosted LazyCloud control plane,
-  installation artifacts, container registries, and sources used by your
-  workloads.
-- outbound UDP port `51820` to the LazyCloud WireGuard gateway, including
-  stateful return traffic.
-- traffic arriving on `wg-lazycloud` from `100.96.0.0/24` to TCP port `29443`.
-
-The WireGuard connection starts from your host. You do not need a public
-inbound port, port forwarding, or a static public IP.
-
-### Reserved networks
-
-The host cannot have an existing route that overlaps the LazyCloud WireGuard
-overlay, `100.96.0.0/11`. The agent rejects enrollment when it finds one.
-
-Workers create a local bridge with `192.168.0.0/20` for IPv4 and
-`fd00:abcd::/64` for IPv6 by default. These ranges must not conflict with the
-host's LAN, VPN, or container networks.
+The dashboard has the same flow under Settings, then Compute, then Join a
+machine, and shows the host checks as they pass.
 
 ```bash
 lazycloud machine list
 lazycloud machine remove <machine-id>
 ```
-
-Your machines also appear in the dashboard under account settings, alongside
-the AWS connection.

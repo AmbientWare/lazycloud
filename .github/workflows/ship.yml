@@ -1,34 +1,45 @@
 name: Ship
 
-# One entry point for a full deploy: publish a release, then put the control
-# plane on it.
+# One entry point for a full release: cut the version, publish the release, then
+# put the control plane on it.
+#
+# The version is chosen here and nowhere else. An operator picks which part of
+# the version this release changes, the first job reads the latest `v*` tag,
+# computes the next one, and pushes it; every later job carries that number as
+# an input. Nothing in the tree holds a version: the tag is the record, and the
+# workspace keeps a placeholder that the release stamps over at build time.
+#
+# The tag is pushed by this run rather than by hand, and it triggers nothing. A
+# tag pushed with the workflow token starts no other workflow, which is what
+# used to go wrong when release and deploy both listened for `v*` and the
+# deploy raced the release it was meant to run.
 #
 # The two halves stay separate workflows because they answer to different
-# audiences. A release is immutable and public — a customer's own AWS account
+# audiences. A release is immutable and public: a customer's own AWS account
 # resolves the agent binary, the worker image and the node AMI out of its
-# manifest — so rebuilding it on every code deploy would churn artifacts other
-# people's infrastructure depends on. A deploy is ours alone and runs many times
-# against one release.
-#
-# Sequencing them here is what a tag used to get wrong. Both workflows once
-# triggered on `v*` independently, so the deploy raced the release it was meant
-# to run and published a bundle naming whichever release came before it.
+# manifest, and a customer's machine installs the Python package from PyPI. A
+# deploy is ours alone and runs many times against one release.
 
 on:
   workflow_dispatch:
     inputs:
+      bump:
+        description: Which part of the version this release changes
+        type: choice
+        required: true
+        options:
+          - patch
+          - minor
+          - major
       deployment:
         description: Deployment prefix the ECR repositories and secrets carry
         type: string
         default: lazycloud-prod
-  push:
-    tags:
-      - "v*"
 
 # What the called workflows need, because a caller cannot grant less than they
-# ask for: the deploy records its build as a commit on the deployment branch,
-# and a caller offering only `contents: read` fails the whole run before any job
-# starts, with no logs to read.
+# ask for: this run pushes the tag and the deploy records its build as a commit
+# on the deployment branch, and a caller offering only `contents: read` fails
+# the whole run before any job starts, with no logs to read.
 permissions:
   contents: write
   id-token: write
@@ -38,14 +49,156 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  version:
+    name: Cut the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      # Only main. A release tags the commit it runs from, and a tag on a branch
+      # commit is a version customers can install that main never contained.
+      - name: Refuse anything but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Ship runs from main; this run is on ${GITHUB_REF}."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Compute the next version
+        id: next
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest="$(git tag -l 'v*' | sort -V | tail -1)"
+          current="${latest#v}"
+          current="${current:-0.0.0}"
+          IFS=. read -r major minor patch <<<"${current}"
+          case "${{ inputs.bump }}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          version="${major}.${minor}.${patch}"
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            echo "::error::v${version} already exists."
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "${latest:-no tag} -> v${version} (${{ inputs.bump }})"
+
+      - name: Push the tag
+        run: |
+          set -euo pipefail
+          git config user.name "lazycloud-deploy"
+          git config user.email "deploy@lazycloud.dev"
+          git tag -a "v${{ steps.next.outputs.version }}" -m "Release ${{ steps.next.outputs.version }}" "${GITHUB_SHA}"
+          git push origin "v${{ steps.next.outputs.version }}"
+
+  # The customer-facing Python package. `lazycloud-client` is the SDK and the
+  # `lazycloud` command; `lazycloud-shared` carries the contracts it speaks, and
+  # the client pins it exactly so an installed pair always agrees. Both are
+  # published at the release version, so the version a customer has installed
+  # names the release it was built from.
+  #
+  # The workspace keeps 0.1.0 as a placeholder. Stamping at build time rather
+  # than bumping in the tree is what keeps thirty exact workspace pins from
+  # changing on every release.
+  #
+  # The wheels are installed into an empty environment before anything is
+  # published: a wheel that resolves against the workspace and not against PyPI
+  # is the failure a customer would otherwise be the first to see.
+  python-package:
+    name: Publish the Python package
+    needs: version
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          version: "0.11.21"
+
+      - name: Stamp the release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          uv version --frozen --package lazycloud-shared "${version}"
+          uv version --frozen --package lazycloud-client "${version}"
+          python3 - "${version}" <<'EOF'
+          import re, sys
+          from pathlib import Path
+          version = sys.argv[1]
+          path = Path("packages/lazycloud/pyproject.toml")
+          text, count = re.subn(r'"lazycloud-shared==[^"]+"', f'"lazycloud-shared=={version}"', path.read_text())
+          if count != 1:
+              sys.exit(f"expected one lazycloud-shared pin in {path}, found {count}")
+          path.write_text(text)
+          EOF
+          git --no-pager diff --stat
+
+      - name: Build wheels and sdists
+        run: |
+          set -euo pipefail
+          uv build --package lazycloud-shared -o dist/pypi
+          uv build --package lazycloud-client -o dist/pypi
+          ls -1 dist/pypi
+
+      - name: Install the wheels into an empty environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for python in 3.10 3.12; do
+            uv run --isolated --no-project --python "${python}" \
+              --with dist/pypi/lazycloud_shared-*.whl \
+              --with dist/pypi/lazycloud_client-*.whl \
+              -- lazycloud --help >/dev/null
+            uv run --isolated --no-project --python "${python}" \
+              --with dist/pypi/lazycloud_shared-*.whl \
+              --with dist/pypi/lazycloud_client-*.whl \
+              -- python -c "import lazycloud, shared; print(lazycloud.__name__)"
+          done
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v7
+        with:
+          name: lazycloud-python-package
+          path: dist/pypi/*
+          if-no-files-found: error
+
+      # Trusted publishing: PyPI accepts this workflow's OIDC token for both
+      # projects, configured on each as owner `AmbientWare`, repository
+      # `lazycloud`, workflow `ship.yml`, environment `release`. No token is
+      # stored anywhere. The step lives here and not in release.yml because
+      # PyPI does not accept a reusable workflow as a publisher.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/pypi
+          # A re-run of the same ship rebuilds identical wheels. PyPI refuses
+          # a second upload of a version, and that refusal must not fail the
+          # deploy that follows.
+          skip-existing: true
+
   release:
     name: Publish the release
+    needs: version
     uses: ./.github/workflows/release.yml
     secrets: inherit
+    with:
+      version: ${{ needs.version.outputs.version }}
 
   deploy:
     name: Deploy onto it
-    needs: release
+    needs: [version, python-package, release]
     uses: ./.github/workflows/deploy.yml
     secrets: inherit
     with:

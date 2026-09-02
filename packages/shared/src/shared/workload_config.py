@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-from foundation.resources import parse_memory_mib
 from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 
 from shared.callbacks import normalize_callback_url
@@ -14,6 +13,7 @@ from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageBuildStep
 from shared.lifecycle import LifecycleHooks
 from shared.mounts import MountAuthMode, validate_mount_auth
+from shared.resources import parse_memory_mib
 from shared.tasks import RetryPolicy
 
 _JSON_MAPPING_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])

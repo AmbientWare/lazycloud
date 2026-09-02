@@ -1,11 +1,12 @@
 ---
 title: "Welcome to LazyCloud"
-description: "LazyCloud is a Python-first serverless compute platform for functions, endpoints, scheduled jobs, pods, and sandboxes."
+description: "Write plain Python, decorate it, and run it on LazyCloud as functions, HTTP endpoints, scheduled jobs, pods, and sandboxes."
 ---
 
-LazyCloud lets you write plain Python, decorate it, and run it on remote compute
-with production semantics: durable tasks, retries, autoscaling HTTP workloads,
-queues, volumes, secrets, and full observability.
+LazyCloud runs your Python on remote compute. You decorate a function, deploy
+it from your terminal, and every call becomes a durable task with a result and
+logs. Sign in at [lazycloud.dev](https://lazycloud.dev), install the client, and
+deploy.
 
 ```python
 from lazycloud import App, Image
@@ -23,34 +24,35 @@ if __name__ == "__main__":
     print(hello.local("lazycloud"))
 ```
 
-Deploy it with one command:
-
 ```bash
 lazycloud deploy quickstart.py:hello
+lazycloud run quickstart.py:hello LazyCloud
 ```
 
 ## What you can run
 
 | Workload | Decorator | Use it for |
 | --- | --- | --- |
-| [Function](/concepts/functions) | `@app.function` | Remote Python calls, fan-out maps, background spawns |
-| [Endpoint](/concepts/endpoints) | `@app.endpoint` | HTTP APIs from typed Python callables |
-| [ASGI / Realtime](/concepts/endpoints) | `@app.asgi`, `@app.realtime` | FastAPI/Starlette apps and WebSocket-style handlers |
-| [Schedules](/concepts/schedules) | `@app.function(cron=...)` | Functions that run on a schedule |
-| [Pod](/concepts/pods) | `app.pod(...)` | Long-running command-style containers |
-| [Sandbox](/concepts/sandboxes) | `app.sandbox(...)` | On-demand containers with process, filesystem, and Docker control |
+| [Function](/concepts/functions) | `@app.function` | Remote Python calls, fan-out maps, background jobs |
+| [Endpoint](/concepts/endpoints) | `@app.endpoint` | An HTTP route backed by a typed Python callable |
+| [ASGI and realtime](/concepts/endpoints) | `@app.asgi`, `@app.realtime` | FastAPI and Starlette apps, WebSocket-style handlers |
+| [Schedule](/concepts/schedules) | `@app.function(cron=...)` | A function that runs on a schedule |
+| [Pod](/concepts/pods) | `app.pod(...)` | A long-running container command |
+| [Sandbox](/concepts/sandboxes) | `app.sandbox(...)` | An on-demand container with process, file, and Docker control |
+
+Workloads share [volumes](/concepts/volumes), [secrets](/concepts/secrets), and
+[queues and maps](/concepts/queues-maps-signals). Every run shows up in the
+[dashboard](/platform/dashboard) with its status, result, and logs.
 
 ## Where it runs
 
-Your workspace schedules work onto compute you control:
-
-- **Managed compute** operated by the platform you log in to.
-- **Your own AWS account**, connected with `lazycloud cloud connect aws`.
-- **Self-hosted machines** you join with `lazycloud machine join`.
+Your workloads run on LazyCloud's compute by default, and you pay per second
+for what they use. On the Team plan you can also connect your own AWS account
+or join your own machines. See [Compute](/platform/compute) and
+[Plans and limits](/platform/plans).
 
 ## Start here
 
-- [Installation](/getting-started/installation)
-- [Quickstart: deploy your first function](/getting-started/quickstart)
-- [Your first endpoint](/getting-started/first-endpoint)
-- [CLI reference](/cli/overview)
+1. [Install the client](/getting-started/installation)
+2. [Deploy your first function](/getting-started/quickstart)
+3. [Serve your first endpoint](/getting-started/first-endpoint)

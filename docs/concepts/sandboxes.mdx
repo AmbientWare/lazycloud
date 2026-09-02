@@ -3,10 +3,9 @@ title: "Sandboxes"
 description: "On-demand containers with process control, a filesystem API, exposed ports, snapshots, and optional Docker."
 ---
 
-Sandboxes are on-demand containers for interactive and programmatic work:
-running commands, editing files, exposing ports, and controlling processes.
-They are ideal for code execution agents, dev environments, and untrusted
-workloads.
+A sandbox is a container you create when you need it, run commands in, move
+files in and out of, and terminate. It suits code-execution agents, dev
+environments, and untrusted workloads.
 
 ```python
 from lazycloud import App, Image
@@ -19,54 +18,55 @@ sandbox = app.sandbox(
     memory=1024,
     keep_warm_seconds=600,
 )
+
+instance = sandbox.create()
+result = instance.run("python --version")
+print(result.exit_code, result.stdout)
+instance.terminate()
 ```
 
 Sandboxes default to `cpu=1.0`, `memory=128` (MiB), `keep_warm_seconds=600`,
-and `authorized=False`. They are created on demand — `app.deploy()` does not
+and `authorized=False`. They are created on demand; `app.deploy()` does not
 deploy them.
 
 ## Instances
 
 ```python
 instance = sandbox.create()
-print(instance.sandbox_id())
+sandbox_id = instance.sandbox_id()
 
-# Reconnect to a running sandbox later
-same = sandbox.connect(instance.sandbox_id())
-
-instance.update_ttl(1800)   # extend the idle lifetime
+same = sandbox.connect(sandbox_id)   # reconnect later
+instance.update_ttl(1800)            # extend the idle lifetime
 instance.terminate()
 ```
 
-`sandbox.list()` returns the workspace's sandboxes, `sandbox.stats()`
-aggregate counts, and `sandbox.timeline(stub_id)` the lifecycle timeline of
-one sandbox.
+`sandbox.list()` returns the workspace's sandboxes, `sandbox.stats()` counts
+them, and `sandbox.timeline(stub_id)` gives one sandbox's lifecycle.
 
-## Running commands and processes
+## Commands and processes
 
-`run` executes a command and blocks for the response; the `process` manager
-gives asynchronous control:
+`run` blocks until the command exits. `process` gives you control over
+long-running ones:
 
 ```python
-result = instance.run("python --version")
-print(result.exit_code, result.stdout)
+result = instance.run("pytest -q", cwd="/workspace", timeout_seconds=300)
 
 proc = instance.process.exec("python", "-m", "http.server", "8000")
-proc.wait()                      # or poll proc.status()
-print(proc.stdout.read())        # stream stdout / stderr / combined logs
+proc.wait()                    # or proc.status()
+print(proc.stdout.read())      # stdout, stderr, and combined logs streams
 proc.kill()
 
-instance.process.run_code("print(2 + 2)")   # run a Python snippet
+instance.process.run_code("print(2 + 2)")   # a Python snippet
 instance.list_processes()
 ```
 
-Processes expose `pid`, `wait(timeout)`, `kill()`, `status()`, and `stdout`,
+A process has `pid`, `wait(timeout)`, `kill()`, `status()`, and `stdout`,
 `stderr`, and `logs` streams with `read()` and `lines()`.
 
-## Filesystem
+## Files
 
-`instance.fs` operates on the sandbox filesystem (default working directory
-`/workspace`):
+`instance.fs` works on the sandbox filesystem. The working directory is
+`/workspace`.
 
 ```python
 instance.fs.upload_file("model.pt", "/workspace/model.pt")
@@ -79,33 +79,29 @@ instance.fs.find_in_files("/workspace/src", "TODO")
 instance.fs.replace_in_files("/workspace/src", "old", "new")
 ```
 
-## Ports and networking
+## Ports and network
 
 ```python
-url = instance.expose_port(8000)   # URL pinned to this sandbox instance
+url = instance.expose_port(8000)
 instance.list_urls()
 
 instance.network_permissions()
-instance.update_network_permissions(block_network=True, allow_list=["api.example.com"])
+instance.update_network_permissions(block_network=True)
+instance.update_network_permissions(allow_list=["api.example.com"])
 ```
 
-Each URL identifies the exact sandbox container. It never redirects to another
-instance created from the same sandbox definition, and becomes unavailable when
-that container stops. `list_urls()` returns the persisted exposures that the
-worker still reports as active. Ports must be between 1 and 65535.
-If the owning app's visibility changes, `list_urls()` returns and persists the
-corresponding current public or authenticated URL; authorization always checks
-the current workspace and app state.
+An exposed URL points at this exact container. It never redirects to another
+instance of the same sandbox, and it stops working when the container stops.
+Declare `ports=[8000]` on the sandbox to expose ports as soon as an instance
+is ready. `block_network` and `allow_list` set the outbound policy and cannot
+be combined.
 
-Declare `ports=[8000]` on the sandbox definition to expose ports after the new
-instance becomes ready.
-`block_network` and `allow_list` set the outbound policy.
+## Docker inside a sandbox
 
-## Docker inside sandboxes
-
-With `docker_enabled=True`, the sandbox gets an isolated Docker daemon and
-`instance.docker` provides access to it for building and running containers
-within the sandbox.
+With `docker_enabled=True` the sandbox has its own Docker daemon, and
+`instance.docker` wraps it: `run`, `build`, `pull`, `push`, `ps`, `logs`,
+`stop`, `rm`, `exec`, `login`, `compose_up`, `compose_down`, and volume
+commands.
 
 ## Snapshots
 
@@ -116,19 +112,19 @@ restored = sandbox.create_from_memory_snapshot(snapshot_id)
 image_id = instance.create_image_from_filesystem()
 ```
 
-Memory snapshots restore a running sandbox's state; filesystem images capture
-the disk as a reusable image id for `Image.from_id(...)`.
+A memory snapshot restores a running sandbox's state. A filesystem image
+captures the disk as an image id you can reuse with `Image.from_id(...)`.
 
-## Async API
+## Async
 
-Every surface has an async twin under `.aio` — for example
-`await instance.aio.run(...)`, `await instance.process.aio.exec(...)`, and
-`await instance.fs.aio.upload_file(...)`.
+Every surface has an async twin under `.aio`: `await instance.aio.run(...)`,
+`await instance.process.aio.exec(...)`, `await instance.fs.aio.upload_file(...)`.
 
 ## Definition options
 
-Sandboxes accept `env`, `secrets`, `volumes`, `gpu`/`gpu_count`,
-`sync_local_dir` (copy your working directory into the sandbox at creation),
-`command` (initial command), and the standard `pool`/`provider`
-options. Inspect sandboxes in the [dashboard](/platform/dashboard) with a
-terminal, file browser, and process list.
+Sandboxes also accept `env`, `secrets`, `volumes`, `gpu` and `gpu_count`,
+`sync_local_dir=True` to copy your working directory in at creation,
+`command` for the initial process, `docker_enabled`, and `pool`. Running
+sandboxes appear on their app's page in the
+[dashboard](/platform/dashboard) with a terminal, file browser, and process
+list.

@@ -1,21 +1,33 @@
 ---
-title: "deployment and container"
-description: "Manage deployment lifecycle and running containers."
+title: "app, deployment, container, client"
+description: "Manage deployed apps, deployments, running containers, and generated clients."
 ---
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
+## lazycloud app
+
+An app is addressed by name or id.
+
+```bash
+lazycloud app list [--active | --inactive | --all]
+lazycloud app show APP
+lazycloud app pause APP      # stop every workload in the app
+lazycloud app resume APP
+lazycloud app delete APP
+```
+
 ## lazycloud deployment
 
-Deployments accept an id or a deployment name.
+A deployment is addressed by name or id.
 
-| Command | Description |
-| --- | --- |
-| `lazycloud deployment list [--app <slug>] [--limit <n>]` | List deployments, optionally for one app. |
-| `lazycloud deployment stop IDS_OR_NAMES...` | Stop one or more deployments (workers scale to zero; the record stays). |
-| `lazycloud deployment start ID_OR_NAME` | Start a stopped deployment. |
-| `lazycloud deployment scale ID_OR_NAME --containers <n>` | Set the container count. |
-| `lazycloud deployment delete ID_OR_NAME` | Delete the deployment. |
+```bash
+lazycloud deployment list [--app <name>] [--limit <n>]
+lazycloud deployment stop IDS_OR_NAMES...        # scale to zero; the record stays
+lazycloud deployment start ID_OR_NAME
+lazycloud deployment scale ID_OR_NAME --containers <n>
+lazycloud deployment delete ID_OR_NAME
+```
 
 ```bash
 lazycloud deployment list --app api_demo
@@ -24,11 +36,23 @@ lazycloud deployment scale predict --containers 3
 
 ## lazycloud container
 
-| Command | Description |
-| --- | --- |
-| `lazycloud container list [--limit <n>]` | Running containers in the workspace (limit 1–1000, default 100). |
-| `lazycloud container attach CONTAINER_ID` | Attach to a container's output. |
-| `lazycloud container checkpoint CONTAINER_ID [--checkpoint-id <id>]` | Checkpoint a checkpoint-enabled container. |
-| `lazycloud container stop CONTAINER_IDS...` | Stop one or more containers. |
+```bash
+lazycloud container list [--limit <n>]                        # recent containers, default 100
+lazycloud container attach CONTAINER_ID                       # stream output until it exits
+lazycloud container checkpoint CONTAINER_ID [--checkpoint-id <id>]
+lazycloud container stop CONTAINER_IDS...
+```
+
+## lazycloud client
+
+```bash
+lazycloud client get APP [--output <dir>]
+lazycloud client remove APP [--output <dir>]
+```
+
+`client get` writes a typed Python client for a deployed app's functions,
+endpoints, and ASGI apps into `lazycloud_clients/<app>/`, so another project
+can call them with the app's argument and return types without importing its
+source. `client remove` deletes it.
 
 <WorkspaceFlag />

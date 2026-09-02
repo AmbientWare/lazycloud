@@ -1,16 +1,15 @@
 ---
 title: "Queues, maps, and signals"
-description: "Lightweight distributed primitives for coordinating work across containers."
+description: "Shared state for coordinating work across containers."
 ---
 
-These primitives coordinate state between workloads, local processes, and
-anything else holding a token authorized for the workspace. They are
-name-addressed: two objects constructed with the same name share the same
-underlying state.
+These objects share state between workloads and your local process. They are
+addressed by name: two objects with the same name in the same workspace share
+the same data. Inspect them under Storage in the dashboard.
 
 ## Queue
 
-A distributed FIFO queue of JSON-serializable values:
+A FIFO queue of JSON-serializable values:
 
 ```python
 from lazycloud import Queue
@@ -18,41 +17,43 @@ from lazycloud import Queue
 q = Queue("work-items")
 
 q.put({"path": "a.wav"})
-q.empty()      # False
-q.peek()       # read the head without removing it
+len(q)          # 1
+q.empty()       # False
+q.peek()        # read the head without removing it
 item = q.pop()
-q.delete()     # remove the queue and its contents
+q.delete()      # remove the queue and its contents
 ```
 
-A common pattern pairs a `Queue` with a
-[`QueueDepthAutoscaler`](/concepts/functions#sizing-timeouts-and-retries) so
-consumers scale with backlog.
+Pair a queue with a function whose `autoscaler` is a
+[`QueueDepthAutoscaler`](/concepts/functions#warm-containers-and-concurrency)
+to scale consumers with backlog.
 
 ## Map
 
-A distributed key/value map with the standard `MutableMapping` interface:
+A key/value map with the `MutableMapping` interface:
 
 ```python
 from lazycloud import Map
 
 state = Map("pipeline-state")
 
-state["cursor"] = 42          # dict-style access
+state["cursor"] = 42
 state.get("cursor")
 state.set("cursor", 43, ttl=3600)   # per-key TTL in seconds
 "cursor" in state
 list(state.keys())
+len(state)
 del state["cursor"]
-state.delete()                # remove the whole map
+state.delete()                      # remove the whole map
 ```
 
-Keys default to a seven-day TTL when set with `set(...)`; use `ttl` to
-override it.
+Keys expire after seven days unless `set(..., ttl=...)` says otherwise. Seven
+days is also the maximum.
 
 ## Signal (experimental)
 
-A named flag one container sets and another reacts to — useful for cache
-invalidation, reload triggers, and cross-workload notifications.
+A named flag one container sets and another reacts to. Use it for cache
+invalidation, reload triggers, and similar notifications.
 
 ```python
 from lazycloud.abstractions.experimental import Signal
@@ -60,12 +61,12 @@ from lazycloud.abstractions.experimental import Signal
 reload_flag = Signal("reload-models")
 
 # Producer
-reload_flag.set(ttl=600)
+reload_flag.set(ttl=600)    # 600 seconds is the default
 
-# Consumer: poll once...
+# Consumer: check once
 response = reload_flag.monitor_once()
 
-# ...or run a background listener thread
+# Or poll in a background thread
 signal = Signal("reload-models", handler=lambda: print("reloading"))
 signal.start_monitoring(poll_interval_seconds=1.0)
 signal.stop_monitoring()
@@ -74,6 +75,5 @@ reload_flag.clear()
 ```
 
 <Note>
-  `Signal` lives under the experimental namespace; its interface may change
-  between releases.
+  `Signal` is experimental. Its interface may change between releases.
 </Note>

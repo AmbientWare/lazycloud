@@ -44,11 +44,15 @@ wireguard:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 256Mi }
 
-# The server's own ceiling, divided below. Every process holds its own pool, so
-# the sum of what they may open is the number that has to fit, and nothing
-# reports the overrun except requests failing to connect once it is exceeded.
+# The server's ceiling, divided below. Every process holds its own pool, so the
+# sum of what they may open is the number that has to fit, and nothing reports
+# the overrun except requests failing to connect once it is exceeded. Declared
+# here and read by `deploy/platform-eks/database.tf`, which sets the branch's
+# `max_connections` to it. Two control-plane and two scheduler replicas need 31
+# with the reserve; 40 leaves a third control-plane replica fitting without a
+# database change.
 database:
-  maxConnections: 25
+  maxConnections: 40
   # Kept back for an operator's psql and the database's own sessions.
   reserved: 3
 
@@ -93,7 +97,7 @@ controlPlane:
     maxOverflow: 1
 
 scheduler:
-  replicas: 1
+  replicas: 2
   # The largest consumer in the deployment by a wide margin: 678m sustained,
   # 899m at its peak, 497Mi resident. Whatever this process does not request it
   # takes anyway, out of whatever on the node has no request of its own, so an

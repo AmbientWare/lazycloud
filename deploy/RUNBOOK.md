@@ -103,6 +103,23 @@ Neither flag is verified against AWS during a release. `verify` can check that t
 AMIs exist, but only when run with `--aws-cli-verify`, which neither this command
 nor the workflow passes; the recorded ids are validated by pattern alone.
 
+### Shipping from Actions
+
+The Ship workflow is the release. Run it from `main` and choose `patch`,
+`minor`, or `major`; it reads the latest `v*` tag, pushes the next one, publishes
+the release under that version, and deploys onto it. The tag is the only record
+of the version. The workspace keeps `0.1.0` as a placeholder and the release
+stamps the real number at build time, so nothing in the tree is bumped.
+
+The same run publishes `lazycloud-client` and `lazycloud-shared` to PyPI at
+that version, so a customer's installed version names the release it came from.
+Both PyPI projects accept the workflow through trusted publishing, configured on
+each project as repository `AmbientWare/lazycloud`, workflow `ship.yml`,
+environment `release`. No token is stored anywhere. The projects themselves were
+created once by hand, because PyPI allows one pending publisher per workflow and
+the two packages share one; ordinary publishers on existing projects have no
+such limit.
+
 `--arch` defaults to `amd64`, which is what AWS node classes consume. Building
 `arm64` needs binfmt registered first (`docker run --privileged tonistiigi/binfmt
 --install arm64`), or the cross-architecture stage fails with `exec format
@@ -408,10 +425,7 @@ repository is created with immutable tags.
 | `container-worker` | the connected-AWS pool the scheduler launches |
 | `agent`, `agent-join-token` | a real joined machine |
 | `platform-unit`, `worker-token` | not needed; those feed the Compose fleet |
-
-Redis stays on the host. It is also the reason there is one host: two would need
-it moved to ElastiCache first, because it holds the leases the scheduler
-serialises capacity work on.
+| `redis` | ElastiCache, through `LAZYCLOUD_REDIS_URL`; a primary and a standby with automatic failover |
 
 ### The database connection string
 
