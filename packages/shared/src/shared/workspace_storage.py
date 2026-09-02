@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
 from typing import Protocol
 
 from pydantic import Field, field_validator, model_validator
@@ -10,7 +10,7 @@ from shared.contracts import ContractModel
 from shared.identity import WorkspaceStorageConfig
 
 
-class WorkspaceStorageIssuerKind(StrEnum):
+class WorkspaceStorageIssuerKind(str, Enum):
     """Which store issues this deployment's workspace credentials.
 
     Named rather than inferred from whatever object-store settings happen to be

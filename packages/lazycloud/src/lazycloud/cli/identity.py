@@ -172,14 +172,23 @@ def _device_request(
         raise DeviceLoginError(msg) from exc
 
 
-def announce_device_login(started: DeviceCodeCreateResponse) -> None:
+def announce_device_login(
+    started: DeviceCodeCreateResponse,
+    *,
+    profile: str,
+    endpoint: str,
+) -> None:
+    # The link is minted by whichever control plane the profile points at, so
+    # the card says which one that is: a stale local profile is otherwise only
+    # visible in the link's host.
     error_console.print(
         notice_card(
             "Sign in to lazycloud",
-            f"Open {started.verification_uri_complete}",
+            f"Profile {profile} at {endpoint}\n\nOpen {started.verification_uri_complete}",
             hint=(
                 f"Confirm code {started.user_code}. "
-                f"It expires in {started.expires_in_seconds // 60} minutes."
+                f"It expires in {started.expires_in_seconds // 60} minutes. "
+                "Wrong control plane? Pass --endpoint or activate another profile."
             ),
         )
     )
@@ -215,7 +224,11 @@ def login(
             result = device_login(
                 selected_endpoint_url,
                 client_name=device_login_client_name(),
-                announce=announce_device_login,
+                announce=lambda started: announce_device_login(
+                    started,
+                    profile=profile_name,
+                    endpoint=selected_endpoint_url,
+                ),
             )
         except DeviceLoginError as exc:
             raise ClientError(
@@ -253,9 +266,12 @@ def login(
         view=notice_card(
             "Signed in" if activate else "Profile saved",
             (
-                f"Profile {saved.name} is active."
+                f"Profile {saved.name} is active at {selected_endpoint_url}."
                 if activate
-                else f"Saved profile {saved.name} without making it active."
+                else (
+                    f"Saved profile {saved.name} for {selected_endpoint_url} "
+                    "without making it active."
+                )
             ),
             hint=("" if activate else f"Run `lazycloud profile activate {saved.name}` to use it."),
             tone="success",
@@ -270,6 +286,7 @@ def profile_list(ctx: typer.Context) -> None:
     rows = [
         [
             item.name,
+            item.resolved_endpoint(),
             "yes" if item.name == active else "",
         ]
         for item in profiles
@@ -283,7 +300,7 @@ def profile_list(ctx: typer.Context) -> None:
     console.print(
         table(
             "Profiles",
-            ["name", "active"],
+            ["name", "endpoint", "active"],
             rows,
             expand=False,
         )
