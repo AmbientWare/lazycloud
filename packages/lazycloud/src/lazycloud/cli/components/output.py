@@ -60,10 +60,14 @@ class CliConsole(Console):
     @property
     def file(self) -> IO[str]:
         if self._file is not None:
-            return self._file
-        if self.stderr or json_output_active():
-            return sys.stderr
-        return sys.stdout
+            file = self._file
+        elif self.stderr or json_output_active():
+            file = sys.stderr
+        else:
+            file = sys.stdout
+        # A live display swaps sys.stdout for a proxy that prints through this
+        # console; writing to the proxy from here would recurse without end.
+        return getattr(file, "rich_proxied_file", file)
 
     @file.setter
     def file(self, new_file: IO[str]) -> None:

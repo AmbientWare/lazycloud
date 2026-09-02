@@ -3,6 +3,7 @@ from __future__ import annotations
 import email.message
 import io
 import json
+import sys
 import urllib.error
 from collections.abc import Iterator
 
@@ -177,3 +178,18 @@ def test_normalize_exception_preserves_safe_actionable_details(case: str) -> Non
         wrapped = RuntimeError()
         wrapped.__cause__ = RuntimeError("specific downstream failure")
         assert normalize_exception(wrapped).message == "specific downstream failure"
+
+
+def test_cli_console_prints_through_a_live_stdout_proxy(capsys: pytest.CaptureFixture[str]) -> None:
+    from lazycloud.cli.components.output import CliConsole
+    from rich.file_proxy import FileProxy
+
+    console = CliConsole(force_terminal=False)
+    original = sys.stdout
+    sys.stdout = FileProxy(console, original)
+    try:
+        console.print("through the proxy")
+    finally:
+        sys.stdout = original
+
+    assert "through the proxy" in capsys.readouterr().out
