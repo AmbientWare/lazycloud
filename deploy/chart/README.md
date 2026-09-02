@@ -12,8 +12,9 @@ Application reads that file beside `values.yaml`. Nothing in this chart decides
 a value the infrastructure already knows.
 
 One chart, one namespace per deployment. The chart never names a namespace;
-Argo's Application does, and the only cluster-scoped object it once declared,
-the storage class, now belongs to `deploy/platform-core`.
+Argo's Application does. It declares nothing cluster-scoped: the storage class
+its claims name belongs to `deploy/platform-core`, because two deployments
+syncing a chart that declared it would each claim it.
 
 `billing.ratesEffectiveAt` is the exception, and it is authored here on purpose.
 No infrastructure output knows the instant a rate card starts applying, and
