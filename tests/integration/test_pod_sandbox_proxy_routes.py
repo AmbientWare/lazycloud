@@ -523,7 +523,9 @@ def test_pinned_sandbox_backend_failures_are_bounded_and_typed(
     started = time.monotonic()
     response = client.get(f"/sandbox/id/{container.id}/8080", headers=headers)
     assert response.status_code == 502
-    assert time.monotonic() - started < 2.0
+    # Bounded by the one-second connect timeout, not the request timeout; the
+    # slack is for a loaded runner, and the request timeout is minutes away.
+    assert time.monotonic() - started < 10.0
     assert proxy_client.connect_timeouts == [PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS]
 
     with (

@@ -344,7 +344,11 @@ def predict():
                 break
             await asyncio.sleep(0.01)
         assert len(scheduler.requests) == 1
-        _record_dispatch_container(isolated_services, stub, _WARM_CONTAINER_ID)
+        # The dispatch in flight commits its transaction from this loop, so a
+        # sync write here must not block the loop while it waits on that lock.
+        await asyncio.to_thread(
+            _record_dispatch_container, isolated_services, stub, _WARM_CONTAINER_ID
+        )
         containers.states.append(
             SchedulerContainerState(
                 container_id=_WARM_CONTAINER_ID,
