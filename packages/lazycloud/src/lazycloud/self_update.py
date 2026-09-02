@@ -13,17 +13,17 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import StrEnum
 from importlib import metadata
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
+from shared.enums import StringEnum
 
 DISTRIBUTION = "lazycloud-client"
 PYPI_RELEASE_URL = f"https://pypi.org/pypi/{DISTRIBUTION}/json"
 
 
-class InstallerKind(StrEnum):
+class InstallerKind(StringEnum):
     UV_TOOL = "uv tool"
     PIPX = "pipx"
     UV = "uv pip"
