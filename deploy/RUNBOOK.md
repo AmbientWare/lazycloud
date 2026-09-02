@@ -113,6 +113,16 @@ stamps the real number at build time, so nothing in the tree is bumped.
 
 The same run publishes `lazycloud-client` and `lazycloud-shared` to PyPI at
 that version, so a customer's installed version names the release it came from.
+
+A release rebuilds only what the commit changed. `deploy/aws-release-assets/plan.py`
+diffs the commit against the previous release that published a manifest and
+decides, per artifact, from the paths it is built from: the worker image, the
+agent binary, and, because they embed both, the node images. What is not
+rebuilt is referenced from the previous manifest by digest, which is how the
+control plane checks it anyway. The run's summary lists each decision and its
+reason, and the manifest records which release each reused artifact came from
+in `reused_from`. A control-plane-only change therefore ships in about eight
+minutes; a worker change still bakes both node images.
 Both PyPI projects accept the workflow through trusted publishing, configured on
 each project as repository `AmbientWare/lazycloud`, workflow `ship.yml`,
 environment `release`. No token is stored anywhere. The projects themselves were

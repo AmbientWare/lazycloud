@@ -120,6 +120,12 @@ def main() -> None:
         default="{}",
         help="JSON object mapping AWS region to the baked GPU node AMI ID",
     )
+    stage.add_argument("--source-revision", default="")
+    stage.add_argument(
+        "--reused-from",
+        default="{}",
+        help="JSON object naming the release each reused artifact came from",
+    )
     stage.add_argument("--output", type=Path, required=True)
 
     validate_local = subparsers.add_parser("validate-local")
@@ -144,6 +150,8 @@ def main() -> None:
         manifest = stage_release(
             version=args.version,
             agent_version_dir=args.agent_version_dir,
+            source_revision=args.source_revision,
+            reused_from=json.loads(args.reused_from),
             worker_image=args.worker_image,
             bucket=args.bucket,
             region=args.region,
@@ -233,6 +241,8 @@ def stage_release(
     output: Path,
     cpu_ami_ids: dict[str, str] | None = None,
     gpu_ami_ids: dict[str, str] | None = None,
+    source_revision: str = "",
+    reused_from: dict[str, str] | None = None,
 ) -> AwsReleaseManifest:
     if not VERSION_PATTERN.fullmatch(version):
         raise ValueError("release version contains invalid characters")
@@ -312,6 +322,8 @@ def stage_release(
         container_worker_image=worker_image,
         capacity_cpu_ami_ids=normalized_cpu_ami_ids,
         capacity_gpu_ami_ids=normalized_gpu_ami_ids,
+        source_revision=source_revision,
+        reused_from=dict(reused_from or {}),
         objects=[
             ReleaseObject(
                 local_path=template_local.as_posix(),
