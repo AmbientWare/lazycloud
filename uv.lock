@@ -100,6 +100,15 @@ requires-dist = [
 ]
 
 [[package]]
+name = "aiosqlite"
+version = "0.22.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/8a/64761f4005f17809769d23e518d915db74e6310474e733e3593cfc854ef1/aiosqlite-0.22.1.tar.gz", hash = "sha256:043e0bd78d32888c0a9ca90fc788b38796843360c855a7262a532813133a0650", size = 14821, upload-time = "2025-12-23T19:25:43.997Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl", hash = "sha256:21c002eb13823fad740196c5a2e9d8e62f6243bd9e7e4a1f87fb5e44ecb4fceb", size = 17405, upload-time = "2025-12-23T19:25:42.139Z" },
+]
+
+[[package]]
 name = "alembic"
 version = "1.19.1"
 source = { registry = "https://pypi.org/simple" }
@@ -150,6 +159,7 @@ version = "0.1.0"
 source = { editable = "apps/api" }
 dependencies = [
     { name = "agent" },
+    { name = "anyio" },
     { name = "billing" },
     { name = "cache" },
     { name = "cloudpickle" },
@@ -185,6 +195,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agent", editable = "packages/agent" },
+    { name = "anyio", specifier = ">=4,<5" },
     { name = "billing", editable = "packages/billing" },
     { name = "cache", editable = "packages/cache" },
     { name = "cloudpickle", specifier = ">=3,<4" },
@@ -1343,6 +1354,7 @@ source = { editable = "packages/networking" }
 dependencies = [
     { name = "compute" },
     { name = "coordination" },
+    { name = "h11" },
     { name = "httpx" },
     { name = "lazycloud-shared" },
     { name = "pydantic" },
@@ -1353,6 +1365,7 @@ dependencies = [
 requires-dist = [
     { name = "compute", editable = "packages/compute" },
     { name = "coordination", editable = "packages/coordination" },
+    { name = "h11", specifier = ">=0.16,<1" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "pydantic", specifier = ">=2.8,<3" },
@@ -2493,6 +2506,7 @@ source = { virtual = "." }
 dev = [
     { name = "agent" },
     { name = "agent-app" },
+    { name = "aiosqlite" },
     { name = "api" },
     { name = "basedpyright" },
     { name = "billing" },
@@ -2579,6 +2593,7 @@ workspace = [
 dev = [
     { name = "agent", editable = "packages/agent" },
     { name = "agent-app", editable = "apps/agent" },
+    { name = "aiosqlite", specifier = ">=0.21,<1" },
     { name = "api", editable = "apps/api" },
     { name = "basedpyright", specifier = ">=1.39.9" },
     { name = "billing", editable = "packages/billing" },

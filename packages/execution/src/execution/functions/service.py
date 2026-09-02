@@ -1,19 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from control.service import ControlPlaneService, StubKind, StubRecord
 from database.repositories.execution import (
+    LogPage,
     LogPageCursor,
     TaskDependencyRepository,
     TaskRepository,
 )
 from database.repositories.orchestration import ContainerRepository
+from database.types import DatabaseSession
 from pydantic import JsonValue
 from shared.app_identity import FUNCTION_IMAGE
 from shared.autoscaling import function_container_ceiling
@@ -58,6 +61,7 @@ from shared.http.workspace_changes import WorkspaceChangeType
 from shared.tasks import Task, TaskDependency, TaskStatus, is_terminal_task_status
 from shared.timestamps import utc_now
 
+from database import AsyncDatabaseClient
 from execution.checkpoints import latest_available_checkpoint
 from execution.config import env_sequence_mapping
 from execution.containers.planning import ContainerSchedulingOptions
@@ -87,6 +91,7 @@ LOGGER = logging.getLogger(__name__)
 class FunctionControlService:
     services: ExecutionServices
     gateway_http_url: Callable[[], str] = no_gateway_origin
+    async_database: AsyncDatabaseClient | None = None
     control_plane: ControlPlaneService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -980,16 +985,16 @@ class FunctionControlService:
             ],
         )
 
-    def function_invoke_stream(
+    async def function_invoke_stream(
         self,
-        request: FunctionInvokeBody,
+        initial: FunctionInvokeResponse,
         *,
+        headless: bool = False,
         poll_interval_seconds: float = 0.25,
         keepalive_interval_seconds: float = 5.0,
-    ) -> Iterable[FunctionInvokeResponse]:
-        initial = self.function_invoke(request)
+    ) -> AsyncIterator[FunctionInvokeResponse]:
         yield initial
-        if initial.done or initial.exit_code != 0 or not initial.task_id or request.headless:
+        if initial.done or initial.exit_code != 0 or not initial.task_id or headless:
             return
 
         log_cursor: LogPageCursor | None = None
@@ -997,21 +1002,14 @@ class FunctionControlService:
         last_status = ""
         last_keepalive = time.monotonic()
         while True:
-            log_page = self.services.tasks.log_page(
-                initial.task_id,
-                limit=1_000,
-                cursor=log_cursor,
-            )
-            for record in log_page.data:
-                entry = record.entry
-                log_cursor = record.cursor
-                last_keepalive = time.monotonic()
-                yield FunctionInvokeResponse.from_result(
-                    task_id=initial.task_id,
-                    output=_stream_log_output(entry.message),
-                )
             try:
-                task = self.services.tasks.get(initial.task_id)
+                log_page, task = await self._async_database().run_transaction(
+                    lambda session, cursor=log_cursor: self._function_stream_page_in_session(
+                        session,
+                        initial.task_id,
+                        cursor=cursor,
+                    )
+                )
             except NotFoundError as exc:
                 yield FunctionInvokeResponse.from_result(
                     task_id=initial.task_id,
@@ -1020,6 +1018,14 @@ class FunctionControlService:
                     exit_code=1,
                 )
                 return
+            for record in log_page.data:
+                entry = record.entry
+                log_cursor = record.cursor
+                last_keepalive = time.monotonic()
+                yield FunctionInvokeResponse.from_result(
+                    task_id=initial.task_id,
+                    output=_stream_log_output(entry.message),
+                )
             if task.status.value != last_status:
                 last_status = task.status.value
                 last_keepalive = time.monotonic()
@@ -1047,7 +1053,23 @@ class FunctionControlService:
             if time.monotonic() - last_keepalive >= max(keepalive_interval_seconds, sleep_seconds):
                 last_keepalive = time.monotonic()
                 yield FunctionInvokeResponse.from_result(task_id=initial.task_id)
-            time.sleep(sleep_seconds)
+            await asyncio.sleep(sleep_seconds)
+
+    def _async_database(self) -> AsyncDatabaseClient:
+        if self.async_database is None:
+            raise RuntimeError("function streaming asynchronous database is not configured")
+        return self.async_database
+
+    def _function_stream_page_in_session(
+        self,
+        session: DatabaseSession,
+        task_id: str,
+        *,
+        cursor: LogPageCursor | None,
+    ) -> tuple[LogPage, Task]:
+        tasks = self.services.tasks
+        task = tasks.get_in_session(session, task_id)
+        return tasks.log_page_in_session(session, task, limit=1_000, cursor=cursor), task
 
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse:
         """Give a container asking for work one invocation to run, if there is one.

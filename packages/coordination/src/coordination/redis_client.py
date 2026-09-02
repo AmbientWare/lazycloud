@@ -3,16 +3,36 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fnmatch import fnmatch
-from typing import Protocol
+from typing import Literal, Protocol
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from pydantic import TypeAdapter, model_validator
+from pydantic import Field, TypeAdapter, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from redis import Redis
-from redis.client import Pipeline, PubSub
-from redis.exceptions import RedisError
+from redis.asyncio import Redis as AsyncRedis
+from redis.asyncio.connection import (
+    AbstractConnection as AsyncAbstractConnection,
+)
+from redis.asyncio.connection import (
+    Connection as AsyncConnection,
+)
+from redis.asyncio.connection import (
+    ConnectionPool as AsyncConnectionPool,
+)
+from redis.asyncio.connection import (
+    SSLConnection as AsyncSSLConnection,
+)
+from redis.asyncio.connection import (
+    UnixDomainSocketConnection as AsyncUnixDomainSocketConnection,
+)
+from redis.client import Pipeline
+from redis.connection import Connection as SyncConnection
+from redis.connection import ConnectionInterface as SyncConnectionInterface
+from redis.connection import ConnectionPool as SyncConnectionPool
+from redis.connection import SSLConnection as SyncSSLConnection
+from redis.exceptions import MaxConnectionsError, RedisError
 from redis.typing import EncodableT, FieldT, KeyT, StreamIdT
 from shared.app_identity import ENV_PREFIX, REDIS_KEY_PREFIX
 from shared.deployment_settings import MissingDeploymentSettingError
@@ -41,39 +61,19 @@ class RedisPubSubTransport(Protocol):
         self,
         ignore_subscribe_messages: bool = False,
         timeout: float = 0.0,
-    ) -> RedisPubSubMessage | None: ...
-
-    def close(self) -> None: ...
-
-
-class _RedisPyPubSubProtocol(Protocol):
-    def subscribe(self, *channels: str) -> None: ...
-
-    def get_message(
-        self,
-        ignore_subscribe_messages: bool = False,
-        timeout: float = 0.0,
     ) -> Mapping[str, RedisWireResponse] | None: ...
 
     def close(self) -> None: ...
 
 
-class _RedisPipelineListPopProtocol(Protocol):
-    def lpop(self, name: str) -> RedisCommandResponse: ...
+class RedisCommandTransport[CommandResponseT](Protocol):
+    def ping(self, **kwargs: RedisWireScalar) -> CommandResponseT: ...
 
+    def get(self, name: str) -> CommandResponseT: ...
 
-class RedisTransport(Protocol):
-    """Frozen synchronous Redis command surface used by production owners."""
+    def mget(self, keys: Iterable[str]) -> CommandResponseT: ...
 
-    def ping(self, **kwargs: RedisWireScalar) -> RedisCommandResponse: ...
-
-    def close(self) -> RedisCommandResponse: ...
-
-    def get(self, name: str) -> RedisCommandResponse: ...
-
-    def mget(self, keys: Iterable[str]) -> RedisCommandResponse: ...
-
-    def getdel(self, name: str) -> RedisCommandResponse: ...
+    def getdel(self, name: str) -> CommandResponseT: ...
 
     def set(
         self,
@@ -83,19 +83,19 @@ class RedisTransport(Protocol):
         ex: int | None = None,
         px: int | None = None,
         nx: bool = False,
-    ) -> RedisCommandResponse: ...
+    ) -> CommandResponseT: ...
 
-    def delete(self, *names: str) -> RedisCommandResponse: ...
+    def delete(self, *names: str) -> CommandResponseT: ...
 
-    def exists(self, *names: str) -> RedisCommandResponse: ...
+    def exists(self, *names: str) -> CommandResponseT: ...
 
-    def expire(self, name: str, time: int) -> RedisCommandResponse: ...
+    def expire(self, name: str, time: int) -> CommandResponseT: ...
 
-    def ttl(self, name: str) -> RedisCommandResponse: ...
+    def ttl(self, name: str) -> CommandResponseT: ...
 
-    def incr(self, name: str) -> RedisCommandResponse: ...
+    def incr(self, name: str) -> CommandResponseT: ...
 
-    def strlen(self, name: str) -> RedisCommandResponse: ...
+    def strlen(self, name: str) -> CommandResponseT: ...
 
     def hset(
         self,
@@ -103,71 +103,71 @@ class RedisTransport(Protocol):
         key: str | None = None,
         value: str | None = None,
         mapping: Mapping[FieldT, EncodableT] | None = None,
-    ) -> RedisCommandResponse: ...
+    ) -> CommandResponseT: ...
 
-    def hget(self, name: str, key: str) -> RedisCommandResponse: ...
+    def hget(self, name: str, key: str) -> CommandResponseT: ...
 
-    def hgetall(self, name: str) -> RedisCommandResponse: ...
+    def hgetall(self, name: str) -> CommandResponseT: ...
 
-    def hdel(self, name: str, *keys: str) -> RedisCommandResponse: ...
+    def hdel(self, name: str, *keys: str) -> CommandResponseT: ...
 
-    def hlen(self, name: str) -> RedisCommandResponse: ...
+    def hlen(self, name: str) -> CommandResponseT: ...
 
-    def sadd(self, name: str, *values: RedisWireScalar) -> RedisCommandResponse: ...
+    def sadd(self, name: str, *values: RedisWireScalar) -> CommandResponseT: ...
 
-    def srem(self, name: str, *values: RedisWireScalar) -> RedisCommandResponse: ...
+    def srem(self, name: str, *values: RedisWireScalar) -> CommandResponseT: ...
 
-    def smembers(self, name: str) -> RedisCommandResponse: ...
+    def smembers(self, name: str) -> CommandResponseT: ...
 
-    def scard(self, name: str) -> RedisCommandResponse: ...
+    def scard(self, name: str) -> CommandResponseT: ...
 
-    def sismember(self, name: str, value: str) -> RedisCommandResponse: ...
+    def sismember(self, name: str, value: str) -> CommandResponseT: ...
 
-    def rpush(self, name: str, *values: RedisWireScalar) -> RedisCommandResponse: ...
+    def rpush(self, name: str, *values: RedisWireScalar) -> CommandResponseT: ...
 
-    def lpop(self, name: str) -> RedisCommandResponse: ...
+    def lpop(self, name: str) -> CommandResponseT: ...
 
     def blpop(
         self,
         keys: str | list[str],
         *,
         timeout: float,
-    ) -> RedisCommandResponse: ...
+    ) -> CommandResponseT: ...
 
     def blmove(
         self,
         first_list: str,
         second_list: str,
         timeout: int,
-    ) -> RedisCommandResponse: ...
+    ) -> CommandResponseT: ...
 
-    def lrange(self, name: str, start: int, end: int) -> RedisCommandResponse: ...
+    def lrange(self, name: str, start: int, end: int) -> CommandResponseT: ...
 
-    def lindex(self, name: str, index: int) -> RedisCommandResponse: ...
+    def lindex(self, name: str, index: int) -> CommandResponseT: ...
 
-    def llen(self, name: str) -> RedisCommandResponse: ...
+    def llen(self, name: str) -> CommandResponseT: ...
 
-    def zadd(self, name: str, mapping: Mapping[str, float]) -> RedisCommandResponse: ...
+    def zadd(self, name: str, mapping: Mapping[str, float]) -> CommandResponseT: ...
 
-    def zrange(self, name: str, start: int, end: int) -> RedisCommandResponse: ...
+    def zrange(self, name: str, start: int, end: int) -> CommandResponseT: ...
 
     def zrangebyscore(
         self,
         name: str,
         min: float | str,
         max: float | str,
-    ) -> RedisCommandResponse: ...
+    ) -> CommandResponseT: ...
 
-    def zcard(self, name: str) -> RedisCommandResponse: ...
+    def zcard(self, name: str) -> CommandResponseT: ...
 
-    def publish(self, channel: str, message: RedisWireScalar) -> RedisCommandResponse: ...
+    def publish(self, channel: str, message: RedisWireScalar) -> CommandResponseT: ...
 
     def eval(
         self,
         script: str,
         numkeys: int,
         *keys_and_args: RedisWireScalar,
-    ) -> RedisCommandResponse: ...
+    ) -> CommandResponseT: ...
 
     def xadd(
         self,
@@ -177,7 +177,7 @@ class RedisTransport(Protocol):
         id: str = "*",
         maxlen: int | None = None,
         approximate: bool = False,
-    ) -> RedisCommandResponse: ...
+    ) -> CommandResponseT: ...
 
     def xrevrange(
         self,
@@ -185,20 +185,32 @@ class RedisTransport(Protocol):
         max: str = "+",
         min: str = "-",
         count: int | None = None,
-    ) -> RedisCommandResponse: ...
+    ) -> CommandResponseT: ...
 
     def xread(
         self,
         streams: dict[KeyT, StreamIdT],
         count: int | None = None,
         block: int | None = None,
-    ) -> RedisCommandResponse: ...
+    ) -> CommandResponseT: ...
+
+    def scan(
+        self,
+        cursor: int,
+        *,
+        match: str,
+        count: int,
+    ) -> CommandResponseT: ...
+
+
+class RedisTransport(RedisCommandTransport[RedisCommandResponse], Protocol):
+    def close(self) -> RedisCommandResponse: ...
 
     def pubsub(
         self,
         *,
         ignore_subscribe_messages: bool = False,
-    ) -> PubSub: ...
+    ) -> RedisPubSubTransport: ...
 
     def pipeline(
         self,
@@ -206,12 +218,34 @@ class RedisTransport(Protocol):
         shard_hint: str | None = None,
     ) -> Pipeline: ...
 
-    def scan_iter(
+
+class AsyncRedisPubSubTransport(Protocol):
+    async def subscribe(self, *channels: str) -> None: ...
+
+    async def get_message(
+        self,
+        ignore_subscribe_messages: bool = False,
+        timeout: float = 0.0,
+    ) -> Mapping[str, RedisWireResponse] | None: ...
+
+    async def aclose(self) -> None: ...
+
+
+class AsyncRedisTransport(
+    RedisCommandTransport[Awaitable[RedisWireResponse]],
+    Protocol,
+):
+    # redis-py types every command as `Awaitable | Any`, so a sync client would
+    # satisfy the awaitable arm structurally; this attribute is what tells them apart.
+    _is_async_client: Literal[True]
+
+    async def aclose(self) -> None: ...
+
+    def pubsub(
         self,
         *,
-        match: str,
-        count: int,
-    ) -> Iterable[RedisWireScalar]: ...
+        ignore_subscribe_messages: bool = False,
+    ) -> AsyncRedisPubSubTransport: ...
 
 
 REDIS_UNAVAILABLE_ERRORS: tuple[type[Exception], ...] = (RedisError, OSError)
@@ -231,6 +265,7 @@ class RedisSettings(BaseSettings):
     decode_responses: bool = True
     socket_timeout_seconds: float = 5.0
     health_check_interval_seconds: int = 30
+    max_connections: int = Field(default=2_048, gt=0)
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_REDIS_",
@@ -261,6 +296,18 @@ class RedisConnectionInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class RedisPoolStatus:
+    idle: int
+    in_use: int
+    capacity: int
+    exhaustions_total: int = 0
+
+    @property
+    def exhausted(self) -> bool:
+        return self.idle == 0 and self.in_use >= self.capacity
+
+
+@dataclass(frozen=True, slots=True)
 class RedisPubSubMessage:
     type: str | bytes
     pattern: str | bytes | None
@@ -272,30 +319,6 @@ _PUBSUB_MESSAGE_ADAPTER: TypeAdapter[RedisPubSubMessage] = TypeAdapter(RedisPubS
 _PIPELINE_RESULTS_ADAPTER: TypeAdapter[list[RedisWireResponse]] = TypeAdapter(
     list[RedisWireResponse]
 )
-
-
-@dataclass(slots=True)
-class _RedisPyPubSubTransport:
-    _pubsub: _RedisPyPubSubProtocol
-
-    def subscribe(self, *channels: str) -> None:
-        self._pubsub.subscribe(*channels)
-
-    def get_message(
-        self,
-        ignore_subscribe_messages: bool = False,
-        timeout: float = 0.0,
-    ) -> RedisPubSubMessage | None:
-        message = self._pubsub.get_message(
-            ignore_subscribe_messages=ignore_subscribe_messages,
-            timeout=timeout,
-        )
-        if message is None:
-            return None
-        return _PUBSUB_MESSAGE_ADAPTER.validate_python(message)
-
-    def close(self) -> None:
-        self._pubsub.close()
 
 
 @dataclass(slots=True)
@@ -311,13 +334,41 @@ class RedisSubscription:
         ignore_subscribe_messages: bool = False,
         timeout: float = 0.0,
     ) -> RedisPubSubMessage | None:
-        return self._transport.get_message(
+        message = self._transport.get_message(
             ignore_subscribe_messages=ignore_subscribe_messages,
             timeout=timeout,
         )
+        if message is None:
+            return None
+        return _PUBSUB_MESSAGE_ADAPTER.validate_python(message)
 
     def close(self) -> None:
         self._transport.close()
+
+
+@dataclass(slots=True)
+class AsyncRedisSubscription:
+    _transport: AsyncRedisPubSubTransport
+
+    async def subscribe(self, *channels: str) -> None:
+        await self._transport.subscribe(*channels)
+
+    async def get_message(
+        self,
+        *,
+        ignore_subscribe_messages: bool = False,
+        timeout: float = 0.0,
+    ) -> RedisPubSubMessage | None:
+        message = await self._transport.get_message(
+            ignore_subscribe_messages=ignore_subscribe_messages,
+            timeout=timeout,
+        )
+        if message is None:
+            return None
+        return _PUBSUB_MESSAGE_ADAPTER.validate_python(message)
+
+    async def close(self) -> None:
+        await self._transport.aclose()
 
 
 @dataclass(slots=True)
@@ -360,7 +411,7 @@ class RedisPipeline:
         self._pipeline.ttl(key)
 
     def list_pop(self, key: str) -> None:
-        _pipeline_list_pop(self._pipeline, key)
+        self._pipeline.lpop(key)
 
     def execute(self) -> list[RedisWireResponse]:
         return _PIPELINE_RESULTS_ADAPTER.validate_python(self._pipeline.execute())
@@ -371,6 +422,7 @@ class RedisClient:
     _transport: RedisTransport
     key_prefix: str = REDIS_KEY_PREFIX
     connection_info: RedisConnectionInfo | None = None
+    _connection_pool: _MeasuredSyncConnectionPool | None = None
 
     @classmethod
     def from_settings(
@@ -381,7 +433,7 @@ class RedisClient:
     ) -> RedisClient:
         config = settings or RedisSettings()
         client_name = sanitize_redis_client_name(config.client_name)
-        transport, connection_info = _redis_from_url(
+        transport, pool, connection_info = _redis_from_url(
             config.url,
             decode_responses=(
                 config.decode_responses if decode_responses is None else decode_responses
@@ -389,11 +441,13 @@ class RedisClient:
             socket_timeout=config.socket_timeout_seconds,
             health_check_interval=config.health_check_interval_seconds,
             client_name=client_name or None,
+            max_connections=config.max_connections,
         )
         return cls(
             transport,
             key_prefix=config.key_prefix,
             connection_info=connection_info,
+            _connection_pool=pool,
         )
 
     def with_key_prefix(self, key_prefix: str) -> RedisClient:
@@ -401,6 +455,7 @@ class RedisClient:
             self._transport,
             key_prefix=key_prefix,
             connection_info=self.connection_info,
+            _connection_pool=self._connection_pool,
         )
 
     @property
@@ -408,8 +463,7 @@ class RedisClient:
         return id(self._transport)
 
     def key(self, *parts: RedisKeyPart) -> str:
-        cleaned = [str(part).strip(":") for part in parts if str(part).strip(":")]
-        return ":".join([self.key_prefix, *cleaned])
+        return _prefixed_key(self.key_prefix, parts)
 
     def ping(self) -> bool:
         return _redis_bool(self._transport.ping(), "PING")
@@ -434,26 +488,14 @@ class RedisClient:
     def mget(self, keys: Sequence[str]) -> list[RedisWireScalar | None]:
         if not keys:
             return []
-        raw = _sync_response(self._transport.mget(list(keys)), "MGET")
-        if not isinstance(raw, (list, tuple)):
-            raise TypeError("Redis MGET response must be a sequence")
-        return [_optional_scalar(value, "MGET item") for value in raw]
+        return _optional_scalars(self._transport.mget(list(keys)), "MGET")
 
     def set_single_use(self, key: str, value: str, *, ttl_seconds: int) -> bool:
-        """Store a short-lived value only when its key does not already exist."""
-
         return self.set(key, value, ex=ttl_seconds, nx=True)
 
     def getdel(self, key: str) -> str | None:
-        """Atomically return and remove one short-lived coordination value."""
-
-        value = _optional_scalar(
-            self._transport.getdel(key),
-            "GETDEL",
-        )
-        if value is None:
-            return None
-        return redis_text(value)
+        value = _optional_scalar(self._transport.getdel(key), "GETDEL")
+        return None if value is None else redis_text(value)
 
     def delete(self, *keys: str) -> int:
         if not keys:
@@ -493,7 +535,7 @@ class RedisClient:
     def hash_set(
         self,
         key: str,
-        field: str | None = None,
+        field_name: str | None = None,
         value: str | None = None,
         *,
         mapping: Mapping[str, str] | None = None,
@@ -502,12 +544,7 @@ class RedisClient:
             {name: item for name, item in mapping.items()} if mapping is not None else None
         )
         return _redis_int(
-            self._transport.hset(
-                key,
-                field,
-                value,
-                mapping=encoded_mapping,
-            ),
+            self._transport.hset(key, field_name, value, mapping=encoded_mapping),
             "HSET",
         )
 
@@ -518,14 +555,7 @@ class RedisClient:
         )
 
     def hash_get_all(self, key: str) -> dict[RedisWireScalar, RedisWireScalar]:
-        raw = _sync_response(self._transport.hgetall(key), "HGETALL")
-        if not isinstance(raw, dict):
-            raise TypeError("Redis HGETALL response must be a mapping")
-        values: dict[RedisWireScalar, RedisWireScalar] = {}
-        for raw_key, raw_value in raw.items():
-            key_scalar = _scalar(raw_key, "HGETALL key")
-            values[key_scalar] = _scalar(raw_value, "HGETALL value")
-        return values
+        return _scalar_mapping(self._transport.hgetall(key), "HGETALL")
 
     def hash_delete(self, key: str, *fields: str) -> int:
         return _redis_int(
@@ -608,7 +638,7 @@ class RedisClient:
         window in which the value exists only in the caller's memory.
 
         Whole seconds, and never zero, because Redis reads a zero timeout as "wait
-        forever" — a caller with less than a second left polls instead of blocking.
+        forever". A caller with less than a second left polls instead of blocking.
         """
 
         if timeout_seconds < 1:
@@ -720,7 +750,9 @@ class RedisClient:
         maxlen: int | None = None,
         approximate: bool = False,
     ) -> RedisWireScalar:
-        encoded_fields: dict[FieldT, EncodableT] = {field: value for field, value in fields.items()}
+        encoded_fields: dict[FieldT, EncodableT] = {
+            field_name: value for field_name, value in fields.items()
+        }
         return _scalar(
             self._transport.xadd(
                 stream,
@@ -757,49 +789,24 @@ class RedisClient:
         stream_offsets: dict[KeyT, StreamIdT] = {
             stream: offset for stream, offset in streams.items()
         }
-        raw = _sync_response(
-            self._transport.xread(
-                stream_offsets,
-                count=count,
-                block=block,
-            ),
-            "XREAD",
-        )
-        if not isinstance(raw, (list, tuple)):
-            raise TypeError("Redis XREAD response must be a sequence")
-        reads: list[RedisStreamRead] = []
-        for item in raw:
-            if not isinstance(item, (list, tuple)) or len(item) != 2:
-                raise TypeError("Redis XREAD stream must contain a name and entries")
-            name = _scalar(item[0], "XREAD stream name")
-            reads.append((name, _stream_entries(item[1], "XREAD entries")))
-        return reads
+        return _stream_reads(self._transport.xread(stream_offsets, count=count, block=block))
 
     def pubsub(self, *, ignore_subscribe_messages: bool = False) -> RedisSubscription:
-        transport = _RedisPyPubSubTransport(
+        return RedisSubscription(
             self._transport.pubsub(ignore_subscribe_messages=ignore_subscribe_messages)
         )
-        return RedisSubscription(transport)
 
     def pipeline(self, *, transaction: bool) -> RedisPipeline:
         return RedisPipeline(self._transport.pipeline(transaction=transaction))
 
-    def keys(self, pattern: str) -> list[str]:
-        return self.scan(pattern)
-
     def scan(self, pattern: str, *, count: int = 10_000) -> list[str]:
-        seen: set[str] = set()
-        keys: list[str] = []
-
-        def add(raw_key: RedisWireScalar) -> None:
-            key = redis_text(raw_key)
-            if key not in seen and fnmatch(key, pattern):
-                seen.add(key)
-                keys.append(key)
-
-        for key in self._transport.scan_iter(match=pattern, count=count):
-            add(key)
-        return keys
+        keys: dict[str, None] = {}
+        cursor = 0
+        while True:
+            cursor, page = _scan_page(self._transport.scan(cursor, match=pattern, count=count))
+            _add_matching_keys(keys, page, pattern)
+            if cursor == 0:
+                return list(keys)
 
     def delete_matching(self, pattern: str) -> int:
         return self.delete(*self.scan(pattern))
@@ -807,13 +814,282 @@ class RedisClient:
     def close(self) -> None:
         _sync_response(self._transport.close(), "CLOSE")
 
+    def pool_status(self) -> RedisPoolStatus | None:
+        pool = self._connection_pool
+        return None if pool is None else pool.status_snapshot()
+
+
+@dataclass(slots=True)
+class AsyncRedisClient:
+    _transport: AsyncRedisTransport
+    key_prefix: str = REDIS_KEY_PREFIX
+    connection_info: RedisConnectionInfo | None = None
+    _connection_pool: _MeasuredAsyncConnectionPool | None = None
+
+    @classmethod
+    def from_settings(
+        cls,
+        settings: RedisSettings | None = None,
+        *,
+        decode_responses: bool | None = None,
+    ) -> AsyncRedisClient:
+        config = settings or RedisSettings()
+        client_name = sanitize_redis_client_name(config.client_name)
+        transport, pool, connection_info = _async_redis_from_url(
+            config.url,
+            decode_responses=(
+                config.decode_responses if decode_responses is None else decode_responses
+            ),
+            socket_timeout=config.socket_timeout_seconds,
+            health_check_interval=config.health_check_interval_seconds,
+            client_name=client_name or None,
+            max_connections=config.max_connections,
+        )
+        return cls(
+            transport,
+            key_prefix=config.key_prefix,
+            connection_info=connection_info,
+            _connection_pool=pool,
+        )
+
+    def key(self, *parts: RedisKeyPart) -> str:
+        return _prefixed_key(self.key_prefix, parts)
+
+    async def set(
+        self,
+        key: str,
+        value: RedisWireScalar,
+        *,
+        ex: int | None = None,
+        px: int | None = None,
+        nx: bool = False,
+    ) -> bool:
+        raw = await self._transport.set(key, value, ex=ex, px=px, nx=nx)
+        if raw is None:
+            return False
+        return _redis_bool(raw, "SET")
+
+    async def get(self, key: str) -> RedisWireScalar | None:
+        return _optional_scalar(await self._transport.get(key), "GET")
+
+    async def mget(self, keys: Sequence[str]) -> list[RedisWireScalar | None]:
+        if not keys:
+            return []
+        return _optional_scalars(await self._transport.mget(list(keys)), "MGET")
+
+    async def getdel(self, key: str) -> str | None:
+        value = _optional_scalar(await self._transport.getdel(key), "GETDEL")
+        return None if value is None else redis_text(value)
+
+    async def delete(self, *keys: str) -> int:
+        if not keys:
+            return 0
+        return _redis_int(await self._transport.delete(*keys), "DEL")
+
+    async def exists(self, key: str) -> bool:
+        return _redis_int(await self._transport.exists(key), "EXISTS") > 0
+
+    async def expire(self, key: str, ttl_seconds: int) -> bool:
+        return _redis_bool(await self._transport.expire(key, ttl_seconds), "EXPIRE")
+
+    async def ttl(self, key: str) -> int:
+        return _redis_int(await self._transport.ttl(key), "TTL")
+
+    async def increment(self, key: str) -> int:
+        return _redis_int(await self._transport.incr(key), "INCR")
+
+    async def hash_set(
+        self,
+        key: str,
+        field_name: str | None = None,
+        value: str | None = None,
+        *,
+        mapping: Mapping[str, str] | None = None,
+    ) -> int:
+        encoded_mapping: dict[FieldT, EncodableT] | None = (
+            {name: item for name, item in mapping.items()} if mapping is not None else None
+        )
+        return _redis_int(
+            await self._transport.hset(key, field_name, value, mapping=encoded_mapping),
+            "HSET",
+        )
+
+    async def hash_get_all(self, key: str) -> dict[RedisWireScalar, RedisWireScalar]:
+        return _scalar_mapping(await self._transport.hgetall(key), "HGETALL")
+
+    async def set_add(self, key: str, *values: RedisWireScalar) -> int:
+        return _redis_int(await self._transport.sadd(key, *values), "SADD")
+
+    async def set_remove(self, key: str, *values: RedisWireScalar) -> int:
+        return _redis_int(await self._transport.srem(key, *values), "SREM")
+
+    async def set_members(self, key: str) -> set[RedisWireScalar]:
+        return set(_scalar_sequence(await self._transport.smembers(key), "SMEMBERS"))
+
+    async def blocking_list_move(
+        self,
+        source: str,
+        destination: str,
+        *,
+        timeout_seconds: int,
+    ) -> RedisWireScalar | None:
+        if timeout_seconds < 1:
+            raise ValueError("blocking list move timeout must be at least one second")
+        return _optional_scalar(
+            await self._transport.blmove(source, destination, timeout_seconds),
+            "BLMOVE",
+        )
+
+    async def publish(self, channel: str, message: RedisWireScalar) -> int:
+        return _redis_int(await self._transport.publish(channel, message), "PUBLISH")
+
+    async def _eval(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: RedisWireScalar,
+    ) -> RedisWireResponse:
+        return await self._transport.eval(script, numkeys, *keys_and_args)
+
+    async def eval_int(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: RedisWireScalar,
+    ) -> int:
+        return _redis_int(await self._eval(script, numkeys, *keys_and_args), "EVAL")
+
+    async def eval_scalar(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: RedisWireScalar,
+    ) -> RedisWireScalar | None:
+        return _optional_scalar(await self._eval(script, numkeys, *keys_and_args), "EVAL")
+
+    async def eval_scalars(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: RedisWireScalar,
+    ) -> list[RedisWireScalar]:
+        return _scalar_sequence(await self._eval(script, numkeys, *keys_and_args), "EVAL")
+
+    async def stream_add(
+        self,
+        stream: str,
+        fields: Mapping[str, RedisWireScalar],
+        *,
+        id: str = "*",
+        maxlen: int | None = None,
+        approximate: bool = False,
+    ) -> RedisWireScalar:
+        encoded_fields: dict[FieldT, EncodableT] = {
+            field_name: value for field_name, value in fields.items()
+        }
+        return _scalar(
+            await self._transport.xadd(
+                stream,
+                encoded_fields,
+                id=id,
+                maxlen=maxlen,
+                approximate=approximate,
+            ),
+            "XADD",
+        )
+
+    async def stream_reverse_range(
+        self,
+        stream: str,
+        *,
+        count: int | None = None,
+    ) -> list[RedisStreamEntry]:
+        raw = await self._transport.xrevrange(stream, count=count)
+        return _stream_entries(raw, "XREVRANGE")
+
+    async def stream_read(
+        self,
+        streams: Mapping[str, str],
+        *,
+        count: int | None = None,
+        block: int | None = None,
+    ) -> list[RedisStreamRead]:
+        stream_offsets: dict[KeyT, StreamIdT] = {
+            stream: offset for stream, offset in streams.items()
+        }
+        return _stream_reads(await self._transport.xread(stream_offsets, count=count, block=block))
+
+    async def list_length(self, key: str) -> int:
+        return _redis_int(await self._transport.llen(key), "LLEN")
+
+    def pubsub(self, *, ignore_subscribe_messages: bool = False) -> AsyncRedisSubscription:
+        return AsyncRedisSubscription(
+            self._transport.pubsub(ignore_subscribe_messages=ignore_subscribe_messages)
+        )
+
+    async def scan(self, pattern: str, *, count: int = 10_000) -> list[str]:
+        keys: dict[str, None] = {}
+        cursor = 0
+        while True:
+            cursor, page = _scan_page(
+                await self._transport.scan(cursor, match=pattern, count=count)
+            )
+            _add_matching_keys(keys, page, pattern)
+            if cursor == 0:
+                return list(keys)
+
+    async def close(self) -> None:
+        await self._transport.aclose()
+
+    def pool_status(self) -> RedisPoolStatus | None:
+        pool = self._connection_pool
+        return None if pool is None else pool.status_snapshot()
+
+
+class _MeasuredSyncConnectionPool(SyncConnectionPool):
+    exhaustions_total: int = 0
+    _available_connections: list[SyncConnectionInterface]
+    _in_use_connections: set[SyncConnectionInterface]
+
+    def make_connection(self) -> SyncConnectionInterface:
+        try:
+            return super().make_connection()
+        except MaxConnectionsError:
+            self.exhaustions_total += 1
+            raise
+
+    def status_snapshot(self) -> RedisPoolStatus:
+        return RedisPoolStatus(
+            idle=len(self._available_connections),
+            in_use=len(self._in_use_connections),
+            capacity=self.max_connections,
+            exhaustions_total=self.exhaustions_total,
+        )
+
+
+class _MeasuredAsyncConnectionPool(AsyncConnectionPool):
+    exhaustions_total: int = 0
+    _available_connections: list[AsyncAbstractConnection]
+    _in_use_connections: set[AsyncAbstractConnection]
+
+    def get_available_connection(self) -> AsyncAbstractConnection:
+        try:
+            return super().get_available_connection()
+        except MaxConnectionsError:
+            self.exhaustions_total += 1
+            raise
+
+    def status_snapshot(self) -> RedisPoolStatus:
+        return RedisPoolStatus(
+            idle=len(self._available_connections),
+            in_use=len(self._in_use_connections),
+            capacity=self.max_connections,
+            exhaustions_total=self.exhaustions_total,
+        )
+
 
 def sanitize_redis_client_name(name: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9]+", "", name.replace(" ", "").replace("\n", ""))
-
-
-def _pipeline_list_pop(pipeline: _RedisPipelineListPopProtocol, key: str) -> None:
-    pipeline.lpop(key)
+    return re.sub(r"[^a-zA-Z0-9]+", "", name)
 
 
 def _redis_from_url(
@@ -823,7 +1099,95 @@ def _redis_from_url(
     socket_timeout: float,
     health_check_interval: int,
     client_name: str | None,
-) -> tuple[Redis, RedisConnectionInfo]:
+    max_connections: int,
+) -> tuple[Redis, _MeasuredSyncConnectionPool | None, RedisConnectionInfo]:
+    plan = _redis_connection_plan(url, client_name=client_name)
+    if plan.scheme == "unix":
+        # redis-py types the sync pool's connection_class as `Connection`, which the
+        # Unix socket connection is not, so that pool is built by Redis itself and
+        # stays unmeasured.
+        transport = Redis(
+            unix_socket_path=plan.socket_path,
+            db=plan.database,
+            username=plan.username,
+            password=plan.password,
+            decode_responses=decode_responses,
+            socket_timeout=socket_timeout,
+            health_check_interval=health_check_interval,
+            client_name=client_name,
+            max_connections=max_connections,
+        )
+        return transport, None, plan.info
+    pool = _MeasuredSyncConnectionPool(
+        connection_class=(SyncSSLConnection if plan.scheme == "rediss" else SyncConnection),
+        host=plan.host,
+        port=plan.port,
+        db=plan.database,
+        username=plan.username,
+        password=plan.password,
+        decode_responses=decode_responses,
+        socket_timeout=socket_timeout,
+        health_check_interval=health_check_interval,
+        client_name=client_name,
+        max_connections=max_connections,
+    )
+    return Redis(connection_pool=pool), pool, plan.info
+
+
+def _async_redis_from_url(
+    url: str,
+    *,
+    decode_responses: bool,
+    socket_timeout: float,
+    health_check_interval: int,
+    client_name: str | None,
+    max_connections: int,
+) -> tuple[AsyncRedis, _MeasuredAsyncConnectionPool, RedisConnectionInfo]:
+    plan = _redis_connection_plan(url, client_name=client_name)
+    pool = (
+        _MeasuredAsyncConnectionPool(
+            connection_class=AsyncUnixDomainSocketConnection,
+            path=plan.socket_path,
+            db=plan.database,
+            username=plan.username,
+            password=plan.password,
+            decode_responses=decode_responses,
+            socket_timeout=socket_timeout,
+            health_check_interval=health_check_interval,
+            client_name=client_name,
+            max_connections=max_connections,
+        )
+        if plan.scheme == "unix"
+        else _MeasuredAsyncConnectionPool(
+            connection_class=(AsyncSSLConnection if plan.scheme == "rediss" else AsyncConnection),
+            host=plan.host,
+            port=plan.port,
+            db=plan.database,
+            username=plan.username,
+            password=plan.password,
+            decode_responses=decode_responses,
+            socket_timeout=socket_timeout,
+            health_check_interval=health_check_interval,
+            client_name=client_name,
+            max_connections=max_connections,
+        )
+    )
+    return AsyncRedis(connection_pool=pool), pool, plan.info
+
+
+@dataclass(frozen=True, slots=True)
+class _RedisConnectionPlan:
+    scheme: str
+    database: int
+    username: str | None
+    password: str | None = field(repr=False)
+    info: RedisConnectionInfo
+    host: str = ""
+    port: int = 0
+    socket_path: str = ""
+
+
+def _redis_connection_plan(url: str, *, client_name: str | None) -> _RedisConnectionPlan:
     parsed = urlsplit(url)
     if parsed.scheme not in {"redis", "rediss", "unix"}:
         raise ValueError("Redis URL scheme must be redis, rediss, or unix")
@@ -847,18 +1211,13 @@ def _redis_from_url(
         socket_path = unquote(parsed.path)
         if not socket_path:
             raise ValueError("Unix Redis URL must include a socket path")
-        return (
-            Redis(
-                unix_socket_path=socket_path,
-                db=database,
-                username=username,
-                password=password,
-                decode_responses=decode_responses,
-                socket_timeout=socket_timeout,
-                health_check_interval=health_check_interval,
-                client_name=client_name,
-            ),
-            RedisConnectionInfo(
+        return _RedisConnectionPlan(
+            scheme=parsed.scheme,
+            database=database,
+            username=username,
+            password=password,
+            socket_path=socket_path,
+            info=RedisConnectionInfo(
                 scheme=parsed.scheme,
                 database=database,
                 client_name=client_name or "",
@@ -867,20 +1226,14 @@ def _redis_from_url(
         )
     host = unquote(parsed.hostname) if parsed.hostname else "localhost"
     port = parsed.port or 6379
-    return (
-        Redis(
-            host=host,
-            port=port,
-            db=database,
-            username=username,
-            password=password,
-            ssl=parsed.scheme == "rediss",
-            decode_responses=decode_responses,
-            socket_timeout=socket_timeout,
-            health_check_interval=health_check_interval,
-            client_name=client_name,
-        ),
-        RedisConnectionInfo(
+    return _RedisConnectionPlan(
+        scheme=parsed.scheme,
+        database=database,
+        username=username,
+        password=password,
+        host=host,
+        port=port,
+        info=RedisConnectionInfo(
             scheme=parsed.scheme,
             host=host,
             port=port,
@@ -894,6 +1247,22 @@ def redis_text(value: RedisWireScalar) -> str:
     if isinstance(value, bytes):
         return value.decode()
     return str(value)
+
+
+def _prefixed_key(prefix: str, parts: Sequence[RedisKeyPart]) -> str:
+    cleaned = [str(part).strip(":") for part in parts if str(part).strip(":")]
+    return ":".join([prefix, *cleaned])
+
+
+def _add_matching_keys(
+    keys: dict[str, None],
+    page: Sequence[RedisWireScalar],
+    pattern: str,
+) -> None:
+    for raw_key in page:
+        key = redis_text(raw_key)
+        if fnmatch(key, pattern):
+            keys.setdefault(key)
 
 
 def _sync_response(value: RedisCommandResponse, operation: str) -> RedisWireResponse:
@@ -956,6 +1325,36 @@ def _scalar_sequence(value: RedisCommandResponse, operation: str) -> list[RedisW
     return [_scalar(item, operation) for item in value]
 
 
+def _optional_scalars(
+    value: RedisCommandResponse,
+    operation: str,
+) -> list[RedisWireScalar | None]:
+    value = _sync_response(value, operation)
+    if not isinstance(value, (list, tuple)):
+        raise TypeError(f"Redis {operation} response must be a sequence")
+    return [_optional_scalar(item, f"{operation} item") for item in value]
+
+
+def _scalar_mapping(
+    value: RedisCommandResponse,
+    operation: str,
+) -> dict[RedisWireScalar, RedisWireScalar]:
+    value = _sync_response(value, operation)
+    if not isinstance(value, dict):
+        raise TypeError(f"Redis {operation} response must be a mapping")
+    return {
+        _scalar(raw_key, f"{operation} key"): _scalar(raw_value, f"{operation} value")
+        for raw_key, raw_value in value.items()
+    }
+
+
+def _scan_page(value: RedisCommandResponse) -> tuple[int, list[RedisWireScalar]]:
+    value = _sync_response(value, "SCAN")
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise TypeError("Redis SCAN response must contain a cursor and keys")
+    return _redis_int(value[0], "SCAN cursor"), _scalar_sequence(value[1], "SCAN keys")
+
+
 def _stream_entries(value: RedisCommandResponse, operation: str) -> list[RedisStreamEntry]:
     value = _sync_response(value, operation)
     if not isinstance(value, (list, tuple)):
@@ -965,14 +1364,18 @@ def _stream_entries(value: RedisCommandResponse, operation: str) -> list[RedisSt
         if not isinstance(item, (list, tuple)) or len(item) != 2:
             raise TypeError(f"Redis {operation} entry must contain an id and fields")
         entry_id = _scalar(item[0], f"{operation} entry id")
-        raw_fields = item[1]
-        if not isinstance(raw_fields, dict):
-            raise TypeError(f"Redis {operation} fields must be a mapping")
-        fields: dict[RedisWireScalar, RedisWireScalar] = {}
-        for raw_key, raw_value in raw_fields.items():
-            fields[_scalar(raw_key, f"{operation} field key")] = _scalar(
-                raw_value,
-                f"{operation} field value",
-            )
-        entries.append((entry_id, fields))
+        entries.append((entry_id, _scalar_mapping(item[1], f"{operation} fields")))
     return entries
+
+
+def _stream_reads(value: RedisCommandResponse) -> list[RedisStreamRead]:
+    value = _sync_response(value, "XREAD")
+    if not isinstance(value, (list, tuple)):
+        raise TypeError("Redis XREAD response must be a sequence")
+    reads: list[RedisStreamRead] = []
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise TypeError("Redis XREAD stream must contain a name and entries")
+        name = _scalar(item[0], "XREAD stream name")
+        reads.append((name, _stream_entries(item[1], "XREAD entries")))
+    return reads

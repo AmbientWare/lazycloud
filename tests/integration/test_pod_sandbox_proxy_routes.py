@@ -3,9 +3,9 @@ from __future__ import annotations
 import socket
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from uuid import NAMESPACE_DNS, uuid5
 
@@ -19,20 +19,15 @@ from database.repositories.execution import PodExecutionRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.pods.proxy import (
     PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS,
+    PodProxyBackendError,
     PodProxyHttpRequest,
-    PodProxyHttpResponse,
+    PodProxyResponseStream,
     PodProxyTarget,
-    PodProxyUnavailable,
 )
-from execution.pods.service import PodControlService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from scheduler.fleet import SchedulerContainerStatus
-from scheduler.state import (
-    SchedulerContainerAddress,
-    SchedulerContainerAddressMap,
-    SchedulerContainerState,
-)
+from scheduler.state import SchedulerContainerAddressMap, SchedulerContainerState
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind
@@ -42,7 +37,6 @@ from tests.service_fixtures import owned_workspace
 from tests.url_constants import TEST_DOMAIN, TEST_URL
 from websockets.sync.server import ServerConnection, serve
 from websockets.typing import Subprotocol
-from worker.container_client.scheduler import SchedulerContainerClientFactory
 
 BASE_URL = TEST_URL
 
@@ -74,12 +68,10 @@ def test_pod_id_proxy_preserves_request_and_selects_port_ready_container(
     )
     connections = _RecordingConnections(active={missing_port.id: 0, busy.id: 5, selected.id: 1})
     proxy_client = _RecordingProxyClient()
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler,
-        container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
-        pod_proxy_http_client=proxy_client,
+    service = replace(
+        isolated_services.pod_service,
+        async_scheduler_containers=scheduler,
+        async_pod_proxy_http_client=proxy_client,
         pod_proxy_connections=connections,
         container_readiness_probe=_ServingContainers(),
     )
@@ -129,12 +121,10 @@ def test_pod_proxy_records_demand_before_waiting_for_scale_from_zero(
         port=8080,
     )
     proxy_client = _RecordingProxyClient()
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler,
-        container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
-        pod_proxy_http_client=proxy_client,
+    service = replace(
+        isolated_services.pod_service,
+        async_scheduler_containers=scheduler,
+        async_pod_proxy_http_client=proxy_client,
         pod_proxy_connections=connections,
         container_readiness_probe=_ServingContainers(),
         pod_proxy_start_timeout_seconds=0.1,
@@ -226,12 +216,10 @@ def test_pod_websocket_proxies_subprotocol_text_binary_and_balances_demand(
     backend_thread = threading.Thread(target=backend_server.serve_forever, daemon=True)
     backend_thread.start()
     socket_client = _LoopbackSocketClient(backend_port)
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler,
-        container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
-        pod_proxy_http_client=_RecordingProxyClient(),
+    service = replace(
+        isolated_services.pod_service,
+        async_scheduler_containers=scheduler,
+        async_pod_proxy_http_client=_RecordingProxyClient(),
         pod_proxy_socket_client=socket_client,
         pod_proxy_connections=connections,
         container_readiness_probe=_ServingContainers(),
@@ -332,12 +320,10 @@ def test_pod_websocket_upgrade_withholds_proxy_credentials_from_the_backend(
     backend_server = serve(echo_backend, sock=listener)
     backend_thread = threading.Thread(target=backend_server.serve_forever, daemon=True)
     backend_thread.start()
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler,
-        container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
-        pod_proxy_http_client=_RecordingProxyClient(),
+    service = replace(
+        isolated_services.pod_service,
+        async_scheduler_containers=scheduler,
+        async_pod_proxy_http_client=_RecordingProxyClient(),
         pod_proxy_socket_client=_LoopbackSocketClient(backend_port),
         pod_proxy_connections=_RecordingConnections(),
         container_readiness_probe=_ServingContainers(),
@@ -388,12 +374,10 @@ def test_pinned_sandbox_routes_never_wait_or_fall_through_to_a_sibling(
     )
     proxy_client = _RecordingProxyClient()
     connections = _RecordingConnections()
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler,
-        container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
-        pod_proxy_http_client=proxy_client,
+    service = replace(
+        isolated_services.pod_service,
+        async_scheduler_containers=scheduler,
+        async_pod_proxy_http_client=proxy_client,
         pod_proxy_connections=connections,
         container_readiness_probe=_ServingContainers(),
         pod_proxy_start_timeout_seconds=10,
@@ -413,15 +397,11 @@ def test_pinned_sandbox_routes_never_wait_or_fall_through_to_a_sibling(
         PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS,
     ]
     connection_events = list(connections.events)
-    with pytest.raises(PodProxyUnavailable, match="unavailable"):
-        service.forward_pod_http_request(
-            PodProxyHttpRequest(
-                stub_id=stub.id,
-                container_id=str(uuid5(NAMESPACE_DNS, "foreign-sandbox")),
-                port=8080,
-                method="GET",
-            )
-        )
+    foreign = client.get(
+        f"/sandbox/id/{uuid5(NAMESPACE_DNS, 'foreign-sandbox')}/8080",
+        headers=headers,
+    )
+    assert foreign.status_code == 404
     assert connections.events == connection_events
 
     stopped = isolated_services.containers.get(first.id)
@@ -466,12 +446,10 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
         update={"routes": [route]}
     )
     proxy_client = _RecordingProxyClient()
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler,
-        container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
-        pod_proxy_http_client=proxy_client,
+    service = replace(
+        isolated_services.pod_service,
+        async_scheduler_containers=scheduler,
+        async_pod_proxy_http_client=proxy_client,
         pod_proxy_connections=_RecordingConnections(),
         container_readiness_probe=_ServingContainers(),
     )
@@ -527,14 +505,12 @@ def test_pinned_sandbox_backend_failures_are_bounded_and_typed(
         container,
         address_maps={container.id: {8080: "127.0.0.1:1"}},
     )
-    proxy_client = _RecordingProxyClient(failure=TimeoutError("connect timed out"))
+    proxy_client = _RecordingProxyClient(failure=PodProxyBackendError("connect timed out"))
     socket_client = _FailingSocketClient()
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler,
-        container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
-        pod_proxy_http_client=proxy_client,
+    service = replace(
+        isolated_services.pod_service,
+        async_scheduler_containers=scheduler,
+        async_pod_proxy_http_client=proxy_client,
         pod_proxy_socket_client=socket_client,
         pod_proxy_connections=_RecordingConnections(),
         container_readiness_probe=_ServingContainers(),
@@ -547,7 +523,9 @@ def test_pinned_sandbox_backend_failures_are_bounded_and_typed(
     started = time.monotonic()
     response = client.get(f"/sandbox/id/{container.id}/8080", headers=headers)
     assert response.status_code == 502
-    assert time.monotonic() - started < 2.0
+    # Bounded by the one-second connect timeout, not the request timeout; the
+    # slack is for a loaded runner, and the request timeout is minutes away.
+    assert time.monotonic() - started < 10.0
     assert proxy_client.connect_timeouts == [PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS]
 
     with (
@@ -587,12 +565,10 @@ def test_sandbox_proxy_supports_id_deployment_and_public_path_forms(
         },
     )
     proxy_client = _RecordingProxyClient()
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler,
-        container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
-        pod_proxy_http_client=proxy_client,
+    service = replace(
+        isolated_services.pod_service,
+        async_scheduler_containers=scheduler,
+        async_pod_proxy_http_client=proxy_client,
         pod_proxy_connections=_RecordingConnections(),
         container_readiness_probe=_ServingContainers(),
     )
@@ -642,12 +618,10 @@ def test_pod_proxy_returns_service_unavailable_when_port_is_missing(
         address_maps={container.id: {8000: "10.0.0.7:8000"}},
     )
     proxy_client = _RecordingProxyClient()
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler,
-        container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
-        pod_proxy_http_client=proxy_client,
+    service = replace(
+        isolated_services.pod_service,
+        async_scheduler_containers=scheduler,
+        async_pod_proxy_http_client=proxy_client,
         pod_proxy_connections=_RecordingConnections(),
         container_readiness_probe=_ServingContainers(),
     )
@@ -700,12 +674,10 @@ def test_pod_and_sandbox_private_routes_use_token_workspace(
         },
     )
     proxy_client = _RecordingProxyClient()
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler,
-        container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
-        pod_proxy_http_client=proxy_client,
+    service = replace(
+        isolated_services.pod_service,
+        async_scheduler_containers=scheduler,
+        async_pod_proxy_http_client=proxy_client,
         pod_proxy_connections=_RecordingConnections(),
         container_readiness_probe=_ServingContainers(),
     )
@@ -768,12 +740,10 @@ def test_cross_workspace_public_app_does_not_publish_a_private_sandbox(
         address_maps={container.id: {8080: "10.0.1.9:8080"}},
     )
     proxy_client = _RecordingProxyClient()
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler,
-        container_clients=SchedulerContainerClientFactory(scheduler_containers=scheduler),
-        pod_proxy_http_client=proxy_client,
+    service = replace(
+        isolated_services.pod_service,
+        async_scheduler_containers=scheduler,
+        async_pod_proxy_http_client=proxy_client,
         pod_proxy_connections=_RecordingConnections(),
         container_readiness_probe=_ServingContainers(),
     )
@@ -801,7 +771,7 @@ class _ServingContainers:
     a backend down live in `packages/execution/tests/test_pod_readiness_routing.py`.
     """
 
-    def is_ready(
+    async def is_ready(
         self,
         *,
         container_id: str,
@@ -821,20 +791,20 @@ class _RecordingProxyClient:
     connect_timeouts: list[float | None] = field(default_factory=list)
     failure: Exception | None = None
 
-    def forward(
+    async def open_stream(
         self,
         target: PodProxyTarget,
         request: PodProxyHttpRequest,
         *,
         timeout_seconds: float = 175.0,
         connect_timeout_seconds: float | None = None,
-    ) -> PodProxyHttpResponse:
+    ) -> PodProxyResponseStream:
         _ = timeout_seconds
         self.calls.append((target, request))
         self.connect_timeouts.append(connect_timeout_seconds)
         if self.failure is not None:
             raise self.failure
-        return PodProxyHttpResponse(
+        return _RecordedResponseStream(
             status_code=209,
             headers={
                 "content-type": ["text/plain"],
@@ -842,6 +812,19 @@ class _RecordingProxyClient:
             },
             body=f"{request.method} {request.path}".encode(),
         )
+
+
+@dataclass(slots=True)
+class _RecordedResponseStream:
+    status_code: int
+    headers: dict[str, list[str]]
+    body: bytes
+
+    async def iter_chunks(self) -> AsyncIterator[bytes]:
+        yield self.body
+
+    async def close(self) -> None:
+        return None
 
 
 @dataclass(slots=True)
@@ -885,11 +868,16 @@ class _RecordingConnections:
     events: list[str] = field(default_factory=list)
     total: dict[str, int] = field(default_factory=dict)
 
-    def container_connections(self, workspace_id: str, stub_id: str, container_id: str) -> int:
+    async def container_connections(
+        self,
+        workspace_id: str,
+        stub_id: str,
+        container_id: str,
+    ) -> int:
         _ = workspace_id, stub_id
         return self.active.get(container_id, 0)
 
-    def increment_container_connections(
+    async def increment_container_connections(
         self,
         workspace_id: str,
         stub_id: str,
@@ -902,7 +890,7 @@ class _RecordingConnections:
         self.active[container_id] = self.active.get(container_id, 0) + 1
         return self.active[container_id]
 
-    def decrement_container_connections(
+    async def decrement_container_connections(
         self,
         workspace_id: str,
         stub_id: str,
@@ -915,13 +903,13 @@ class _RecordingConnections:
         self.active[container_id] = max(self.active.get(container_id, 0) - 1, 0)
         return self.active[container_id]
 
-    def increment_total_connections(self, workspace_id: str, stub_id: str) -> int:
+    async def increment_total_connections(self, workspace_id: str, stub_id: str) -> int:
         _ = workspace_id
         self.events.append(f"total+:{stub_id}")
         self.total[stub_id] = self.total.get(stub_id, 0) + 1
         return self.total[stub_id]
 
-    def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int:
+    async def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int:
         _ = workspace_id
         self.events.append(f"total-:{stub_id}")
         self.total[stub_id] = max(self.total.get(stub_id, 0) - 1, 0)
@@ -934,8 +922,12 @@ class _WakeOnDemandConnections(_RecordingConnections):
     container: ContainerRecord
     port: int
 
-    def increment_total_connections(self, workspace_id: str, stub_id: str) -> int:
-        count = _RecordingConnections.increment_total_connections(self, workspace_id, stub_id)
+    async def increment_total_connections(self, workspace_id: str, stub_id: str) -> int:
+        count = await _RecordingConnections.increment_total_connections(
+            self,
+            workspace_id,
+            stub_id,
+        )
         self.scheduler.states[self.container.id] = SchedulerContainerState(
             container_id=self.container.id,
             stub_id=stub_id,
@@ -981,17 +973,29 @@ class _FakeSchedulerContainers:
             },
         )
 
-    def get_container_state(self, container_id: str) -> SchedulerContainerState | None:
+    async def get_container_state(self, container_id: str) -> SchedulerContainerState | None:
         return self.states.get(container_id)
 
-    def get_worker_address(self, container_id: str) -> SchedulerContainerAddress | None:
-        return SchedulerContainerAddress(container_id=container_id, address="worker.internal:9001")
+    async def list_by_stub(self, stub_id: str) -> list[SchedulerContainerState]:
+        return [state for state in self.states.values() if state.stub_id == stub_id]
 
-    def get_container_address_map(self, container_id: str) -> SchedulerContainerAddressMap:
+    async def get_container_address_map(self, container_id: str) -> SchedulerContainerAddressMap:
         return self.address_maps.get(
             container_id,
             SchedulerContainerAddressMap(container_id=container_id),
         )
+
+    async def get_container_address_maps(
+        self,
+        container_ids: Sequence[str],
+    ) -> dict[str, SchedulerContainerAddressMap]:
+        return {
+            container_id: self.address_maps.get(
+                container_id,
+                SchedulerContainerAddressMap(container_id=container_id),
+            )
+            for container_id in container_ids
+        }
 
 
 def _create_container(

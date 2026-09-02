@@ -39,6 +39,7 @@ from storage.retention_settings import RetentionSettings
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 from worker.settings import ContainerServiceSettings
 
+from api.server.async_io import ApiAsyncIo
 from api.server.provider_compute import require_connected_aws_deployment_credentials
 from api.server.services import (
     ApiOwnedResource,
@@ -160,7 +161,6 @@ class ControlPlaneRuntime:
                 configure_token_invalidation(
                     AuthTokenInvalidation.from_redis(self._services.redis_client)
                 )
-                self._services.workspace_compute_policy_service.reconcile_capacity_at_startup()
             except BaseException as startup_error:
                 cleanup_error: BaseException | None = None
                 try:
@@ -226,9 +226,8 @@ def _production_api_services() -> ApiServices:
     backend_route_settings = BackendRouteSettings()
     with ExitStack() as rollback:
         owned_resources: list[ApiOwnedResource] = []
-        database = DatabaseClient.from_settings(
-            DatabaseSettings(application_name=DatabaseApplicationName.Api)
-        )
+        database_settings = DatabaseSettings(application_name=DatabaseApplicationName.Api)
+        database = DatabaseClient.from_settings(database_settings)
         rollback.callback(database.dispose)
         redis_client = RedisClient.from_settings(redis_settings)
         rollback.callback(redis_client.close)
@@ -275,6 +274,7 @@ def _production_api_services() -> ApiServices:
             volume_metering_settings=volume_metering_settings,
             redis_client=redis_client,
             binary_redis_client=binary_redis_client,
+            async_io=ApiAsyncIo.from_settings(database_settings, redis_settings),
             owns_redis_client=True,
             owns_binary_redis_client=True,
             owned_resources=tuple(owned_resources),

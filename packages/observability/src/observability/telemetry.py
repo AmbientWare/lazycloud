@@ -88,9 +88,13 @@ class TelemetryConfig(ContractModel):
         return value
 
     @model_validator(mode="after")
-    def require_endpoint_when_trace_export_enabled(self) -> Self:
-        if self.enabled and self.export_traces and not self.endpoint.strip():
-            msg = "telemetry endpoint is required when trace export is enabled"
+    def require_endpoint_when_otlp_export_enabled(self) -> Self:
+        if (
+            self.enabled
+            and (self.export_traces or self.export_metrics)
+            and not self.endpoint.strip()
+        ):
+            msg = "telemetry endpoint is required when trace or metric export is enabled"
             raise ValueError(msg)
         return self
 
@@ -199,7 +203,11 @@ def build_telemetry_plan(config: TelemetryConfig) -> TelemetrySetupPlan:
         service_name=config.service_name,
         resource_attributes=resource_attributes,
         exporters=tuple(exporters),
-        endpoint=plan_telemetry_endpoint(config.endpoint) if config.export_traces else None,
+        endpoint=(
+            plan_telemetry_endpoint(config.endpoint)
+            if config.export_traces or config.export_metrics
+            else None
+        ),
         trace_sample_ratio=config.trace_sample_ratio,
         meter_interval_millis=_seconds_to_millis(config.meter_interval_seconds),
         trace_batch_delay_millis=_seconds_to_millis(config.trace_interval_seconds),

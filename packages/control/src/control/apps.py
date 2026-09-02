@@ -195,30 +195,37 @@ class AppService:
 
     def get(self, app_id_or_name: str, *, workspace: str | None = None) -> AppRecord:
         with self.context.database.session() as session:
-            workspace_id = (
-                self.context.workspace(session, workspace).id if workspace is not None else None
+            return self.get_in_session(session, app_id_or_name, workspace=workspace)
+
+    def get_in_session(
+        self,
+        session: Session,
+        app_id_or_name: str,
+        *,
+        workspace: str | None = None,
+    ) -> AppRecord:
+        workspace_id = (
+            self.context.workspace(session, workspace).id if workspace is not None else None
+        )
+        repository = AppRepository(session)
+        app_id = try_uuid(app_id_or_name)
+        if app_id is not None:
+            record = (
+                repository.get(app_id, workspace_id=workspace_id)
+                if workspace_id is not None
+                else repository.get_across_workspaces(app_id)
             )
-            repository = AppRepository(session)
-            app_id = try_uuid(app_id_or_name)
-            if app_id is not None:
-                record = (
-                    repository.get(app_id, workspace_id=workspace_id)
-                    if workspace_id is not None
-                    else repository.get_across_workspaces(app_id)
-                )
-            elif workspace_id is not None:
-                record = repository.get_by_name(app_id_or_name, workspace_id=workspace_id)
-            else:
-                matches = [
-                    item
-                    for item in repository.list_across_workspaces()
-                    if item.name == app_id_or_name
-                ]
-                record = max(
-                    matches,
-                    key=lambda item: (item.version, item.updated_at),
-                    default=None,
-                )
+        elif workspace_id is not None:
+            record = repository.get_by_name(app_id_or_name, workspace_id=workspace_id)
+        else:
+            matches = [
+                item for item in repository.list_across_workspaces() if item.name == app_id_or_name
+            ]
+            record = max(
+                matches,
+                key=lambda item: (item.version, item.updated_at),
+                default=None,
+            )
         if record is not None:
             return record
         raise NotFoundError(f"app not found: {app_id_or_name}")

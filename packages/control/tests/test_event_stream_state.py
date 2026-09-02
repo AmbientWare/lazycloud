@@ -1,12 +1,32 @@
 from __future__ import annotations
 
-from observability.stream_state import RedisEventStreamRepository
+from collections.abc import AsyncIterator
+
+import pytest
+from api.server.async_io import ApiAsyncIo
+from api.server.services import ApiServices
+from observability.stream_state import (
+    AsyncRedisEventStreamRepository,
+    RedisEventStreamRepository,
+)
 from shared.realtime.contracts import EventRecordType
 from shared.realtime.streams import EventHistoryQuery, LogStreamQuery
 from tests.real_redis import RealRedisActors
 
 
-def test_redis_event_stream_repository_reads_and_blocks_on_generic_streams(
+@pytest.fixture
+async def async_io(isolated_services: ApiServices) -> AsyncIterator[ApiAsyncIo]:
+    io = isolated_services.require_async_io()
+    await io.start()
+    try:
+        yield io
+    finally:
+        await io.close()
+
+
+@pytest.mark.anyio
+async def test_redis_event_stream_repository_reads_and_follows_generic_streams(
+    async_io: ApiAsyncIo,
     real_redis_actors: RealRedisActors,
 ) -> None:
     repo = RedisEventStreamRepository(real_redis_actors.client())
@@ -37,14 +57,19 @@ def test_redis_event_stream_repository_reads_and_blocks_on_generic_streams(
         EventHistoryQuery(workspace_id="workspace", stub_id="stub", task_id="task")
     )
     logs = repo.read_logs(LogStreamQuery(workspace_id="workspace", stub_id="stub", task_id="task"))
-    followed = list(
-        repo.stream_event_history(
+    followed = [
+        record
+        async for record in await AsyncRedisEventStreamRepository(
+            async_io.redis
+        ).follow_event_history(
+            async_io.realtime,
             EventHistoryQuery(workspace_id="workspace", stub_id="stub", task_id="task"),
             last_event_id="0-0",
-            block_milliseconds=1,
             max_events=1,
+            heartbeat_seconds=1.0,
         )
-    )
+        if record is not None
+    ]
 
     assert events[0].body["id"] == "event-task"
     assert logs[0].body["id"] == "event-log"

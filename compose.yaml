@@ -486,6 +486,10 @@ services:
         ]
     deploy:
       replicas: 1
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
     ports:
       - "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}:9000"
       - "${LAZYCLOUD_COMPOSE_TCP_INGRESS_PORT:-1995}:1995"

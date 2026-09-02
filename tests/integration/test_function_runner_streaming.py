@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import io
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -41,15 +43,13 @@ from shared.http.functions import (
 from shared.http.gateway_tasks import AppendTaskLogRequest, EndTaskRequest, StartTaskRequest
 from shared.lifecycle import LifecycleHooks
 from shared.tasks import TaskStatus
-from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
-from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
 def test_function_runner_streams_plain_user_logs_and_persists_result(
-    function_runtime: ApiServices,
+    isolated_services: ApiServices,
     tmp_path: Path,
 ) -> None:
     handler_ref = _write_handler_module(
@@ -67,7 +67,7 @@ def stream_value(value):
 """,
         "stream_value",
     )
-    responses = _invoke_and_run(function_runtime, handler_ref, 8)
+    responses = _invoke_and_run(isolated_services, handler_ref, 8)
 
     final = _final_response(responses)
     assert final.exit_code == 0
@@ -84,42 +84,13 @@ def stream_value(value):
     assert "stderr" not in output
 
     task_id = responses[0].task_id
-    logs = function_runtime.tasks.logs(task_id)
+    logs = isolated_services.tasks.logs(task_id)
     assert [(entry.stream, entry.message) for entry in logs] == [
         ("stdout", "alpha"),
         ("stdout", "beta"),
         ("stdout", "gamma"),
     ]
-    assert function_runtime.tasks.get(task_id).status is TaskStatus.Complete
-
-
-def _services_with_redis(
-    isolated_services: ApiServices,
-    redis: RedisClient,
-    request: pytest.FixtureRequest,
-) -> ApiServices:
-    services = ApiServices.create(
-        isolated_services.database,
-        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
-        root=isolated_services.root,
-        create_schema=False,
-        volume_filesystem=isolated_services.volume_filesystem,
-        redis_client=redis,
-        binary_redis_client=isolated_services.binary_redis_client,
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-    )
-    request.addfinalizer(services.close)
-    return services
-
-
-@pytest.fixture
-def function_runtime(
-    isolated_services: ApiServices,
-    real_redis_actors: RealRedisActors,
-    request: pytest.FixtureRequest,
-) -> ApiServices:
-    return _services_with_redis(isolated_services, real_redis_actors.client(), request)
+    assert isolated_services.tasks.get(task_id).status is TaskStatus.Complete
 
 
 def test_function_runner_rejects_untyped_invocation_envelopes() -> None:
@@ -135,7 +106,7 @@ def test_function_runner_rejects_untyped_invocation_envelopes() -> None:
 
 
 def test_function_runner_failure_streams_and_persists_traceback(
-    function_runtime: ApiServices,
+    isolated_services: ApiServices,
     tmp_path: Path,
 ) -> None:
     handler_ref = _write_handler_module(
@@ -147,7 +118,7 @@ def fail_value():
 """,
         "fail_value",
     )
-    responses = _invoke_and_run(function_runtime, handler_ref)
+    responses = _invoke_and_run(isolated_services, handler_ref)
 
     final = _final_response(responses)
     assert final.exit_code == 1
@@ -159,11 +130,11 @@ def fail_value():
     assert "RuntimeError: boom" in output
 
     task_id = responses[0].task_id
-    logs = function_runtime.tasks.logs(task_id)
+    logs = isolated_services.tasks.logs(task_id)
     stderr = "\n".join(entry.message for entry in logs if entry.stream == "stderr")
     assert "Traceback" in stderr
     assert "RuntimeError: boom" in stderr
-    assert function_runtime.tasks.get(task_id).status is TaskStatus.Failed
+    assert isolated_services.tasks.get(task_id).status is TaskStatus.Failed
 
 
 def test_task_log_stream_flush_publishes_partial_line_once() -> None:
@@ -189,7 +160,10 @@ def _invoke_and_run(
 ) -> list[FunctionInvokeResponse]:
     scheduler = _Scheduler()
     runtime.containers.scheduler = scheduler
-    function_service = FunctionControlService(runtime)
+    function_service = FunctionControlService(
+        runtime,
+        async_database=runtime.require_async_io().database,
+    )
     gateway_service = replace(
         runtime.gateway_service,
         compute_state=compute_state or _compute_state(),
@@ -207,18 +181,14 @@ def _invoke_and_run(
                 "kwargs": decoded.get("kwargs", {}),
             }
         )
-    stream = iter(
-        function_service.function_invoke_stream(
-            FunctionInvokeBody(
-                stub_id=stub.id,
-                invocation=invocation,
-            ),
-            poll_interval_seconds=0.01,
-            keepalive_interval_seconds=1.0,
+    initial = function_service.function_invoke(
+        FunctionInvokeBody(
+            stub_id=stub.id,
+            invocation=invocation,
         )
     )
-    responses = [next(stream)]
-    assert responses[0].task_id
+    responses = [initial]
+    assert initial.task_id
     assert scheduler.requests
     runner = FunctionRunner(
         config=FunctionRunnerConfig(
@@ -233,8 +203,29 @@ def _invoke_and_run(
     )
 
     runner.run()
-    responses.extend(stream)
+    streamed = asyncio.run(
+        _collect_function_stream(
+            runtime,
+            function_service.function_invoke_stream(
+                initial,
+                poll_interval_seconds=0.01,
+                keepalive_interval_seconds=1.0,
+            ),
+        )
+    )
+    assert streamed[0] == initial
+    responses.extend(streamed[1:])
     return responses
+
+
+async def _collect_function_stream(
+    runtime: ApiServices,
+    stream: AsyncIterator[FunctionInvokeResponse],
+) -> list[FunctionInvokeResponse]:
+    try:
+        return [response async for response in stream]
+    finally:
+        await runtime.require_async_io().close()
 
 
 def _create_function_stub(services: ApiServices, handler_ref: str) -> StubRecord:

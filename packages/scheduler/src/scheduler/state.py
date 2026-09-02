@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -9,11 +11,13 @@ from hashlib import sha256
 from math import ceil
 from secrets import token_urlsafe
 
-from coordination.redis_client import RedisClient, RedisWireScalar
+from coordination.redis_client import AsyncRedisClient, RedisClient, RedisWireScalar
 from coordination.token_lock import (
     TokenLockReleaseStatus,
     release_token_lock,
+    release_token_lock_async,
     try_acquire_token_lock,
+    try_acquire_token_lock_async,
 )
 from pydantic import Field, field_validator
 from shared.container_requests import StopContainerReason
@@ -515,7 +519,7 @@ class WorkerPoolStateNotFoundError(SchedulerRepositoryError):
 
 @dataclass(frozen=True, slots=True)
 class SchedulerStateKeys:
-    redis: RedisClient
+    redis: RedisClient | AsyncRedisClient
     namespace: str = "scheduler"
 
     def orphaned_container_confirmation(self, container_id: str) -> str:
@@ -717,6 +721,16 @@ class RedisSchedulerWorkerRepository:
     def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None:
         return self._get_worker_from_key(self.keys.worker_state(worker_id))
 
+    async def get_worker_async(
+        self,
+        redis: AsyncRedisClient,
+        worker_id: str,
+    ) -> SchedulerWorkerRecord | None:
+        raw = await redis.hash_get_all(self.keys.worker_state(worker_id))
+        if not raw:
+            return None
+        return redis_serialization.load_model_hash(SchedulerWorkerRecord, raw)
+
     def list_workers(self) -> list[SchedulerWorkerRecord]:
         state_keys = sorted(
             redis_serialization.redis_strings(self.redis.set_members(self.keys.worker_index()))
@@ -814,14 +828,12 @@ class RedisSchedulerWorkerRepository:
                 raise WorkerStateNotFoundError(worker_id)
             if reconcile_capacity:
                 worker = self._reconciled_worker_capacity(worker)
-            updated = worker.model_copy(
-                update={
-                    "status": status,
-                    "unavailable_reason": unavailable_reason,
-                    "unavailable_detail": unavailable_detail,
-                    "resource_version": worker.resource_version + 1,
-                    "updated_at": now or utc_now(),
-                }
+            updated = _worker_with_status(
+                worker,
+                status,
+                now=now,
+                unavailable_reason=unavailable_reason,
+                unavailable_detail=unavailable_detail,
             )
             state_key = self.keys.worker_state(worker_id)
             self.redis.hash_set(state_key, mapping=redis_serialization.dump_model_hash(updated))
@@ -829,6 +841,36 @@ class RedisSchedulerWorkerRepository:
             return updated
 
         return self._with_worker_lock(worker_id, write)
+
+    async def update_worker_status_async(
+        self,
+        redis: AsyncRedisClient,
+        worker_id: str,
+        status: SchedulerWorkerStatus,
+        *,
+        ttl_seconds: int = DEFAULT_WORKER_STATE_TTL_SECONDS,
+        now: datetime | None = None,
+        unavailable_reason: WorkerUnavailableReason | None = None,
+        unavailable_detail: str = "",
+    ) -> SchedulerWorkerRecord:
+        async with self._worker_lock_async(redis, worker_id):
+            worker = await self.get_worker_async(redis, worker_id)
+            if worker is None:
+                raise WorkerStateNotFoundError(worker_id)
+            updated = _worker_with_status(
+                worker,
+                status,
+                now=now,
+                unavailable_reason=unavailable_reason,
+                unavailable_detail=unavailable_detail,
+            )
+            state_key = self.keys.worker_state(worker_id)
+            await redis.hash_set(
+                state_key,
+                mapping=redis_serialization.dump_model_hash(updated),
+            )
+            await redis.expire(state_key, ttl_seconds)
+            return updated
 
     def update_worker_tenancy(
         self,
@@ -1243,11 +1285,20 @@ class RedisSchedulerWorkerRepository:
                 f"scheduler request dispatch returned unexpected status {result}: {request_id}"
             )
 
-    def enqueue_worker_request(self, worker_id: str, request: SchedulerWorkerRequest) -> int:
-        return self._with_worker_lock(
-            worker_id,
-            lambda: self._enqueue_worker_request(worker_id, request),
-        )
+    async def enqueue_worker_request(
+        self,
+        redis: AsyncRedisClient,
+        worker_id: str,
+        request: SchedulerWorkerRequest,
+    ) -> int:
+        async with self._worker_lock_async(redis, worker_id):
+            return await redis.eval_int(
+                PLACE_WORKER_REQUEST_SCRIPT,
+                4,
+                *self._worker_request_placement_keys(worker_id, request, delivered=False),
+                request.container_id,
+                request.model_dump_json(),
+            )
 
     def _enqueue_worker_request(
         self,
@@ -1271,20 +1322,33 @@ class RedisSchedulerWorkerRepository:
         old entry behind would let one request be delivered twice from two places.
         """
 
-        queue_key = self.keys.worker_requests(worker_id)
-        inflight_key = self.keys.worker_inflight_requests(worker_id)
-        payloads_key = self.keys.worker_request_payloads(worker_id)
-        cancellation_key = self.keys.container_cancellation(request.container_id)
-        payload = request.model_dump_json()
         return self.redis.eval_int(
             PLACE_WORKER_REQUEST_SCRIPT,
             4,
-            inflight_key if delivered else queue_key,
-            payloads_key,
-            cancellation_key,
-            queue_key if delivered else inflight_key,
+            *self._worker_request_placement_keys(worker_id, request, delivered=delivered),
             request.container_id,
-            payload,
+            request.model_dump_json(),
+        )
+
+    def _worker_request_placement_keys(
+        self,
+        worker_id: str,
+        request: SchedulerWorkerRequest,
+        *,
+        delivered: bool,
+    ) -> tuple[str, str, str, str]:
+        """Keys for `PLACE_WORKER_REQUEST_SCRIPT`.
+
+        The list the request lands on, the payload hash, the cancellation marker,
+        and the list the request is removed from so it is never on both.
+        """
+        queue_key = self.keys.worker_requests(worker_id)
+        inflight_key = self.keys.worker_inflight_requests(worker_id)
+        return (
+            inflight_key if delivered else queue_key,
+            self.keys.worker_request_payloads(worker_id),
+            self.keys.container_cancellation(request.container_id),
+            queue_key if delivered else inflight_key,
         )
 
     def enqueue_container_request(
@@ -1421,9 +1485,13 @@ class RedisSchedulerWorkerRepository:
             is not None
         )
 
-    def _take_worker_request(self, worker_id: str) -> str | None:
+    async def _take_worker_request(
+        self,
+        redis: AsyncRedisClient,
+        worker_id: str,
+    ) -> str | None:
         result = _redis_script_text_items(
-            self.redis.eval_scalars(
+            await redis.eval_scalars(
                 TAKE_WORKER_REQUEST_SCRIPT,
                 3,
                 self.keys.worker_requests(worker_id),
@@ -1433,25 +1501,13 @@ class RedisSchedulerWorkerRepository:
         )
         return result[1] if len(result) == 2 else None
 
-    def get_next_container_request(self, worker_id: str) -> SchedulerWorkerRequest | None:
-        """Hand the worker its next request without destroying it.
-
-        Delivery is at least once. The request moves to the worker's in-flight
-        list in the same command that takes it off the queue, and stays there
-        until the worker acknowledges it, so a control plane that dies between
-        the take and the response redelivers rather than losing the container.
-        An unacknowledged request is returned again ahead of the queue, which is
-        why the worker has to reconcile a redelivery against what it is already
-        running instead of starting a second container.
-        """
-
-        raw = self._take_worker_request(worker_id)
-        if raw is None:
-            return None
-        return SchedulerWorkerRequest.model_validate_json(raw)
-
-    def _claim_moved_worker_request(self, worker_id: str, request_id: str) -> str:
-        value = self.redis.eval_scalar(
+    async def _claim_moved_worker_request(
+        self,
+        redis: AsyncRedisClient,
+        worker_id: str,
+        request_id: str,
+    ) -> str:
+        value = await redis.eval_scalar(
             CLAIM_MOVED_WORKER_REQUEST_SCRIPT,
             2,
             self.keys.worker_request_payloads(worker_id),
@@ -1462,30 +1518,38 @@ class RedisSchedulerWorkerRepository:
             raise SchedulerRepositoryError("worker request take returned no payload")
         return redis_serialization.redis_text(value)
 
-    def wait_for_next_container_request(
+    async def wait_for_next_container_request(
         self,
+        redis: AsyncRedisClient,
         worker_id: str,
         *,
         timeout_seconds: float,
     ) -> SchedulerWorkerRequest | None:
+        """Hand the worker its next request without destroying it.
+
+        Delivery is at least once. The request moves to the worker's in-flight
+        list in the same command that takes it off the queue, and stays there
+        until the worker acknowledges it, so a control plane that dies between
+        the take and the response redelivers rather than losing the container.
+        An unacknowledged request is returned again ahead of the queue, which is
+        why the worker has to reconcile a redelivery against what it is already
+        running instead of starting a second container.
+        """
         if timeout_seconds <= 0:
             raise ValueError("worker request wait timeout must be greater than zero")
         deadline = time.monotonic() + timeout_seconds
         queue_key = self.keys.worker_requests(worker_id)
         inflight_key = self.keys.worker_inflight_requests(worker_id)
         while True:
-            raw = self._take_worker_request(worker_id)
+            raw = await self._take_worker_request(redis, worker_id)
             if raw is not None:
                 return SchedulerWorkerRequest.model_validate_json(raw)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
-            # One command, so nothing exists only in this process: a blocking pop
-            # followed by a write would lose the request if the control plane died
-            # between them, which is the failure this whole path exists to remove.
             # Redis waits in whole seconds and reads zero as forever, so a shorter
             # remainder is rounded up rather than turned into an unbounded wait.
-            moved = self.redis.blocking_list_move(
+            moved = await redis.blocking_list_move(
                 queue_key,
                 inflight_key,
                 timeout_seconds=ceil(remaining),
@@ -1493,11 +1557,20 @@ class RedisSchedulerWorkerRepository:
             if moved is None:
                 return None
             request_id = redis_serialization.redis_text(moved)
-            payload = self._claim_moved_worker_request(worker_id, request_id)
+            payload = await self._claim_moved_worker_request(
+                redis,
+                worker_id,
+                request_id,
+            )
             if payload:
                 return SchedulerWorkerRequest.model_validate_json(payload)
 
-    def acknowledge_worker_request(self, worker_id: str, container_id: str) -> bool:
+    async def acknowledge_worker_request(
+        self,
+        redis: AsyncRedisClient,
+        worker_id: str,
+        container_id: str,
+    ) -> bool:
         """Retire a delivered request once the worker has taken the container.
 
         Until this lands the request is redeliverable, and after it lands nothing
@@ -1506,7 +1579,7 @@ class RedisSchedulerWorkerRepository:
         """
 
         return bool(
-            self.redis.eval_int(
+            await redis.eval_int(
                 ACKNOWLEDGE_WORKER_REQUEST_SCRIPT,
                 2,
                 self.keys.worker_inflight_requests(worker_id),
@@ -1515,8 +1588,9 @@ class RedisSchedulerWorkerRepository:
             )
         )
 
-    def return_worker_request(
+    async def return_worker_request(
         self,
+        redis: AsyncRedisClient,
         worker_id: str,
         request: SchedulerWorkerRequest,
         *,
@@ -1530,7 +1604,7 @@ class RedisSchedulerWorkerRepository:
         """
 
         scheduled_at = ready_at or utc_now()
-        return self.redis.eval_int(
+        return await redis.eval_int(
             RETURN_WORKER_REQUEST_SCRIPT,
             6,
             self.keys.worker_requests(worker_id),
@@ -1762,6 +1836,34 @@ class RedisSchedulerWorkerRepository:
         finally:
             _release_token_lock(
                 self.redis,
+                lock.key,
+                lock.token,
+                kind=WorkerRepositoryLockKind.Worker,
+            )
+
+    @asynccontextmanager
+    async def _worker_lock_async(
+        self,
+        redis: AsyncRedisClient,
+        worker_id: str,
+    ) -> AsyncIterator[None]:
+        lock = await _acquire_token_lock_async(
+            redis,
+            self.keys.worker_lock(worker_id),
+            kind=WorkerRepositoryLockKind.Worker,
+            owner_id=worker_id,
+            resource_id=worker_id,
+            ttl_seconds=DEFAULT_WORKER_LOCK_TTL_SECONDS,
+            retries=DEFAULT_WORKER_LOCK_RETRIES,
+        )
+        if not lock.acquired:
+            msg = f"worker {worker_id} lock not acquired"
+            raise SchedulerRepositoryError(msg)
+        try:
+            yield
+        finally:
+            await _release_token_lock_async(
+                redis,
                 lock.key,
                 lock.token,
                 kind=WorkerRepositoryLockKind.Worker,
@@ -3407,26 +3509,102 @@ def _acquire_token_lock(
     attempts = max(retries, 0) + 1
     for attempt in range(attempts):
         if try_acquire_token_lock(redis, key, token, ttl_seconds=ttl_seconds):
-            return WorkerRepositoryLockRecord(
-                kind=kind,
-                key=key,
+            return _lock_record(
+                kind,
+                key,
                 token=token,
                 owner_id=owner_id,
                 resource_id=resource_id,
                 ttl_seconds=ttl_seconds,
                 retries=retries,
-                acquired=True,
             )
         if attempt + 1 < attempts:
             time.sleep(0.01)
-    return WorkerRepositoryLockRecord(
-        kind=kind,
-        key=key,
+    return _lock_record(
+        kind,
+        key,
+        token=None,
         owner_id=owner_id,
         resource_id=resource_id,
         ttl_seconds=ttl_seconds,
         retries=retries,
-        acquired=False,
+    )
+
+
+async def _acquire_token_lock_async(
+    redis: AsyncRedisClient,
+    key: str,
+    *,
+    kind: WorkerRepositoryLockKind,
+    owner_id: str,
+    resource_id: str,
+    ttl_seconds: int,
+    retries: int,
+) -> WorkerRepositoryLockRecord:
+    token = token_urlsafe(24)
+    attempts = max(retries, 0) + 1
+    for attempt in range(attempts):
+        if await try_acquire_token_lock_async(redis, key, token, ttl_seconds=ttl_seconds):
+            return _lock_record(
+                kind,
+                key,
+                token=token,
+                owner_id=owner_id,
+                resource_id=resource_id,
+                ttl_seconds=ttl_seconds,
+                retries=retries,
+            )
+        if attempt + 1 < attempts:
+            await asyncio.sleep(0.01)
+    return _lock_record(
+        kind,
+        key,
+        token=None,
+        owner_id=owner_id,
+        resource_id=resource_id,
+        ttl_seconds=ttl_seconds,
+        retries=retries,
+    )
+
+
+def _lock_record(
+    kind: WorkerRepositoryLockKind,
+    key: str,
+    *,
+    token: str | None,
+    owner_id: str,
+    resource_id: str,
+    ttl_seconds: int,
+    retries: int,
+) -> WorkerRepositoryLockRecord:
+    return WorkerRepositoryLockRecord(
+        kind=kind,
+        key=key,
+        token=token or "",
+        owner_id=owner_id,
+        resource_id=resource_id,
+        ttl_seconds=ttl_seconds,
+        retries=retries,
+        acquired=token is not None,
+    )
+
+
+def _worker_with_status(
+    worker: SchedulerWorkerRecord,
+    status: SchedulerWorkerStatus,
+    *,
+    now: datetime | None,
+    unavailable_reason: WorkerUnavailableReason | None,
+    unavailable_detail: str,
+) -> SchedulerWorkerRecord:
+    return worker.model_copy(
+        update={
+            "status": status,
+            "unavailable_reason": unavailable_reason,
+            "unavailable_detail": unavailable_detail,
+            "resource_version": worker.resource_version + 1,
+            "updated_at": now or utc_now(),
+        }
     )
 
 
@@ -3437,7 +3615,26 @@ def _release_token_lock(
     *,
     kind: WorkerRepositoryLockKind,
 ) -> WorkerRepositoryLockRelease:
-    status = release_token_lock(redis, key, token)
+    return _token_lock_release(kind, key, token, release_token_lock(redis, key, token))
+
+
+async def _release_token_lock_async(
+    redis: AsyncRedisClient,
+    key: str,
+    token: str,
+    *,
+    kind: WorkerRepositoryLockKind,
+) -> WorkerRepositoryLockRelease:
+    status = await release_token_lock_async(redis, key, token)
+    return _token_lock_release(kind, key, token, status)
+
+
+def _token_lock_release(
+    kind: WorkerRepositoryLockKind,
+    key: str,
+    token: str,
+    status: TokenLockReleaseStatus,
+) -> WorkerRepositoryLockRelease:
     if status is TokenLockReleaseStatus.Missing:
         return WorkerRepositoryLockRelease(
             kind=kind,
@@ -3461,3 +3658,100 @@ def _cap_capacity(value: int, total: int) -> int:
     if total > 0:
         return min(value, total)
     return value
+
+
+@dataclass(init=False, slots=True)
+class AsyncRedisSchedulerContainerReader:
+    redis: AsyncRedisClient
+    keys: SchedulerStateKeys
+
+    def __init__(
+        self,
+        redis: AsyncRedisClient,
+        keys: SchedulerStateKeys | None = None,
+    ) -> None:
+        self.redis = redis
+        self.keys = keys or SchedulerStateKeys(redis)
+
+    async def get_container_state(self, container_id: str) -> SchedulerContainerState | None:
+        raw = await self.redis.hash_get_all(self.keys.container_state(container_id))
+        if not raw:
+            return None
+        return redis_serialization.load_model_hash(SchedulerContainerState, raw)
+
+    async def list_by_stub(self, stub_id: str) -> list[SchedulerContainerState]:
+        state_keys = sorted(
+            redis_serialization.redis_strings(
+                await self.redis.set_members(self.keys.container_stub_index(stub_id))
+            )
+        )
+        if not state_keys:
+            return []
+        raw_states = await asyncio.gather(
+            *(self.redis.hash_get_all(state_key) for state_key in state_keys)
+        )
+        return [
+            redis_serialization.load_model_hash(SchedulerContainerState, raw)
+            for raw in raw_states
+            if raw
+        ]
+
+    async def get_container_address_map(
+        self,
+        container_id: str,
+    ) -> SchedulerContainerAddressMap:
+        maps = await self.get_container_address_maps([container_id])
+        return maps[container_id]
+
+    async def get_container_address(
+        self,
+        container_id: str,
+    ) -> SchedulerContainerAddress | None:
+        raw = await self.redis.get(self.keys.container_address(container_id))
+        if raw is None:
+            return None
+        return redis_serialization.load_model_json(SchedulerContainerAddress, raw)
+
+    async def get_container_address_maps(
+        self,
+        container_ids: Sequence[str],
+    ) -> dict[str, SchedulerContainerAddressMap]:
+        raw_maps = await self.redis.mget(
+            [self.keys.container_address_map(container_id) for container_id in container_ids]
+        )
+        return {
+            container_id: (
+                redis_serialization.load_model_json(SchedulerContainerAddressMap, raw)
+                if raw is not None
+                else SchedulerContainerAddressMap(container_id=container_id)
+            )
+            for container_id, raw in zip(container_ids, raw_maps, strict=True)
+        }
+
+    async def agent_route_ids(self, container_id: str) -> set[str]:
+        raw_address, raw_address_map, raw_worker_address = await self.redis.mget(
+            [
+                self.keys.container_address(container_id),
+                self.keys.container_address_map(container_id),
+                self.keys.worker_address(container_id),
+            ]
+        )
+        routes: list[AgentBackendRoute] = []
+        if raw_address is not None:
+            address = redis_serialization.load_model_json(SchedulerContainerAddress, raw_address)
+            if address.route is not None:
+                routes.append(address.route)
+        if raw_address_map is not None:
+            address_map = redis_serialization.load_model_json(
+                SchedulerContainerAddressMap,
+                raw_address_map,
+            )
+            routes.extend(address_map.routes)
+        if raw_worker_address is not None:
+            worker_address = redis_serialization.load_model_json(
+                SchedulerContainerAddress,
+                raw_worker_address,
+            )
+            if worker_address.route is not None:
+                routes.append(worker_address.route)
+        return {route.route_id for route in routes if route.route_id}

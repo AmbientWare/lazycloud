@@ -75,7 +75,6 @@ class ObservabilityClient(Protocol):
         request: EventHistoryRequest | None = None,
         *,
         max_events: int = 0,
-        wait_seconds: float = 1.0,
         cursor: str | None = None,
         clamp: bool | None = None,
     ) -> JsonValue: ...
@@ -244,7 +243,6 @@ class ObservabilityControlClient:
         request: EventHistoryRequest | None = None,
         *,
         max_events: int = 0,
-        wait_seconds: float = 1.0,
         cursor: str | None = None,
         clamp: bool | None = None,
     ) -> JsonValue:
@@ -253,7 +251,6 @@ class ObservabilityControlClient:
             _events_stream_path(
                 selected,
                 max_events=max_events,
-                wait_seconds=wait_seconds,
                 cursor=cursor,
                 clamp=clamp,
             )
@@ -327,7 +324,6 @@ def _events_stream_path(
     request: EventHistoryRequest,
     *,
     max_events: int,
-    wait_seconds: float,
     cursor: str | None,
     clamp: bool | None,
 ) -> str:
@@ -343,7 +339,6 @@ def _events_stream_path(
     params: dict[str, JsonValue] = {
         "follow": True,
         "max_events": max_events,
-        "wait_seconds": wait_seconds,
     }
     if cursor is not None:
         params["cursor"] = cursor

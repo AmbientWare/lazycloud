@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 import websockets.asyncio.client
 from control.service import ControlPlaneService, StubKind, StubRecord
 from execution.endpoints.dispatch import (
+    AsyncEndpointResponseStream,
     EndpointBackendProtocol,
-    EndpointResponseStream,
     endpoint_backend_url,
 )
 from execution.endpoints.service import (
@@ -29,7 +29,6 @@ from shared.http.endpoints import (
     StartEndpointServeRequest,
     StartEndpointServeResponse,
 )
-from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
@@ -44,7 +43,9 @@ from api.server.dependencies import (
 )
 from api.server.deployed_stubs import (
     resolve_deployed_stub,
+    resolve_deployed_stub_async,
     resolve_deployed_stub_id,
+    resolve_deployed_stub_id_async,
 )
 from api.server.http import (
     HOP_BY_HOP_RESPONSE_HEADERS,
@@ -90,9 +91,9 @@ async def deployed_endpoint_request_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub_id(
+    stub = await resolve_deployed_stub_id_async(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Endpoint,
         public=False,
@@ -114,9 +115,9 @@ async def deployed_public_endpoint_request_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub_id(
+    stub = await resolve_deployed_stub_id_async(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Endpoint,
         public=True,
@@ -139,7 +140,7 @@ def deployed_endpoint_warmup_by_id(
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub_id(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Endpoint,
         public=False,
@@ -157,11 +158,9 @@ def deployed_endpoint_warmup_by_latest_path(
     deployment_name: str,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub(
-        control_plane,
         services,
         deployment_name,
         StubKind.Endpoint,
@@ -181,11 +180,9 @@ def deployed_endpoint_warmup_by_version(
     version: int,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub(
-        control_plane,
         services,
         deployment_name,
         StubKind.Endpoint,
@@ -206,11 +203,9 @@ async def deployed_endpoint_request_by_latest_path(
     request: Request,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub(
-        control_plane,
+    stub = await resolve_deployed_stub_async(
         services,
         deployment_name,
         StubKind.Endpoint,
@@ -236,11 +231,9 @@ async def deployed_endpoint_request_by_version(
     request: Request,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub(
-        control_plane,
+    stub = await resolve_deployed_stub_async(
         services,
         deployment_name,
         StubKind.Endpoint,
@@ -265,7 +258,7 @@ def deployed_asgi_warmup_by_id(
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub_id(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Asgi,
         public=False,
@@ -283,11 +276,9 @@ def deployed_asgi_warmup_by_latest_path(
     deployment_name: str,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub(
-        control_plane,
         services,
         deployment_name,
         StubKind.Asgi,
@@ -307,11 +298,9 @@ def deployed_asgi_warmup_by_version(
     version: int,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub(
-        control_plane,
         services,
         deployment_name,
         StubKind.Asgi,
@@ -332,10 +321,10 @@ async def deployed_asgi_websocket_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    workspace_id = authorize_websocket_workspace(services, websocket)
-    stub = resolve_deployed_stub_id(
+    workspace_id = await authorize_websocket_workspace(services, websocket)
+    stub = await resolve_deployed_stub_id_async(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Asgi,
         public=False,
@@ -360,9 +349,9 @@ async def deployed_public_asgi_websocket_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    stub = resolve_deployed_stub_id(
+    stub = await resolve_deployed_stub_id_async(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Asgi,
         public=True,
@@ -383,12 +372,10 @@ async def deployed_asgi_websocket_by_latest_path(
     deployment_name: str,
     subpath: str = "",
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    workspace_id = authorize_websocket_workspace(services, websocket)
-    stub = resolve_deployed_stub(
-        control_plane,
+    workspace_id = await authorize_websocket_workspace(services, websocket)
+    stub = await resolve_deployed_stub_async(
         services,
         deployment_name,
         StubKind.Asgi,
@@ -412,12 +399,10 @@ async def deployed_asgi_websocket_by_version(
     version: int,
     subpath: str = "",
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_websocket_services),
 ) -> None:
-    workspace_id = authorize_websocket_workspace(services, websocket)
-    stub = resolve_deployed_stub(
-        control_plane,
+    workspace_id = await authorize_websocket_workspace(services, websocket)
+    stub = await resolve_deployed_stub_async(
         services,
         deployment_name,
         StubKind.Asgi,
@@ -449,9 +434,9 @@ async def deployed_asgi_request_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub_id(
+    stub = await resolve_deployed_stub_id_async(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Asgi,
         public=False,
@@ -480,9 +465,9 @@ async def deployed_public_asgi_request_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub_id(
+    stub = await resolve_deployed_stub_id_async(
         control_plane,
-        services.apps,
+        services,
         stub_id,
         StubKind.Asgi,
         public=True,
@@ -513,11 +498,9 @@ async def deployed_asgi_request_by_latest_path(
     *,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub(
-        control_plane,
+    stub = await resolve_deployed_stub_async(
         services,
         deployment_name,
         StubKind.Asgi,
@@ -551,11 +534,9 @@ async def deployed_asgi_request_by_version(
     *,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    stub = resolve_deployed_stub(
-        control_plane,
+    stub = await resolve_deployed_stub_async(
         services,
         deployment_name,
         StubKind.Asgi,
@@ -598,7 +579,7 @@ async def _health_probe_response(
 
     if forwarded.path != CONTAINER_HEALTH_PATH:
         return None
-    result = await run_in_threadpool(service.forward_endpoint_health, forwarded)
+    result = await service.forward_endpoint_health(forwarded)
     return forwarded_response(
         status_code=result.status_code, headers=result.headers, body=result.body
     )
@@ -612,7 +593,7 @@ async def _forward_endpoint_request(
     subpath: str = "",
 ) -> Response:
     forwarded = await _forwarded_request(stub, request, subpath)
-    result = await run_in_threadpool(service.forward_endpoint_request, forwarded)
+    result = await service.forward_endpoint_request(forwarded)
     return forwarded_response(
         status_code=result.status_code, headers=result.headers, body=result.body
     )
@@ -631,14 +612,13 @@ async def _forward_asgi_http_request(
         return probe
     session: EndpointIngressDispatchSession | None = None
     try:
-        session = await run_in_threadpool(service.prepare_asgi_http, forwarded)
-        stream = await run_in_threadpool(service.open_asgi_http_stream, session, forwarded)
+        session = await service.prepare_asgi_http(forwarded)
+        stream = await service.open_asgi_http_stream(session, forwarded)
     except EndpointWebSocketDispatchRejected as exc:
         return Response(content=str(exc), status_code=exc.status_code)
     except Exception as exc:
         if session is not None:
-            await run_in_threadpool(
-                service.finish_asgi_http,
+            await service.finish_asgi_http(
                 session.task_id,
                 error=str(exc),
             )
@@ -649,7 +629,7 @@ async def _forward_asgi_http_request(
 def _asgi_streaming_response(
     service: EndpointApiService,
     session: EndpointIngressDispatchSession,
-    stream: EndpointResponseStream,
+    stream: AsyncEndpointResponseStream,
 ) -> StreamingResponse:
     response = StreamingResponse(
         _stream_asgi_response_body(service, session, stream),
@@ -671,16 +651,16 @@ def _asgi_streaming_response(
     return response
 
 
-def _stream_asgi_response_body(
+async def _stream_asgi_response_body(
     service: EndpointApiService,
     session: EndpointIngressDispatchSession,
-    stream: EndpointResponseStream,
-) -> Iterator[bytes]:
+    stream: AsyncEndpointResponseStream,
+) -> AsyncIterator[bytes]:
     body_size_bytes = 0
     completed = False
     error: str | None = None
     try:
-        for chunk in stream.iter_chunks():
+        async for chunk in stream.iter_chunks():
             body_size_bytes += len(chunk)
             yield chunk
         completed = True
@@ -688,8 +668,8 @@ def _stream_asgi_response_body(
         error = str(exc)
         raise
     finally:
-        stream.close()
-        service.finish_asgi_http(
+        await stream.close()
+        await service.finish_asgi_http(
             session.task_id,
             status_code=stream.status_code,
             body_size_bytes=body_size_bytes,
@@ -721,44 +701,59 @@ async def _forward_asgi_websocket(
     )
     session: EndpointIngressDispatchSession | None = None
     backend: ClientConnection | None = None
-    accepted = False
     cancelled = False
     error: str | None = None
+    terminal_close: BackendWebSocketClose | None = None
+    heartbeat: asyncio.Task[None] | None = None
+    heartbeat_stop = asyncio.Event()
     try:
-        session = await run_in_threadpool(service.prepare_asgi_websocket, forwarded)
+        session = await service.prepare_asgi_websocket(forwarded)
         backend = await _connect_backend_websocket(service, session, forwarded, websocket)
         await websocket.accept(subprotocol=backend.subprotocol)
-        accepted = True
-        heartbeat = asyncio.create_task(_heartbeat_asgi_websocket(service, session))
-        try:
-            cancelled = await _proxy_asgi_websocket(websocket, backend)
-        finally:
-            heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)
+        heartbeat = asyncio.create_task(_heartbeat_asgi_websocket(service, session, heartbeat_stop))
+        outcome = await _proxy_asgi_websocket(websocket, backend)
+        cancelled = outcome.cancelled
+        terminal_close = outcome.close
     except EndpointWebSocketDispatchRejected as exc:
-        await websocket.close(
-            code=status.WS_1013_TRY_AGAIN_LATER,
-            reason=str(exc)[:120],
+        terminal_close = BackendWebSocketClose(
+            status.WS_1013_TRY_AGAIN_LATER,
+            str(exc),
         )
         error = str(exc)
     except WebSocketDisconnect:
         cancelled = True
     except Exception as exc:
         error = str(exc)
-        if accepted:
-            await close_websocket(websocket, code=status.WS_1011_INTERNAL_ERROR, reason=error)
-        else:
-            await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason=error[:120])
+        terminal_close = BackendWebSocketClose(status.WS_1011_INTERNAL_ERROR, error)
     finally:
-        if session is not None:
-            await run_in_threadpool(
-                service.finish_asgi_websocket,
-                session.task_id,
-                cancelled=cancelled,
-                error=error,
-            )
-        if backend is not None:
-            await backend.close()
+        heartbeat_stop.set()
+        if heartbeat is not None:
+            try:
+                await heartbeat
+            except Exception as exc:
+                error = str(exc)
+                terminal_close = BackendWebSocketClose(
+                    status.WS_1011_INTERNAL_ERROR,
+                    error,
+                )
+        try:
+            if session is not None:
+                await service.finish_asgi_websocket(
+                    session.task_id,
+                    cancelled=cancelled,
+                    error=error,
+                )
+        finally:
+            try:
+                if backend is not None:
+                    await backend.close()
+            finally:
+                if terminal_close is not None:
+                    await close_websocket(
+                        websocket,
+                        code=terminal_close.code,
+                        reason=terminal_close.reason,
+                    )
 
 
 async def _connect_backend_websocket(
@@ -767,7 +762,7 @@ async def _connect_backend_websocket(
     request: EndpointForwardRequest,
     websocket: WebSocket,
 ) -> ClientConnection:
-    backend_socket = service.open_asgi_websocket_socket(session)
+    backend_socket = await service.open_asgi_websocket_socket(session)
     subprotocols = websocket_subprotocols(websocket)
     return await websockets.asyncio.client.connect(
         endpoint_backend_url(
@@ -789,20 +784,32 @@ class BackendWebSocketClose:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class BackendWebSocketProxyOutcome:
+    cancelled: bool = False
+    close: BackendWebSocketClose | None = None
+
+
 async def _heartbeat_asgi_websocket(
     service: EndpointApiService,
     session: EndpointIngressDispatchSession,
+    stop: asyncio.Event,
 ) -> None:
     interval = min(max(session.wait_timeout_seconds / 2, 0.1), 5.0)
     while True:
-        await asyncio.sleep(interval)
-        await run_in_threadpool(service.heartbeat_asgi_websocket, session.task_id)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except TimeoutError:
+            pass
+        else:
+            return
+        await service.heartbeat_asgi_websocket(session.task_id)
 
 
 async def _proxy_asgi_websocket(
     websocket: WebSocket,
     backend: ClientConnection,
-) -> bool:
+) -> BackendWebSocketProxyOutcome:
     backend_reader = asyncio.create_task(_backend_to_websocket(websocket, backend))
     client_reader = asyncio.create_task(_websocket_to_backend(websocket, backend))
     done, _pending = await asyncio.wait(
@@ -811,19 +818,13 @@ async def _proxy_asgi_websocket(
     )
     if backend_reader in done:
         close = await backend_reader
-        await close_websocket(
-            websocket,
-            code=close.code,
-            reason=close.reason,
-        )
         client_reader.cancel()
         await asyncio.gather(client_reader, return_exceptions=True)
-        return False
+        return BackendWebSocketProxyOutcome(close=close)
     cancelled = await client_reader
     backend_reader.cancel()
-    await backend.close()
     await asyncio.gather(backend_reader, return_exceptions=True)
-    return cancelled
+    return BackendWebSocketProxyOutcome(cancelled=cancelled)
 
 
 async def _backend_to_websocket(

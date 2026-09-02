@@ -7,7 +7,9 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from functools import partial
 from typing import Protocol
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from compute.agent_control import (
@@ -37,6 +39,7 @@ from compute.projection import PoolConfig
 from compute.providers import joined_unit_identity
 from compute.service import ComputeService
 from compute.state import (
+    AsyncRedisComputeStateRepository,
     ComputeAgentTokenState,
     ComputeAgentWorkerSlotState,
     ComputeJoinTokenState,
@@ -61,6 +64,7 @@ from control.apps import AppService
 from control.deployment_resources import DeploymentResourceService, client_manifest_resource
 from control.deployments import DeploymentService
 from control.service import ControlPlaneService, StubKind
+from coordination.redis_client import AsyncRedisClient
 from database.context import ServiceContext
 from database.repositories.compute import (
     ComputeJoinCredentialRecord,
@@ -72,15 +76,20 @@ from database.repositories.compute import (
     WireGuardGatewayRepository,
     WireGuardPeerRepository,
 )
-from database.repositories.execution import EventRepository
+from database.repositories.execution import LogRepository
 from database.repositories.identity import WorkspaceMemberRepository
-from database.repositories.orchestration import MachineRepository, WorkerRepository
+from database.repositories.orchestration import (
+    ContainerRepository,
+    MachineRepository,
+    WorkerRepository,
+)
 from execution.containers.service import ContainerService
 from execution.functions.service import FunctionControlService
 from execution.tasks import TaskService
 from identity.auth import AuthService
 from identity.authz import AuthzRequirement
 from identity.signatures import sign_payload
+from networking.async_http import AsyncBackendHttpClient, AsyncBackendHttpError
 from networking.dialer import BackendConnector, SocketBackendConnector
 from networking.routing import BackendRouteAuthenticator
 from networking.wireguard import (
@@ -94,7 +103,7 @@ from networking.wireguard import (
 )
 from observability.events import EventService
 from observability.metrics import MetricsService
-from observability.stream_state import RedisEventStreamRepository
+from observability.stream_state import AsyncRedisEventStreamRepository, RedisEventStreamRepository
 from observability.usage import UsageService
 from operations.management import ManagementService
 from pydantic import JsonValue
@@ -183,8 +192,10 @@ from shared.http.objects import (
     PutObjectResponse,
 )
 from shared.identity import AuthScope, TokenKind, TokenStatus
+from shared.logs import LogEntry
 from shared.objects import ObjectRecord
 from shared.realtime.contracts import EventRecordType
+from shared.realtime.streams import LogStreamQuery
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
     SchedulerContainerStatus,
@@ -205,6 +216,7 @@ from storage.service import ObjectStorage
 from worker.container_client import models
 from worker.container_client.scheduler import SchedulerContainerClientFactory
 
+from database import AsyncDatabaseClient
 from gateway.http import (
     AgentMetricSnapshot as HttpAgentMetricSnapshot,
 )
@@ -229,7 +241,12 @@ from gateway.http import (
     UpdateAgentRouteStatusRequest,
     UpdateAgentRouteStatusResponse,
 )
-from gateway.payloads import container_output, object_key, task_result_value
+from gateway.payloads import (
+    CONTAINER_OUTPUT_LOG_LIMIT,
+    container_output,
+    object_key,
+    task_result_value,
+)
 from gateway.route_prewarm import RoutePrewarmService
 from gateway.stub_config import deployment_spec_from_stub, stub_config, stub_kind
 from gateway.unit_state import GatewayUnitStateCoordinator, billing_owner_for_unit
@@ -343,6 +360,8 @@ larger backlog drains over consecutive passes instead of holding one lease for
 the whole fleet."""
 
 PRIVATE_NETWORK_PROBE_TIMEOUT_SECONDS = 2.0
+# Matches the presigned PUT validity the object store hands out.
+OBJECT_UPLOAD_TIMEOUT_SECONDS = 3600.0
 
 
 def _domain_error(exc: KeyError | ValueError) -> DomainError:
@@ -381,6 +400,7 @@ class GatewayControlService:
     agent_worker_image_tag: str = "local"
     agent_artifact_version: str = ""
     agent_sha256_by_arch: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
+    async_http_client: AsyncBackendHttpClient | None = None
 
     @property
     def objects(self) -> ObjectStorage:
@@ -462,55 +482,81 @@ class GatewayControlService:
         chunks: AsyncIterator[bytes],
         *,
         workspace_id: str,
+        database: AsyncDatabaseClient,
     ) -> PutObjectResponse:
-        upload_dir = self.services.context.paths.root / "gateway-uploads"
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        temp_path = upload_dir / f".object-{uuid4().hex}.part"
-        digest = hashlib.sha256()
-        size = 0
+        if self.async_http_client is None:
+            raise UpstreamUnavailableError("async object upload transport is unavailable")
+        key = object_key(request.object_metadata, request.hash)
+        upload = None
         try:
-            with temp_path.open("wb") as target:
-                async for chunk in chunks:
-                    if not chunk:
-                        continue
-                    size += len(chunk)
-                    if size > request.object_metadata.size:
-                        raise InvalidInputError("object size does not match content")
-                    target.write(chunk)
-                    digest.update(chunk)
-
-            actual_hash = digest.hexdigest()
-            if actual_hash != request.hash:
-                raise InvalidInputError("object hash does not match content")
-            if request.object_metadata.size != size:
-                raise InvalidInputError("object size does not match content")
-
-            key = object_key(request.object_metadata, request.hash)
-            existing = self._completed_object_for_upload(
+            upload = await self.objects.prepare_stream_upload(
+                database,
                 workspace_id=workspace_id,
                 bucket=request.bucket,
                 key=key,
-                sha256=actual_hash,
-                overwrite=request.overwrite,
-            )
-            if existing is not None:
-                return PutObjectResponse(object_id=existing.id)
-            record = self.objects.put_file_for_workspace(
-                workspace_id=workspace_id,
-                bucket=request.bucket,
-                key=key,
-                source=temp_path,
+                size=request.object_metadata.size,
+                sha256=request.hash,
                 content_type=request.content_type,
                 metadata=request.metadata,
                 overwrite=request.overwrite,
             )
-        except (KeyError, ValueError) as exc:
-            raise _domain_error(exc) from exc
-        except (RuntimeError, OSError) as exc:
-            raise UpstreamUnavailableError(str(exc)) from exc
-        finally:
-            temp_path.unlink(missing_ok=True)
+            target = urlsplit(upload.upload.url)
+            if target.scheme not in {"http", "https"} or not target.netloc:
+                raise UpstreamUnavailableError("object store returned an invalid upload target")
+            response = await self.async_http_client.open_stream(
+                address=urlunsplit((target.scheme, target.netloc, "", "", "")),
+                route_id="",
+                method="PUT",
+                path=urlunsplit(("", "", target.path or "/", target.query, "")),
+                headers=upload.upload.headers,
+                body=self._validated_upload_chunks(request, chunks),
+                content_length=request.object_metadata.size,
+                timeout_seconds=OBJECT_UPLOAD_TIMEOUT_SECONDS,
+                resource="object store",
+            )
+            await response.read()
+            if 400 <= response.status_code < 500:
+                raise InvalidInputError("object store rejected the upload")
+            if response.status_code < 200 or response.status_code >= 300:
+                raise UpstreamUnavailableError(
+                    f"object store upload failed with status {response.status_code}"
+                )
+            record = await self.objects.complete_stream_upload(database, upload)
+        except BaseException as exc:
+            if upload is not None:
+                try:
+                    await self.objects.abort_stream_upload(database, upload)
+                except BaseException as abort_error:
+                    raise BaseExceptionGroup(
+                        "object upload and claim cleanup failed",
+                        [exc, abort_error],
+                    ) from None
+            if isinstance(exc, (KeyError, ValueError)):
+                raise _domain_error(exc) from exc
+            if isinstance(exc, (AsyncBackendHttpError, RuntimeError, OSError)):
+                raise UpstreamUnavailableError(str(exc)) from exc
+            raise
         return PutObjectResponse(object_id=record.id)
+
+    @staticmethod
+    async def _validated_upload_chunks(
+        request: PutObjectRequest,
+        chunks: AsyncIterator[bytes],
+    ) -> AsyncIterator[bytes]:
+        digest = hashlib.sha256()
+        size = 0
+        async for chunk in chunks:
+            if not chunk:
+                continue
+            size += len(chunk)
+            if size > request.object_metadata.size:
+                raise InvalidInputError("object size does not match content")
+            digest.update(chunk)
+            yield chunk
+        if size != request.object_metadata.size:
+            raise InvalidInputError("object size does not match content")
+        if digest.hexdigest() != request.hash:
+            raise InvalidInputError("object hash does not match content")
 
     def object_download_url(
         self,
@@ -582,23 +628,53 @@ class GatewayControlService:
                 workspace_id=container.workspace_id,
             )
 
-    def attach_to_container(
+    async def attach_to_container(
         self,
         request: AttachToContainerRequest,
         *,
         workspace_id: str,
+        database: AsyncDatabaseClient,
+        redis: AsyncRedisClient,
     ) -> AttachToContainerResponse:
         try:
-            container = self._container_for_workspace(request.container_id, workspace_id)
+            container, task_logs = await database.run_transaction(
+                lambda session: self._container_output_state(
+                    session,
+                    request.container_id,
+                    workspace_id,
+                )
+            )
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
-        output = container_output(self.services, container, logs=self.event_streams)
+        output = await container_output(
+            container,
+            task_logs=task_logs,
+            logs=AsyncRedisEventStreamRepository(redis),
+        )
         done = container.finished_at is not None
         return AttachToContainerResponse(
             output=output,
             done=done,
             exit_code=container.exit_code or 0,
         )
+
+    @staticmethod
+    def _container_output_state(
+        session: Session,
+        container_id: str,
+        workspace_id: str,
+    ) -> tuple[ContainerRecord, tuple[LogEntry, ...]]:
+        container = ContainerRepository(session).get(container_id, workspace_id=workspace_id)
+        if container is None:
+            raise NotFoundError(f"container not found: {container_id}")
+        if not container.task_id:
+            return container, ()
+        page = LogRepository(session).page(
+            LogStreamQuery(workspace_id=workspace_id, task_id=container.task_id),
+            workspace_id=workspace_id,
+            limit=CONTAINER_OUTPUT_LOG_LIMIT,
+        )
+        return container, tuple(record.entry for record in page.data)
 
     def sync_container_workspace(
         self,
@@ -2551,33 +2627,6 @@ class GatewayControlService:
         except NotFoundError:
             return None
 
-    def _completed_object_for_upload(
-        self,
-        *,
-        workspace_id: str,
-        bucket: str,
-        key: str,
-        sha256: str,
-        overwrite: bool,
-    ) -> ObjectRecord | None:
-        if overwrite:
-            return None
-        matching_hash = self.objects.find_by_sha256_for_workspace(
-            workspace_id=workspace_id,
-            sha256=sha256,
-            bucket=bucket,
-        )
-        if matching_hash is not None and self.objects.object_is_complete(matching_hash):
-            return matching_hash
-        matching_key = self._object_by_key(bucket, key, workspace_id=workspace_id)
-        if matching_key is None:
-            return None
-        if matching_key.sha256 != sha256:
-            raise ConflictError(f"object already exists: {bucket}/{key}")
-        if self.objects.object_is_complete(matching_key):
-            return matching_key
-        return None
-
     def _container_for_workspace(
         self,
         container_id: str,
@@ -2629,8 +2678,10 @@ class GatewayControlService:
             self.compute_states.save_agent_token_state(state)
         return state
 
-    def sweep_disconnected_agents(
+    async def sweep_disconnected_agents(
         self,
+        database: AsyncDatabaseClient,
+        redis: AsyncRedisClient,
         *,
         now: datetime | None = None,
         limit: int = DISCONNECT_SWEEP_LIMIT,
@@ -2647,12 +2698,16 @@ class GatewayControlService:
 
         current_time = now or utc_now()
         cutoff = current_time - timedelta(seconds=AGENT_HEARTBEAT_TIMEOUT_SECONDS)
-        with self.services.context.database.session() as session:
-            candidates = ComputeMachineEnrollmentRepository(session).list_silent_since(
+
+        def list_candidates(session: Session) -> list[ComputeMachineEnrollmentRecord]:
+            return ComputeMachineEnrollmentRepository(session).list_silent_since(
                 cutoff=cutoff,
                 limit=limit,
             )
+
+        candidates = await database.run_transaction(list_candidates)
         marked: list[str] = []
+        compute_states = AsyncRedisComputeStateRepository(redis)
         for candidate in candidates:
             # One machine that cannot be written must not cost the rest their
             # sweep. An enrollment whose workspace is no longer active raises
@@ -2660,17 +2715,25 @@ class GatewayControlService:
             # escape would put it at the head of every later scan and stop the
             # fleet being swept at all.
             try:
-                disconnected = self._mark_agent_disconnected(candidate, now=current_time)
+                disconnected = await database.run_transaction(
+                    partial(
+                        self._mark_agent_disconnected_in_session,
+                        candidate=candidate,
+                        now=current_time,
+                    )
+                )
             except (DomainError, ValueError) as exc:
-                self._record_disconnect_failure(candidate, exc)
+                await self._record_disconnect_failure(database, candidate, exc)
                 continue
             if disconnected is None:
                 continue
+            await compute_states.save_agent_token_state(disconnected)
             marked.append(disconnected.machine_id)
         return marked
 
-    def _mark_agent_disconnected(
+    def _mark_agent_disconnected_in_session(
         self,
+        session: Session,
         candidate: ComputeMachineEnrollmentRecord,
         *,
         now: datetime,
@@ -2688,51 +2751,50 @@ class GatewayControlService:
         asking for it; the next reads the row it wrote and has nothing to do.
         """
 
-        with self.services.context.database.session() as session:
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            enrollment = enrollments.by_machine(
-                candidate.workspace_id,
-                candidate.machine_id,
-                pool=candidate.pool,
-                for_update=True,
+        enrollments = ComputeMachineEnrollmentRepository(session)
+        enrollment = enrollments.by_machine(
+            candidate.workspace_id,
+            candidate.machine_id,
+            pool=candidate.pool,
+            for_update=True,
+        )
+        if enrollment is None or enrollment.status is not ComputeMachineEnrollmentStatus.Active:
+            return None
+        state = _agent_state_from_enrollment(enrollment)
+        if state is None:
+            return None
+        plan = plan_agent_disconnect(agent_telemetry_state(state), now=now)
+        if plan.action is not AgentDisconnectAction.MarkDisconnected:
+            return None
+        state = state.model_copy(update={"last_disconnect_at": plan.disconnected_at})
+        readiness_phase = _agent_readiness_phase(state)
+        enrollments.save(
+            enrollment.model_copy(
+                update={
+                    "last_disconnect_at": plan.disconnected_at,
+                    "readiness_phase": readiness_phase,
+                    "updated_at": now,
+                }
             )
-            if enrollment is None or enrollment.status is not ComputeMachineEnrollmentStatus.Active:
-                return None
-            state = _agent_state_from_enrollment(enrollment)
-            if state is None:
-                return None
-            plan = plan_agent_disconnect(agent_telemetry_state(state), now=now)
-            if plan.action is not AgentDisconnectAction.MarkDisconnected:
-                return None
-            state = state.model_copy(update={"last_disconnect_at": plan.disconnected_at})
-            readiness_phase = _agent_readiness_phase(state)
-            enrollments.save(
-                enrollment.model_copy(
+        )
+        machines = MachineRepository(session)
+        machine = machines.get(state.machine_id, workspace_id=state.workspace_id)
+        if machine is not None:
+            machines.upsert(
+                machine.model_copy(
                     update={
-                        "last_disconnect_at": plan.disconnected_at,
-                        "readiness_phase": readiness_phase,
+                        "status": MACHINE_STATUS_FOR_READINESS[readiness_phase],
                         "updated_at": now,
                     }
-                )
+                ),
+                workspace_id=state.workspace_id,
             )
-            machines = MachineRepository(session)
-            machine = machines.get(state.machine_id, workspace_id=state.workspace_id)
-            if machine is not None:
-                machines.upsert(
-                    machine.model_copy(
-                        update={
-                            "status": MACHINE_STATUS_FOR_READINESS[readiness_phase],
-                            "updated_at": now,
-                        }
-                    ),
-                    workspace_id=state.workspace_id,
-                )
-            self._write_agent_disconnected_event(session, state, plan.reason, now=now)
-        self.compute_states.save_agent_token_state(state)
+        self._write_agent_disconnected_event(session, state, plan.reason, now=now)
         return state
 
-    def _record_disconnect_failure(
+    async def _record_disconnect_failure(
         self,
+        database: AsyncDatabaseClient,
         candidate: ComputeMachineEnrollmentRecord,
         exc: Exception,
     ) -> None:
@@ -2744,8 +2806,9 @@ class GatewayControlService:
         """
 
         # Recording the failure must never replace the failure being recorded.
-        with suppress(Exception):
-            self.services.events.emit(
+        def record(session: Session) -> None:
+            self.services.events.emit_in_session(
+                session,
                 "agent.disconnect.failed",
                 resource_type="agent",
                 resource_id=candidate.machine_id,
@@ -2761,6 +2824,9 @@ class GatewayControlService:
                     "error_type": type(exc).__name__,
                 },
             )
+
+        with suppress(Exception):
+            await database.run_transaction(record)
 
     def _write_agent_disconnected_event(
         self,
@@ -2787,15 +2853,14 @@ class GatewayControlService:
             "last_seen_at": last_seen.isoformat() if last_seen is not None else None,
             "reason": reason,
         }
-        EventRepository(session).records.create_across_workspaces(
-            {
-                "action": "agent.disconnected",
-                "level": EventLevel.Warning.value,
-                "resource_type": "agent",
-                "resource_id": state.machine_id,
-                "message": f"machine {state.machine_id} stopped reporting {silence} ago",
-                "data": data,
-            },
+        self.services.events.emit_in_session(
+            session,
+            "agent.disconnected",
+            resource_type="agent",
+            resource_id=state.machine_id,
+            message=f"machine {state.machine_id} stopped reporting {silence} ago",
+            level=EventLevel.Warning,
+            data=data,
             workspace_id=state.workspace_id,
         )
 

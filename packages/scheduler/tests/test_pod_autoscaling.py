@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import time
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Protocol
 
 import pytest
+from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubConfigUpdateValue, StubKind, StubRecord
 from coordination.redis_client import RedisClient
@@ -16,7 +16,7 @@ from database.repositories.orchestration import AutoscalerStateRepository, Conta
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.pods.proxy import PodProxySession, PodProxyTarget
 from execution.pods.service import PodControlService
-from gateway.pod_proxy import RedisPodProxyConnectionRepository
+from gateway.pod_proxy import AsyncRedisPodProxyConnectionRepository
 from observability.stream_state import RedisEventStreamRepository
 from operations.management import ManagementService
 from pydantic import JsonValue
@@ -49,11 +49,18 @@ from shared.workload_keys import (
     pod_total_connections_key,
 )
 from tests.metric_helpers import metric_value
+from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 
 
-class _RealRedisActors(Protocol):
-    def client(self) -> RedisClient: ...
+@pytest.fixture
+async def async_io(isolated_services: ApiServices) -> AsyncIterator[ApiAsyncIo]:
+    io = isolated_services.require_async_io()
+    await io.start()
+    try:
+        yield io
+    finally:
+        await io.close()
 
 
 def test_pod_autoscaler_scales_immediately_idle_deployment_to_zero(
@@ -118,7 +125,7 @@ def test_pod_autoscaler_scales_immediately_idle_deployment_to_zero(
 
 def test_pod_autoscaler_replaces_running_records_without_live_scheduler_state(
     isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     scheduler = _Scheduler()
     isolated_services = replace(
@@ -217,7 +224,7 @@ def test_pod_keep_warm_minus_one_is_durable_never_scale_to_zero(
 
 def test_always_on_pod_deployment_releases_containers_the_operator_scaled_away(
     isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     scheduler = _Scheduler()
     isolated_services = replace(
@@ -281,7 +288,7 @@ def test_always_on_pod_deployment_releases_containers_the_operator_scaled_away(
 
 def test_pod_autoscaler_scales_down_only_idle_deployment_containers(
     isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     scheduler = _Scheduler()
     isolated_services = replace(
@@ -346,16 +353,17 @@ def test_pod_autoscaler_scales_down_only_idle_deployment_containers(
     assert isolated_services.containers.get(warm.id).status is ContainerStatus.Running
 
 
-def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_stop(
+@pytest.mark.anyio
+async def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_stop(
     isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
+    async_io: ApiAsyncIo,
 ) -> None:
     scheduler = _Scheduler()
     isolated_services = replace(
         isolated_services,
         containers=replace(isolated_services.containers, scheduler=scheduler),
     )
-    redis = real_redis_actors.client()
+    redis = isolated_services.redis_client
     isolated_services = replace(
         isolated_services,
         containers=replace(
@@ -371,7 +379,7 @@ def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_stop(
         created_at=utc_now() - timedelta(seconds=60),
         redis=redis,
     )
-    connections = RedisPodProxyConnectionRepository(redis)
+    connections = AsyncRedisPodProxyConnectionRepository(async_io.redis)
     service = PodControlService(
         isolated_services,
         redis=redis,
@@ -379,21 +387,21 @@ def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_stop(
     )
     lock_key = redis.key(pod_keep_warm_lock_key(stub.workspace_id, stub.id, container.id))
     redis.set(lock_key, "1", ex=1)
-    connections.increment_total_connections(stub.workspace_id, stub.id)
-    connections.increment_container_connections(
+    await connections.increment_total_connections(stub.workspace_id, stub.id)
+    await connections.increment_container_connections(
         stub.workspace_id,
         stub.id,
         container.id,
         keep_warm_seconds=stub.config.runtime.keep_warm,
     )
-    time.sleep(1.1)
+    await asyncio.sleep(1.1)
 
     assert redis.ttl(lock_key) == -1
     active = _pod_autoscaler(isolated_services, redis).reconcile()[0]
     assert active.signal_value == 1
     assert active.actions == []
 
-    service.finish_pod_proxy(
+    await service.finish_pod_proxy(
         PodProxySession(
             workspace_id=stub.workspace_id,
             stub_id=stub.id,
@@ -416,14 +424,15 @@ def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_stop(
 
 
 @pytest.mark.parametrize("keep_warm_seconds", [2, -1])
-def test_pod_proxy_finalization_is_idempotent_after_stub_deletion(
+@pytest.mark.anyio
+async def test_pod_proxy_finalization_is_idempotent_after_stub_deletion(
     isolated_services: ApiServices,
-    real_redis_actors: _RealRedisActors,
+    async_io: ApiAsyncIo,
     keep_warm_seconds: int,
 ) -> None:
-    redis = real_redis_actors.client()
+    redis = isolated_services.redis_client
     stub = _create_pod_stub(isolated_services, keep_warm_seconds=keep_warm_seconds)
-    connections = RedisPodProxyConnectionRepository(redis)
+    connections = AsyncRedisPodProxyConnectionRepository(async_io.redis)
     service = PodControlService(
         isolated_services,
         redis=redis,
@@ -436,10 +445,10 @@ def test_pod_proxy_finalization_is_idempotent_after_stub_deletion(
         target=PodProxyTarget(container_id=container_id, address="10.0.0.1:8080"),
         keep_warm_seconds=stub.config.runtime.keep_warm,
     )
-    connections.increment_total_connections(stub.workspace_id, stub.id)
+    await connections.increment_total_connections(stub.workspace_id, stub.id)
     lock_key = redis.key(pod_keep_warm_lock_key(stub.workspace_id, stub.id, container_id))
     redis.set(lock_key, "1")
-    connections.increment_container_connections(
+    await connections.increment_container_connections(
         stub.workspace_id,
         stub.id,
         container_id,
@@ -453,11 +462,10 @@ def test_pod_proxy_finalization_is_idempotent_after_stub_deletion(
         )
     redis.delete(lock_key)
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        list(executor.map(service.finish_pod_proxy, [session] * 8))
+    await asyncio.gather(*(service.finish_pod_proxy(session) for _ in range(8)))
 
     assert not redis.exists(lock_key)
-    assert connections.container_connections(stub.workspace_id, stub.id, container_id) == 0
+    assert await connections.container_connections(stub.workspace_id, stub.id, container_id) == 0
     assert not redis.exists(redis.key(pod_total_connections_key(stub.workspace_id, stub.id)))
 
 

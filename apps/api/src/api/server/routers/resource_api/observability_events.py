@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 
+from coordination.stream_tail import RedisStreamTailBroker
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import StreamingResponse
 from observability.event_summary import (
@@ -11,12 +11,15 @@ from observability.event_summary import (
     ContainerEventsBatchTarget,
     ContainerEventSummary,
 )
-from observability.stream_state import RedisEventStreamRepository, RedisStreamRecord
+from observability.stream_state import (
+    AsyncRedisEventStreamRepository,
+    RedisEventStreamRepository,
+    RedisStreamRecord,
+)
 from observability.workspace_changes import (
     WORKSPACE_CHANGE_SSE_EVENT,
-    WORKSPACE_CHANGE_STREAM_HEARTBEAT_SECONDS,
-    WorkspaceChangeService,
-    validate_workspace_change_cursor,
+    AsyncWorkspaceChangeReader,
+    WorkspaceChangeRecord,
 )
 from shared.http.observability import EventListResponse, EventQueryResponse
 from shared.realtime.streams import EventHistoryQuery
@@ -25,7 +28,12 @@ from api.server.auth import read_workspace
 from api.server.dependencies import current_services
 from api.server.routers.resource_api.common import _management
 from api.server.services import ApiServices
-from api.server.sse import sse_event, sse_response
+from api.server.sse import (
+    SSE_HEARTBEAT_SECONDS,
+    SseItem,
+    sse_response_items,
+    sse_response_prepared,
+)
 
 router = APIRouter()
 
@@ -42,16 +50,14 @@ def api_v1_stream_workspace_changes(
     workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),
 ) -> StreamingResponse:
-    cursor = (
-        validate_workspace_change_cursor(last_event_id)
-        if last_event_id is not None
-        else services.workspace_changes.repository.current_entry_id(workspace_id)
-    )
-    return _workspace_change_response(
-        services.workspace_changes,
-        workspace_id=workspace_id,
-        cursor=cursor,
-        max_events=max_events,
+    changes = AsyncWorkspaceChangeReader(services.require_async_io().realtime)
+    return sse_response_prepared(
+        lambda: _prepare_workspace_change_items(
+            changes,
+            workspace_id=workspace_id,
+            after=last_event_id,
+            max_events=max_events,
+        )
     )
 
 
@@ -70,51 +76,31 @@ def list_events(
     )
 
 
-def _workspace_change_response(
-    changes: WorkspaceChangeService,
+async def _prepare_workspace_change_items(
+    changes: AsyncWorkspaceChangeReader,
     *,
     workspace_id: str,
-    cursor: str,
+    after: str | None,
     max_events: int,
-) -> StreamingResponse:
-    return StreamingResponse(
-        _workspace_change_events(
-            changes,
-            workspace_id=workspace_id,
-            cursor=cursor,
+) -> AsyncIterator[SseItem]:
+    return _workspace_change_items(
+        await changes.follow(
+            workspace_id,
+            after=after,
             max_events=max_events,
-        ),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+            heartbeat_seconds=SSE_HEARTBEAT_SECONDS,
+        )
     )
 
 
-def _workspace_change_events(
-    changes: WorkspaceChangeService,
-    *,
-    workspace_id: str,
-    cursor: str,
-    max_events: int,
-) -> Iterator[str]:
-    current_cursor = cursor
-    emitted = 0
-    heartbeat_at = time.monotonic() + WORKSPACE_CHANGE_STREAM_HEARTBEAT_SECONDS
-    yield ": connected\n\n"
-    while max_events <= 0 or emitted < max_events:
-        records = changes.repository.read_after(workspace_id, current_cursor)
-        for record in records:
-            current_cursor = record.entry_id
-            yield sse_event(WORKSPACE_CHANGE_SSE_EVENT, record.entry_id, record.event)
-            emitted += 1
-            heartbeat_at = time.monotonic() + WORKSPACE_CHANGE_STREAM_HEARTBEAT_SECONDS
-            if max_events > 0 and emitted >= max_events:
-                return
-        if time.monotonic() >= heartbeat_at:
-            yield ": heartbeat\n\n"
-            heartbeat_at = time.monotonic() + WORKSPACE_CHANGE_STREAM_HEARTBEAT_SECONDS
+async def _workspace_change_items(
+    records: AsyncIterator[WorkspaceChangeRecord | None],
+) -> AsyncIterator[SseItem]:
+    async for record in records:
+        if record is None:
+            yield None
+        else:
+            yield (WORKSPACE_CHANGE_SSE_EVENT, record.entry_id, record.event)
 
 
 @router.get(
@@ -127,7 +113,6 @@ def api_v1_stream_container_events(
     cursor: str | None = None,
     clamp: bool | None = None,
     max_events: int = Query(0, ge=0),
-    wait_seconds: float = Query(1.0, ge=0, le=30),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
@@ -139,13 +124,12 @@ def api_v1_stream_container_events(
         query,
         follow=follow,
         max_events=max_events,
-        wait_seconds=wait_seconds,
         last_event_id=last_event_id or cursor,
         clamp=clamp,
     ):
         return response
     result = _management(services).event_history(workspace_id, container_id=container_id)
-    return sse_response((item.action, item.id, item) for item in result.data)
+    return sse_response_items((item.action, item.id, item) for item in result.data)
 
 
 @router.get(
@@ -200,7 +184,6 @@ def api_v1_stream_stub_container_events(
     cursor: str | None = None,
     clamp: bool | None = None,
     max_events: int = Query(0, ge=0),
-    wait_seconds: float = Query(1.0, ge=0, le=30),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
@@ -216,13 +199,12 @@ def api_v1_stream_stub_container_events(
         query,
         follow=follow,
         max_events=max_events,
-        wait_seconds=wait_seconds,
         last_event_id=last_event_id or cursor,
         clamp=clamp,
     ):
         return response
     result = _management(services).event_history(workspace_id, container_id=container_id)
-    return sse_response(
+    return sse_response_items(
         (item.action, item.id, item)
         for item in result.data
         if item.data.get("stub_id") in {None, stub_id}
@@ -289,7 +271,6 @@ def api_v1_stream_stub_events(
     cursor: str | None = None,
     clamp: bool | None = None,
     max_events: int = Query(0, ge=0),
-    wait_seconds: float = Query(1.0, ge=0, le=30),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
@@ -301,7 +282,6 @@ def api_v1_stream_stub_events(
         query,
         follow=follow,
         max_events=max_events,
-        wait_seconds=wait_seconds,
         last_event_id=last_event_id or cursor,
         clamp=clamp,
     ):
@@ -309,7 +289,7 @@ def api_v1_stream_stub_events(
     result = _management(services).event_history(
         workspace_id, resource_type="stub", resource_id=stub_id
     )
-    return sse_response((item.action, item.id, item) for item in result.data)
+    return sse_response_items((item.action, item.id, item) for item in result.data)
 
 
 @router.get(
@@ -322,7 +302,6 @@ def api_v1_stream_task_events(
     cursor: str | None = None,
     clamp: bool | None = None,
     max_events: int = Query(0, ge=0),
-    wait_seconds: float = Query(1.0, ge=0, le=30),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
@@ -334,13 +313,12 @@ def api_v1_stream_task_events(
         query,
         follow=follow,
         max_events=max_events,
-        wait_seconds=wait_seconds,
         last_event_id=last_event_id or cursor,
         clamp=clamp,
     ):
         return response
     result = _management(services).event_history(workspace_id, task_id=task_id)
-    return sse_response((item.action, item.id, item) for item in result.data)
+    return sse_response_items((item.action, item.id, item) for item in result.data)
 
 
 @router.get(
@@ -353,7 +331,6 @@ def api_v1_stream_app_events(
     cursor: str | None = None,
     clamp: bool | None = None,
     max_events: int = Query(0, ge=0),
-    wait_seconds: float = Query(1.0, ge=0, le=30),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
@@ -365,7 +342,6 @@ def api_v1_stream_app_events(
         query,
         follow=follow,
         max_events=max_events,
-        wait_seconds=wait_seconds,
         last_event_id=last_event_id or cursor,
         clamp=clamp,
     ):
@@ -375,7 +351,7 @@ def api_v1_stream_app_events(
         resource_type="app",
         resource_id=app_id,
     )
-    return sse_response((item.action, item.id, item) for item in result.data)
+    return sse_response_items((item.action, item.id, item) for item in result.data)
 
 
 @router.get(
@@ -414,7 +390,6 @@ def api_v1_stream_workspace_events(
     cursor: str | None = None,
     clamp: bool | None = None,
     max_events: int = Query(0, ge=0),
-    wait_seconds: float = Query(1.0, ge=0, le=30),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
@@ -426,13 +401,12 @@ def api_v1_stream_workspace_events(
         query,
         follow=follow,
         max_events=max_events,
-        wait_seconds=wait_seconds,
         last_event_id=last_event_id or cursor,
         clamp=clamp,
     ):
         return response
     result = _management(services).event_history(workspace_id)
-    return sse_response((item.action, item.id, item) for item in result.data)
+    return sse_response_items((item.action, item.id, item) for item in result.data)
 
 
 @router.post(
@@ -454,32 +428,53 @@ def _redis_event_response(
     *,
     follow: bool,
     max_events: int,
-    wait_seconds: float,
     last_event_id: str | None,
     clamp: bool | None,
 ) -> StreamingResponse | None:
-    repository = RedisEventStreamRepository(services.redis())
     if follow:
-        return sse_response(
-            _redis_event_items(
-                repository.stream_event_history(
-                    query,
-                    last_event_id=last_event_id,
-                    clamp=clamp,
-                    block_milliseconds=int(wait_seconds * 1000),
-                    max_events=max_events,
-                )
+        async_io = services.require_async_io()
+        repository = AsyncRedisEventStreamRepository(async_io.redis)
+        return sse_response_prepared(
+            lambda: _prepare_redis_event_items(
+                repository,
+                async_io.realtime,
+                query,
+                last_event_id=last_event_id,
+                clamp=clamp,
+                max_events=max_events,
             )
         )
+    repository = RedisEventStreamRepository(services.redis())
     try:
         records = repository.read_event_history(query, cursor=last_event_id, clamp=clamp)
     except (AttributeError, TypeError, RuntimeError):
         return None
     if not records and last_event_id is not None:
-        return sse_response(())
+        return sse_response_items(())
     if not records:
         return None
-    return sse_response(_redis_event_items(records))
+    return sse_response_items(_redis_event_items(records))
+
+
+async def _prepare_redis_event_items(
+    repository: AsyncRedisEventStreamRepository,
+    tail: RedisStreamTailBroker,
+    query: EventHistoryQuery,
+    *,
+    last_event_id: str | None,
+    clamp: bool | None,
+    max_events: int,
+) -> AsyncIterator[SseItem]:
+    return _async_redis_event_items(
+        await repository.follow_event_history(
+            tail,
+            query,
+            last_event_id=last_event_id,
+            clamp=clamp,
+            max_events=max_events,
+            heartbeat_seconds=SSE_HEARTBEAT_SECONDS,
+        )
+    )
 
 
 def _redis_event_items(
@@ -487,6 +482,16 @@ def _redis_event_items(
 ) -> Iterator[tuple[str, str, object]]:
     for record in records:
         yield (record.event_name, record.entry_id, record.body)
+
+
+async def _async_redis_event_items(
+    records: AsyncIterator[RedisStreamRecord | None],
+) -> AsyncIterator[SseItem]:
+    async for record in records:
+        if record is None:
+            yield None
+        else:
+            yield (record.event_name, record.entry_id, record.body)
 
 
 @router.get(

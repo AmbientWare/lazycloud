@@ -83,17 +83,14 @@ controlPlane:
   initResources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 256Mi }
-  # One of these is held for the process's lifetime by the recovery fence, so a
-  # replica works with one fewer than it appears to have.
-  #
-  # Sized for the requests that hold a connection, which is not the same as the
-  # requests in flight: the worker long-polls (`get-next-container-request`,
-  # `stream-worker-events`) hold a thread for their whole wait and no connection
-  # at all. Bounding one by the other starves them, and a fleet whose workers
-  # cannot long-poll stops taking work while reporting itself healthy.
+  # Each replica owns one synchronous and one asynchronous engine. Both read
+  # these settings, so 2 + 1 means six possible connections per replica and 12
+  # across the two replicas. The recovery fence holds one asynchronous
+  # connection per process; request and stream operations use that engine's
+  # remaining capacity without holding a connection for an SSE lifetime.
   database:
-    poolSize: 4
-    maxOverflow: 2
+    poolSize: 2
+    maxOverflow: 1
 
 scheduler:
   replicas: 1
@@ -129,8 +126,8 @@ scheduler:
     # Sessions are opened around an operation rather than held for a pass, so
     # four loops draw four at their peak; the rest is for a pass that opens a
     # second inside the first. Bounded from above by the server's ceiling, which
-    # `lazycloud.databaseBudget` enforces at render time — this and the control
-    # plane's two replicas are what that 25 is divided between.
+    # `lazycloud.databaseBudget` enforces at render time. This and the control
+    # plane's four engine pools are what that 25 is divided between.
     poolSize: 5
     maxOverflow: 2
 

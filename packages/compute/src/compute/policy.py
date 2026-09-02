@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -49,6 +50,7 @@ from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.context import ComputeContext
 from compute.offers import ReservationStatus
 from compute.provider_machines import _provider_booted_template_version
+from database import AsyncDatabaseClient
 
 LOGGER = logging.getLogger(__name__)
 
@@ -278,7 +280,10 @@ class WorkspaceComputePolicyService:
             configuration=connection.compute,
         )
 
-    def reconcile_capacity_at_startup(self) -> tuple[ComputeUnitRecord, ...]:
+    async def reconcile_capacity_at_startup(
+        self,
+        database: AsyncDatabaseClient,
+    ) -> tuple[ComputeUnitRecord, ...]:
         """Rebuild every warm baseline the connected accounts still ask for.
 
         Iterating connections rather than workspaces is what the configuration's
@@ -289,30 +294,34 @@ class WorkspaceComputePolicyService:
         baseline = self.aws_default_capacity
         if baseline is None:
             return ()
-        with self.context.database.session() as session:
-            active_workspace_ids = {
-                workspace.id
-                for workspace in WorkspaceRepository(session).list()
-                if workspace.status is WorkspaceStatus.Active
-            }
-            members = WorkspaceMemberRepository(session)
-            targets = [
-                (workspace_id, connection.compute)
-                for connection in AwsAccountConnectionRepository(session).list_all()
-                for workspace_id in members.owned_workspace_ids(connection.user_id)
-                if workspace_id in active_workspace_ids
-            ]
-        return tuple(
-            pool
-            for workspace_id, configuration in targets
-            if (
-                pool := baseline.reconcile(
-                    workspace_id=workspace_id,
-                    configuration=configuration,
-                )
+        targets = await database.run_transaction(self._startup_capacity_targets)
+        pools: list[ComputeUnitRecord] = []
+        for workspace_id, configuration in targets:
+            pool = await asyncio.to_thread(
+                baseline.reconcile,
+                workspace_id=workspace_id,
+                configuration=configuration,
             )
-            is not None
-        )
+            if pool is not None:
+                pools.append(pool)
+        return tuple(pools)
+
+    @staticmethod
+    def _startup_capacity_targets(
+        session: DatabaseSession,
+    ) -> list[tuple[str, AwsAccountComputeConfiguration]]:
+        active_workspace_ids = {
+            workspace.id
+            for workspace in WorkspaceRepository(session).list()
+            if workspace.status is WorkspaceStatus.Active
+        }
+        members = WorkspaceMemberRepository(session)
+        return [
+            (workspace_id, connection.compute)
+            for connection in AwsAccountConnectionRepository(session).list_all()
+            for workspace_id in members.owned_workspace_ids(connection.user_id)
+            if workspace_id in active_workspace_ids
+        ]
 
     def default_machine_pool(self, *, workspace: str) -> MachinePool:
         """Pool a workload lands in when it names none."""
