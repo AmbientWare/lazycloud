@@ -48,7 +48,7 @@ the repository's `release` environment.
 
 ## Release Workflow
 
-Tag or dispatch `.github/workflows/release.yml`. The connected-AWS job:
+Run the `Ship` workflow from `main`. Its reusable release workflow then:
 
 1. builds the standalone agent on `linux/amd64` and verifies it on Amazon Linux;
 2. builds and pushes `container-worker` to Amazon ECR Public;
