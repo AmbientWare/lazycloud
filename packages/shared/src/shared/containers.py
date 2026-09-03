@@ -66,6 +66,7 @@ class ContainerRecord(ContractModel):
     pid: int | None = None
     exit_code: int | None = None
     termination_reason: StopContainerReason = StopContainerReason.Unknown
+    startup_error: str = ""
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
     ports: dict[str, int] = Field(default_factory=dict)

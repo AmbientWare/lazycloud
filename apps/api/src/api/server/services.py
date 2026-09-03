@@ -303,6 +303,14 @@ class FunctionApiService(Protocol):
 
     def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]: ...
 
+    def fail_unclaimed_tasks(
+        self,
+        stub_id: str,
+        *,
+        error: str,
+        limit: int = 100,
+    ) -> int: ...
+
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse: ...
 
     def function_set_result(self, request: FunctionSetResultBody) -> FunctionSetResultResponse: ...

@@ -2754,18 +2754,21 @@ class WorkerRepositoryService:
                     container.status,
                     container.exit_code,
                     container.finished_at,
+                    container.startup_error,
                 )
                 if task_id and not container.task_id:
                     container.task_id = task_id
                 container.status = ContainerStatus.Failed
                 container.exit_code = 1
                 container.finished_at = container.finished_at or finished_at
+                container.startup_error = error
                 self._release_container_runtime_state(container)
                 if previous_state != (
                     container.task_id,
                     container.status,
                     container.exit_code,
                     container.finished_at,
+                    container.startup_error,
                 ):
                     changed_container = ContainerRepository(session).upsert(container)
 

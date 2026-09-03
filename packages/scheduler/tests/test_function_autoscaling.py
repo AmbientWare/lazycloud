@@ -46,6 +46,7 @@ from shared.deployments import DeploymentKind
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody
 from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
+from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
 from tests.metric_helpers import metric_value
 from tests.redis_fakes import FakeRedis
@@ -247,6 +248,65 @@ def test_function_autoscaler_reclaims_a_container_that_never_started(
     assert result.current_containers == 1
     assert result.desired_containers == 2
     assert result.actions[-1].action == "start"
+
+
+def test_function_startup_breaker_fails_queued_tasks_with_the_startup_error(
+    isolated_services: ApiServices,
+) -> None:
+    scheduler = _Scheduler()
+    services = replace(
+        isolated_services,
+        containers=replace(isolated_services.containers, scheduler=scheduler),
+    )
+    redis = RedisClient(FakeRedis(), key_prefix="test")
+    stub = _create_function_stub(services, max_containers=1)
+    invoked = FunctionControlService(services).function_invoke(
+        FunctionInvokeBody(
+            stub_id=stub.id,
+            invocation=FunctionJsonInvocation(args=[1]),
+        )
+    )
+    now = utc_now()
+    startup_error = (
+        "container startup failed during load-image: image OCI descriptor does not belong "
+        "to the workload registry"
+    )
+    starting = _pending_containers(services, stub)[0]
+    starting.status = ContainerStatus.Failed
+    starting.exit_code = 1
+    starting.finished_at = now
+    starting.startup_error = startup_error
+    with services.context.database.session() as session:
+        repository = ContainerRepository(session)
+        repository.upsert(starting)
+        for suffix in (902, 903):
+            repository.upsert(
+                ContainerRecord(
+                    id=f"00000000-0000-4000-8000-000000000{suffix}",
+                    name="function-startup-failure",
+                    image="img-function",
+                    command=["python", "-m", "runner"],
+                    workspace_id=stub.workspace_id,
+                    stub_id=stub.id,
+                    app_id=stub.app_id,
+                    status=ContainerStatus.Failed,
+                    exit_code=1,
+                    startup_error=startup_error,
+                    created_at=now,
+                    finished_at=now,
+                )
+            )
+
+    result = _function_autoscaler(services, redis).reconcile(now=now)[0]
+
+    failed_task = services.tasks.get(invoked.task_id)
+    assert failed_task.status is TaskStatus.Failed
+    assert failed_task.error == startup_error
+    assert failed_task.exit_code == 1
+    assert len(scheduler.requests) == 1
+    assert [action.action for action in result.actions] == ["fail-unclaimed-tasks"]
+    assert FunctionControlService(services).schedule_due_retries(now=now) == []
+    assert len(scheduler.requests) == 1
 
 
 def _create_function_stub(runtime: ApiServices, *, max_containers: int) -> StubRecord:
