@@ -196,6 +196,14 @@ class _MemoryObjectClient:
         self.object_metadata.pop(location, None)
 
 
+class _RecordingWorkloadImageRegistry:
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+
+    def delete_manifest(self, registry_ref: str) -> None:
+        self.deleted.append(registry_ref)
+
+
 class _BlockingDeleteObjectClient(_MemoryObjectClient):
     def __init__(self) -> None:
         super().__init__()
@@ -381,6 +389,10 @@ def test_durable_retention_prunes_only_unreferenced_production_artifacts(
             object_key=live_archive_key,
             size_bytes=4,
             sha256="a" * 64,
+            registry_ref=f"registry.example.com/workloads@sha256:{'a' * 64}",
+            manifest_digest="sha256:" + "a" * 64,
+            architecture="amd64",
+            format_version=2,
         )
         archives.reserve(
             "image-stale",
@@ -388,6 +400,10 @@ def test_durable_retention_prunes_only_unreferenced_production_artifacts(
             object_key=stale_archive_key,
             size_bytes=4,
             sha256="b" * 64,
+            registry_ref=f"registry.example.com/workloads@sha256:{'b' * 64}",
+            manifest_digest="sha256:" + "b" * 64,
+            architecture="amd64",
+            format_version=2,
         )
         ImageBuildRepository(session).upsert(stale_build, workspace_id=workspace.id)
         CheckpointRepository(session).upsert(
@@ -421,6 +437,7 @@ def test_durable_retention_prunes_only_unreferenced_production_artifacts(
             data=b"data",
         )
 
+    workload_registry = _RecordingWorkloadImageRegistry()
     result = RetentionService(
         context=isolated_services.context,
         object_storage=objects,
@@ -433,6 +450,7 @@ def test_durable_retention_prunes_only_unreferenced_production_artifacts(
             image_archive_retention_seconds=1,
         ),
         image_archive_settings=archive_settings,
+        workload_image_registry=workload_registry,
     ).reconcile(
         active_recent_stub_keys=[checkpoint_recent_stub_key(workspace.id, stub.id)],
         now=future,
@@ -479,6 +497,7 @@ def test_durable_retention_prunes_only_unreferenced_production_artifacts(
     assert result.source_objects_removed == 1
     assert result.image_records_removed == 1
     assert result.image_archives_removed == 1
+    assert workload_registry.deleted == [f"registry.example.com/workloads@sha256:{'b' * 64}"]
     assert result.build_records_removed == 1
     assert result.checkpoints_removed == 1
 
@@ -874,7 +893,12 @@ def test_image_archive_survives_until_the_last_authorized_workspace_is_cleaned(
             object_key=object_key,
             size_bytes=14,
             sha256="c" * 64,
+            registry_ref=f"registry.example.com/workloads@sha256:{'c' * 64}",
+            manifest_digest="sha256:" + "c" * 64,
+            architecture="amd64",
+            format_version=2,
         )
+    workload_registry = _RecordingWorkloadImageRegistry()
     service = RetentionService(
         context=isolated_services.context,
         object_storage=objects,
@@ -891,6 +915,7 @@ def test_image_archive_survives_until_the_last_authorized_workspace_is_cleaned(
             max_items_per_cycle=1,
         ),
         image_archive_settings=archive_settings,
+        workload_image_registry=workload_registry,
     )
 
     partial = service.reconcile(active_recent_stub_keys=[], now=future)
@@ -905,6 +930,7 @@ def test_image_archive_survives_until_the_last_authorized_workspace_is_cleaned(
 
     assert final.image_records_removed == 1
     assert final.image_archives_removed == 1
+    assert workload_registry.deleted == [f"registry.example.com/workloads@sha256:{'c' * 64}"]
     assert not client.exists(physical_key, bucket=archive_settings.bucket)
     with isolated_services.context.database.session() as session:
         assert ImageArchiveRepository(session).get(image_id) is None

@@ -15,6 +15,7 @@ from worker.image_lifecycle import ImageRegistryStore
 from worker.origin_access import (
     CacheOriginCredentialRequest,
     ImageArchiveUploadCredentialRequest,
+    ImageRegistryCredentials,
 )
 from worker_repository.origin_credentials import (
     CacheOriginCredentialConfig,
@@ -23,6 +24,9 @@ from worker_repository.origin_credentials import (
 
 ARCHIVE_SHA256 = "a" * 64
 ARCHIVE_KEY = "image-archives/image-123.rclip"
+MANIFEST_DIGEST = "sha256:" + "b" * 64
+REGISTRY_REPOSITORY = "registry.example.com/workloads"
+REGISTRY_REF = f"{REGISTRY_REPOSITORY}@{MANIFEST_DIGEST}"
 
 
 def _archive_settings() -> ResolvedImageArchiveSettings:
@@ -34,7 +38,14 @@ def _archive_settings() -> ResolvedImageArchiveSettings:
 
 
 def _s3_config() -> CacheOriginCredentialConfig:
-    return CacheOriginCredentialConfig(image_registry_store=ImageRegistryStore.S3)
+    return CacheOriginCredentialConfig(
+        image_registry_store=ImageRegistryStore.S3,
+        workload_image_registry_repository=REGISTRY_REPOSITORY,
+    )
+
+
+def _registry_credentials(registry: str) -> ImageRegistryCredentials:
+    return ImageRegistryCredentials(registry=registry)
 
 
 def _publish_archive(services: ApiServices, *, workspace_id: str) -> ImageArchiveRecord:
@@ -45,6 +56,10 @@ def _publish_archive(services: ApiServices, *, workspace_id: str) -> ImageArchiv
             object_key=ARCHIVE_KEY,
             size_bytes=1024,
             sha256=ARCHIVE_SHA256,
+            registry_ref=REGISTRY_REF,
+            manifest_digest=MANIFEST_DIGEST,
+            architecture="amd64",
+            format_version=2,
         )
         ImageRepository(session).upsert(
             ImageRecord(workspace_id=workspace_id, image_id="image-123")
@@ -65,6 +80,7 @@ def test_archive_download_is_signed_only_for_an_authorized_workspace(
         config=_s3_config(),
         object_store_client=signer,
         archive_settings=_archive_settings(),
+        registry_credentials=_registry_credentials,
     )
     principal = WorkerCredentialPrincipal(
         workspace_id="infrastructure-worker",
@@ -85,6 +101,7 @@ def test_archive_download_is_signed_only_for_an_authorized_workspace(
     assert credentials.image_archive_url == f"https://signed/archive-bucket/{physical_key}?ttl=900"
     assert credentials.archive_size_bytes == archive.size_bytes
     assert credentials.archive_sha256 == ARCHIVE_SHA256
+    assert credentials.registry_ref == REGISTRY_REF
     assert signer.calls == [("archive-bucket", physical_key, 900)]
 
     # The archive row is global and its key carries no tenant component, so this
@@ -114,6 +131,7 @@ def test_archive_upload_binds_the_reserved_digest_and_skips_a_published_archive(
         config=_s3_config(),
         object_store_client=signer,
         archive_settings=_archive_settings(),
+        registry_credentials=_registry_credentials,
     )
     request = ImageArchiveUploadCredentialRequest(
         workspace_id=workspace.id,
@@ -123,6 +141,10 @@ def test_archive_upload_binds_the_reserved_digest_and_skips_a_published_archive(
         upload_capability="a" * 32,
         archive_size_bytes=1024,
         archive_sha256=ARCHIVE_SHA256,
+        registry_ref=REGISTRY_REF,
+        manifest_digest=MANIFEST_DIGEST,
+        architecture="amd64",
+        format_version=2,
     )
     principal = WorkerCredentialPrincipal(
         workspace_id="infrastructure-worker",
@@ -170,6 +192,7 @@ def test_image_archive_vending_requires_injected_lifespan_signer(
         isolated_services,
         config=_s3_config(),
         archive_settings=_archive_settings(),
+        registry_credentials=_registry_credentials,
     )
 
     credentials = service.vend(
@@ -198,6 +221,7 @@ def test_image_archive_presign_failures_are_sanitized(
         config=_s3_config(),
         object_store_client=_FailingPresigner(),
         archive_settings=_archive_settings(),
+        registry_credentials=_registry_credentials,
     )
     principal = WorkerCredentialPrincipal(
         workspace_id=workspace.id,
@@ -221,6 +245,10 @@ def test_image_archive_presign_failures_are_sanitized(
             upload_capability="a" * 32,
             archive_size_bytes=1024,
             archive_sha256=ARCHIVE_SHA256,
+            registry_ref=REGISTRY_REF,
+            manifest_digest=MANIFEST_DIGEST,
+            architecture="amd64",
+            format_version=2,
         ),
         principal=principal,
         archive=archive,

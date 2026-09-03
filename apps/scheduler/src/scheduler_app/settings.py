@@ -7,6 +7,7 @@ from shared.app_identity import ENV_PREFIX
 
 
 class SchedulerProcessSettings(BaseSettings):
+    workload_image_registry_repository: str = ""
     managed_compute_reconcile_interval_seconds: float = Field(
         default=MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS,
         gt=0,

@@ -20,6 +20,7 @@ from worker.image_lifecycle import LOCAL_IMAGE_ARCHIVE_EXTENSION
 
 DEFAULT_WORKER_RETENTION_INTERVAL_SECONDS = 5 * 60
 DEFAULT_WORKER_IMAGE_CACHE_MAX_BYTES = 20 * 1024 * 1024 * 1024
+DEFAULT_WORKER_IMAGE_LAYER_CACHE_MAX_BYTES = 40 * 1024 * 1024 * 1024
 DEFAULT_WORKER_IMAGE_MATERIALIZATION_MAX_BYTES = 40 * 1024 * 1024 * 1024
 DEFAULT_WORKER_CHECKPOINT_CACHE_MAX_BYTES = 10 * 1024 * 1024 * 1024
 DEFAULT_WORKER_ARTIFACT_LOW_WATERMARK_PCT = 0.75
@@ -35,9 +36,11 @@ class WorkerArtifactInstanceSource(Protocol):
 class WorkerRetentionConfig(ContractModel):
     image_cache_root: Path
     image_mount_root: Path
+    image_layer_cache_root: Path = Path("/var/lib/lazycloud/image-content/image-layers")
     checkpoint_root: Path
     image_archive_extension: str = "rclip"
     image_cache_max_bytes: int = DEFAULT_WORKER_IMAGE_CACHE_MAX_BYTES
+    image_layer_cache_max_bytes: int = DEFAULT_WORKER_IMAGE_LAYER_CACHE_MAX_BYTES
     image_materialization_max_bytes: int = DEFAULT_WORKER_IMAGE_MATERIALIZATION_MAX_BYTES
     checkpoint_cache_max_bytes: int = DEFAULT_WORKER_CHECKPOINT_CACHE_MAX_BYTES
     low_watermark_pct: float = DEFAULT_WORKER_ARTIFACT_LOW_WATERMARK_PCT
@@ -48,6 +51,7 @@ class WorkerRetentionConfig(ContractModel):
 
     @field_validator(
         "image_cache_max_bytes",
+        "image_layer_cache_max_bytes",
         "image_materialization_max_bytes",
         "checkpoint_cache_max_bytes",
         "recent_guard_seconds",
@@ -74,9 +78,10 @@ class WorkerRetentionConfig(ContractModel):
         roots = {
             self.image_cache_root.expanduser().resolve(),
             self.image_mount_root.expanduser().resolve(),
+            self.image_layer_cache_root.expanduser().resolve(),
             self.checkpoint_root.expanduser().resolve(),
         }
-        if len(roots) != 3:
+        if len(roots) != 4:
             raise ValueError("worker artifact retention roots must be distinct")
         return self
 
@@ -86,6 +91,9 @@ class WorkerRetentionResult(ContractModel):
     image_cache_scanned: int = 0
     image_cache_removed: int = 0
     image_cache_freed_bytes: int = 0
+    image_layer_cache_scanned: int = 0
+    image_layer_cache_removed: int = 0
+    image_layer_cache_freed_bytes: int = 0
     materializations_scanned: int = 0
     materializations_removed: int = 0
     materializations_freed_bytes: int = 0
@@ -102,6 +110,7 @@ class WorkerRetentionResult(ContractModel):
     def removed(self) -> int:
         return (
             self.image_cache_removed
+            + self.image_layer_cache_removed
             + self.materializations_removed
             + self.checkpoints_removed
             + self.image_build_scratch_removed
@@ -111,6 +120,7 @@ class WorkerRetentionResult(ContractModel):
     def freed_bytes(self) -> int:
         return (
             self.image_cache_freed_bytes
+            + self.image_layer_cache_freed_bytes
             + self.materializations_freed_bytes
             + self.checkpoints_freed_bytes
             + self.image_build_scratch_freed_bytes
@@ -130,6 +140,7 @@ class WorkerRetentionService:
     config: WorkerRetentionConfig
     image_build_scratch: ImageBuildScratchManager | None = None
     checkpoint_activity: CheckpointLeaseRegistry = field(default_factory=CheckpointLeaseRegistry)
+    image_unmounter: Callable[[str], None] | None = None
 
     def reconcile(self, *, now: datetime | None = None) -> WorkerRetentionResult:
         current = now or utc_now()
@@ -150,6 +161,15 @@ class WorkerRetentionService:
                 ),
                 now=current,
             )
+            image_layer_cache = _prune_bounded_root(
+                self.config.image_layer_cache_root,
+                max_bytes=self.config.image_layer_cache_max_bytes,
+                low_watermark_pct=self.config.low_watermark_pct,
+                recent_guard_seconds=self.config.recent_guard_seconds,
+                retention_seconds=self.config.materialization_retention_seconds,
+                protected_names=active_image_ids,
+                now=current,
+            )
             materializations = _prune_bounded_root(
                 self.config.image_mount_root,
                 max_bytes=self.config.image_materialization_max_bytes,
@@ -157,6 +177,8 @@ class WorkerRetentionService:
                 recent_guard_seconds=self.config.recent_guard_seconds,
                 retention_seconds=self.config.materialization_retention_seconds,
                 protected_names=active_image_ids,
+                before_remove=self.image_unmounter,
+                measure_directory_contents=False,
                 now=current,
             )
             checkpoints = _prune_bounded_root(
@@ -175,6 +197,7 @@ class WorkerRetentionService:
             )
         else:
             image_cache = _PruneResult()
+            image_layer_cache = _PruneResult()
             materializations = _PruneResult()
             checkpoints = _PruneResult()
         image_build_scratch = (
@@ -187,6 +210,9 @@ class WorkerRetentionService:
             image_cache_scanned=image_cache.scanned,
             image_cache_removed=image_cache.removed,
             image_cache_freed_bytes=image_cache.freed_bytes,
+            image_layer_cache_scanned=image_layer_cache.scanned,
+            image_layer_cache_removed=image_layer_cache.removed,
+            image_layer_cache_freed_bytes=image_layer_cache.freed_bytes,
             materializations_scanned=materializations.scanned,
             materializations_removed=materializations.removed,
             materializations_freed_bytes=materializations.freed_bytes,
@@ -226,12 +252,17 @@ def _prune_bounded_root(
     retention_seconds: int = 0,
     protected_names: set[str] | None = None,
     removal_guard: Callable[[str], AbstractContextManager[bool]] | None = None,
+    before_remove: Callable[[str], None] | None = None,
+    measure_directory_contents: bool = True,
     now: datetime,
 ) -> _PruneResult:
     resolved_root = root.expanduser().resolve()
     if not resolved_root.exists():
         return _PruneResult()
-    candidates = _artifact_candidates(resolved_root)
+    candidates = _artifact_candidates(
+        resolved_root,
+        measure_directory_contents=measure_directory_contents,
+    )
     total_bytes = sum(candidate.size_bytes for candidate in candidates)
     target_bytes = int(max_bytes * low_watermark_pct) if max_bytes > 0 else total_bytes
     pressured = max_bytes > 0 and total_bytes > max_bytes
@@ -254,13 +285,19 @@ def _prune_bounded_root(
         with guard as removable:
             if not removable:
                 continue
+            if before_remove is not None:
+                before_remove(candidate.path.name)
             _remove_artifact(candidate.path, root=resolved_root)
         removed += 1
         freed += candidate.size_bytes
     return _PruneResult(scanned=len(candidates), removed=removed, freed_bytes=freed)
 
 
-def _artifact_candidates(root: Path) -> list[_ArtifactCandidate]:
+def _artifact_candidates(
+    root: Path,
+    *,
+    measure_directory_contents: bool = True,
+) -> list[_ArtifactCandidate]:
     candidates: list[_ArtifactCandidate] = []
     for path in root.iterdir():
         if path.name.startswith(".") and not _stale_temporary_path(path):
@@ -269,7 +306,9 @@ def _artifact_candidates(root: Path) -> list[_ArtifactCandidate]:
         candidates.append(
             _ArtifactCandidate(
                 path=path,
-                size_bytes=_artifact_size(path),
+                size_bytes=(
+                    _artifact_size(path) if measure_directory_contents else path.lstat().st_size
+                ),
                 modified_at=datetime.fromtimestamp(stat.st_mtime, tz=utc_now().tzinfo),
             )
         )

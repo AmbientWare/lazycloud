@@ -135,9 +135,7 @@ x-container-service-credentials: &container-service-credentials
 
 x-cache-origin-registry: &cache-origin-registry
   LAZYCLOUD_IMAGE_REGISTRY_STORE: "s3"
-  LAZYCLOUD_BUILD_REGISTRY: "${LAZYCLOUD_BUILD_REGISTRY:-}"
-  LAZYCLOUD_BUILD_REGISTRY_CREDENTIALS: "${LAZYCLOUD_BUILD_REGISTRY_CREDENTIALS:-}"
-  LAZYCLOUD_BUILD_REGISTRY_CREDENTIALS_SECRET: "${LAZYCLOUD_BUILD_REGISTRY_CREDENTIALS_SECRET:-}"
+  LAZYCLOUD_WORKLOAD_IMAGE_REGISTRY_REPOSITORY: "${LAZYCLOUD_WORKLOAD_IMAGE_REGISTRY_REPOSITORY:-localhost:5000/lazycloud/workload-images}"
 
 x-database-bootstrap-env: &database-bootstrap-env
   LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
@@ -275,6 +273,19 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  workload-registry:
+    image: registry:2.8.3
+    restart: unless-stopped
+    ports:
+      - "${LAZYCLOUD_COMPOSE_WORKLOAD_REGISTRY_PORT:-5000}:5000"
+    volumes:
+      - workload-registry-data:/var/lib/registry
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5000/v2/ >/dev/null"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
 
   database-bootstrap:
     image: database-bootstrap:local
@@ -881,22 +892,17 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "object-store.localhost:host-gateway"
+    entrypoint: ["tini", "--", "/bin/sh", "-ec"]
     command:
-      [
-        "lazycloud-container-worker",
-        "--worker-id",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_ID:-compose-container-worker}",
-        "--machine-id",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}",
-        "--pool",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}",
-        "--pod-address",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}",
-        "--container-service-port",
-        "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}",
-        "--checkpoint-bucket",
-        "lazycloud-objects",
-      ]
+      - |
+        socat TCP-LISTEN:5000,bind=127.0.0.1,fork,reuseaddr TCP:workload-registry:5000 &
+        exec lazycloud-container-worker \
+          --worker-id "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_ID:-compose-container-worker}" \
+          --machine-id "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}" \
+          --pool "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}" \
+          --pod-address "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}" \
+          --container-service-port "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}" \
+          --checkpoint-bucket lazycloud-objects
     environment:
       LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
       LAZYCLOUD_WORKER_CONFIG_PATH: "/etc/lazycloud/worker/worker.yaml"
@@ -929,6 +935,8 @@ services:
       worker-token:
         condition: service_completed_successfully
       cache-server:
+        condition: service_healthy
+      workload-registry:
         condition: service_healthy
     healthcheck: *container-worker-healthcheck
     volumes:
@@ -1045,6 +1053,7 @@ volumes:
   lazycloud-cache:
   lazycloud-worker-tokens:
   lazycloud-shared-worker:
+  workload-registry-data:
   tcp-ingress-tls:
   wireguard-keys:
 

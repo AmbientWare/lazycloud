@@ -93,9 +93,13 @@ class WorkerImageSourceLoadResult(ContractModel):
 class WorkerImageMountRequest(ContractModel):
     container_id: str
     image_id: str
+    workspace_id: str = ""
+    stub_id: str = ""
     archive_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     archive_path: str
     mount_point: str
+    cache_path: str
+    preload: bool = False
     repair_incomplete: bool = False
 
 
@@ -214,6 +218,7 @@ class WorkerImageStartupLoader:
     cache_metadata: WorkerImageCacheMetadataProvider | None = None
     image_cache_path: str = DEFAULT_IMAGE_CACHE_PATH
     image_mount_root: str = DEFAULT_IMAGE_MOUNT_ROOT
+    image_content_cache_root: str = "/cache/image-layers"
     image_archive_extension: str = DEFAULT_IMAGE_ARCHIVE_EXTENSION
     storage_mode: ImageArchiveStorageMode = ImageArchiveStorageMode.Local
     publish_source_to_cache: bool = True
@@ -259,9 +264,13 @@ class WorkerImageStartupLoader:
             WorkerImageMountRequest(
                 container_id=request.container_id,
                 image_id=request.image_id,
+                workspace_id=request.workspace_id,
+                stub_id=request.stub_id,
                 archive_sha256=self._materialized_archive_sha256(paths, cache_load, source_load),
                 archive_path=paths.local_archive_path,
                 mount_point=paths.mount_point,
+                cache_path=str(Path(self.image_content_cache_root) / request.image_id),
+                preload=request.preload_image,
                 repair_incomplete=True,
             )
         )
@@ -301,9 +310,13 @@ class WorkerImageStartupLoader:
             WorkerImageMountRequest(
                 container_id=request.container_id,
                 image_id=request.image_id,
+                workspace_id=request.workspace_id,
+                stub_id=request.stub_id,
                 archive_sha256=request.archive_sha256,
                 archive_path=paths.local_archive_path,
                 mount_point=paths.mount_point,
+                cache_path=str(Path(self.image_content_cache_root) / request.image_id),
+                preload=request.preload_image,
             )
         )
         if mount.repair_required:

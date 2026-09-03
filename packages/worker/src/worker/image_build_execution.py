@@ -12,7 +12,9 @@ import tempfile
 import threading
 import time
 import zipfile
+from base64 import b64encode
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -22,11 +24,11 @@ from urllib.parse import urlparse
 from networking.internal_http import InternalHttpClient
 from pydantic import Field
 from shared.contracts import ContractModel
+from shared.image_building.credentials import registry_host_for_image
 from shared.managed_runtime_integrity import managed_package_source_digest
 from shared.scheduling import SchedulerWorkerRequest
 from shared.timestamps import utc_now
 
-from worker.container_checkpoints import ContainerImageArchiver
 from worker.container_execution import WorkerAddressPublisher
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_service.protocols import WorkerContainerInstanceStore
@@ -59,9 +61,13 @@ from worker.image_lifecycle import (
     plan_buildah_environment,
     plan_buildah_storage_config,
 )
+from worker.image_runtime import ImageRuntimeClient
 from worker.origin_access import (
+    CacheOriginCredentialRequest,
+    CacheOriginCredentials,
     ImageArchiveUploadCredentialRequest,
     ImageArchiveUploadCredentials,
+    ImageRegistryCredentials,
 )
 from worker.repository_payloads import (
     ImageBuildPrivateInputs,
@@ -95,6 +101,7 @@ class WorkerImageBuildSessionPayload(ContractModel):
 class WorkerImageBuildRequestPayload(ContractModel):
     kind: str = IMAGE_BUILD_REQUEST_KIND
     workspace_id: str = ""
+    stub_id: str = ""
     build_id: str
     image_id: str
     tag: str = ""
@@ -114,6 +121,10 @@ class WorkerImageArchiveBuildResult(ContractModel):
     ok: bool
     image_id: str
     archive_path: str = ""
+    registry_ref: str = ""
+    manifest_digest: str = ""
+    architecture: str = ""
+    format_version: int = 0
     logs: list[str] = Field(default_factory=list)
     error_message: str = ""
 
@@ -193,6 +204,10 @@ class WorkerImageArchivePublisher(Protocol):
         container_id: str = "",
         upload_capability: str = "",
         archive_path: Path,
+        registry_ref: str = "",
+        manifest_digest: str = "",
+        architecture: str = "",
+        format_version: int = 0,
         workspace_id: str = "",
         stub_id: str = "",
     ) -> WorkerImageArchivePublishResult: ...
@@ -207,6 +222,15 @@ class ImageArchiveUploadCredentialClient(Protocol):
         self,
         request: ImageArchiveUploadCredentialRequest,
     ) -> ImageArchiveUploadCredentialsResponseLike: ...
+
+    def get_cache_origin_credentials(
+        self,
+        request: CacheOriginCredentialRequest,
+    ) -> CacheOriginCredentialsResponseLike: ...
+
+
+class CacheOriginCredentialsResponseLike(Protocol):
+    credentials: CacheOriginCredentials | None
 
 
 def is_image_build_scheduler_request(request: SchedulerWorkerRequest) -> bool:
@@ -223,7 +247,7 @@ class WorkerImageBuildExecutionService:
 
     def execute(self, request: SchedulerWorkerRequest) -> WorkerImageBuildExecutionResult:
         payload = WorkerImageBuildRequestPayload.model_validate(request.payload).model_copy(
-            update={"workspace_id": request.workspace_id}
+            update={"workspace_id": request.workspace_id, "stub_id": request.stub_id}
         )
         instance = self._build_instance(request, payload)
         logs: list[str] = []
@@ -288,6 +312,10 @@ class WorkerImageBuildExecutionService:
                 container_id=request.container_id,
                 upload_capability=payload.archive_upload_capability,
                 archive_path=Path(build.archive_path),
+                registry_ref=build.registry_ref,
+                manifest_digest=build.manifest_digest,
+                architecture=build.architecture,
+                format_version=build.format_version,
                 workspace_id=request.workspace_id,
                 stub_id=request.stub_id,
             )
@@ -585,8 +613,10 @@ def _download_image_build_context(
 
 @dataclass(slots=True)
 class BuildahWorkerImageBuilder:
-    archiver: ContainerImageArchiver
     scratch: ImageBuildScratchManager
+    repository: ImageArchiveUploadCredentialClient
+    image_runtime: ImageRuntimeClient
+    archive_root: Path
     context_loader: WorkerImageBuildContextLoader | None = None
     architecture_preparer: ImageBuildArchitecturePreparer = field(
         default_factory=ImageBuildArchitectureRuntime
@@ -770,31 +800,72 @@ class BuildahWorkerImageBuilder:
                 msg = "image build request requires a Dockerfile or source image"
                 raise RuntimeError(msg)
 
-            mounted_root = self._run_buildah(
-                ["mount", build_container_name],
+            self._run_buildah(
+                ["commit", "--format", "oci", build_container_name, image_ref],
                 directories=directories,
                 driver=driver,
                 env=env,
                 cwd=context_dir,
                 log=log,
-                capture_stdout=True,
                 scratch=lease,
-            ).strip()
-            if not mounted_root:
-                msg = "buildah did not return a mounted root filesystem"
-                raise RuntimeError(msg)
-            archive = self.archiver.archive_image(
-                Path(mounted_root),
-                payload.image_id,
-                lambda progress: log(f"archive progress: {progress}%"),
             )
-            if not archive.success:
-                raise RuntimeError(archive.error_message or "archive creation failed")
-            log(f"image archive ready: {archive.archive_path}")
+            layout_path = root / "oci-layout"
+            self._run_buildah(
+                ["push", "--format", "oci", image_ref, f"oci:{layout_path}:image"],
+                directories=directories,
+                driver=driver,
+                env=env,
+                cwd=context_dir,
+                log=log,
+                scratch=lease,
+            )
+            manifest_digest = _oci_layout_manifest_digest(layout_path)
+            origin = self._workload_registry_credentials(
+                payload,
+                container_id=container_id,
+            )
+            registry_ref = f"{origin.registry_repository}@{manifest_digest}"
+            index_path = root / f"{payload.image_id}.rclip"
+            workload_auth_file = _write_workload_registry_auth_file(
+                root,
+                origin.registry_credentials,
+            )
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                push = executor.submit(
+                    _push_oci_layout,
+                    layout_path,
+                    origin.registry_repository,
+                    manifest_digest,
+                    workload_auth_file,
+                )
+                index = executor.submit(
+                    self.image_runtime.create_index,
+                    image_id=payload.image_id,
+                    local_layout_path=layout_path,
+                    storage_image_ref=registry_ref,
+                    output_path=index_path,
+                    architecture=payload.build_options.architecture.value,
+                )
+                push_output = push.result()
+                index.result()
+            for line in push_output:
+                log(line)
+            published_index_path = self.archive_root / f"{payload.image_id}.rclip"
+            published_index_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_index_path = published_index_path.with_suffix(
+                f".rclip.{_safe_name(container_id)}.tmp"
+            )
+            shutil.copy2(index_path, temporary_index_path)
+            temporary_index_path.replace(published_index_path)
+            log(f"lazy image index ready: {published_index_path}")
             return WorkerImageArchiveBuildResult(
                 ok=True,
                 image_id=payload.image_id,
-                archive_path=archive.archive_path,
+                archive_path=str(published_index_path),
+                registry_ref=registry_ref,
+                manifest_digest=manifest_digest,
+                architecture=payload.build_options.architecture.value,
+                format_version=2,
             )
         finally:
             try:
@@ -815,6 +886,30 @@ class BuildahWorkerImageBuilder:
         if self.storage_driver is self.fallback_storage_driver:
             return (self.storage_driver,)
         return (self.storage_driver, self.fallback_storage_driver)
+
+    def _workload_registry_credentials(
+        self,
+        payload: WorkerImageBuildRequestPayload,
+        *,
+        container_id: str,
+    ) -> CacheOriginCredentials:
+        credentials = self.repository.get_cache_origin_credentials(
+            CacheOriginCredentialRequest(
+                workspace_id=payload.workspace_id,
+                container_id=container_id,
+                stub_id=payload.stub_id,
+                image_id=payload.image_id,
+            )
+        ).credentials
+        if credentials is None:
+            raise RuntimeError("broker did not return workload registry credentials")
+        if not credentials.ok:
+            raise RuntimeError(
+                credentials.error_msg or "broker denied workload registry credentials"
+            )
+        if not credentials.registry_repository or credentials.registry_credentials is None:
+            raise RuntimeError("workload image registry is not configured")
+        return credentials
 
     def _prepare_context(
         self,
@@ -914,7 +1009,7 @@ class BuildahWorkerImageBuilder:
 class RepositoryWorkerImageArchivePublisher:
     repository: ImageArchiveUploadCredentialClient
     http: InternalHttpClient = field(default_factory=InternalHttpClient)
-    content_type: str = "application/x-tar"
+    content_type: str = "application/vnd.lazycloud.image-index"
 
     def publish_image_archive(
         self,
@@ -924,6 +1019,10 @@ class RepositoryWorkerImageArchivePublisher:
         container_id: str = "",
         upload_capability: str = "",
         archive_path: Path,
+        registry_ref: str = "",
+        manifest_digest: str = "",
+        architecture: str = "",
+        format_version: int = 0,
         workspace_id: str = "",
         stub_id: str = "",
     ) -> WorkerImageArchivePublishResult:
@@ -950,6 +1049,10 @@ class RepositoryWorkerImageArchivePublisher:
                 upload_capability=upload_capability,
                 archive_size_bytes=size_bytes,
                 archive_sha256=archive_sha256,
+                registry_ref=registry_ref,
+                manifest_digest=manifest_digest,
+                architecture=architecture,
+                format_version=format_version,
                 content_type=self.content_type,
             )
         )
@@ -1123,6 +1226,78 @@ def _base_env() -> list[str]:
     if registry_auth_file and not Path(registry_auth_file).exists():
         values.pop("REGISTRY_AUTH_FILE", None)
     return [f"{key}={value}" for key, value in values.items()]
+
+
+def _oci_layout_manifest_digest(layout_path: Path) -> str:
+    index_path = layout_path / "index.json"
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        manifests = index["manifests"]
+        digest = manifests[0]["digest"] if len(manifests) == 1 else ""
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("OCI layout does not contain one image manifest") from exc
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise RuntimeError("OCI layout manifest digest is invalid")
+    return digest
+
+
+def _write_workload_registry_auth_file(
+    root: Path,
+    credentials: ImageRegistryCredentials | None,
+) -> Path | None:
+    if credentials is None:
+        return None
+    registry = credentials.registry
+    if credentials.username and credentials.password:
+        encoded = b64encode(f"{credentials.username}:{credentials.password}".encode()).decode()
+        entry = {"auth": encoded}
+    elif credentials.auth:
+        entry = {"auth": credentials.auth}
+    elif credentials.identity_token:
+        entry = {"identitytoken": credentials.identity_token}
+    elif credentials.registry_token:
+        entry = {"registrytoken": credentials.registry_token}
+    else:
+        return None
+    path = root / "workload-registry-auth.json"
+    _write_private_file(
+        path,
+        json.dumps({"auths": {registry: entry}}, separators=(",", ":")),
+    )
+    return path
+
+
+def _push_oci_layout(
+    layout_path: Path,
+    repository: str,
+    manifest_digest: str,
+    auth_file: Path | None,
+) -> list[str]:
+    tag = f"sha256-{manifest_digest.removeprefix('sha256:')}"
+    registry = registry_host_for_image(repository)
+    insecure = registry.startswith(("localhost:", "127.0.0.1:"))
+    command = [
+        "skopeo",
+        "copy",
+        "--preserve-digests",
+        *(["--dest-tls-verify=false"] if insecure else []),
+        *(["--dest-authfile", str(auth_file)] if auth_file is not None else []),
+        f"oci:{layout_path}:image",
+        f"docker://{repository}:{tag}",
+    ]
+    process = subprocess.run(command, text=True, capture_output=True, check=False)
+    if process.returncode != 0:
+        inspect = [
+            "skopeo",
+            "inspect",
+            *(["--tls-verify=false"] if insecure else []),
+            *(["--authfile", str(auth_file)] if auth_file is not None else []),
+            f"docker://{repository}@{manifest_digest}",
+        ]
+        existing = subprocess.run(inspect, text=True, capture_output=True, check=False)
+        if existing.returncode != 0:
+            raise RuntimeError(_process_error_message(command, process))
+    return _output_lines(process.stdout, process.stderr)
 
 
 def _write_registry_auth_file(

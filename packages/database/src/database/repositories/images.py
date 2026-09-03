@@ -175,6 +175,10 @@ class ImageArchiveRepository:
         object_key: str,
         size_bytes: int,
         sha256: str,
+        registry_ref: str,
+        manifest_digest: str,
+        architecture: str,
+        format_version: int,
     ) -> tuple[ImageArchiveRecord, bool]:
         """Claim the archive for this image id, or return the one already there.
 
@@ -191,7 +195,12 @@ class ImageArchiveRepository:
             object_key=object_key,
             size_bytes=size_bytes,
             sha256=sha256,
-            payload={},
+            payload={
+                "registry_ref": registry_ref,
+                "manifest_digest": manifest_digest,
+                "architecture": architecture,
+                "format_version": format_version,
+            },
         )
         try:
             with self.session.begin_nested():
@@ -220,6 +229,10 @@ class ImageArchiveRepository:
         object_key: str,
         size_bytes: int,
         sha256: str,
+        registry_ref: str,
+        manifest_digest: str,
+        architecture: str,
+        format_version: int,
     ) -> ImageArchiveRecord | None:
         """Repoint a broken archive, only if it still holds the digest we saw.
 
@@ -243,6 +256,12 @@ class ImageArchiveRepository:
                 object_key=object_key,
                 size_bytes=size_bytes,
                 sha256=sha256,
+                payload={
+                    "registry_ref": registry_ref,
+                    "manifest_digest": manifest_digest,
+                    "architecture": architecture,
+                    "format_version": format_version,
+                },
                 updated_at=utc_now(),
             )
         )
@@ -345,6 +364,7 @@ def _one_row_changed(result: object) -> bool:
 
 
 def _image_archive_record(row: ImageArchiveTable) -> ImageArchiveRecord:
+    format_version = row.payload.get("format_version")
     return ImageArchiveRecord(
         id=str(row.id),
         image_id=row.image_id,
@@ -352,6 +372,14 @@ def _image_archive_record(row: ImageArchiveTable) -> ImageArchiveRecord:
         object_key=row.object_key,
         size_bytes=row.size_bytes,
         sha256=row.sha256,
+        registry_ref=str(row.payload.get("registry_ref") or ""),
+        manifest_digest=str(row.payload.get("manifest_digest") or ""),
+        architecture=str(row.payload.get("architecture") or ""),
+        format_version=(
+            format_version
+            if isinstance(format_version, int) and not isinstance(format_version, bool)
+            else 1
+        ),
         cleanup_claimed_at=row.cleanup_claimed_at,
     )
 

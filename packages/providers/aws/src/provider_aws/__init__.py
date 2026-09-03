@@ -68,6 +68,7 @@ from .pooled_provider import AwsConnectedAccountPooledProvider
 from .provider import (
     AwsClientOptions,
     AwsCredentialSource,
+    AwsEcrImageRegistry,
     AwsProvider,
     AwsProviderSettings,
     AwsService,
@@ -75,6 +76,7 @@ from .provider import (
     EcrAuthorization,
     EcrAuthorizationClient,
     EcrAuthorizationPlan,
+    EcrImageDeletionClient,
 )
 from .provider_control import (
     AwsProviderControlError,
@@ -140,6 +142,7 @@ __all__ = [
     "AwsDirectInstanceMetadataTransport",
     "AwsEc2ProviderNodeIdentityProofProvider",
     "AwsEc2SpotInterruptionMonitor",
+    "AwsEcrImageRegistry",
     "AwsExistingAccountAuthorization",
     "AwsExistingAccountAuthorizationValidation",
     "AwsExistingAccountAuthorizationValidationInput",
@@ -190,6 +193,7 @@ __all__ = [
     "EcrAuthorization",
     "EcrAuthorizationClient",
     "EcrAuthorizationPlan",
+    "EcrImageDeletionClient",
     "aws_account_connection_template_bytes",
     "aws_account_connection_template_identity",
     "aws_instance_catalog_entry",

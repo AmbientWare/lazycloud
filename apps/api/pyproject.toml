@@ -24,6 +24,7 @@ dependencies = [
     "observability",
     "operations",
     "provider-clients",
+    "provider-aws",
     "provider-cloudflare",
     "provider-github",
     "provider-stripe",

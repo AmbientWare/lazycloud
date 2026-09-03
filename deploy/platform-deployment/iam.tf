@@ -52,6 +52,22 @@ data "aws_iam_policy_document" "control_plane" {
   }
 
   statement {
+    sid = "PublishAndReadWorkloadImages"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchDeleteImage",
+      "ecr:BatchGetImage",
+      "ecr:CompleteLayerUpload",
+      "ecr:DescribeImages",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:InitiateLayerUpload",
+      "ecr:PutImage",
+      "ecr:UploadLayerPart",
+    ]
+    resources = [local.workload_image_repository_arn]
+  }
+
+  statement {
     sid       = "ReadDeploymentBundle"
     actions   = ["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket"]
     resources = [aws_s3_bucket.deploy.arn, "${aws_s3_bucket.deploy.arn}/*"]
