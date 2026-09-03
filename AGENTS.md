@@ -35,8 +35,8 @@ Answer condensed. This is a must-follow rule, not a preference.
 - Lead with the answer or outcome. State blockers and decisions needed in one
   line each.
 - Omit reasoning already accepted, alternatives not taken, restated context,
-  and evidence the reader did not ask for. Link or name a file, ticket, or
-  command instead of reproducing its content.
+  and evidence the reader did not ask for. Link or name a file or command
+  instead of reproducing its content.
 - No recap sections, no narration of what was just done, no tables or headings
   unless they carry information prose cannot.
 - Expand only when asked, or when a correctness, security, cost, or data-loss
@@ -83,7 +83,7 @@ in the owning `AGENTS.md`. Delete comments that no longer describe the code when
 you touch the surrounding lines.
 
 Writing for people follows the `unslop` skill. Load it before writing or editing
-an `AGENTS.md`, documentation, a commit message, a pull request body, or a reply.
+an `AGENTS.md`, documentation, a commit message, or a reply.
 If it is not installed, install it first from
 https://github.com/cursor/plugins/blob/main/pstack/skills/unslop/SKILL.md
 (for Claude Code, as `~/.claude/skills/unslop/SKILL.md`), then load it.
@@ -241,41 +241,6 @@ proof where relevant. Prefer the reversible step, and when an action is
 irreversible, say so plainly before taking it rather than after. Stop for user
 direction when an irreversible action, public contract, security/cost posture,
 provider strategy, or top-level architecture choice is genuinely unresolved.
-
-## Work and collaboration
-
-GitHub Issues track work; the `ticket` label marks a tracked ticket. Open one
-only for substantial big-ticket work that genuinely needs tracked design,
-ownership, dependencies, or multiple acceptance checkpoints. Small fixes,
-subtasks, contained implementation, docs/config changes, and incidental
-follow-ups proceed directly without a ticket.
-
-Work continues under the ticket that owns it until that ticket is complete. Do
-not open a new ticket for follow-up, remaining scope, a blocker, or a defect
-discovered inside tracked work. Fix what belongs to the same change and record
-the outcome as a comment on the owning ticket. Comments record outcome,
-decisions, blockers, and concise evidence, not command diaries. The issue body
-stays the current description of the ticket; edit it when scope changes rather
-than appending corrections.
-
-Ticket work uses a branch per ticket. Rebase, validate a clean feature tree, and
-merge through a pull request that references the ticket and closes it. A ticket
-is done when its acceptance passes and its pull request merges; move it on the
-board rather than restating the outcome in a file.
-
-Tickets live on the `Agent Development` project board and advance through
-`Backlog`, `Todo`, `In progress`, `Under review`, `Merged`, in that order. Move
-the ticket yourself as its real state changes: `In progress` when work starts,
-`Under review` when its pull request opens, `Merged` when that pull request
-merges. Board automation is a safety net for the states it can observe, not a
-substitute for moving the ticket; a pull request only closes its ticket when its
-body says so, so reference the ticket with a closing keyword when the merge
-completes it.
-
-`Backlog` holds work that is recorded but not needed yet. Deferring a ticket
-there is a scope decision and is stated as one. It is not the same as moving a
-ticket backwards to make the board agree with a mistake, which is never the fix.
-Do not start `Backlog` work without the owner asking for it.
 
 ## Working rules
 
