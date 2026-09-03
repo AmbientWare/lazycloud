@@ -93,7 +93,7 @@ release and one from another; there is now no second place for them to disagree.
 deployment that runs managed capacity: a release naming no AMI produces a control
 plane that refuses to start rather than a pool that launches nothing.
 
-`--gpu-ami` names the GPU node image from the same bake, and is optional — a
+`--gpu-ami` names the GPU node image from the same host recipe. It is optional. A
 release without one simply offers no GPU instance types, and CPU capacity is
 unaffected. Supply it and every GPU type in the catalog becomes launchable in that
 region, because one image serves every card: the driver branch is unified across
@@ -114,15 +114,12 @@ stamps the real number at build time, so nothing in the tree is bumped.
 The same run publishes `lazycloud-client` and `lazycloud-shared` to PyPI at
 that version, so a customer's installed version names the release it came from.
 
-A release rebuilds only what the commit changed. `deploy/aws-release-assets/plan.py`
-diffs the commit against the previous release that published a manifest and
-decides, per artifact, from the paths it is built from: the worker image, the
-agent binary, and, because they embed both, the node images. What is not
-rebuilt is referenced from the previous manifest by digest, which is how the
-control plane checks it anyway. The run's summary lists each decision and its
-reason, and the manifest records which release each reused artifact came from
-in `reused_from`. A control-plane-only change therefore ships in about eight
-minutes; a worker change still bakes both node images.
+A release rebuilds only the application artifact whose inputs changed.
+`deploy/aws-release-assets/plan.py` compares the commit with the previous release
+and decides whether to rebuild the worker image and agent binary. Host images
+come from the separately dispatched Node Images workflow. Release resolves its
+current catalog and refuses to continue if the catalog's recipe does not match
+the checked-out revision. Worker changes never start an AMI bake.
 Both PyPI projects accept the workflow through trusted publishing, configured on
 each project as repository `AmbientWare/lazycloud`, workflow `ship.yml`,
 environment `release`. No token is stored anywhere. The projects themselves were

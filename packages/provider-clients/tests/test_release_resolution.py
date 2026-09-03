@@ -104,8 +104,7 @@ def test_release_supplies_every_artifact_value_a_deployment_would_copy() -> None
     assert release.agent_binaries.binary_sha256_by_arch == {"amd64": _AGENT_SHA256}
     assert release.aws_capacity.worker_image_digest == _WORKER_IMAGE
     assert release.aws_capacity.cpu_ami_ids == _CPU_AMI_IDS
-    # The GPU catalog now arrives from the release too, so a deployment cannot
-    # name a GPU AMI carrying a driver the release never baked.
+    # The release captures the exact independently published host-image catalog.
     assert release.aws_capacity.gpu_ami_ids == _GPU_AMI_IDS
     assert release.aws_capacity.agent_binary_url.endswith(
         f"/agents/{_VERSION}/{_AGENT_SHA256}/{AGENT_AMD64_FILENAME}"

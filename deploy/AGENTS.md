@@ -31,9 +31,9 @@ substitutes, and gives every service an explicit owner and health check.
   differ, and none of them fails visibly when it does not.
 - A release and a deploy are separate workflows, chained by `ship.yml`. They are
   not merged because a release is public and immutable: a customer's own AWS
-  account resolves the agent binary, the worker image, and the node AMI out of
-  its manifest, so rebuilding one per code deploy churns artifacts other
-  people's infrastructure already points at. Sequencing them is the part that
+  account resolves the agent binary, worker image, and exact node AMI IDs out of
+  its manifest. Host AMIs have a separate recipe and workflow, so application
+  releases never rebuild them. Sequencing release and deploy is the part that
   cannot be left to chance. Both once triggered on `v*` independently, so a
   tagged deploy raced the release it was meant to run. Ship is dispatched with
   a bump choice, pushes the tag itself, and passes the version to both as an
