@@ -314,13 +314,13 @@ class FakeRedis:
 
     def zremrangebyscore(
         self,
-        key: str,
-        min_score: float | str,
-        max_score: float | str,
+        name: str,
+        min: float | str,
+        max: float | str,
     ) -> int:
-        bucket = self.zsets.setdefault(key, {})
-        minimum = _score_bound(min_score, negative=True)
-        maximum = _score_bound(max_score, negative=False)
+        bucket = self.zsets.setdefault(name, {})
+        minimum = _score_bound(min, negative=True)
+        maximum = _score_bound(max, negative=False)
         remove = [member for member, score in bucket.items() if minimum <= score <= maximum]
         for member in remove:
             bucket.pop(member, None)
