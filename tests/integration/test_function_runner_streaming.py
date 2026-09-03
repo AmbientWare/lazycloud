@@ -76,10 +76,13 @@ def stream_value(value):
     assert isinstance(final.result, FunctionCloudpickleResult)
     assert final.result.bytes_value() == cloudpickle_bytes(64)
 
-    output = "".join(item.output for item in responses)
-    assert "alpha\n" in output
-    assert "beta\n" in output
-    assert "gamma\n" in output
+    streamed_output = [(item.stream, item.output) for item in responses if item.output]
+    assert streamed_output == [
+        ("stdout", "alpha\n"),
+        ("stdout", "beta\n"),
+        ("stdout", "gamma\n"),
+    ]
+    output = "".join(message for _, message in streamed_output)
     assert "stdout" not in output
     assert "stderr" not in output
 
