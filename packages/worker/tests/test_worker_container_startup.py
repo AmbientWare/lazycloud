@@ -78,6 +78,43 @@ class _BrokerSourceLoader:
         )
 
 
+def test_unrecorded_local_archive_is_verified_before_first_mount(tmp_path: Path) -> None:
+    cache_root = tmp_path / "cache" / "images"
+    mount_root = tmp_path / "mnt" / "images"
+    unrecorded = b"archive-without-a-completed-mount"
+    authorized = b"archive-this-request-is-authorized-for"
+    authorized_sha256 = hashlib.sha256(authorized).hexdigest()
+
+    archive_path = cache_root / "image-1.rclip"
+    archive_path.parent.mkdir(parents=True)
+    archive_path.write_bytes(unrecorded)
+
+    mounter = _RecordingMounter()
+    source_loader = _BrokerSourceLoader(payload=authorized, archive_sha256=authorized_sha256)
+    loader = WorkerImageStartupLoader(
+        mounter=mounter,
+        cache=_UnreachableContentCache(),
+        source_loader=source_loader,
+        cache_metadata=_MissingCacheMetadata(),
+        image_cache_path=str(cache_root),
+        image_mount_root=str(mount_root),
+        publish_source_to_cache=False,
+    )
+
+    result = loader.load_image(
+        ContainerRequestContext(
+            container_id="ctr-1",
+            image_id="image-1",
+            archive_sha256=authorized_sha256,
+        )
+    )
+
+    assert result.loaded
+    assert [request.archive_path for request in source_loader.requests] == [str(archive_path)]
+    assert archive_path.read_bytes() == authorized
+    assert [request.archive_sha256 for request in mounter.requests] == [authorized_sha256]
+
+
 def test_cached_image_is_refused_when_it_records_other_archive_bytes(tmp_path: Path) -> None:
     """A local image cached under other archive bytes is re-fetched, not mounted.
 
