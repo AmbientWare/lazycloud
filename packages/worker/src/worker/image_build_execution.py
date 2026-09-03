@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 from networking.internal_http import InternalHttpClient
 from pydantic import Field
 from shared.contracts import ContractModel
+from shared.image_prewarm import WorkerImagePrewarmArchive
 from shared.managed_runtime_integrity import managed_package_source_digest
 from shared.scheduling import SchedulerWorkerRequest
 from shared.timestamps import utc_now
@@ -30,7 +31,9 @@ from worker.container_checkpoints import ContainerImageArchiver
 from worker.container_execution import WorkerAddressPublisher
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_service.protocols import WorkerContainerInstanceStore
+from worker.container_startup import WorkerImagePrewarmResult
 from worker.events import ContainerRequestContext
+from worker.image_archive_cache import WorkerContentCache, publish_source_image_archive_to_cache
 from worker.image_archive_transfer import (
     image_archive_file_identity,
     upload_image_archive,
@@ -132,6 +135,8 @@ class WorkerImageArchivePublishResult(ContractModel):
     bucket: str = ""
     size_bytes: int = 0
     sha256: str = ""
+    cache_published: bool = False
+    cache_error: str = ""
     error_message: str = ""
 
 
@@ -198,6 +203,15 @@ class WorkerImageArchivePublisher(Protocol):
     ) -> WorkerImageArchivePublishResult: ...
 
 
+class WorkerBuiltImagePreparer(Protocol):
+    def prewarm_image(
+        self,
+        target: WorkerImagePrewarmArchive,
+        *,
+        source_loader: None = None,
+    ) -> WorkerImagePrewarmResult: ...
+
+
 class ImageArchiveUploadCredentialsResponseLike(Protocol):
     credentials: ImageArchiveUploadCredentials | None
 
@@ -220,6 +234,7 @@ class WorkerImageBuildExecutionService:
     builder: WorkerImageBuilder
     publisher: WorkerImageArchivePublisher
     credential_loader: ImageBuildCredentialLoader | None = None
+    runtime_image_preparer: WorkerBuiltImagePreparer | None = None
 
     def execute(self, request: SchedulerWorkerRequest) -> WorkerImageBuildExecutionResult:
         payload = WorkerImageBuildRequestPayload.model_validate(request.payload).model_copy(
@@ -317,6 +332,11 @@ class WorkerImageBuildExecutionService:
                 "image archive published: "
                 f"{published.bucket}/{published.object_key} ({published.size_bytes} bytes)"
             )
+            if published.cache_published:
+                log("image archive seeded to the node content cache")
+            elif published.cache_error:
+                log(f"image archive cache seed deferred: {published.cache_error}")
+            self._prepare_runtime_image(published, log=log)
             return self._finish(
                 instance,
                 payload,
@@ -430,6 +450,28 @@ class WorkerImageBuildExecutionService:
             logs=result_logs,
             error_message=error_message,
         )
+
+    def _prepare_runtime_image(
+        self,
+        published: WorkerImageArchivePublishResult,
+        *,
+        log: ImageBuildLog,
+    ) -> None:
+        if self.runtime_image_preparer is None or not published.sha256:
+            return
+        try:
+            prepared = self.runtime_image_preparer.prewarm_image(
+                WorkerImagePrewarmArchive(
+                    image_id=published.image_id,
+                    archive_sha256=published.sha256,
+                    archive_size_bytes=published.size_bytes,
+                )
+            )
+        except Exception as exc:
+            log(f"runtime image preparation deferred: {type(exc).__name__}: {exc}")
+            return
+        status = "ready" if prepared.ready else "deferred"
+        log(f"runtime image preparation {status}: {prepared.reason}")
 
 
 def _require_matching_managed_packages(expected_digest: str) -> None:
@@ -915,6 +957,7 @@ class RepositoryWorkerImageArchivePublisher:
     repository: ImageArchiveUploadCredentialClient
     http: InternalHttpClient = field(default_factory=InternalHttpClient)
     content_type: str = "application/x-tar"
+    cache: WorkerContentCache | None = None
 
     def publish_image_archive(
         self,
@@ -979,13 +1022,13 @@ class RepositoryWorkerImageArchivePublisher:
             # Another build already published this image id. Its bytes are the ones
             # every authorized workspace resolves, so this build adopts that identity
             # rather than uploading a second copy over it.
-            return WorkerImageArchivePublishResult(
-                ok=True,
+            return self._published_result(
                 image_id=image_id,
                 object_key=credentials.object_key,
                 bucket=credentials.bucket,
                 size_bytes=credentials.archive_size_bytes,
                 sha256=credentials.archive_sha256,
+                archive_path=archive_path,
             )
         try:
             upload_image_archive(
@@ -1006,13 +1049,46 @@ class RepositoryWorkerImageArchivePublisher:
                 bucket=credentials.bucket,
                 error_message=f"{type(exc).__name__}: {exc}",
             )
-        return WorkerImageArchivePublishResult(
-            ok=True,
+        return self._published_result(
             image_id=image_id,
             object_key=credentials.object_key,
             bucket=credentials.bucket,
             size_bytes=size_bytes,
             sha256=archive_sha256,
+            archive_path=archive_path,
+        )
+
+    def _published_result(
+        self,
+        *,
+        image_id: str,
+        object_key: str,
+        bucket: str,
+        size_bytes: int,
+        sha256: str,
+        archive_path: Path,
+    ) -> WorkerImageArchivePublishResult:
+        cache_publish = (
+            publish_source_image_archive_to_cache(
+                self.cache,
+                archive_path=str(archive_path),
+                image_id=image_id,
+                cache_client_available=True,
+            )
+            if self.cache is not None
+            else None
+        )
+        return WorkerImageArchivePublishResult(
+            ok=True,
+            image_id=image_id,
+            object_key=object_key,
+            bucket=bucket,
+            size_bytes=size_bytes,
+            sha256=sha256,
+            cache_published=cache_publish.complete if cache_publish is not None else False,
+            cache_error=(
+                "" if cache_publish is None or cache_publish.complete else cache_publish.reason
+            ),
         )
 
 

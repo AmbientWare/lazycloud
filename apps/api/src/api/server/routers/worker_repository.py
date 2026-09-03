@@ -55,6 +55,8 @@ from worker.repository_payloads import (
     GetWorkerAddressRequest,
     GetWorkerAddressResponse,
     GetWorkerByIdResponse,
+    ListImagePrewarmTargetsRequest,
+    ListImagePrewarmTargetsResponse,
     MoveContainerIpRequest,
     MoveContainerIpResponse,
     NetworkLockRequest,
@@ -311,6 +313,19 @@ def get_worker_by_id(
 ) -> GetWorkerByIdResponse:
     _require_worker_subject(principal, request.worker_id, action="worker lookup")
     return service.get_worker_by_id(request)
+
+
+@router.post(
+    "/worker-repository/list-image-prewarm-targets",
+    response_model=ListImagePrewarmTargetsResponse,
+)
+def list_image_prewarm_targets(
+    request: ListImagePrewarmTargetsRequest,
+    service: WorkerRepo,
+    principal: WorkerPrincipal,
+) -> ListImagePrewarmTargetsResponse:
+    _require_worker_subject(principal, request.worker_id, action="image prewarm target lookup")
+    return service.list_image_prewarm_targets(request, principal=principal)
 
 
 @router.post("/worker-repository/add-worker", response_model=WorkerRecordResponse)

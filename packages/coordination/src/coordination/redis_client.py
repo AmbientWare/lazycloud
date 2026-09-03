@@ -158,6 +158,13 @@ class RedisCommandTransport[CommandResponseT](Protocol):
         max: float | str,
     ) -> CommandResponseT: ...
 
+    def zremrangebyscore(
+        self,
+        name: str,
+        min: float | str,
+        max: float | str,
+    ) -> CommandResponseT: ...
+
     def zcard(self, name: str) -> CommandResponseT: ...
 
     def publish(self, channel: str, message: RedisWireScalar) -> CommandResponseT: ...
@@ -688,6 +695,17 @@ class RedisClient:
                 maximum,
             ),
             "ZRANGEBYSCORE",
+        )
+
+    def sorted_set_remove_by_score(
+        self,
+        key: str,
+        minimum: float | str,
+        maximum: float | str,
+    ) -> int:
+        return _redis_int(
+            self._transport.zremrangebyscore(key, minimum, maximum),
+            "ZREMRANGEBYSCORE",
         )
 
     def sorted_set_cardinality(self, key: str) -> int:

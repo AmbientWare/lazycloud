@@ -67,6 +67,7 @@ from shared.errors import (
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import AuthScope, TokenStatus
 from shared.image_building.records import BuildStatus
+from shared.image_prewarm import WorkerImagePrewarmArchive, WorkerImagePrewarmTarget
 from shared.objects import ObjectRecord
 from shared.realtime.contracts import EventRecordType
 from shared.routing import AgentBackendRoute
@@ -141,6 +142,8 @@ from worker.repository_payloads import (
     GetWorkerAddressRequest,
     GetWorkerAddressResponse,
     GetWorkerByIdResponse,
+    ListImagePrewarmTargetsRequest,
+    ListImagePrewarmTargetsResponse,
     MoveContainerIpRequest,
     MoveContainerIpResponse,
     NetworkLockRequest,
@@ -825,6 +828,50 @@ class WorkerRepositoryService:
             return GetWorkerByIdResponse(worker=self.workers.get_worker(request.worker_id))
         except SchedulerRepositoryError as exc:
             raise _scheduler_domain_error(exc) from exc
+
+    def list_image_prewarm_targets(
+        self,
+        request: ListImagePrewarmTargetsRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> ListImagePrewarmTargetsResponse:
+        worker = self._validate_worker_stream(request.worker_id, principal=principal)
+        archives: list[WorkerImagePrewarmArchive] = []
+        for target in self.workers.list_image_prewarm_targets(
+            worker.capacity_owner_id,
+            limit=request.limit,
+        ):
+            self._authorize_worker_tenancy(
+                principal,
+                target.workspace_id,
+                operation="image prewarm",
+            )
+            credentials = self.origin_credentials.vend(
+                CacheOriginCredentialRequest(
+                    workspace_id=target.workspace_id,
+                    container_id=f"image-prewarm-{request.worker_id}",
+                    stub_id=target.stub_id,
+                    image_id=target.image_id,
+                ),
+                principal=principal.credential_principal(
+                    proven_workspace_id=target.workspace_id,
+                ),
+            )
+            if credentials.archive_sha256 and (credentials.archive_sha256 != target.archive_sha256):
+                LOGGER.warning(
+                    "image prewarm archive identity changed",
+                    extra={"image_id": target.image_id},
+                )
+                continue
+            archives.append(
+                WorkerImagePrewarmArchive(
+                    image_id=target.image_id,
+                    archive_sha256=target.archive_sha256,
+                    archive_size_bytes=credentials.archive_size_bytes,
+                    image_archive_url=credentials.image_archive_url,
+                )
+            )
+        return ListImagePrewarmTargetsResponse(targets=archives)
 
     def add_worker(
         self,
@@ -1637,6 +1684,25 @@ class WorkerRepositoryService:
             or credentials.object_key != reservation.archive.object_key
         ):
             raise RuntimeError("image archive upload descriptor does not match reservation")
+        if credentials.ok:
+            worker = self.workers.get_worker(state.worker_id)
+            if worker is not None and worker.capacity_owner_id:
+                try:
+                    self.workers.record_image_prewarm_target(
+                        worker.capacity_owner_id,
+                        WorkerImagePrewarmTarget(
+                            workspace_id=request.workspace_id,
+                            stub_id=request.stub_id,
+                            image_id=request.image_id,
+                            archive_sha256=request.archive_sha256,
+                        ),
+                    )
+                except Exception:
+                    LOGGER.warning(
+                        "image prewarm target was not recorded for build",
+                        exc_info=True,
+                        extra={"build_id": request.build_id},
+                    )
         return GetImageArchiveUploadCredentialsResponse(credentials=credentials)
 
     def get_image_build_credentials(

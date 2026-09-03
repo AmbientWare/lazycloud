@@ -13,6 +13,7 @@ from cache.server import (
     WorkerCacheHttpClient,
 )
 from networking.internal_http import InternalHttpClient
+from shared.image_prewarm import WorkerImagePrewarmArchive
 from worker.container_startup import (
     IMAGE_MOUNT_MANIFEST_NAME,
     ImageMountManifest,
@@ -102,6 +103,24 @@ class BrokeredImageArchiveSourceLoader:
             archive_sha256=archive_sha256,
             bytes_written=bytes_written,
             reason="brokered image archive downloaded and verified",
+        )
+
+    def load_prewarm_image_archive(
+        self,
+        archive: WorkerImagePrewarmArchive,
+        request: WorkerImageSourceLoadRequest,
+    ) -> WorkerImageSourceLoadResult:
+        if not archive.image_archive_url:
+            return WorkerImageSourceLoadResult(
+                ok=False,
+                archive_path=request.archive_path,
+                reason="image prewarm archive URL is unavailable",
+            )
+        return self._download_url(
+            archive.image_archive_url,
+            request.archive_path,
+            archive_size_bytes=archive.archive_size_bytes,
+            archive_sha256=archive.archive_sha256,
         )
 
 

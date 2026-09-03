@@ -22,6 +22,7 @@ from coordination.token_lock import (
 from pydantic import Field, field_validator
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
+from shared.image_prewarm import WorkerImagePrewarmTarget
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
     DEFAULT_CONTAINER_STATE_TTL_SECONDS,
@@ -571,6 +572,14 @@ class SchedulerStateKeys:
     def image_pull_lock(self, worker_id: str, image_id: str) -> str:
         return self.redis.key("worker-images", worker_id, "images", image_id, "pull-lock")
 
+    def image_prewarm_targets(self, capacity_owner_id: str) -> str:
+        return self.redis.key(
+            self.namespace,
+            "capacity-owners",
+            capacity_owner_key_segment(capacity_owner_id),
+            "image-prewarm-targets",
+        )
+
     def container_requests(self) -> str:
         return self.redis.key(self.namespace, "containers", "requests")
 
@@ -810,6 +819,44 @@ class RedisSchedulerWorkerRepository:
 
     def list_workers_on_machine(self, machine_id: str) -> list[SchedulerWorkerRecord]:
         return [worker for worker in self.list_workers() if worker.machine_id == machine_id]
+
+    def record_image_prewarm_target(
+        self,
+        capacity_owner_id: str,
+        target: WorkerImagePrewarmTarget,
+        *,
+        now: datetime | None = None,
+        ttl_seconds: int = 24 * 60 * 60,
+    ) -> None:
+        if not capacity_owner_id:
+            raise ValueError("capacity owner id is required for image prewarm target")
+        current_time = now or utc_now()
+        key = self.keys.image_prewarm_targets(capacity_owner_id)
+        self.redis.sorted_set_add(key, {target.model_dump_json(): current_time.timestamp()})
+        self.redis.sorted_set_remove_by_score(
+            key,
+            "-inf",
+            current_time.timestamp() - ttl_seconds,
+        )
+        self.redis.expire(key, ttl_seconds)
+
+    def list_image_prewarm_targets(
+        self,
+        capacity_owner_id: str,
+        *,
+        limit: int = 4,
+    ) -> list[WorkerImagePrewarmTarget]:
+        if not capacity_owner_id or limit <= 0:
+            return []
+        values = self.redis.sorted_set_range(
+            self.keys.image_prewarm_targets(capacity_owner_id),
+            -limit,
+            -1,
+        )
+        return [
+            WorkerImagePrewarmTarget.model_validate_json(redis_serialization.redis_text(value))
+            for value in reversed(values)
+        ]
 
     def update_worker_status(
         self,

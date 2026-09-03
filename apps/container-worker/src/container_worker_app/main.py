@@ -51,6 +51,7 @@ WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS = 0.2
 WORKER_EVENT_PUBSUB_TIMEOUT_SECONDS = 0.05
 WORKER_EVENT_BATCH_SIZE = 1
 DEFAULT_WORKER_KEEPALIVE_INTERVAL_SECONDS = 15.0
+DEFAULT_IMAGE_PREWARM_INTERVAL_SECONDS = 15.0
 MAX_WORKER_KEEPALIVE_INTERVAL_SECONDS = DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS / 3
 
 
@@ -166,6 +167,16 @@ class WorkerRetentionLoop:
         self.thread.join(timeout=1.0)
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerImagePrewarmLoop:
+    stop_event: threading.Event
+    thread: threading.Thread
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=1.0)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=CONTAINER_WORKER_PROCESS_NAME)
     parser.add_argument("--worker-id")
@@ -234,6 +245,7 @@ def run_container_worker(
     event_loop: ContainerWorkerEventLoop | None = None
     keepalive_loop: ContainerWorkerKeepaliveLoop | None = None
     retention_loop: WorkerRetentionLoop | None = None
+    image_prewarm_loop: WorkerImagePrewarmLoop | None = None
     shutdown_event = threading.Event()
     shutdown_registered_worker = False
     registration_failure: tuple[WorkerUnavailableReason, str] = (
@@ -260,7 +272,9 @@ def run_container_worker(
                     f"(timeout {resolved_settings.worker_repository_timeout_seconds:g}s)",
                     file=sys.stderr,
                 )
-                registration = worker_services.lifecycle.register_available()
+                registration = worker_services.lifecycle.register_available(
+                    before_available=lambda: _reconcile_worker_images(worker_services, limit=1)
+                )
                 _report_registration(registration)
                 if not registration or not all(
                     step.status is WorkerLifecycleStatus.Ok for step in registration
@@ -299,6 +313,11 @@ def run_container_worker(
                 retention_loop = _start_retention_loop(
                     worker_services,
                     interval_seconds=resolved_settings.retention_interval_seconds,
+                    stop_event=shutdown_event,
+                )
+                image_prewarm_loop = _start_image_prewarm_loop(
+                    worker_services,
+                    interval_seconds=DEFAULT_IMAGE_PREWARM_INTERVAL_SECONDS,
                     stop_event=shutdown_event,
                 )
                 heartbeat = None if heartbeat_file is None else HeartbeatFile(heartbeat_file)
@@ -371,6 +390,8 @@ def run_container_worker(
             keepalive_loop.stop()
         if retention_loop is not None:
             retention_loop.stop()
+        if image_prewarm_loop is not None:
+            image_prewarm_loop.stop()
         if event_loop is not None:
             event_loop.stop()
         if shutdown_registered_worker:
@@ -427,6 +448,36 @@ def _reconcile_worker_artifacts(services: ContainerWorkerServices) -> None:
     for failure in result.image_build_scratch_cleanup_failures:
         print(
             f"container worker image build scratch cleanup failed: {failure}",
+            file=sys.stderr,
+        )
+
+
+def _reconcile_worker_images(
+    services: ContainerWorkerServices,
+    *,
+    limit: int | None = None,
+) -> None:
+    prewarmer = services.image_prewarmer
+    if prewarmer is None:
+        return
+    try:
+        results = prewarmer.reconcile(
+            limit=limit,
+            on_start=lambda target: print(
+                f"container worker prewarming runtime image {target.image_id}",
+                file=sys.stderr,
+            ),
+        )
+    except Exception as exc:
+        print(
+            f"container worker image prewarm lookup failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return
+    for result in results:
+        status = "ready" if result.ready else "deferred"
+        print(
+            f"container worker runtime image {result.image_id} prewarm {status}: {result.reason}",
             file=sys.stderr,
         )
 
@@ -586,6 +637,33 @@ def _run_retention_loop(
             continue
         consecutive_failures = 0
         stop_event.wait(interval_seconds)
+
+
+def _start_image_prewarm_loop(
+    services: ContainerWorkerServices,
+    *,
+    interval_seconds: float,
+    stop_event: threading.Event,
+) -> WorkerImagePrewarmLoop | None:
+    if services.image_prewarmer is None:
+        return None
+    thread = threading.Thread(
+        target=_run_image_prewarm_loop,
+        args=(services, stop_event, interval_seconds),
+        name="container-worker-image-prewarm",
+        daemon=True,
+    )
+    thread.start()
+    return WorkerImagePrewarmLoop(stop_event=stop_event, thread=thread)
+
+
+def _run_image_prewarm_loop(
+    services: ContainerWorkerServices,
+    stop_event: threading.Event,
+    interval_seconds: float,
+) -> None:
+    while not stop_event.wait(interval_seconds):
+        _reconcile_worker_images(services)
 
 
 _REGISTRATION_STEP_REASONS: dict[WorkerLifecycleAction, WorkerUnavailableReason] = {

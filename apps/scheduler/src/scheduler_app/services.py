@@ -282,6 +282,7 @@ class SchedulerAppServices:
             dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
             lifecycle_events=stream_events,
             workspace_owners=DatabaseWorkspaceOwners(context),
+            image_prewarm=worker_repository,
         )
         containers = ContainerService(
             context,

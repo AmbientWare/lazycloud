@@ -9,6 +9,7 @@ from cache.protocol import (
     CacheContentReadResult,
     CacheContentStoreResult,
 )
+from shared.image_prewarm import WorkerImagePrewarmArchive
 from worker.container_startup import (
     IMAGE_MOUNT_MANIFEST_NAME,
     ImageMountManifest,
@@ -76,6 +77,58 @@ class _BrokerSourceLoader:
             bytes_written=len(self.payload),
             reason="brokered image archive downloaded and verified",
         )
+
+
+@dataclass(slots=True)
+class _PrewarmSourceLoader:
+    payload: bytes
+
+    def load_prewarm_image_archive(
+        self,
+        archive: WorkerImagePrewarmArchive,
+        request: WorkerImageSourceLoadRequest,
+    ) -> WorkerImageSourceLoadResult:
+        assert archive.image_archive_url == "https://objects.example.test/image-1"
+        Path(request.archive_path).write_bytes(self.payload)
+        return WorkerImageSourceLoadResult(
+            ok=True,
+            archive_path=request.archive_path,
+            archive_sha256=archive.archive_sha256,
+            bytes_written=len(self.payload),
+            reason="prewarm archive downloaded",
+        )
+
+
+def test_recent_image_is_downloaded_and_materialized_before_a_request(
+    tmp_path: Path,
+) -> None:
+    payload = b"runtime-image-archive" * 512
+    digest = hashlib.sha256(payload).hexdigest()
+    cache_root = tmp_path / "cache" / "images"
+    mount_root = tmp_path / "mnt" / "images"
+    mounter = _RecordingMounter()
+    loader = WorkerImageStartupLoader(
+        mounter=mounter,
+        cache=_UnreachableContentCache(),
+        cache_metadata=_MissingCacheMetadata(),
+        image_cache_path=str(cache_root),
+        image_mount_root=str(mount_root),
+        publish_source_to_cache=False,
+    )
+
+    result = loader.prewarm_image(
+        WorkerImagePrewarmArchive(
+            image_id="image-1",
+            archive_sha256=digest,
+            archive_size_bytes=len(payload),
+            image_archive_url="https://objects.example.test/image-1",
+        ),
+        source_loader=_PrewarmSourceLoader(payload),
+    )
+
+    assert result.ready
+    assert (cache_root / "image-1.rclip").read_bytes() == payload
+    assert [request.archive_sha256 for request in mounter.requests] == [digest]
 
 
 def test_cached_image_is_refused_when_it_records_other_archive_bytes(tmp_path: Path) -> None:

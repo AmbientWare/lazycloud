@@ -342,6 +342,7 @@ def _container_requests_with_capacity(
         dispatch_wake=base.dispatch_wake,
         lifecycle_events=base.lifecycle_events,
         workspace_owners=base.workspace_owners,
+        image_prewarm=base.image_prewarm,
         capacity_reservations=capacity_reservations,
         usage=base.usage,
         requeue_delay_seconds=base.requeue_delay_seconds,

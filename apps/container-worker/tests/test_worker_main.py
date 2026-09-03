@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import signal
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Never
@@ -191,7 +192,13 @@ class _Lifecycle:
         ]
     )
 
-    def register_available(self) -> list[WorkerLifecycleStepResult]:
+    def register_available(
+        self,
+        *,
+        before_available: Callable[[], None] | None = None,
+    ) -> list[WorkerLifecycleStepResult]:
+        if before_available is not None:
+            before_available()
         return self.registration_steps
 
     def keepalive(self) -> WorkerLifecycleStepResult:
@@ -236,3 +243,4 @@ class _Services:
     retention: None = None
     memory_watcher: None = None
     credential_refresher: None = None
+    image_prewarmer: None = None

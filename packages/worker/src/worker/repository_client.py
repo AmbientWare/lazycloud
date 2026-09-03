@@ -13,6 +13,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.checkpoints import AutomaticCheckpointCreationLease, CheckpointRecord
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
+from shared.image_prewarm import WorkerImagePrewarmArchive
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsPayload
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
@@ -88,6 +89,8 @@ from worker.repository_payloads import (
     GetWorkerAddressRequest,
     GetWorkerAddressResponse,
     GetWorkerByIdResponse,
+    ListImagePrewarmTargetsRequest,
+    ListImagePrewarmTargetsResponse,
     MoveContainerIpRequest,
     MoveContainerIpResponse,
     NetworkLockRequest,
@@ -340,6 +343,16 @@ class WorkerRepositoryHttpClient:
             "/worker-repository/get-worker-by-id",
             request,
             GetWorkerByIdResponse,
+        )
+
+    def list_image_prewarm_targets(
+        self,
+        request: ListImagePrewarmTargetsRequest,
+    ) -> ListImagePrewarmTargetsResponse:
+        return self._post_model(
+            "/worker-repository/list-image-prewarm-targets",
+            request,
+            ListImagePrewarmTargetsResponse,
         )
 
     def add_worker(self, request: AddWorkerRequest) -> WorkerRecordResponse:
@@ -858,6 +871,16 @@ class RemoteSchedulerWorkerRepository:
 
     def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None:
         return self.client.get_worker_by_id(WorkerIdRequest(worker_id=worker_id)).worker
+
+    def list_image_prewarm_targets(
+        self,
+        worker_id: str,
+        *,
+        limit: int = 4,
+    ) -> list[WorkerImagePrewarmArchive]:
+        return self.client.list_image_prewarm_targets(
+            ListImagePrewarmTargetsRequest(worker_id=worker_id, limit=limit)
+        ).targets
 
     def add_worker(
         self,

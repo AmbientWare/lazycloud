@@ -65,6 +65,7 @@ from worker.image_build_execution import (
 from worker.image_build_runtime_credentials import RemoteImageBuildCredentialLoader
 from worker.image_build_scratch import ImageBuildScratchManager
 from worker.image_lifecycle import ImageArchiveStorageMode
+from worker.image_prewarm import WorkerImagePrewarmService
 from worker.managed_runtime import MANAGED_RUNTIME_IMAGE_ROOT
 from worker.monitoring import (
     AsyncContainerLifecycleSink,
@@ -273,10 +274,11 @@ def build_worker_process_services(
         ),
     )
     image_build_credential_loader = RemoteImageBuildCredentialLoader(repository)
-    archive_source_loader = image_source_loader or BrokeredImageArchiveSourceLoader(
+    brokered_source_loader = BrokeredImageArchiveSourceLoader(
         repository,
         internal_http,
     )
+    archive_source_loader = image_source_loader or brokered_source_loader
     cache_metadata = (
         CacheServerImageArchiveMetadataProvider(cache_server) if cache_server is not None else None
     )
@@ -306,7 +308,11 @@ def build_worker_process_services(
         target_root=Path(paths.image_cache_path),
         extension=config.image_archive_extension,
     )
-    image_archive_publisher = RepositoryWorkerImageArchivePublisher(repository, internal_http)
+    image_archive_publisher = RepositoryWorkerImageArchivePublisher(
+        repository,
+        internal_http,
+        cache=cache_server,
+    )
     request_mounts = mountpoint_backend or WorkerRequestMountManager(
         mountpoint_binary=config.workspace_storage_mountpoint_binary
     )
@@ -388,6 +394,7 @@ def build_worker_process_services(
         ),
         image_archive_publisher=image_archive_publisher,
         image_build_credential_loader=image_build_credential_loader,
+        runtime_image_preparer=image_loader,
     )
     retention = WorkerRetentionService(
         instances=instance_store,
@@ -441,6 +448,12 @@ def build_worker_process_services(
                 workspace_id="",
                 token_kind=TokenKind.Worker,
             ),
+        ),
+        image_prewarmer=WorkerImagePrewarmService(
+            worker_id=identity.worker_id,
+            repository=worker_repository,
+            loader=image_loader,
+            source_loader=brokered_source_loader,
         ),
     )
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from cache.server import FileCacheServer
 from networking.internal_http import InternalHttpClient
 from pydantic import JsonValue, TypeAdapter
 from scheduler.state import SchedulerWorkerRequest
@@ -295,6 +296,8 @@ def test_repository_archive_publisher_requests_and_propagates_exact_identity(
         )
     )
     uploads: list[dict[str, object]] = []
+    cache = FileCacheServer(tmp_path / "cache")
+    cache.prepare()
 
     def capture_upload(
         _http: InternalHttpClient,
@@ -321,7 +324,7 @@ def test_repository_archive_publisher_requests_and_propagates_exact_identity(
 
     monkeypatch.setattr(image_build_execution, "upload_image_archive", capture_upload)
 
-    result = RepositoryWorkerImageArchivePublisher(repository).publish_image_archive(
+    result = RepositoryWorkerImageArchivePublisher(repository, cache=cache).publish_image_archive(
         image_id="image-1",
         build_id="build-1",
         container_id="container-1",
@@ -338,6 +341,8 @@ def test_repository_archive_publisher_requests_and_propagates_exact_identity(
     assert result.object_key == "image-archives/image-1.rclip"
     assert result.size_bytes == len(content)
     assert result.sha256 == digest
+    assert result.cache_published
+    assert cache.has_complete_content(digest, len(content)).complete
 
 
 def test_buildah_failure_cleans_every_resource_in_its_isolated_store(

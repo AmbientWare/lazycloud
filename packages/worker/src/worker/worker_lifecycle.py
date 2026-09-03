@@ -40,6 +40,7 @@ class WorkerLifecycleAction(StrEnum):
     MarkAvailable = "mark-available"
     ActivateSourceCache = "activate-source-cache"
     ValidateReadiness = "validate-readiness"
+    PrepareImages = "prepare-images"
     KeepAlive = "keepalive"
     DisableScheduling = "disable-scheduling"
     DrainRequests = "drain-requests"
@@ -199,7 +200,12 @@ class WorkerLifecycleOrchestrator:
             ),
         )
 
-    def register_available(self, *, now: datetime | None = None) -> list[WorkerLifecycleStepResult]:
+    def register_available(
+        self,
+        *,
+        now: datetime | None = None,
+        before_available: Callable[[], None] | None = None,
+    ) -> list[WorkerLifecycleStepResult]:
         registration = self.registration
         if registration is None:
             return [self.mark_available()]
@@ -246,11 +252,24 @@ class WorkerLifecycleOrchestrator:
                 return [added, readiness]
         else:
             readiness = None
+        image_preparation = (
+            self._run_repository_step(WorkerLifecycleAction.PrepareImages, before_available)
+            if before_available is not None
+            else None
+        )
+        if image_preparation is not None and not image_preparation.ok:
+            return [
+                added,
+                activation,
+                *([readiness] if readiness is not None else []),
+                image_preparation,
+            ]
         available = self.mark_available()
         return [
             added,
             activation,
             *([readiness] if readiness is not None else []),
+            *([image_preparation] if image_preparation is not None else []),
             available,
         ]
 

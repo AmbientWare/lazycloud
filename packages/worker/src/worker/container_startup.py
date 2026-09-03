@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Literal, Protocol
 from pydantic import Field, TypeAdapter
 from shared.container_requests import RequestMount
 from shared.contracts import ContractModel
+from shared.image_prewarm import WorkerImagePrewarmArchive
 
 from worker.container_execution import (
     ContainerImageLoadResult,
@@ -167,6 +169,12 @@ class WorkerImageStartupRecord(ContractModel):
     reason: str = ""
 
 
+class WorkerImagePrewarmResult(ContractModel):
+    image_id: str
+    ready: bool = False
+    reason: str = ""
+
+
 class WorkerMountPointRequest(ContractModel):
     container_id: str
     mount: RequestMount
@@ -190,6 +198,14 @@ class WorkerImageCacheMetadataProvider(Protocol):
 class WorkerImageArchiveSourceLoader(Protocol):
     def load_source_image_archive(
         self,
+        request: WorkerImageSourceLoadRequest,
+    ) -> WorkerImageSourceLoadResult: ...
+
+
+class WorkerImagePrewarmSourceLoader(Protocol):
+    def load_prewarm_image_archive(
+        self,
+        archive: WorkerImagePrewarmArchive,
         request: WorkerImageSourceLoadRequest,
     ) -> WorkerImageSourceLoadResult: ...
 
@@ -218,6 +234,12 @@ class WorkerImageStartupLoader:
     storage_mode: ImageArchiveStorageMode = ImageArchiveStorageMode.Local
     publish_source_to_cache: bool = True
     records: list[WorkerImageStartupRecord] = field(default_factory=list)
+    _image_locks: dict[str, threading.Lock] = field(default_factory=dict, init=False, repr=False)
+    _image_locks_guard: threading.Lock = field(
+        default_factory=threading.Lock,
+        init=False,
+        repr=False,
+    )
 
     def load_image(self, request: ContainerRequestContext) -> ContainerImageLoadResult:
         if not request.image_id:
@@ -228,6 +250,11 @@ class WorkerImageStartupLoader:
                 )
             )
             return ContainerImageLoadResult(loaded=True, reason="no image id")
+
+        with self._image_lock(request.image_id):
+            return self._load_image(request)
+
+    def _load_image(self, request: ContainerRequestContext) -> ContainerImageLoadResult:
 
         paths = build_worker_image_paths(
             request.image_id,
@@ -285,6 +312,103 @@ class WorkerImageStartupLoader:
             )
         )
         return ContainerImageLoadResult(loaded=True, reason=reason)
+
+    def prewarm_image(
+        self,
+        target: WorkerImagePrewarmArchive,
+        *,
+        source_loader: WorkerImagePrewarmSourceLoader | None = None,
+    ) -> WorkerImagePrewarmResult:
+        request = ContainerRequestContext(
+            container_id=f"image-prewarm-{target.image_id}",
+            image_id=target.image_id,
+            archive_sha256=target.archive_sha256,
+        )
+        with self._image_lock(target.image_id):
+            paths = build_worker_image_paths(
+                target.image_id,
+                image_cache_path=self.image_cache_path,
+                image_mount_root=self.image_mount_root,
+                image_archive_extension=self.image_archive_extension,
+            )
+            mounted_hit = self._load_mounted_image_hit(request, paths)
+            if mounted_hit is not None:
+                return WorkerImagePrewarmResult(
+                    image_id=target.image_id,
+                    ready=True,
+                    reason=mounted_hit.reason,
+                )
+            cache_path = image_archive_cache_path(
+                target.image_id,
+                extension=self.image_archive_extension,
+            )
+            cache_load = self._load_local_or_cache(
+                request,
+                paths,
+                cache_path,
+            )
+            source_load: WorkerImageSourceLoadResult | None = None
+            if cache_load.should_pull_source:
+                if source_loader is None or not target.image_archive_url:
+                    return WorkerImagePrewarmResult(
+                        image_id=target.image_id,
+                        reason=cache_load.reason,
+                    )
+                Path(paths.local_archive_path).parent.mkdir(parents=True, exist_ok=True)
+                source_load = source_loader.load_prewarm_image_archive(
+                    target,
+                    WorkerImageSourceLoadRequest(
+                        container_id=request.container_id,
+                        image_id=request.image_id,
+                        archive_path=paths.local_archive_path,
+                        mount_point=paths.mount_point,
+                        cache_path=cache_path,
+                        reason=cache_load.reason,
+                    ),
+                )
+                if not source_load.ok:
+                    return WorkerImagePrewarmResult(
+                        image_id=target.image_id,
+                        reason=source_load.reason,
+                    )
+                if self.cache is not None and self.publish_source_to_cache:
+                    publish_source_image_archive_to_cache(
+                        self.cache,
+                        archive_path=paths.local_archive_path,
+                        image_id=target.image_id,
+                        cache_client_available=True,
+                    )
+            mount = self.mounter.mount_image_archive(
+                WorkerImageMountRequest(
+                    container_id=request.container_id,
+                    image_id=target.image_id,
+                    archive_sha256=self._materialized_archive_sha256(
+                        paths,
+                        cache_load,
+                        source_load,
+                    ),
+                    archive_path=paths.local_archive_path,
+                    mount_point=paths.mount_point,
+                    repair_incomplete=True,
+                )
+            )
+            if not mount.mounted:
+                msg = mount.reason or f"image archive mount failed for {target.image_id}"
+                raise RuntimeError(msg)
+            return WorkerImagePrewarmResult(
+                image_id=target.image_id,
+                ready=True,
+                reason=mount.reason
+                or (source_load.reason if source_load is not None else cache_load.reason),
+            )
+
+    def _image_lock(self, image_id: str) -> threading.Lock:
+        with self._image_locks_guard:
+            lock = self._image_locks.get(image_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._image_locks[image_id] = lock
+            return lock
 
     def _load_mounted_image_hit(
         self,

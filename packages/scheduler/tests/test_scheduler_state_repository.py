@@ -94,6 +94,7 @@ from shared.deployments import DeploymentKind, StubKind
 from shared.errors import ConflictError, NotFoundError
 from shared.http.functions import FunctionClaimRequest
 from shared.image_building.authoring import ImageSpec
+from shared.image_prewarm import WorkerImagePrewarmTarget
 from shared.realtime.contracts import (
     CloudEventRecord,
     EventDataInput,
@@ -107,6 +108,33 @@ from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 
 _EVENT_DATA_ADAPTER = TypeAdapter(dict[str, JsonValue | datetime])
+
+
+def test_image_prewarm_targets_keep_the_newest_pool_working_set() -> None:
+    redis = RedisClient(FakeRedis(), key_prefix="scheduler-image-prewarm")
+    repository = RedisSchedulerWorkerRepository(redis)
+    first = WorkerImagePrewarmTarget(
+        workspace_id="workspace-1",
+        image_id="image-1",
+        archive_sha256="a" * 64,
+    )
+    second = WorkerImagePrewarmTarget(
+        workspace_id="workspace-1",
+        image_id="image-2",
+        archive_sha256="b" * 64,
+    )
+    started_at = datetime(2026, 1, 1, tzinfo=UTC)
+
+    repository.record_image_prewarm_target("pool-1", first, now=started_at, ttl_seconds=10)
+    repository.record_image_prewarm_target(
+        "pool-1",
+        second,
+        now=started_at + timedelta(seconds=11),
+        ttl_seconds=10,
+    )
+
+    assert repository.list_image_prewarm_targets("pool-1") == [second]
+    assert repository.list_image_prewarm_targets("pool-2") == []
 
 
 def test_container_exit_code_retains_typed_termination_reason() -> None:

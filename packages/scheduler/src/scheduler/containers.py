@@ -11,7 +11,9 @@ from typing import Protocol
 from coordination.wake_signal import WakeSignalPublisher
 from pydantic import JsonValue
 from shared.billing_quotes import ContainerShape
+from shared.container_requests import WorkerContainerRequestPayload
 from shared.contracts import ContractModel
+from shared.image_prewarm import WorkerImagePrewarmTarget
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
     SchedulerContainerCancellationResult,
@@ -227,6 +229,16 @@ class SchedulerContainerLifecycleEvents(Protocol):
     ) -> CloudEventRecord: ...
 
 
+class SchedulerImagePrewarmRecorder(Protocol):
+    def record_image_prewarm_target(
+        self,
+        capacity_owner_id: str,
+        target: WorkerImagePrewarmTarget,
+        *,
+        now: datetime | None = None,
+    ) -> None: ...
+
+
 class SchedulerWorkspaceOwners(Protocol):
     """Which account a workspace belongs to, for the private-placement comparison.
 
@@ -304,6 +316,7 @@ class SchedulerContainerRequestService:
     dispatch_wake: WakeSignalPublisher
     lifecycle_events: SchedulerContainerLifecycleEvents
     workspace_owners: SchedulerWorkspaceOwners
+    image_prewarm: SchedulerImagePrewarmRecorder | None = None
     capacity_reservations: SchedulerCapacityReservations | None = None
     usage: SchedulerUsageRecorder | None = None
     requeue_delay_seconds: float = DEFAULT_SCHEDULER_REQUEUE_DELAY_SECONDS
@@ -949,12 +962,47 @@ class SchedulerContainerRequestService:
                 reason=str(exc),
             )
         self._record_dispatch_lifecycle(request, claimed_at=now)
+        self._record_image_prewarm_target(request, worker, now=now)
         return SchedulerContainerDispatchResult(
             status=SchedulerContainerDispatchStatus.Dispatched,
             container_id=request.container_id,
             worker_id=worker_id,
             reason="container request dispatched to worker",
         )
+
+    def _record_image_prewarm_target(
+        self,
+        request: SchedulerWorkerRequest,
+        worker: SchedulerWorkerRecord,
+        *,
+        now: datetime,
+    ) -> None:
+        if (
+            self.image_prewarm is None
+            or not worker.capacity_owner_id
+            or not request.payload.get("archive_sha256")
+        ):
+            return
+        try:
+            payload = WorkerContainerRequestPayload.model_validate(request.payload)
+            if not payload.image_id or not payload.archive_sha256:
+                return
+            self.image_prewarm.record_image_prewarm_target(
+                worker.capacity_owner_id,
+                WorkerImagePrewarmTarget(
+                    workspace_id=request.workspace_id,
+                    stub_id=request.stub_id,
+                    image_id=payload.image_id,
+                    archive_sha256=payload.archive_sha256,
+                ),
+                now=now,
+            )
+        except Exception:
+            LOGGER.warning(
+                "image prewarm target was not recorded",
+                exc_info=True,
+                extra={"container_id": request.container_id},
+            )
 
     def _record_dispatch_lifecycle(
         self,

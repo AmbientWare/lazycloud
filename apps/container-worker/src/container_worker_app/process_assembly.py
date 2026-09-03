@@ -62,11 +62,13 @@ from worker.finalization import (
     WorkerContainerFinalizationService,
 )
 from worker.image_build_execution import (
+    WorkerBuiltImagePreparer,
     WorkerImageArchivePublisher,
     WorkerImageBuilder,
     WorkerImageBuildExecutionService,
 )
 from worker.image_build_runtime_credentials import ImageBuildCredentialLoader
+from worker.image_prewarm import WorkerImagePrewarmService
 from worker.memory_pressure import WorkerMemoryPressureWatcher
 from worker.monitoring import ContainerRuntimeMonitor
 from worker.repository_payloads import StreamWorkerEventsRequest
@@ -175,6 +177,7 @@ class WorkerProcessImageBuildDependencies:
     image_builder: WorkerImageBuilder | None = None
     image_archive_publisher: WorkerImageArchivePublisher | None = None
     image_build_credential_loader: ImageBuildCredentialLoader | None = None
+    runtime_image_preparer: WorkerBuiltImagePreparer | None = None
 
 
 @dataclass(slots=True)
@@ -194,6 +197,7 @@ class WorkerProcessServices:
     memory_watcher: WorkerMemoryPressureWatcher | None = None
     retention: WorkerRetentionService | None = None
     credential_refresher: WorkspaceCredentialRefresher | None = None
+    image_prewarmer: WorkerImagePrewarmService | None = None
 
 
 LOGGER = logging.getLogger(__name__)
@@ -219,6 +223,7 @@ def assemble_worker_process_services(
     source_cache_reconciler: WorkerSourceCacheReconciler | None = None,
     retention: WorkerRetentionService | None = None,
     credential_refresher: WorkspaceCredentialRefresher | None = None,
+    image_prewarmer: WorkerImagePrewarmService | None = None,
 ) -> WorkerProcessServices:
     worker_repository = workers
     container_repository = containers
@@ -342,6 +347,7 @@ def assemble_worker_process_services(
             builder=image_build_dependencies.image_builder,
             publisher=image_build_dependencies.image_archive_publisher,
             credential_loader=image_build_dependencies.image_build_credential_loader,
+            runtime_image_preparer=image_build_dependencies.runtime_image_preparer,
         )
         if image_build_dependencies.image_builder is not None
         and image_build_dependencies.image_archive_publisher is not None
@@ -390,6 +396,7 @@ def assemble_worker_process_services(
         memory_watcher=_memory_pressure_watcher(processor, stopper=runtime_stopper),
         retention=retention,
         credential_refresher=credential_refresher,
+        image_prewarmer=image_prewarmer,
     )
 
 

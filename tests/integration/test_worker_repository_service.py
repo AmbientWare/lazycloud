@@ -91,6 +91,7 @@ from shared.http.errors import ErrorResponse
 from shared.identity import AuthScope, TokenKind, WorkspaceStorageConfig
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import ImageRecord
+from shared.image_prewarm import WorkerImagePrewarmTarget
 from shared.objects import ObjectRecord
 from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
 from shared.source_cache_cleanup import (
@@ -136,6 +137,7 @@ from worker.repository_payloads import (
     GetImageBuildCredentialsRequest,
     GetNextContainerRequestRequest,
     GetNextContainerRequestResponse,
+    ListImagePrewarmTargetsRequest,
     PersistCheckpointArchiveRequest,
     PrepareCheckpointArchiveUploadRequest,
     PrepareImageBuildContextDownloadRequest,
@@ -698,6 +700,63 @@ def test_cache_origin_broker_returns_urls_without_storage_credentials(
     assert response.credentials.image_archive_url.startswith(
         "memory://image-archives/image-archives/"
     )
+
+
+def test_image_prewarm_targets_are_selected_by_authenticated_worker_pool(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "image-prewarm")
+    image_id = "image-prewarm"
+    with isolated_services.context.database.session() as session:
+        ImageArchiveRepository(session).reserve(
+            image_id,
+            bucket="image-archives",
+            object_key=f"image-archives/{image_id}.rclip",
+            size_bytes=1024,
+            sha256="a" * 64,
+        )
+        ImageRepository(session).upsert(ImageRecord(workspace_id=workspace.id, image_id=image_id))
+    service = _worker_repository_service(isolated_services, redis)
+    service.origin_credentials.config = CacheOriginCredentialConfig(
+        image_registry_store=ImageRegistryStore.S3,
+    )
+    service.origin_credentials.archive_settings = _archive_settings()
+    service.origin_credentials.object_store_client = _FakeObjectStorage()
+    service.workers.add_worker(
+        SchedulerWorkerRecord(
+            capacity_owner_id="11111111-1111-4111-8111-111111111111",
+            worker_id="worker-prewarm",
+            pool=MachinePool("pool"),
+            status=SchedulerWorkerStatus.Available,
+        )
+    )
+    service.workers.record_image_prewarm_target(
+        "11111111-1111-4111-8111-111111111111",
+        WorkerImagePrewarmTarget(
+            workspace_id=workspace.id,
+            stub_id="stub-prewarm",
+            image_id=image_id,
+            archive_sha256="a" * 64,
+        ),
+    )
+
+    response = service.list_image_prewarm_targets(
+        ListImagePrewarmTargetsRequest(worker_id="worker-prewarm"),
+        principal=WorkerRepositoryPrincipal(worker_id="worker-prewarm"),
+    )
+
+    assert len(response.targets) == 1
+    assert response.targets[0].image_id == image_id
+    assert response.targets[0].image_archive_url.startswith(
+        "memory://image-archives/image-archives/"
+    )
+    with pytest.raises(ConflictError, match="authenticated worker"):
+        service.list_image_prewarm_targets(
+            ListImagePrewarmTargetsRequest(worker_id="worker-prewarm"),
+            principal=WorkerRepositoryPrincipal(worker_id="worker-other"),
+        )
 
 
 def test_cache_origin_broker_denies_other_workers_container_and_image(

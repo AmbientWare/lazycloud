@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Protocol
@@ -9,6 +9,7 @@ from shared.container_requests import StopContainerReason
 from shared.scheduling import WorkerUnavailableReason
 from worker.event_bridge import WorkerEventHandlingResult
 from worker.events import WorkerStreamEvent
+from worker.image_prewarm import WorkerImagePrewarmService
 from worker.memory_pressure import WorkerMemoryPressureWatcher
 from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.retention import WorkerRetentionService
@@ -26,7 +27,11 @@ class ContainerWorkerProcessor(Protocol):
 
 
 class ContainerWorkerLifecycle(Protocol):
-    def register_available(self) -> list[WorkerLifecycleStepResult]: ...
+    def register_available(
+        self,
+        *,
+        before_available: Callable[[], None] | None = None,
+    ) -> list[WorkerLifecycleStepResult]: ...
 
     def keepalive(self) -> WorkerLifecycleStepResult: ...
 
@@ -80,6 +85,9 @@ class ContainerWorkerServices(Protocol):
 
     @property
     def credential_refresher(self) -> WorkspaceCredentialRefresher | None: ...
+
+    @property
+    def image_prewarmer(self) -> WorkerImagePrewarmService | None: ...
 
 
 @dataclass(slots=True)

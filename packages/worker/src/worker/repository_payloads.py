@@ -9,6 +9,7 @@ from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.identity import AuthTokenRecord, TokenKind
 from shared.image_building.credentials import normalize_registry_host
+from shared.image_prewarm import WorkerImagePrewarmArchive
 from shared.logs import ContainerLogEntryKind
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsPayload
 from shared.routing import AgentBackendRoute
@@ -132,6 +133,15 @@ class AcknowledgeWorkerEventResponse(WorkerRepositoryResponse):
 
 class WorkerIdRequest(ContractModel):
     worker_id: str
+
+
+class ListImagePrewarmTargetsRequest(ContractModel):
+    worker_id: str
+    limit: int = Field(default=4, ge=1, le=8)
+
+
+class ListImagePrewarmTargetsResponse(WorkerRepositoryResponse):
+    targets: list[WorkerImagePrewarmArchive] = Field(default_factory=list)
 
 
 class DisableWorkerRequest(ContractModel):
