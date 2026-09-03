@@ -661,23 +661,29 @@ class ControlPlaneService:
         reuse_existing: bool = True,
     ) -> StubRecord:
         workspace_record = self.get_workspace(workspace)
+        metadata_payload = dict(metadata) if metadata is not None else {}
         with self.context.database.session() as session:
             repository = _stub_records(session)
             stubs = repository.list(workspace_id=workspace_record.id)
-            existing = _stub_by_name_and_app(stubs, name, app_id=app_id) if reuse_existing else None
+            logical_app = metadata_payload.get("app")
+            app_name = logical_app if isinstance(logical_app, str) and logical_app else None
+            existing = (
+                _stub_by_name_and_app(stubs, name, app_id=app_id, app_name=app_name)
+                if reuse_existing
+                else None
+            )
             if existing is not None and deployment_id is None:
                 existing = next(
                     (
                         item
                         for item in stubs
                         if item.name == name
-                        and item.app_id == app_id
+                        and _stub_has_app_identity(item, app_id=app_id, app_name=app_name)
                         and item.deployment_id is None
                     ),
                     None,
                 )
             now = utc_now()
-            metadata_payload = dict(metadata) if metadata is not None else {}
             config_payload = (
                 config
                 if isinstance(config, StubConfig)
@@ -783,6 +789,7 @@ class ControlPlaneService:
         *,
         workspace: str | None = None,
         app_id: str | None = None,
+        deployed_only: bool = False,
     ) -> list[StubRecord]:
         workspace_id = self.get_workspace(workspace).id if workspace is not None else None
         with self.context.database.session() as session:
@@ -792,6 +799,8 @@ class ControlPlaneService:
                 if workspace_id is not None
                 else repository.list_across_workspaces(app_id=app_id)
             )
+        if deployed_only:
+            records = [record for record in records if record.deployment_id is not None]
         records.sort(key=lambda item: (item.workspace_id, item.name))
         return records
 
@@ -1581,8 +1590,29 @@ def _stub_by_name_and_app(
     name: str,
     *,
     app_id: str | None,
+    app_name: str | None = None,
 ) -> StubRecord | None:
-    return next((item for item in records if item.name == name and item.app_id == app_id), None)
+    return next(
+        (
+            item
+            for item in records
+            if item.name == name and _stub_has_app_identity(item, app_id=app_id, app_name=app_name)
+        ),
+        None,
+    )
+
+
+def _stub_has_app_identity(
+    stub: StubRecord,
+    *,
+    app_id: str | None,
+    app_name: str | None,
+) -> bool:
+    if stub.app_id != app_id:
+        return False
+    if app_id is not None or app_name is None:
+        return True
+    return stub.metadata.get("app") == app_name
 
 
 def _limit_by_name(

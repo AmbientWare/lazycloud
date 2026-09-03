@@ -23,7 +23,7 @@ import {
 import { formatKind } from "@/lib/format";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import { sandboxesQueryOptions } from "@/lib/queries/sandboxes";
-import { stubsQueryOptions } from "@/lib/queries/stubs";
+import { deployedStubsQueryOptions } from "@/lib/queries/stubs";
 import { tasksQueryOptions } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -49,7 +49,7 @@ export function GlobalSearch({
   const normalizedQuery = deferredQuery.toLowerCase();
 
   const apps = useQuery({ ...appSummariesQueryOptions(workspace.id), enabled: open });
-  const workloads = useQuery({ ...stubsQueryOptions(workspace.id), enabled: open });
+  const workloads = useQuery({ ...deployedStubsQueryOptions(workspace.id), enabled: open });
   const tasks = useQuery({
     ...tasksQueryOptions(workspace.id, { limit: 10, search: deferredQuery }),
     enabled: open && deferredQuery.length >= 2,

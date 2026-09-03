@@ -5,12 +5,13 @@ import { stubListSchema, taskLatencyTimeseriesSchema } from "@/lib/api/schemas";
 
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
-export function stubsQueryOptions(workspaceId: string, appId?: string) {
-  const appParam = appId ? `?app_id=${encodeURIComponent(appId)}` : "";
+export function deployedStubsQueryOptions(workspaceId: string, appId?: string) {
+  const params = new URLSearchParams({ deployed_only: "true" });
+  if (appId) params.set("app_id", appId);
   return queryOptions({
     queryKey: workspaceQueryKeys.workloads.list(workspaceId, appId ?? null),
     queryFn: () =>
-      apiRequest(withWorkspace(`/api/v1/stubs${appParam}`, workspaceId), stubListSchema),
+      apiRequest(withWorkspace(`/api/v1/stubs?${params.toString()}`, workspaceId), stubListSchema),
     meta: workspaceLiveQueryMeta(true),
   });
 }

@@ -52,11 +52,18 @@ def _stub_url_response(result: StubUrlPlan) -> StubUrlResponse:
 @router.get("/api/v1/stubs", response_model=StubListResponse, operation_id="list_stubs")
 def list_stubs(
     app_id: str | None = None,
+    deployed_only: bool = False,
     *,
     workspace_id: read_workspace,
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> StubListResponse:
-    return _stub_list_response(service.list_stubs(workspace=workspace_id, app_id=app_id))
+    return _stub_list_response(
+        service.list_stubs(
+            workspace=workspace_id,
+            app_id=app_id,
+            deployed_only=deployed_only,
+        )
+    )
 
 
 @router.post(

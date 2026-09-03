@@ -22,7 +22,7 @@ import {
   taskMetricsQueryOptions,
   tasksInfiniteQueryOptions,
 } from "@/lib/queries/tasks";
-import { stubsQueryOptions } from "@/lib/queries/stubs";
+import { deployedStubsQueryOptions } from "@/lib/queries/stubs";
 import { useWorkspace } from "@/lib/workspace-context";
 
 type TasksSearch = {
@@ -69,7 +69,7 @@ function TasksPage() {
     }),
   );
   const apps = useQuery(appSummariesQueryOptions(workspace.id));
-  const workloads = useQuery(stubsQueryOptions(workspace.id, search.app));
+  const workloads = useQuery(deployedStubsQueryOptions(workspace.id, search.app));
   const metrics = useQuery(taskMetricsQueryOptions(workspace.id));
   const taskList = selectTaskList(tasks.data, tasks.hasNextPage);
   const selectedDeployment = taskList.items.find((task) => task.deployment_id === search.deployment)

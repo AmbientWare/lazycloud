@@ -115,6 +115,17 @@ class RecordingFunctionService:
     def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]:
         raise AssertionError(f"unexpected containers_holding_work call: {container_ids}")
 
+    def fail_unclaimed_tasks(
+        self,
+        stub_id: str,
+        *,
+        error: str,
+        limit: int = 100,
+    ) -> int:
+        raise AssertionError(
+            f"unexpected fail_unclaimed_tasks call: {stub_id}, {error}, limit={limit}"
+        )
+
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse:
         raise AssertionError(f"unexpected function_claim call: {request}")
 

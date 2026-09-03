@@ -220,8 +220,7 @@ class GetOrCreateStubRequest(HttpModel):
     @model_validator(mode="after")
     def workload_configuration_is_canonical(self) -> GetOrCreateStubRequest:
         # Both rules the deployment record states, checked here too because this
-        # is the other owner that builds a stub config, and a stub is deployable
-        # the moment it exists.
+        # is the other owner that builds a runtime-ready stub config.
         if self.cron and self.stub_type != DeploymentKind.Function.value:
             msg = "cron is only supported for function workloads"
             raise ValueError(msg)

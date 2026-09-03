@@ -68,6 +68,45 @@ def test_pod_checkpoint_readiness_is_retained_by_source_and_deployed_stubs(
     assert deployment_stub.config.runtime.checkpoint_readiness_interval_seconds == 0.25
 
 
+def test_runtime_prepare_stays_outside_apps_and_deployments_until_publish(
+    isolated_services: ApiServices,
+) -> None:
+    gateway = isolated_services.gateway_service
+    request = GetOrCreateStubRequest(
+        name="hello",
+        app_name="runtime_boundary",
+        handler="quickstart:hello",
+    )
+
+    prepared = gateway.get_or_create_stub(request)
+    repeated = gateway.get_or_create_stub(request)
+    peer = gateway.get_or_create_stub(request.model_copy(update={"app_name": "peer_runtime"}))
+
+    control = ControlPlaneService(isolated_services.context)
+    runtime = control.get_stub(prepared.stub_id)
+    assert repeated.stub_id == runtime.id
+    assert peer.stub_id != runtime.id
+    assert runtime.app_id is None
+    assert runtime.deployment_id is None
+    assert runtime.metadata["app"] == "runtime_boundary"
+    assert isolated_services.apps.list() == []
+    assert control.list_stubs(deployed_only=True) == []
+
+    published = gateway.deploy_stub(
+        DeployStubRequest(
+            stub_id=runtime.id,
+            name="hello",
+            workspace="default",
+        )
+    )
+
+    assert published.app_id is not None
+    deployed = control.list_stubs(deployed_only=True)
+    assert [stub.id for stub in deployed] == [published.stub_id]
+    assert deployed[0].app_id == published.app_id
+    assert deployed[0].deployment_id == published.deployment_id
+
+
 def test_a_resource_ceiling_survives_being_stored_and_read_back() -> None:
     """`cpu=(1, 4)` has to reach the deploy that reads the stub back.
 
