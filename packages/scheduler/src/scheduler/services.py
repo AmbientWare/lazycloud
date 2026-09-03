@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Protocol
 
 from compute.service import ComputeService
-from database.records.apps import AppRecord, StubRecord
+from database.records.apps import AppRecord, AutoscalingStubRecord, StubRecord
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
@@ -148,6 +148,8 @@ class SchedulerContainerService(Protocol):
 
 class SchedulerWorkloadDirectory(Protocol):
     def list_stubs(self, *, workspace: str | None = None) -> list[StubRecord]: ...
+
+    def list_autoscaling_stubs(self) -> list[AutoscalingStubRecord]: ...
 
     def get_stub(
         self,

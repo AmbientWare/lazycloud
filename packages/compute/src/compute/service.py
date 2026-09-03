@@ -996,9 +996,8 @@ class ComputeService:
                     f"compute pool capacity owner does not exist: {capacity_owner_id}"
                 )
             operations = ComputeCapacityOperationRepository(session)
-            open_operations = operations.list_open_for_owner(capacity_owner_id)
-            peak_desired_units = operations.peak_desired_unit(capacity_owner_id)
-            all_operations = operations.list_for_owner(capacity_owner_id)
+            open_operations = operations.list_open_sizing_for_owner(capacity_owner_id)
+            operation_history = operations.sizing_history_summary_for_owner(capacity_owner_id)
             machines = ComputeProviderInstanceRepository(session).list_sizing_for_pool(unit.id)
         open_machines = [record for record in machines if _reservation_open(record.status)]
         desired_units = (
@@ -1023,13 +1022,10 @@ class ComputeService:
         return CapacityPoolSizingSnapshot(
             capacity_owner_id=capacity_owner_id,
             desired_units=desired_units,
-            peak_desired_units=peak_desired_units,
+            peak_desired_units=operation_history.peak_desired_unit,
             pending_operation_id=pending.operation_id if pending is not None else "",
             pending_desired_units=pending.desired_unit if pending is not None else 0,
-            last_requested_at=max(
-                (operation.created_at for operation in all_operations),
-                default=None,
-            ),
+            last_requested_at=operation_history.last_requested_at,
             last_released_at=max(
                 (record.updated_at for record in machines if not _reservation_open(record.status)),
                 default=None,
