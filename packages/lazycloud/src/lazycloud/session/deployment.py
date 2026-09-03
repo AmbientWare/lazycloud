@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -58,7 +59,7 @@ from lazycloud.session.uploads import (
     object_upload_timeout_seconds,
     stream_object_bytes,
 )
-from lazycloud.terminal import ProgressCallback, Terminal
+from lazycloud.terminal import ProgressCallback, Terminal, TerminalStep
 from lazycloud.values import cloudpickle_bytes
 
 DEFAULT_IMAGE_BUILD_TIMEOUT_SECONDS = 600.0
@@ -301,24 +302,22 @@ class DeploymentClient(ControlClientConfigMixin):
             if not selected_root.is_dir():
                 msg = f"deployment source root is not a directory: {selected_root}"
                 raise RuntimeError(msg)
-        self._progress(f"Preparing image for <{spec.name}>")
         prepared_spec = self._prepare_image(spec, image=image)
-        self._progress("Syncing source package")
         source_object_id = self._source_object_id(
             prepared_spec,
             sync_source=sync_source,
             source_root=selected_root,
             archive_prefix=archive_prefix,
         )
-        self._progress("Creating deployment")
-        response = self.control_client.get_or_create_stub(
-            _stub_request_from_spec(
-                prepared_spec,
-                workspace=selected_workspace,
-                object_id=source_object_id,
+        with self._step("Deployment", prepared_spec.name) as step:
+            response = self.control_client.get_or_create_stub(
+                _stub_request_from_spec(
+                    prepared_spec,
+                    workspace=selected_workspace,
+                    object_id=source_object_id,
+                )
             )
-        )
-        self._progress("Deployment created")
+            step.done(f"{prepared_spec.name} · {response.stub_id[:8]}")
         return response
 
     def list(
@@ -580,9 +579,12 @@ class DeploymentClient(ControlClientConfigMixin):
         )
         return spec.model_copy(update={"image": built_spec})
 
-    def _progress(self, message: str) -> None:
-        if self.terminal is not None and message:
-            self.terminal.line(message)
+    def _step(self, name: str, summary: str) -> AbstractContextManager[TerminalStep]:
+        if self.terminal is None:
+            return nullcontext(
+                TerminalStep(name=name, terminal=Terminal(quiet=True), summary=summary)
+            )
+        return self.terminal.step(name, summary)
 
     def _image_client(self) -> ImageBuildClient:
         if self.image_client is None:

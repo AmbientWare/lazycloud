@@ -36,6 +36,7 @@ export const functionInvokeResponseSchema = z
   .object({
     task_id: z.string().default(""),
     output: z.string().default(""),
+    status: z.string().default(""),
     done: z.boolean().default(false),
     exit_code: z.number().int().default(0),
     result: functionResultSchema.nullable().default(null),

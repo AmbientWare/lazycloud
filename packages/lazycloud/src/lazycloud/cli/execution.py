@@ -257,7 +257,12 @@ def run(
         else:
             _reject_unapplied_overrides(target, overrides)
             response = call_handler(target, args=payload_args)
-    print_payload(ctx, payload_data(response), title="Run result")
+    result = payload_data(response)
+    if isinstance(result, str) and not json_output_enabled(ctx):
+        console.print()
+        console.print(result, markup=False, highlight=False)
+        return
+    print_payload(ctx, result, title="Run result")
 
 
 def shell(
