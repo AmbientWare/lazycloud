@@ -3,12 +3,13 @@ from __future__ import annotations
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, time
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
+from billing.admission import DatabaseBillingAdmission
 from database.records.apps import AutoscalingStubRecord, StubKind, StubRecord
 from database.repositories.apps import DeploymentRepository, StubRepository
 from database.repositories.cleanup import CleanupRepository
@@ -88,6 +89,18 @@ class WorkspaceStorageAlreadyExistsError(ValueError):
 
 class WorkspaceStorageAuthorizationError(PermissionError):
     pass
+
+
+class WorkspaceCreationAdmission(Protocol):
+    """Whether the account creating a workspace is allowed another one.
+
+    Asked before anything is written, so a refusal leaves no workspace, no
+    owner and no storage behind. Stated here as a protocol because
+    how many workspaces a plan comes with is a billing term rather than a
+    control-plane one.
+    """
+
+    def assert_may_create_workspace(self, session: Session, *, owner_user_id: str) -> None: ...
 
 
 class WorkspaceBucketSettings(Protocol):
@@ -314,6 +327,15 @@ class ControlPlaneService:
         Callable[[WorkspaceStorageConfig], OwnedWorkspaceBucketClient] | None
     ) = None
     workspace_changes: WorkspaceChangePublisher | None = None
+    workspace_admission: WorkspaceCreationAdmission = field(
+        default_factory=DatabaseBillingAdmission
+    )
+    """What decides whether the account gets another workspace.
+
+    Carries the production decision rather than being left to each composition
+    to supply, because a workspace limit that only the API enforces is one every
+    other entry point silently grants.
+    """
 
     def set_workspace(
         self,
@@ -359,6 +381,15 @@ class ControlPlaneService:
         storage: WorkspaceStorageConfig | None = None,
     ) -> WorkspaceCreateResult:
         workspace_name = name or f"workspace-{uuid4()}"
+        # Only a workspace that does not exist yet is a new one. `set_workspace`
+        # adopts an existing name and adds the caller as an owner, and refusing
+        # that would lock an account out of workspaces it already holds.
+        with self.context.database.session() as session:
+            if WorkspaceRepository(session).by_name(workspace_name) is None:
+                self.workspace_admission.assert_may_create_workspace(
+                    session,
+                    owner_user_id=owner_user_id,
+                )
         workspace = self.set_workspace(
             workspace_name,
             owner_user_id=owner_user_id,
@@ -1686,6 +1717,7 @@ def _duration_ms(start: datetime | None, end: datetime | None) -> int | None:
 
 __all__ = [
     "ControlPlaneService",
+    "WorkspaceCreationAdmission",
     "WorkspaceStorageAlreadyExistsError",
     "WorkspaceStorageAuthorizationError",
     "WorkspaceStorageError",

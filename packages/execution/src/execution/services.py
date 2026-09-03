@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol
 
 from control.apps import AppReader
@@ -38,9 +39,14 @@ class ExecutionContainerService(Protocol):
         reservation: PendingContainerReservation,
     ) -> ContainerRecord: ...
 
-    def assert_may_start_container(
-        self, session: DatabaseSession, *, workspace_id: str
-    ) -> None: ...
+    def admit_container_start(
+        self,
+        session: DatabaseSession,
+        *,
+        workspace_id: str,
+        gpu: Sequence[str],
+        gpu_count: int,
+    ) -> list[str]: ...
 
     def get(self, container_id: str) -> ContainerRecord: ...
 

@@ -456,6 +456,10 @@ services:
 
   control-plane:
     image: api:local
+    # The upload proxy streams to the presigned host, which is the host machine's
+    # published port rather than this container's loopback.
+    extra_hosts:
+      - "object-store.localhost:host-gateway"
     restart: unless-stopped
     build:
       context: .
@@ -892,8 +896,11 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "object-store.localhost:host-gateway"
-    entrypoint: ["tini", "--", "/bin/sh", "-ec"]
+    # A shell under the shared entrypoint, which is what exports the worker token
+    # and rewrites the repository origin before handing off to tini.
     command:
+      - /bin/sh
+      - -ec
       - |
         socat TCP-LISTEN:5000,bind=127.0.0.1,fork,reuseaddr TCP:workload-registry:5000 &
         exec lazycloud-container-worker \

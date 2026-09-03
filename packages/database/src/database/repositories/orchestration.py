@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from database.repositories.cleanup import CleanupRepository
@@ -35,7 +36,7 @@ from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, Containe
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.routing import AgentBackendRoute
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import Select, and_, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -347,8 +348,8 @@ class ContainerRepository:
             stub_ids=stub_ids,
         )
 
-    def count_live_for_owner(self, *, owner_user_id: str) -> int:
-        """How many containers this account is holding capacity for, everywhere.
+    def count_live_cpu_for_owner(self, *, owner_user_id: str) -> int:
+        """How many containers without a GPU this account is holding, everywhere.
 
         Counted across every workspace the account owns, because the limit is a
         term of a plan and a plan belongs to a payer. Counted per workspace it
@@ -371,18 +372,57 @@ class ContainerRepository:
 
         return int(
             self.session.scalar(
-                select(func.count(ContainerTable.id))
-                .join(
-                    WorkspaceMemberTable,
-                    WorkspaceMemberTable.workspace_id == ContainerTable.workspace_id,
-                )
-                .where(
-                    WorkspaceMemberTable.user_id == owner_user_id,
-                    WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
-                    ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+                self._live_for_owner(
+                    select(func.count(ContainerTable.id)), owner_user_id=owner_user_id
+                ).where(ContainerTable.gpu_count == 0)
+            )
+            or 0
+        )
+
+    def count_live_gpus_for_owner(self, *, owner_user_id: str) -> int:
+        """How many GPU cards this account is holding, everywhere.
+
+        Cards rather than containers, because a container may ask for several and
+        cards are what the plan's GPU pool bounds. Same account scope and the same
+        deliberate approximation as the CPU count.
+        """
+
+        return int(
+            self.session.scalar(
+                self._live_for_owner(
+                    select(func.coalesce(func.sum(ContainerTable.gpu_count), 0)),
+                    owner_user_id=owner_user_id,
                 )
             )
             or 0
+        )
+
+    def live_gpu_containers_for_owner(self, *, owner_user_id: str) -> list[ContainerRecord]:
+        """Every container holding a card for this account, with what it asked for.
+
+        Whole records, because the question asked of them is which models they
+        named and that lives in the payload. Few rows: bounded by the plan's GPU
+        pool, and read when a plan change has to know what is still running.
+        """
+
+        statement = self._live_for_owner(select(ContainerTable), owner_user_id=owner_user_id).where(
+            ContainerTable.gpu_count > 0
+        )
+        return [
+            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
+        ]
+
+    @staticmethod
+    def _live_for_owner[TStatement: Select[Any]](
+        statement: TStatement, *, owner_user_id: str
+    ) -> TStatement:
+        return statement.join(
+            WorkspaceMemberTable,
+            WorkspaceMemberTable.workspace_id == ContainerTable.workspace_id,
+        ).where(
+            WorkspaceMemberTable.user_id == owner_user_id,
+            WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+            ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
         )
 
     def live_counts_for_workspaces(

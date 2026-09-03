@@ -25,7 +25,6 @@ from shared.timestamps import utc_now
 from sqlalchemy import delete
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
-from tests.backing_services import postgres_dsn
 
 from database import (
     DatabaseApplicationName,
@@ -79,8 +78,10 @@ def test_postgresql_workspace_name_belongs_to_one_live_workspace(
         database.dispose()
 
 
-def test_postgresql_workspace_deletion_serializes_complete_attempts() -> None:
-    database = _postgres_database()
+def test_postgresql_workspace_deletion_serializes_complete_attempts(
+    postgres_database_url: URL,
+) -> None:
+    database = _postgres_database(postgres_database_url)
     first_id = _create_workspace(database, "attempt-first")
     second_id = _create_workspace(database, "attempt-second")
     release_first = Event()
@@ -122,8 +123,8 @@ def test_postgresql_workspace_deletion_serializes_complete_attempts() -> None:
         database.dispose()
 
 
-def test_postgresql_workspace_deletion_fences_owned_write_races() -> None:
-    database = _postgres_database()
+def test_postgresql_workspace_deletion_fences_owned_write_races(postgres_database_url: URL) -> None:
+    database = _postgres_database(postgres_database_url)
     writer_first_workspace_id = _create_workspace(database, "writer-first")
     deletion_first_workspace_id = _create_workspace(database, "deletion-first")
     release_writer = Event()
@@ -148,8 +149,10 @@ def test_postgresql_workspace_deletion_fences_owned_write_races() -> None:
         database.dispose()
 
 
-def test_postgresql_same_object_location_in_sibling_workspaces_does_not_serialize() -> None:
-    database = _postgres_database()
+def test_postgresql_same_object_location_in_sibling_workspaces_does_not_serialize(
+    postgres_database_url: URL,
+) -> None:
+    database = _postgres_database(postgres_database_url)
     first_id = _create_workspace(database, "object-first")
     second_id = _create_workspace(database, "object-second")
     first_claimed = Event()
@@ -278,11 +281,10 @@ def _prove_deletion_before_writer(
         assert AutoscalerStateRepository(session).list(workspace_id=workspace_id) == []
 
 
-def _postgres_database() -> DatabaseClient:
-    database_url = postgres_dsn()
+def _postgres_database(database_url: URL) -> DatabaseClient:
     database = DatabaseClient.from_settings(
         DatabaseSettings(
-            url=database_url,
+            url=database_url.render_as_string(hide_password=False),
             # Above the widest contender count below, because those tests hold
             # every connection at a barrier at once. A pool smaller than the
             # concurrency it serves waits for a connection nobody will return.
@@ -326,7 +328,9 @@ def _autoscaler_state(workspace_id: str, target_id: str) -> AutoscalerStateRecor
     )
 
 
-def test_postgresql_contended_volume_name_settles_on_the_constraint() -> None:
+def test_postgresql_contended_volume_name_settles_on_the_constraint(
+    postgres_database_url: URL,
+) -> None:
     """Two containers mounting one new volume name both get the volume.
 
     The lookup a caller does before creating is not a lock — workspace scoping
@@ -342,7 +346,7 @@ def test_postgresql_contended_volume_name_settles_on_the_constraint() -> None:
     workspace change is announced and whether billing is asked for a new volume.
     """
 
-    database = _postgres_database()
+    database = _postgres_database(postgres_database_url)
     workspace_id = _create_workspace(database, "volume-race")
     started = Event()
 
@@ -371,7 +375,9 @@ def test_postgresql_contended_volume_name_settles_on_the_constraint() -> None:
         database.dispose()
 
 
-def test_postgresql_released_claim_returns_to_exactly_one_other_container() -> None:
+def test_postgresql_released_claim_returns_to_exactly_one_other_container(
+    postgres_database_url: URL,
+) -> None:
     """A stopped container gives its invocation back, and one container takes it.
 
     The failure this rules out loses a customer's call silently: a pooled
@@ -385,7 +391,7 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container() -> N
     invocation in front of two containers.
     """
 
-    database = _postgres_database()
+    database = _postgres_database(postgres_database_url)
     workspace_id = _create_workspace(database, "claim-release")
     stub_id = str(uuid4())
     contenders = 8
@@ -467,7 +473,9 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container() -> N
         database.dispose()
 
 
-def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release() -> None:
+def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release(
+    postgres_database_url: URL,
+) -> None:
     """A container stopping after its call finished must not rerun the call.
 
     The window is real: a container reports its result and is stopped moments
@@ -476,7 +484,7 @@ def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release() -> No
     container and deliver the second answer over the first.
     """
 
-    database = _postgres_database()
+    database = _postgres_database(postgres_database_url)
     workspace_id = _create_workspace(database, "late-release")
     stub_id = str(uuid4())
     container_id = str(uuid4())
@@ -534,7 +542,9 @@ def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release() -> No
         database.dispose()
 
 
-def test_postgresql_claimable_task_is_taken_by_exactly_one_container() -> None:
+def test_postgresql_claimable_task_is_taken_by_exactly_one_container(
+    postgres_database_url: URL,
+) -> None:
     """A runnable task goes to one container, however many ask at once.
 
     Pooled containers poll for their own work, so several ask for the same stub's
@@ -548,7 +558,7 @@ def test_postgresql_claimable_task_is_taken_by_exactly_one_container() -> None:
     report this passing whether or not the clause were there.
     """
 
-    database = _postgres_database()
+    database = _postgres_database(postgres_database_url)
     workspace_id = _create_workspace(database, "task-claim")
     stub_id = str(uuid4())
     contenders = 8

@@ -10,7 +10,7 @@ from shared.billing_quotes import BYTES_PER_GIB, NANOS_PER_USD
 from shared.gpu import NO_GPU, SUPPORTED_GPU_TYPES, GpuType
 from shared.usage import UsageBillingOwner
 
-PRICING_VERSION = "2026-08-27.a"
+PRICING_VERSION = "2026-09-03.a"
 """The version of the plans, entitlements, and rates exposed to customers."""
 
 METERED_RATE_VERSION = "2026-08-18.a"
@@ -32,23 +32,53 @@ all would have nowhere for its usage to land.
 FREE_PLAN_INCLUDED_NANOS = 5 * NANOS_PER_USD
 """What the free plan comes with, issued as a credit grant each period."""
 
-FREE_PLAN_MAX_CONTAINERS = 100
-"""How much the free plan may run at once, across every workspace it owns.
+FREE_PLAN_MAX_CPU_CONTAINERS = 30
+"""How much the free plan may run at once without a GPU, across every workspace.
 
 A term of the plan rather than a scheduler setting, because it is part of what an
 account is buying and the pricing page states it. Counted per account and not per
-workspace: making a workspace is self-serve, so a per-workspace ceiling is one
-anybody raises by clicking new workspace.
+workspace, because the count is a bound on one payer's blast radius and a payer
+is the unit that gets billed for it.
 """
 
-TEAM_PLAN_MAX_CONTAINERS = 5_000
+FREE_PLAN_MAX_GPUS = 5
+"""How many GPU cards the free plan may hold at once, across every workspace.
 
-FREE_PLAN_MAX_APPS = 200
-TEAM_PLAN_MAX_APPS = 1_000
-FREE_PLAN_MAX_MEMBERS = 3
+A pool of its own rather than a share of the container count, because the two
+limits bound different things. A CPU container costs cents an hour on capacity
+that is cheap to keep warm; a card costs dollars an hour on hardware that is not,
+so the same number cannot be both a generous CPU ceiling and a sane GPU one.
+Counted in cards rather than containers because a container may ask for several
+and cards are what is scarce.
+"""
+
+FREE_PLAN_GPU_TYPES: frozenset[GpuType] = frozenset({GpuType.T4, GpuType.L4, GpuType.A10G})
+"""Which cards the free plan may ask for: the ones renting for around a dollar an hour.
+
+Not a revenue gate. A free account with a card pays the metered rate on any
+model, so what this protects is the larger cards themselves, which are the ones
+expensive to hold idle and the ones an abuser wants most.
+"""
+
+FREE_PLAN_MAX_WORKSPACES = 1
+FREE_PLAN_MAX_MEMBERS = 1
+"""The owner, and nobody else.
+
+Counted the way the membership repository counts, which includes the owner's own
+membership row, so one is a workspace with no co-members rather than no
+workspace at all. Wanting to work with somebody is the free plan's upgrade
+trigger, and it is the one every customer understands without reading terms.
+"""
+
+TEAM_PLAN_MAX_CPU_CONTAINERS = 1_000
+TEAM_PLAN_MAX_GPUS = 50
 
 UnlimitedEntitlement: TypeAlias = Literal["unlimited"]
 EntitlementLimit: TypeAlias = int | UnlimitedEntitlement
+
+AllGpuTypes: TypeAlias = Literal["all"]
+GpuTypeEntitlement: TypeAlias = frozenset[GpuType] | AllGpuTypes
+"""Which cards a plan may ask for: a named set, or every model the platform rents."""
 
 NO_CARD_INCLUDED_NANOS = 1 * NANOS_PER_USD
 """What an account with no card on file may spend before it is stopped.
@@ -62,8 +92,8 @@ account gets once somebody can be billed for what they do next; this is what the
 platform is willing to give away to find that out.
 """
 
-NO_CARD_MAX_CONTAINERS = 10
-"""How much an account with no card may run at once.
+NO_CARD_MAX_CPU_CONTAINERS = 10
+"""How much an account with no card may run at once without a GPU.
 
 The real bound on what a cardless account can spend before anything stops it, and
 the reason it is far below the free plan's. Usage reaches the ledger on an
@@ -73,14 +103,18 @@ and the product is what cannot be collected. This is the only term in it the
 platform sets directly.
 """
 
-TEAM_PLAN_MONTHLY_NANOS = 200 * NANOS_PER_USD
+NO_CARD_MAX_GPUS = 1
+"""One card, because the spending cap above stops it inside an hour on any model
+the free plan may ask for, and none is an account that can never see a GPU work."""
+
+TEAM_PLAN_MONTHLY_NANOS = 100 * NANOS_PER_USD
 """The subscription, charged by the payment provider as a flat monthly price."""
 
-TEAM_PLAN_INCLUDED_NANOS = 100 * NANOS_PER_USD
+TEAM_PLAN_INCLUDED_NANOS = 30 * NANOS_PER_USD
 """What the subscription comes with, issued as a credit grant each period.
 
 Stated in nanodollars like every other figure here; the provider's grant is in
-cents, and 100 USD converts exactly.
+cents, and 30 USD converts exactly.
 """
 
 _SECONDS_PER_HOUR = 3_600
@@ -370,22 +404,48 @@ class PublishedPlan:
 
 @dataclass(frozen=True, slots=True)
 class PlanEntitlements:
-    """The limits and capabilities one plan grants to its account."""
+    """The limits and capabilities one plan grants to its account.
 
-    max_apps: int
-    max_concurrent_containers: int
+    Concurrency is two pools rather than one count with a GPU share inside it. A
+    container counts against the CPU pool or, if it asks for cards, against the
+    GPU pool by the number of cards, never both; so GPU work can never crowd out
+    a customer's web apps and the pricing page can state each figure in one line.
+    """
+
+    max_concurrent_cpu_containers: int
+    max_concurrent_gpus: int
+    gpu_types: GpuTypeEntitlement
+    max_workspaces: EntitlementLimit
     max_members: EntitlementLimit
     connected_cloud: bool
     custom_domains: bool
     self_hosted: bool
 
     def __post_init__(self) -> None:
-        if self.max_apps <= 0:
-            raise ValueError("a plan must allow at least one app")
-        if self.max_concurrent_containers <= 0:
-            raise ValueError("a plan must allow at least one concurrent container")
+        if self.max_concurrent_cpu_containers <= 0:
+            raise ValueError("a plan must allow at least one concurrent CPU container")
+        if self.max_concurrent_gpus <= 0:
+            raise ValueError("a plan must allow at least one concurrent GPU")
+        if self.gpu_types != "all" and not self.gpu_types:
+            raise ValueError("a plan that names its GPU models must name at least one")
+        if isinstance(self.max_workspaces, int) and self.max_workspaces <= 0:
+            raise ValueError("a bounded workspace limit must be positive")
         if isinstance(self.max_members, int) and self.max_members <= 0:
             raise ValueError("a bounded member limit must be positive")
+
+    def allows_gpu_type(self, gpu_type: GpuType) -> bool:
+        return self.gpu_types == "all" or gpu_type in self.gpu_types
+
+    @property
+    def allowed_gpu_types(self) -> tuple[GpuType, ...]:
+        """The models this plan may ask for, in the platform's published order.
+
+        What a request for `any` card narrows to. Held to `SUPPORTED_GPU_TYPES`
+        rather than to the plan's own set so the answer is always a model the
+        scheduler can place, whichever way the set is written.
+        """
+
+        return tuple(model for model in SUPPORTED_GPU_TYPES if self.allows_gpu_type(model))
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,7 +482,8 @@ def account_terms(plan: BillingPlanId, *, has_payment_method: bool) -> AccountTe
             included_nanos=NO_CARD_INCLUDED_NANOS,
             entitlements=replace(
                 published.entitlements,
-                max_concurrent_containers=NO_CARD_MAX_CONTAINERS,
+                max_concurrent_cpu_containers=NO_CARD_MAX_CPU_CONTAINERS,
+                max_concurrent_gpus=NO_CARD_MAX_GPUS,
             ),
         )
     return AccountTerms(
@@ -490,8 +551,10 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
         monthly_nanos=FREE_PLAN_MONTHLY_NANOS,
         included_nanos=FREE_PLAN_INCLUDED_NANOS,
         entitlements=PlanEntitlements(
-            max_apps=FREE_PLAN_MAX_APPS,
-            max_concurrent_containers=FREE_PLAN_MAX_CONTAINERS,
+            max_concurrent_cpu_containers=FREE_PLAN_MAX_CPU_CONTAINERS,
+            max_concurrent_gpus=FREE_PLAN_MAX_GPUS,
+            gpu_types=FREE_PLAN_GPU_TYPES,
+            max_workspaces=FREE_PLAN_MAX_WORKSPACES,
             max_members=FREE_PLAN_MAX_MEMBERS,
             connected_cloud=False,
             custom_domains=False,
@@ -510,8 +573,10 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
         monthly_nanos=TEAM_PLAN_MONTHLY_NANOS,
         included_nanos=TEAM_PLAN_INCLUDED_NANOS,
         entitlements=PlanEntitlements(
-            max_apps=TEAM_PLAN_MAX_APPS,
-            max_concurrent_containers=TEAM_PLAN_MAX_CONTAINERS,
+            max_concurrent_cpu_containers=TEAM_PLAN_MAX_CPU_CONTAINERS,
+            max_concurrent_gpus=TEAM_PLAN_MAX_GPUS,
+            gpu_types="all",
+            max_workspaces="unlimited",
             max_members="unlimited",
             connected_cloud=True,
             custom_domains=True,
@@ -519,6 +584,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
         ),
         terms=(
             "The same workloads at the same metered rates, with higher account limits.",
+            "Every GPU model the platform rents, and as many workspaces and members as you need.",
             "One account and invoice for every workspace it owns.",
         ),
     ),
@@ -587,14 +653,17 @@ if tuple(rate.gpu_type for rate in PUBLISHED_GPU_RATES) != SUPPORTED_GPU_TYPES:
 
 __all__ = [
     "CONNECTED_CLOUD_MANAGEMENT_FEE",
+    "FREE_PLAN_GPU_TYPES",
     "FREE_PLAN_INCLUDED_NANOS",
-    "FREE_PLAN_MAX_APPS",
-    "FREE_PLAN_MAX_CONTAINERS",
+    "FREE_PLAN_MAX_CPU_CONTAINERS",
+    "FREE_PLAN_MAX_GPUS",
     "FREE_PLAN_MAX_MEMBERS",
+    "FREE_PLAN_MAX_WORKSPACES",
     "FREE_PLAN_MONTHLY_NANOS",
     "METERED_RATE_VERSION",
     "NO_CARD_INCLUDED_NANOS",
-    "NO_CARD_MAX_CONTAINERS",
+    "NO_CARD_MAX_CPU_CONTAINERS",
+    "NO_CARD_MAX_GPUS",
     "PRICING_VERSION",
     "PUBLISHED_COMPUTE_RATES",
     "PUBLISHED_GPU_RATES",
@@ -604,11 +673,13 @@ __all__ = [
     "SECONDS_PER_30_DAY_MONTH",
     "STORED_RATE_STEP",
     "TEAM_PLAN_INCLUDED_NANOS",
-    "TEAM_PLAN_MAX_APPS",
-    "TEAM_PLAN_MAX_CONTAINERS",
+    "TEAM_PLAN_MAX_CPU_CONTAINERS",
+    "TEAM_PLAN_MAX_GPUS",
     "TEAM_PLAN_MONTHLY_NANOS",
     "AccountTerms",
+    "AllGpuTypes",
     "EntitlementLimit",
+    "GpuTypeEntitlement",
     "PlanEntitlements",
     "PublishedComputeRate",
     "PublishedGpuRate",

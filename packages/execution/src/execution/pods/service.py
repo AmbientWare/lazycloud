@@ -83,6 +83,7 @@ from shared.scheduling import (
     SchedulerContainerAddressMap,
     SchedulerContainerState,
     SchedulerContainerStatus,
+    gpu_count_for_capacity,
 )
 from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
@@ -254,29 +255,33 @@ class PodControlService:
         env = env_sequence_mapping(plan.env)
         if request.checkpoint_id:
             env["CHECKPOINT_ID"] = request.checkpoint_id
-        container = ContainerRecord(
-            id=plan.container_id,
-            name=f"{'sandbox' if stub.kind is StubKind.Sandbox else 'pod'}-{stub.name}",
-            image=plan.image_id or POD_IMAGE,
-            command=list(plan.entrypoint),
-            workspace_id=stub.workspace_id,
-            stub_id=stub.id,
-            app_id=stub.app_id,
-            status=ContainerStatus.Pending,
-            env=env,
-            ports={str(port): port for port in plan.ports},
-            network_blocked=config.runtime.block_network,
-            network_allow_list=list(config.runtime.allow_list),
-            timeout_seconds=timeout_seconds,
-            expires_at=(
-                created_at + timedelta(seconds=timeout_seconds) if timeout_seconds > 0 else None
-            ),
-            created_at=created_at,
-        )
-
         with self.services.context.database.session() as session:
-            self.services.containers.assert_may_start_container(
-                session, workspace_id=container.workspace_id
+            gpu = self.services.containers.admit_container_start(
+                session,
+                workspace_id=stub.workspace_id,
+                gpu=plan.gpu,
+                gpu_count=plan.gpu_count,
+            )
+            container = ContainerRecord(
+                id=plan.container_id,
+                name=f"{'sandbox' if stub.kind is StubKind.Sandbox else 'pod'}-{stub.name}",
+                image=plan.image_id or POD_IMAGE,
+                command=list(plan.entrypoint),
+                workspace_id=stub.workspace_id,
+                stub_id=stub.id,
+                app_id=stub.app_id,
+                status=ContainerStatus.Pending,
+                env=env,
+                ports={str(port): port for port in plan.ports},
+                network_blocked=config.runtime.block_network,
+                network_allow_list=list(config.runtime.allow_list),
+                gpu=gpu,
+                gpu_count=gpu_count_for_capacity(gpu, plan.gpu_count),
+                timeout_seconds=timeout_seconds,
+                expires_at=(
+                    created_at + timedelta(seconds=timeout_seconds) if timeout_seconds > 0 else None
+                ),
+                created_at=created_at,
             )
             ContainerRepository(session).records.upsert(
                 container,
@@ -348,8 +353,8 @@ class PodControlService:
                     memory_mib=plan.memory_mib,
                     memory_limit_mib=plan.memory_limit_mib,
                     disk_mib=plan.disk_mib,
-                    gpu=list(plan.gpu),
-                    gpu_count=plan.gpu_count,
+                    gpu=list(container.gpu),
+                    gpu_count=container.gpu_count,
                     pool_selector=config.runtime.pool_selector or "",
                     runtime=config.runtime.runtime,
                     runtime_class=config.runtime.runtime_class or "",

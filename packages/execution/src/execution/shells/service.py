@@ -28,6 +28,7 @@ from shared.scheduling import (
     ContainerSchedulingDirectory,
     SchedulerContainerAddressMap,
     SchedulerContainerStatus,
+    gpu_count_for_capacity,
 )
 from shared.shell_protocol import (
     SHELL_FRAME_HEADER_SIZE,
@@ -135,21 +136,26 @@ class ShellControlService:
         request = self._standalone_request(stub, token_key=token_key, container_id=container_id)
         plan = plan_shell_standalone(request)
         env = _env_tuple_to_mapping(plan.env) | {"SHELL_CONTAINER_ID": plan.container_id}
-        record = ContainerRecord(
-            id=plan.container_id,
-            name=f"shell-{stub.name}",
-            image=request.image_id or SHELL_IMAGE,
-            command=list(plan.entrypoint),
-            workspace_id=stub.workspace_id,
-            stub_id=stub.id,
-            app_id=stub.app_id,
-            env=env,
-            ports={"shell": SHELL_WORKER_PORT},
-            status=ContainerStatus.Pending,
-        )
         with self.services.context.database.session() as session:
-            self.services.containers.assert_may_start_container(
-                session, workspace_id=stub.workspace_id
+            gpu = self.services.containers.admit_container_start(
+                session,
+                workspace_id=stub.workspace_id,
+                gpu=plan.gpu,
+                gpu_count=plan.gpu_count,
+            )
+            record = ContainerRecord(
+                id=plan.container_id,
+                name=f"shell-{stub.name}",
+                image=request.image_id or SHELL_IMAGE,
+                command=list(plan.entrypoint),
+                workspace_id=stub.workspace_id,
+                stub_id=stub.id,
+                app_id=stub.app_id,
+                env=env,
+                ports={"shell": SHELL_WORKER_PORT},
+                status=ContainerStatus.Pending,
+                gpu=gpu,
+                gpu_count=gpu_count_for_capacity(gpu, plan.gpu_count),
             )
             ContainerRepository(session).records.upsert(
                 record,
@@ -180,8 +186,8 @@ class ShellControlService:
                 cpu_millicores=plan.cpu_millicores,
                 memory_mib=plan.memory_mib,
                 disk_mib=plan.disk_mib,
-                gpu=list(plan.gpu),
-                gpu_count=plan.gpu_count,
+                gpu=list(record.gpu),
+                gpu_count=record.gpu_count,
                 mounts=source_code_mounts(
                     context=self.services.context,
                     object_storage=self.services.object_storage,
