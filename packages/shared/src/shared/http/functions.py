@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -38,6 +39,7 @@ class FunctionInvokeBody(HttpModel):
 class FunctionInvokeResponse(HttpModel):
     task_id: str = ""
     output: str = ""
+    stream: Literal["stdout", "stderr", "system"] = "system"
     status: str = ""
     done: bool = False
     exit_code: int = 0
@@ -50,6 +52,7 @@ class FunctionInvokeResponse(HttpModel):
         task_id: str,
         result: FunctionResultPayload | None = None,
         output: str = "",
+        stream: Literal["stdout", "stderr", "system"] = "system",
         status: str = "",
         done: bool = False,
         exit_code: int = 0,
@@ -57,6 +60,7 @@ class FunctionInvokeResponse(HttpModel):
         return cls(
             task_id=task_id,
             output=output,
+            stream=stream,
             status=status,
             done=done,
             exit_code=exit_code,

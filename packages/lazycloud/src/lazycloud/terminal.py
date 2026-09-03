@@ -80,6 +80,13 @@ class Terminal:
     def line(self, message: str = "") -> None:
         self.write(f"{message}\n")
 
+    def remote_output(self, message: str, *, stream: str = "stdout") -> None:
+        del stream
+        self.line(message.rstrip("\n"))
+
+    def flush_remote_output(self) -> None:
+        pass
+
     def error(self, message: str) -> None:
         if not self.quiet:
             sys.stderr.write(f"{message}\n")

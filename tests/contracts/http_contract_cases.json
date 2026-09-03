@@ -114,6 +114,7 @@
         "output": "",
         "result": null,
         "status": "",
+        "stream": "system",
         "task_id": ""
       }
     },
@@ -122,6 +123,7 @@
       "contract": "function_invoke_response",
       "input": {
         "result": null,
+        "stream": "stderr",
         "task_id": "task-null"
       },
       "name": "nullable_result",
@@ -131,8 +133,19 @@
         "output": "",
         "result": null,
         "status": "",
+        "stream": "stderr",
         "task_id": "task-null"
       }
+    },
+    {
+      "accepted": false,
+      "contract": "function_invoke_response",
+      "input": {
+        "stream": "debug",
+        "task_id": "task-invalid-stream"
+      },
+      "name": "invalid_stream",
+      "normalized": null
     },
     {
       "accepted": false,
@@ -224,6 +237,7 @@
           "version": 1
         },
         "status": "",
+        "stream": "system",
         "task_id": "task-json"
       }
     },
@@ -256,6 +270,7 @@
           "version": 1
         },
         "status": "",
+        "stream": "system",
         "task_id": "task-cloudpickle"
       }
     }

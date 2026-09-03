@@ -185,7 +185,13 @@ def _input_cases() -> list[_InputCase]:
             contract="function_invoke_response",
             name="nullable_result",
             accepted=True,
-            input={"task_id": "task-null", "result": None},
+            input={"task_id": "task-null", "result": None, "stream": "stderr"},
+        ),
+        _InputCase(
+            contract="function_invoke_response",
+            name="invalid_stream",
+            accepted=False,
+            input={"task_id": "task-invalid-stream", "stream": "debug"},
         ),
         _InputCase(
             contract="function_invoke_response",

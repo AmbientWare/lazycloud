@@ -591,7 +591,10 @@ class Function(Generic[P, R]):
                 if response.status and step is not None:
                     step.update(f"{response.task_id[:8]} {response.status}")
                 if response.output:
-                    self._progress(response.output.rstrip("\n"))
+                    self._progress(
+                        response.output,
+                        stream="stderr" if response.exit_code else response.stream,
+                    )
                 last_response = response
                 if response.done or response.exit_code != 0:
                     break
@@ -602,9 +605,9 @@ class Function(Generic[P, R]):
             raise FunctionOperationError(msg)
         return last_response
 
-    def _progress(self, message: str) -> None:
+    def _progress(self, message: str, *, stream: str) -> None:
         if self.terminal is not None and message:
-            self.terminal.line(message)
+            self.terminal.remote_output(message, stream=stream)
 
     def _task_step(self) -> AbstractContextManager[TerminalStep]:
         if self.terminal is None:
