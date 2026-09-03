@@ -52,6 +52,7 @@ _PROVIDER_REF = f"aws:{_CONNECTION_ID}"
 @dataclass(slots=True)
 class _CapacityOwnerMutations:
     active_owner_id: str = ""
+    active_dispatch_owner_id: str = ""
     open_reservations: bool = False
 
     @contextmanager
@@ -62,6 +63,15 @@ class _CapacityOwnerMutations:
             yield
         finally:
             self.active_owner_id = ""
+
+    @contextmanager
+    def dispatch_lock(self, capacity_owner_id: str) -> Iterator[None]:
+        assert not self.active_dispatch_owner_id
+        self.active_dispatch_owner_id = capacity_owner_id
+        try:
+            yield
+        finally:
+            self.active_dispatch_owner_id = ""
 
     def has_open_reservations(self, capacity_owner_id: str) -> bool:
         assert self.active_owner_id == capacity_owner_id

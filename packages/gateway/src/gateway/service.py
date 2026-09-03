@@ -307,6 +307,8 @@ class GatewayContainerStopper(Protocol):
 class CapacityReservationGuard(Protocol):
     def mutation_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
 
+    def dispatch_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
+
     def has_open_reservations(self, capacity_owner_id: str) -> bool: ...
 
 
@@ -1007,7 +1009,10 @@ class GatewayControlService:
                 workspace_id=workspace_id,
             )
             name = unit.name
-            with self.capacity_reservations.mutation_lock(unit.capacity_owner_id):
+            with (
+                self.capacity_reservations.mutation_lock(unit.capacity_owner_id),
+                self.capacity_reservations.dispatch_lock(unit.capacity_owner_id),
+            ):
                 if self.capacity_reservations.has_open_reservations(unit.capacity_owner_id):
                     raise ConflictError(f"compute pool {name!r} has active capacity reservations")
                 self._delete_pool_enrollments(
@@ -1016,7 +1021,10 @@ class GatewayControlService:
                     require_host_decommission=unit.provider == "agent",
                 )
                 self._delete_pool_workers(unit.capacity_owner_id)
-                self.services.compute.delete_unit(unit.capacity_owner_id, workspace=workspace_id)
+                self.services.compute.delete_unit(
+                    unit.capacity_owner_id,
+                    workspace=workspace_id,
+                )
                 self.unit_state_coordinator.delete_compute_unit_state(
                     unit.capacity_owner_id,
                     workspace_id=workspace_id,
@@ -1149,7 +1157,10 @@ class GatewayControlService:
         pool = next((candidate for candidate in pools if candidate.name == name), None)
         if pool is None:
             return
-        with self.capacity_reservations.mutation_lock(pool.capacity_owner_id):
+        with (
+            self.capacity_reservations.mutation_lock(pool.capacity_owner_id),
+            self.capacity_reservations.dispatch_lock(pool.capacity_owner_id),
+        ):
             if self.capacity_reservations.has_open_reservations(pool.capacity_owner_id):
                 raise ConflictError(f"compute pool {name!r} has active capacity reservations")
             self._delete_pool_enrollments(

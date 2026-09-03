@@ -230,6 +230,8 @@ class _MutationLeases:
     on_acquire: Callable[[str], None] | None = None
     acquired: list[str] = field(default_factory=list)
     held: set[str] = field(default_factory=set)
+    dispatch_acquired: list[str] = field(default_factory=list)
+    dispatch_held: set[str] = field(default_factory=set)
 
     @contextmanager
     def mutation_lock(self, capacity_owner_id: str) -> Iterator[None]:
@@ -243,6 +245,17 @@ class _MutationLeases:
             yield
         finally:
             self.held.remove(capacity_owner_id)
+
+    @contextmanager
+    def dispatch_lock(self, capacity_owner_id: str) -> Iterator[None]:
+        if capacity_owner_id in self.dispatch_held:
+            raise ConflictError(f"capacity owner dispatch lease already held: {capacity_owner_id}")
+        self.dispatch_held.add(capacity_owner_id)
+        self.dispatch_acquired.append(capacity_owner_id)
+        try:
+            yield
+        finally:
+            self.dispatch_held.remove(capacity_owner_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -548,6 +561,7 @@ def test_scale_zero_persists_intent_and_releases_operations_before_provider_muta
 
     assert guard_observations == [1]
     assert leases.acquired[-1] == pool.capacity_owner_id
+    assert leases.dispatch_acquired[-1] == pool.capacity_owner_id
     assert scaled.desired_machines == 0
     assert scaled.observed_machines == 0
     assert scaled.phase is ComputeUnitPhase.Ready

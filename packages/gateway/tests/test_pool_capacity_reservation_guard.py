@@ -55,7 +55,9 @@ class _RecordingCapacityReservationGuard:
     def __init__(self, *, open_reservations: bool) -> None:
         self.open_reservations = open_reservations
         self.active_capacity_owner_id = ""
+        self.active_dispatch_owner_id = ""
         self.locked_capacity_owner_ids: list[str] = []
+        self.dispatch_locked_capacity_owner_ids: list[str] = []
         self.checked_capacity_owner_ids: list[str] = []
         self.events: list[str] = []
 
@@ -70,6 +72,18 @@ class _RecordingCapacityReservationGuard:
         finally:
             self.events.append("lock-exit")
             self.active_capacity_owner_id = ""
+
+    @contextmanager
+    def dispatch_lock(self, capacity_owner_id: str) -> Iterator[None]:
+        assert not self.active_dispatch_owner_id
+        self.active_dispatch_owner_id = capacity_owner_id
+        self.dispatch_locked_capacity_owner_ids.append(capacity_owner_id)
+        self.events.append("dispatch-lock-enter")
+        try:
+            yield
+        finally:
+            self.events.append("dispatch-lock-exit")
+            self.active_dispatch_owner_id = ""
 
     def has_open_reservations(self, capacity_owner_id: str) -> bool:
         assert self.active_capacity_owner_id == capacity_owner_id
@@ -567,8 +581,15 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
         gateway.delete_unit(capacity_owner_id, workspace_id=workspace_id)
 
     assert guard.locked_capacity_owner_ids == [capacity_owner_id]
+    assert guard.dispatch_locked_capacity_owner_ids == [capacity_owner_id]
     assert guard.checked_capacity_owner_ids == [capacity_owner_id]
-    assert guard.events == ["lock-enter", "reservation-check", "lock-exit"]
+    assert guard.events == [
+        "lock-enter",
+        "dispatch-lock-enter",
+        "reservation-check",
+        "dispatch-lock-exit",
+        "lock-exit",
+    ]
     assert gateway.scheduler_pool_state_repository.get_state(capacity_owner_id) == (
         scheduler_pool_state
     )
@@ -621,8 +642,15 @@ def test_pool_delete_uses_durable_capacity_owner_for_guard_and_scheduler_state(
     gateway.delete_unit(capacity_owner_id, workspace_id=workspace_id)
 
     assert guard.locked_capacity_owner_ids == [capacity_owner_id]
+    assert guard.dispatch_locked_capacity_owner_ids == [capacity_owner_id]
     assert guard.checked_capacity_owner_ids == [capacity_owner_id]
-    assert guard.events == ["lock-enter", "reservation-check", "lock-exit"]
+    assert guard.events == [
+        "lock-enter",
+        "dispatch-lock-enter",
+        "reservation-check",
+        "dispatch-lock-exit",
+        "lock-exit",
+    ]
     assert all(
         item.name != unit_name
         for item in isolated_services.compute.list_units(workspace=workspace_id)

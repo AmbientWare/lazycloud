@@ -61,33 +61,30 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_CAPACITY_MUTATION_LOCK_SECONDS = 300
 
 
-class _HeldMutations(local):
-    """Capacity owners this thread already holds the mutation lease for.
+class _HeldOwnerLeases(local):
+    """Capacity owners this thread already holds each lease for.
 
-    The lease says one mutation at a time per capacity owner, and a decision that
-    holds it calls services which take it for themselves: the drain surges a
-    replacement through `scale_internal_unit`, which locks the owner it was just
-    locked for. Without re-entry that is a deadlock against itself, reported as
-    contention with another holder, and the pool never rolls.
+    Provider work takes the mutation lease. Only destructive work also takes the
+    dispatch lease, so routine provider observation cannot delay ready work. A
+    drain can re-enter both while scaling or releasing a machine; without
+    re-entry it deadlocks against its own call stack.
 
     Per thread, and the scheduler runs several: re-entry is a property of one
     call stack, so a lease another loop holds has to read as contention here
     rather than as this thread's own.
     """
 
-    owners: set[str]
+    mutations: set[str]
+    dispatches: set[str]
 
     def __init__(self) -> None:
         # `threading.local` runs this once per thread that touches the object,
         # which is what gives each its own set without a lock or a lookup.
-        self.owners = set()
+        self.mutations = set()
+        self.dispatches = set()
 
 
-_HELD_MUTATIONS = _HeldMutations()
-
-
-def _reentrant_owners() -> set[str]:
-    return _HELD_MUTATIONS.owners
+_HELD_OWNER_LEASES = _HeldOwnerLeases()
 
 
 DEFAULT_CAPACITY_RESERVATION_RETENTION_SECONDS = 86_400
@@ -628,6 +625,14 @@ class CapacityReservationKeys:
             "mutation-lock",
         )
 
+    def dispatch_lock(self, capacity_owner_id: str) -> str:
+        return self.redis.key(
+            self.namespace,
+            "capacity-owners",
+            _owner_key(capacity_owner_id),
+            "dispatch-lock",
+        )
+
 
 @dataclass(slots=True)
 class RedisCapacityReservationRepository:
@@ -649,15 +654,48 @@ class RedisCapacityReservationRepository:
         *,
         ttl_seconds: int = DEFAULT_CAPACITY_MUTATION_LOCK_SECONDS,
     ) -> Iterator[None]:
-        owners = _reentrant_owners()
+        with self._owner_lock(
+            capacity_owner_id,
+            key=self.keys.mutation_lock(capacity_owner_id),
+            lease_name="mutation",
+            owners=_HELD_OWNER_LEASES.mutations,
+            ttl_seconds=ttl_seconds,
+        ):
+            yield
+
+    @contextmanager
+    def dispatch_lock(
+        self,
+        capacity_owner_id: str,
+        *,
+        ttl_seconds: int = DEFAULT_CAPACITY_MUTATION_LOCK_SECONDS,
+    ) -> Iterator[None]:
+        with self._owner_lock(
+            capacity_owner_id,
+            key=self.keys.dispatch_lock(capacity_owner_id),
+            lease_name="dispatch",
+            owners=_HELD_OWNER_LEASES.dispatches,
+            ttl_seconds=ttl_seconds,
+        ):
+            yield
+
+    @contextmanager
+    def _owner_lock(
+        self,
+        capacity_owner_id: str,
+        *,
+        key: str,
+        lease_name: str,
+        owners: set[str],
+        ttl_seconds: int,
+    ) -> Iterator[None]:
         if capacity_owner_id in owners:
             yield
             return
-        key = self.keys.mutation_lock(capacity_owner_id)
         token = token_urlsafe(24)
         if not try_acquire_token_lock(self.redis, key, token, ttl_seconds=ttl_seconds):
             raise CapacityReservationLockContendedError(
-                f"capacity owner {capacity_owner_id} is already being reconciled"
+                f"capacity owner {capacity_owner_id} {lease_name} lease is already held"
             )
         owners.add(capacity_owner_id)
         stop_renewal = Event()
@@ -676,7 +714,8 @@ class RedisCapacityReservationRepository:
                     )
                 except Exception as exc:
                     LOGGER.exception(
-                        "capacity mutation lease renewal failed for owner %s",
+                        "capacity %s lease renewal failed for owner %s",
+                        lease_name,
                         capacity_owner_id,
                     )
                     lease_loss.append(("renewal failed", exc))
@@ -689,7 +728,7 @@ class RedisCapacityReservationRepository:
 
         renewal = Thread(
             target=renew,
-            name=f"capacity-lock-{capacity_owner_key_segment(capacity_owner_id)[:12]}",
+            name=(f"capacity-{lease_name}-{capacity_owner_key_segment(capacity_owner_id)[:12]}"),
             daemon=True,
         )
         renewal.start()
@@ -707,7 +746,8 @@ class RedisCapacityReservationRepository:
                 current_token = self.redis.get(key)
             except Exception as exc:
                 LOGGER.exception(
-                    "reading the capacity mutation lease failed for owner %s",
+                    "reading the capacity %s lease failed for owner %s",
+                    lease_name,
                     capacity_owner_id,
                 )
                 lease_loss.append(("reading the lock failed", exc))
@@ -720,7 +760,8 @@ class RedisCapacityReservationRepository:
                 release_token_lock(self.redis, key, token)
             except Exception as exc:
                 LOGGER.exception(
-                    "releasing the capacity mutation lease failed for owner %s",
+                    "releasing the capacity %s lease failed for owner %s",
+                    lease_name,
                     capacity_owner_id,
                 )
                 lease_loss.append(("releasing the lock failed", exc))
@@ -728,7 +769,7 @@ class RedisCapacityReservationRepository:
             if lease_lost.is_set() and not body_failed:
                 why, cause = lease_loss[0] if lease_loss else ("the lock was lost", None)
                 raise CapacityReservationLeaseLostError(
-                    f"capacity owner {capacity_owner_id} mutation lease was lost: {why}"
+                    f"capacity owner {capacity_owner_id} {lease_name} lease was lost: {why}"
                 ) from cause
 
     def reserve(
@@ -1019,6 +1060,11 @@ class CapacityReservationService:
     @contextmanager
     def mutation_lock(self, capacity_owner_id: str) -> Iterator[None]:
         with self.reservations.mutation_lock(capacity_owner_id):
+            yield
+
+    @contextmanager
+    def dispatch_lock(self, capacity_owner_id: str) -> Iterator[None]:
+        with self.reservations.dispatch_lock(capacity_owner_id):
             yield
 
     def can_acquire(self, request: SchedulerWorkerRequest) -> bool:
