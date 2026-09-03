@@ -479,6 +479,8 @@ class Image:
                 break
 
         if last_response is None:
+            if step is not None:
+                step.fail("the build stream ended before the build finished")
             return ImageBuildResult(
                 success=False,
                 error="image build produced no terminal response",
