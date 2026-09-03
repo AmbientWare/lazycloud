@@ -205,6 +205,7 @@ def _add_worker(
     *,
     machine_id: str,
     capacity_owner_id: str,
+    created_at: datetime | None = None,
 ) -> None:
     workers.add_worker(
         SchedulerWorkerRecord(
@@ -217,7 +218,7 @@ def _add_worker(
             total_memory_mib=1024,
             free_cpu_millicores=1000,
             free_memory_mib=1024,
-            created_at=updated_at,
+            created_at=created_at or updated_at,
             updated_at=updated_at,
         ),
         now=updated_at,
@@ -273,6 +274,41 @@ def test_worker_pool_drain_releases_the_idle_provider_machine(
 
     assert [item.action for item in result] == [WorkerPoolDrainAction.TerminateProviderMachine]
     assert compute.released == [(PROVIDER_OWNER_ID, "machine-provider")]
+
+
+def test_worker_pool_drain_retires_burst_capacity_before_the_warm_machine(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    compute = _Compute()
+    _seed_pool_state(
+        compute_states,
+        capacity_owner_id=PROVIDER_OWNER_ID,
+        active_machines=2,
+        min_machines=1,
+    )
+    _add_worker(
+        workers,
+        "worker-warm",
+        NOW - timedelta(minutes=5),
+        machine_id="machine-warm",
+        capacity_owner_id=PROVIDER_OWNER_ID,
+        created_at=NOW - timedelta(hours=1),
+    )
+    _add_worker(
+        workers,
+        "worker-burst",
+        NOW - timedelta(minutes=4),
+        machine_id="machine-burst",
+        capacity_owner_id=PROVIDER_OWNER_ID,
+    )
+
+    result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+
+    assert [item.action for item in result] == [WorkerPoolDrainAction.TerminateProviderMachine]
+    assert compute.released == [(PROVIDER_OWNER_ID, "machine-burst")]
 
 
 def test_worker_pool_drain_holds_at_the_pool_minimum(
