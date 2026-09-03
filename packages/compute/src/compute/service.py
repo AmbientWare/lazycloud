@@ -1907,6 +1907,19 @@ class ComputeService:
         )
         return updated, snapshot
 
+    def inspect_internal_unit(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+    ) -> tuple[ComputeUnitRecord, ProviderUnitSnapshot]:
+        """Read provider state without entering the capacity mutation boundary."""
+
+        unit, provider, offer = self._internal_unit_provider(workspace_id, capacity_owner_id)
+        if provider.pooled is None:
+            raise RuntimeError("internal compute unit does not use pooled capacity")
+        snapshot = provider.pooled.describe_unit(self._provider_unit_request(unit, offer))
+        return unit, snapshot
+
     def internal_unit_machine_by_instance(
         self,
         workspace_id: str,

@@ -11,7 +11,7 @@ from compute.providers import ProviderUnitSnapshot
 from compute.service import ComputeService
 from compute.state import ComputeUnitState, RedisComputeStateRepository
 from pydantic import Field
-from shared.compute_policy import MachinePool, UnitName
+from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.contracts import ContractModel
 from shared.env import truthy_env_value
 from shared.errors import ConflictError
@@ -111,7 +111,20 @@ class WorkerPoolDrainController(Protocol):
     @property
     def pool(self) -> MachinePool: ...
 
-    def reconcile(self, *, now: datetime | None = None) -> WorkerPoolDrainResult: ...
+    def observe(self) -> WorkerPoolDrainObservation: ...
+
+    def reconcile(
+        self,
+        observation: WorkerPoolDrainObservation,
+        *,
+        now: datetime | None = None,
+    ) -> WorkerPoolDrainResult: ...
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerPoolDrainObservation:
+    unit: ComputeUnitRecord
+    snapshot: ProviderUnitSnapshot
 
 
 @dataclass(slots=True)
@@ -139,6 +152,16 @@ class WorkerPoolDrainService:
     ) -> WorkerPoolDrainResult:
         current_time = now or utc_now()
         try:
+            observation = controller.observe()
+        except Exception as exc:
+            return WorkerPoolDrainResult(
+                capacity_owner_id=controller.capacity_owner_id,
+                pool=controller.pool,
+                reason="worker-pool observation failed",
+                lock_acquired=False,
+                error=str(exc),
+            )
+        try:
             with self.capacity_owners.mutation_lock(controller.capacity_owner_id):
                 if self.capacity_owners.has_open_reservations(controller.capacity_owner_id):
                     return WorkerPoolDrainResult(
@@ -146,7 +169,7 @@ class WorkerPoolDrainService:
                         pool=controller.pool,
                         reason="capacity owner has open provisioning allocations",
                     )
-                return controller.reconcile(now=current_time)
+                return controller.reconcile(observation, now=current_time)
         except ConflictError as conflict:
             return WorkerPoolDrainResult(
                 capacity_owner_id=controller.capacity_owner_id,
@@ -183,8 +206,36 @@ class ManagedComputeWorkerPoolDrainController:
     def capacity_owner_id(self) -> str:
         return _capacity_owner_id_from_state(self.state)
 
-    def reconcile(self, *, now: datetime | None = None) -> WorkerPoolDrainResult:
+    def observe(self) -> WorkerPoolDrainObservation:
+        unit, snapshot = self.compute.inspect_internal_unit(
+            self.state.workspace_id,
+            self.capacity_owner_id,
+        )
+        return WorkerPoolDrainObservation(
+            unit=unit,
+            snapshot=snapshot,
+        )
+
+    def reconcile(
+        self,
+        observation: WorkerPoolDrainObservation,
+        *,
+        now: datetime | None = None,
+    ) -> WorkerPoolDrainResult:
         current_time = now or utc_now()
+        current_unit = self.compute.get_internal_unit(
+            self.state.workspace_id,
+            self.capacity_owner_id,
+        )
+        if (
+            current_unit.id != observation.unit.id
+            or current_unit.generation != observation.unit.generation
+        ):
+            return WorkerPoolDrainResult(
+                capacity_owner_id=self.capacity_owner_id,
+                pool=self.pool,
+                reason="worker-pool capacity changed during provider observation",
+            )
         config = _drain_config_from_state(self.state)
         if not config.enabled:
             return WorkerPoolDrainResult(
@@ -192,7 +243,11 @@ class ManagedComputeWorkerPoolDrainController:
                 pool=self.pool,
                 reason="worker-pool drain disabled",
             )
-        replacement = self._reconcile_replacement(config, now=current_time)
+        replacement = self._reconcile_replacement(
+            config,
+            snapshot=observation.snapshot,
+            now=current_time,
+        )
         if replacement is not None:
             return replacement
         sizing_state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
@@ -277,6 +332,7 @@ class ManagedComputeWorkerPoolDrainController:
         self,
         config: WorkerPoolDrainConfig,
         *,
+        snapshot: ProviderUnitSnapshot,
         now: datetime,
     ) -> WorkerPoolDrainResult | None:
         """Move the pool onto the version it would launch today, one machine at a time.
@@ -288,14 +344,6 @@ class ManagedComputeWorkerPoolDrainController:
         Returns None when there is nothing superseded, so the idle-drain phase
         runs as it did before.
         """
-        # Not guarded. `reconcile_controller` already turns an exception into a
-        # result carrying the error, and a provider that cannot be described is
-        # worth seeing rather than a pool that quietly stops replacing.
-        _, snapshot = self.compute.describe_internal_unit(
-            self.state.workspace_id,
-            self.capacity_owner_id,
-        )
-
         current_version = snapshot.current_template_version
         if not current_version:
             # The provider cannot say what it would launch. Nothing is provably
