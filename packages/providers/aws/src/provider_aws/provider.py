@@ -109,7 +109,9 @@ class _EcrAuthorizationData(AwsModel):
     expires_at: datetime | None = Field(default=None, alias="expiresAt")
 
 
-class _EcrAuthorizationResponse(AwsModel):
+class _EcrAuthorizationResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     authorization_data: list[_EcrAuthorizationData] = Field(alias="authorizationData")
 
 
