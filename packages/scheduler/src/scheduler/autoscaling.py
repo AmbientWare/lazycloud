@@ -119,6 +119,14 @@ class FunctionAutoscaleControl(Protocol):
 
     def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]: ...
 
+    def fail_unclaimed_tasks(
+        self,
+        stub_id: str,
+        *,
+        error: str,
+        limit: int = 100,
+    ) -> int: ...
+
 
 class EndpointAutoscaleControl(Protocol):
     def start_endpoint_serve(
@@ -288,6 +296,12 @@ class WorkloadAutoscaler(Protocol):
         """
         ...
 
+    def handle_failure_threshold(
+        self,
+        stub: AutoscalingStub,
+        failed_containers: Sequence[ContainerRecord],
+    ) -> list[AutoscaleAction]: ...
+
     def scale_down(
         self,
         stub: AutoscalingStub,
@@ -423,11 +437,12 @@ class AutoscalingDriver:
         # against it — so a stub whose startup cannot succeed is started for as
         # long as the pressure sits there. This is what bounds it, and the
         # workspace guardrail below is what bounds the healthy case.
-        failed_containers = _recent_failed_container_ids(
+        recent_failed_containers = _recent_failed_containers(
             containers,
             now=current_time,
             window_seconds=_failed_container_window_seconds(stub.config),
         )
+        failed_containers = [container.id for container in recent_failed_containers]
         failure_threshold = _failed_container_threshold(stub.config)
         failure_threshold_reached = (
             failure_threshold > 0 and len(failed_containers) >= failure_threshold
@@ -443,6 +458,7 @@ class AutoscalingDriver:
             desired = 0
             reason = "failed container threshold reached"
             decision = scale_kind(desired, current)
+            actions.extend(self.workload.handle_failure_threshold(stub, recent_failed_containers))
         guardrail = AutoscalerGuardrailPlan()
         if active and plan.valid and desired > current:
             guardrail = plan_autoscaler_start_guardrails(
@@ -731,6 +747,25 @@ class FunctionAutoscaler:
         # the ceiling is checked rather than here.
         return "" if self.functions.start_function_container(stub.id) else None
 
+    def handle_failure_threshold(
+        self,
+        stub: AutoscalingStub,
+        failed_containers: Sequence[ContainerRecord],
+    ) -> list[AutoscaleAction]:
+        error = next(
+            (container.startup_error for container in failed_containers if container.startup_error),
+            "function containers failed to start",
+        )
+        failed_count = self.functions.fail_unclaimed_tasks(stub.id, error=error)
+        if failed_count == 0:
+            return []
+        return [
+            AutoscaleAction(
+                action="fail-unclaimed-tasks",
+                reason=f"failed {failed_count} queued tasks: {error}",
+            )
+        ]
+
     def scale_down(
         self,
         stub: AutoscalingStub,
@@ -838,6 +873,14 @@ class EndpointAutoscaler:
         )
         return response.container_id
 
+    def handle_failure_threshold(
+        self,
+        stub: AutoscalingStub,
+        failed_containers: Sequence[ContainerRecord],
+    ) -> list[AutoscaleAction]:
+        del stub, failed_containers
+        return []
+
     def scale_down(
         self,
         stub: AutoscalingStub,
@@ -927,6 +970,14 @@ class PodAutoscaler:
             # refusal to respect: nothing was started and nothing named it.
             raise InvalidInputError("pod create returned no container id")
         return response.container_id
+
+    def handle_failure_threshold(
+        self,
+        stub: AutoscalingStub,
+        failed_containers: Sequence[ContainerRecord],
+    ) -> list[AutoscaleAction]:
+        del stub, failed_containers
+        return []
 
     def scale_down(
         self,
@@ -1385,12 +1436,12 @@ def _pending_container_count(containers: list[ContainerRecord]) -> int:
     return sum(1 for container in containers if container.status is ContainerStatus.Pending)
 
 
-def _recent_failed_container_ids(
+def _recent_failed_containers(
     containers: list[ContainerRecord],
     *,
     now: datetime,
     window_seconds: int,
-) -> list[str]:
+) -> list[ContainerRecord]:
     cutoff = now - timedelta(seconds=max(window_seconds, 0))
     failed: list[ContainerRecord] = []
     for container in containers:
@@ -1404,7 +1455,7 @@ def _recent_failed_container_ids(
         key=lambda container: container.finished_at or container.started_at or container.created_at,
         reverse=True,
     )
-    return [container.id for container in failed]
+    return failed
 
 
 def _stoppable_endpoint_containers(

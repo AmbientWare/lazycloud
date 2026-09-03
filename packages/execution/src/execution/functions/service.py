@@ -763,47 +763,23 @@ class FunctionControlService:
                 continue
             if result is not None:
                 scheduled.append(self.services.tasks.get(task.id))
-        scheduled.extend(self._schedule_unservable_claimable_work(limit=limit, at=current))
         return scheduled
 
-    def _schedule_unservable_claimable_work(
+    def fail_unclaimed_tasks(
         self,
+        stub_id: str,
         *,
-        limit: int,
-        at: datetime,
-    ) -> list[Task]:
-        """Give a stub with runnable work and nothing alive somewhere to run it.
-
-        Releasing a claim and having somewhere to run are separate events, and a
-        container dying between them leaves a row that says runnable forever
-        while its caller waits forever. Nothing else notices: the work is not
-        failed, not claimed, and not attached to anything that will report it.
-
-        Recovery only, one container per stub. How deep to go for a backlog that
-        is already being served is the autoscaler's decision, taken against the
-        whole queue on the same tick this runs on — a second opinion formed here
-        from one task row would be the two-starter race again.
-        """
-
-        scheduled: list[Task] = []
-        with self.services.context.database.session() as session:
-            candidates = TaskRepository(session).list_unclaimed_claimable(limit=limit)
-        served: set[str] = set()
-        for task in candidates:
-            if not task.stub_id or task.stub_id in served:
-                continue
-            served.add(task.stub_id)
-            try:
-                stub = self.control_plane.get_stub(task.stub_id)
-                if stub.kind is not StubKind.Function:
-                    continue
-                result = self._schedule_function_task(task, eligible_at=at)
-            except DomainError:
-                LOGGER.exception("scheduling claimable task %s failed", task.id)
-                continue
-            if result is not None:
-                scheduled.append(self.services.tasks.get(task.id))
-        return scheduled
+        error: str,
+        limit: int = 100,
+    ) -> int:
+        failed = self.services.tasks.fail_unclaimed_claimable_for_stub(
+            stub_id,
+            error=error,
+            limit=limit,
+        )
+        for task in failed:
+            self.release_dependents(task)
+        return len(failed)
 
     def _reserve_function_container(
         self,

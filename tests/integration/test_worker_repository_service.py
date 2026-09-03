@@ -1996,6 +1996,9 @@ def test_worker_repository_lifecycle_failure_marks_container_and_task_failed(
     assert updated_container.status is ContainerStatus.Failed
     assert updated_container.exit_code == 1
     assert updated_container.finished_at is not None
+    assert updated_container.startup_error == (
+        "container startup failed during load-image: image archive missing"
+    )
     assert updated_task is not None
     assert updated_task.status is TaskStatus.Failed
     assert updated_task.exit_code == 1

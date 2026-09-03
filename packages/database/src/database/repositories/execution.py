@@ -428,6 +428,34 @@ class TaskRepository:
         )
         return [Task.model_validate(row.payload) for row in rows]
 
+    def list_unclaimed_claimable_for_update(
+        self,
+        *,
+        stub_id: str,
+        limit: int,
+    ) -> list[Task]:
+        """Lock runnable work for one stub without racing a container claim."""
+
+        if limit <= 0:
+            return []
+        rows = (
+            self.session.scalars(
+                select(TaskTable)
+                .where(
+                    TaskTable.stub_id == stub_id,
+                    TaskTable.status == TaskStatus.Pending.value,
+                    TaskTable.container_id.is_(None),
+                    TaskTable.claimable_at.is_not(None),
+                )
+                .order_by(TaskTable.claimable_at, TaskTable.id)
+                .with_for_update(skip_locked=True)
+                .limit(limit)
+            )
+            .unique()
+            .all()
+        )
+        return [Task.model_validate(row.payload) for row in rows]
+
     def count_unclaimed_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]:
         """Runnable, unclaimed work for several stubs in one grouped query."""
         ids = tuple(dict.fromkeys(stub_id for stub_id in stub_ids if stub_id))

@@ -721,6 +721,45 @@ class TaskService:
                 limit=limit,
             )
 
+    def fail_unclaimed_claimable_for_stub(
+        self,
+        stub_id: str,
+        *,
+        error: str,
+        limit: int = 100,
+    ) -> list[Task]:
+        """Fail queued work only while it is still free for a container to claim."""
+
+        with self.context.database.session() as session:
+            candidates = TaskRepository(session).list_unclaimed_claimable_for_update(
+                stub_id=stub_id,
+                limit=limit,
+            )
+            failed = [
+                self._transition_in_session(
+                    session,
+                    task,
+                    TaskStatus.Failed,
+                    result=None,
+                    function_result=None,
+                    error=error,
+                    exit_code=1,
+                )
+                for task in candidates
+            ]
+        for task in failed:
+            self.events.emit(
+                "task.failed",
+                resource_type="task",
+                resource_id=task.id,
+                message=f"task {task.name} failed",
+                level=EventLevel.Error,
+                workspace_id=task.workspace_id,
+            )
+            self.publish_lifecycle_change(task, WorkspaceChangeType.Updated)
+            self._deliver_callback(task)
+        return failed
+
     def list(
         self,
         *,
