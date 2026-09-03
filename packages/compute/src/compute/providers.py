@@ -171,9 +171,11 @@ class PooledCapacityProvider(Protocol):
 
 
 class CapacityOwnerMutationLease(Protocol):
-    """Serialize every provider mutation for one durable capacity owner."""
+    """Serialize provider mutations and fence destructive changes from dispatch."""
 
     def mutation_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
+
+    def dispatch_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
 
 
 @dataclass(frozen=True, slots=True)

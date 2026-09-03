@@ -607,6 +607,53 @@ def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
     assert updated.free_cpu_millicores == 3_000
 
 
+def test_provider_reconciliation_does_not_block_final_dispatch(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    workers = RedisSchedulerWorkerRepository(redis)
+    containers = RedisSchedulerContainerRepository(redis)
+    capacity = CapacityReservationService(
+        RedisCapacityReservationRepository(redis),
+        tuple,
+    )
+    requests = SchedulerContainerRequestService(
+        workers=workers,
+        containers=containers,
+        placement=_IdentityPlacement(),
+        failure_handler=_FailureHandler(),
+        assignments=_Assignments(),
+        dispatch_wake=_Wake(),
+        lifecycle_events=_Events(),
+        capacity_reservations=capacity,
+        workspace_owners=_UnownedWorkspaces(),
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    request = _request("container-provider-reconcile")
+    worker = _worker(OWNER_ID, created_at=now)
+    workers.add_worker(worker, now=now)
+    workers.toggle_worker_available(worker.worker_id, now=now)
+    assert requests.submit(request, ready_at=now).accepted
+
+    mutation_started = Barrier(2)
+    release_mutation = Barrier(2)
+
+    def reconcile_provider() -> None:
+        with capacity.mutation_lock(OWNER_ID):
+            mutation_started.wait()
+            release_mutation.wait()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        reconciling = executor.submit(reconcile_provider)
+        mutation_started.wait()
+        [result] = requests.dispatch_ready(now=now + timedelta(seconds=1), limit=1)
+        release_mutation.wait()
+        reconciling.result()
+
+    assert result.status is SchedulerContainerDispatchStatus.Dispatched
+    assert result.worker_id == worker.worker_id
+
+
 @pytest.mark.anyio
 async def test_final_dispatch_rechecks_owner_worker_after_scale_zero_mutation(
     real_redis_actors: RealRedisActors,
@@ -662,7 +709,7 @@ async def test_final_dispatch_rechecks_owner_worker_after_scale_zero_mutation(
 
     def scale_zero() -> None:
         stale_snapshot_read.wait()
-        with capacity.mutation_lock(OWNER_ID):
+        with capacity.mutation_lock(OWNER_ID), capacity.dispatch_lock(OWNER_ID):
             workers.disable_worker(
                 worker.worker_id,
                 reason=WorkerUnavailableReason.MachineRetired,

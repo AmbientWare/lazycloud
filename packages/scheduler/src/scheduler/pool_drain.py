@@ -90,13 +90,15 @@ class WorkerPoolDrainContainerRepository(Protocol):
 
 
 class WorkerPoolDrainCapacityOwner(Protocol):
-    """The capacity owner's mutation lease, and what is already claimed against it.
+    """The capacity owner's leases, and what is already claimed against it.
 
-    One lease, taken here and re-entered by whatever this decision calls: a surge
-    scales the unit, and scaling takes the same owner's lease for itself.
+    Both leases are taken here and re-entered by whatever this decision calls: a
+    surge scales the unit, and scaling takes the same owner's leases for itself.
     """
 
     def mutation_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
+
+    def dispatch_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
 
     def has_open_reservations(self, capacity_owner_id: str) -> bool: ...
 
@@ -162,7 +164,10 @@ class WorkerPoolDrainService:
                 error=str(exc),
             )
         try:
-            with self.capacity_owners.mutation_lock(controller.capacity_owner_id):
+            with (
+                self.capacity_owners.mutation_lock(controller.capacity_owner_id),
+                self.capacity_owners.dispatch_lock(controller.capacity_owner_id),
+            ):
                 if self.capacity_owners.has_open_reservations(controller.capacity_owner_id):
                     return WorkerPoolDrainResult(
                         capacity_owner_id=controller.capacity_owner_id,

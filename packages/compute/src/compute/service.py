@@ -1747,13 +1747,23 @@ class ComputeService:
         mutations = self._required_capacity_owner_mutations()
         try:
             with mutations.mutation_lock(initial.capacity_owner_id):
-                return self._scale_internal_unit_under_lease(
-                    workspace_id,
-                    capacity_owner_id,
-                    desired_machines,
-                    before_mutation=before_mutation,
-                    now=now,
-                )
+                current = self.get_internal_unit(workspace_id, capacity_owner_id)
+                if desired_machines >= current.desired_machines and desired_machines != 0:
+                    return self._scale_internal_unit_under_lease(
+                        workspace_id,
+                        capacity_owner_id,
+                        desired_machines,
+                        before_mutation=before_mutation,
+                        now=now,
+                    )
+                with mutations.dispatch_lock(initial.capacity_owner_id):
+                    return self._scale_internal_unit_under_lease(
+                        workspace_id,
+                        capacity_owner_id,
+                        desired_machines,
+                        before_mutation=before_mutation,
+                        now=now,
+                    )
         except DomainError:
             raise
         except Exception as exc:
@@ -2087,6 +2097,7 @@ class ComputeService:
                 with mutations.mutation_lock(pool.capacity_owner_id):
                     current = self._reconcile_pooled_pool(
                         pool.id,
+                        dispatch_fence=mutations,
                         now=current_time,
                     )
             except ConflictError as conflict:
@@ -2116,6 +2127,7 @@ class ComputeService:
         self,
         pool_id: str,
         *,
+        dispatch_fence: CapacityOwnerMutationLease,
         now: datetime,
     ) -> ComputeUnitRecord | None:
         with self.context.database.session() as session:
@@ -2134,7 +2146,8 @@ class ComputeService:
                     f"compute pool {current.name!r} provider is not pooled"
                 )
             if current.phase is ComputeUnitPhase.Deleting:
-                snapshot = pooled.delete_unit(self._provider_unit_request(current, offer))
+                with dispatch_fence.dispatch_lock(current.capacity_owner_id):
+                    snapshot = pooled.delete_unit(self._provider_unit_request(current, offer))
                 return self.provider_machines._apply_pooled_snapshot(
                     current,
                     offer,
@@ -2156,7 +2169,14 @@ class ComputeService:
                 # A durably degraded pool stopped relaunching: observe and prove
                 # terminations without restoring provider capacity until an
                 # explicit capacity mutation clears the degraded reason.
-                pooled.describe_unit(request) if degraded else pooled.ensure_unit(request)
+                pooled.describe_unit(request)
+                if degraded
+                else self._ensure_reconciled_pool(
+                    current,
+                    pooled=pooled,
+                    request=request,
+                    dispatch_fence=dispatch_fence,
+                )
             )
             return self.provider_machines._apply_pooled_snapshot(
                 current,
@@ -2176,6 +2196,19 @@ class ComputeService:
                 current,
                 preserve_deleting=True,
             )
+
+    @staticmethod
+    def _ensure_reconciled_pool(
+        pool: ComputeUnitRecord,
+        *,
+        pooled: PooledCapacityProvider,
+        request: ProviderUnitRequest,
+        dispatch_fence: CapacityOwnerMutationLease,
+    ) -> ProviderUnitSnapshot:
+        if pool.observed_machines <= pool.desired_machines:
+            return pooled.ensure_unit(request)
+        with dispatch_fence.dispatch_lock(pool.capacity_owner_id):
+            return pooled.ensure_unit(request)
 
     def _unit_matching_its_connection(
         self,

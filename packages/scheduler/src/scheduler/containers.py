@@ -238,7 +238,7 @@ class SchedulerWorkspaceOwners(Protocol):
 
 
 class SchedulerCapacityReservations(Protocol):
-    def mutation_lock(
+    def dispatch_lock(
         self,
         capacity_owner_id: str,
     ) -> AbstractContextManager[None]: ...
@@ -782,11 +782,10 @@ class SchedulerContainerRequestService:
 
         dispatch_result: SchedulerContainerDispatchResult | None = None
         try:
-            # No caller enters final dispatch while holding an owner lease. Reserved
-            # allocations are only read here and consumed by the atomic worker-queue
-            # commit below, so this is the single lease for both reserved and direct
-            # dispatch paths.
-            with self.capacity_reservations.mutation_lock(capacity_owner_id):
+            # Reserved allocations are only read here and consumed by the atomic
+            # worker-queue commit below, so one dispatch fence protects both reserved
+            # and direct dispatch from destructive capacity changes.
+            with self.capacity_reservations.dispatch_lock(capacity_owner_id):
                 current_worker = self.workers.get_worker(worker.worker_id)
                 if (
                     current_worker is None
@@ -811,7 +810,7 @@ class SchedulerContainerRequestService:
                 claim,
                 worker_id=worker.worker_id,
                 now=now,
-                reason=f"capacity-owner mutation is in progress: {exc}",
+                reason=f"capacity-owner dispatch is fenced: {exc}",
             )
         if dispatch_result is not None:
             return dispatch_result
