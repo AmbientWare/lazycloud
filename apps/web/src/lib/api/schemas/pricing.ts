@@ -8,10 +8,26 @@ export const entitlementLimitSchema = z.union([
   z.literal("unlimited"),
 ]);
 
+/**
+ * Which cards a plan may ask for: the models it names, or every model the
+ * platform rents.
+ *
+ * Open strings rather than an enum, like the rate card's own `gpu_type`. The
+ * schedulable list is the server's to publish, and a model added there must
+ * reach the page that lists it without this file being edited.
+ */
+export const gpuTypeEntitlementSchema = z.union([z.literal("all"), z.array(z.string()).min(1)]);
+export type GpuTypeEntitlement = z.infer<typeof gpuTypeEntitlementSchema>;
+
 export const planEntitlementsSchema = z
   .object({
-    max_apps: z.number().int().positive(),
-    max_concurrent_containers: z.number().int().positive(),
+    // Two pools rather than one count with a GPU share inside it: a container
+    // counts against one of them, never both, so GPU work cannot crowd out the
+    // account's web apps.
+    max_concurrent_cpu_containers: z.number().int().positive(),
+    max_concurrent_gpus: z.number().int().positive(),
+    gpu_types: gpuTypeEntitlementSchema,
+    max_workspaces: entitlementLimitSchema,
     max_members: entitlementLimitSchema,
     connected_cloud: z.boolean(),
     custom_domains: z.boolean(),
@@ -67,7 +83,8 @@ export const pricingCatalogSchema = z
     no_payment_method: z
       .object({
         included_nanos: z.number().int().nonnegative(),
-        max_concurrent_containers: z.number().int().positive(),
+        max_concurrent_cpu_containers: z.number().int().positive(),
+        max_concurrent_gpus: z.number().int().positive(),
       })
       .strict(),
     plans: z.array(publishedPlanSchema),

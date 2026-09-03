@@ -6,6 +6,7 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { BillingPlan, BillingSummary } from "@/lib/api/schemas";
+import { usagePhrase } from "@/lib/entitlements";
 import { exactDollars, formatCostNanos } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
@@ -55,10 +56,22 @@ export function BillingSettings({
                 <AllowanceMeter allowance={summary.plan.allowance} currency={summary.currency} />
               )}
               {summary.plan ? (
-                <ConcurrencyLine
-                  running={summary.usage.concurrent_containers}
-                  limit={summary.entitlements?.max_concurrent_containers ?? 0}
-                />
+                <div className="flex flex-col gap-1">
+                  <ConcurrencyLine
+                    running={summary.usage.concurrent_cpu_containers}
+                    limit={summary.entitlements?.max_concurrent_cpu_containers ?? 0}
+                    noun="CPU container"
+                    state="running or queued"
+                    atLimitNote="New containers will start when capacity is available."
+                  />
+                  <ConcurrencyLine
+                    running={summary.usage.concurrent_gpus}
+                    limit={summary.entitlements?.max_concurrent_gpus ?? 0}
+                    noun="GPU card"
+                    state="in use"
+                    atLimitNote="New GPU containers will start when cards are free."
+                  />
+                </div>
               ) : null}
               <EntitlementUsage summary={summary} />
               <RetainedTermsLine summary={summary} offers={controller.offers} />
@@ -134,19 +147,49 @@ export function BillingSettings({
 }
 
 /**
- * How much this account has running against how much it may.
+ * How much of one pool this account is holding against how much it may.
  *
- * Stated as a pair rather than as a ceiling alone, because the ceiling belongs
- * to the account and the containers filling it may be in a workspace nobody is
- * looking at — a limit with no position reads as arbitrary the moment somebody
- * is refused.
+ * One line per pool, because the two are bounded separately: a container counts
+ * against the CPU ceiling or, if it asks for cards, against the GPU one by the
+ * number of cards. A single combined figure would leave an account refused a GPU
+ * looking at a container count with plenty of room in it.
  */
-function ConcurrencyLine({ running, limit }: { running: number; limit: number }) {
+function ConcurrencyLine({
+  running,
+  limit,
+  noun,
+  state,
+  atLimitNote,
+}: {
+  running: number;
+  limit: number;
+  noun: string;
+  state: string;
+  atLimitNote: string;
+}) {
   const atLimit = running >= limit;
   return (
     <p className={cn("text-sm", atLimit ? "text-warning" : "text-muted-foreground")}>
-      {running} of {limit} containers running or queued
-      {atLimit ? ". New containers will start when capacity is available." : null}
+      {usagePhrase(running, limit, noun)} {state}
+      {atLimit ? `. ${atLimitNote}` : null}
+    </p>
+  );
+}
+
+/**
+ * The two ceilings that are not compute: how many workspaces and how many people.
+ *
+ * Both are counted across the account rather than per workspace, which is the
+ * scope a payer is billed in — somebody holding three workspaces reads one
+ * figure here rather than adding up their own.
+ */
+function EntitlementUsage({ summary }: { summary: BillingSummary }) {
+  const entitlements = summary.entitlements;
+  if (!entitlements) return null;
+  return (
+    <p className="text-sm text-muted-foreground">
+      {usagePhrase(summary.usage.workspaces, entitlements.max_workspaces, "workspace")} ·{" "}
+      {usagePhrase(summary.usage.members, entitlements.max_members, "member")}
     </p>
   );
 }
@@ -156,23 +199,9 @@ function ConcurrencyLine({ running, limit }: { running: number; limit: number })
  *
  * Which is what a move onto cheaper terms leaves behind: the allowance is
  * stamped when the cycle opens and is never reduced inside it, so the customer
- * keeps what they bought and the smaller plan starts at the next cycle. False
+ * keeps what they bought and the smaller plan starts at the next cycle. Absent
  * for an account with no card, whose stamped figure is below every plan's.
  */
-function EntitlementUsage({ summary }: { summary: BillingSummary }) {
-  const entitlements = summary.entitlements;
-  if (!entitlements) return null;
-  const members =
-    entitlements.max_members === "unlimited"
-      ? `${summary.usage.members} members`
-      : `${summary.usage.members} of ${entitlements.max_members} members`;
-  return (
-    <p className="text-sm text-muted-foreground">
-      {summary.usage.apps} of {entitlements.max_apps} apps · {members}
-    </p>
-  );
-}
-
 function RetainedTermsLine({
   summary,
   offers,

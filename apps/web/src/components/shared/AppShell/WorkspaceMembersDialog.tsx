@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Workspace } from "@/lib/api/schemas";
+import { usagePhrase } from "@/lib/entitlements";
 import { billingSummaryQueryOptions } from "@/lib/queries/billing";
 import { workspaceMembersQueryOptions } from "@/lib/queries/members";
 
@@ -36,9 +37,11 @@ export function WorkspaceMembersDialog({
         </DialogHeader>
         {owner && billing.data?.entitlements ? (
           <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-            {billing.data.entitlements.max_members === "unlimited"
-              ? `${billing.data.usage.members} account members`
-              : `${billing.data.usage.members}/${billing.data.entitlements.max_members} account members`}
+            {usagePhrase(
+              billing.data.usage.members,
+              billing.data.entitlements.max_members,
+              "account member",
+            )}
           </p>
         ) : null}
         {members.isPending ? (

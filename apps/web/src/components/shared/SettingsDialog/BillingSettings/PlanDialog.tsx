@@ -19,6 +19,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { BillingSummary } from "@/lib/api/schemas";
+import { gpuModelsPhrase, limitPhrase, memberLimitPhrase } from "@/lib/entitlements";
+import { countLabel } from "@/lib/format";
 import { exactDollars, formatCostNanos } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
@@ -120,15 +122,16 @@ function PlanCard({
       <p className="mt-2 text-xs leading-5 text-muted-foreground">{offer.summary}</p>
       <ul className="mt-4 flex-1 space-y-2 border-t border-border/80 pt-4 text-xs leading-5">
         <PlanPoint>{exactDollars(offer.included_nanos)} compute included each month</PlanPoint>
-        <PlanPoint>{offer.entitlements.max_apps} apps</PlanPoint>
         <PlanPoint>
-          {offer.entitlements.max_concurrent_containers} containers running at once
+          {countLabel(offer.entitlements.max_concurrent_cpu_containers, "CPU container")} running at
+          once
         </PlanPoint>
         <PlanPoint>
-          {offer.entitlements.max_members === "unlimited"
-            ? "Unlimited members"
-            : `${offer.entitlements.max_members} members`}
+          {countLabel(offer.entitlements.max_concurrent_gpus, "GPU card")} held at once
         </PlanPoint>
+        <PlanPoint>{gpuModelsPhrase(offer.entitlements.gpu_types)}</PlanPoint>
+        <PlanPoint>{limitPhrase(offer.entitlements.max_workspaces, "workspace")}</PlanPoint>
+        <PlanPoint>{memberLimitPhrase(offer.entitlements.max_members)}</PlanPoint>
         {offer.entitlements.connected_cloud ? (
           <PlanPoint>Connected cloud accounts</PlanPoint>
         ) : null}
@@ -235,8 +238,9 @@ function ChangeConfirmation({
           )}
           {summary ? (
             <li>
-              The container limit changes immediately to{" "}
-              {offer.entitlements.max_concurrent_containers}.
+              Your limits change immediately to{" "}
+              {countLabel(offer.entitlements.max_concurrent_cpu_containers, "CPU container")} and{" "}
+              {countLabel(offer.entitlements.max_concurrent_gpus, "GPU card")} at once.
             </li>
           ) : null}
           <li>Your workloads keep running and usage remains billable.</li>

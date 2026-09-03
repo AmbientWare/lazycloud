@@ -107,14 +107,19 @@ class FunctionControlService:
                     done=True,
                     exit_code=1,
                 )
+            config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
             # Before the task row, because everything after this commits: a
             # refusal taken later leaves a task queued forever for an account
-            # nothing will schedule.
+            # nothing will schedule. Asked with the GPU the container will want,
+            # and answered again when that container is reserved; what comes
+            # back here is discarded because nothing is created yet.
             with self.services.context.database.session() as session:
-                self.services.containers.assert_may_start_container(
-                    session, workspace_id=stub.workspace_id
+                self.services.containers.admit_container_start(
+                    session,
+                    workspace_id=stub.workspace_id,
+                    gpu=config.runtime.gpu,
+                    gpu_count=config.runtime.gpu_count,
                 )
-            config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
             self._assert_within_pending_limit(stub.id, config)
             retry_policy = config.effective_retry_policy
             invoke_plan = plan_function_invoke(
@@ -474,6 +479,7 @@ class FunctionControlService:
                 disk_mib=config.runtime.requested_disk_mib,
                 requires_gpu=config.runtime.gpu_required,
                 gpu_count=config.runtime.gpu_count,
+                gpu=list(config.runtime.gpu),
                 image_id=config.effective_image_id,
                 checkpoint_enabled=config.runtime.checkpoint_enabled,
                 env=_function_runtime_env(config.env_list, self.gateway_http_url()),
@@ -539,8 +545,8 @@ class FunctionControlService:
                 memory_mib=container_plan.memory_mib,
                 memory_limit_mib=container_plan.memory_limit_mib,
                 disk_mib=container_plan.disk_mib,
-                gpu=list(config.runtime.gpu),
-                gpu_count=container_plan.gpu_count,
+                gpu=list(container.gpu),
+                gpu_count=container.gpu_count,
                 pool_selector=config.runtime.pool_selector or "",
                 runtime=config.runtime.runtime,
                 runtime_class=config.runtime.runtime_class or "",
@@ -845,6 +851,8 @@ class FunctionControlService:
                         stub_id=stub_id,
                         app_id=stub_app_id,
                         env=env_sequence_mapping(container_plan.env),
+                        gpu=list(container_plan.gpu),
+                        gpu_count=container_plan.gpu_count,
                     ),
                 )
             except ConflictError:

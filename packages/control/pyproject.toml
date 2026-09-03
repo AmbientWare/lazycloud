@@ -5,6 +5,7 @@ description = "Control-plane resource services for LazyCloud."
 requires-python = ">=3.12"
 dependencies = [
     "lazycloud-shared==0.1.0",
+    "billing",
     "database",
     "foundation",
     "identity",

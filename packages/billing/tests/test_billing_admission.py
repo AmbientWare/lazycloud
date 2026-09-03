@@ -5,17 +5,19 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from database.records.apps import AppRecord
-from database.repositories.apps import AppRepository
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.custom_domains import CustomDomainRepository
+from database.repositories.orchestration import ContainerRepository
 from database.tables.orchestration import ContainerTable
 from database.tables.storage import VolumeTable
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
+from shared.billing_rate_card import FREE_PLAN_GPU_TYPES
+from shared.containers import ContainerRecord, ContainerStatus
 from shared.custom_domains import CustomDomain
 from shared.errors import CapacityLimitReachedError, ConflictError, PaymentRequiredError
+from shared.gpu import GPU_ANY, SUPPORTED_GPU_TYPES
 from shared.http.volumes import GetOrCreateVolumeRequest
 from shared.timestamps import utc_now
 from sqlalchemy import func, select
@@ -44,50 +46,25 @@ def test_free_plan_refuses_paid_capabilities(isolated_services: ApiServices) -> 
         admission.assert_may_use_custom_domains(session, user_id=user_id)
 
 
-def test_free_plan_refuses_an_app_beyond_its_account_limit(
+def test_the_free_plan_counts_the_owner_as_its_one_member(
     isolated_services: ApiServices,
 ) -> None:
+    """The plan comes with the person who signed up, and nobody else.
+
+    Counted the way the membership rows count, which includes the owner's own —
+    so a workspace with no co-members is already at the limit, and wanting to
+    work with somebody is what a free account upgrades for.
+    """
+
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-        repository = AppRepository(session)
-        for index in range(200):
-            repository.upsert(
-                AppRecord(
-                    id=str(uuid4()),
-                    workspace_id=workspace_id,
-                    name=f"quota-app-{index}",
-                )
-            )
+    colleague = isolated_services.users.create(display_name="member-one")
 
-    with pytest.raises(CapacityLimitReachedError, match="200 apps"):
-        isolated_services.apps.create("one_more_app", workspace="default")
-
-
-def test_free_plan_counts_distinct_members_across_owned_workspaces(
-    isolated_services: ApiServices,
-) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    admission = DatabaseBillingAdmission()
-    first = isolated_services.users.create(display_name="member-one")
-    second = isolated_services.users.create(display_name="member-two")
-    refused = isolated_services.users.create(display_name="member-three")
-    isolated_services.users.add_member(
-        workspace_id=workspace_id,
-        user_id=first.id,
-        admission=admission,
-    )
-    isolated_services.users.add_member(
-        workspace_id=workspace_id,
-        user_id=second.id,
-        admission=admission,
-    )
-
-    with pytest.raises(CapacityLimitReachedError, match="3 members"):
+    with pytest.raises(CapacityLimitReachedError, match="1 members"):
         isolated_services.users.add_member(
             workspace_id=workspace_id,
-            user_id=refused.id,
-            admission=admission,
+            user_id=colleague.id,
+            admission=DatabaseBillingAdmission(),
         )
 
 
@@ -240,3 +217,185 @@ def _container_count(services: ApiServices, workspace_id: str) -> int:
             session.scalar(select(func.count()).where(ContainerTable.workspace_id == workspace_id))
             or 0
         )
+
+
+def test_a_free_plan_gpu_request_is_held_to_the_models_the_plan_offers(
+    isolated_services: ApiServices,
+) -> None:
+    """A card the plan does not sell is refused; `any` narrows to the ones it does.
+
+    The narrowing is the half that would otherwise be silent. A wildcard passed
+    through reaches the scheduler as "whatever is going", and the first offer
+    taken would be the hardware this account may not hold — so the plan has to
+    answer with its own models rather than only with yes.
+    """
+
+    workspace_id = _carded_free_account(isolated_services)
+    admission = DatabaseBillingAdmission()
+
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(PaymentRequiredError, match=r"H100.*Team plan"),
+    ):
+        admission.admit_container_start(
+            session,
+            workspace_id=workspace_id,
+            gpu=["H100"],
+            gpu_count=1,
+        )
+
+    with isolated_services.context.database.session() as session:
+        assert admission.admit_container_start(
+            session,
+            workspace_id=workspace_id,
+            gpu=[GPU_ANY],
+            gpu_count=1,
+        ) == [model.value for model in SUPPORTED_GPU_TYPES if model in FREE_PLAN_GPU_TYPES]
+
+
+def test_the_gpu_limit_counts_cards_and_leaves_the_cpu_pool_alone(
+    isolated_services: ApiServices,
+) -> None:
+    """Cards, not containers, and a pool of their own.
+
+    A container may hold several, so counting containers would let one account
+    hold the plan's limit many times over. Counting them against the CPU figure
+    instead would let GPU work crowd out the web apps the same plan promises.
+    """
+
+    workspace_id = _carded_free_account(isolated_services)
+    _hold_gpu_cards(isolated_services, workspace_id=workspace_id, cards=4)
+    admission = DatabaseBillingAdmission()
+
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(CapacityLimitReachedError, match="already holds 4 GPUs"),
+    ):
+        admission.admit_container_start(
+            session,
+            workspace_id=workspace_id,
+            gpu=["T4"],
+            gpu_count=2,
+        )
+
+    with isolated_services.context.database.session() as session:
+        assert admission.admit_container_start(
+            session,
+            workspace_id=workspace_id,
+            gpu=["T4"],
+            gpu_count=1,
+        ) == ["T4"]
+        assert (
+            admission.admit_container_start(
+                session,
+                workspace_id=workspace_id,
+                gpu=(),
+                gpu_count=0,
+            )
+            == []
+        )
+
+
+def test_the_first_workspace_needs_no_account_and_the_second_needs_the_plan(
+    isolated_services: ApiServices,
+) -> None:
+    """Sign-in creates a workspace before billing exists, so the first is free.
+
+    Gated on terms, the workspace an account is given on its first sign-in would
+    be refused for an account a few statements away from holding a subscription,
+    and the sign-in meant to create both would leave neither.
+    """
+
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    owner_user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+    newcomer = isolated_services.users.create(display_name="no-account-yet")
+    admission = DatabaseBillingAdmission()
+
+    with isolated_services.context.database.session() as session:
+        admission.assert_may_create_workspace(session, owner_user_id=newcomer.id)
+
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(CapacityLimitReachedError, match="already owns 1 workspaces"),
+    ):
+        admission.assert_may_create_workspace(session, owner_user_id=owner_user_id)
+
+
+def test_a_plan_change_names_the_gpu_model_the_target_plan_does_not_offer(
+    isolated_services: ApiServices,
+) -> None:
+    """Moving down while holding hardware the smaller plan does not sell.
+
+    The model is what the customer has to act on, so it is what the refusal
+    says: told only that they are over a limit, there is nothing for them to
+    stop.
+    """
+
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+    with isolated_services.context.database.session() as session:
+        BillingAccountRepository(session).upsert(
+            user_id=user_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id=f"cus_{user_id}",
+            provider_subscription_id=f"sub_{user_id}",
+            provider_credit_grant_id=f"credgr_{user_id}",
+            plan=BillingPlanId.Team,
+        )
+        session.commit()
+    _hold_gpu_cards(isolated_services, workspace_id=workspace_id, cards=1, model="H100")
+
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(ConflictError, match="1 running containers on H100"),
+    ):
+        DatabaseBillingAdmission().assert_plan_change_fits(
+            session,
+            user_id=user_id,
+            target=BillingPlanId.Free,
+        )
+
+
+def _carded_free_account(services: ApiServices) -> str:
+    """The default workspace's owner, on the free plan with a card attached.
+
+    A plan's own terms are only observable with a card: without one every
+    account is given the cardless figures whatever it is subscribed to.
+    """
+
+    with services.context.database.session() as session:
+        workspace_id = services.context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(services.context, workspace_id)
+    with services.context.database.session() as session:
+        BillingAccountRepository(session).set_payment_method_present(
+            user_id=user_id,
+            present=True,
+            at=utc_now(),
+        )
+        session.commit()
+    return workspace_id
+
+
+def _hold_gpu_cards(
+    services: ApiServices,
+    *,
+    workspace_id: str,
+    cards: int,
+    model: str = "T4",
+) -> None:
+    with services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name=f"gpu-{uuid4().hex[:8]}",
+                image="",
+                command=[],
+                workspace_id=workspace_id,
+                status=ContainerStatus.Running,
+                gpu=[model],
+                gpu_count=cards,
+            )
+        )
+        session.commit()

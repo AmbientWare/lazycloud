@@ -647,6 +647,7 @@ name = "control"
 version = "0.1.0"
 source = { editable = "packages/control" }
 dependencies = [
+    { name = "billing" },
     { name = "database" },
     { name = "foundation" },
     { name = "identity" },
@@ -656,6 +657,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "billing", editable = "packages/billing" },
     { name = "database", editable = "packages/database" },
     { name = "foundation", editable = "packages/foundation" },
     { name = "identity", editable = "packages/identity" },

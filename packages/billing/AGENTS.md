@@ -210,7 +210,17 @@ admission decision, and the sweep.
 - Every billed thing asks that question, not only a container, and the method is
   named for the question rather than for what is asking. A volume asks it before
   it exists; a third billable resource asks the same one and adds no method. Only
-  a container carries a count, so only a container has a second.
+  a container carries a count and a shape, so only a container has a second.
+- The container method answers with the GPU models to schedule rather than only
+  with yes. A request for `any` card is a request the plan narrows, and narrowing
+  it here is the only place that can happen before the scheduler acts on it:
+  passed through, the first offer taken would be whatever the fleet had spare,
+  which on a plan that sells three models is usually one of the other five. A
+  request naming models comes back unchanged once every one of them is a model
+  the plan offers, because substituting a stated preference would run something
+  other than what was asked for. A model the plan does not offer is a payment
+  refusal naming the model and the plan that does offer it, since that is a
+  customer who has to decide something rather than one who has to wait.
 - A volume is admitted on creation alone, and the remainder is deliberate rather
   than overlooked. Storage is the one billed dimension that keeps accruing with
   nothing running, so the sweep that stops containers can do nothing about it,
@@ -234,6 +244,20 @@ admission decision, and the sweep.
   approximate under concurrent starts. Closing that gap would put a per-account
   exclusive lock in the path of every autoscaler ramp to protect a guardrail
   whose overshoot self-corrects and is invoiced like anything else.
+- Two concurrency pools, not one count with a GPU share inside it. A container
+  counts against the CPU pool, or, when it asks for cards, against the GPU pool
+  by the number of cards it holds, never both. One count would mean GPU work
+  crowding out the web apps the same plan promises, and it would mean a container
+  asking for eight cards costing an account the same as one asking for none.
+  Cards rather than containers because cards are what is scarce and what the
+  hourly rate is charged per.
+- A workspace is admitted against the plan too, and the first one is always
+  allowed with no account required. Sign-in provisions the default workspace
+  before billing exists, so a check that read terms there would refuse a customer
+  the workspace their sign-in was creating, and the sign-in meant to produce both
+  would produce neither. Adoption of a workspace that already carries the name is
+  not a creation and is not gated: refusing it would lock an account out of
+  workspaces it already holds.
 - All of it is read from local rows rather than the provider, because these
   questions are asked on every container start and a balance call there is a
   start that fails whenever the provider is slow. Whether a card exists is

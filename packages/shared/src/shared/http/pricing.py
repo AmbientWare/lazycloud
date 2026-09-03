@@ -6,24 +6,31 @@ from shared.billing_plans import BillingPlanId
 from shared.billing_rate_card import (
     CONNECTED_CLOUD_MANAGEMENT_FEE,
     NO_CARD_INCLUDED_NANOS,
-    NO_CARD_MAX_CONTAINERS,
+    NO_CARD_MAX_CPU_CONTAINERS,
+    NO_CARD_MAX_GPUS,
     PRICING_VERSION,
     PUBLISHED_GPU_RATES,
     PUBLISHED_PLANS,
     PUBLISHED_PLATFORM_RATE,
     PUBLISHED_SHAPE_RATES,
     SECONDS_PER_30_DAY_MONTH,
+    AllGpuTypes,
     EntitlementLimit,
     PlanEntitlements,
 )
+from shared.gpu import GpuType
 from shared.http.base import HttpModel
 from shared.payments import BILLING_CURRENCY
 from shared.usage import UsageBillingOwner
 
 
 class PlanEntitlementsResponse(HttpModel):
-    max_apps: int = Field(gt=0)
-    max_concurrent_containers: int = Field(gt=0)
+    max_concurrent_cpu_containers: int = Field(gt=0)
+    max_concurrent_gpus: int = Field(gt=0)
+    gpu_types: list[GpuType] | AllGpuTypes
+    """The models the plan may ask for, or `all` for every model on the rate card."""
+
+    max_workspaces: EntitlementLimit
     max_members: EntitlementLimit
     connected_cloud: bool
     custom_domains: bool
@@ -42,7 +49,8 @@ class PublishedPlanResponse(HttpModel):
 
 class NoPaymentMethodTermsResponse(HttpModel):
     included_nanos: int = Field(ge=0)
-    max_concurrent_containers: int = Field(gt=0)
+    max_concurrent_cpu_containers: int = Field(gt=0)
+    max_concurrent_gpus: int = Field(gt=0)
 
 
 class PublishedShapeRateResponse(HttpModel):
@@ -76,8 +84,12 @@ class PricingCatalogResponse(HttpModel):
 
 def _entitlements_response(entitlements: PlanEntitlements) -> PlanEntitlementsResponse:
     return PlanEntitlementsResponse(
-        max_apps=entitlements.max_apps,
-        max_concurrent_containers=entitlements.max_concurrent_containers,
+        max_concurrent_cpu_containers=entitlements.max_concurrent_cpu_containers,
+        max_concurrent_gpus=entitlements.max_concurrent_gpus,
+        gpu_types=(
+            "all" if entitlements.gpu_types == "all" else list(entitlements.allowed_gpu_types)
+        ),
+        max_workspaces=entitlements.max_workspaces,
         max_members=entitlements.max_members,
         connected_cloud=entitlements.connected_cloud,
         custom_domains=entitlements.custom_domains,
@@ -95,7 +107,8 @@ def pricing_catalog_response() -> PricingCatalogResponse:
         connected_cloud_management_fee_percent=int(fee_percent),
         no_payment_method=NoPaymentMethodTermsResponse(
             included_nanos=NO_CARD_INCLUDED_NANOS,
-            max_concurrent_containers=NO_CARD_MAX_CONTAINERS,
+            max_concurrent_cpu_containers=NO_CARD_MAX_CPU_CONTAINERS,
+            max_concurrent_gpus=NO_CARD_MAX_GPUS,
         ),
         plans=[
             PublishedPlanResponse(

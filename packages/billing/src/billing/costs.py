@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from database.repositories.apps import AppRepository
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import (
     BillingAllowanceRepository,
@@ -60,10 +59,16 @@ _BUCKET_WIDTHS: dict[UsageCostBucket, timedelta] = {
 
 @dataclass(frozen=True, slots=True)
 class BillingEntitlementUsage:
-    """Account-wide usage measured against plan entitlements."""
+    """Account-wide usage measured against plan entitlements.
 
-    apps: int
-    concurrent_containers: int
+    Concurrency is two figures because the plan bounds two pools: containers
+    holding no card, and the cards themselves. Reported as one number they would
+    be read against whichever limit the surface happened to draw them beside.
+    """
+
+    concurrent_cpu_containers: int
+    concurrent_gpus: int
+    workspaces: int
     members: int
     connected_clouds: int
     custom_domains: int
@@ -230,14 +235,13 @@ class BillingStandingService:
 
     def _entitlement_usage(self, *, user_id: str) -> BillingEntitlementUsage:
         connection = AwsAccountConnectionRepository(self.session).get_for_user(user_id)
+        containers = ContainerRepository(self.session)
+        members = WorkspaceMemberRepository(self.session)
         return BillingEntitlementUsage(
-            apps=AppRepository(self.session).count_for_owner(user_id),
-            concurrent_containers=ContainerRepository(self.session).count_live_for_owner(
-                owner_user_id=user_id
-            ),
-            members=WorkspaceMemberRepository(self.session).distinct_member_count_for_owner(
-                user_id
-            ),
+            concurrent_cpu_containers=containers.count_live_cpu_for_owner(owner_user_id=user_id),
+            concurrent_gpus=containers.count_live_gpus_for_owner(owner_user_id=user_id),
+            workspaces=members.owned_workspace_count(user_id),
+            members=members.distinct_member_count_for_owner(user_id),
             connected_clouds=int(connection is not None and not connection.platform_fleet),
             custom_domains=CustomDomainRepository(self.session).count_for_user(user_id),
         )
