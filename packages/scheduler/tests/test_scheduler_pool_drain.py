@@ -179,6 +179,7 @@ def _seed_pool_state(
     capacity_owner_id: str,
     active_machines: int,
     min_machines: int = 0,
+    idle_seconds: int = 10,
 ) -> None:
     compute_states.save_unit_state(
         ComputeUnitState(
@@ -192,7 +193,7 @@ def _seed_pool_state(
             active_machines=active_machines,
             metadata={
                 "config": {"name": POOL, "providers": ["aws"]},
-                "drain": {"scale_down_idle_seconds": "10"},
+                "drain": {"scale_down_idle_seconds": str(idle_seconds)},
             },
         )
     )
@@ -288,11 +289,12 @@ def test_worker_pool_drain_retires_burst_capacity_before_the_warm_machine(
         capacity_owner_id=PROVIDER_OWNER_ID,
         active_machines=2,
         min_machines=1,
+        idle_seconds=300,
     )
     _add_worker(
         workers,
         "worker-warm",
-        NOW - timedelta(minutes=5),
+        NOW - timedelta(minutes=6),
         machine_id="machine-warm",
         capacity_owner_id=PROVIDER_OWNER_ID,
         created_at=NOW - timedelta(hours=1),
@@ -305,8 +307,13 @@ def test_worker_pool_drain_retires_burst_capacity_before_the_warm_machine(
         capacity_owner_id=PROVIDER_OWNER_ID,
     )
 
-    result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+    initial = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+    result = _drain_service(redis, compute, compute_states, workers).reconcile(
+        now=NOW + timedelta(minutes=2)
+    )
 
+    assert [item.action for item in initial] == [WorkerPoolDrainAction.None_]
+    assert initial[0].reason == "no idle provider machine candidate"
     assert [item.action for item in result] == [WorkerPoolDrainAction.TerminateProviderMachine]
     assert compute.released == [(PROVIDER_OWNER_ID, "machine-burst")]
 

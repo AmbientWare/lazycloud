@@ -306,6 +306,7 @@ class ManagedComputeWorkerPoolDrainController:
             self.containers,
             now=current_time,
             idle_seconds=config.idle_seconds,
+            retain_machines=config.min_workers,
         )
         if candidate is None:
             return WorkerPoolDrainResult(
@@ -634,9 +635,26 @@ def _idle_machine_candidate(
     *,
     now: datetime,
     idle_seconds: float,
+    retain_machines: int,
 ) -> _IdleMachineCandidate | None:
+    healthy_machines = [
+        (machine_id, workers)
+        for machine_id, workers in workers_by_machine.items()
+        if any(worker.status is SchedulerWorkerStatus.Available for worker in workers)
+    ]
+    healthy_machines.sort(
+        key=lambda item: (
+            min(worker.created_at for worker in item[1]),
+            item[0],
+        )
+    )
+    retained_machine_ids = {
+        machine_id for machine_id, _workers in healthy_machines[:retain_machines]
+    }
     candidates: list[_IdleMachineCandidate] = []
     for machine_id, workers in workers_by_machine.items():
+        if machine_id in retained_machine_ids:
+            continue
         if _pool_has_active_containers(workers, containers):
             continue
         idle_workers = _idle_workers(workers, now, idle_seconds)
