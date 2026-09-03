@@ -33,6 +33,7 @@ class LocalImageArchiveReadyStatus(StrEnum):
     Missing = "missing"
     Directory = "directory"
     Empty = "empty"
+    Unverified = "unverified"
     DigestMismatch = "digest-mismatch"
     Invalid = "invalid"
 
@@ -264,8 +265,8 @@ def plan_local_image_archive_ready(
     Comparing the two records is what makes a stale or foreign local copy visible;
     rehashing the archive would cost its full size on every container start, and the
     download path already verified the bytes against the digest that produced the
-    record. Either side being empty means nothing is being claimed, so the archive is
-    judged exactly as it was before.
+    record. When dispatch names a digest, an archive without that record must pass
+    through a verified cache restore or brokered download before its first mount.
     """
     if not exists:
         return LocalImageArchiveReadyPlan(
@@ -292,6 +293,14 @@ def plan_local_image_archive_ready(
             image_id=image_id,
             remove_path=True,
             reason="local image archive is empty",
+        )
+    if expected_sha256 and not recorded_sha256:
+        return LocalImageArchiveReadyPlan(
+            status=LocalImageArchiveReadyStatus.Unverified,
+            ready=False,
+            archive_path=archive_path,
+            image_id=image_id,
+            reason="local image archive has no verified digest record",
         )
     if expected_sha256 and recorded_sha256 and expected_sha256 != recorded_sha256:
         return LocalImageArchiveReadyPlan(
