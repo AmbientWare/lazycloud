@@ -18,7 +18,7 @@ import { countLabel } from "@/lib/format";
 import { appQueryOptions } from "@/lib/queries/apps";
 import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
 import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
-import { stubsQueryOptions, taskLatencyQueryOptions } from "@/lib/queries/stubs";
+import { deployedStubsQueryOptions, taskLatencyQueryOptions } from "@/lib/queries/stubs";
 import { tasksQueryOptions } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -60,7 +60,7 @@ function WorkloadDetailPage() {
   const deployments = useInfiniteQuery(
     deploymentsInfiniteQueryOptions(workspace.id, { appId, name }),
   );
-  const stubs = useQuery(stubsQueryOptions(workspace.id, appId));
+  const stubs = useQuery(deployedStubsQueryOptions(workspace.id, appId));
 
   const deploymentList = selectDeploymentList(deployments.data, deployments.hasNextPage);
   const group = findWorkloadGroup(deploymentList.items, appId, name);

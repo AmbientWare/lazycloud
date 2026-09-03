@@ -309,7 +309,7 @@ class DeploymentClient(ControlClientConfigMixin):
             source_root=selected_root,
             archive_prefix=archive_prefix,
         )
-        with self._step("Deployment", prepared_spec.name) as step:
+        with self._step("Runtime", prepared_spec.name) as step:
             response = self.control_client.get_or_create_stub(
                 _stub_request_from_spec(
                     prepared_spec,
