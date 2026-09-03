@@ -67,6 +67,7 @@ from sqlalchemy.orm.attributes import flag_modified
 type DatabaseInsertValue = JsonValue | datetime
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
+_DATETIME_ADAPTER = TypeAdapter(datetime)
 
 
 def _model_json(model: BaseModel) -> dict[str, JsonValue]:
@@ -94,6 +95,22 @@ class ComputeCapacityOperationRecord(ContractModel):
     last_error: str = Field(default="", max_length=TERMINAL_REASON_MAX_LENGTH)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class ComputeCapacityOperationSizingRecord:
+    operation_id: str
+    desired_unit: int
+    status: str
+    owns_capacity: bool
+    failure_count: int
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ComputeCapacityOperationHistorySummary:
+    peak_desired_unit: int
+    last_requested_at: datetime | None
 
 
 class ComputeProviderInstanceRecord(ContractModel):
@@ -763,6 +780,53 @@ class ComputeCapacityOperationRepository:
         )
         return [ComputeCapacityOperationRecord.model_validate(row.payload) for row in rows]
 
+    def list_open_sizing_for_owner(
+        self,
+        capacity_owner_id: str,
+    ) -> list[ComputeCapacityOperationSizingRecord]:
+        rows = self.session.execute(
+            select(
+                ComputeCapacityOperationTable.operation_id,
+                ComputeCapacityOperationTable.desired_unit,
+                ComputeCapacityOperationTable.status,
+                func.coalesce(
+                    ComputeCapacityOperationTable.payload["owns_capacity"].as_boolean(),
+                    False,
+                ),
+                func.coalesce(
+                    ComputeCapacityOperationTable.payload["failure_count"].as_integer(),
+                    0,
+                ),
+                ComputeCapacityOperationTable.payload["updated_at"].as_string(),
+            )
+            .where(
+                ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id,
+                ComputeCapacityOperationTable.status.not_in(("released", "unsupported")),
+            )
+            .order_by(
+                ComputeCapacityOperationTable.created_at,
+                ComputeCapacityOperationTable.id,
+            )
+        ).tuples()
+        return [
+            ComputeCapacityOperationSizingRecord(
+                operation_id=operation_id,
+                desired_unit=desired_unit,
+                status=status,
+                owns_capacity=owns_capacity,
+                failure_count=failure_count,
+                updated_at=to_utc(_DATETIME_ADAPTER.validate_python(updated_at)),
+            )
+            for (
+                operation_id,
+                desired_unit,
+                status,
+                owns_capacity,
+                failure_count,
+                updated_at,
+            ) in rows
+        ]
+
     def list_for_owner(self, capacity_owner_id: str) -> list[ComputeCapacityOperationRecord]:
         rows = self.session.scalars(
             select(ComputeCapacityOperationTable)
@@ -771,20 +835,30 @@ class ComputeCapacityOperationRepository:
         )
         return [ComputeCapacityOperationRecord.model_validate(row.payload) for row in rows]
 
-    def peak_desired_unit(self, capacity_owner_id: str) -> int:
-        """Highest unit this owner has ever been driven to, released rows included.
+    def sizing_history_summary_for_owner(
+        self,
+        capacity_owner_id: str,
+    ) -> ComputeCapacityOperationHistorySummary:
+        """Summarize all requests without loading their durable JSON payloads.
 
-        Released operations stay readable precisely so this stays monotonic: it
-        is the durable answer to "has the pool ever reached its initial size",
-        which is what stops the sizer from buying back every machine the drain
-        controller retires.
+        Released operations stay in the aggregate so the peak remains monotonic.
+        That stops the sizer from buying back every machine the drain controller
+        retires.
         """
-        highest = self.session.scalar(
-            select(func.max(ComputeCapacityOperationTable.desired_unit)).where(
-                ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id
-            )
+        peak_desired_unit, last_requested_at = self.session.execute(
+            select(
+                func.max(ComputeCapacityOperationTable.desired_unit),
+                func.max(ComputeCapacityOperationTable.payload["created_at"].as_string()),
+            ).where(ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id)
+        ).one()
+        return ComputeCapacityOperationHistorySummary(
+            peak_desired_unit=int(peak_desired_unit or 0),
+            last_requested_at=(
+                to_utc(_DATETIME_ADAPTER.validate_python(last_requested_at))
+                if last_requested_at is not None
+                else None
+            ),
         )
-        return int(highest or 0)
 
     def upsert(self, record: ComputeCapacityOperationRecord) -> ComputeCapacityOperationRecord:
         current = self.get(record.capacity_owner_id, record.operation_id, for_update=True)

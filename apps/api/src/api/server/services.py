@@ -35,7 +35,7 @@ from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
-from database.records.apps import StubRecord
+from database.records.apps import AutoscalingStubRecord, StubRecord
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.collections.service import CollectionService
@@ -371,6 +371,9 @@ class ApiSchedulerWorkloadControl:
 
     def list_stubs(self, *, workspace: str | None = None) -> list[StubRecord]:
         return self.control_plane.list_stubs(workspace=workspace)
+
+    def list_autoscaling_stubs(self) -> list[AutoscalingStubRecord]:
+        return self.control_plane.list_autoscaling_stubs()
 
     def get_stub(
         self,

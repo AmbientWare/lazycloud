@@ -699,7 +699,7 @@ class Scheduler:
             try:
                 stubs = tuple(
                     stub
-                    for stub in self.runtime_services.scheduler_workloads.list_stubs()
+                    for stub in self.runtime_services.scheduler_workloads.list_autoscaling_stubs()
                     if any(driver.workload.selects(stub) for driver in drivers)
                 )
                 snapshot = load_autoscaling_placement_snapshot(

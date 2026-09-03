@@ -16,9 +16,14 @@ from shared.app_lifecycle import (
     AppLifecycleTarget,
 )
 from shared.contracts import ContractModel
+from shared.deployment_records import CpuRequest
 from shared.deployments import StubKind
 from shared.timestamps import utc_now
-from shared.workload_config import StubConfig
+from shared.workload_config import (
+    StubAutoscalerConfig,
+    StubConfig,
+    StubTaskPolicy,
+)
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
@@ -45,6 +50,36 @@ class StubRecord(ContractModel):
     ) -> dict[str, JsonValue]:
         config_json = config.model_dump_json(exclude_unset=True)
         return _JSON_OBJECT_ADAPTER.validate_json(config_json)
+
+
+class AutoscalingStubRuntimeConfig(ContractModel):
+    cpu: CpuRequest | None = None
+    cpu_millicores: int = Field(default=0, ge=0)
+    gpu: list[str] = Field(default_factory=list)
+    gpu_count: int = Field(default=0, ge=0)
+    timeout_seconds: int | float | None = Field(default=None, ge=0)
+    keep_warm: int = Field(default=0, ge=-1)
+    workspace_gpu_quota: int = Field(default=0, ge=0)
+    workspace_cpu_quota_millicores: int = Field(default=0, ge=0)
+
+
+class AutoscalingStubConfig(ContractModel):
+    runtime: AutoscalingStubRuntimeConfig = Field(default_factory=AutoscalingStubRuntimeConfig)
+    autoscaler: StubAutoscalerConfig = Field(default_factory=StubAutoscalerConfig)
+    task_policy: StubTaskPolicy = Field(default_factory=StubTaskPolicy)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class AutoscalingStubRecord(ContractModel):
+    id: str
+    workspace_id: str
+    kind: StubKind
+    deployment_id: str | None = None
+    app_id: str | None = None
+    config: AutoscalingStubConfig = Field(default_factory=AutoscalingStubConfig)
+
+
+type AutoscalingStub = AutoscalingStubRecord | StubRecord
 
 
 class AppRecord(ContractModel):
@@ -101,6 +136,10 @@ __all__ = [
     "AppContainerShutdownIntentRecord",
     "AppDeploymentIntentRecord",
     "AppRecord",
+    "AutoscalingStub",
+    "AutoscalingStubConfig",
+    "AutoscalingStubRecord",
+    "AutoscalingStubRuntimeConfig",
     "StubKind",
     "StubRecord",
 ]
