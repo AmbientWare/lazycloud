@@ -198,7 +198,6 @@ class QueueMessageTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "queue_messages"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_queue_messages_queue_available", "queue", "available_at"),
-        Index("ix_queue_messages_workspace_queue", "workspace_id", "queue"),
         Index(
             "ix_queue_messages_workspace_queue_claim",
             "workspace_id",
