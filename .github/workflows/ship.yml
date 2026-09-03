@@ -186,7 +186,7 @@ jobs:
 
   release:
     name: Publish the release
-    # Nothing bakes until the wheels install on every supported Python.
+    # Host images are published separately. This job only builds release assets.
     needs: [version, python-package]
     uses: ./.github/workflows/release.yml
     secrets: inherit

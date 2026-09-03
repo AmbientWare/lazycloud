@@ -58,6 +58,21 @@ jobs:
           role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
           aws-region: ${{ env.AWS_RELEASE_REGION }}
 
+      - name: Resolve the current node image catalog
+        id: images
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://s3.${AWS_RELEASE_REGION}.amazonaws.com/${{ vars.AWS_RELEASE_ASSET_BUCKET }}/connected-aws/node-images/current.json"
+          if ! curl -fsS -o node-images.json "${url}"; then
+            echo "::error::No current node image catalog. Run the Node Images workflow on main before Ship."
+            exit 1
+          fi
+          uv run --group workspace python -m deploy.ami.catalog resolve \
+            --catalog node-images.json \
+            --github-output "${GITHUB_OUTPUT}"
+          echo "node image catalog: ${url}"
+
       - name: Login to Amazon ECR Public
         uses: aws-actions/amazon-ecr-login@v2
         with:
@@ -191,71 +206,6 @@ jobs:
           test -n "${image}"
           echo "image=${image}" >> "${GITHUB_OUTPUT}"
           echo "worker image: ${image}"
-
-      # Baked only when the agent or worker the image embeds was rebuilt, or the
-      # bake itself changed; otherwise the previous release's images serve this
-      # one. The plan decides, not the image name: a name carries the version,
-      # so matching on it would either never reuse or reuse the wrong thing.
-      - name: Bake connected AWS node image
-        if: steps.plan.outputs.rebuild_images == 'true'
-        id: bake
-        shell: bash
-        run: |
-          cpu_ami_ids="$(uv run --group workspace python deploy/ami/bake.py \
-            --release-version "${{ inputs.version }}" \
-            --agent-version-dir "dist/agent-binarys/${{ inputs.version }}" \
-            --worker-image "${{ steps.worker.outputs.image }}" \
-            --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}" \
-            --bucket-region "${AWS_RELEASE_REGION}" \
-            --regions us-east-1)"
-          test -n "${cpu_ami_ids}"
-          echo "cpu_ami_ids=${cpu_ami_ids}" >> "${GITHUB_OUTPUT}"
-
-      # A second image from the same release, carrying the NVIDIA driver and
-      # toolkit. One image covers every card, because the driver branch is
-      # unified across Turing through Blackwell.
-      #
-      # Baked beside the CPU image so both catalogs describe one release. A GPU
-      # image from an earlier bake names an earlier agent and worker image than
-      # the CPU one beside it.
-      #
-      # A release without this publishes an empty GPU catalog and nothing fails.
-      # Every GPU instance type stops being offerable while CPU capacity keeps
-      # working, so the symptom is a priced fleet that will not launch the cards
-      # it is priced for.
-      - name: Bake connected AWS GPU node image
-        if: steps.plan.outputs.rebuild_images == 'true'
-        id: bake-gpu
-        shell: bash
-        run: |
-          gpu_ami_ids="$(uv run --group workspace python deploy/ami/bake.py \
-            --variant gpu \
-            --release-version "${{ inputs.version }}" \
-            --agent-version-dir "dist/agent-binarys/${{ inputs.version }}" \
-            --worker-image "${{ steps.worker.outputs.image }}" \
-            --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}" \
-            --bucket-region "${AWS_RELEASE_REGION}" \
-            --regions us-east-1)"
-          test -n "${gpu_ami_ids}"
-          echo "gpu_ami_ids=${gpu_ami_ids}" >> "${GITHUB_OUTPUT}"
-
-      - name: Resolve the node images this release names
-        id: images
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${{ steps.plan.outputs.rebuild_images }}" = "true" ]; then
-            cpu='${{ steps.bake.outputs.cpu_ami_ids }}'
-            gpu='${{ steps.bake-gpu.outputs.gpu_ami_ids }}'
-          else
-            cpu='${{ steps.plan.outputs.previous_cpu_ami_ids }}'
-            gpu='${{ steps.plan.outputs.previous_gpu_ami_ids }}'
-          fi
-          test -n "${cpu}"
-          echo "cpu_ami_ids=${cpu}" >> "${GITHUB_OUTPUT}"
-          echo "gpu_ami_ids=${gpu}" >> "${GITHUB_OUTPUT}"
-          echo "cpu images: ${cpu}"
-          echo "gpu images: ${gpu}"
 
       - name: Stage immutable connected AWS release bundle
         run: >-

@@ -11,13 +11,15 @@ ARG GO_IMAGE=golang:1.24.4-bookworm
 FROM debian:bookworm-slim AS runsc
 ARG TARGETARCH
 # Pinned together with the node driver: nvproxy validates the driver ABI it was
-# built against, so this release and the AMI's NVIDIA version are one decision.
+# built against, so this worker and the AMI's NVIDIA version are one decision.
 # 20250407.0 topped out at 570 and knew no 580 at all, which is what kept GPU
 # workloads off gVisor.
-ARG GVISOR_VERSION=20260727.0
+COPY deploy/ami/gvisor-version /tmp/gvisor-version
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
+    && GVISOR_VERSION="$(tr -d '\r\n' < /tmp/gvisor-version)" \
+    && test -n "${GVISOR_VERSION}" \
     && case "${TARGETARCH}" in \
         amd64) GVISOR_ARCH="x86_64" ;; \
         arm64) GVISOR_ARCH="aarch64" ;; \

@@ -42,7 +42,7 @@ class AwsCapacityImageClientFactory(Protocol):
 class Boto3AwsCapacityImageSharing:
     """Grants EC2 launch permission on platform-owned capacity AMIs.
 
-    Capacity AMIs are baked in the platform account by the release pipeline, so
+    Capacity AMIs are baked in the platform account by the node-image workflow, so
     this control always runs with the platform default credential chain, never
     an assumed customer connection role.
     """

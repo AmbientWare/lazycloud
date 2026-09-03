@@ -186,6 +186,7 @@ DEV="0"
 AGENT_BIN="${LAZYCLOUD_AGENT_BIN:-}"
 AGENT_URL="${LAZYCLOUD_AGENT_URL:-}"
 INSTALL_ONLY="0"
+RUNTIME_ONLY="0"
 AGENT_VERSION="${LAZYCLOUD_AGENT_VERSION:-}"
 AGENT_SHA256="${LAZYCLOUD_AGENT_SHA256:-}"
 AGENT_AMD64_SHA256="${LAZYCLOUD_AGENT_AMD64_SHA256:-}"
@@ -217,7 +218,9 @@ ARCH_NAME=""
 main() {
   parse_args "$@"
   detect_platform
-  resolve_agent_artifact_digest
+  if [ "$RUNTIME_ONLY" != "1" ]; then
+    resolve_agent_artifact_digest
+  fi
   validate_input
   GATEWAY="${GATEWAY%/}"
 
@@ -226,6 +229,10 @@ main() {
   fi
   ensure_docker
   ensure_wireguard
+  if [ "$RUNTIME_ONLY" = "1" ]; then
+    say "Installed __AGENT_NAME__ host runtime"
+    return
+  fi
   install_agent
   if [ "$INSTALL_ONLY" = "1" ]; then
     say "Installed __AGENT_NAME__ runtime without enrolling"
@@ -260,6 +267,7 @@ parse_args() {
       --agent-bin) require_value "$1" "${2:-}"; AGENT_BIN="$2"; shift 2 ;;
       --agent-url) require_value "$1" "${2:-}"; AGENT_URL="$2"; shift 2 ;;
       --install-only) INSTALL_ONLY="1"; shift ;;
+      --runtime-only) RUNTIME_ONLY="1"; shift ;;
       --agent-version) require_value "$1" "${2:-}"; AGENT_VERSION="$2"; shift 2 ;;
       --agent-sha256) require_value "$1" "${2:-}"; AGENT_SHA256="$2"; shift 2 ;;
       --agent-amd64-sha256)
@@ -334,10 +342,15 @@ resolve_agent_artifact_digest() {
 }
 
 validate_input() {
-  # An image bake installs the runtime and never enrols: there is no control
-  # plane to name and no credential to carry, and demanding either would mean
-  # baking a machine identity into an image every instance boots from.
-  if [ "$INSTALL_ONLY" = "1" ]; then
+  if [ "$RUNTIME_ONLY" = "1" ]; then
+    if [ "$INSTALL_ONLY" = "1" ] || [ -n "$JOIN_TOKEN" ] || \
+        [ -n "$PROVIDER_ENROLLMENT_REQUEST" ] || [ -n "$AGENT_URL" ] || \
+        [ -n "$AGENT_BIN" ]; then
+      fail "--runtime-only cannot install or enroll an agent" 2
+    fi
+  # An install-only run installs the runtime and agent but never enrolls. There
+  # is no control plane to name and no credential to carry.
+  elif [ "$INSTALL_ONLY" = "1" ]; then
     if [ -n "$JOIN_TOKEN" ] || [ -n "$PROVIDER_ENROLLMENT_REQUEST" ]; then
       fail "--install-only cannot be combined with an enrollment credential" 2
     fi

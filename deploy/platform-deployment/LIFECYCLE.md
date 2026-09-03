@@ -167,13 +167,15 @@ same grant.
 
 ### 6. The first deploy
 
+Run the Node Images workflow once before the first Ship, and again only when its
+host recipe changes. It bakes CPU and GPU images in parallel and publishes the
+current catalog. Ship refuses a missing or incompatible catalog before it builds
+anything.
+
 Run the Ship workflow from `main` and choose `patch`. It cuts the version,
-publishes the Python package and the release, then deploys onto the release,
-handing the manifest URL from one half to the next. Do that for a first
-bring-up, and for any change to the agent, the container-worker image, or the
-node AMI. It bakes both node images every time, CPU and GPU, and takes about
-half an hour, because each carries the agent and worker this release publishes
-and one baked earlier describes an earlier release.
+publishes the Python package and release, then deploys onto that release. Agent
+and container-worker changes reuse the current host images. Nodes download the
+agent and pull the exact worker digest before reporting ready.
 
 `deploy.yml` on its own is the ordinary case afterwards, and runs many times
 against one release: it builds the commit's images once, into the shared

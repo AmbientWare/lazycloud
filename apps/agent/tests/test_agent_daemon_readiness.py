@@ -16,6 +16,8 @@ from agent_app.daemon import (
     AgentDaemonService,
     AgentStateStore,
     DockerAgentWorkerController,
+    ProviderInstanceIdentityMode,
+    WorkerImagePullError,
     _recoverable_stream_error,
     build_agent_daemon_service,
 )
@@ -34,7 +36,13 @@ from gateway.http import (
     UpdateAgentRouteStatusRequest,
     UpdateAgentRouteStatusResponse,
 )
-from shared.compute_enrollment import AgentCapacityState
+from provider_clients import ProviderNodeIdentityEvidence
+from pydantic import SecretStr
+from shared.compute_enrollment import (
+    AgentCapacityState,
+    MachineBootstrapFailureReason,
+    MachineBootstrapPhase,
+)
 from shared.compute_policy import MachinePool
 from shared.http.errors import HttpApiError, HttpTransportError
 from shared.http.gateway import (
@@ -47,6 +55,7 @@ from shared.http.provider_nodes import (
     ProviderNodeBootstrapPhaseRequest,
     ProviderNodeEnrollmentRequest,
 )
+from shared.provider_config import ProviderKind
 
 
 class _Gateway:
@@ -143,6 +152,50 @@ class _InterruptionGateway(_Gateway):
         )
 
 
+class _BootstrapGateway(_Gateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: list[ProviderNodeBootstrapFailureRequest] = []
+
+    def record_provider_node_bootstrap_failure(
+        self,
+        request: ProviderNodeBootstrapFailureRequest,
+    ) -> ProviderNodeBootstrapFailureResponse:
+        self.failures.append(request)
+        return ProviderNodeBootstrapFailureResponse(
+            provider_instance_id=request.provider_instance_id,
+            phase=MachineBootstrapPhase.Failed,
+            failure_reason=request.failure_reason,
+            observed_at=datetime.now(UTC),
+        )
+
+    def record_provider_node_bootstrap_phase(
+        self,
+        request: ProviderNodeBootstrapPhaseRequest,
+    ) -> ProviderNodeBootstrapFailureResponse:
+        return ProviderNodeBootstrapFailureResponse(
+            provider_instance_id=request.provider_instance_id,
+            phase=request.phase,
+            observed_at=datetime.now(UTC),
+        )
+
+
+class _ProviderIdentity:
+    def create(self, *, expected_region: str | None = None) -> ProviderNodeIdentityEvidence:
+        del expected_region
+        return ProviderNodeIdentityEvidence(
+            provider=ProviderKind.Aws,
+            region="us-east-1",
+            provider_instance_id="i-0123456789abcdef0",
+            proof_url=SecretStr("https://identity.example.test/proof"),
+        )
+
+
+class _FailingImageController(DockerAgentWorkerController):
+    def prepare_worker_image(self) -> None:
+        raise WorkerImagePullError("registry unavailable")
+
+
 class _InterruptionWorkerController(DockerAgentWorkerController):
     def __init__(self, state_dir: Path, events: list[str]) -> None:
         super().__init__(state_dir)
@@ -199,6 +252,45 @@ def test_daemon_removes_stale_ready_marker_before_failed_stream(tmp_path: Path) 
         service.run()
 
     assert not service.state_store.ready_path.exists()
+
+
+def test_worker_image_pull_failure_is_reported_before_runtime_ready(tmp_path: Path) -> None:
+    gateway = _BootstrapGateway()
+    state_store = AgentStateStore(tmp_path)
+    state_store.save(
+        AgentState(
+            gateway_url="https://control.example.com",
+            workspace_id="workspace-one",
+            pool=MachinePool("pool-one"),
+            machine_id="machine-one",
+            agent_token="agent-secret",
+            credential_id="credential-one",
+            credential_generation=1,
+            bootstrap=AgentBootstrap(gateway_public_http_url="https://control.example.com"),
+        )
+    )
+    service = build_agent_daemon_service(
+        AgentDaemonOptions(
+            gateway_url="https://control.example.com",
+            provider_enrollment_request="11111111-1111-4111-8111-111111111111",
+            provider=ProviderKind.Aws,
+            provider_instance_identity=ProviderInstanceIdentityMode.ImdsV2,
+            state_dir=str(tmp_path),
+            executor=WorkerExecutor.External,
+            once=True,
+        ),
+        client=gateway,
+        worker_controller=_FailingImageController(tmp_path),
+        provider_identity=_ProviderIdentity(),
+    )
+
+    with pytest.raises(WorkerImagePullError, match="registry unavailable"):
+        service.run()
+
+    assert not state_store.ready_path.exists()
+    assert [failure.failure_reason for failure in gateway.failures] == [
+        MachineBootstrapFailureReason.WorkerImagePullFailed
+    ]
 
 
 def test_daemon_cordons_current_session_before_bounded_worker_shutdown(

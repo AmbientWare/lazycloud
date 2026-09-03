@@ -331,6 +331,28 @@ def test_install_script_refuses_missing_docker_when_install_is_disabled(tmp_path
     assert "test-join-token" not in completed.stderr
 
 
+def test_runtime_only_installs_no_agent_or_service(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    _fake_uname(fake_bin)
+    for name in ("wg", "ip", "iptables"):
+        _executable(fake_bin / name, "#!/bin/sh\nexit 0\n")
+    _executable(
+        fake_bin / "docker",
+        '#!/bin/sh\n[ "${1:-}" = "info" ] && exit 0\nexit 0\n',
+    )
+    env = _hermetic_environment(fake_bin, "sh", "sed", "tr")
+
+    completed = _run_installer(
+        tmp_path,
+        ["--runtime-only", "--foreground", "--executor", "container"],
+        env=env,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert f"Installed {AGENT_NAME} host runtime" in completed.stderr
+
+
 def test_install_script_fails_before_changes_when_background_is_not_root(tmp_path: Path) -> None:
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
