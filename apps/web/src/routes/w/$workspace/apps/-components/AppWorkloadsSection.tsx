@@ -20,8 +20,10 @@ import type { Container, Deployment } from "@/lib/api/schemas";
 import { countLabel, formatKind } from "@/lib/format";
 
 import { groupDeploymentsByWorkload } from "../-workloads/grouping";
+import { WorkloadRowActions } from "./WorkloadRowActions";
 
 export function AppWorkloadsSection({
+  workspaceId,
   workspaceName,
   appId,
   deployments,
@@ -34,6 +36,7 @@ export function AppWorkloadsSection({
   onLoadMore,
   continuationLabel,
 }: {
+  workspaceId: string;
   workspaceName: string;
   appId: string;
   deployments: Deployment[] | undefined;
@@ -174,10 +177,13 @@ export function AppWorkloadsSection({
                         live={group.active}
                       />
                     </span>
-                    <ChevronRight
-                      className="interactive-row-indicator hidden size-3.5 text-muted-foreground transition-colors xl:block"
-                      aria-hidden="true"
-                    />
+                    <span className="flex items-center justify-end gap-1">
+                      <WorkloadRowActions group={group} workspaceId={workspaceId} appId={appId} />
+                      <ChevronRight
+                        className="interactive-row-indicator hidden size-3.5 text-muted-foreground transition-colors xl:block"
+                        aria-hidden="true"
+                      />
+                    </span>
                   </Link>
                 );
               })}

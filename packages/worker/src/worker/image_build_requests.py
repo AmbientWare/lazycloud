@@ -5,8 +5,9 @@ from enum import StrEnum
 from pydantic import Field
 from shared.contracts import ContractModel
 from shared.image_building.authoring import LinuxArchitecture
+from shared.usage import IMAGE_BUILD_WORKLOAD_ID
 
-IMAGE_BUILD_REQUEST_KIND = "image-build"
+IMAGE_BUILD_REQUEST_KIND = IMAGE_BUILD_WORKLOAD_ID
 
 
 class ImageBuildSchedulerCredentialSource(StrEnum):

@@ -118,6 +118,9 @@ class UsageCostRowResponse(HttpModel):
     workload_name: str = ""
     workload_kind: str = ""
     task_id: str = ""
+    # "image-build" for the usage image builds incurred, which reach no app;
+    # empty for everything else.
+    category: str = ""
     cost_nanos: int = Field(default=0, ge=0)
     components: list[UsageCostComponentResponse] = Field(default_factory=list)
 

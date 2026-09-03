@@ -62,6 +62,21 @@ export function deleteAppMutationOptions(workspaceId: string, appId: string) {
   };
 }
 
+export function deleteWorkloadMutationOptions(workspaceId: string, deploymentIds: string[]) {
+  return {
+    mutationFn: async () => {
+      for (const deploymentId of deploymentIds) {
+        await apiRequest(
+          withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}`, workspaceId),
+          noContentSchema,
+          { method: "DELETE" },
+        );
+      }
+      return null;
+    },
+  };
+}
+
 export function startDeploymentMutationOptions(workspaceId: string, deploymentId: string) {
   return {
     mutationFn: () =>

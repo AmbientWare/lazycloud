@@ -94,6 +94,8 @@ export const usageCostRowSchema = z.object({
   workload_name: z.string().default(""),
   workload_kind: z.string().default(""),
   task_id: z.string().default(""),
+  /** "image-build" for image builds, which reach no app; empty otherwise. */
+  category: z.string().default(""),
   cost_nanos: z.number().int().nonnegative().default(0),
   components: z.array(usageCostComponentSchema).default([]),
 });

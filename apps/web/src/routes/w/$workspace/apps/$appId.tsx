@@ -82,6 +82,7 @@ function AppDetailPage() {
         ) : (
           <div className="grid min-h-full gap-3 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(0,1.45fr)_minmax(19rem,0.8fr)] lg:overflow-hidden">
             <AppWorkloadsSection
+              workspaceId={workspace.id}
               workspaceName={workspace.name}
               appId={appId}
               deployments={deploymentRows}
