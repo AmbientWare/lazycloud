@@ -4,8 +4,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from scheduler.state import SchedulerWorkerRecord, WorkerRemovalResult
+from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
-from shared.scheduling import WorkerUnavailableReason
+from shared.scheduling import SchedulerWorkerStatus, WorkerUnavailableReason
 from shared.timestamps import utc_now
 from worker.events import ContainerRequestContext
 from worker.worker_lifecycle import (
@@ -59,11 +60,34 @@ def test_worker_lifecycle_orchestrates_keepalive_shutdown_and_cleanup() -> None:
     assert shutdown.steps[-1].action is WorkerLifecycleAction.RemoveWorker
 
 
+def test_pending_worker_registers_again_after_keepalive_recovers() -> None:
+    worker = SchedulerWorkerRecord(
+        worker_id="worker-1",
+        pool=MachinePool("default"),
+        capacity_owner_id=_CAPACITY_OWNER_ID,
+        status=SchedulerWorkerStatus.Pending,
+    )
+    repo = _FakeLifecycleRepo(worker=worker)
+    lifecycle = WorkerLifecycleOrchestrator(
+        worker_id=worker.worker_id,
+        repository=repo,
+        registration=worker,
+    )
+
+    result = lifecycle.keepalive()
+
+    assert result.ok
+    assert result.metadata == {"re_registered": "true"}
+    assert repo.worker is not None
+    assert repo.worker.status is SchedulerWorkerStatus.Available
+
+
 @dataclass(slots=True)
 class _FakeLifecycleRepo:
     actions: list[str] = field(default_factory=list)
     registered: list[SchedulerWorkerRecord] = field(default_factory=list)
     fail_next_keepalive: bool = False
+    worker: SchedulerWorkerRecord | None = None
 
     def add_worker(
         self,
@@ -75,19 +99,34 @@ class _FakeLifecycleRepo:
         _ = ttl_seconds, now
         self.actions.append("registered")
         self.registered.append(worker)
+        self.worker = worker
         return worker
 
-    def toggle_worker_available(self, worker_id: str, *, ttl_seconds: int) -> None:
+    def toggle_worker_available(
+        self,
+        worker_id: str,
+        *,
+        ttl_seconds: int,
+    ) -> SchedulerWorkerRecord | None:
         _ = worker_id, ttl_seconds
         self.actions.append("available")
+        if self.worker is not None:
+            self.worker = self.worker.model_copy(update={"status": SchedulerWorkerStatus.Available})
+        return self.worker
 
-    def set_keep_alive(self, worker_id: str, *, ttl_seconds: int) -> None:
+    def set_keep_alive(
+        self,
+        worker_id: str,
+        *,
+        ttl_seconds: int,
+    ) -> SchedulerWorkerRecord | None:
         _ = ttl_seconds
         self.actions.append("keepalive")
         if self.fail_next_keepalive:
             self.fail_next_keepalive = False
             msg = f"worker {worker_id!r} state is missing"
             raise RuntimeError(msg)
+        return self.worker
 
     def prepare_source_cache(self) -> None:
         self.actions.append("activated")

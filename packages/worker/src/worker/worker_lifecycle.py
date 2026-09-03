@@ -11,7 +11,12 @@ from typing import Protocol, runtime_checkable
 from pydantic import Field
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
-from shared.scheduling import SchedulerWorkerRecord, WorkerRemovalResult, WorkerUnavailableReason
+from shared.scheduling import (
+    SchedulerWorkerRecord,
+    SchedulerWorkerStatus,
+    WorkerRemovalResult,
+    WorkerUnavailableReason,
+)
 from shared.timestamps import utc_now
 
 from worker.events import ContainerRequestContext
@@ -264,7 +269,7 @@ class WorkerLifecycleOrchestrator:
                 error_message="worker repository is not configured",
             )
         try:
-            keepalive_result = repository.set_keep_alive(
+            worker = repository.set_keep_alive(
                 self.worker_id,
                 ttl_seconds=self.keepalive_ttl_seconds,
             )
@@ -278,15 +283,17 @@ class WorkerLifecycleOrchestrator:
                 error_message=f"source cache is {exc.state.value}",
             )
         except Exception as exc:  # pragma: no cover - defensive boundary capture
+            worker = None
             result = WorkerLifecycleStepResult(
                 action=WorkerLifecycleAction.KeepAlive,
                 status=WorkerLifecycleStatus.Error,
                 error_message=f"{type(exc).__name__}: {exc}",
             )
         else:
-            del keepalive_result
             result = WorkerLifecycleStepResult(action=WorkerLifecycleAction.KeepAlive)
-        if result.ok or self.registration is None:
+        if self.registration is None or (
+            result.ok and (worker is None or worker.status is not SchedulerWorkerStatus.Pending)
+        ):
             return result
         registered = self.register_available()
         if all(step.ok for step in registered):
@@ -294,6 +301,16 @@ class WorkerLifecycleOrchestrator:
                 action=WorkerLifecycleAction.KeepAlive,
                 attempts=result.attempts + sum(step.attempts for step in registered),
                 metadata={"re_registered": "true"},
+            )
+        if result.ok:
+            detail = "; ".join(
+                f"{step.action.value}: {step.error_message}" for step in registered if not step.ok
+            )
+            return WorkerLifecycleStepResult(
+                action=WorkerLifecycleAction.KeepAlive,
+                status=WorkerLifecycleStatus.Error,
+                attempts=result.attempts + sum(step.attempts for step in registered),
+                error_message=f"worker re-registration failed: {detail}",
             )
         return result
 
