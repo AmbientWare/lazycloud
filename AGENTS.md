@@ -244,6 +244,9 @@ provider strategy, or top-level architecture choice is genuinely unresolved.
 
 ## Working rules
 
+Develop each feature on its own branch, open a pull request, and merge it only
+after its checks pass.
+
 Default to one task at a time. Parallel work is the exception you justify, not
 the mode you assume: it requires genuinely disjoint owners and files, and the
 manager still reviews returned work and runs integrated acceptance. Delegating

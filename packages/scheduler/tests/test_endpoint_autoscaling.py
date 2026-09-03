@@ -126,7 +126,7 @@ def test_endpoint_autoscaler_scales_up_from_active_dispatch_pressure(
     assert len(state.last_actions) == 3
 
 
-def test_endpoint_autoscaler_persists_scale_decisions_only_on_transition(
+def test_endpoint_autoscaler_persists_state_and_events_only_on_transition(
     isolated_services: ApiServices,
 ) -> None:
     scheduler = _Scheduler()
@@ -149,8 +149,54 @@ def test_endpoint_autoscaler_persists_scale_decisions_only_on_transition(
         )
 
     service.reconcile()
+    with isolated_services.context.database.session() as session:
+        initial_state = AutoscalerStateRepository(session).get(
+            workspace_id=stub.workspace_id,
+            target_kind=AutoscalerTargetKind.Endpoint,
+            target_id=stub.id,
+        )
+    assert initial_state is not None
+
     service.reconcile()
+    with isolated_services.context.database.session() as session:
+        unchanged_state = AutoscalerStateRepository(session).get(
+            workspace_id=stub.workspace_id,
+            target_kind=AutoscalerTargetKind.Endpoint,
+            target_id=stub.id,
+        )
+    assert unchanged_state is not None
+    assert unchanged_state.updated_at == initial_state.updated_at
     assert len(decision_events()) == 1
+
+    lock_key = redis.key(
+        "autoscaling",
+        service.workload.identity.lock_namespace,
+        stub.workspace_id,
+        stub.id,
+        "lock",
+    )
+    redis.set(lock_key, "peer", ex=10)
+    contended = service.reconcile()[0]
+    assert contended.lock_acquired is False
+    with isolated_services.context.database.session() as session:
+        contended_state = AutoscalerStateRepository(session).get(
+            workspace_id=stub.workspace_id,
+            target_kind=AutoscalerTargetKind.Endpoint,
+            target_id=stub.id,
+        )
+    assert contended_state is not None
+    assert contended_state.updated_at == initial_state.updated_at
+    assert (
+        metric_value(
+            "autoscaler_lock_contentions_total",
+            source="endpoint.autoscaler",
+            workspace_id=stub.workspace_id,
+            stub_id=stub.id,
+            kind=StubKind.Endpoint.value,
+        )
+        == 1
+    )
+    redis.delete(lock_key)
 
     _attach_dispatch(isolated_services, stub)
     service.reconcile()
