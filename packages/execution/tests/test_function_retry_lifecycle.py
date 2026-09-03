@@ -36,15 +36,14 @@ class _RecordingScheduler:
         )
 
 
-def test_function_retry_reuses_a_warm_container_and_starts_one_only_when_none_is_free(
+def test_function_retry_reuses_a_warm_container_and_leaves_replacement_to_the_autoscaler(
     isolated_services: ApiServices,
 ) -> None:
-    """A retry costs a new container only when nothing is free to take it.
+    """A retry rejoins the claimable backlog without provisioning capacity.
 
     The retried task goes back to being claimable, so while the first container
-    is still alive it is that container's to pick up and no second is started.
-    Once that container is gone the work would otherwise sit claimable with
-    nothing coming for it, and capacity has to be started for it.
+    is still alive it is that container's to pick up. If that container dies,
+    the function autoscaler sees the same backlog and owns its replacement.
     """
 
     scheduler = _RecordingScheduler()
@@ -94,9 +93,6 @@ def test_function_retry_reuses_a_warm_container_and_starts_one_only_when_none_is
             status=first_container.status.value,
         )
 
-    scheduled = functions.schedule_due_retries(now=datetime.now(UTC))
-
-    assert len(scheduled) == 1
-    assert len(scheduler.requests) == 2
-    assert scheduler.requests[1].container_id != first_container_id
+    assert functions.schedule_due_retries(now=datetime.now(UTC)) == []
+    assert len(scheduler.requests) == 1
     assert isolated_services.containers.get(first_container_id).status is ContainerStatus.Failed
