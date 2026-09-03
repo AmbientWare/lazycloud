@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import platform
+import random
 import shutil
 import socket
 import subprocess
@@ -176,6 +177,10 @@ class AgentAuthorityRevokedError(RuntimeError):
     Terminal by construction: the process exits non-zero and the unit's start
     limit stops respawning it, rather than rejoining once every restart.
     """
+
+
+class WorkerImagePullError(RuntimeError):
+    """The exact worker image could not be made available on this host."""
 
 
 class AgentDaemonOptions(ContractModel):
@@ -554,6 +559,30 @@ class DockerAgentWorkerController:
     host_aliases: list[str] = field(default_factory=list)
     platform: str = ""
     telemetry: AgentTelemetryBuffer | None = None
+    _prepared_images: set[str] = field(default_factory=set)
+
+    def prepare_worker_image(self) -> None:
+        if self.worker_image_override:
+            self._ensure_worker_image(self.worker_image_override)
+
+    def _ensure_worker_image(self, image: str) -> None:
+        if image in self._prepared_images:
+            return
+        inspected = self.runner.run([self.docker_binary, "image", "inspect", image])
+        if inspected.returncode == 0:
+            self._prepared_images.add(image)
+            return
+        failures: list[str] = []
+        for attempt in range(3):
+            pulled = self.runner.run([self.docker_binary, "pull", image])
+            if pulled.returncode == 0:
+                self._prepared_images.add(image)
+                return
+            failures.append((pulled.stderr or pulled.stdout).strip()[-1000:])
+            if attempt < 2:
+                time.sleep(2**attempt + random.uniform(0, 0.5))
+        detail = failures[-1] if failures else "docker returned no diagnostic"
+        raise WorkerImagePullError(f"pull worker image {image} failed: {detail}")
 
     @property
     def active_slots_path(self) -> Path:
@@ -627,6 +656,7 @@ class DockerAgentWorkerController:
         if not image:
             msg = f"worker image is required for slot {slot.worker_id}"
             raise ValueError(msg)
+        self._ensure_worker_image(image)
         worker_bootstrap = (
             bootstrap.model_copy(
                 update={"gateway_runtime_http_url": self.worker_runtime_http_url_override}
@@ -855,6 +885,11 @@ class AgentDaemonService:
             except Exception:
                 self._report_bootstrap_failure(MachineBootstrapFailureReason.NetworkJoinFailed)
                 raise
+            try:
+                self.worker_controller.prepare_worker_image()
+            except WorkerImagePullError:
+                self._report_bootstrap_failure(MachineBootstrapFailureReason.WorkerImagePullFailed)
+                raise
             last_result = last_result.model_copy(
                 update={
                     "private_network_started": private_network_runtime is not None,
@@ -896,6 +931,11 @@ class AgentDaemonService:
                                 "authority_revoked": True,
                             }
                         )
+                    if isinstance(exc, WorkerImagePullError) and not runtime_ready:
+                        self._report_bootstrap_failure(
+                            MachineBootstrapFailureReason.WorkerImagePullFailed
+                        )
+                        raise
                     if self.options.once or not _recoverable_stream_error(exc):
                         raise
                     if (

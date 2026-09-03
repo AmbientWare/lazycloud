@@ -13,13 +13,12 @@ managed runtime packages, so the paths that matter are whatever the pyproject
 files say today; a list kept by hand would be wrong the first time a dependency
 was added.
 
-The node images are a cache. A node's installer fetches the agent by hash and
-pulls the worker image by digest at boot, so an image is rebaked only when the
-worker image it pre-pulls changed, or the bake itself did; an agent change alone
-costs a node a 48 MB download and no bake.
+Node images have their own host-runtime workflow and catalog. They are not
+release artifacts and never enter this plan.
 
-No previous manifest means everything rebuilds. A first release, and a release
-whose baseline cannot be read, are both built in full rather than guessed at.
+No previous manifest means both application artifacts rebuild. A first release,
+and a release whose baseline cannot be read, are both built rather than guessed
+at.
 """
 
 from __future__ import annotations
@@ -39,16 +38,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKER_APP = "container-worker-app"
 AGENT_APP = "agent-app"
 MANAGED_RUNTIME_DISTRIBUTIONS = ("lazycloud-shared", "foundation", "lazycloud-client", "runner")
-WORKER_FIXED_INPUTS = ("docker/Dockerfile.worker", "deploy/managed-runtime/", "uv.lock")
+WORKER_FIXED_INPUTS = (
+    "docker/Dockerfile.worker",
+    "deploy/ami/gvisor-version",
+    "deploy/managed-runtime/",
+    "uv.lock",
+)
 AGENT_FIXED_INPUTS = ("deploy/agent-binary/", "uv.lock")
-BAKE_INPUTS = ("deploy/ami/",)
 
 
 @dataclass(frozen=True, slots=True)
 class ArtifactInputs:
     worker: tuple[str, ...]
     agent: tuple[str, ...]
-    bake: tuple[str, ...] = BAKE_INPUTS
 
 
 def workspace_members(root: Path = REPO_ROOT) -> dict[str, tuple[str, list[str]]]:
@@ -116,8 +118,6 @@ class PreviousRelease:
     agent_sha256: str
     agent_url: str
     agent_size_bytes: int
-    cpu_ami_ids: dict[str, str]
-    gpu_ami_ids: dict[str, str]
 
     @classmethod
     def from_manifest(cls, manifest: AwsReleaseManifest) -> PreviousRelease:
@@ -128,8 +128,6 @@ class PreviousRelease:
             agent_sha256=manifest.agent_artifact_sha256,
             agent_url=agent.public_url,
             agent_size_bytes=agent.size_bytes,
-            cpu_ami_ids=dict(manifest.capacity_cpu_ami_ids),
-            gpu_ami_ids=dict(manifest.capacity_gpu_ami_ids),
         )
 
 
@@ -137,7 +135,6 @@ class PreviousRelease:
 class ReleasePlan:
     rebuild_worker: bool
     rebuild_agent: bool
-    rebuild_images: bool
     reasons: dict[str, str]
     previous: PreviousRelease | None = None
     changed: tuple[str, ...] = field(default_factory=tuple)
@@ -147,25 +144,17 @@ class ReleasePlan:
         return {
             "rebuild_worker": str(self.rebuild_worker).lower(),
             "rebuild_agent": str(self.rebuild_agent).lower(),
-            "rebuild_images": str(self.rebuild_images).lower(),
             "previous_version": previous.version if previous else "",
             "previous_worker_image": previous.worker_image if previous else "",
             "previous_agent_sha256": previous.agent_sha256 if previous else "",
             "previous_agent_url": previous.agent_url if previous else "",
             "previous_agent_size_bytes": str(previous.agent_size_bytes) if previous else "",
-            "previous_cpu_ami_ids": json.dumps(previous.cpu_ami_ids, sort_keys=True)
-            if previous
-            else "{}",
-            "previous_gpu_ami_ids": json.dumps(previous.gpu_ami_ids, sort_keys=True)
-            if previous
-            else "{}",
             "reused_from": json.dumps(
                 {
                     name: previous.version
                     for name, rebuild in (
                         ("container_worker_image", self.rebuild_worker),
                         ("agent_artifact", self.rebuild_agent),
-                        ("node_images", self.rebuild_images),
                     )
                     if previous and not rebuild
                 },
@@ -178,7 +167,7 @@ class ReleasePlan:
         baseline = self.previous.version if self.previous else "none"
         lines.append(f"Baseline: previous release `{baseline}`.")
         lines.append("")
-        for name in ("worker", "agent", "images"):
+        for name in ("worker", "agent"):
             action = "rebuild" if getattr(self, f"rebuild_{name}") else "reuse"
             lines.append(f"- **{name}**: {action}. {self.reasons[name]}")
         return "\n".join(lines) + "\n"
@@ -220,17 +209,15 @@ def plan_release(
     inputs: ArtifactInputs,
 ) -> ReleasePlan:
     if previous is None:
-        reason = "No previous release to reuse from; everything is built."
+        reason = "No previous release to reuse from; both application artifacts are built."
         return ReleasePlan(
             rebuild_worker=True,
             rebuild_agent=True,
-            rebuild_images=True,
-            reasons={"worker": reason, "agent": reason, "images": reason},
+            reasons={"worker": reason, "agent": reason},
             changed=tuple(changed),
         )
     worker_hits = _touched(changed, inputs.worker)
     agent_hits = _touched(changed, inputs.agent)
-    bake_hits = _touched(changed, inputs.bake)
     rebuild_worker = bool(worker_hits)
     rebuild_agent = bool(agent_hits)
     reasons: dict[str, str] = {}
@@ -244,24 +231,9 @@ def plan_release(
         if rebuild_agent
         else f"No agent input changed since {previous.version}; reusing its binary."
     )
-    if rebuild_worker:
-        reasons["images"] = (
-            "The worker image the node images pre-pull is rebuilt, so they are baked."
-        )
-        rebuild_images = True
-    elif bake_hits:
-        reasons["images"] = _explain(bake_hits)
-        rebuild_images = True
-    else:
-        reasons["images"] = (
-            f"Worker image and bake inputs unchanged since {previous.version}; reusing its images. "
-            "A node fetches the agent by hash at boot, so an agent change needs no bake."
-        )
-        rebuild_images = False
     return ReleasePlan(
         rebuild_worker=rebuild_worker,
         rebuild_agent=rebuild_agent,
-        rebuild_images=rebuild_images,
         reasons=reasons,
         previous=previous,
         changed=tuple(changed),

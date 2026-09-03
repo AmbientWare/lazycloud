@@ -1,0 +1,135 @@
+name: Connected AWS Node Images
+
+# Host images change only when their operating system, container runtime,
+# networking tools, or GPU driver changes. Ship consumes the catalog this
+# workflow publishes and never bakes an AMI itself.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: connected-aws-node-images
+  cancel-in-progress: false
+
+jobs:
+  cpu:
+    name: Bake CPU host image
+    runs-on: ubuntu-latest
+    environment: release
+    outputs:
+      ami_ids: ${{ steps.bake.outputs.ami_ids }}
+    env:
+      AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
+    steps:
+      - name: Refuse anything but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Node Images runs from main; this run is on ${GITHUB_REF}."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+
+      - name: Configure release AWS identity
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+          aws-region: ${{ env.AWS_RELEASE_REGION }}
+
+      - name: Bake CPU image
+        id: bake
+        shell: bash
+        run: |
+          set -euo pipefail
+          ami_ids="$(uv run --group workspace python -m deploy.ami.bake --regions us-east-1)"
+          test -n "${ami_ids}"
+          echo "ami_ids=${ami_ids}" >> "${GITHUB_OUTPUT}"
+
+  gpu:
+    name: Bake GPU host image
+    runs-on: ubuntu-latest
+    environment: release
+    outputs:
+      ami_ids: ${{ steps.bake.outputs.ami_ids }}
+    env:
+      AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
+    steps:
+      - name: Refuse anything but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Node Images runs from main; this run is on ${GITHUB_REF}."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+
+      - name: Configure release AWS identity
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+          aws-region: ${{ env.AWS_RELEASE_REGION }}
+
+      - name: Bake GPU image
+        id: bake
+        shell: bash
+        run: |
+          set -euo pipefail
+          ami_ids="$(uv run --group workspace python -m deploy.ami.bake \
+            --variant gpu \
+            --regions us-east-1)"
+          test -n "${ami_ids}"
+          echo "ami_ids=${ami_ids}" >> "${GITHUB_OUTPUT}"
+
+  publish:
+    name: Publish host image catalog
+    needs:
+      - cpu
+      - gpu
+    runs-on: ubuntu-latest
+    environment: release
+    env:
+      AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+
+      - name: Configure release AWS identity
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+          aws-region: ${{ env.AWS_RELEASE_REGION }}
+
+      - name: Publish catalog
+        run: >-
+          uv run --group workspace python -m deploy.ami.catalog publish
+          --cpu-ami-ids '${{ needs.cpu.outputs.ami_ids }}'
+          --gpu-ami-ids '${{ needs.gpu.outputs.ami_ids }}'
+          --source-revision "${GITHUB_SHA}"
+          --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}"
+          --region "${AWS_RELEASE_REGION}"
+          --output node-images.json
+
+      - name: Upload catalog evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: connected-aws-node-images-${{ github.sha }}
+          path: node-images.json
+          if-no-files-found: error

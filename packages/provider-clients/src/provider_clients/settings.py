@@ -125,10 +125,9 @@ class AwsCapacityEnvironmentSettings(BaseSettings):
     """The managed-capacity value no release can publish.
 
     What an instance hour costs is the deployment's own decision. The worker
-    image, agent artifact URL and both baked AMI catalogs are facts of the release
-    it points at — GPU AMIs became one when the release started baking them, and
-    a deployment naming its own would be asserting a driver the release never
-    built.
+    image, agent artifact URL, and both host AMI catalogs are facts of the release
+    it points at. A deployment naming its own would split the worker and the host
+    recipe across two sources.
     """
 
     instance_hourly_micros: dict[str, int] = Field(default_factory=dict)

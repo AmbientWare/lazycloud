@@ -74,6 +74,7 @@ class MachineBootstrapFailureReason(StringEnum):
     NetworkJoinFailed = "network_join_failed"
     ProviderIdentityFailed = "provider_identity_failed"
     AgentEnrollmentFailed = "agent_enrollment_failed"
+    WorkerImagePullFailed = "worker_image_pull_failed"
     WorkerStartFailed = "worker_start_failed"
     WorkerReadinessFailed = "worker_readiness_failed"
     BootstrapTimedOut = "bootstrap_timed_out"

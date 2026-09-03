@@ -1,12 +1,4 @@
-"""Bake per-region connected-AWS node AMIs for a release.
-
-Launches one temporary Amazon Linux 2023 instance per region, installs the
-release runtime dependencies (Docker, WireGuard tools, the release agent
-executable, the pre-pulled container-worker image) through user data,
-stops the instance, and registers the immutable node image. The managed-pool
-bootstrap script keeps every install step as a guarded no-op, so nodes booted
-from a baked image skip straight to enrollment.
-"""
+"""Bake per-region connected-AWS host-runtime AMIs."""
 
 from __future__ import annotations
 
@@ -20,21 +12,16 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from base64 import b64encode
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from hashlib import sha256
-from pathlib import Path
-from urllib.request import pathname2url
 
 from agent.operations import build_agent_install_script
+from deploy.ami.recipe import host_recipe_sha256
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from shared.app_identity import AGENT_NAME
 
-_AGENT_FILENAME = "lazycloud-agent-linux-amd64"
 # One driver serves every card this fleet rents: the branch is unified from
 # Turing through Blackwell, so the GPU image is one per region rather than one per
 # model. Pinned rather than "latest" because gVisor's nvproxy validates the driver
@@ -63,7 +50,7 @@ _NVIDIA_DRIVER_STREAM = "590-open"
 #   docker run --rm --entrypoint runsc container-worker:local \
 #     nvproxy list-supported-drivers
 #
-# Keep in step with GVISOR_VERSION in docker/Dockerfile.worker.
+# `deploy/ami/gvisor-version` is the worker-side pin.
 _NVPROXY_SUPPORTED_DRIVERS = (
     "535.129.03",
     "535.183.06",
@@ -91,8 +78,8 @@ _NVPROXY_SUPPORTED_DRIVERS = (
 # A GPU bake must run on a GPU or it cannot check its own work; this is the
 # cheapest instance that has one.
 _GPU_BAKE_INSTANCE_TYPE = "g4dn.xlarge"
-# Not burstable. The bake's cost is a driver install and a container-worker pull,
-# both of which are exactly what exhausts a `t3` credit balance, and a bake whose
+# Not burstable. The bake's cost is package and driver installation, which is
+# exactly what exhausts a `t3` credit balance, and a bake whose
 # duration depends on how much credit the account happened to have is one whose
 # timeout means nothing. A few cents an hour buys a run that takes the same time
 # every time.
@@ -121,28 +108,11 @@ _MANAGED_TAG_KEY = "cloud-pool:managed-by"
 _MANAGED_TAG_VALUE = "control-plane"
 _POLL_INTERVAL_SECONDS = 15
 _REGION_PATTERN = re.compile(r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
-_RELEASE_TAG_KEY = "lazycloud:release"
-_S3_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
-_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-_WORKER_IMAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
+_RECIPE_TAG_KEY = "lazycloud:node-recipe"
 
 
 class _BakeModel(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
-
-
-class _AgentArtifactEntry(_BakeModel):
-    os: str
-    arch: str
-    filename: str
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    size_bytes: int = Field(gt=0)
-
-
-class _AgentArtifactManifest(_BakeModel):
-    schema_version: int
-    version: str
-    artifacts: list[_AgentArtifactEntry]
 
 
 class _SsmParameter(_BakeModel):
@@ -187,18 +157,6 @@ class _CreateImageResponse(_BakeModel):
     image_id: str = Field(alias="ImageId")
 
 
-class _HeadObjectResponse(_BakeModel):
-    content_length: int = Field(alias="ContentLength")
-    checksum_sha256: str = Field(alias="ChecksumSHA256")
-
-
-@dataclass(frozen=True, slots=True)
-class _AgentArtifact:
-    path: Path
-    sha256: str
-    size_bytes: int
-
-
 class _BakeVariant(StrEnum):
     Cpu = "cpu"
     Gpu = "gpu"
@@ -207,10 +165,7 @@ class _BakeVariant(StrEnum):
 @dataclass(frozen=True, slots=True)
 class _BakeRequest:
     variant: _BakeVariant
-    release_version: str
-    agent: _AgentArtifact
-    agent_url: str
-    worker_image: str
+    recipe_sha256: str
     instance_type: str
     instance_profile: str | None
     subnet_id: str | None
@@ -227,7 +182,7 @@ class _BakeRequest:
         driverless AMI as the GPU catalog entry.
         """
         suffix = "-gpu" if self.variant is _BakeVariant.Gpu else ""
-        return f"lazycloud-node-{self.release_version}{suffix}-amd64"
+        return f"lazycloud-node-{self.recipe_sha256}{suffix}-amd64"
 
     @property
     def root_volume_gib(self) -> int:
@@ -238,7 +193,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Bake immutable per-region connected-AWS node AMIs "
-            "(Docker + WireGuard tools + release agent + pre-pulled worker image)."
+            "containing host runtime dependencies."
         )
     )
     parser.add_argument(
@@ -247,22 +202,11 @@ def main() -> None:
         default=_BakeVariant.Cpu.value,
         help="cpu bakes the default node image; gpu adds the NVIDIA driver and toolkit",
     )
-    parser.add_argument("--release-version", required=True)
-    parser.add_argument(
-        "--agent-version-dir",
-        type=Path,
-        required=True,
-        help="staged agent artifact directory containing manifest.json (deploy/agent-binary)",
-    )
-    parser.add_argument("--worker-image", required=True)
-    parser.add_argument("--bucket", required=True, help="public release asset bucket")
-    parser.add_argument("--bucket-region", required=True)
-    parser.add_argument("--key-prefix", default="connected-aws")
     parser.add_argument("--regions", nargs="+", default=["us-east-1"])
     parser.add_argument(
         "--instance-type",
         default=None,
-        help="defaults to t3.small for cpu and a GPU instance for gpu",
+        help="defaults to c7i.large for cpu and a GPU instance for gpu",
     )
     parser.add_argument("--instance-profile", default=None)
     parser.add_argument("--subnet-id", default=None)
@@ -271,15 +215,8 @@ def main() -> None:
     parser.add_argument("--aws-cli", default="aws")
     args = parser.parse_args()
 
-    version: str = args.release_version
-    if not _VERSION_PATTERN.fullmatch(version):
-        raise SystemExit("release version contains invalid characters")
-    if not _WORKER_IMAGE_PATTERN.fullmatch(args.worker_image):
-        raise SystemExit("worker image must use an immutable sha256 digest reference")
-    if not _S3_NAME_PATTERN.fullmatch(args.bucket):
-        raise SystemExit("invalid release bucket name")
     regions = [region.strip().lower() for region in args.regions]
-    for region in [args.bucket_region, *regions]:
+    for region in regions:
         if not _REGION_PATTERN.fullmatch(region):
             raise SystemExit(f"invalid AWS region: {region}")
     if len(regions) != len(set(regions)):
@@ -287,29 +224,10 @@ def main() -> None:
     if args.instance_timeout_seconds <= 0 or args.image_timeout_seconds <= 0:
         raise SystemExit("bake timeouts must be positive")
 
-    key_prefix = args.key_prefix.strip().strip("/")
-    if not key_prefix or any(part in {".", ".."} for part in key_prefix.split("/")):
-        raise SystemExit("release key prefix is invalid")
-
-    agent = _load_agent_artifact(args.agent_version_dir, version=version)
-    agent_key = f"{key_prefix}/agents/{version}/{agent.sha256}/{_AGENT_FILENAME}"
-    agent_url = _s3_public_url(args.bucket, args.bucket_region, agent_key)
-    _ensure_agent_published(
-        agent,
-        bucket=args.bucket,
-        region=args.bucket_region,
-        object_key=agent_key,
-        public_url=agent_url,
-        aws_cli=args.aws_cli,
-    )
-
     variant = _BakeVariant(args.variant)
     request = _BakeRequest(
         variant=variant,
-        release_version=version,
-        agent=agent,
-        agent_url=agent_url,
-        worker_image=args.worker_image,
+        recipe_sha256=host_recipe_sha256(),
         instance_type=args.instance_type or _default_bake_instance_type(variant),
         instance_profile=args.instance_profile,
         subnet_id=args.subnet_id,
@@ -321,141 +239,18 @@ def main() -> None:
     print(json.dumps(ami_ids, sort_keys=True, separators=(",", ":")))
 
 
-def _load_agent_artifact(version_dir: Path, *, version: str) -> _AgentArtifact:
-    manifest_path = version_dir.resolve() / "manifest.json"
-    try:
-        manifest = _AgentArtifactManifest.model_validate_json(
-            manifest_path.read_text(encoding="utf-8")
-        )
-    except (OSError, ValidationError) as exc:
-        raise SystemExit(f"invalid agent artifact manifest: {manifest_path}") from exc
-    if manifest.schema_version != 1 or manifest.version != version:
-        raise SystemExit("agent artifact manifest does not match the release version")
-    entries = [
-        entry
-        for entry in manifest.artifacts
-        if entry.os == "linux" and entry.arch == "amd64" and entry.filename == _AGENT_FILENAME
-    ]
-    if len(entries) != 1:
-        raise SystemExit("agent artifact manifest must contain exactly one linux/amd64 artifact")
-    entry = entries[0]
-    path = version_dir.resolve() / entry.filename
-    if not path.is_file() or path.stat().st_size != entry.size_bytes:
-        raise SystemExit(f"agent artifact failed integrity verification: {path}")
-    digest = sha256()
-    with path.open("rb") as artifact:
-        for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
-            digest.update(chunk)
-    if digest.hexdigest() != entry.sha256:
-        raise SystemExit(f"agent artifact failed integrity verification: {path}")
-    return _AgentArtifact(path=path, sha256=entry.sha256, size_bytes=entry.size_bytes)
-
-
-def _ensure_agent_published(
-    agent: _AgentArtifact,
-    *,
-    bucket: str,
-    region: str,
-    object_key: str,
-    public_url: str,
-    aws_cli: str,
-) -> None:
-    """Publish the immutable sha-addressed agent object the bake instances download.
-
-    The release bucket serves anonymous reads, and the object key embeds the
-    artifact digest, so publishing before `release.py publish` yields the exact
-    object the release manifest later references; the release publisher verifies
-    byte identity against any existing object.
-    """
-    checksum = b64encode(bytes.fromhex(agent.sha256)).decode()
-    existing = _run_aws(
-        aws_cli,
-        [
-            "s3api",
-            "head-object",
-            "--bucket",
-            bucket,
-            "--key",
-            object_key,
-            "--checksum-mode",
-            "ENABLED",
-            "--region",
-            region,
-            "--output",
-            "json",
-        ],
-        check=False,
-    )
-    if existing.returncode == 0:
-        head = _parse(_HeadObjectResponse, existing.stdout, operation="inspect agent object")
-        if head.content_length != agent.size_bytes or head.checksum_sha256 != checksum:
-            raise SystemExit(
-                f"immutable agent object already exists with different bytes: "
-                f"s3://{bucket}/{object_key}"
-            )
-    else:
-        detail = f"{existing.stdout}\n{existing.stderr}".casefold()
-        if not ("not found" in detail or "404" in detail or "nosuchkey" in detail):
-            raise SystemExit(f"could not inspect agent object: {_command_error(existing)}")
-        _log(f"publishing agent object s3://{bucket}/{object_key}")
-        uploaded = _run_aws(
-            aws_cli,
-            [
-                "s3api",
-                "put-object",
-                "--bucket",
-                bucket,
-                "--key",
-                object_key,
-                "--body",
-                str(agent.path),
-                "--content-type",
-                "application/octet-stream",
-                "--cache-control",
-                "public, max-age=31536000, immutable",
-                "--checksum-algorithm",
-                "SHA256",
-                "--checksum-sha256",
-                checksum,
-                "--if-none-match",
-                "*",
-                "--region",
-                region,
-                "--output",
-                "json",
-            ],
-            check=False,
-        )
-        if uploaded.returncode != 0:
-            raise SystemExit(f"could not publish agent object: {_command_error(uploaded)}")
-    _verify_public_agent(public_url, expected_sha256=agent.sha256, expected_size=agent.size_bytes)
-
-
-def _verify_public_agent(url: str, *, expected_sha256: str, expected_size: int) -> None:
-    request = urllib.request.Request(
-        url,
-        method="GET",
-        headers={"User-Agent": "lazycloud-ami-bake/1"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            payload = response.read()
-    except (OSError, urllib.error.HTTPError) as exc:
-        raise SystemExit(f"agent object is not anonymously readable: {url}") from exc
-    if len(payload) != expected_size or sha256(payload).hexdigest() != expected_sha256:
-        raise SystemExit(f"public agent object failed integrity verification: {url}")
-
-
 def _bake_region(request: _BakeRequest, *, region: str) -> str:
-    # Whether an image is reused is the release plan's decision, made from the
-    # digests of what an image embeds. An image of this name already existing is
-    # a name collision, not a reason to skip: a name carries only the version.
     existing = _find_existing_image(request, region=region)
     if existing is not None:
-        raise SystemExit(
-            f"{region}: an image named {request.image_name} already exists as "
-            f"{existing.image_id}; a release bakes each name once"
-        )
+        if existing.state == "available":
+            _log(f"{region}: reusing {existing.image_id} for recipe {request.recipe_sha256}")
+            return existing.image_id
+        if existing.state != "pending":
+            raise SystemExit(
+                f"{region}: node image {existing.image_id} entered state {existing.state}"
+            )
+        _wait_for_image(request, region=region, image_id=existing.image_id)
+        return existing.image_id
 
     base_ami = _latest_al2023_ami(request, region=region)
     _log(f"{region}: baking {request.image_name} from {base_ami}")
@@ -518,9 +313,9 @@ def _latest_al2023_ami(request: _BakeRequest, *, region: str) -> str:
 
 def _launch_bake_instance(request: _BakeRequest, *, region: str, base_ami: str) -> str:
     tags = [
-        {"Key": "Name", "Value": f"lazycloud-ami-bake-{request.release_version}"},
+        {"Key": "Name", "Value": f"lazycloud-ami-bake-{request.recipe_sha256[:16]}"},
         {"Key": _MANAGED_TAG_KEY, "Value": _MANAGED_TAG_VALUE},
-        {"Key": _RELEASE_TAG_KEY, "Value": request.release_version},
+        {"Key": _RECIPE_TAG_KEY, "Value": request.recipe_sha256},
     ]
     tag_specifications = json.dumps(
         [
@@ -714,13 +509,10 @@ def _wait_for_instance_stopped(request: _BakeRequest, *, region: str, instance_i
 
 
 def _create_image(request: _BakeRequest, *, region: str, instance_id: str) -> str:
-    # What the image embeds, readable from the console without a manifest.
-    worker_digest = request.worker_image.rsplit("@", 1)[-1]
     tags = (
         f"{{Key={_MANAGED_TAG_KEY},Value={_MANAGED_TAG_VALUE}}},"
-        f"{{Key={_RELEASE_TAG_KEY},Value={request.release_version}}},"
-        f"{{Key=lazycloud:agent-sha256,Value={request.agent.sha256}}},"
-        f"{{Key=lazycloud:worker-digest,Value={worker_digest}}}"
+        f"{{Key={_RECIPE_TAG_KEY},Value={request.recipe_sha256}}},"
+        f"{{Key=lazycloud:node-variant,Value={request.variant.value}}}"
     )
     result = _run_aws(
         request.aws_cli,
@@ -732,7 +524,7 @@ def _create_image(request: _BakeRequest, *, region: str, instance_id: str) -> st
             "--name",
             request.image_name,
             "--description",
-            f"LazyCloud connected-AWS node image for release {request.release_version}",
+            f"LazyCloud connected-AWS {request.variant.value} host runtime",
             "--tag-specifications",
             f"ResourceType=image,Tags=[{tags}]",
             f"ResourceType=snapshot,Tags=[{tags}]",
@@ -844,19 +636,15 @@ bake_announce() {
 trap 'bake_line=${LINENO}; bake_cmd=${BASH_COMMAND}' ERR
 trap bake_announce EXIT
 
-WORKER_IMAGE_DIGEST=__WORKER_IMAGE_DIGEST__
-RELEASE_VERSION=__RELEASE_VERSION__
-AGENT_SHA256=__AGENT_SHA256__
+RECIPE_SHA256=__RECIPE_SHA256__
 
-# The installer this image was built from, embedded rather than fetched: a bake
-# has no control plane to ask, and an image whose runtime came from a different
-# installer than the one shipped alongside it is exactly the drift this
-# replaced.
+# The agent package owns host runtime installation. Runtime-only mode installs
+# Docker and WireGuard without putting a release agent into the image.
 cat > /tmp/lazycloud-agent-install.sh <<'INSTALLER_EOF'
 __INSTALL_SCRIPT__
 INSTALLER_EOF
 
-sh /tmp/lazycloud-agent-install.sh --install-only --agent-url __AGENT_BINARY_URL__
+sh /tmp/lazycloud-agent-install.sh --runtime-only --executor container
 rm -f /tmp/lazycloud-agent-install.sh
 
 __GPU_SETUP__
@@ -867,10 +655,8 @@ systemctl enable --now amazon-ssm-agent
 # silent, so a bake that cannot offer it is not worth shipping.
 systemctl is-enabled amazon-ssm-agent
 
-docker pull "$WORKER_IMAGE_DIGEST"
-
 cat > /etc/lazycloud-node-image.json <<MARKER
-{"release_version":"${RELEASE_VERSION}","agent_sha256":"${AGENT_SHA256}","wireguard_tools":true,"worker_image":"${WORKER_IMAGE_DIGEST}","ssm_agent":true,"variant":"__VARIANT__"}
+{"recipe_sha256":"${RECIPE_SHA256}","wireguard_tools":true,"ssm_agent":true,"variant":"__VARIANT__"}
 MARKER
 
 # Last, and the baker will not image an instance that never said it. A stop is
@@ -878,7 +664,7 @@ MARKER
 # stop an instance too, and every one of them would otherwise be captured and
 # published as a node image.
 bake_done="yes"
-say "LAZYCLOUD_BAKE_OK release=${RELEASE_VERSION} variant=__VARIANT__"
+say "LAZYCLOUD_BAKE_OK recipe=${RECIPE_SHA256} variant=__VARIANT__"
 sync
 shutdown -h now
 """
@@ -1004,14 +790,7 @@ def _default_bake_instance_type(variant: _BakeVariant) -> str:
 
 
 def _bake_user_data_blob(request: _BakeRequest) -> bytes:
-    """Compress the bake script, which no longer fits in user data uncompressed.
-
-    cloud-init decompresses gzipped user data before dispatching it, so the
-    instance runs the same script either way. The agent installer the script
-    embeds is on its own past EC2's limit, and compressing it keeps one source
-    of truth for that installer rather than splitting it across a second fetch
-    the bake would then have to publish and verify.
-    """
+    """Compress the generated host installer for EC2 user data."""
     script = _bake_user_data(request)
     _reject_unparsable_script(script)
     blob = gzip.compress(script.encode("utf-8"), mtime=0)
@@ -1019,8 +798,7 @@ def _bake_user_data_blob(request: _BakeRequest) -> bytes:
     if encoded > _MAX_ENCODED_USER_DATA_BYTES:
         msg = (
             f"bake user data is {encoded} bytes encoded, over EC2's "
-            f"{_MAX_ENCODED_USER_DATA_BYTES}: the embedded agent installer has outgrown "
-            "user data and must move to a fetched artifact"
+            f"{_MAX_ENCODED_USER_DATA_BYTES}: the host installer must move to a fetched artifact"
         )
         raise SystemExit(msg)
     return blob
@@ -1050,10 +828,7 @@ def _reject_unparsable_script(script: str) -> None:
 
 def _bake_user_data(request: _BakeRequest) -> str:
     values = {
-        "__AGENT_BINARY_URL__": request.agent_url,
-        "__AGENT_SHA256__": request.agent.sha256,
-        "__WORKER_IMAGE_DIGEST__": request.worker_image,
-        "__RELEASE_VERSION__": request.release_version,
+        "__RECIPE_SHA256__": request.recipe_sha256,
         "__VARIANT__": request.variant.value,
     }
     script = _BAKE_USER_DATA_TEMPLATE
@@ -1072,8 +847,6 @@ def _bake_user_data(request: _BakeRequest) -> str:
         script = script.replace(placeholder, shlex.quote(value))
     installer = build_agent_install_script(
         binary_name=AGENT_NAME,
-        artifact_version=request.release_version,
-        sha256_by_arch={"amd64": request.agent.sha256},
     )
     if "INSTALLER_EOF" in installer:
         msg = "agent install script contains the bake heredoc terminator"
@@ -1112,11 +885,6 @@ def _parse[ModelT: BaseModel](model: type[ModelT], payload: str, *, operation: s
 def _command_error(result: subprocess.CompletedProcess[str]) -> str:
     detail = result.stderr.strip() or result.stdout.strip()
     return detail[-1000:] if detail else f"exit status {result.returncode}"
-
-
-def _s3_public_url(bucket: str, region: str, object_key: str) -> str:
-    encoded_key = "/".join(pathname2url(part) for part in object_key.split("/"))
-    return f"https://s3.{region}.amazonaws.com/{bucket}/{encoded_key}"
 
 
 def _log(message: str) -> None:

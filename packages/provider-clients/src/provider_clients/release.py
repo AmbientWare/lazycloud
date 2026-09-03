@@ -1,8 +1,8 @@
 """Resolution of a deployment's configuration from the release it points at.
 
 A release publishes the agent artifact, its digest, the URL that serves it, the
-container-worker image, the customer authorization template, and any baked CPU
-AMIs. Those are facts of one release, and a deployment that copies them into six
+container-worker image, the customer authorization template, and exact host AMI
+IDs. Those are facts of one release, and a deployment that copies them into six
 independent variables can hold five from one release and one from another with
 nothing able to notice. Pointing at the manifest instead makes them arrive
 together or not at all.

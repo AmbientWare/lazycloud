@@ -165,6 +165,7 @@ export const customerComputeInstanceSchema = z
         "network_join_failed",
         "provider_identity_failed",
         "agent_enrollment_failed",
+        "worker_image_pull_failed",
         "worker_start_failed",
         "worker_readiness_failed",
         "bootstrap_timed_out",

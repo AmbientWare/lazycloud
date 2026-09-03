@@ -1,11 +1,13 @@
 # Connected AWS Release Assets
 
-Connected AWS capacity has three immutable release inputs:
+Connected AWS capacity has four immutable release inputs:
 
 - a standalone Linux `amd64` agent served by the control plane;
 - the exact bundled account-authorization CloudFormation template at an HTTPS
   S3 URL whose path contains its SHA-256 digest;
 - an anonymously pullable container-worker image addressed by manifest digest.
+- exact CPU and GPU AMI IDs resolved from the independently published host-image
+  catalog.
 
 The customer does not configure any of these. They authorize their AWS account
 from the dashboard; platform release and deployment automation owns the assets.
@@ -50,10 +52,10 @@ Tag or dispatch `.github/workflows/release.yml`. The connected-AWS job:
 
 1. builds the standalone agent on `linux/amd64` and verifies it on Amazon Linux;
 2. builds and pushes `container-worker` to Amazon ECR Public;
-3. bakes the per-region node AMI with `deploy/ami/bake.py` (skippable through
-   the `bake_ami` dispatch input for a template-only release);
-4. stages the bundled CloudFormation bytes, agent, image digest, and baked CPU
-   AMI catalog into one manifest with `deploy/aws-release-assets/release.py`;
+3. resolves the current recipe-compatible CPU and GPU AMI catalog and fails if
+   the Node Images workflow has not published one for this host recipe;
+4. stages the bundled CloudFormation bytes, agent, image digest, and exact AMI
+   IDs into one manifest with `deploy/aws-release-assets/release.py`;
 5. publishes objects with SHA-256 checksums and immutable cache headers;
 6. downloads every S3 object and inspects the worker image with empty credential
    directories, proving customer nodes can access them anonymously. Baked AMIs
@@ -85,7 +87,7 @@ manifest path.
 the only value a deployment takes from a release. The control plane fetches that
 manifest at startup and resolves the agent artifact version and digest, the URL
 that serves it, the container-worker image, the customer authorization
-template, and the baked CPU AMI catalog from the release itself. None of the six
+template, and both host AMI catalogs from the release itself. None of the six
 are environment-readable, so no deployment can hold five of them from one
 release and one from another. `deploy/release.py` writes the URL into `.env`;
 see `deploy/RUNBOOK.md`.
@@ -102,11 +104,9 @@ control principal (`LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN`). Managed
 capacity is those plus the three the release publishes or none of them, and a
 deployment missing either half fails at startup naming which half it is.
 
-`capacity_cpu_ami_ids` is whatever reached `stage --cpu-ami-ids`:
-`deploy/ami/bake.py` in the workflow, `--cpu-ami` on `deploy/release.py`
-locally. It is empty for a release given neither, and managed capacity on that
-release fails the rule above rather than launching without them (see
-`deploy/ami/README.md`).
+`capacity_cpu_ami_ids` and `capacity_gpu_ami_ids` come from the current host-image
+catalog in Actions. Local publication may still supply them through `--cpu-ami`
+and `--gpu-ami`. See `deploy/ami/README.md` for the catalog workflow.
 
 ## Focused Acceptance
 
