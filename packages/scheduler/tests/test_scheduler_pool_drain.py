@@ -67,7 +67,7 @@ class _Compute:
     def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
         return CapacityPoolSizingSnapshot(capacity_owner_id=capacity_owner_id)
 
-    def describe_internal_unit(
+    def inspect_internal_unit(
         self,
         workspace_id: str,
         capacity_owner_id: str,
@@ -93,6 +93,14 @@ class _Compute:
                 ],
             ),
         )
+
+    def get_internal_unit(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+    ) -> ComputeUnitRecord:
+        unit, _ = self.inspect_internal_unit(workspace_id, capacity_owner_id)
+        return unit
 
     def internal_unit_cordoned_machines(
         self,
