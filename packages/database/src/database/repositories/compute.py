@@ -56,7 +56,7 @@ from shared.compute_policy import (
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
-from shared.timestamps import utc_now
+from shared.timestamps import to_utc, utc_now
 from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -131,6 +131,12 @@ class ComputeProviderInstanceRecord(ContractModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class ComputeProviderInstanceSizingRecord:
+    status: str
+    updated_at: datetime
 
 
 class ComputeJoinCredentialRecord(ContractModel):
@@ -220,6 +226,18 @@ class ComputeMachineEnrollmentRecord(ContractModel):
     revoked_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ComputeMachineCapacityInterruptionRecord:
+    enrollment_id: str
+    credential_generation: int
+    workspace_id: str
+    pool: MachinePool
+    machine_id: str
+    state: AgentCapacityState
+    reason: str
+    observed_at: datetime
 
 
 class ComputeMachineEnrollmentCreate(ContractModel):
@@ -858,6 +876,18 @@ class ComputeProviderInstanceRepository:
             statement = statement.with_for_update()
         return [_provider_instance_record(row) for row in self.session.scalars(statement)]
 
+    def list_sizing_for_pool(self, pool_id: str) -> list[ComputeProviderInstanceSizingRecord]:
+        rows = self.session.execute(
+            select(
+                ComputeProviderInstanceTable.status,
+                ComputeProviderInstanceTable.updated_at,
+            ).where(ComputeProviderInstanceTable.pool_id == pool_id)
+        ).tuples()
+        return [
+            ComputeProviderInstanceSizingRecord(status=status, updated_at=to_utc(updated_at))
+            for status, updated_at in rows
+        ]
+
     def bind_machine(
         self,
         pool_id: str,
@@ -1169,6 +1199,62 @@ class ComputeMachineEnrollmentRepository:
         flag_modified(row, "payload")
         self.session.flush()
         return record
+
+    def list_active_capacity_interruptions(
+        self,
+    ) -> list[ComputeMachineCapacityInterruptionRecord]:
+        rows = self.session.execute(
+            select(
+                ComputeMachineEnrollmentTable.id,
+                ComputeMachineEnrollmentTable.credential_generation,
+                ComputeMachineEnrollmentTable.workspace_id,
+                ComputeMachineEnrollmentTable.pool,
+                ComputeMachineEnrollmentTable.machine_id,
+                ComputeMachineEnrollmentTable.capacity_state,
+                func.coalesce(
+                    ComputeMachineEnrollmentTable.payload["capacity_reason"].as_string(),
+                    "",
+                ),
+                ComputeMachineEnrollmentTable.capacity_observed_at,
+            )
+            .where(
+                ComputeMachineEnrollmentTable.status == ComputeMachineEnrollmentStatus.Active.value,
+                ComputeMachineEnrollmentTable.capacity_state.in_(
+                    (
+                        AgentCapacityState.Preempting.value,
+                        AgentCapacityState.Cordoned.value,
+                    )
+                ),
+                ComputeMachineEnrollmentTable.capacity_observed_at.is_not(None),
+            )
+            .order_by(
+                ComputeMachineEnrollmentTable.created_at.desc(),
+                ComputeMachineEnrollmentTable.id.asc(),
+            )
+        ).tuples()
+        return [
+            ComputeMachineCapacityInterruptionRecord(
+                enrollment_id=enrollment_id,
+                credential_generation=credential_generation,
+                workspace_id=workspace_id,
+                pool=MachinePool(pool),
+                machine_id=machine_id,
+                state=AgentCapacityState(state),
+                reason=reason,
+                observed_at=to_utc(observed_at),
+            )
+            for (
+                enrollment_id,
+                credential_generation,
+                workspace_id,
+                pool,
+                machine_id,
+                state,
+                reason,
+                observed_at,
+            ) in rows
+            if observed_at is not None
+        ]
 
     def by_credential_hash(
         self,

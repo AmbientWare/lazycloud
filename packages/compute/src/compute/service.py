@@ -999,7 +999,7 @@ class ComputeService:
             open_operations = operations.list_open_for_owner(capacity_owner_id)
             peak_desired_units = operations.peak_desired_unit(capacity_owner_id)
             all_operations = operations.list_for_owner(capacity_owner_id)
-            machines = ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
+            machines = ComputeProviderInstanceRepository(session).list_sizing_for_pool(unit.id)
         open_machines = [record for record in machines if _reservation_open(record.status)]
         desired_units = (
             unit.desired_machines

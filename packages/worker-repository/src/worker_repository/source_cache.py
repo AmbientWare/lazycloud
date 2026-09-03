@@ -22,6 +22,7 @@ from worker.repository_payloads import WorkerRepositoryPrincipal
 
 SOURCE_CACHE_CLAIM_LEASE_SECONDS = 30
 SOURCE_CACHE_RETRY_DELAY_SECONDS = 5
+SOURCE_CACHE_DURABLE_HEARTBEAT_INTERVAL_SECONDS = 60
 
 
 class WorkerSourceCacheUnavailableError(UpstreamUnavailableError):
@@ -294,14 +295,20 @@ class WorkerSourceCacheService:
             generation_id=generation_id,
             session_fence=session_fence,
         )
-        if not repository.touch_generation(
-            generation_id,
-            worker_id=worker_id,
-            session_fence=session_fence,
-            now=now,
+        if (
+            generation.last_seen_at
+            + timedelta(seconds=SOURCE_CACHE_DURABLE_HEARTBEAT_INTERVAL_SECONDS)
+            <= now
         ):
-            raise ConflictError("worker source cache session is no longer current")
-        return generation.model_copy(update={"last_seen_at": now, "updated_at": now})
+            if not repository.touch_generation(
+                generation_id,
+                worker_id=worker_id,
+                session_fence=session_fence,
+                now=now,
+            ):
+                raise ConflictError("worker source cache session is no longer current")
+            return generation.model_copy(update={"last_seen_at": now, "updated_at": now})
+        return generation
 
     @staticmethod
     def _workspace_scope(principal: WorkerRepositoryPrincipal) -> str | None:
