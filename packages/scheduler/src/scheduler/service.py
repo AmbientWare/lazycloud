@@ -1729,6 +1729,7 @@ def _record_worker_pool_drain_observability(
 ) -> None:
     for result in results:
         if result.lock_acquired:
+            signature_key = result.capacity_owner_id
             signature = (
                 result.action.value,
                 result.reason,
@@ -1739,11 +1740,12 @@ def _record_worker_pool_drain_observability(
             if (
                 result.action is not WorkerPoolDrainAction.None_
                 or result.drained_worker_ids
-                or event_signatures.get(result.pool) != signature
+                or event_signatures.get(signature_key) != signature
             ):
                 data: dict[str, JsonValue] = {
                     "source": WORKER_POOL_DRAIN_SOURCE,
                     "pool": result.pool,
+                    "capacity_owner_id": result.capacity_owner_id,
                     "action": result.action.value,
                     "machine_id": result.machine_id,
                     "desired_replicas": result.desired_replicas,
@@ -1761,7 +1763,7 @@ def _record_worker_pool_drain_observability(
                     level=EventLevel.Warning if result.error else EventLevel.Info,
                     data=data,
                 )
-            event_signatures[str(result.pool)] = signature
+            event_signatures[signature_key] = signature
         labels = {"source": WORKER_POOL_DRAIN_SOURCE, "pool": str(result.pool)}
         services.metrics.increment(
             "worker_pool_drain_decisions_total",
