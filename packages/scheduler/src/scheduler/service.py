@@ -1728,39 +1728,40 @@ def _record_worker_pool_drain_observability(
     event_signatures: dict[str, tuple[str, ...]],
 ) -> None:
     for result in results:
-        signature = (
-            result.action.value,
-            result.reason,
-            result.error,
-            str(result.desired_replicas),
-            str(result.observed_replicas),
-        )
-        if (
-            result.action is not WorkerPoolDrainAction.None_
-            or result.drained_worker_ids
-            or event_signatures.get(result.pool) != signature
-        ):
-            data: dict[str, JsonValue] = {
-                "source": WORKER_POOL_DRAIN_SOURCE,
-                "pool": result.pool,
-                "action": result.action.value,
-                "machine_id": result.machine_id,
-                "desired_replicas": result.desired_replicas,
-                "observed_replicas": result.observed_replicas,
-                "drained_worker_ids": list(result.drained_worker_ids),
-                "reason": result.reason,
-                "lock_acquired": result.lock_acquired,
-                "error": result.error,
-            }
-            services.events.emit(
-                WORKER_POOL_DRAIN_DECISION_ACTION,
-                resource_type="worker_pool",
-                resource_id=result.pool,
-                message="worker-pool drain selected desired capacity",
-                level=EventLevel.Warning if result.error else EventLevel.Info,
-                data=data,
+        if result.lock_acquired:
+            signature = (
+                result.action.value,
+                result.reason,
+                result.error,
+                str(result.desired_replicas),
+                str(result.observed_replicas),
             )
-        event_signatures[str(result.pool)] = signature
+            if (
+                result.action is not WorkerPoolDrainAction.None_
+                or result.drained_worker_ids
+                or event_signatures.get(result.pool) != signature
+            ):
+                data: dict[str, JsonValue] = {
+                    "source": WORKER_POOL_DRAIN_SOURCE,
+                    "pool": result.pool,
+                    "action": result.action.value,
+                    "machine_id": result.machine_id,
+                    "desired_replicas": result.desired_replicas,
+                    "observed_replicas": result.observed_replicas,
+                    "drained_worker_ids": list(result.drained_worker_ids),
+                    "reason": result.reason,
+                    "lock_acquired": result.lock_acquired,
+                    "error": result.error,
+                }
+                services.events.emit(
+                    WORKER_POOL_DRAIN_DECISION_ACTION,
+                    resource_type="worker_pool",
+                    resource_id=result.pool,
+                    message="worker-pool drain selected desired capacity",
+                    level=EventLevel.Warning if result.error else EventLevel.Info,
+                    data=data,
+                )
+            event_signatures[str(result.pool)] = signature
         labels = {"source": WORKER_POOL_DRAIN_SOURCE, "pool": str(result.pool)}
         services.metrics.increment(
             "worker_pool_drain_decisions_total",

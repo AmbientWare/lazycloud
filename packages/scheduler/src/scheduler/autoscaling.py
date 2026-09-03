@@ -303,11 +303,11 @@ class WorkloadAutoscaler(Protocol):
 class AutoscalingDriver:
     """The reconcile pass every workload gets, identically.
 
-    Stub selection and the pause an operator set, the stub's lock and the state
-    a contended tick still records, the container counts and which of them are
-    real, the failed-container threshold, the inactive deployment, the workspace
-    guardrail, and the metrics and event and state row a tick leaves behind: all
-    of it here, once, for every kind, and none of it reachable from a workload.
+    Stub selection and the pause an operator set, the stub's lock and contention
+    metric, the container counts and which of them are real, the failed-container
+    threshold, the inactive deployment, the workspace guardrail, and the metrics,
+    event, and state row a lock-holding tick leaves behind: all of it here, once,
+    for every kind, and none of it reachable from a workload.
     """
 
     services: SchedulerServices
@@ -354,7 +354,7 @@ class AutoscalingDriver:
             token = token_urlsafe(16)
             lock_key = self._lock_key(stub)
             if not self._acquire_lock(lock_key, token):
-                results.append(self._record_lock_contention(stub, lock_key))
+                results.append(self._record_lock_contention(stub))
                 continue
             try:
                 results.append(
@@ -546,10 +546,36 @@ class AutoscalingDriver:
     def _record(self, stub: StubRecord, result: AutoscaleResult, plan: ScalePlan) -> None:
         identity = self.workload.identity
         action_payloads = _autoscale_action_payloads(result.actions)
-        if _should_persist_scale_event(
-            self.services,
+        state = _autoscaler_state(
+            source=identity.source,
             target_kind=identity.kind,
             stub=stub,
+            current_count=result.current_containers,
+            desired_count=result.desired_containers,
+            signal_name=result.signal_name,
+            signal_value=result.signal_value,
+            decision=result.decision.value,
+            reason=result.reason,
+            active=result.active,
+            valid=result.valid,
+            lock_acquired=result.lock_acquired,
+            owner_lock_key=self._lock_key(stub),
+            failed_container_count=len(result.failed_containers),
+            last_sample={
+                result.signal_name: result.signal_value,
+                "current_containers": result.current_containers,
+                "pending_containers": result.pending_containers,
+                "guardrails": result.guardrails,
+            },
+            last_actions=action_payloads,
+        )
+        previous = self.services.autoscaler_states.get(
+            workspace_id=stub.workspace_id,
+            target_kind=identity.kind,
+            target_id=stub.id,
+        )
+        if _should_persist_scale_event(
+            previous,
             decision=result.decision.value,
             desired_count=result.desired_containers,
             reason=result.reason,
@@ -602,38 +628,10 @@ class AutoscalingDriver:
             guardrails=result.guardrails,
             actions=action_payloads,
         )
-        _record_autoscaler_state(
-            self.services,
-            source=identity.source,
-            target_kind=identity.kind,
-            stub=stub,
-            current_count=result.current_containers,
-            desired_count=result.desired_containers,
-            signal_name=result.signal_name,
-            signal_value=result.signal_value,
-            decision=result.decision.value,
-            reason=result.reason,
-            active=result.active,
-            valid=result.valid,
-            lock_acquired=result.lock_acquired,
-            owner_lock_key=self._lock_key(stub),
-            failed_container_count=len(result.failed_containers),
-            last_sample={
-                result.signal_name: result.signal_value,
-                "current_containers": result.current_containers,
-                "pending_containers": result.pending_containers,
-                "guardrails": result.guardrails,
-            },
-            last_actions=action_payloads,
-        )
+        if _autoscaler_state_changed(previous, state):
+            self.services.autoscaler_states.upsert(state)
 
-    def _record_lock_contention(self, stub: StubRecord, lock_key: str) -> AutoscaleResult:
-        """A tick that found the lock held is still a tick that looked.
-
-        Left unrecorded it reads as an autoscaler that never ran, which is the
-        one reading that sends somebody looking at the wrong process.
-        """
-
+    def _record_lock_contention(self, stub: StubRecord) -> AutoscaleResult:
         identity = self.workload.identity
         result = AutoscaleResult(
             kind=identity.kind,
@@ -644,20 +642,14 @@ class AutoscalingDriver:
             reason="autoscaler lock already held",
             lock_acquired=False,
         )
-        _record_autoscaler_state(
-            self.services,
-            source=identity.source,
-            target_kind=identity.kind,
-            stub=stub,
-            current_count=result.current_containers,
-            desired_count=result.desired_containers,
-            signal_name=result.signal_name,
-            decision=result.decision.value,
-            reason=result.reason,
-            active=result.active,
-            valid=result.valid,
-            lock_acquired=result.lock_acquired,
-            owner_lock_key=lock_key,
+        self.services.metrics.increment(
+            "autoscaler_lock_contentions_total",
+            labels={
+                "source": identity.source,
+                "workspace_id": stub.workspace_id,
+                "stub_id": stub.id,
+                "kind": stub.kind.value,
+            },
         )
         return result
 
@@ -1162,10 +1154,8 @@ def _is_no_worker_capacity(reason: str) -> bool:
 
 
 def _should_persist_scale_event(
-    services: SchedulerServices,
+    previous: AutoscalerStateRecord | None,
     *,
-    target_kind: AutoscalerTargetKind,
-    stub: StubRecord,
     decision: str,
     desired_count: int,
     reason: str,
@@ -1181,11 +1171,6 @@ def _should_persist_scale_event(
     """
     if actions_taken:
         return True
-    previous = services.autoscaler_states.get(
-        workspace_id=stub.workspace_id,
-        target_kind=target_kind,
-        target_id=stub.id,
-    )
     if previous is None:
         return True
     return (
@@ -1196,8 +1181,7 @@ def _should_persist_scale_event(
     )
 
 
-def _record_autoscaler_state(
-    services: SchedulerServices,
+def _autoscaler_state(
     *,
     source: str,
     target_kind: AutoscalerTargetKind,
@@ -1216,9 +1200,9 @@ def _record_autoscaler_state(
     last_sample: dict[str, JsonValue] | None = None,
     last_actions: list[dict[str, JsonValue]] | None = None,
     cooldown_until: datetime | None = None,
-) -> None:
+) -> AutoscalerStateRecord:
     actions = last_actions or []
-    state = AutoscalerStateRecord(
+    return AutoscalerStateRecord(
         name=autoscaler_state_name(target_kind, stub.id),
         workspace_id=stub.workspace_id,
         source=source,
@@ -1243,7 +1227,15 @@ def _record_autoscaler_state(
         last_actions=actions,
         updated_at=utc_now(),
     )
-    services.autoscaler_states.upsert(state)
+
+
+def _autoscaler_state_changed(
+    previous: AutoscalerStateRecord | None,
+    current: AutoscalerStateRecord,
+) -> bool:
+    if previous is None:
+        return True
+    return previous.model_dump(exclude={"updated_at"}) != current.model_dump(exclude={"updated_at"})
 
 
 def _autoscaler_error(actions: list[dict[str, JsonValue]]) -> str:

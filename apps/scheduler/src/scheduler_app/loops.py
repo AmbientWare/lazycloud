@@ -29,16 +29,15 @@ from scheduler.service import Scheduler, SchedulerRunResult
 
 LOGGER = logging.getLogger(__name__)
 
-PLACEMENT_SWEEP_INTERVAL_SECONDS = 0.25
+PLACEMENT_SWEEP_INTERVAL_SECONDS = 1.0
 """How often placement looks for work that has nowhere to run.
 
 A plain timed sweep rather than a wake, deliberately. `RedisWakeSignal.wait` is a
 blocking pop, so it consumes what it receives: a second waiter on the dispatch
 scope would take wakeups meant for dispatch and delay the loop it was trying to
 help. Placement would need a scope of its own, published from wherever a stub's
-backlog grows, and at this interval that buys under a quarter second against a
-sweep that costs one indexed query. It is worth doing when the sweep is what
-limits latency, and it is not.
+backlog grows. A one-second fallback bounds wake-free placement latency without
+running four full placement snapshots per second while the system is idle.
 """
 
 CAPACITY_INTERVAL_SECONDS = 5.0

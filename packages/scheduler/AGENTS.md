@@ -32,11 +32,11 @@ invisible in the diff that made it, because the copy it was missing from was
 complete on its own terms.
 
 So the safety is now unreachable from a workload rather than repeated in each:
-stub selection including the pause, the stub lock and the state a contended tick
-still records, the failed-container threshold and its window, the inactive
-deployment, the workspace guardrail, and the metrics, event, and state row a
-tick leaves behind. A workload cannot skip one of those, because it is never
-handed them.
+stub selection including the pause, the stub lock, the contention metric, the
+failed-container threshold and its window, the inactive deployment, the
+workspace guardrail, and the metrics, event, and state row a lock-holding tick
+leaves behind. A workload cannot skip one of those, because it is never handed
+them.
 
 Composition, not inheritance. A base class with abstract hooks would reuse the
 same code, but it would also put the pass in the subclass's reach, which is the

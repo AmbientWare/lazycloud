@@ -2544,15 +2544,6 @@ class GatewayControlService:
                 )
                 self._record_node_usage(updated_state, plan)
                 self._persist_agent_state(updated_state)
-                event_data: dict[str, JsonValue] = dict(plan.event_attrs)
-                self.services.events.emit(
-                    "agent.metrics",
-                    resource_type="agent",
-                    resource_id=state.machine_id,
-                    message=f"agent metrics received for {state.machine_id}",
-                    data=event_data,
-                    workspace_id=state.workspace_id,
-                )
             for log in request.logs:
                 redacted_line = redact_telemetry_line(log.line)
                 self.services.events.emit(
