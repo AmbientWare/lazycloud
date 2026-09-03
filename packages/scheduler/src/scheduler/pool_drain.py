@@ -61,6 +61,7 @@ class WorkerPoolDrainWorker(Protocol):
     capacity_owner_id: str
     machine_id: str
     status: SchedulerWorkerStatus
+    created_at: datetime
     updated_at: datetime
 
 
@@ -644,7 +645,15 @@ def _idle_machine_candidate(
         candidates.append(_IdleMachineCandidate(machine_id=machine_id, workers=idle_workers))
     if not candidates:
         return None
-    return sorted(candidates, key=lambda item: min(worker.updated_at for worker in item.workers))[0]
+    # Scale-out nodes begin with an empty image cache. Retire the newest idle
+    # machine so the long-lived node keeps the cache it accumulated serving work.
+    return max(
+        candidates,
+        key=lambda item: (
+            min(worker.created_at for worker in item.workers),
+            item.machine_id,
+        ),
+    )
 
 
 def _idle_workers(
