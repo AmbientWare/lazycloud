@@ -111,6 +111,7 @@ class FakeFunctionClient:
 class RecordingTerminal(Terminal):
     lines: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    remote_outputs: list[tuple[str, str]] = field(default_factory=list)
 
     def write(self, message: str) -> None:
         self.lines.append(message)
@@ -123,6 +124,9 @@ class RecordingTerminal(Terminal):
 
     def error(self, message: str) -> None:
         self.errors.append(message)
+
+    def remote_output(self, message: str, *, stream: str = "stdout") -> None:
+        self.remote_outputs.append((stream, message))
 
 
 @dataclass
@@ -481,7 +485,16 @@ def test_function_remote_streams_status_logs_and_ignores_keepalives() -> None:
             yield FunctionInvokeResponse.from_result(task_id="task-1")
             yield FunctionInvokeResponse.from_result(task_id="task-1", status="running")
             yield FunctionInvokeResponse.from_result(task_id="task-1")
-            yield FunctionInvokeResponse.from_result(task_id="task-1", output="hello\n")
+            yield FunctionInvokeResponse.from_result(
+                task_id="task-1",
+                output="hello\n",
+                stream="stdout",
+            )
+            yield FunctionInvokeResponse.from_result(
+                task_id="task-1",
+                output="careful\n",
+                stream="stderr",
+            )
             yield FunctionInvokeResponse.from_result(
                 task_id="task-1",
                 result=FunctionCloudpickleResult.from_bytes(cloudpickle_bytes({"ok": True})),
@@ -504,7 +517,10 @@ def test_function_remote_streams_status_logs_and_ignores_keepalives() -> None:
 
     assert streamer.remote() == {"ok": True}
     assert [detached for _, _, detached in client.invocations] == [False]
-    assert "hello" in terminal.lines
+    assert terminal.remote_outputs == [
+        ("stdout", "hello\n"),
+        ("stderr", "careful\n"),
+    ]
     assert any(line.startswith("   Task: task-1 running (") for line in terminal.lines)
 
 

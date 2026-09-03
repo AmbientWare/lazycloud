@@ -21,15 +21,19 @@ TAIL_LINES = 3
 FAILURE_TAIL_LINES = 20
 NAME_WIDTH = 11
 _LOG_INDENT = "    "
+_REMOTE_RAIL = "│ "
 
 
 @dataclass
 class CliTerminal(Terminal):
     _pending: str = field(default="", init=False)
+    _remote_pending: str = field(default="", init=False)
+    _remote_stream: str = field(default="stdout", init=False)
 
     def write(self, message: str) -> None:
         if self.quiet or not message:
             return
+        self.flush_remote_output()
         self._pending += message.replace("\r", "\n")
         while "\n" in self._pending:
             line, self._pending = self._pending.split("\n", maxsplit=1)
@@ -38,12 +42,31 @@ class CliTerminal(Terminal):
     def line(self, message: str = "") -> None:
         if self.quiet:
             return
+        self.flush_remote_output()
         self._flush_pending()
         self._print_line(message)
+
+    def remote_output(self, message: str, *, stream: str = "stdout") -> None:
+        if self.quiet or not message:
+            return
+        self._flush_pending()
+        if self._remote_pending and stream != self._remote_stream:
+            self.flush_remote_output()
+        self._remote_stream = stream
+        self._remote_pending += message.replace("\r", "\n")
+        while "\n" in self._remote_pending:
+            line, self._remote_pending = self._remote_pending.split("\n", maxsplit=1)
+            self._print_remote_line(line, stream=stream)
+
+    def flush_remote_output(self) -> None:
+        if self._remote_pending:
+            pending, self._remote_pending = self._remote_pending, ""
+            self._print_remote_line(pending, stream=self._remote_stream)
 
     def error(self, message: str) -> None:
         if self.quiet:
             return
+        self.flush_remote_output()
         self._flush_pending()
         output.error_console.print(theme.styled(message, theme.ERROR + theme.EMPHASIS))
 
@@ -56,16 +79,19 @@ class CliTerminal(Terminal):
     def warn(self, message: str) -> None:
         if self.quiet:
             return
+        self.flush_remote_output()
         self._flush_pending()
         output.console.print(theme.styled(message, theme.WARNING))
 
     def success(self, message: str) -> None:
         if self.quiet:
             return
+        self.flush_remote_output()
         self._flush_pending()
         output.console.print(theme.styled(message, theme.SUCCESS + theme.EMPHASIS))
 
     def step(self, name: str, summary: str = "") -> TerminalStep:
+        self.flush_remote_output()
         self._flush_pending()
         return LiveStep(name=name, terminal=self, summary=summary)
 
@@ -79,6 +105,14 @@ class CliTerminal(Terminal):
             output.console.print()
             return
         output.console.print(theme.styled(message, output_style(message)))
+
+    def _print_remote_line(self, message: str, *, stream: str) -> None:
+        rail_style = theme.ERROR if stream == "stderr" else theme.RUNNING
+        message_style = theme.ERROR if stream == "stderr" else theme.MUTED
+        line = Text()
+        line.append(_REMOTE_RAIL, style=rail_style)
+        line.append(message, style=message_style)
+        output.console.print(line)
 
 
 @dataclass
@@ -157,6 +191,7 @@ class LiveStep(TerminalStep):
         if self._live is not None:
             self._live.stop()
             self._live = None
+        self.terminal.flush_remote_output()
 
     def _print_final(self, glyph: str, style: Style) -> None:
         if self.terminal.quiet:

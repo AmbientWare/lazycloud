@@ -1025,6 +1025,7 @@ class FunctionControlService:
                 yield FunctionInvokeResponse.from_result(
                     task_id=initial.task_id,
                     output=_stream_log_output(entry.message),
+                    stream=entry.stream,
                 )
             if task.status.value != last_status:
                 last_status = task.status.value
