@@ -14,6 +14,9 @@ from database.records.apps import (
     AppContainerShutdownIntentRecord,
     AppDeploymentIntentRecord,
     AppRecord,
+    AutoscalingStubConfig,
+    AutoscalingStubRecord,
+    AutoscalingStubRuntimeConfig,
     StubRecord,
 )
 from database.repositories.common import (
@@ -44,11 +47,12 @@ from shared.app_lifecycle import (
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
-from shared.deployments import DeploymentKind
+from shared.deployments import DeploymentKind, StubKind
 from shared.enums import StringEnum
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.tasks import TaskStatus
+from shared.workload_config import StubAutoscalerConfig, StubTaskPolicy
 from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -642,6 +646,83 @@ class StubRepository:
 
     def list(self, *, workspace_id: str) -> list[StubRecord]:
         return self.records.list(workspace_id=workspace_id)
+
+    def list_autoscaling_across_workspaces(self) -> list[AutoscalingStubRecord]:
+        rows = self.session.execute(
+            select(
+                StubTable.id,
+                StubTable.workspace_id,
+                StubTable.type,
+                StubTable.app_id,
+                StubTable.payload["deployment_id"].as_string(),
+                StubTable.payload["config"]["runtime"]["cpu"],
+                StubTable.payload["config"]["runtime"]["cpu_millicores"],
+                StubTable.payload["config"]["runtime"]["gpu"],
+                StubTable.payload["config"]["runtime"]["gpu_count"],
+                StubTable.payload["config"]["runtime"]["timeout_seconds"],
+                StubTable.payload["config"]["runtime"]["keep_warm"],
+                StubTable.payload["config"]["runtime"]["workspace_gpu_quota"],
+                StubTable.payload["config"]["runtime"]["workspace_cpu_quota_millicores"],
+                StubTable.payload["config"]["autoscaler"],
+                StubTable.payload["config"]["task_policy"],
+                StubTable.payload["config"]["metadata"]["autoscaling_enabled"].as_boolean(),
+            ).order_by(StubTable.created_at.desc(), StubTable.id.asc())
+        ).tuples()
+        return [
+            AutoscalingStubRecord(
+                id=id_,
+                workspace_id=workspace_id,
+                kind=StubKind(type_),
+                app_id=app_id,
+                deployment_id=deployment_id,
+                config=AutoscalingStubConfig(
+                    runtime=AutoscalingStubRuntimeConfig.model_validate(
+                        {
+                            field: value
+                            for field, value in (
+                                ("cpu", cpu),
+                                ("cpu_millicores", cpu_millicores),
+                                ("gpu", gpu),
+                                ("gpu_count", gpu_count),
+                                ("timeout_seconds", timeout_seconds),
+                                ("keep_warm", keep_warm),
+                                ("workspace_gpu_quota", workspace_gpu_quota),
+                                (
+                                    "workspace_cpu_quota_millicores",
+                                    workspace_cpu_quota_millicores,
+                                ),
+                            )
+                            if value is not None
+                        }
+                    ),
+                    autoscaler=StubAutoscalerConfig.model_validate(autoscaler or {}),
+                    task_policy=StubTaskPolicy.model_validate(task_policy or {}),
+                    metadata=(
+                        {"autoscaling_enabled": autoscaling_enabled}
+                        if autoscaling_enabled is not None
+                        else {}
+                    ),
+                ),
+            )
+            for (
+                id_,
+                workspace_id,
+                type_,
+                app_id,
+                deployment_id,
+                cpu,
+                cpu_millicores,
+                gpu,
+                gpu_count,
+                timeout_seconds,
+                keep_warm,
+                workspace_gpu_quota,
+                workspace_cpu_quota_millicores,
+                autoscaler,
+                task_policy,
+                autoscaling_enabled,
+            ) in rows
+        ]
 
     def app_ids_by_id(
         self,

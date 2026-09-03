@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
-from database.records.apps import StubKind, StubRecord
+from database.records.apps import AutoscalingStubRecord, StubKind, StubRecord
 from database.repositories.apps import DeploymentRepository, StubRepository
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.common import (
@@ -794,6 +794,10 @@ class ControlPlaneService:
             )
         records.sort(key=lambda item: (item.workspace_id, item.name))
         return records
+
+    def list_autoscaling_stubs(self) -> list[AutoscalingStubRecord]:
+        with self.context.database.session() as session:
+            return StubRepository(session).list_autoscaling_across_workspaces()
 
     def discard_deployment_registration_stub(
         self,

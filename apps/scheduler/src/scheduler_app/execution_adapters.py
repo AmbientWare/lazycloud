@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from control.service import ControlPlaneService
-from database.records.apps import StubRecord
+from database.records.apps import AutoscalingStubRecord, StubRecord
 from database.repositories.orchestration import ContainerRepository
 from execution.endpoints.service import EndpointDispatchStateRepository
 from scheduler.autoscaling import EndpointAutoscalingDispatchObservation
@@ -64,6 +64,9 @@ class SchedulerWorkloadDirectoryAdapter:
 
     def list_stubs(self, *, workspace: str | None = None) -> list[StubRecord]:
         return self.control_plane.list_stubs(workspace=workspace)
+
+    def list_autoscaling_stubs(self) -> list[AutoscalingStubRecord]:
+        return self.control_plane.list_autoscaling_stubs()
 
     def get_stub(
         self,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from coordination.redis_client import RedisClient
-from database.records.apps import StubRecord
+from database.records.apps import AutoscalingStub, AutoscalingStubRuntimeConfig
 from pydantic import Field, JsonValue
 from shared.contracts import ContractModel
 from shared.deployment_records import request_and_limit
@@ -39,7 +39,7 @@ class AutoscalerGuardrailPlan(ContractModel):
 def plan_autoscaler_start_guardrails(
     redis: RedisClient,
     *,
-    stub: StubRecord,
+    stub: AutoscalingStub,
     current_count: int,
     desired_count: int,
 ) -> AutoscalerGuardrailPlan:
@@ -117,7 +117,9 @@ def plan_autoscaler_start_guardrails(
     )
 
 
-def _gpu_per_container(runtime_config: StubRuntimeConfig) -> int:
+def _gpu_per_container(
+    runtime_config: AutoscalingStubRuntimeConfig | StubRuntimeConfig,
+) -> int:
     return gpu_count_for_capacity(
         runtime_config.gpu,
         runtime_config.gpu_count,
