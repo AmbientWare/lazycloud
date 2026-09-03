@@ -12,6 +12,7 @@ from shared.scheduling import (
     SchedulerContainerStatus,
     SchedulerWorkerRequest,
 )
+from shared.usage import IMAGE_BUILD_WORKLOAD_ID
 
 from images.building.models import (
     ImageBuildCredentialAction,
@@ -25,7 +26,7 @@ DEFAULT_IMAGE_BUILD_CONTAINER_MEMORY_MIB = 1024
 DEFAULT_IMAGE_BUILD_CONTAINER_ADDRESS_WAIT_SECONDS = 180.0
 DEFAULT_IMAGE_BUILD_CONTAINER_ADDRESS_POLL_SECONDS = 0.1
 DEFAULT_SCHEDULER_BUILD_REGISTRY_CREDENTIAL_TTL_SECONDS = 5 * 60
-IMAGE_BUILD_REQUEST_KIND = "image-build"
+IMAGE_BUILD_REQUEST_KIND = IMAGE_BUILD_WORKLOAD_ID
 
 
 class ImageBuildSchedulerCredentialSource(StrEnum):

@@ -12,19 +12,33 @@ from database.tables.identity import WorkspaceTable
 from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.errors import InvalidInputError
 from shared.http.usage import UsageCostGroupKey
+from shared.usage import IMAGE_BUILD_WORKLOAD_ID
 from sqlalchemy import (
     ColumnElement,
     and_,
+    case,
     func,
     or_,
     select,
 )
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
-_GROUP_COLUMNS: dict[UsageCostGroupKey, tuple[InstrumentedAttribute[str], ...]] = {
+type _GroupColumn = ColumnElement[str] | InstrumentedAttribute[str]
+
+_CATEGORY: ColumnElement[str] = case(
+    (BillingLedgerSegmentTable.workload_id == IMAGE_BUILD_WORKLOAD_ID, IMAGE_BUILD_WORKLOAD_ID),
+    else_="",
+).label("category")
+"""What kind of usage a row is when no app can say: image builds, or nothing.
+
+Grouped by app, image builds would otherwise share the empty `app_id` with
+every other app-less row in a workspace and be shown as one unattributed sum."""
+
+_GROUP_COLUMNS: dict[UsageCostGroupKey, tuple[_GroupColumn, ...]] = {
     UsageCostGroupKey.App: (
         BillingLedgerSegmentTable.workspace_id,
         BillingLedgerSegmentTable.app_id,
+        _CATEGORY,
     ),
     UsageCostGroupKey.Workload: (
         BillingLedgerSegmentTable.workspace_id,
@@ -124,6 +138,7 @@ class LedgerCostRow:
     workload_name: str
     workload_kind: str
     task_id: str
+    category: str
     cost_nanos: int
     components: tuple[LedgerComponentTotal, ...]
 
@@ -414,10 +429,11 @@ class BillingLedgerCostRepository:
             app_id=app_id,
             workload_id=workload_id,
         )
-        names = self._names(keys)
+        names = self._names(keys, group_by=group_by)
         rows = tuple(
             _cost_row(
                 key=key,
+                group_by=group_by,
                 cost_nanos=int(row[len(columns)]),
                 components=components.get(key, ()),
                 names=names,
@@ -439,7 +455,7 @@ class BillingLedgerCostRepository:
         scope: LedgerCostScope,
         start: datetime,
         end: datetime,
-        columns: tuple[InstrumentedAttribute[str], ...],
+        columns: tuple[_GroupColumn, ...],
         keys: Sequence[tuple[str, ...]],
         app_id: str | None,
         workload_id: str | None,
@@ -496,7 +512,12 @@ class BillingLedgerCostRepository:
             )
         return {key: tuple(values) for key, values in totals.items()}
 
-    def _names(self, keys: Sequence[tuple[str, ...]]) -> _ResolvedNames:
+    def _names(
+        self,
+        keys: Sequence[tuple[str, ...]],
+        *,
+        group_by: UsageCostGroupKey,
+    ) -> _ResolvedNames:
         """Human names for the ids the page carries.
 
         Resolved here rather than in the browser: a customer surface speaks in
@@ -513,7 +534,11 @@ class BillingLedgerCostRepository:
 
         workspace_ids = {key[0] for key in keys if key[0]}
         app_ids = {key[1] for key in keys if len(key) > 1 and key[1]}
-        workload_ids = {key[2] for key in keys if len(key) > 2 and key[2]}
+        workload_ids = (
+            set[str]()
+            if group_by is UsageCostGroupKey.App
+            else {key[2] for key in keys if len(key) > 2 and key[2]}
+        )
         workspaces = names_by_id(
             self.session,
             WorkspaceTable.id,
@@ -545,7 +570,7 @@ class _ResolvedNames:
 
 def _after(
     cost: ColumnElement[int],
-    columns: tuple[InstrumentedAttribute[str], ...],
+    columns: tuple[_GroupColumn, ...],
     cursor: LedgerCostCursor,
 ) -> ColumnElement[bool]:
     """The groups that fall after the cursor in `(cost desc, key asc)` order.
@@ -593,13 +618,20 @@ def _scope(scope: LedgerCostScope) -> ColumnElement[bool]:
 def _cost_row(
     *,
     key: tuple[str, ...],
+    group_by: UsageCostGroupKey,
     cost_nanos: int,
     components: tuple[LedgerComponentTotal, ...],
     names: _ResolvedNames,
 ) -> LedgerCostRow:
     # The key carries the ids above its level and stops there, so a shallower
-    # grouping leaves the levels below it empty rather than absent.
-    workspace_id, app_id, workload_id, task_id = (*key, "", "")[:4]
+    # grouping leaves the levels below it empty rather than absent. Grouped by
+    # app the third member is the category rather than a workload.
+    if group_by is UsageCostGroupKey.App:
+        workspace_id, app_id, category = key
+        workload_id = task_id = ""
+    else:
+        workspace_id, app_id, workload_id, task_id = (*key, "")[:4]
+        category = IMAGE_BUILD_WORKLOAD_ID if workload_id == IMAGE_BUILD_WORKLOAD_ID else ""
     workload_name, workload_kind = names.workloads.get(workload_id, ("", ""))
     return LedgerCostRow(
         workspace_id=workspace_id,
@@ -610,6 +642,7 @@ def _cost_row(
         workload_name=workload_name,
         workload_kind=workload_kind,
         task_id=task_id,
+        category=category,
         cost_nanos=cost_nanos,
         components=components,
     )

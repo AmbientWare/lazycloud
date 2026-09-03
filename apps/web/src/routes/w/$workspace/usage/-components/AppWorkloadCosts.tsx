@@ -76,7 +76,12 @@ export function AppWorkloadCosts({
                   className="mono min-w-0 flex-1 truncate text-xs text-foreground"
                   title={row.workload_id}
                 >
-                  {row.workload_name || (row.workload_id ? "Workload removed" : "Unattributed")}
+                  {row.workload_name ||
+                    (row.category === "image-build"
+                      ? "Image builds"
+                      : row.workload_id
+                        ? "Workload removed"
+                        : "Unattributed")}
                 </span>
                 <span className="mono w-16 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
                   {runtime(row)}

@@ -93,6 +93,7 @@ def usage_cost_list_response(
                 workload_name=row.workload_name,
                 workload_kind=row.workload_kind,
                 task_id=row.task_id,
+                category=row.category,
                 cost_nanos=row.cost_nanos,
                 components=[
                     UsageCostComponentResponse(

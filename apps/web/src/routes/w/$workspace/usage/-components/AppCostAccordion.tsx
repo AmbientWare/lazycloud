@@ -171,7 +171,11 @@ function UnattributedRow({
   return (
     <div className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5">
       <span className="size-3.5 shrink-0" aria-hidden="true" />
-      <RowIdentity name="Unattributed" detail={`No app · ${workspaceLabel(row)}`} />
+      {row.category === "image-build" ? (
+        <RowIdentity name="Image builds" detail={`Builds · ${workspaceLabel(row)}`} />
+      ) : (
+        <RowIdentity name="Unattributed" detail={`No app · ${workspaceLabel(row)}`} />
+      )}
       <RowFigures
         share={share}
         label={`${shareLabel(share)} of spend over this range`}
@@ -215,5 +219,5 @@ function appName(row: UsageCostRow): string {
  * the cross-page dedupe and React's reconciliation.
  */
 function rowKey(row: UsageCostRow): string {
-  return `${row.workspace_id}|${row.app_id}`;
+  return `${row.workspace_id}|${row.app_id}|${row.category}`;
 }

@@ -17,6 +17,10 @@ METERING_WINDOW_ENDED_AT_METADATA_KEY = "metering_window_ended_at"
 METERING_OBSERVATION_QUALITY_METADATA_KEY = "metering_observation_quality"
 METERING_OBSERVATION_ERROR_TYPE_METADATA_KEY = "metering_observation_error_type"
 
+# The workload id image builds meter under: a build runs for an image, not for a
+# stub, and the ledger tells builds apart from the rest of a workspace by it.
+IMAGE_BUILD_WORKLOAD_ID = "image-build"
+
 UsageRecordIdentityPart: TypeAlias = str | int
 
 
@@ -147,6 +151,7 @@ class UsageAggregation(ContractModel):
 
 
 __all__ = [
+    "IMAGE_BUILD_WORKLOAD_ID",
     "METERING_OBSERVATION_ERROR_TYPE_METADATA_KEY",
     "METERING_OBSERVATION_QUALITY_METADATA_KEY",
     "METERING_WINDOW_ENDED_AT_METADATA_KEY",

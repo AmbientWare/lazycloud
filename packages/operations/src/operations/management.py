@@ -750,6 +750,10 @@ class ManagementService:
         summaries: list[AppOperationalSummary] = []
         for app in apps:
             app_resources = resources_by_app.get(app.id, [])
+            # An ad hoc run creates the app its stub hangs off without deploying
+            # anything; the dashboard lists what is deployed, not every name.
+            if not app_resources:
+                continue
             latest = max(
                 app_resources,
                 key=lambda item: (item.deployment.created_at, item.deployment.version),
