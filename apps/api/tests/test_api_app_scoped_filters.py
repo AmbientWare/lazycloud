@@ -74,6 +74,35 @@ def test_app_scoped_resource_lists_exclude_peer_apps(
     assert items[0].app_id == app.id
 
 
+def test_deployed_stub_list_excludes_runtime_only_revisions(
+    isolated_services: ApiServices,
+    client_stack: ExitStack,
+) -> None:
+    control = ControlPlaneService(isolated_services.context)
+    runtime = control.create_stub("runtime-only")
+    deployment = isolated_services.deployments.deploy(
+        DeploymentSpec(
+            name="published",
+            kind=DeploymentKind.Function,
+            handler="published:handler",
+            metadata={"app": "published_app"},
+        )
+    )
+    assert deployment.stub_id is not None
+
+    client, headers = _client(isolated_services, client_stack)
+    response = client.get(
+        "/api/v1/stubs",
+        headers=headers,
+        params={"deployed_only": True},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = StubListResponse.model_validate_json(response.content)
+    assert runtime.id not in {stub.id for stub in payload.stubs}
+    assert [stub.id for stub in payload.stubs] == [deployment.stub_id]
+
+
 def test_deployment_pages_are_app_and_workload_scoped_with_opaque_cursors(
     isolated_services: ApiServices,
     client_stack: ExitStack,

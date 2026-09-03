@@ -843,37 +843,23 @@ class GatewayControlService:
             request = _request_with_workload_defaults(request, kind)
             config = stub_config(request)
             app_name = app_slug_or_default(request.app_name, default=request.name)
-            app = self.services.apps.create(
-                app_name,
-                workspace=request.workspace,
-                public=not request.authorized,
-            )
             metadata: dict[str, JsonValue] = {
                 "object_id": request.object_id,
                 "image_id": request.image_id,
                 "force_create": request.force_create,
-                "app": app.name,
-                "app_id": app.id,
+                "app": app_name,
             }
             config_metadata = dict(config.metadata)
-            config_metadata["app"] = app.name
-            config_metadata["app_id"] = app.id
+            config_metadata["app"] = app_name
             config.metadata = config_metadata
             stub = self.control_plane.create_stub(
                 request.name,
                 workspace=request.workspace,
                 kind=kind,
                 handler=request.handler or None,
-                app_id=app.id,
                 public=not request.authorized,
                 config=config,
                 metadata=metadata,
-            )
-            self.services.apps.create(
-                app.name,
-                stub_id=stub.id,
-                workspace=stub.workspace_id,
-                public=not request.authorized,
             )
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
