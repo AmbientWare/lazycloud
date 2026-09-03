@@ -61,6 +61,7 @@ output "runtime_configuration" {
     LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID          = ""
     LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY      = ""
     LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE       = "false"
+    LAZYCLOUD_WORKLOAD_IMAGE_REGISTRY_REPOSITORY  = local.workload_image_repository
     # Which store cuts a workspace's storage credential, and the role it is cut
     # from. Neither has a meaningful empty, unlike the object-store endpoint
     # above, so both are checked by the values renderer rather than defaulted.

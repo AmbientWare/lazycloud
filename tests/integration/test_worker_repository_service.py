@@ -431,6 +431,7 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
     )
     service.origin_credentials.config = CacheOriginCredentialConfig(
         image_registry_store=ImageRegistryStore.S3,
+        workload_image_registry_repository="localhost:5000/lazycloud/workloads",
     )
     service.origin_credentials.archive_settings = _archive_settings()
     service.origin_credentials.object_store_client = archive_storage
@@ -444,6 +445,9 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
         upload_capability=capability,
         archive_size_bytes=1024,
         archive_sha256="a" * 64,
+        registry_ref=f"localhost:5000/lazycloud/workloads@sha256:{'c' * 64}",
+        manifest_digest="sha256:" + "c" * 64,
+        architecture="amd64",
     )
     principal = WorkerRepositoryPrincipal(
         workspace_id="control-workspace",
@@ -527,6 +531,9 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
                 upload_capability=stale_capability,
                 archive_size_bytes=1024,
                 archive_sha256="b" * 64,
+                registry_ref=f"localhost:5000/lazycloud/workloads@sha256:{'d' * 64}",
+                manifest_digest="sha256:" + "d" * 64,
+                architecture="amd64",
             ),
             principal=principal,
         )
@@ -662,11 +669,16 @@ def test_cache_origin_broker_returns_urls_without_storage_credentials(
             object_key=f"image-archives/{image_id}.rclip",
             size_bytes=1024,
             sha256="a" * 64,
+            registry_ref=f"localhost:5000/lazycloud/workloads@sha256:{'a' * 64}",
+            manifest_digest="sha256:" + "a" * 64,
+            architecture="amd64",
+            format_version=2,
         )
         ImageRepository(session).upsert(ImageRecord(workspace_id=workspace.id, image_id=image_id))
     service = _worker_repository_service(isolated_services, redis)
     service.origin_credentials.config = CacheOriginCredentialConfig(
         image_registry_store=ImageRegistryStore.S3,
+        workload_image_registry_repository="localhost:5000/lazycloud/workloads",
     )
     service.origin_credentials.archive_settings = _archive_settings()
     archive_storage = _FakeObjectStorage()
@@ -719,6 +731,10 @@ def test_cache_origin_broker_denies_other_workers_container_and_image(
             object_key=f"image-archives/{assigned_image_id}.rclip",
             size_bytes=1024,
             sha256="b" * 64,
+            registry_ref=f"localhost:5000/lazycloud/workloads@sha256:{'b' * 64}",
+            manifest_digest="sha256:" + "b" * 64,
+            architecture="amd64",
+            format_version=2,
         )
         ImageRepository(session).upsert(
             ImageRecord(workspace_id=workspace_id, image_id=assigned_image_id)
@@ -726,6 +742,7 @@ def test_cache_origin_broker_denies_other_workers_container_and_image(
     repository = _worker_repository_service(isolated_services, redis)
     repository.origin_credentials.config = CacheOriginCredentialConfig(
         image_registry_store=ImageRegistryStore.S3,
+        workload_image_registry_repository="localhost:5000/lazycloud/workloads",
     )
     repository.origin_credentials.archive_settings = _archive_settings()
     archive_storage = _FakeObjectStorage()

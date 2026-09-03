@@ -25,6 +25,16 @@ resource "aws_ecr_repository" "image" {
   }
 }
 
+resource "aws_ecr_repository" "workload_images" {
+  name                 = "${var.name}/workload-images"
+  image_tag_mutability = "IMMUTABLE"
+  force_delete         = var.destroy_repositories_with_images
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
 # Untagged images accumulate on every rebuild of an unchanged layer set. Tagged
 # images are kept: a deployment names its tag, and a rollback is a values commit
 # naming an older one, which has to still be there.
@@ -37,6 +47,24 @@ resource "aws_ecr_lifecycle_policy" "image" {
     rules = [{
       rulePriority = 1
       description  = "Expire untagged images after 14 days"
+      selection = {
+        tagStatus   = "untagged"
+        countType   = "sinceImagePushed"
+        countUnit   = "days"
+        countNumber = 14
+      }
+      action = { type = "expire" }
+    }]
+  })
+}
+
+resource "aws_ecr_lifecycle_policy" "workload_images" {
+  repository = aws_ecr_repository.workload_images.name
+
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Expire untagged workload manifests after 14 days"
       selection = {
         tagStatus   = "untagged"
         countType   = "sinceImagePushed"

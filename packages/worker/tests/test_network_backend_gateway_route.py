@@ -31,18 +31,18 @@ class _Allocator:
         return None
 
 
-def _host_with_wireguard(argv: list[str]) -> ProcessResult:
+def _host_with_wireguard(args: list[str]) -> ProcessResult:
     stdout = ""
-    if argv[:4] == ["ip", "-4", "route", "show"]:
+    if args[:4] == ["ip", "-4", "route", "show"]:
         stdout = "default via 10.84.1.1 dev enp39s0 proto dhcp src 10.84.1.103 metric 512\n"
-    elif argv[:4] == ["ip", "-4", "route", "get"]:
+    elif args[:4] == ["ip", "-4", "route", "get"]:
         stdout = "100.96.0.2 dev wg-lazycloud src 100.125.130.220 uid 0\n    cache\n"
-    elif argv[:3] == ["ip", "-6", "route"]:
-        return ProcessResult(args=argv, exit_code=2, stdout="", stderr="no ipv6")
-    elif argv[-2:] == ["rt_br0", "up"] or "-C" in argv:
+    elif args[:3] == ["ip", "-6", "route"]:
+        return ProcessResult(args=args, exit_code=2, stdout="", stderr="no ipv6")
+    elif args[-2:] == ["rt_br0", "up"] or "-C" in args:
         # Firewall checks report the rule absent; everything else succeeds.
-        return ProcessResult(args=argv, exit_code=1 if "-C" in argv else 0, stdout="", stderr="")
-    return ProcessResult(args=argv, exit_code=0, stdout=stdout, stderr="")
+        return ProcessResult(args=args, exit_code=1 if "-C" in args else 0, stdout="", stderr="")
+    return ProcessResult(args=args, exit_code=0, stdout=stdout, stderr="")
 
 
 def test_bridge_forwards_and_masquerades_toward_the_control_plane_interface() -> None:
@@ -89,15 +89,15 @@ def test_bridge_forwards_and_masquerades_toward_the_control_plane_interface() ->
 
 
 def test_gateway_on_the_uplink_adds_no_second_interface() -> None:
-    def uplink_only(argv: list[str]) -> ProcessResult:
-        if argv[:4] == ["ip", "-4", "route", "get"]:
+    def uplink_only(args: list[str]) -> ProcessResult:
+        if args[:4] == ["ip", "-4", "route", "get"]:
             return ProcessResult(
-                args=argv,
+                args=args,
                 exit_code=0,
                 stdout="1.2.3.4 via 10.84.1.1 dev enp39s0 src 10.84.1.103\n",
                 stderr="",
             )
-        return _host_with_wireguard(argv)
+        return _host_with_wireguard(args)
 
     system = CommandNetworkSystem(run_command=uplink_only)
     capabilities = system.discover_host_capabilities(

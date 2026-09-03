@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -12,6 +13,7 @@ from shared.app_identity import NAME
 from shared.image_building.credentials import (
     EcrRegistryRef,
     parse_ecr_registry,
+    registry_host_for_image,
     registry_hosts_equal,
 )
 
@@ -111,9 +113,32 @@ class _EcrAuthorizationResponse(AwsModel):
     authorization_data: list[_EcrAuthorizationData] = Field(alias="authorizationData")
 
 
+class _EcrImageDeletionFailure(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    failure_code: str = Field(alias="failureCode")
+
+
+class _EcrImageDeletionResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    failures: list[_EcrImageDeletionFailure] = Field(default_factory=list)
+
+
 @runtime_checkable
 class EcrAuthorizationClient(Protocol):
     def get_authorization_token(self, *, registryIds: list[str]) -> object: ...
+
+
+@runtime_checkable
+class EcrImageDeletionClient(Protocol):
+    def batch_delete_image(
+        self,
+        *,
+        registryId: str,
+        repositoryName: str,
+        imageIds: list[dict[str, str]],
+    ) -> object: ...
 
 
 _SessionT = TypeVar("_SessionT", covariant=True)
@@ -269,10 +294,65 @@ class AwsProvider:
             expires_at=entry.expires_at,
         )
 
+    def delete_ecr_image(
+        self,
+        repository: str,
+        manifest_digest: str,
+        *,
+        ecr_client: EcrImageDeletionClient | None = None,
+    ) -> None:
+        registry_host = registry_host_for_image(repository)
+        plan = self.ecr_authorization_plan(registry_host)
+        repository_prefix = f"{plan.registry.host}/"
+        if not repository.startswith(repository_prefix):
+            raise ValueError("ECR repository does not belong to its registry host")
+        repository_name = repository.removeprefix(repository_prefix)
+        if not repository_name or repository_name.startswith("/"):
+            raise ValueError("ECR repository name is invalid")
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", manifest_digest) is None:
+            raise ValueError("ECR image digest is invalid")
+        client = ecr_client or self.client(AwsService.Ecr)
+        if not isinstance(client, EcrImageDeletionClient):
+            raise RuntimeError("boto3 ecr client lacks image deletion")
+        response = _EcrImageDeletionResponse.model_validate(
+            client.batch_delete_image(
+                registryId=plan.registry.account_id,
+                repositoryName=repository_name,
+                imageIds=[{"imageDigest": manifest_digest}],
+            )
+        )
+        material_failures = [
+            failure for failure in response.failures if failure.failure_code != "ImageNotFound"
+        ]
+        if material_failures:
+            raise RuntimeError("ECR image deletion failed")
+
+
+@dataclass(slots=True)
+class AwsEcrImageRegistry:
+    repository: str
+    provider: AwsProvider = field(default_factory=AwsProvider)
+
+    def __post_init__(self) -> None:
+        registry = registry_host_for_image(self.repository)
+        self.provider.ecr_authorization_plan(registry)
+
+    def delete_manifest(self, registry_ref: str) -> None:
+        prefix = f"{self.repository}@"
+        if not registry_ref.startswith(prefix):
+            raise ValueError(
+                "image registry reference does not belong to the configured repository"
+            )
+        self.provider.delete_ecr_image(
+            self.repository,
+            registry_ref.removeprefix(prefix),
+        )
+
 
 __all__ = [
     "AwsClientOptions",
     "AwsCredentialSource",
+    "AwsEcrImageRegistry",
     "AwsProvider",
     "AwsProviderSettings",
     "AwsService",
@@ -280,4 +360,5 @@ __all__ = [
     "EcrAuthorization",
     "EcrAuthorizationClient",
     "EcrAuthorizationPlan",
+    "EcrImageDeletionClient",
 ]

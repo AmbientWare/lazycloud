@@ -54,6 +54,16 @@ output "ecr_repository_arns" {
   value       = [for repository in aws_ecr_repository.image : repository.arn]
 }
 
+output "workload_image_repository" {
+  description = "Immutable OCI repository holding user image layers."
+  value       = aws_ecr_repository.workload_images.repository_url
+}
+
+output "workload_image_repository_arn" {
+  description = "Repository the control plane may vend scoped push and pull credentials for."
+  value       = aws_ecr_repository.workload_images.arn
+}
+
 output "oidc_provider_arn" {
   value = aws_iam_openid_connect_provider.cluster.arn
 }

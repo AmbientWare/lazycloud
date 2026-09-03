@@ -219,6 +219,7 @@ def assemble_worker_process_services(
     source_cache_reconciler: WorkerSourceCacheReconciler | None = None,
     retention: WorkerRetentionService | None = None,
     credential_refresher: WorkspaceCredentialRefresher | None = None,
+    cleanup_actions: list[WorkerCleanupAction] | None = None,
 ) -> WorkerProcessServices:
     worker_repository = workers
     container_repository = containers
@@ -324,16 +325,19 @@ def assemble_worker_process_services(
         stopper=runtime_stopper,
         registration=registration,
         readiness_validator=readiness_validator,
-        cleanup_actions=(
-            [
-                WorkerCleanupAction(
-                    name="request-mounts",
-                    action=finalization_dependencies.request_mounts.unmount_all,
-                )
-            ]
-            if finalization_dependencies.request_mounts is not None
-            else []
-        ),
+        cleanup_actions=[
+            *(cleanup_actions or []),
+            *(
+                [
+                    WorkerCleanupAction(
+                        name="request-mounts",
+                        action=finalization_dependencies.request_mounts.unmount_all,
+                    )
+                ]
+                if finalization_dependencies.request_mounts is not None
+                else []
+            ),
+        ],
     )
     image_builds = (
         WorkerImageBuildExecutionService(

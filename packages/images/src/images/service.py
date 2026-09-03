@@ -263,6 +263,10 @@ def _build_record_matches_executor(
         return (
             bool(record.cache_metadata.get("scheduler_submit_status"))
             and record.cache_metadata.get("build_container_required") == "true"
+            and (
+                not executor.requires_archive_publication
+                or record.cache_metadata.get("image_archive_format_version") == "2"
+            )
         )
     return False
 
@@ -1296,6 +1300,10 @@ class ImageBuildService:
         object_key: str,
         size_bytes: int,
         sha256: str,
+        registry_ref: str,
+        manifest_digest: str,
+        architecture: str,
+        format_version: int,
     ) -> ImageArchiveReservation:
         """Claim the one archive for this image id, or defer to the one already there.
 
@@ -1318,6 +1326,10 @@ class ImageBuildService:
                 object_key=object_key,
                 size_bytes=size_bytes,
                 sha256=sha256,
+                registry_ref=registry_ref,
+                manifest_digest=manifest_digest,
+                architecture=architecture,
+                format_version=format_version,
             )
         if reserved:
             return ImageArchiveReservation(archive=archive, upload_required=True)
@@ -1326,7 +1338,7 @@ class ImageBuildService:
             # Adopting the row would let this build skip an upload for content that
             # is about to disappear, so fail retryably and let cleanup finish.
             raise ConflictError("image archive is being reclaimed")
-        if self._archive_bytes_present(archive):
+        if archive.format_version >= 2 and self._archive_bytes_present(archive):
             return ImageArchiveReservation(archive=archive, upload_required=False)
         with self.context.database.session() as session:
             taken = ImageArchiveRepository(session).take_over(
@@ -1336,6 +1348,10 @@ class ImageBuildService:
                 object_key=object_key,
                 size_bytes=size_bytes,
                 sha256=sha256,
+                registry_ref=registry_ref,
+                manifest_digest=manifest_digest,
+                architecture=architecture,
+                format_version=format_version,
             )
         if taken is None:
             raise ConflictError("image archive was claimed by another build")

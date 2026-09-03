@@ -244,6 +244,10 @@ class ArchiveImageBuildPublicationPublisher:
                 "image_archive_size_bytes": str(published_size),
                 "image_archive_sha256": published_sha256,
                 "image_archive_status": "ready",
+                "image_archive_registry_ref": archive.registry_ref,
+                "image_archive_manifest_digest": archive.manifest_digest,
+                "image_archive_architecture": archive.architecture,
+                "image_archive_format_version": str(archive.format_version),
             },
             reason="image build archive verified",
         )

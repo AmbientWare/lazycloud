@@ -208,6 +208,42 @@ def test_concurrent_equivalent_builds_share_one_durable_record(
     assert second_result.record.phase is ImageBuildPhase.Reused
 
 
+def test_archive_executor_rebuilds_legacy_completed_image(
+    isolated_services: ApiServices,
+) -> None:
+    class LegacyBuildContainerExecutor:
+        cache_markers: ClassVar[frozenset[str]] = frozenset(
+            {ImageBuildExecutorKind.BuildContainer.value}
+        )
+        requires_archive_publication: ClassVar[bool] = False
+
+        def execute(self, request: ImageBuildExecutionRequest) -> ImageBuildExecutionResult:
+            del request
+            return ImageBuildExecutionResult(
+                status=BuildStatus.Complete,
+                cache_metadata={
+                    "executor": ImageBuildExecutorKind.BuildContainer.value,
+                    "scheduler_submit_status": "submitted",
+                    "build_container_required": "true",
+                },
+            )
+
+    class CurrentBuildContainerExecutor(LegacyBuildContainerExecutor):
+        requires_archive_publication: ClassVar[bool] = True
+
+    service = isolated_services.images
+    spec = ImageSpec(ignore_python=True, commands=["printf archive-cutover"])
+    service.executor = LegacyBuildContainerExecutor()
+    legacy = service.execute(spec).record
+
+    service.executor = CurrentBuildContainerExecutor()
+    replacement = service.start(spec).record
+
+    assert legacy.status is BuildStatus.Complete
+    assert replacement.id != legacy.id
+    assert replacement.status is BuildStatus.Running
+
+
 def test_stale_image_build_claim_is_failed_and_replaced_after_crash(
     isolated_services: ApiServices,
 ) -> None:
@@ -327,6 +363,10 @@ def test_archive_publication_rejects_head_integrity_mismatch(
             object_key=archive_key,
             size_bytes=1024,
             sha256=archive_sha256,
+            registry_ref=f"registry.example.com/workloads@sha256:{'c' * 64}",
+            manifest_digest="sha256:" + "c" * 64,
+            architecture="amd64",
+            format_version=2,
         )
 
     class IntegrityMismatchStore:

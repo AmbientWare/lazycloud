@@ -12,6 +12,7 @@ from shared.app_identity import ENV_PREFIX
 from shared.contracts import ContractModel
 from shared.identity import TokenKind
 from shared.image_building.constants import image_archive_object_key
+from shared.image_building.credentials import registry_host_for_image
 from shared.image_building.records import ImageArchiveRecord
 from storage.image_archive import ResolvedImageArchiveSettings
 from worker.credential_payloads import WORKER_TOKEN_KINDS, WorkerCredentialPrincipal
@@ -24,6 +25,7 @@ from worker.origin_access import (
     CacheOriginCredentials,
     ImageArchiveUploadCredentialRequest,
     ImageArchiveUploadCredentials,
+    ImageRegistryCredentials,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ class CacheOriginCredentialConfig(BaseSettings):
 
     image_registry_store: ImageRegistryStore = ImageRegistryStore.Local
     image_archive_extension: str = DEFAULT_IMAGE_ARCHIVE_EXTENSION
+    workload_image_registry_repository: str = ""
 
 
 class PresignedGetUrlClient(Protocol):
@@ -85,12 +88,17 @@ class WorkerOriginCredentialServices(Protocol):
     def images(self) -> WorkerOriginCredentialImageLookup: ...
 
 
+class ImageRegistryCredentialIssuer(Protocol):
+    def __call__(self, registry: str) -> ImageRegistryCredentials: ...
+
+
 @dataclass(slots=True)
 class WorkerCacheOriginCredentialService:
     services: WorkerOriginCredentialServices | None = None
     config: CacheOriginCredentialConfig = field(default_factory=CacheOriginCredentialConfig)
     object_store_client: PresignedPutClient | None = None
     archive_settings: ResolvedImageArchiveSettings | None = None
+    registry_credentials: ImageRegistryCredentialIssuer | None = None
 
     @property
     def image_archive_available(self) -> bool:
@@ -119,10 +127,35 @@ class WorkerCacheOriginCredentialService:
         )
         if archive.error:
             return CacheOriginCredentials.denied(archive.error)
+        registry_repository = self.config.workload_image_registry_repository.strip()
+        credentials: ImageRegistryCredentials | None = None
+        if registry_repository:
+            registry = registry_host_for_image(registry_repository)
+            if not registry:
+                return CacheOriginCredentials.denied(
+                    "workload image registry repository is invalid"
+                )
+            if self.registry_credentials is not None:
+                try:
+                    credentials = self.registry_credentials(registry)
+                except Exception:
+                    LOGGER.warning(
+                        "workload registry credentials could not be issued",
+                        exc_info=True,
+                    )
+                    return CacheOriginCredentials.denied(
+                        "workload image registry credentials are unavailable"
+                    )
         return CacheOriginCredentials(
             image_archive_url=archive.url,
             archive_size_bytes=archive.size_bytes,
             archive_sha256=archive.sha256,
+            registry_repository=registry_repository,
+            registry_ref=archive.registry_ref,
+            manifest_digest=archive.manifest_digest,
+            architecture=archive.architecture,
+            format_version=archive.format_version,
+            registry_credentials=credentials,
         )
 
     def vend_upload(
@@ -203,6 +236,17 @@ class WorkerCacheOriginCredentialService:
             ),
         )
 
+    def upload_descriptor_denial(
+        self,
+        request: ImageArchiveUploadCredentialRequest,
+    ) -> str:
+        repository = self.config.workload_image_registry_repository.strip()
+        if not repository:
+            return "workload image registry is not configured"
+        if not request.registry_ref.startswith(f"{repository}@"):
+            return "image OCI descriptor does not belong to the workload registry"
+        return ""
+
     def _authorization_denial(
         self,
         request: CacheOriginCredentialRequest,
@@ -240,6 +284,13 @@ class WorkerCacheOriginCredentialService:
         )
         if archive is None:
             return _ImageArchiveCredentials()
+        if archive.cleanup_claimed_at is not None:
+            return _ImageArchiveCredentials(error="image archive is being reclaimed")
+        repository = self.config.workload_image_registry_repository.strip()
+        if not repository or not archive.registry_ref.startswith(f"{repository}@"):
+            return _ImageArchiveCredentials(
+                error="image OCI descriptor does not belong to the workload registry"
+            )
         try:
             if self.object_store_client is None:
                 return _ImageArchiveCredentials()
@@ -255,6 +306,10 @@ class WorkerCacheOriginCredentialService:
             url=url,
             size_bytes=archive.size_bytes,
             sha256=archive.sha256,
+            registry_ref=archive.registry_ref,
+            manifest_digest=archive.manifest_digest,
+            architecture=archive.architecture,
+            format_version=archive.format_version,
         )
 
     def _services(self) -> WorkerOriginCredentialServices:
@@ -268,4 +323,8 @@ class _ImageArchiveCredentials(ContractModel):
     url: str = ""
     size_bytes: int = 0
     sha256: str = ""
+    registry_ref: str = ""
+    manifest_digest: str = ""
+    architecture: str = ""
+    format_version: int = 0
     error: str = ""

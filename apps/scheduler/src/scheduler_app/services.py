@@ -50,6 +50,7 @@ from operations.container_shutdown import (
     ContainerShutdownService,
     DatabaseDurableWorkerAbsence,
 )
+from provider_aws import AwsEcrImageRegistry
 from provider_clients import (
     workspace_compute_provider_resolver,
 )
@@ -71,6 +72,7 @@ from scheduler.state import (
 )
 from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.checkpoints import checkpoint_recent_stub_key
+from shared.image_building.credentials import parse_ecr_registry, registry_host_for_image
 from storage.image_archive import ImageArchiveSettings, ResolvedImageArchiveSettings
 from storage.retention import (
     RetentionResult,
@@ -107,6 +109,7 @@ class SchedulerStorageSettings:
     image_archive: ImageArchiveSettings
     retention: RetentionSettings
     volume_metering: VolumeMeteringSettings
+    workload_image_registry_repository: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +214,7 @@ class SchedulerAppServices:
             cache_storage=CacheStorage(context),
             settings=storage.retention,
             image_archive_settings=image_archive_config,
+            workload_image_registry_repository=(storage.workload_image_registry_repository),
         )
         worker_repository = RedisSchedulerWorkerRepository(redis)
         container_repository = RedisSchedulerContainerRepository(redis)
@@ -480,9 +484,16 @@ def scheduler_retention(
     cache_storage: CacheStorage,
     settings: RetentionSettings,
     image_archive_settings: ResolvedImageArchiveSettings,
+    workload_image_registry_repository: str = "",
 ) -> SchedulerRetention | None:
     if not settings.enabled:
         return None
+    repository = workload_image_registry_repository.strip()
+    workload_registry = (
+        AwsEcrImageRegistry(repository)
+        if parse_ecr_registry(registry_host_for_image(repository)) is not None
+        else None
+    )
     return SchedulerRetention(
         service=RetentionService(
             context=context,
@@ -493,6 +504,7 @@ def scheduler_retention(
             ),
             image_archive_settings=image_archive_settings,
             image_archive_client=S3ObjectStoreClient.from_settings(image_archive_settings.storage),
+            workload_image_registry=workload_registry,
         ),
         deployment_resources=DeploymentResourceService(context),
     )

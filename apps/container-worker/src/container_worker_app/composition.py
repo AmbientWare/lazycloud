@@ -65,6 +65,7 @@ from worker.image_build_execution import (
 from worker.image_build_runtime_credentials import RemoteImageBuildCredentialLoader
 from worker.image_build_scratch import ImageBuildScratchManager
 from worker.image_lifecycle import ImageArchiveStorageMode
+from worker.image_runtime import ImageRuntimeClient
 from worker.managed_runtime import MANAGED_RUNTIME_IMAGE_ROOT
 from worker.monitoring import (
     AsyncContainerLifecycleSink,
@@ -113,6 +114,7 @@ from worker.source_code import DEFAULT_SOURCE_CACHE_ROOT, SourceCodePackageMater
 from worker.supervision import (
     WorkerSupervisionService,
 )
+from worker.worker_lifecycle import WorkerCleanupAction
 from worker.workspace_credential_refresh import WorkspaceCredentialRefresher
 from worker.workspace_storage import WorkerWorkspaceStorageManager
 
@@ -122,10 +124,11 @@ from .container_instances import (
     OciContainerServiceInstanceRecorder,
 )
 from .image_archives import (
+    BrokeredClipImageMounter,
     BrokeredImageArchiveSourceLoader,
     CacheServerImageArchiveMetadataProvider,
-    TarImageArchiveMounter,
 )
+from .image_runtime import ImageRuntimeProcess
 from .process_assembly import (
     WorkerProcessContainerServiceDependencies,
     WorkerProcessExecutionDependencies,
@@ -143,6 +146,7 @@ def build_worker_process_services(
     *,
     settings: WorkerSettings,
     image_mounter: WorkerImageArchiveMounter | None = None,
+    image_runtime_client: ImageRuntimeClient | None = None,
     image_source_loader: WorkerImageArchiveSourceLoader | None = None,
     mountpoint_backend: WorkerRequestMountLifecycle | None = None,
     repository_client: WorkerRepositoryHttpClient | None = None,
@@ -218,6 +222,23 @@ def build_worker_process_services(
         scratch_root=paths.container_rootfs_root,
     )
     cache_server = _worker_content_cache(config, internal_http)
+    image_runtime_process: ImageRuntimeProcess | None = None
+    image_runtime = image_runtime_client
+    image_content_cache_root = (
+        paths.cache_root.expanduser().resolve()
+        if paths.cache_root is not None
+        else Path(paths.image_cache_path).expanduser().resolve().parent / "image-content"
+    )
+    if image_runtime is None:
+        image_runtime_process = ImageRuntimeProcess(
+            image_root=Path(paths.image_cache_path).expanduser().resolve(),
+            mount_root=Path(paths.image_mount_root).expanduser().resolve(),
+            cache_root=image_content_cache_root,
+            build_root=paths.image_build_root.expanduser().resolve(),
+        )
+        image_runtime = image_runtime_process.start()
+    if image_mounter is None:
+        image_mounter = BrokeredClipImageMounter(repository, image_runtime)
     checkpoint_state_sink = RemoteCheckpointStateSink(repository)
     automatic_checkpoint_leases = RemoteAutomaticCheckpointCreationLeaseCoordinator(repository)
     checkpoint_restore_source = RemoteCheckpointRestoreSource(
@@ -281,12 +302,13 @@ def build_worker_process_services(
         CacheServerImageArchiveMetadataProvider(cache_server) if cache_server is not None else None
     )
     image_loader = WorkerImageStartupLoader(
-        mounter=image_mounter or TarImageArchiveMounter(),
+        mounter=image_mounter,
         cache=cache_server,
         source_loader=archive_source_loader,
         cache_metadata=cache_metadata,
         image_cache_path=paths.image_cache_path,
         image_mount_root=paths.image_mount_root,
+        image_content_cache_root=str(image_content_cache_root / "image-layers"),
         image_archive_extension=config.image_archive_extension,
         storage_mode=ImageArchiveStorageMode.Local,
         publish_source_to_cache=cache_server is not None,
@@ -382,8 +404,10 @@ def build_worker_process_services(
     )
     image_build_dependencies = WorkerProcessImageBuildDependencies(
         image_builder=BuildahWorkerImageBuilder(
-            archiver=image_archiver,
             scratch=image_build_scratch,
+            repository=repository,
+            image_runtime=image_runtime,
+            archive_root=Path(paths.image_cache_path),
             context_loader=RepositoryImageBuildContextLoader(repository, internal_http),
         ),
         image_archive_publisher=image_archive_publisher,
@@ -394,6 +418,7 @@ def build_worker_process_services(
         config=WorkerRetentionConfig(
             image_cache_root=Path(paths.image_cache_path),
             image_mount_root=Path(paths.image_mount_root),
+            image_layer_cache_root=image_content_cache_root / "image-layers",
             checkpoint_root=Path(paths.checkpoint_root),
             image_archive_extension=config.image_archive_extension,
             image_cache_max_bytes=config.image_cache_max_bytes,
@@ -407,6 +432,7 @@ def build_worker_process_services(
         ),
         image_build_scratch=image_build_scratch,
         checkpoint_activity=checkpoint_activity,
+        image_unmounter=image_runtime.unmount,
     )
     return assemble_worker_process_services(
         identity=identity,
@@ -420,13 +446,20 @@ def build_worker_process_services(
         pool_mode=execution.pool_mode,
         billing_owner=execution.billing_owner,
         registration=registration,
-        readiness_validator=(
-            None
-            if network_backend is None
-            else lambda: _initialize_network_backend(
-                network_backend,
-                _gateway_runtime_network_endpoint(config),
-            )
+        readiness_validator=lambda: _validate_worker_readiness(
+            image_runtime,
+            network_backend=network_backend,
+            gateway_endpoint=_gateway_runtime_network_endpoint(config),
+        ),
+        cleanup_actions=(
+            [
+                WorkerCleanupAction(
+                    name="image-runtime",
+                    action=image_runtime_process.stop,
+                )
+            ]
+            if image_runtime_process is not None
+            else []
         ),
         container_service_dependencies=container_service_dependencies,
         finalization_dependencies=finalization_dependencies,
@@ -443,6 +476,20 @@ def build_worker_process_services(
             ),
         ),
     )
+
+
+def _validate_worker_readiness(
+    image_runtime: ImageRuntimeClient | None,
+    *,
+    network_backend: AgentBridgeNetworkBackend | None,
+    gateway_endpoint: str,
+) -> None:
+    if image_runtime is not None:
+        response = image_runtime.health()
+        if not response.ok:
+            raise RuntimeError(response.error or "image runtime is unavailable")
+    if network_backend is not None:
+        _initialize_network_backend(network_backend, gateway_endpoint)
 
 
 def planned_scheduler_worker_record_from_settings(

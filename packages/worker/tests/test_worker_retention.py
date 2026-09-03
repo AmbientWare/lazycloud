@@ -30,33 +30,46 @@ def test_retention_preserves_active_local_clip_archive(tmp_path: Path) -> None:
     now = utc_now()
     image_cache = tmp_path / "images"
     image_mounts = tmp_path / "mounts"
+    image_layers = tmp_path / "layers"
     checkpoints = tmp_path / "checkpoints"
-    for root in (image_cache, image_mounts, checkpoints):
+    for root in (image_cache, image_mounts, image_layers, checkpoints):
         root.mkdir()
 
     active_archive = image_cache / "active.clip"
     inactive_archive = image_cache / "inactive.clip"
     active_archive.write_bytes(b"active")
     inactive_archive.write_bytes(b"inactive")
+    active_layers = image_layers / "active"
+    inactive_layers = image_layers / "inactive"
+    active_layers.mkdir()
+    inactive_layers.mkdir()
+    (active_layers / "layer").write_bytes(b"active-layer")
+    (inactive_layers / "layer").write_bytes(b"inactive-layer")
     old = (now - timedelta(days=1)).timestamp()
-    os.utime(active_archive, (old, old))
-    os.utime(inactive_archive, (old, old))
+    for path in (active_archive, inactive_archive, active_layers, inactive_layers):
+        os.utime(path, (old, old))
 
     result = WorkerRetentionService(
         instances=_Instances(),
         config=WorkerRetentionConfig(
             image_cache_root=image_cache,
             image_mount_root=image_mounts,
+            image_layer_cache_root=image_layers,
             checkpoint_root=checkpoints,
             image_cache_max_bytes=1,
+            image_layer_cache_max_bytes=1,
             low_watermark_pct=1,
             recent_guard_seconds=0,
+            materialization_retention_seconds=1,
         ),
     ).reconcile(now=now)
 
     assert active_archive.exists()
     assert not inactive_archive.exists()
+    assert active_layers.exists()
+    assert not inactive_layers.exists()
     assert result.image_cache_removed == 1
+    assert result.image_layer_cache_removed == 1
 
 
 def test_retention_preserves_checkpoint_with_active_checkpoint_lease(tmp_path: Path) -> None:

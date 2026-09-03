@@ -150,6 +150,7 @@ class ContainerRequestContext(ContractModel):
     # Digest the control plane resolved against this request's own workspace
     # authorization. Empty means no archive is authorized for the image.
     archive_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
+    preload_image: bool = False
     stub_id: str = ""
     stub_type: str = ""
     workspace_id: str = ""

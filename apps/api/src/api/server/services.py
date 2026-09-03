@@ -122,6 +122,7 @@ from operations.container_shutdown import (
     DatabaseDurableWorkerAbsence,
 )
 from operations.management import ManagementService
+from provider_aws import AwsProvider, AwsProviderSettings
 from provider_clients import (
     AwsProviderNodeIdentityAdapter,
     ProductionRegistryCredentialResolver,
@@ -190,6 +191,7 @@ from shared.http.functions import (
     FunctionSetResultResponse,
 )
 from shared.identity import WorkspaceRecord, WorkspaceStorageConfig
+from shared.image_building.credentials import parse_ecr_registry
 from shared.payments import PaymentProvider
 from shared.workspace_storage import WorkspaceStorageIssuer
 from storage.image_archive import (
@@ -211,6 +213,7 @@ from worker.container_client.scheduler import (
     SchedulerContainerServiceStopper,
 )
 from worker.image_lifecycle import ImageRegistryStore
+from worker.origin_access import ImageRegistryCredentials
 from worker.settings import ContainerServiceSettings
 from worker_repository.checkpoint_records import CheckpointService
 from worker_repository.credentials import WorkerCredentialService
@@ -1533,6 +1536,7 @@ def _worker_repository_service(
             config=_cache_origin_credential_config(),
             object_store_client=core.image_archive_presigner,
             archive_settings=core.image_archive_settings,
+            registry_credentials=_workload_registry_credentials,
         ),
         source_cache=WorkerSourceCacheService(core.context),
         dependencies=WorkerRepositoryDependencies(
@@ -1601,6 +1605,23 @@ def _cache_origin_credential_config() -> CacheOriginCredentialConfig:
     return CacheOriginCredentialConfig(
         image_registry_store=ImageRegistryStore.S3,
         image_archive_extension=IMAGE_ARCHIVE_EXTENSION,
+    )
+
+
+def _workload_registry_credentials(registry: str) -> ImageRegistryCredentials:
+    ecr = parse_ecr_registry(registry)
+    if ecr is None:
+        if registry not in {"localhost", "127.0.0.1"} and not registry.startswith(
+            ("localhost:", "127.0.0.1:")
+        ):
+            raise ValueError("workload image registry must be ECR or a local registry")
+        return ImageRegistryCredentials(registry=registry)
+    authorization = AwsProvider(AwsProviderSettings(region=ecr.region)).ecr_authorization(registry)
+    return ImageRegistryCredentials(
+        registry=authorization.registry,
+        username=authorization.username,
+        password=authorization.password,
+        expires_at=authorization.expires_at,
     )
 
 
