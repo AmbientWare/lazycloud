@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from shared.http.base import HttpModel
 from shared.http.workspaces import WorkspaceResponse
-from shared.identity import PlatformRole, UserStatus, WorkspaceRole
+from shared.identity import (
+    PlatformRole,
+    UserStatus,
+    WorkspaceInvitationStatus,
+    WorkspaceRole,
+    normalize_invitation_email,
+)
 
 
 class UserResponse(HttpModel):
@@ -101,8 +107,60 @@ class WorkspaceMemberRoleRequest(HttpModel):
     role: WorkspaceRole
 
 
+class WorkspaceInvitationCreateRequest(HttpModel):
+    """Invite an address to a workspace. Owner is not a role an invitation can carry."""
+
+    email: str = Field(min_length=3, max_length=320)
+    role: WorkspaceRole = WorkspaceRole.Member
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return normalize_invitation_email(value)
+
+
+class WorkspaceInvitationResponse(HttpModel):
+    """An invitation as its workspace's administrators see it."""
+
+    id: str
+    workspace_id: str
+    email: str
+    role: WorkspaceRole = WorkspaceRole.Member
+    status: WorkspaceInvitationStatus = WorkspaceInvitationStatus.Pending
+    invited_by_user_id: str = ""
+    invited_by_name: str = ""
+    expires_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkspaceInvitationListResponse(HttpModel):
+    data: list[WorkspaceInvitationResponse] = Field(default_factory=list)
+    next: str = ""
+
+
+class PendingInvitationResponse(HttpModel):
+    """An invitation as the person it was sent to sees it, once signed in."""
+
+    id: str
+    workspace_id: str
+    workspace_name: str
+    email: str
+    role: WorkspaceRole = WorkspaceRole.Member
+    invited_by_name: str = ""
+    expires_at: datetime
+    created_at: datetime
+
+
+class PendingInvitationListResponse(HttpModel):
+    data: list[PendingInvitationResponse] = Field(default_factory=list)
+    next: str = ""
+
+
 __all__ = [
     "CurrentSessionResponse",
+    "PendingInvitationListResponse",
+    "PendingInvitationResponse",
     "SessionCreateRequest",
     "SessionResponse",
     "UserCreateRequest",
@@ -110,6 +168,9 @@ __all__ = [
     "UserResponse",
     "UserRoleRequest",
     "UserStatusRequest",
+    "WorkspaceInvitationCreateRequest",
+    "WorkspaceInvitationListResponse",
+    "WorkspaceInvitationResponse",
     "WorkspaceMemberAddRequest",
     "WorkspaceMemberListResponse",
     "WorkspaceMemberResponse",

@@ -53,6 +53,31 @@ unique index rather than by convention. The owner is who a workspace's connected
 compute and registered domains resolve through, so a second one would make
 "whose account backs this workspace" have two answers.
 
+## Invitations
+
+An invitation is addressed to an email, because the person may have no account
+yet, and it becomes a membership only when a signed-in account whose
+provider-verified address matches accepts it. That comparison is the one place
+an email decides anything about identity here, and it is deliberately narrow:
+the address comes from the provider's verified primary email at the last
+sign-in, the match happens under a row lock, and a mismatch answers "not
+found" rather than "forbidden" so an invitation id says nothing about who it is
+waiting on. There is no secret in the link. A link that carried one would let a
+forwarded message bypass the address check.
+
+Membership rows are written only at acceptance. An invited person has no row
+until then, so nothing that reads `workspace_members` can mistake an offer for
+access. One pending invitation per address per workspace is held by a partial
+unique index; re-inviting resends the existing one and refreshes its expiry.
+Answered invitations stay as rows, in their terminal status, because the audit
+history points at them.
+
+Delivery is separate from the record. The row is committed first, then the
+message is sent, and a provider refusal is raised to the caller with the
+invitation left standing so an administrator can resend it. An invitation the
+dashboard reports as sent and nobody receives is the failure that arrangement
+exists to prevent.
+
 ## Signing in
 
 A person signs in through an external identity provider, and `user_identities`

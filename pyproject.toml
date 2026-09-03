@@ -41,6 +41,7 @@ workspace = [
     "provider-aws",
     "provider-cloudflare",
     "provider-github",
+    "provider-resend",
     "provider-stripe",
 ]
 dev = [
@@ -95,6 +96,7 @@ members = [
     "packages/providers/aws",
     "packages/providers/cloudflare",
     "packages/providers/github",
+    "packages/providers/resend",
     "packages/providers/stripe",
 ]
 
@@ -123,6 +125,7 @@ operations = { workspace = true }
 provider-clients = { workspace = true }
 provider-cloudflare = { workspace = true }
 provider-github = { workspace = true }
+provider-resend = { workspace = true }
 provider-stripe = { workspace = true }
 scheduler-app = { workspace = true }
 tunnel-gateway-app = { workspace = true }

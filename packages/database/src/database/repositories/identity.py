@@ -12,6 +12,7 @@ from database.mappers.identity import (
     secret_storage_record_from_table,
     user_identity_record_from_table,
     user_record_from_table,
+    workspace_invitation_record_from_table,
     workspace_member_record_from_table,
 )
 from database.records.identity import (
@@ -42,6 +43,7 @@ from database.tables.identity import (
     UserIdentityTable,
     UserTable,
     WorkspaceAuditEventTable,
+    WorkspaceInvitationTable,
     WorkspaceMemberTable,
     WorkspaceStorageTable,
     WorkspaceTable,
@@ -67,6 +69,8 @@ from shared.identity import (
     UserIdentityRecord,
     UserRecord,
     UserStatus,
+    WorkspaceInvitationRecord,
+    WorkspaceInvitationStatus,
     WorkspaceMemberRecord,
     WorkspaceRecord,
     WorkspaceRole,
@@ -301,6 +305,13 @@ class UserRepository:
         if record.status is not UserStatus.Active:
             raise NotFoundError(f"user not found: {user_id}")
         return record
+
+    def for_ids(self, user_ids: Collection[str]) -> dict[str, UserRecord]:
+        """Resolve many accounts at once, so a listing is not N queries."""
+        if not user_ids:
+            return {}
+        rows = self.session.scalars(select(UserTable).where(UserTable.id.in_(list(user_ids))))
+        return {str(row.id): user_record_from_table(row) for row in rows}
 
     def list(self) -> list[UserRecord]:
         rows = self.session.scalars(
@@ -671,6 +682,146 @@ class WorkspaceMemberRepository:
         )
         self.session.flush()
         return isinstance(result, CursorResult) and result.rowcount > 0
+
+    def member_with_email(self, *, workspace_id: str, email: str) -> WorkspaceMemberRecord | None:
+        """A member whose provider-reported address is this one, if any.
+
+        Email is not unique across accounts, so this answers "is somebody with this
+        address already in" for an invitation, and nothing about who that person is.
+        """
+        row = self.session.scalars(
+            select(WorkspaceMemberTable)
+            .join(UserTable, UserTable.id == WorkspaceMemberTable.user_id)
+            .where(
+                WorkspaceMemberTable.workspace_id == workspace_id,
+                func.lower(UserTable.email) == email,
+            )
+        ).first()
+        return workspace_member_record_from_table(row) if row is not None else None
+
+
+@dataclass(slots=True)
+class WorkspaceInvitationRepository:
+    session: Session
+
+    def create(
+        self,
+        *,
+        workspace_id: str,
+        email: str,
+        role: WorkspaceRole,
+        invited_by_user_id: str,
+        expires_at: datetime,
+    ) -> WorkspaceInvitationRecord:
+        row = WorkspaceInvitationTable(
+            workspace_id=workspace_id,
+            email=email,
+            role=role.value,
+            status=WorkspaceInvitationStatus.Pending.value,
+            invited_by_user_id=invited_by_user_id or None,
+            expires_at=expires_at,
+        )
+        self.session.add(row)
+        try:
+            self.session.flush()
+        except IntegrityError as exc:
+            raise ConflictError(f"an invitation for {email} is already pending") from exc
+        return workspace_invitation_record_from_table(row)
+
+    def get(self, invitation_id: str) -> WorkspaceInvitationRecord | None:
+        row = self.session.get(WorkspaceInvitationTable, invitation_id)
+        return workspace_invitation_record_from_table(row) if row is not None else None
+
+    def lock(self, invitation_id: str) -> WorkspaceInvitationRecord | None:
+        """The row, held against a concurrent answer to the same invitation."""
+        row = self.session.scalars(
+            select(WorkspaceInvitationTable)
+            .where(WorkspaceInvitationTable.id == invitation_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).first()
+        return workspace_invitation_record_from_table(row) if row is not None else None
+
+    def pending_for_workspace(self, workspace_id: str) -> list[WorkspaceInvitationRecord]:
+        rows = self.session.scalars(
+            select(WorkspaceInvitationTable)
+            .where(
+                WorkspaceInvitationTable.workspace_id == workspace_id,
+                WorkspaceInvitationTable.status == WorkspaceInvitationStatus.Pending.value,
+            )
+            .order_by(WorkspaceInvitationTable.created_at.asc())
+        )
+        return [workspace_invitation_record_from_table(row) for row in rows]
+
+    def pending_for_email(
+        self, *, workspace_id: str, email: str
+    ) -> WorkspaceInvitationRecord | None:
+        row = self.session.scalars(
+            select(WorkspaceInvitationTable).where(
+                WorkspaceInvitationTable.workspace_id == workspace_id,
+                WorkspaceInvitationTable.email == email,
+                WorkspaceInvitationTable.status == WorkspaceInvitationStatus.Pending.value,
+            )
+        ).first()
+        return workspace_invitation_record_from_table(row) if row is not None else None
+
+    def open_for_email(
+        self, email: str, *, now: datetime
+    ) -> list[tuple[WorkspaceInvitationRecord, WorkspaceRecord]]:
+        """Everything still answerable that is addressed to this email.
+
+        Joined to the workspace and narrowed to active ones here, because an
+        invitation into a workspace being deleted is not one anybody can act on.
+        """
+        rows = self.session.execute(
+            select(WorkspaceInvitationTable, WorkspaceTable)
+            .join(WorkspaceTable, WorkspaceTable.id == WorkspaceInvitationTable.workspace_id)
+            .where(
+                WorkspaceInvitationTable.email == email,
+                WorkspaceInvitationTable.status == WorkspaceInvitationStatus.Pending.value,
+                WorkspaceInvitationTable.expires_at > now,
+                WorkspaceTable.status == WorkspaceStatus.Active.value,
+            )
+            .order_by(WorkspaceInvitationTable.created_at.asc())
+        )
+        return [
+            (
+                workspace_invitation_record_from_table(invitation),
+                WorkspaceRecord.model_validate(workspace.payload),
+            )
+            for invitation, workspace in rows
+        ]
+
+    def extend(self, invitation_id: str, *, expires_at: datetime) -> WorkspaceInvitationRecord:
+        row = self._row(invitation_id)
+        row.expires_at = expires_at
+        row.updated_at = utc_now()
+        self.session.flush()
+        return workspace_invitation_record_from_table(row)
+
+    def resolve(
+        self,
+        invitation_id: str,
+        *,
+        status: WorkspaceInvitationStatus,
+        resolved_by_user_id: str,
+        now: datetime,
+    ) -> WorkspaceInvitationRecord:
+        if status is WorkspaceInvitationStatus.Pending:
+            raise ValueError("an invitation is resolved to a terminal status")
+        row = self._row(invitation_id)
+        row.status = status.value
+        row.resolved_by_user_id = resolved_by_user_id or None
+        row.resolved_at = now
+        row.updated_at = now
+        self.session.flush()
+        return workspace_invitation_record_from_table(row)
+
+    def _row(self, invitation_id: str) -> WorkspaceInvitationTable:
+        row = self.session.get(WorkspaceInvitationTable, invitation_id)
+        if row is None:
+            raise NotFoundError(f"invitation not found: {invitation_id}")
+        return row
 
 
 @dataclass(slots=True)

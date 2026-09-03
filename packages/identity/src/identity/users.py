@@ -7,10 +7,13 @@ from database.repositories.identity import (
     TokenRepository,
     UserIdentityRepository,
     UserRepository,
+    WorkspaceAuditRepository,
     WorkspaceMemberRepository,
 )
 from shared.errors import ConflictError, NotFoundError
+from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
 from shared.identity import (
+    AuthTokenRecord,
     IdentityProvider,
     PlatformRole,
     UserIdentityRecord,
@@ -32,7 +35,7 @@ class WorkspaceMembershipAdmission(Protocol):
         session: Session,
         *,
         workspace_id: str,
-        member_user_id: str,
+        member_user_id: str | None,
     ) -> None: ...
 
 
@@ -169,6 +172,7 @@ class UserService:
         workspace_id: str,
         user_id: str,
         role: WorkspaceRole,
+        actor: AuthTokenRecord,
     ) -> WorkspaceMemberRecord:
         with self.context.database.session() as session:
             repository = WorkspaceMemberRepository(session)
@@ -179,13 +183,37 @@ class UserService:
                 raise ConflictError(
                     "the workspace owner's role cannot be changed; transfer ownership first"
                 )
+            if membership.role is role:
+                return membership
             repository.set_role(workspace_id=workspace_id, user_id=user_id, role=role)
             updated = repository.membership(workspace_id=workspace_id, user_id=user_id)
-        if updated is None:
-            raise NotFoundError(f"user is not a member of this workspace: {user_id}")
+            if updated is None:
+                raise NotFoundError(f"user is not a member of this workspace: {user_id}")
+            WorkspaceAuditRepository(session).append(
+                workspace_id=workspace_id,
+                action=WorkspaceAuditAction.MemberRoleChanged,
+                actor=actor,
+                target_type=WorkspaceAuditTarget.Member,
+                target_id=user_id,
+                target_name=_member_name(session, user_id),
+                summary=f"Changed a member's role from {membership.role} to {role}",
+                previous_value=membership.role.value,
+                new_value=role.value,
+            )
         return updated
 
-    def remove_member(self, *, workspace_id: str, user_id: str) -> bool:
+    def remove_member(
+        self,
+        *,
+        workspace_id: str,
+        user_id: str,
+        actor: AuthTokenRecord,
+    ) -> bool:
+        """Take a person out of a workspace, whether an administrator did it or they left.
+
+        Leaving is the same removal by the person themself, and is recorded as
+        such: who ended a membership is the fact the audit history is asked for.
+        """
         with self.context.database.session() as session:
             repository = WorkspaceMemberRepository(session)
             membership = repository.membership(workspace_id=workspace_id, user_id=user_id)
@@ -197,12 +225,36 @@ class UserService:
                 raise ConflictError(
                     "the workspace owner cannot be removed; transfer ownership first"
                 )
-            return repository.remove(workspace_id=workspace_id, user_id=user_id)
+            removed = repository.remove(workspace_id=workspace_id, user_id=user_id)
+            if removed:
+                left = actor.user_id == user_id
+                WorkspaceAuditRepository(session).append(
+                    workspace_id=workspace_id,
+                    action=(
+                        WorkspaceAuditAction.MemberLeft
+                        if left
+                        else WorkspaceAuditAction.MemberRemoved
+                    ),
+                    actor=actor,
+                    target_type=WorkspaceAuditTarget.Member,
+                    target_id=user_id,
+                    target_name=_member_name(session, user_id),
+                    summary="Left the workspace" if left else "Removed a member",
+                    previous_value=membership.role.value,
+                )
+            return removed
 
     def owned_workspace_ids(self, user_id: str) -> list[str]:
         """The workspaces an account's compute and domains apply to, in creation order."""
         with self.context.database.session() as session:
             return WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
+
+
+def _member_name(session: Session, user_id: str) -> str:
+    user = UserRepository(session).get(user_id)
+    if user is None:
+        return user_id
+    return user.display_name or user.email or user_id
 
 
 __all__ = ["UserService", "WorkspaceMembershipAdmission"]

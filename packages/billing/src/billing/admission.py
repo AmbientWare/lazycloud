@@ -160,15 +160,21 @@ class DatabaseBillingAdmission:
         session: Session,
         *,
         workspace_id: str,
-        member_user_id: str,
+        member_user_id: str | None,
     ) -> None:
+        """Whether one more person may join a workspace this account owns.
+
+        `member_user_id` is None when the person has no account yet, which is an
+        invitation being sent: there is nobody to already be counted, so the seat
+        has to be free outright.
+        """
         resolved = self._billable_account(session, workspace_id=workspace_id)
         if resolved is None:
             return
         owner_user_id, terms = resolved
         self._assert_no_pending_plan_change(session, user_id=owner_user_id)
         repository = WorkspaceMemberRepository(session)
-        if repository.is_member_for_owner(
+        if member_user_id is not None and repository.is_member_for_owner(
             owner_user_id=owner_user_id,
             member_user_id=member_user_id,
         ):

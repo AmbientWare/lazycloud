@@ -262,6 +262,56 @@ class WorkspaceMemberRecord(ContractModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class WorkspaceInvitationStatus(StringEnum):
+    """What became of an invitation. Every value but pending is terminal."""
+
+    Pending = "pending"
+    Accepted = "accepted"
+    Declined = "declined"
+    Revoked = "revoked"
+
+
+def normalize_invitation_email(value: str) -> str:
+    """The one spelling an address is stored and matched under.
+
+    Case-folded because the address on the invitation and the address the provider
+    reports for the person who signs in are typed by different people, and a
+    comparison that cared about case would refuse the person it was sent to.
+    """
+    email = value.strip().lower()
+    if len(email) > 320 or email.count("@") != 1 or any(c.isspace() for c in email):
+        raise ValueError("invitation email must be a single address such as name@example.com")
+    local, _, domain = email.partition("@")
+    if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
+        raise ValueError("invitation email must be a single address such as name@example.com")
+    return email
+
+
+class WorkspaceInvitationRecord(ContractModel):
+    """An offer of membership addressed to an email, held until somebody answers it.
+
+    Addressed to an email rather than an account because the person may have no
+    account yet. It becomes a membership only when a signed-in person whose
+    provider-verified address matches accepts it, and that acceptance is the
+    only place an email decides anything about identity.
+    """
+
+    id: str
+    workspace_id: str
+    email: str
+    role: WorkspaceRole = WorkspaceRole.Member
+    status: WorkspaceInvitationStatus = WorkspaceInvitationStatus.Pending
+    invited_by_user_id: str = ""
+    resolved_by_user_id: str = ""
+    expires_at: datetime
+    resolved_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    def open_at(self, now: datetime) -> bool:
+        return self.status is WorkspaceInvitationStatus.Pending and self.expires_at > now
+
+
 class AuthTokenRecord(ContractModel):
     id: str
     name: str
@@ -302,10 +352,13 @@ __all__ = [
     "UserIdentityRecord",
     "UserRecord",
     "UserStatus",
+    "WorkspaceInvitationRecord",
+    "WorkspaceInvitationStatus",
     "WorkspaceMemberRecord",
     "WorkspaceRecord",
     "WorkspaceRole",
     "WorkspaceStatus",
     "WorkspaceStorageConfig",
+    "normalize_invitation_email",
     "workspace_role_covers",
 ]

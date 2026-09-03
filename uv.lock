@@ -30,6 +30,7 @@ members = [
     "provider-clients",
     "provider-cloudflare",
     "provider-github",
+    "provider-resend",
     "provider-stripe",
     "runner",
     "scheduler",
@@ -182,6 +183,7 @@ dependencies = [
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
     { name = "provider-github" },
+    { name = "provider-resend" },
     { name = "provider-stripe" },
     { name = "pydantic-settings" },
     { name = "scheduler" },
@@ -219,6 +221,7 @@ requires-dist = [
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
     { name = "provider-github", editable = "packages/providers/github" },
+    { name = "provider-resend", editable = "packages/providers/resend" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "scheduler", editable = "packages/scheduler" },
@@ -1645,6 +1648,23 @@ requires-dist = [
 ]
 
 [[package]]
+name = "provider-resend"
+version = "0.1.0"
+source = { editable = "packages/providers/resend" }
+dependencies = [
+    { name = "httpx" },
+    { name = "lazycloud-shared" },
+    { name = "pydantic-settings" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "pydantic-settings", specifier = ">=2.5,<3" },
+]
+
+[[package]]
 name = "provider-stripe"
 version = "0.1.0"
 source = { editable = "packages/providers/stripe" }
@@ -2541,6 +2561,7 @@ dev = [
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
     { name = "provider-github" },
+    { name = "provider-resend" },
     { name = "provider-stripe" },
     { name = "pytest" },
     { name = "ruff" },
@@ -2581,6 +2602,7 @@ workspace = [
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
     { name = "provider-github" },
+    { name = "provider-resend" },
     { name = "provider-stripe" },
     { name = "runner" },
     { name = "scheduler" },
@@ -2628,6 +2650,7 @@ dev = [
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
     { name = "provider-github", editable = "packages/providers/github" },
+    { name = "provider-resend", editable = "packages/providers/resend" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "pytest", specifier = ">=9,<10" },
     { name = "ruff", specifier = ">=0.6" },
@@ -2668,6 +2691,7 @@ workspace = [
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
     { name = "provider-github", editable = "packages/providers/github" },
+    { name = "provider-resend", editable = "packages/providers/resend" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "runner", editable = "packages/runner" },
     { name = "scheduler", editable = "packages/scheduler" },

@@ -64,7 +64,7 @@ def user_response(
     )
 
 
-def _member_response(
+def member_response(
     user: UserRecord,
     membership: WorkspaceMemberRecord,
 ) -> WorkspaceMemberResponse:
@@ -193,7 +193,7 @@ def list_workspace_members(
     memberships = services.users.members(workspace_id)
     return WorkspaceMemberListResponse(
         data=[
-            _member_response(services.users.get(membership.user_id), membership)
+            member_response(services.users.get(membership.user_id), membership)
             for membership in memberships
         ]
     )
@@ -232,7 +232,7 @@ def add_workspace_member(
         role=request.role,
         admission=DatabaseBillingAdmission(),
     )
-    return _member_response(user, membership)
+    return member_response(user, membership)
 
 
 @router.put(
@@ -264,8 +264,10 @@ def set_workspace_member_role(
         workspace_id=workspace_id,
         user_id=user_id,
         role=request.role,
+        actor=principal.token,
     )
-    return _member_response(services.users.get(user_id), membership)
+    services.auth.credentials_revoked()
+    return member_response(services.users.get(user_id), membership)
 
 
 @router.delete(
@@ -279,15 +281,26 @@ def remove_workspace_member(
     principal: write_principal,
     services: ApiServices = Depends(current_services),
 ) -> Response:
+    """Take a member out, or leave.
+
+    Removing somebody else takes an administrator; removing yourself takes only
+    being a member, because nobody needs permission to leave. The owner cannot do
+    either, and the service says so.
+    """
+    leaving = principal.token.names_user and principal.token.user_id == user_id
     workspace_id = authorize_token_workspace(
         services,
         principal.token,
         workspace,
         AuthScope.Write,
         platform_role=principal.platform_role,
-        required_role=WorkspaceRole.Administrator,
+        required_role=WorkspaceRole.Member if leaving else WorkspaceRole.Administrator,
     )
-    if not services.users.remove_member(workspace_id=workspace_id, user_id=user_id):
+    if not services.users.remove_member(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        actor=principal.token,
+    ):
         raise NotFoundError(f"user is not a member of this workspace: {user_id}")
     services.auth.credentials_revoked()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -311,4 +324,4 @@ def _authorize_user_access(
     raise HTTPException(status.HTTP_403_FORBIDDEN, "this account is not yours to read or change")
 
 
-__all__ = ["router", "user_response"]
+__all__ = ["member_response", "router", "user_response"]

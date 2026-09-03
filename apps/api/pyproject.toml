@@ -27,6 +27,7 @@ dependencies = [
     "provider-aws",
     "provider-cloudflare",
     "provider-github",
+    "provider-resend",
     "provider-stripe",
     "pydantic-settings>=2.4,<3",
     "scheduler",

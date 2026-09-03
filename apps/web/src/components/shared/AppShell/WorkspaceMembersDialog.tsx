@@ -1,6 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
+import { Loader2, MailPlus, RefreshCw, X } from "lucide-react";
+import { toast } from "sonner";
 
 import { useSession } from "@/components/shared/AuthGate/session";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -8,12 +13,48 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Workspace } from "@/lib/api/schemas";
+import type {
+  InvitableRole,
+  Workspace,
+  WorkspaceInvitation,
+  WorkspaceMember,
+} from "@/lib/api/schemas";
 import { usagePhrase } from "@/lib/entitlements";
+import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { billingSummaryQueryOptions } from "@/lib/queries/billing";
-import { workspaceMembersQueryOptions } from "@/lib/queries/members";
+import {
+  inviteWorkspaceMember,
+  removeWorkspaceMember,
+  resendWorkspaceInvitation,
+  revokeWorkspaceInvitation,
+  setWorkspaceMemberRole,
+  workspaceInvitationsQueryOptions,
+  workspaceMembersQueryOptions,
+} from "@/lib/queries/members";
+import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
+const ROLE_LABELS: Record<WorkspaceMember["role"], string> = {
+  owner: "Owner",
+  administrator: "Administrator",
+  member: "Member",
+};
+
+/**
+ * Who reaches a workspace, and the offers still waiting on an answer.
+ *
+ * An owner or administrator invites by email, changes roles, revokes and resends
+ * invitations, and removes members. Everyone else reads the list and can leave.
+ * Ownership is not editable here: it moves by transfer, not by picking a role.
+ */
 export function WorkspaceMembersDialog({
   workspace,
   onClose,
@@ -22,11 +63,18 @@ export function WorkspaceMembersDialog({
   onClose: () => void;
 }) {
   const { user } = useSession();
+  // Read once when the dialog opens: "expired" is a fact about the moment you
+  // looked, and a clock read on every render is what the purity rule forbids.
+  const [openedAt] = useState(() => Date.now());
   const members = useQuery(workspaceMembersQueryOptions(workspace.id, workspace.name));
-  const owner = members.data?.data.some(
-    (member) => member.user_id === user.id && member.role === "owner",
-  );
-  const billing = useQuery({ ...billingSummaryQueryOptions(), enabled: owner === true });
+  const me = members.data?.data.find((member) => member.user_id === user.id);
+  const manages = me?.role === "owner" || me?.role === "administrator";
+  const owner = me?.role === "owner";
+  const invitations = useQuery({
+    ...workspaceInvitationsQueryOptions(workspace.id, workspace.name),
+    enabled: manages,
+  });
+  const billing = useQuery({ ...billingSummaryQueryOptions(), enabled: owner });
 
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
@@ -44,6 +92,7 @@ export function WorkspaceMembersDialog({
             )}
           </p>
         ) : null}
+        {manages ? <InviteForm workspace={workspace} /> : null}
         {members.isPending ? (
           <div className="space-y-2" aria-hidden="true">
             <Skeleton className="h-12 w-full" />
@@ -56,23 +105,289 @@ export function WorkspaceMembersDialog({
         ) : (
           <ul className="divide-y divide-border border-y border-border">
             {(members.data?.data ?? []).map((member) => (
-              <li className="flex items-center justify-between gap-4 py-3" key={member.user_id}>
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium">{member.display_name}</span>
-                  {member.email ? (
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {member.email}
-                    </span>
-                  ) : null}
-                </span>
-                <span className="shrink-0 text-xs capitalize text-muted-foreground">
-                  {member.role}
-                </span>
-              </li>
+              <MemberRow
+                key={member.user_id}
+                workspace={workspace}
+                member={member}
+                self={member.user_id === user.id}
+                manages={manages}
+                onLeft={onClose}
+              />
             ))}
+            {manages
+              ? (invitations.data?.data ?? []).map((invitation) => (
+                  <InvitationRow
+                    key={invitation.id}
+                    workspace={workspace}
+                    invitation={invitation}
+                    expired={Date.parse(invitation.expires_at) <= openedAt}
+                  />
+                ))
+              : null}
           </ul>
         )}
+        {manages && invitations.error ? (
+          <p className="text-sm text-destructive" role="alert">
+            {invitations.error.message}
+          </p>
+        ) : null}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function InviteForm({ workspace }: { workspace: Workspace }) {
+  const queryClient = useQueryClient();
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<InvitableRole>("member");
+  const invite = useMutation({
+    mutationFn: () => inviteWorkspaceMember(workspace.name, email.trim(), role),
+    onSuccess: (invitation) => {
+      setEmail("");
+      toast.success(`Invitation sent to ${invitation.email}`);
+      void queryClient.invalidateQueries({
+        queryKey: workspaceQueryKeys.invitations(workspace.id),
+      });
+    },
+    onError: (error) => {
+      // A 503 here means the row exists and the email did not go out; the list
+      // refetch is what surfaces it with a resend action.
+      void queryClient.invalidateQueries({
+        queryKey: workspaceQueryKeys.invitations(workspace.id),
+      });
+      toast.error("Could not invite", { description: error.message });
+    },
+  });
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+  return (
+    <form
+      className="flex flex-col gap-2 sm:flex-row"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (valid && !invite.isPending) invite.mutate();
+      }}
+    >
+      <Input
+        aria-label="Email address to invite"
+        autoComplete="off"
+        disabled={invite.isPending}
+        onChange={(event) => setEmail(event.target.value)}
+        placeholder="name@example.com"
+        type="email"
+        value={email}
+      />
+      <RoleSelect
+        aria-label="Role for the invited person"
+        disabled={invite.isPending}
+        onChange={setRole}
+        value={role}
+      />
+      <Button disabled={!valid || invite.isPending} type="submit" className="shrink-0">
+        {invite.isPending ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : (
+          <MailPlus className="size-4" />
+        )}
+        Invite
+      </Button>
+    </form>
+  );
+}
+
+function RoleSelect({
+  value,
+  onChange,
+  disabled,
+  "aria-label": ariaLabel,
+}: {
+  value: InvitableRole;
+  onChange: (role: InvitableRole) => void;
+  disabled?: boolean;
+  "aria-label": string;
+}) {
+  return (
+    <Select
+      disabled={disabled}
+      onValueChange={(next) => onChange(next === "administrator" ? "administrator" : "member")}
+      value={value}
+    >
+      <SelectTrigger aria-label={ariaLabel} className="w-full sm:w-40">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="member">Member</SelectItem>
+        <SelectItem value="administrator">Administrator</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
+function MemberRow({
+  workspace,
+  member,
+  self,
+  manages,
+  onLeft,
+}: {
+  workspace: Workspace;
+  member: WorkspaceMember;
+  self: boolean;
+  manages: boolean;
+  onLeft: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const setRole = useMutation({
+    mutationFn: (role: InvitableRole) =>
+      setWorkspaceMemberRole(workspace.name, member.user_id, role),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.members(workspace.id) }),
+    onError: (error) => toast.error("Could not change role", { description: error.message }),
+  });
+  const remove = useMutation({
+    mutationFn: () => removeWorkspaceMember(workspace.name, member.user_id),
+    onSuccess: async () => {
+      if (self) {
+        // Leaving takes this workspace out of the session, so the shell has to
+        // re-read it before it renders a page in a workspace you no longer reach.
+        onLeft();
+        await queryClient.invalidateQueries({ queryKey: currentSessionQueryOptions().queryKey });
+        void navigate({ to: "/dashboard" });
+        return;
+      }
+      await queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.members(workspace.id) });
+    },
+    onError: (error) =>
+      toast.error(self ? "Could not leave" : "Could not remove member", {
+        description: error.message,
+      }),
+  });
+  const editable = manages && member.role !== "owner" && !self;
+
+  return (
+    <li className="flex items-center justify-between gap-3 py-3">
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-medium">
+          {member.display_name || member.email}
+          {self ? <span className="ml-1 text-xs text-muted-foreground">(you)</span> : null}
+        </span>
+        {member.email ? (
+          <span className="block truncate text-xs text-muted-foreground">{member.email}</span>
+        ) : null}
+      </span>
+      <span className="flex shrink-0 items-center gap-2">
+        {editable ? (
+          <RoleSelect
+            aria-label={`Role for ${member.display_name || member.email}`}
+            disabled={setRole.isPending}
+            onChange={(role) => setRole.mutate(role)}
+            value={member.role === "administrator" ? "administrator" : "member"}
+          />
+        ) : (
+          <span className="text-xs text-muted-foreground">{ROLE_LABELS[member.role]}</span>
+        )}
+        {editable ? (
+          <Button
+            aria-label={`Remove ${member.display_name || member.email}`}
+            disabled={remove.isPending}
+            onClick={() => remove.mutate()}
+            size="icon"
+            type="button"
+            variant="ghost"
+          >
+            {remove.isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <X className="size-4" />
+            )}
+          </Button>
+        ) : null}
+        {self && member.role !== "owner" ? (
+          <Button
+            disabled={remove.isPending}
+            onClick={() => remove.mutate()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            {remove.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
+            Leave
+          </Button>
+        ) : null}
+      </span>
+    </li>
+  );
+}
+
+function InvitationRow({
+  workspace,
+  invitation,
+  expired,
+}: {
+  workspace: Workspace;
+  invitation: WorkspaceInvitation;
+  expired: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const refresh = () =>
+    queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.invitations(workspace.id) });
+  const resend = useMutation({
+    mutationFn: () => resendWorkspaceInvitation(workspace.name, invitation.id),
+    onSuccess: () => {
+      toast.success(`Invitation resent to ${invitation.email}`);
+      return refresh();
+    },
+    onError: (error) => toast.error("Could not resend", { description: error.message }),
+  });
+  const revoke = useMutation({
+    mutationFn: () => revokeWorkspaceInvitation(workspace.name, invitation.id),
+    onSuccess: refresh,
+    onError: (error) => toast.error("Could not revoke", { description: error.message }),
+  });
+  const busy = resend.isPending || revoke.isPending;
+
+  return (
+    <li className="flex items-center justify-between gap-3 py-3">
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-medium">{invitation.email}</span>
+        <span className="block truncate text-xs text-muted-foreground">
+          {expired ? "Invitation expired" : "Invited"}
+          {invitation.invited_by_name ? ` by ${invitation.invited_by_name}` : ""}
+          {" · "}
+          {ROLE_LABELS[invitation.role]}
+        </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-1">
+        <Button
+          aria-label={`Resend the invitation to ${invitation.email}`}
+          disabled={busy}
+          onClick={() => resend.mutate()}
+          size="icon"
+          type="button"
+          variant="ghost"
+        >
+          {resend.isPending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <RefreshCw className="size-4" />
+          )}
+        </Button>
+        <Button
+          aria-label={`Revoke the invitation to ${invitation.email}`}
+          disabled={busy}
+          onClick={() => revoke.mutate()}
+          size="icon"
+          type="button"
+          variant="ghost"
+        >
+          {revoke.isPending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <X className="size-4" />
+          )}
+        </Button>
+      </span>
+    </li>
   );
 }
