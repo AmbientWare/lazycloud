@@ -11,7 +11,7 @@ contract and change together with the deployment assets that set them.
 `Scheduler` does the work and `loops.py` decides when. The passes exist because
 their cadences differ, not because their work is unrelated:
 
-- **placement**, every 250ms, decides what needs to run. Autoscalers and
+- **placement**, every 1s, decides what needs to run. Autoscalers and
   function retries, and nothing that calls a service outside the cluster.
 - **capacity**, every 5s, keeps the fleet and its records agreeing. Also billing
   enforcement, which touches only Postgres and whose interval is money, and cron
