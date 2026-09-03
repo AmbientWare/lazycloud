@@ -89,6 +89,9 @@ metadata:
     # An NLB forwards within a zone unless told otherwise, so a peer that resolved
     # the hostname to another zone's address would reach only the standby there.
     service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+    # WireGuard retries keep UDP flows active after their pod disappears. End the
+    # old target flow promptly so the next handshake reaches the lease holder.
+    service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: deregistration_delay.timeout_seconds=30,deregistration_delay.connection_termination.enabled=true
 spec:
   # Both replicas must stay registered as UDP targets. The TCP health listener on
   # port 8080 selects the current lease holder at the NLB.
