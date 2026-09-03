@@ -20,7 +20,7 @@ from shared.billing_plans import BillingPlanId
 from shared.billing_rate_card import (
     FREE_PLAN_INCLUDED_NANOS,
     NO_CARD_INCLUDED_NANOS,
-    NO_CARD_MAX_CONTAINERS,
+    NO_CARD_MAX_CPU_CONTAINERS,
     TEAM_PLAN_INCLUDED_NANOS,
 )
 from shared.containers import ContainerRecord, ContainerStatus
@@ -240,8 +240,10 @@ def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
     admission = DatabaseBillingAdmission()
     with isolated_services.context.database.session() as session:
         with pytest.raises(PaymentRequiredError):
-            admission.assert_may_start_container(session, workspace_id=paying_workspace_id)
-        admission.assert_may_start_container(session, workspace_id=stranger.id)
+            admission.admit_container_start(
+                session, workspace_id=paying_workspace_id, gpu=(), gpu_count=0
+            )
+        admission.admit_container_start(session, workspace_id=stranger.id, gpu=(), gpu_count=0)
 
 
 def test_provisioning_an_account_twice_leaves_one_customer_and_one_subscription(
@@ -445,7 +447,7 @@ def test_an_account_with_no_subscription_cannot_start_work(
         isolated_services.context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="no subscription"),
     ):
-        admission.assert_may_start_container(session, workspace_id=workspace_id)
+        admission.admit_container_start(session, workspace_id=workspace_id, gpu=(), gpu_count=0)
 
     # A registration that stopped after the customer is the same answer: half of
     # what provisioning writes is not somewhere work may start from.
@@ -464,7 +466,7 @@ def test_an_account_with_no_subscription_cannot_start_work(
         isolated_services.context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="no subscription"),
     ):
-        admission.assert_may_start_container(session, workspace_id=workspace_id)
+        admission.admit_container_start(session, workspace_id=workspace_id, gpu=(), gpu_count=0)
 
 
 def test_an_account_with_a_card_is_admitted_past_its_allowance(
@@ -522,9 +524,13 @@ def test_an_account_with_a_card_is_admitted_past_its_allowance(
 
     admission = DatabaseBillingAdmission()
     with isolated_services.context.database.session() as session:
-        admission.assert_may_start_container(session, workspace_id=carded_workspace_id)
+        admission.admit_container_start(
+            session, workspace_id=carded_workspace_id, gpu=(), gpu_count=0
+        )
         with pytest.raises(PaymentRequiredError):
-            admission.assert_may_start_container(session, workspace_id=cardless_workspace_id)
+            admission.admit_container_start(
+                session, workspace_id=cardless_workspace_id, gpu=(), gpu_count=0
+            )
 
 
 def test_the_container_limit_counts_every_workspace_the_account_owns(
@@ -567,12 +573,14 @@ def test_the_container_limit_counts_every_workspace_the_account_owns(
 
     admission = DatabaseBillingAdmission()
     with isolated_services.context.database.session() as session:
-        admission.assert_may_start_container(session, workspace_id=first_workspace_id)
+        admission.admit_container_start(
+            session, workspace_id=first_workspace_id, gpu=(), gpu_count=0
+        )
 
     # Split across both workspaces, and one of them is only queued: a container
     # waiting for a worker has already been promised the capacity it asked for.
     with isolated_services.context.database.session() as session:
-        for index in range(NO_CARD_MAX_CONTAINERS):
+        for index in range(NO_CARD_MAX_CPU_CONTAINERS):
             ContainerRepository(session).upsert(
                 ContainerRecord(
                     id=str(uuid4()),
@@ -588,4 +596,6 @@ def test_the_container_limit_counts_every_workspace_the_account_owns(
     with isolated_services.context.database.session() as session:
         for workspace_id in (first_workspace_id, second_workspace_id):
             with pytest.raises(CapacityLimitReachedError):
-                admission.assert_may_start_container(session, workspace_id=workspace_id)
+                admission.admit_container_start(
+                    session, workspace_id=workspace_id, gpu=(), gpu_count=0
+                )

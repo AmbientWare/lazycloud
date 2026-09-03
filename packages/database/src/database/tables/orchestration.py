@@ -183,6 +183,7 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
         DateTime(timezone=True),
         nullable=True,
     )
+    gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class RouteTable(IdPayloadTable, DatabaseBase):

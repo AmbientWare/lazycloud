@@ -14,3 +14,15 @@ remembered to pass it.
 
 Public payloads live in `shared.http`. Control and database records do not leak
 into shared models.
+
+An app is created without asking anybody. How many an account may have is not a
+term of any plan, so there is nothing for a gate to read and a check there would
+be one more transaction on the path that deploys.
+
+A workspace is different, because a plan states how many an account gets.
+`create_workspace` asks a `WorkspaceCreationAdmission` before anything is
+written, and only when no workspace already carries the name.
+`set_workspace` adopting an existing one is not a creation, and gating it would
+lock an account out of workspaces it already holds. The service carries the
+billing implementation as its default rather than waiting to be handed one,
+since a limit only the API enforces is a limit every other entry point grants.

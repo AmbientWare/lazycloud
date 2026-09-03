@@ -61,7 +61,6 @@ def function_invoke(
 def function_invoke_stream(
     request: FunctionInvokeBody,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> StreamingResponse:
@@ -71,8 +70,9 @@ def function_invoke_stream(
     # cannot be a 402 and reaches the caller as a stream that simply ends,
     # which reads as the platform losing the request rather than declining it.
     service.assert_may_accept_invocation(request.stub_id)
-    with services.context.database.session() as session:
-        services.containers.assert_may_start_container(session, workspace_id=workspace_id)
+    # Admission is asked inside the invocation below, which runs before the
+    # response begins and knows the cards the function wants. Repeating it here
+    # would be the same question asked without the shape that decides it.
     initial = service.function_invoke(request)
     return StreamingResponse(
         _function_ndjson(

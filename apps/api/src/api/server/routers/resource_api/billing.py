@@ -336,8 +336,14 @@ def _summary(standing: BillingStanding) -> BillingSummaryResponse:
         payment_method_on_file=standing.payment_method_on_file,
         entitlements=(
             PlanEntitlementsResponse(
-                max_apps=standing.entitlements.max_apps,
-                max_concurrent_containers=standing.entitlements.max_concurrent_containers,
+                max_concurrent_cpu_containers=(standing.entitlements.max_concurrent_cpu_containers),
+                max_concurrent_gpus=standing.entitlements.max_concurrent_gpus,
+                gpu_types=(
+                    "all"
+                    if standing.entitlements.gpu_types == "all"
+                    else list(standing.entitlements.allowed_gpu_types)
+                ),
+                max_workspaces=standing.entitlements.max_workspaces,
                 max_members=standing.entitlements.max_members,
                 connected_cloud=standing.entitlements.connected_cloud,
                 custom_domains=standing.entitlements.custom_domains,
@@ -347,8 +353,9 @@ def _summary(standing: BillingStanding) -> BillingSummaryResponse:
             else None
         ),
         usage=BillingEntitlementUsageResponse(
-            apps=standing.usage.apps,
-            concurrent_containers=standing.usage.concurrent_containers,
+            concurrent_cpu_containers=standing.usage.concurrent_cpu_containers,
+            concurrent_gpus=standing.usage.concurrent_gpus,
+            workspaces=standing.usage.workspaces,
             members=standing.usage.members,
             connected_clouds=standing.usage.connected_clouds,
             custom_domains=standing.usage.custom_domains,

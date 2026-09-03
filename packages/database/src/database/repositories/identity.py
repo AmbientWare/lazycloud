@@ -590,6 +590,30 @@ class WorkspaceMemberRepository:
         )
         return [str(row) for row in rows]
 
+    def owned_workspace_count(self, user_id: str) -> int:
+        """How many workspaces this account backs that still exist.
+
+        What a plan's workspace limit is checked against. A workspace being
+        deleted is out already: counting it would refuse the workspace somebody
+        makes right after deleting one, for a slot that frees itself moments
+        later.
+        """
+
+        return int(
+            self.session.scalar(
+                select(func.count(WorkspaceMemberTable.workspace_id))
+                .join(WorkspaceTable, WorkspaceTable.id == WorkspaceMemberTable.workspace_id)
+                .where(
+                    WorkspaceMemberTable.user_id == user_id,
+                    WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                    WorkspaceTable.status.not_in(
+                        [WorkspaceStatus.Deleting.value, WorkspaceStatus.Deleted.value]
+                    ),
+                )
+            )
+            or 0
+        )
+
     def workspaces_for_user(self, user_id: str) -> list[WorkspaceRecord]:
         """Active workspaces this person reaches, resolved in one query.
 

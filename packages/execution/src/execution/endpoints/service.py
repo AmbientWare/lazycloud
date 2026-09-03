@@ -205,6 +205,8 @@ class EndpointControlService:
                     stub_id=stub.id,
                     app_id=stub.app_id,
                     env=env,
+                    gpu=list(config.runtime.gpu),
+                    gpu_count=config.runtime.gpu_count,
                 ),
             )
         self.services.containers.publish_lifecycle_change(
@@ -254,8 +256,8 @@ class EndpointControlService:
                 memory_mib=config.runtime.requested_memory_mib,
                 memory_limit_mib=config.runtime.limit_memory_mib,
                 disk_mib=config.runtime.requested_disk_mib,
-                gpu=list(config.runtime.gpu),
-                gpu_count=config.runtime.gpu_count,
+                gpu=list(container.gpu),
+                gpu_count=container.gpu_count,
                 pool_selector=config.effective_pool_selector,
                 runtime=config.runtime.runtime,
                 runtime_class=config.runtime.runtime_class or "",

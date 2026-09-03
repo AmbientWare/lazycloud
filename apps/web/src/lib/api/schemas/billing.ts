@@ -65,8 +65,9 @@ export type BillingPlan = z.infer<typeof billingPlanSchema>;
 
 export const billingEntitlementUsageSchema = z
   .object({
-    apps: z.number().int().nonnegative(),
-    concurrent_containers: z.number().int().nonnegative(),
+    concurrent_cpu_containers: z.number().int().nonnegative(),
+    concurrent_gpus: z.number().int().nonnegative(),
+    workspaces: z.number().int().nonnegative(),
     members: z.number().int().nonnegative(),
     connected_clouds: z.number().int().nonnegative(),
     custom_domains: z.number().int().nonnegative(),

@@ -153,8 +153,9 @@ function summary(overrides: Partial<BillingSummary> = {}): BillingSummary {
     payment_method_on_file: false,
     entitlements: entitlements(),
     usage: {
-      apps: 0,
-      concurrent_containers: 0,
+      concurrent_cpu_containers: 0,
+      concurrent_gpus: 0,
+      workspaces: 1,
       members: 1,
       connected_clouds: 0,
       custom_domains: 0,
@@ -166,9 +167,11 @@ function summary(overrides: Partial<BillingSummary> = {}): BillingSummary {
 
 function entitlements() {
   return {
-    max_apps: 200,
-    max_concurrent_containers: 100,
-    max_members: 3 as const,
+    max_concurrent_cpu_containers: 30,
+    max_concurrent_gpus: 5,
+    gpu_types: ["T4", "L4", "A10G"],
+    max_workspaces: 1 as const,
+    max_members: 1 as const,
     connected_cloud: false,
     custom_domains: false,
     self_hosted: true,
@@ -180,7 +183,11 @@ function pricingCatalog(): PricingCatalog {
     pricing_version: "test",
     currency: "USD",
     connected_cloud_management_fee_percent: 8,
-    no_payment_method: { included_nanos: 1_000_000_000, max_concurrent_containers: 10 },
+    no_payment_method: {
+      included_nanos: 1_000_000_000,
+      max_concurrent_cpu_containers: 10,
+      max_concurrent_gpus: 1,
+    },
     plans: [
       {
         id: "free",
@@ -195,12 +202,14 @@ function pricingCatalog(): PricingCatalog {
         id: "team",
         name: "Team",
         summary: "Team plan",
-        monthly_nanos: 200_000_000_000,
-        included_nanos: 100_000_000_000,
+        monthly_nanos: 100_000_000_000,
+        included_nanos: 30_000_000_000,
         entitlements: {
           ...entitlements(),
-          max_apps: 1_000,
-          max_concurrent_containers: 5_000,
+          max_concurrent_cpu_containers: 1_000,
+          max_concurrent_gpus: 50,
+          gpu_types: "all",
+          max_workspaces: "unlimited",
           max_members: "unlimited",
           connected_cloud: true,
           custom_domains: true,

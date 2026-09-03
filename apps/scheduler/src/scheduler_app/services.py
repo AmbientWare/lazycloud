@@ -323,7 +323,6 @@ class SchedulerAppServices:
                 container_shutdowns,
             ),
             DatabaseAppImageAvailability(),
-            DatabaseBillingAdmission(),
             workspace_changes=workspace_changes,
         )
         cron_jobs = CronJobService(

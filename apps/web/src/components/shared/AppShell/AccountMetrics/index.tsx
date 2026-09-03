@@ -73,8 +73,8 @@ function ReadingStrip() {
   const billing = useQuery(billingSummaryQueryOptions());
   const tasks = useQuery(taskMetricsQueryOptions(workspace.id, TASK_METRICS_HOURS));
 
-  const ceiling = billing.data?.entitlements?.max_concurrent_containers ?? 0;
-  const accountLive = billing.data?.usage.concurrent_containers ?? 0;
+  const entitlements = billing.data?.entitlements;
+  const usage = billing.data?.usage;
 
   return (
     <section
@@ -92,13 +92,21 @@ function ReadingStrip() {
             : undefined
         }
       />
-      <Reading
-        label="Concurrency"
+      <ConcurrencyReading
         className="border-b border-border sm:border-b-0 sm:border-r"
         query={billing}
-        reading={`${accountLive.toLocaleString()} / ${ceiling.toLocaleString()}`}
-        detail="Ceiling on your plan"
-        meter={billing.data ? { used: accountLive, limit: ceiling } : undefined}
+        pools={[
+          {
+            label: "CPU",
+            used: usage?.concurrent_cpu_containers ?? 0,
+            limit: entitlements?.max_concurrent_cpu_containers ?? 0,
+          },
+          {
+            label: "GPU",
+            used: usage?.concurrent_gpus ?? 0,
+            limit: entitlements?.max_concurrent_gpus ?? 0,
+          },
+        ]}
       />
       <Reading
         label="Tasks · 24h"
@@ -133,12 +141,50 @@ type ReadingQuery = {
 };
 
 /**
- * One cell of the strip.
+ * The chrome every cell shares: its label, and what it shows while the reading
+ * cannot be taken.
  *
- * A reading that could not be taken says so in the cell rather than showing a
- * dash: a dash is what an instrument reads when the answer is genuinely zero or
- * absent, and the two must not look the same.
+ * A reading that failed says so in the cell rather than showing a dash: a dash
+ * is what an instrument reads when the answer is genuinely zero or absent, and
+ * the two must not look the same.
  */
+function ReadingCell({
+  label,
+  query,
+  className,
+  children,
+}: {
+  label: string;
+  query: ReadingQuery;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cn("min-w-0 px-4 py-3", className)}>
+      <div className="micro-label truncate">{label}</div>
+      {query.isPending ? (
+        <div className="mt-1.5 space-y-1.5" aria-hidden="true">
+          <Skeleton className="h-4 w-14" />
+          <Skeleton className="h-2.5 w-20" />
+        </div>
+      ) : query.isError ? (
+        <>
+          <div className="readout mt-1 truncate text-[15px] text-destructive">Unavailable</div>
+          <p
+            className="mt-1 truncate text-[11px] text-muted-foreground"
+            title={query.error?.message}
+          >
+            {query.error?.message ?? "The reading could not be taken"}
+          </p>
+        </>
+      ) : (
+        children
+      )}
+    </div>
+  );
+}
+
+/** One cell of the strip, holding one figure. */
 function Reading({
   label,
   value,
@@ -165,41 +211,56 @@ function Reading({
   className?: string;
 }) {
   return (
-    <div className={cn("min-w-0 px-4 py-3", className)}>
-      <div className="micro-label truncate">{label}</div>
-      {query.isPending ? (
-        <div className="mt-1.5 space-y-1.5" aria-hidden="true">
-          <Skeleton className="h-4 w-14" />
-          <Skeleton className="h-2.5 w-20" />
-        </div>
-      ) : query.isError ? (
-        <>
-          <div className="readout mt-1 truncate text-[15px] text-destructive">Unavailable</div>
-          <p
-            className="mt-1 truncate text-[11px] text-muted-foreground"
-            title={query.error?.message}
-          >
-            {query.error?.message ?? "The reading could not be taken"}
-          </p>
-        </>
-      ) : (
-        <>
-          <div
-            className={cn(
-              "readout mt-1 truncate text-[15px]",
-              tone === "danger" ? "text-destructive" : "text-foreground",
-            )}
-          >
-            {reading ?? value?.toLocaleString() ?? "—"}
+    <ReadingCell label={label} query={query} className={className}>
+      <div
+        className={cn(
+          "readout mt-1 truncate text-[15px]",
+          tone === "danger" ? "text-destructive" : "text-foreground",
+        )}
+      >
+        {reading ?? value?.toLocaleString() ?? "—"}
+      </div>
+      {meter && meter.limit > 0 ? (
+        <ShareBar share={meter.used / meter.limit} tone="capacity" className="mt-1.5 w-full" />
+      ) : null}
+      {detail ? <p className="mt-1 truncate text-[11px] text-muted-foreground">{detail}</p> : null}
+    </ReadingCell>
+  );
+}
+
+/**
+ * The two concurrency pools, one line each.
+ *
+ * They are bounded separately — a container counts against the CPU ceiling, or
+ * against the GPU one by the number of cards it holds — so a single combined
+ * figure would leave an account refused a GPU reading a number with room in it.
+ * One cell rather than two, because they are one question asked twice.
+ */
+function ConcurrencyReading({
+  pools,
+  query,
+  className,
+}: {
+  pools: readonly { label: string; used: number; limit: number }[];
+  query: ReadingQuery;
+  className?: string;
+}) {
+  return (
+    <ReadingCell label="Concurrency" query={query} className={className}>
+      {pools.map((pool) => (
+        <div className="mt-1.5 first:mt-1" key={pool.label}>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="micro-label shrink-0">{pool.label}</span>
+            <span className="readout min-w-0 truncate text-[15px]">
+              {pool.used.toLocaleString()} / {pool.limit.toLocaleString()}
+            </span>
           </div>
-          {meter && meter.limit > 0 ? (
-            <ShareBar share={meter.used / meter.limit} tone="capacity" className="mt-1.5 w-full" />
+          {pool.limit > 0 ? (
+            <ShareBar share={pool.used / pool.limit} tone="capacity" className="mt-1 w-full" />
           ) : null}
-          {detail ? (
-            <p className="mt-1 truncate text-[11px] text-muted-foreground">{detail}</p>
-          ) : null}
-        </>
-      )}
-    </div>
+        </div>
+      ))}
+      <p className="mt-1 truncate text-[11px] text-muted-foreground">Ceilings on your plan</p>
+    </ReadingCell>
   );
 }

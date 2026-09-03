@@ -120,6 +120,8 @@ class PendingContainerReservation(ContractModel):
     ports: dict[str, int] = Field(default_factory=dict)
     network_blocked: bool = False
     network_allow_list: list[str] = Field(default_factory=list)
+    gpu: list[str] = Field(default_factory=list)
+    gpu_count: int = Field(default=0, ge=0)
 
 
 @dataclass(slots=True)
@@ -135,16 +137,32 @@ class ContainerService:
     workspace_changes: WorkspaceChangePublisher
     runtime_state: ContainerRuntimeStateRepository | None = None
 
-    def assert_may_start_container(self, session: DatabaseSession, *, workspace_id: str) -> None:
-        """Refuse a workspace whose account owes money, before anything exists.
+    def admit_container_start(
+        self,
+        session: DatabaseSession,
+        *,
+        workspace_id: str,
+        gpu: Sequence[str],
+        gpu_count: int,
+    ) -> list[str]:
+        """Refuse a start the account may not make, before anything exists.
+
+        Returns the GPU models the container is to be scheduled with; the caller
+        stores them on the record and asks the scheduler for exactly those.
 
         Exposed here rather than left to callers to find, because the two that
         build their own container record instead of reserving one still have to
         ask — and asking through the service that owns containers keeps the one
-        answer in one place.
+        answer in one place. The count is asked as the number of cards the
+        scheduler will hold, so the plan counts what the fleet counts.
         """
 
-        self.payment_admission.assert_may_start_container(session, workspace_id=workspace_id)
+        return self.payment_admission.admit_container_start(
+            session,
+            workspace_id=workspace_id,
+            gpu=gpu,
+            gpu_count=gpu_count_for_capacity(gpu, gpu_count),
+        )
 
     def reserve_pending(
         self,
@@ -152,10 +170,14 @@ class ContainerService:
         reservation: PendingContainerReservation,
     ) -> ContainerRecord:
         # Before the row. Asked ahead of the app check because it is the broader
-        # refusal — owing money stops work whether or not an app owns it, and a
-        # reservation without an app id skips the check below entirely.
-        self.payment_admission.assert_may_start_container(
-            session, workspace_id=reservation.workspace_id
+        # refusal — an account that may not start this stops work whether or not
+        # an app owns it, and a reservation without an app id skips the check
+        # below entirely.
+        gpu = self.admit_container_start(
+            session,
+            workspace_id=reservation.workspace_id,
+            gpu=reservation.gpu,
+            gpu_count=reservation.gpu_count,
         )
         app_id = optional_uuid(reservation.app_id, field="app_id")
         if app_id is not None:
@@ -171,6 +193,8 @@ class ContainerService:
         values["machine_id"] = optional_uuid(reservation.machine_id, field="machine_id")
         values["worker_id"] = optional_uuid(reservation.worker_id, field="worker_id")
         values["status"] = ContainerStatus.Pending.value
+        values["gpu"] = gpu
+        values["gpu_count"] = gpu_count_for_capacity(gpu, reservation.gpu_count)
         return ContainerRepository(session).records.create(
             values,
             workspace_id=reservation.workspace_id,
@@ -276,6 +300,8 @@ class ContainerService:
                     ports=ports or {},
                     network_blocked=block_network,
                     network_allow_list=[str(item) for item in allow_list or []],
+                    gpu=list(gpu),
+                    gpu_count=gpu_count,
                 ),
             )
         self.tasks.publish_created(task)
@@ -295,8 +321,8 @@ class ContainerService:
                 cpu_millicores=cpu_millicores,
                 memory_mib=memory_mib,
                 disk_mib=disk_mib,
-                gpu=list(gpu),
-                gpu_count=gpu_count,
+                gpu=list(record.gpu),
+                gpu_count=record.gpu_count,
                 pool_selector=pool_selector,
                 runtime=runtime,
                 runtime_class=runtime_class,

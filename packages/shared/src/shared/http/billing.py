@@ -114,8 +114,9 @@ class BillingPlanResponse(HttpModel):
 
 
 class BillingEntitlementUsageResponse(HttpModel):
-    apps: int = Field(ge=0)
-    concurrent_containers: int = Field(ge=0)
+    concurrent_cpu_containers: int = Field(ge=0)
+    concurrent_gpus: int = Field(ge=0)
+    workspaces: int = Field(ge=0)
     members: int = Field(ge=0)
     connected_clouds: int = Field(ge=0)
     custom_domains: int = Field(ge=0)

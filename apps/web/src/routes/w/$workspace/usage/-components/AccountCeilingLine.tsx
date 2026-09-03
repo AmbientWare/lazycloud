@@ -31,14 +31,16 @@ export function AccountCeilingLine() {
       </p>
     );
   }
-  const limit = data.entitlements?.max_concurrent_containers ?? 0;
-  const atLimit = data.usage.concurrent_containers >= limit;
+  const cpuLimit = data.entitlements?.max_concurrent_cpu_containers ?? 0;
+  const gpuLimit = data.entitlements?.max_concurrent_gpus ?? 0;
+  const atLimit =
+    data.usage.concurrent_cpu_containers >= cpuLimit || data.usage.concurrent_gpus >= gpuLimit;
   const overspent = (data.plan.allowance?.remaining_nanos ?? 0) < 0;
 
   return (
     <p className={cn("text-xs", atLimit || overspent ? "text-warning" : "text-muted-foreground")}>
-      {data.usage.concurrent_containers}/{countLabel(limit, "container")} running or queued
-      account-wide
+      {data.usage.concurrent_cpu_containers}/{countLabel(cpuLimit, "CPU container")} and{" "}
+      {data.usage.concurrent_gpus}/{countLabel(gpuLimit, "GPU card")} in use account-wide
       {overspent && data.plan.allowance
         ? ` · ${formatCostNanos(-data.plan.allowance.remaining_nanos, data.currency)} over included usage this period`
         : null}

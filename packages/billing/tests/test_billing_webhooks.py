@@ -271,7 +271,9 @@ def test_a_failed_payment_leaves_the_account_admission_refuses(
         isolated_services.context.database.session() as session,
         pytest.raises(PaymentRequiredError),
     ):
-        DatabaseBillingAdmission().assert_may_start_container(session, workspace_id=workspace_id)
+        DatabaseBillingAdmission().admit_container_start(
+            session, workspace_id=workspace_id, gpu=(), gpu_count=0
+        )
 
 
 def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
@@ -404,7 +406,9 @@ def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
         isolated_services.context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="no subscription"),
     ):
-        DatabaseBillingAdmission().assert_may_start_container(session, workspace_id=workspace_id)
+        DatabaseBillingAdmission().admit_container_start(
+            session, workspace_id=workspace_id, gpu=(), gpu_count=0
+        )
 
 
 def test_a_first_card_widens_the_cycle_already_in_progress(

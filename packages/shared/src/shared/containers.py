@@ -72,6 +72,13 @@ class ContainerRecord(ContractModel):
     ports: dict[str, int] = Field(default_factory=dict)
     network_blocked: bool = False
     network_allow_list: list[str] = Field(default_factory=list)
+    gpu: list[str] = Field(default_factory=list)
+    """The models this container asked for, as the request named them and after
+    a wildcard was narrowed to what its plan allows. Empty for CPU work."""
+
+    gpu_count: int = Field(default=0, ge=0)
+    """Cards held while live: what the plan's GPU concurrency counts."""
+
     timeout_seconds: int = Field(default=0, ge=-1)
     expires_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)

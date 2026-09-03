@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { createLazyFileRoute } from "@tanstack/react-router";
 
 import type { PricingCatalog } from "@/lib/api/schemas";
+import { gpuModelsLabel, limitFigure, memberLimitFigure } from "@/lib/entitlements";
+import { countLabel } from "@/lib/format";
 import { exactDollars } from "@/lib/money";
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 import { cn } from "@/lib/utils";
@@ -158,7 +160,8 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
 /* The one account-wide fact a reader needs before choosing a plan: what they get
    before they have paid for anything. The rest is disclosure, not pricing. */
 function accountTerm(catalog: PricingCatalog): string {
-  return `Without a card, each plan includes ${exactDollars(catalog.no_payment_method.included_nanos)} of usage and up to ${catalog.no_payment_method.max_concurrent_containers} concurrent containers. Once the included usage is spent, containers stop and new volumes cannot be created. Existing volumes remain readable, and you continue to pay for them.`;
+  const terms = catalog.no_payment_method;
+  return `Without a card, each plan includes ${exactDollars(terms.included_nanos)} of usage, ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once, and ${countLabel(terms.max_concurrent_gpus, "GPU card")}. Once the included usage is spent, containers stop and new volumes cannot be created. Existing volumes remain readable, and you continue to pay for them.`;
 }
 
 const sectionTitle =
@@ -266,24 +269,26 @@ function MarketingPricing() {
                           <span className="text-muted-foreground">/ month</span>
                         </dd>
                       </div>
-                      <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
-                        <dt className="text-muted-foreground">Concurrent containers</dt>
-                        <dd className="font-mono font-medium">
-                          {plan.entitlements.max_concurrent_containers}
-                        </dd>
-                      </div>
-                      <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
-                        <dt className="text-muted-foreground">Apps</dt>
-                        <dd className="font-mono font-medium">{plan.entitlements.max_apps}</dd>
-                      </div>
-                      <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
-                        <dt className="text-muted-foreground">Members</dt>
-                        <dd className="font-mono font-medium">
-                          {plan.entitlements.max_members === "unlimited"
-                            ? "Unlimited"
-                            : plan.entitlements.max_members}
-                        </dd>
-                      </div>
+                      <PlanLimit
+                        label="CPU containers at once"
+                        value={plan.entitlements.max_concurrent_cpu_containers.toLocaleString()}
+                      />
+                      <PlanLimit
+                        label="GPU cards at once"
+                        value={plan.entitlements.max_concurrent_gpus.toLocaleString()}
+                      />
+                      <PlanLimit
+                        label="GPU models"
+                        value={gpuModelsLabel(plan.entitlements.gpu_types)}
+                      />
+                      <PlanLimit
+                        label="Workspaces"
+                        value={limitFigure(plan.entitlements.max_workspaces)}
+                      />
+                      <PlanLimit
+                        label="Members"
+                        value={memberLimitFigure(plan.entitlements.max_members)}
+                      />
                       <PlanFeature
                         label="Connected cloud"
                         included={plan.entitlements.connected_cloud}
@@ -324,6 +329,18 @@ function MarketingPricing() {
         />
       </main>
     </MarketingLayout>
+  );
+}
+
+/* One term of a plan, read off the catalog. The value column is monospaced
+   whether it holds a figure, a list of models, or a word, so the eye runs down
+   one column rather than two typefaces. */
+function PlanLimit({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="text-right font-mono font-medium">{value}</dd>
+    </div>
   );
 }
 

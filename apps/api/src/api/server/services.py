@@ -925,7 +925,6 @@ class ApiServices(ApiServiceCore):
                 container_shutdowns,
             ),
             DatabaseAppImageAvailability(),
-            payment_admission,
             workspace_changes=workspace_changes,
         )
         cron_jobs = CronJobService(
