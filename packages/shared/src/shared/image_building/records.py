@@ -65,7 +65,7 @@ class ImageRecord(ContractModel):
 
 
 class ImageArchiveRecord(ContractModel):
-    """The one archive for an image id, shared by every workspace authorized for it."""
+    """The OCI index and immutable manifest shared by authorized workspaces."""
 
     id: str = ""
     image_id: str = Field(min_length=1)
@@ -73,6 +73,10 @@ class ImageArchiveRecord(ContractModel):
     object_key: str = Field(min_length=1)
     size_bytes: int = Field(gt=0)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    registry_ref: str = ""
+    manifest_digest: str = Field(default="", pattern=r"^(?:sha256:[0-9a-f]{64})?$")
+    architecture: str = Field(default="", pattern=r"^(?:amd64|arm64)?$")
+    format_version: int = Field(default=1, ge=1)
     cleanup_claimed_at: datetime | None = None
 
 

@@ -1611,6 +1611,13 @@ class WorkerRepositoryService:
             raise AuthorizationDeniedError(
                 "image archive upload build ownership is no longer active"
             )
+        if request.architecture != build.image.architecture.value:
+            raise AuthorizationDeniedError(
+                "image archive upload architecture does not match the assigned build"
+            )
+        descriptor_denial = self.origin_credentials.upload_descriptor_denial(request)
+        if descriptor_denial:
+            raise AuthorizationDeniedError(descriptor_denial)
         if self.redis is None:
             raise UpstreamUnavailableError("Redis is required for image archive upload")
         if not RedisImageBuildUploadCapabilityGuard(self.redis).consume(request.upload_capability):
@@ -1623,6 +1630,10 @@ class WorkerRepositoryService:
             object_key=object_key,
             size_bytes=request.archive_size_bytes,
             sha256=request.archive_sha256,
+            registry_ref=request.registry_ref,
+            manifest_digest=request.manifest_digest,
+            architecture=request.architecture,
+            format_version=request.format_version,
         )
         credentials = self.origin_credentials.vend_upload(
             request,

@@ -30,7 +30,10 @@ from worker.image_build_execution import (
 )
 from worker.image_build_scratch import ImageBuildScratchLease, ImageBuildScratchManager
 from worker.image_lifecycle import BuildahDirectoryPlan, BuildahStorageDriver
+from worker.image_runtime import ImageRuntimeClient
 from worker.origin_access import (
+    CacheOriginCredentialRequest,
+    CacheOriginCredentials,
     ImageArchiveUploadCredentialRequest,
     ImageArchiveUploadCredentials,
 )
@@ -327,6 +330,10 @@ def test_repository_archive_publisher_requests_and_propagates_exact_identity(
         container_id="container-1",
         upload_capability="a" * 32,
         archive_path=archive,
+        registry_ref="registry.example.com/workloads@sha256:" + "b" * 64,
+        manifest_digest="sha256:" + "b" * 64,
+        architecture="amd64",
+        format_version=2,
         workspace_id="workspace-1",
         stub_id="stub-1",
     )
@@ -334,6 +341,7 @@ def test_repository_archive_publisher_requests_and_propagates_exact_identity(
     request = repository.requests[0]
     assert request.archive_size_bytes == len(content)
     assert request.archive_sha256 == digest
+    assert request.manifest_digest == "sha256:" + "b" * 64
     assert uploads[0]["headers"] == signed_headers
     assert result.object_key == "image-archives/image-1.rclip"
     assert result.size_bytes == len(content)
@@ -371,7 +379,6 @@ def test_buildah_failure_cleans_every_resource_in_its_isolated_store(
         fail_buildah,
     )
     builder = image_build_execution.BuildahWorkerImageBuilder(
-        archiver=_SuccessfulImageArchiver(tmp_path / "image.rclip"),
         scratch=ImageBuildScratchManager(
             root=tmp_path / "build-root",
             worker_id="worker-1",
@@ -380,6 +387,9 @@ def test_buildah_failure_cleans_every_resource_in_its_isolated_store(
             minimum_free_bytes=0,
             buildah_binary="cleanup-buildah-missing",
         ),
+        repository=_FakeArchiveUploadRepository(ImageArchiveUploadCredentials()),
+        image_runtime=ImageRuntimeClient(tmp_path / "image-runtime.sock"),
+        archive_root=tmp_path,
         architecture_preparer=ImageBuildArchitectureRuntime(host_machine=lambda: "x86_64"),
         storage_driver=image_build_execution.BuildahStorageDriver.Vfs,
         fallback_storage_driver=image_build_execution.BuildahStorageDriver.Vfs,
@@ -446,7 +456,6 @@ def test_buildah_cleanup_failure_still_releases_isolated_scratch(
     )
     monkeypatch.setattr(ImageBuildScratchManager, "cleanup_store", fail_cleanup)
     builder = image_build_execution.BuildahWorkerImageBuilder(
-        archiver=_SuccessfulImageArchiver(tmp_path / "image.rclip"),
         scratch=ImageBuildScratchManager(
             root=tmp_path / "build-root",
             worker_id="worker-1",
@@ -454,6 +463,9 @@ def test_buildah_cleanup_failure_still_releases_isolated_scratch(
             per_build_max_bytes=16 * 1024 * 1024,
             minimum_free_bytes=0,
         ),
+        repository=_FakeArchiveUploadRepository(ImageArchiveUploadCredentials()),
+        image_runtime=ImageRuntimeClient(tmp_path / "image-runtime.sock"),
+        archive_root=tmp_path,
         architecture_preparer=ImageBuildArchitectureRuntime(host_machine=lambda: "x86_64"),
         storage_driver=image_build_execution.BuildahStorageDriver.Vfs,
         fallback_storage_driver=image_build_execution.BuildahStorageDriver.Vfs,
@@ -641,6 +653,10 @@ class _RecordingImageBuilder:
         return WorkerImageArchiveBuildResult(
             ok=True,
             image_id=payload.image_id,
+            registry_ref="registry.example.com/workloads@sha256:" + "b" * 64,
+            manifest_digest="sha256:" + "b" * 64,
+            architecture="amd64",
+            format_version=2,
             logs=[f"archive output: {private_values[0]}"]
             if self.log_private_values and private_values
             else [],
@@ -708,11 +724,26 @@ class _RecordingImagePublisher:
         container_id: str = "",
         upload_capability: str = "",
         archive_path: Path,
+        registry_ref: str = "",
+        manifest_digest: str = "",
+        architecture: str = "",
+        format_version: int = 0,
         workspace_id: str = "",
         stub_id: str = "",
     ) -> WorkerImageArchivePublishResult:
         self.image_ids.append(image_id)
-        _ = archive_path, workspace_id, stub_id, build_id, container_id, upload_capability
+        _ = (
+            archive_path,
+            workspace_id,
+            stub_id,
+            build_id,
+            container_id,
+            upload_capability,
+            registry_ref,
+            manifest_digest,
+            architecture,
+            format_version,
+        )
         return WorkerImageArchivePublishResult(
             ok=not self.error,
             image_id=image_id,
@@ -728,6 +759,11 @@ class _UploadCredentialsResponse:
     credentials: ImageArchiveUploadCredentials | None
 
 
+@dataclass(slots=True)
+class _CacheOriginCredentialsResponse:
+    credentials: CacheOriginCredentials | None
+
+
 class _FakeArchiveUploadRepository:
     def __init__(self, credentials: ImageArchiveUploadCredentials) -> None:
         self.credentials = credentials
@@ -739,3 +775,10 @@ class _FakeArchiveUploadRepository:
     ) -> _UploadCredentialsResponse:
         self.requests.append(request)
         return _UploadCredentialsResponse(credentials=self.credentials)
+
+    def get_cache_origin_credentials(
+        self,
+        request: CacheOriginCredentialRequest,
+    ) -> _CacheOriginCredentialsResponse:
+        del request
+        return _CacheOriginCredentialsResponse(credentials=CacheOriginCredentials())

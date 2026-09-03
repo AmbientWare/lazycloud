@@ -110,6 +110,8 @@ def test_one_global_archive_serves_every_authorized_workspace(
     sibling = owned_workspace(control, "image-archive-sibling")
     stranger = owned_workspace(control, "image-archive-stranger")
     image_id = "shared-image-name"
+    manifest_digest = "sha256:" + "c" * 64
+    registry_ref = f"registry.example.com/workloads@{manifest_digest}"
 
     with isolated_services.context.database.session() as session:
         archives = ImageArchiveRepository(session)
@@ -119,6 +121,10 @@ def test_one_global_archive_serves_every_authorized_workspace(
             object_key=f"image-archives/{image_id}.rclip",
             size_bytes=1024,
             sha256="a" * 64,
+            registry_ref=registry_ref,
+            manifest_digest=manifest_digest,
+            architecture="amd64",
+            format_version=2,
         )
         assert reserved
         again, reserved_again = archives.reserve(
@@ -127,6 +133,10 @@ def test_one_global_archive_serves_every_authorized_workspace(
             object_key=f"image-archives/{image_id}.rclip",
             size_bytes=2048,
             sha256="b" * 64,
+            registry_ref=f"registry.example.com/workloads@sha256:{'d' * 64}",
+            manifest_digest="sha256:" + "d" * 64,
+            architecture="arm64",
+            format_version=2,
         )
         assert not reserved_again
         assert again.id == archive.id

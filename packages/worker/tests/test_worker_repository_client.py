@@ -53,6 +53,11 @@ def test_worker_repository_client_preserves_session_auth_and_scoped_credentials(
                     image_archive_url="https://signed/image-1.rclip",
                     archive_size_bytes=7,
                     archive_sha256="a" * 64,
+                    registry_repository="registry.example.com/workloads",
+                    registry_ref="registry.example.com/workloads@sha256:" + "b" * 64,
+                    manifest_digest="sha256:" + "b" * 64,
+                    architecture="amd64",
+                    format_version=2,
                 ).model_dump(mode="json"),
             },
         }

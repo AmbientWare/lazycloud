@@ -4,6 +4,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Protocol
 
 from database.repositories.cleanup import (
     OBJECT_CLEANUP_SOURCE,
@@ -101,6 +102,10 @@ class RetentionResult(ContractModel):
         )
 
 
+class WorkloadImageRegistry(Protocol):
+    def delete_manifest(self, registry_ref: str) -> None: ...
+
+
 @dataclass(slots=True)
 class RetentionService:
     context: StorageContext
@@ -109,6 +114,7 @@ class RetentionService:
     config: RetentionConfig
     image_archive_settings: ResolvedImageArchiveSettings
     image_archive_client: ObjectByteClient | None = None
+    workload_image_registry: WorkloadImageRegistry | None = None
 
     def reconcile(
         self,
@@ -634,6 +640,12 @@ class RetentionService:
             raise RuntimeError(
                 f"image archive deletion was not confirmed: {bucket}/{archive.object_key}"
             )
+        if (
+            archive.format_version >= 2
+            and archive.registry_ref
+            and self.workload_image_registry is not None
+        ):
+            self.workload_image_registry.delete_manifest(archive.registry_ref)
         with self.context.database.session() as session:
             CleanupRepository(session).lock_keys({f"image-archive:{archive.image_id}"})
             archives = ImageArchiveRepository(session)

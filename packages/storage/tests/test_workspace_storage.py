@@ -512,6 +512,10 @@ def test_workspace_deletion_preserves_a_published_archive_a_sibling_still_uses(
             object_key=archive_key,
             size_bytes=len(b"archive"),
             sha256=hashlib.sha256(b"archive").hexdigest(),
+            registry_ref=f"registry.example.com/workloads@sha256:{'c' * 64}",
+            manifest_digest="sha256:" + "c" * 64,
+            architecture="amd64",
+            format_version=2,
         )
         images = ImageRepository(session)
         images.upsert(ImageRecord(workspace_id=leaving.id, image_id=image_id))

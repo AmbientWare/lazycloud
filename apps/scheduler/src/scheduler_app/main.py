@@ -309,6 +309,9 @@ def build_scheduler_runtime(
             image_archive=ImageArchiveSettings(),
             retention=RetentionSettings(),
             volume_metering=VolumeMeteringSettings(),
+            workload_image_registry_repository=(
+                scheduler_settings.workload_image_registry_repository
+            ),
         ),
         network=SchedulerNetworkSettings(
             backend_routes=BackendRouteSettings(),
