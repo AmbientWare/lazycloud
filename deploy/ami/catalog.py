@@ -34,6 +34,10 @@ class _CatalogModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class _AwsModel(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+
 class NodeImageCatalog(_CatalogModel):
     schema_version: Literal[1] = 1
     recipe_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -61,18 +65,18 @@ class NodeImageCatalog(_CatalogModel):
         ).encode()
 
 
-class _Tag(_CatalogModel):
+class _Tag(_AwsModel):
     key: str = Field(alias="Key")
     value: str = Field(alias="Value")
 
 
-class _Image(_CatalogModel):
+class _Image(_AwsModel):
     image_id: str = Field(alias="ImageId")
     state: str = Field(alias="State")
     tags: list[_Tag] = Field(default_factory=list, alias="Tags")
 
 
-class _DescribeImagesResponse(_CatalogModel):
+class _DescribeImagesResponse(_AwsModel):
     images: list[_Image] = Field(alias="Images")
 
 
