@@ -17,6 +17,7 @@ from lazycloud.abstractions.serve import write_serve_preview
 from lazycloud.client_contracts import ClientContractError
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.schema import Integer, Schema
+from lazycloud.terminal import Terminal
 from lazycloud.values import cloudpickle_bytes
 from pydantic import JsonValue
 from shared.containers import ContainerStatus
@@ -107,7 +108,7 @@ class FakeFunctionClient:
 
 
 @dataclass
-class RecordingTerminal:
+class RecordingTerminal(Terminal):
     lines: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -116,12 +117,6 @@ class RecordingTerminal:
 
     def line(self, message: str = "") -> None:
         self.lines.append(message)
-
-    def header(self, message: str) -> None:
-        self.line(f"=> {message}")
-
-    def detail(self, message: str) -> None:
-        self.line(f"   {message}")
 
     def warn(self, message: str) -> None:
         self.line(f"WARNING: {message}")
@@ -484,10 +479,7 @@ def test_function_remote_streams_status_logs_and_ignores_keepalives() -> None:
             del parent_task_id, root_task_id, dependencies
             self.invocations.append((stub_id, args, detached))
             yield FunctionInvokeResponse.from_result(task_id="task-1")
-            yield FunctionInvokeResponse.from_result(
-                task_id="task-1",
-                output="Task <task-1> running\n",
-            )
+            yield FunctionInvokeResponse.from_result(task_id="task-1", status="running")
             yield FunctionInvokeResponse.from_result(task_id="task-1")
             yield FunctionInvokeResponse.from_result(task_id="task-1", output="hello\n")
             yield FunctionInvokeResponse.from_result(
@@ -512,9 +504,8 @@ def test_function_remote_streams_status_logs_and_ignores_keepalives() -> None:
 
     assert streamer.remote() == {"ok": True}
     assert [detached for _, _, detached in client.invocations] == [False]
-    assert "Submitted task <task-1>" in terminal.lines
-    assert "Task <task-1> running" in terminal.lines
     assert "hello" in terminal.lines
+    assert any(line.startswith("   Task: task-1 running (") for line in terminal.lines)
 
 
 def test_function_remote_distinguishes_none_result_from_incomplete_responses() -> None:

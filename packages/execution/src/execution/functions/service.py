@@ -1031,7 +1031,7 @@ class FunctionControlService:
                 last_keepalive = time.monotonic()
                 yield FunctionInvokeResponse.from_result(
                     task_id=initial.task_id,
-                    output=f"Task <{initial.task_id}> {last_status}\n",
+                    status=last_status,
                 )
             if is_terminal_task_status(task.status):
                 yield FunctionInvokeResponse.from_result(

@@ -1,43 +1,26 @@
-"""CLI progress backed by the shared output streams and semantic theme."""
+"""CLI progress: one live step at a time, backed by the shared output streams."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from rich.progress import (
-    BarColumn,
-    DownloadColumn,
-    Progress,
-    TextColumn,
-    TimeElapsedColumn,
-    TransferSpeedColumn,
-)
+from rich.console import Group, RenderableType
+from rich.live import Live
+from rich.spinner import Spinner
 from rich.style import Style
+from rich.table import Table
+from rich.text import Text
 
 from lazycloud.cli.components import output, theme
-from lazycloud.terminal import ProgressCallback, Terminal
+from lazycloud.cli.components.errors import debug_errors_enabled
+from lazycloud.terminal import Terminal, TerminalStep, format_elapsed
 
-_BUILD_PREFIXES = (
-    "archive progress:",
-    "building image",
-    "cache key:",
-    "collecting ",
-    "copying ",
-    "downloading ",
-    "getting ",
-    "installing ",
-    "manifest written",
-    "processing ",
-    "resolved ",
-    "step ",
-    "successfully built",
-    "successfully installed",
-    "trying to pull",
-    "writing manifest",
-)
+TAIL_LINES = 3
+FAILURE_TAIL_LINES = 20
+NAME_WIDTH = 11
+_LOG_INDENT = "    "
 
 
 @dataclass
@@ -82,27 +65,9 @@ class CliTerminal(Terminal):
         self._flush_pending()
         output.console.print(theme.styled(message, theme.SUCCESS + theme.EMPHASIS))
 
-    @contextmanager
-    def progress_bytes(self, description: str, *, total: int) -> Iterator[ProgressCallback]:
-        if self.quiet or total <= 0:
-            yield lambda _completed: None
-            return
-        progress = Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            DownloadColumn(binary_units=True),
-            TransferSpeedColumn(),
-            TimeElapsedColumn(),
-            console=output.console,
-            transient=False,
-        )
-        with progress:
-            task_id = progress.add_task(description, total=total)
-
-            def update(completed: int) -> None:
-                progress.update(task_id, completed=max(0, min(completed, total)))
-
-            yield update
+    def step(self, name: str, summary: str = "") -> TerminalStep:
+        self._flush_pending()
+        return LiveStep(name=name, terminal=self, summary=summary)
 
     def _flush_pending(self) -> None:
         if self._pending:
@@ -114,6 +79,128 @@ class CliTerminal(Terminal):
             output.console.print()
             return
         output.console.print(theme.styled(message, output_style(message)))
+
+
+@dataclass
+class LiveStep(TerminalStep):
+    """A step drawn as a spinner line with a short tail of its output.
+
+    While the step runs, the line and its tail redraw in place at the bottom of
+    the screen; anything else printed lands above them. Finishing replaces the
+    live line with a permanent one. Without a terminal, or with debug errors on,
+    every logged line prints as it arrives instead of scrolling through the tail.
+    """
+
+    _tail: deque[str] = field(default_factory=lambda: deque(maxlen=TAIL_LINES), init=False)
+    _recent: deque[str] = field(
+        default_factory=lambda: deque(maxlen=FAILURE_TAIL_LINES), init=False
+    )
+    _live: Live | None = field(default=None, init=False)
+    _spinner: Spinner = field(default_factory=lambda: Spinner("dots", style=theme.RUNNING))
+
+    def __post_init__(self) -> None:
+        if self.terminal.quiet:
+            return
+        if _interactive():
+            self._live = Live(
+                self._render_live(),
+                console=output.console,
+                refresh_per_second=12,
+                transient=True,
+            )
+            self._live.start()
+
+    def update(self, summary: str) -> None:
+        super().update(summary)
+        self._refresh()
+
+    def progress(self, completed: int, total: int) -> None:
+        if total > 0:
+            self.update(
+                f"{self.summary.split('·', 1)[0].strip()} · {min(100, completed * 100 // total)}%"
+            )
+
+    def log(self, line: str) -> None:
+        text = line.rstrip()
+        if not text:
+            return
+        self._recent.append(text)
+        if self._verbose_logs():
+            output.console.print(Text(f"{_LOG_INDENT}{text}", style=theme.MUTED))
+            return
+        self._tail.append(text)
+        self._refresh()
+
+    def done(self, summary: str = "") -> None:
+        self.finished = True
+        self.summary = summary or self.summary
+        self._stop()
+        self._print_final("✓", theme.SUCCESS)
+
+    def fail(self, summary: str = "") -> None:
+        self.finished = True
+        self.summary = summary or self.summary
+        self._stop()
+        if not self._verbose_logs():
+            for text in self._recent:
+                output.console.print(Text(f"{_LOG_INDENT}{text}", style=theme.MUTED))
+        self._print_final("✗", theme.ERROR)
+
+    def _verbose_logs(self) -> bool:
+        return self._live is None or debug_errors_enabled()
+
+    def _refresh(self) -> None:
+        if self._live is not None:
+            self._live.update(self._render_live())
+
+    def _stop(self) -> None:
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
+
+    def _print_final(self, glyph: str, style: Style) -> None:
+        if self.terminal.quiet:
+            return
+        output.console.print(
+            _step_row(Text(glyph, style=style), self.name, self.summary, self.elapsed)
+        )
+
+    def _render_live(self) -> RenderableType:
+        row = _step_row(self._spinner, self.name, self.summary, self.elapsed)
+        if not self._tail:
+            return row
+        tail = [
+            Text(f"{_LOG_INDENT}{text}", style=theme.MUTED, no_wrap=True) for text in self._tail
+        ]
+        return Group(row, *tail)
+
+
+def _interactive() -> bool:
+    """Live redraws need a real terminal on the stream the console writes to.
+
+    FORCE_COLOR makes Rich report a terminal even for a pipe, and JSON output
+    keeps the human stream on stderr, so neither can stand in for a tty check.
+    """
+    if output.json_output_active():
+        return False
+    stream = output.console.file
+    isatty = getattr(stream, "isatty", None)
+    return bool(isatty and isatty())
+
+
+def _step_row(glyph: RenderableType, name: str, summary: str, elapsed: float) -> Table:
+    grid = Table.grid(padding=(0, 1), expand=False)
+    grid.add_column(width=1, no_wrap=True)
+    grid.add_column(width=NAME_WIDTH, no_wrap=True)
+    grid.add_column(min_width=32, max_width=56, no_wrap=True)
+    grid.add_column(justify="right", width=7, no_wrap=True)
+    grid.add_row(
+        glyph,
+        Text(name, style=theme.EMPHASIS),
+        Text(summary),
+        Text(format_elapsed(elapsed), style=theme.MUTED),
+    )
+    return grid
 
 
 @runtime_checkable
@@ -146,20 +233,6 @@ def output_style(message: str) -> Style:
         return theme.WARNING
     if "traceback " in lower or " error" in lower or lower.startswith("error"):
         return theme.ERROR
-    if lower.startswith("preparing "):
-        return theme.RUNNING
-    if lower.startswith("submitted task"):
-        return theme.PENDING
-    if lower.startswith("task <"):
-        if "complete" in lower:
-            return theme.SUCCESS
-        if "failed" in lower or "cancel" in lower or "timeout" in lower:
-            return theme.ERROR
-        return theme.PENDING
-    if lower.startswith(("function complete", "build complete", "build completed successfully")):
-        return theme.SUCCESS
-    if lower.startswith(_BUILD_PREFIXES) or lower.startswith(("-->", "+ ")):
-        return theme.INFO
     return theme.PLAIN
 
 
@@ -170,4 +243,4 @@ def print_stream_message(stream: str, message: str) -> None:
     )
 
 
-__all__ = ["CliTerminal", "attach_terminal", "output_style", "print_stream_message"]
+__all__ = ["CliTerminal", "LiveStep", "attach_terminal", "output_style", "print_stream_message"]

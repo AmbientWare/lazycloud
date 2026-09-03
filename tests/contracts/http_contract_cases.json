@@ -113,6 +113,7 @@
         "exit_code": 0,
         "output": "",
         "result": null,
+        "status": "",
         "task_id": ""
       }
     },
@@ -129,6 +130,7 @@
         "exit_code": 0,
         "output": "",
         "result": null,
+        "status": "",
         "task_id": "task-null"
       }
     },
@@ -221,6 +223,7 @@
           },
           "version": 1
         },
+        "status": "",
         "task_id": "task-json"
       }
     },
@@ -252,6 +255,7 @@
           "value_base64": "gASVCgAAAAAAAAB9lIwCb2uUiHMu",
           "version": 1
         },
+        "status": "",
         "task_id": "task-cloudpickle"
       }
     }

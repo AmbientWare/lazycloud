@@ -4,10 +4,9 @@ import importlib
 import pickle
 import sys
 import zipfile
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import TracebackType
 
 import pytest
 from lazycloud.control import ControlClientConfig
@@ -22,11 +21,11 @@ from lazycloud.session.source_sync import (
     build_source_package_archive,
 )
 from lazycloud.session.uploads import DEFAULT_OBJECT_UPLOAD_TIMEOUT_SECONDS
-from lazycloud.terminal import ProgressCallback
 from lazycloud.values import cloudpickle_bytes
 from shared.deployment_records import DeploymentSpec
 from shared.http.objects import PutObjectResponse
 from tests.fakes import FakeDeploymentClient, FakeUploadClient
+from typing_extensions import Self
 
 
 def test_source_package_sync_collects_ignored_zip_once(tmp_path: Path) -> None:
@@ -84,10 +83,10 @@ def test_source_package_sync_reports_terminal_progress(tmp_path: Path) -> None:
     ).sync()
 
     assert result.object_id == "obj-source"
-    assert terminal.headers[0].startswith("Packaging 1 files")
-    assert "Uploading source" in terminal.headers
-    assert "Source uploaded" in terminal.headers
-    assert terminal.progress_updates[-1] == result.size
+    (step,) = terminal.steps
+    assert step.name == "Source"
+    assert step.finished is not None and step.finished.startswith("1 file, ")
+    assert step.progress_updates[-1] == result.size
 
 
 def test_source_package_sync_preserves_canonical_module_prefix(tmp_path: Path) -> None:
@@ -322,21 +321,38 @@ def test_deployment_object_upload_uses_extended_timeout_for_payload(
 
 @dataclass
 class _RecordingTerminal:
-    headers: list[str] = field(default_factory=list)
-    details: list[str] = field(default_factory=list)
+    steps: list[_RecordingStep] = field(default_factory=list)
+
+    def step(self, name: str, summary: str = "") -> _RecordingStep:
+        step = _RecordingStep(name=name, summary=summary)
+        self.steps.append(step)
+        return step
+
+
+@dataclass
+class _RecordingStep:
+    name: str
+    summary: str
     progress_updates: list[int] = field(default_factory=list)
+    finished: str | None = None
 
-    def header(self, message: str) -> None:
-        self.headers.append(message)
+    def __enter__(self) -> Self:
+        return self
 
-    def detail(self, message: str) -> None:
-        self.details.append(message)
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        return None
 
-    @contextmanager
-    def progress_bytes(self, description: str, *, total: int) -> Iterator[ProgressCallback]:
-        _ = description, total
+    def update(self, summary: str) -> None:
+        self.summary = summary
 
-        def update(completed: int) -> None:
-            self.progress_updates.append(completed)
+    def progress(self, completed: int, total: int) -> None:
+        _ = total
+        self.progress_updates.append(completed)
 
-        yield update
+    def done(self, summary: str = "") -> None:
+        self.finished = summary or self.summary

@@ -38,6 +38,7 @@ class FunctionInvokeBody(HttpModel):
 class FunctionInvokeResponse(HttpModel):
     task_id: str = ""
     output: str = ""
+    status: str = ""
     done: bool = False
     exit_code: int = 0
     result: FunctionResultPayload | None = None
@@ -49,12 +50,14 @@ class FunctionInvokeResponse(HttpModel):
         task_id: str,
         result: FunctionResultPayload | None = None,
         output: str = "",
+        status: str = "",
         done: bool = False,
         exit_code: int = 0,
     ) -> FunctionInvokeResponse:
         return cls(
             task_id=task_id,
             output=output,
+            status=status,
             done=done,
             exit_code=exit_code,
             result=result,

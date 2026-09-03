@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from functools import update_wrapper
 from pathlib import Path
@@ -72,7 +73,7 @@ from lazycloud.env import called_on_import, is_local
 from lazycloud.references import dotted_reference
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
 from lazycloud.session.task import FunctionCall, TaskClient, TaskOperationError
-from lazycloud.terminal import Terminal
+from lazycloud.terminal import Terminal, TerminalStep
 from lazycloud.values import cloudpickle_bytes
 
 P = ParamSpec("P")
@@ -432,21 +433,19 @@ class Function(Generic[P, R]):
         return self._remote_call(*args, **kwargs)
 
     def _remote_call(self, *args: P.args, **kwargs: P.kwargs) -> R:
-        self._progress(f"Running function: <{self.spec().handler}>")
         self._ensure_invokable()
-        response = self._invoke(False, *args, **kwargs)
-        if not response.task_id:
-            raise FunctionOperationError(response.output or "function invocation failed")
-        if not response.done:
-            msg = f"function invocation ended before task {response.task_id} completed"
-            raise FunctionOperationError(msg)
-        call = self._call_from_response(response)
-        try:
-            result = call.get(timeout_seconds=self._effective_timeout_seconds())
-        except TaskOperationError as exc:
-            raise FunctionOperationError(str(exc)) from exc
-        self._progress(f"Function complete <{call.task_id}>")
-        return result
+        with self._task_step() as step:
+            response = self._invoke_serialized(detached=False, args=args, kwargs=kwargs, step=step)
+            if not response.task_id:
+                raise FunctionOperationError(response.output or "function invocation failed")
+            if not response.done:
+                msg = f"function invocation ended before task {response.task_id} completed"
+                raise FunctionOperationError(msg)
+            call = self._call_from_response(response)
+            try:
+                return call.get(timeout_seconds=self._effective_timeout_seconds())
+            except TaskOperationError as exc:
+                raise FunctionOperationError(str(exc)) from exc
 
     @overload
     def spawn(self, *args: P.args, **kwargs: P.kwargs) -> FunctionCall[R]: ...
@@ -517,7 +516,6 @@ class Function(Generic[P, R]):
 
     def _ensure_prepared(self) -> None:
         if not self.stub_id:
-            self._progress(f"Preparing function: <{self.resource_name}>")
             self.prepare()
 
     @staticmethod
@@ -568,6 +566,7 @@ class Function(Generic[P, R]):
         detached: bool,
         args: tuple[Any, ...],
         kwargs: Mapping[str, Any],
+        step: TerminalStep | None = None,
     ) -> FunctionInvokeResponse:
         if not self.stub_id:
             msg = "stub_id is required to invoke a remote function"
@@ -587,7 +586,10 @@ class Function(Generic[P, R]):
             ):
                 if response.task_id and response.task_id != reported_task_id:
                     reported_task_id = response.task_id
-                    self._progress(f"Submitted task <{response.task_id}>")
+                    if step is not None:
+                        step.update(f"{response.task_id[:8]} submitted")
+                if response.status and step is not None:
+                    step.update(f"{response.task_id[:8]} {response.status}")
                 if response.output:
                     self._progress(response.output.rstrip("\n"))
                 last_response = response
@@ -603,6 +605,11 @@ class Function(Generic[P, R]):
     def _progress(self, message: str) -> None:
         if self.terminal is not None and message:
             self.terminal.line(message)
+
+    def _task_step(self) -> AbstractContextManager[TerminalStep]:
+        if self.terminal is None:
+            return nullcontext(TerminalStep(name="Task", terminal=Terminal(quiet=True)))
+        return self.terminal.step("Task", "submitting")
 
     def _error(self, message: str) -> None:
         terminal = self.terminal or Terminal()

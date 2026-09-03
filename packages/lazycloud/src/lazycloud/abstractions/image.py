@@ -4,6 +4,7 @@ import fnmatch
 import hashlib
 import io
 import json
+import re
 import zipfile
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -41,7 +42,7 @@ from shared.image_building.credentials import (
 )
 from typing_extensions import Self
 
-from lazycloud.terminal import ProgressCallback, Terminal
+from lazycloud.terminal import ProgressCallback, Terminal, TerminalStep
 
 _DOCKER_APT_DISTRIBUTION = (
     "set -eu; . /etc/os-release; "
@@ -439,9 +440,10 @@ class Image:
         terminal: Terminal | None = None,
         env: Mapping[str, str] | None = None,
     ) -> ImageBuildResult:
+        step = terminal.step("Image", "preparing") if terminal is not None else None
         if self.explicit_image_id:
-            if terminal is not None:
-                terminal.success("Build complete")
+            if step is not None:
+                step.done(f"{self.explicit_image_id} · pinned")
             return ImageBuildResult(
                 success=True,
                 image_id=self.explicit_image_id,
@@ -458,19 +460,20 @@ class Image:
                     python_version=exists_result.python_version,
                     build_id=exists_result.build_id,
                 )
-                _write_reused_image_response(terminal)
+                if step is not None:
+                    step.done(f"python {exists_result.python_version} · cached")
                 return result
             if exists_result.error:
-                if terminal is not None:
-                    terminal.error(exists_result.error)
+                if step is not None:
+                    step.fail(exists_result.error)
                 return exists_result
 
         responses: list[BuildImageResponse] = []
         last_response: BuildImageResponse | None = None
         for response in self._build_stream(client, env=env):
             responses.append(response)
-            if terminal is not None:
-                _write_build_response(terminal, response)
+            if step is not None:
+                _write_build_response(step, response)
             if response.done:
                 last_response = response
                 break
@@ -574,12 +577,6 @@ def _image_verify_client(client: ImageBuildClient) -> ImageVerifyClient | None:
     if isinstance(client, ImageVerifyClient):
         return client
     return None
-
-
-def _write_reused_image_response(terminal: Terminal | None) -> None:
-    if terminal is None:
-        return
-    terminal.success("Using cached image")
 
 
 def _credential_values(
@@ -768,15 +765,46 @@ def _response_error(response: BuildImageResponse) -> str:
     return response.error or response.msg.strip()
 
 
-def _write_build_response(terminal: Terminal, response: BuildImageResponse) -> None:
+def _write_build_response(step: TerminalStep, response: BuildImageResponse) -> None:
     if response.warning and response.msg:
-        terminal.warn(response.msg.rstrip())
+        step.log(f"warning: {response.msg.rstrip()}")
         return
     if response.msg and not response.done:
-        terminal.write(response.msg)
+        for line in response.msg.replace("\r", "\n").splitlines():
+            if line.strip():
+                step.log(line)
+                step.update(_build_summary(line, step.summary))
         return
     if response.done and response.success:
-        terminal.success("Build complete")
+        step.done(f"python {response.python_version} · built".strip())
         return
     if response.done and not response.success:
-        terminal.error(_response_error(response))
+        step.fail(_response_error(response))
+
+
+_BUILD_STEP = re.compile(r"^STEP (\d+)/(\d+): (.*)$")
+_BUILD_STAGES = (
+    ("submitting build container request", "submitting"),
+    ("container request queued", "queued"),
+    ("build container execution started", "starting builder"),
+    ("image build worker request accepted", "building"),
+    ("image archive ready", "archived"),
+)
+
+
+def _build_summary(line: str, current: str) -> str:
+    """The one-line build summary a log line implies, or the current one."""
+    text = line.strip()
+    matched = _BUILD_STEP.match(text)
+    if matched is not None:
+        instruction = matched.group(3).split("@", 1)[0]
+        return f"step {matched.group(1)}/{matched.group(2)} · {instruction[:48]}"
+    lower = text.lower()
+    if lower.startswith("archive progress:"):
+        return f"archiving {text.split(':', 1)[1].strip()}"
+    if lower.startswith("cache key:"):
+        return "planning"
+    for prefix, summary in _BUILD_STAGES:
+        if lower.startswith(prefix):
+            return summary
+    return current

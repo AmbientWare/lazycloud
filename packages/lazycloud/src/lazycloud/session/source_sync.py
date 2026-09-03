@@ -7,13 +7,14 @@ import posixpath
 import threading
 import zipfile
 from collections.abc import Iterable, Sequence
-from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from tempfile import SpooledTemporaryFile
+from types import TracebackType
 from typing import Protocol
 
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
+from typing_extensions import Self
 
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.terminal import ProgressCallback, humanize_bytes
@@ -68,17 +69,25 @@ class SourcePackageUploadClient(Protocol):
     ) -> object: ...
 
 
-class SourceSyncTerminal(Protocol):
-    def header(self, message: str) -> None: ...
+class SourceSyncStep(Protocol):
+    def __enter__(self) -> Self: ...
 
-    def detail(self, message: str) -> None: ...
-
-    def progress_bytes(
+    def __exit__(
         self,
-        description: str,
-        *,
-        total: int,
-    ) -> AbstractContextManager[ProgressCallback]: ...
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None: ...
+
+    def update(self, summary: str) -> None: ...
+
+    def progress(self, completed: int, total: int) -> None: ...
+
+    def done(self, summary: str = "") -> None: ...
+
+
+class SourceSyncTerminal(Protocol):
+    def step(self, name: str, summary: str = "") -> SourceSyncStep: ...
 
 
 class SourcePackageSyncError(RuntimeError):
@@ -149,52 +158,61 @@ class SourcePackageSyncer:
             ignore_patterns=ignore_patterns,
             include_patterns=include_patterns,
         )
-        self._header(f"Packaging {len(archive.files)} files ({humanize_bytes(archive.size)})")
-        cached = self.cache.get(root, archive.sha256) if cache_object_id else None
-        if cached is not None:
-            self._header("Using cached source")
-            return cached
-
-        object_name = f"{SOURCE_PACKAGE_PREFIX}/{archive.sha256}.zip"
-        self._header("Uploading source")
-        if self.terminal is not None:
-            with self.terminal.progress_bytes("source package", total=archive.size) as progress:
-                uploaded = _upload_source_package(
-                    self.object_client,
-                    archive,
-                    object_name=object_name,
-                    progress=progress,
-                )
-                progress(archive.size)
-        else:
+        plural = "s" if len(archive.files) != 1 else ""
+        description = f"{len(archive.files)} file{plural}, {humanize_bytes(archive.size)}"
+        with self._step("Source", description) as step:
+            cached = self.cache.get(root, archive.sha256) if cache_object_id else None
+            if cached is not None:
+                step.done(f"{description} · cached")
+                return cached
+            object_name = f"{SOURCE_PACKAGE_PREFIX}/{archive.sha256}.zip"
             uploaded = _upload_source_package(
                 self.object_client,
                 archive,
                 object_name=object_name,
-                progress=None,
+                progress=lambda completed: step.progress(completed, archive.size),
             )
-        object_id = _uploaded_object_id(uploaded)
-        if not object_id:
-            msg = "source package upload did not return an object_id"
-            raise SourcePackageSyncError(msg)
-        result = SourcePackageSyncResult(
-            object_id=object_id,
-            sha256=archive.sha256,
-            size=archive.size,
-            files=archive.files,
-        )
+            object_id = _uploaded_object_id(uploaded)
+            if not object_id:
+                msg = "source package upload did not return an object_id"
+                raise SourcePackageSyncError(msg)
+            result = SourcePackageSyncResult(
+                object_id=object_id,
+                sha256=archive.sha256,
+                size=archive.size,
+                files=archive.files,
+            )
+            step.done(description)
         if cache_object_id:
             self.cache.put(root, result)
-        self._header("Source uploaded")
         return result
 
-    def _header(self, message: str) -> None:
-        if self.terminal is not None:
-            self.terminal.header(message)
+    def _step(self, name: str, summary: str) -> SourceSyncStep:
+        if self.terminal is None:
+            return _SilentStep()
+        return self.terminal.step(name, summary)
 
-    def _detail(self, message: str) -> None:
-        if self.terminal is not None:
-            self.terminal.detail(message)
+
+class _SilentStep:
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        return None
+
+    def update(self, summary: str) -> None:
+        return None
+
+    def progress(self, completed: int, total: int) -> None:
+        return None
+
+    def done(self, summary: str = "") -> None:
+        return None
 
 
 def _upload_source_package(
