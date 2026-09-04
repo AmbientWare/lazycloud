@@ -238,7 +238,7 @@ jobs:
               --repository-name "$IMAGE_PREFIX/$repository" \
               --image-ids "imageTag=$COMMIT" >"$RUNNER_TEMP/image.json" 2>"$RUNNER_TEMP/ecr-error"; then
               present=$((present + 1))
-            elif rg -q 'ImageNotFoundException' "$RUNNER_TEMP/ecr-error"; then
+            elif grep -q 'ImageNotFoundException' "$RUNNER_TEMP/ecr-error"; then
               missing=$((missing + 1))
               echo "not published: $IMAGE_PREFIX/$repository:$COMMIT"
             else
