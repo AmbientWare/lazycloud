@@ -51,7 +51,7 @@ def test_the_free_plan_counts_the_owner_as_its_one_member(
 ) -> None:
     """The plan comes with the person who signed up, and nobody else.
 
-    Counted the way the membership rows count, which includes the owner's own —
+    Counted the way the membership rows count, which includes the owner's own,
     so a workspace with no co-members is already at the limit, and wanting to
     work with somebody is what a free account upgrades for.
     """
@@ -226,7 +226,7 @@ def test_a_free_plan_gpu_request_is_held_to_the_models_the_plan_offers(
 
     The narrowing is the half that would otherwise be silent. A wildcard passed
     through reaches the scheduler as "whatever is going", and the first offer
-    taken would be the hardware this account may not hold — so the plan has to
+    taken would be the hardware this account may not hold, so the plan has to
     answer with its own models rather than only with yes.
     """
 

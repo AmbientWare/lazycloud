@@ -60,7 +60,7 @@ export function gpuModelsPhrase(gpuTypes: GpuTypeEntitlement): string {
  * A live count against the ceiling holding it: `3 of 30 CPU containers`.
  *
  * The pair rather than the ceiling alone, because the ceiling belongs to the
- * account and what fills it may be in a workspace nobody is looking at — a limit
+ * account and what fills it may be in a workspace nobody is looking at. A limit
  * with no position reads as arbitrary the moment somebody is refused.
  */
 export function usagePhrase(

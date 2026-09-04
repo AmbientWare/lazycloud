@@ -180,7 +180,7 @@ function ConcurrencyLine({
  * The two ceilings that are not compute: how many workspaces and how many people.
  *
  * Both are counted across the account rather than per workspace, which is the
- * scope a payer is billed in — somebody holding three workspaces reads one
+ * scope a payer is billed in. Somebody holding three workspaces reads one
  * figure here rather than adding up their own.
  */
 function EntitlementUsage({ summary }: { summary: BillingSummary }) {

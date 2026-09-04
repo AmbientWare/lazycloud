@@ -170,7 +170,7 @@ class ContainerService:
         reservation: PendingContainerReservation,
     ) -> ContainerRecord:
         # Before the row. Asked ahead of the app check because it is the broader
-        # refusal — an account that may not start this stops work whether or not
+        # refusal. An account that may not start this stops work whether or not
         # an app owns it, and a reservation without an app id skips the check
         # below entirely.
         gpu = self.admit_container_start(

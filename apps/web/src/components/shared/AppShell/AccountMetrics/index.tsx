@@ -197,7 +197,7 @@ function Reading({
 }: {
   label: string;
   value?: number;
-  /** The figure as written, where it is not one count — `3 / 10` against a ceiling. */
+  /** The figure as written when it is not one count, such as `3 / 10` against a ceiling. */
   reading?: string;
   detail?: ReactNode;
   tone?: "neutral" | "danger";
@@ -231,8 +231,8 @@ function Reading({
 /**
  * The two concurrency pools, one line each.
  *
- * They are bounded separately — a container counts against the CPU ceiling, or
- * against the GPU one by the number of cards it holds — so a single combined
+ * They are bounded separately. A container counts against the CPU ceiling, or
+ * against the GPU one by the number of cards it holds, so a single combined
  * figure would leave an account refused a GPU reading a number with room in it.
  * One cell rather than two, because they are one question asked twice.
  */

@@ -213,8 +213,8 @@ admission decision, and the sweep.
   a container carries a count and a shape, so only a container has a second.
 - The container method answers with the GPU models to schedule rather than only
   with yes. A request for `any` card is a request the plan narrows, and narrowing
-  it here is the only place that can happen before the scheduler acts on it:
-  passed through, the first offer taken would be whatever the fleet had spare,
+  it here is the only place that can happen before the scheduler acts on it.
+  Passed through, the first offer taken would be whatever the fleet had spare,
   which on a plan that sells three models is usually one of the other five. A
   request naming models comes back unchanged once every one of them is a model
   the plan offers, because substituting a stated preference would run something
@@ -256,7 +256,7 @@ admission decision, and the sweep.
   before billing exists, so a check that read terms there would refuse a customer
   the workspace their sign-in was creating, and the sign-in meant to produce both
   would produce neither. Adoption of a workspace that already carries the name is
-  not a creation and is not gated: refusing it would lock an account out of
+  not a creation and is not gated. Refusing it would lock an account out of
   workspaces it already holds.
 - All of it is read from local rows rather than the provider, because these
   questions are asked on every container start and a balance call there is a
