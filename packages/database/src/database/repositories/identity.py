@@ -87,6 +87,15 @@ from sqlalchemy.sql.elements import ColumnElement
 _STRINGS_ADAPTER = TypeAdapter(list[str])
 
 
+def _escape_like(term: str) -> str:
+    """Take the wildcards out of what somebody typed.
+
+    Without this a search for `_` or `%` matches every account, which reads as
+    the filter being broken rather than as the character meaning something.
+    """
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def new_signing_key(prefix: str | None = None) -> str:
     return f"{prefix or 'sign_'}{secrets.token_urlsafe(32)}"
 
@@ -320,14 +329,27 @@ class UserRepository:
         )
         return [user_record_from_table(row) for row in rows]
 
-    def page(self, *, after_user_id: str | None, limit: int) -> list[UserRecord]:
-        """Every account, walked by id in one total order.
+    def page(
+        self,
+        *,
+        after_user_id: str | None,
+        limit: int,
+        search: str = "",
+        role: PlatformRole | None = None,
+        status: UserStatus | None = None,
+    ) -> list[UserRecord]:
+        """Accounts, walked by id in one total order, narrowed by what was asked for.
 
         A keyset walk for the same reason the billing sweeps take one: the
         caller is a list that continues where the last page stopped, and an
         offset would skip or repeat a row for every account created underneath
         it. `None` starts the walk and is an absent predicate, since the column
         is a native UUID and no string stands for "before every id".
+
+        The narrowing is part of the same statement rather than applied to the
+        page afterwards. Filtering a page that was already cut to `limit` would
+        return fewer rows than asked for and, worse, would end the walk early
+        whenever a whole page failed the filter.
         """
 
         if limit <= 0:
@@ -335,6 +357,26 @@ class UserRepository:
         statement = select(UserTable)
         if after_user_id is not None:
             statement = statement.where(UserTable.id > after_user_id)
+        if role is not None:
+            statement = statement.where(UserTable.role == role.value)
+        if status is not None:
+            statement = statement.where(UserTable.status == status.value)
+        term = search.strip()
+        if term:
+            # The GitHub login is the name an operator knows somebody by, and it
+            # lives on the identity rather than the account, so a search that
+            # read only `users` would miss the one term most likely to be typed.
+            pattern = f"%{_escape_like(term)}%"
+            logins = select(UserIdentityTable.user_id).where(
+                UserIdentityTable.subject_login.ilike(pattern, escape="\\")
+            )
+            statement = statement.where(
+                or_(
+                    UserTable.display_name.ilike(pattern, escape="\\"),
+                    UserTable.email.ilike(pattern, escape="\\"),
+                    UserTable.id.in_(logins),
+                )
+            )
         rows = self.session.scalars(statement.order_by(UserTable.id).limit(limit))
         return [user_record_from_table(row) for row in rows]
 
