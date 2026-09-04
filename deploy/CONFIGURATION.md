@@ -10,6 +10,11 @@ property bindings. Edit `chart/values.yaml` or `chart/environments/prod.yaml` an
 deploy. No infrastructure apply is needed for those changes. Runtime processes
 receive environment variables and mounted files, never Terraform output files.
 
+The chart explicitly selects native S3 with an empty object-store endpoint and
+virtual-hosted bucket addressing. The S3 client uses the AWS credential chain
+unless credentials are supplied, so production uses Pod Identity without static
+keys. Development credentials belong in Compose, not client defaults.
+
 Postgres owns customer configuration and workload state. Redis owns coordination.
 The immutable release manifest owns agent artifacts, worker image digests and host
 AMI identities. It is selected in the deployment branch, alongside configuration

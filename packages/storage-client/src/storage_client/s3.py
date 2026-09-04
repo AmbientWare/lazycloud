@@ -24,21 +24,12 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import (
     ENV_PREFIX,
-    NAME,
     OBJECT_STORE_BUCKET,
     WORKSPACE_BUCKET_PREFIX,
 )
 from shared.contracts import ContractModel
 from shared.deployment_settings import MissingDeploymentSettingError
 from typing_extensions import TypeVar
-
-# Local-dev credentials matching the root Compose object store
-# (`compose.yaml` object-store defaults). Every containerized deployment path
-# sets the `LAZYCLOUD_OBJECT_STORE_*` environment explicitly (Compose
-# `x-object-store-env` and the provider bootstrap), so these defaults only
-# apply on the host.
-LOCAL_OBJECT_STORE_ACCESS_KEY_ID = f"{NAME}-local"
-LOCAL_OBJECT_STORE_SECRET_ACCESS_KEY = f"{NAME}-local-secret"
 
 
 class S3ObjectStoreSettings(BaseSettings):
@@ -58,8 +49,8 @@ class S3ObjectStoreSettings(BaseSettings):
     endpoint_url: str | None = None
     presigned_endpoint_url: str | None = None
     region_name: str = "us-east-1"
-    access_key_id: str = Field(default=LOCAL_OBJECT_STORE_ACCESS_KEY_ID, repr=False)
-    secret_access_key: str = Field(default=LOCAL_OBJECT_STORE_SECRET_ACCESS_KEY, repr=False)
+    access_key_id: str = Field(default="", repr=False)
+    secret_access_key: str = Field(default="", repr=False)
     session_token: str = Field(default="", repr=False)
     credential_expires_at: datetime | None = None
     force_path_style: bool = True

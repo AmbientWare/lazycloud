@@ -169,20 +169,23 @@ def test_native_s3_presign_uses_explicit_session_token() -> None:
     assert query["X-Amz-Security-Token"] == ["temporary-session-token"]
 
 
-def test_native_s3_presign_can_use_ambient_session_credentials(
+def test_native_s3_presign_uses_ambient_session_credentials_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    for name in (
+        "LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID",
+        "LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY",
+        "LAZYCLOUD_OBJECT_STORE_PRESIGNED_ENDPOINT_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ambient-access-key")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ambient-secret-key")
     monkeypatch.setenv("AWS_SESSION_TOKEN", "ambient-session-token")
     client = S3ObjectStoreClient.from_settings(
         S3ObjectStoreSettings(
             bucket="lazycloud-connected-object-store",
-            endpoint_url="https://s3.us-east-1.amazonaws.com",
-            presigned_endpoint_url="https://s3.us-east-1.amazonaws.com",
+            endpoint_url="",
             region_name="us-east-1",
-            access_key_id="",
-            secret_access_key="",
             force_path_style=False,
         )
     )
