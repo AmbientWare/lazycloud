@@ -92,9 +92,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workspace-id", type=UUID, required=True)
     parser.add_argument("--ref", default="hetzner:platform")
-    parser.add_argument("--server-type", required=True)
+    parser.add_argument("--server-type", action="append", required=True)
+    parser.add_argument("--warm-cpu-min", type=int, default=1)
     parser.add_argument("--usd-per-currency-unit", type=Decimal)
     args = parser.parse_args()
+    server_types = tuple(dict.fromkeys(args.server_type))
 
     _output_directory(args.output)
     token = SecretStr(_read_private(args.token_file).strip())
@@ -135,27 +137,31 @@ def main() -> None:
         platform_fleet=True,
         default_region=metadata.location,
         allowed_regions=(metadata.location,),
-        allowed_instance_types=(args.server_type,),
-        warm_cpu_min=0,
+        allowed_instance_types=server_types,
+        warm_cpu_min=args.warm_cpu_min,
     )
-    shape = next((item for item in client.server_types() if item.name == args.server_type), None)
-    if (
-        shape is None
-        or shape.architecture != "x86"
-        or shape.cpu_type != "dedicated"
-        or shape.disk < policy.root_volume_gib
-    ):
-        raise ValueError("select a dedicated x86 server with enough disk for the node policy")
-    location = next((v for v in shape.locations if v.name == metadata.location), None)
-    if (
-        location is not None
-        and location.deprecation is not None
-        and location.deprecation.unavailable_after <= utc_now()
-    ):
-        raise ValueError("the server type is no longer available in this location")
-    price = next((v for v in shape.prices if v.location == metadata.location), None)
-    if price is None:
-        raise ValueError("the server type has no price in the selected location")
+    shapes = {item.name: item for item in client.server_types()}
+    prices: dict[str, Decimal] = {}
+    for name in server_types:
+        shape = shapes.get(name)
+        if (
+            shape is None
+            or shape.architecture != "x86"
+            or shape.cpu_type != "dedicated"
+            or shape.disk < policy.root_volume_gib
+        ):
+            raise ValueError("select dedicated x86 servers with enough disk for the node policy")
+        location = next((v for v in shape.locations if v.name == metadata.location), None)
+        if (
+            location is not None
+            and location.deprecation is not None
+            and location.deprecation.unavailable_after <= utc_now()
+        ):
+            raise ValueError("a selected server type is no longer available in this location")
+        price = next((v for v in shape.prices if v.location == metadata.location), None)
+        if price is None:
+            raise ValueError("a selected server type has no price in this location")
+        prices[name] = price.price_hourly.net
     pricing = client.pricing()
     if pricing.currency == "USD":
         if args.usd_per_currency_unit not in {None, Decimal(1)}:
@@ -182,14 +188,6 @@ def main() -> None:
             rounding=ROUND_CEILING
         )
     )
-    hourly = (
-        int(
-            (price.price_hourly.net * conversion * 1_000_000).to_integral_value(
-                rounding=ROUND_CEILING
-            )
-        )
-        + ipv4_hourly
-    )
     binding = HetznerCapacityBinding(
         ref=args.ref,
         api_token=token,
@@ -199,7 +197,7 @@ def main() -> None:
                 image_id=image.id, recipe_sha256=metadata.recipe_sha256
             )
         },
-        allowed_server_types=frozenset({args.server_type}),
+        allowed_server_types=frozenset(server_types),
         usd_per_currency_unit=conversion,
         primary_ipv4_hourly_micros=ipv4_hourly,
     )
@@ -222,8 +220,14 @@ def main() -> None:
         handle.flush()
         os.fsync(handle.fileno())
     print(f"Prepared private operator document: {args.output}")
-    print(f"{binding.ref}: {metadata.location}, {args.server_type}, {hourly} USD micros/node-hour")
-    print("Warm floor is zero. No provider resources or deployment secrets were changed.")
+    print(f"{binding.ref}: {metadata.location}, warm CPU minimum {policy.warm_cpu_min}")
+    for name, price in prices.items():
+        hourly = (
+            int((price * conversion * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
+            + ipv4_hourly
+        )
+        print(f"{name}: {hourly} USD micros/node-hour")
+    print("No provider resources or deployment secrets were changed.")
 
 
 if __name__ == "__main__":

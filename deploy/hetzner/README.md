@@ -12,8 +12,9 @@ node credential; successful reporting removes the local bootstrap token.
 Neither a project API token nor a reusable join credential goes into user-data
 or the image. Source IP is not an authenticator.
 
-This change has no live Hetzner acceptance record. Do not activate it in
-production until the disposable workflow below passes.
+Live workload acceptance is outstanding. The owner approved performing it on
+production with the intended warm/cold configuration. Merge and deployment
+remain on hold until the owner releases the hold for the other feature.
 
 ## Deployment flow
 
@@ -23,8 +24,9 @@ operator secret, then use the existing Ship workflow for application releases.
 Ship does not rebuild host images or need another provider-specific deploy.
 
 The initial location is Ashburn, `ash`. Keep other locations disabled until
-their images, costs and acceptance are reviewed. CCX33 has enough included disk
-for the current 200-GiB node policy; the CCX23 build server is only temporary.
+their images, costs and acceptance are reviewed. The Ashburn catalog includes
+CCX33, CCX43, CCX53, and CCX63, all with enough included disk for the current
+200-GiB node policy. The CCX23 build server is only temporary.
 
 Before the first image build, an operator must place the selected project's
 token in the GitHub `release` environment secret `HCLOUD_TOKEN`. The local token
@@ -94,14 +96,16 @@ uv run python -m deploy.hetzner.configure \
   --operator-document /private/path/operator-current.json \
   --output /private/path/operator-with-hetzner.json \
   --workspace-id PLATFORM_CAPACITY_WORKSPACE_ID \
-  --server-type ccx33
+  --server-type ccx33 --server-type ccx43 \
+  --server-type ccx53 --server-type ccx63 --warm-cpu-min 1
 ```
 
 The command checks the manifest against the current host recipe and the
 snapshot in the token's actual project. It checks disk size and reports the
 current supplier price including IPv4. It writes a new `0600` document
 outside the repository, never credentials to stdout. The initial binding uses
-only the manifest's location and a zero warm floor. Repeating the same setup
+only the manifest's location and a one-node warm floor by default. Use
+`--warm-cpu-min 0` for any additional cold binding. Repeating the same setup
 preserves an identical binding; changing an active binding needs explicit review.
 USD and IPv4 prices come from the project's API. A project billed in another
 currency requires an explicit reviewed `--usd-per-currency-unit` conversion.
@@ -110,7 +114,7 @@ This prepares a local document only. The operator must publish it to the
 existing `<deployment>/operator` secret before deployment, checking that no
 other operator changed the source document meanwhile. Do not upload this
 credential-bearing file as a GitHub artifact. Complete build-resource cleanup
-and live acceptance before enabling a warm floor.
+before deployment. Activating this configuration starts billable warm capacity.
 
 Before applying the deployment's new secret map, add
 `LAZYCLOUD_PLATFORM_CAPACITY_HETZNER` to the existing operator secret document,
@@ -132,6 +136,13 @@ Each binding follows `provider_clients.settings.HetznerCapacityBinding`:
   default binding; every other binding uses 0. The warm target follows measured
   arrivals without a separate provider maximum.
 
+The warm controller holds the cheapest compatible CPU shape in the default
+region. It counts only requests that fit that shape. Larger shapes start cold
+and are acquired when a request needs them. Offer selection checks requested
+CPU and memory with host headroom, then chooses the cheapest compatible node.
+Users request container resources, not server sizes. Several containers may
+share one node. This is per-request sizing, not a fleet-wide batch optimizer.
+
 Account admission enforces plan concurrency and billing limits. Hetzner adds no
 node-count or supplier-price ceiling. Existing AWS connection limits remain.
 The scheduler ranks compatible offers by cost, but does not guarantee a margin
@@ -145,27 +156,31 @@ The node's root-only state directory holds its launch ID, bootstrap token, and
 locally generated node credential. Tenant containers cannot read that directory
 or reach provider metadata through their network namespace.
 
-## Disposable acceptance and rollout
+## Production acceptance and rollout
 
-Use an approved non-production target with reachable object storage, public
-bootstrap origin, private callback routes, and the release's real agent binary.
-Start with one allowed SKU, one default location, one CPU request, and zero
-warm nodes. Name every created unit, server, IP, enrollment, worker, and image
+After the owner releases the hold, integrate current main, pass CI, and merge.
+Preserve production state and use its object storage, public bootstrap origin,
+private callback routes, and the release's real agent binary. Start with the
+Ashburn size range above and one warm CPU node. Other platform pools have no
+warm floor. Name every created unit, server, IP, enrollment, worker, and image
 in the acceptance record.
 
 Submit a CPU function through the public SDK, then poll the durable unit and
 enrollment, provider server, bootstrap log, scheduler request, and worker log.
 Prove the returned function result and usage charge. Confirm a second compatible
 request shares existing or pending capacity rather than buying another node.
+Submit larger CPU and memory requests that cannot fit the warm shape, and prove
+that placement acquires a suitable larger node. Check AWS GPU placement too.
 
 Run separate checks for expired or replayed bootstrap tokens, wrong node
 credentials and server IDs, restart reconciliation after an uncertain create,
 idle deletion near the paid-hour boundary, and deletion after failed bootstrap.
-Prove that deleting the exact server does not recreate it. Confirm the server
-and primary IP are absent and no volume was attached. Preserve shared images
-and all unrelated project resources.
+Prove that drained cold nodes are not recreated without demand, and confirm
+their exact servers and primary IPs are absent. No volume should be attached.
+Retain the intended warm baseline; a warm node's replacement is expected.
+Preserve shared images and all unrelated project resources.
 
-Only then enable the one-node warm floor. Regional selection remains unavailable
+Regional selection remains unavailable
 until explicit regional compute rates are reviewed and published. Omitting a
 region uses Auto pricing regardless of the supplier that runs the container.
 

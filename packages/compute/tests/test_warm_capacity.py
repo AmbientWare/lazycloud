@@ -76,7 +76,7 @@ def test_warm_capacity_absorbs_launch_window_demand_and_shrinks_gradually() -> N
     assert reduced.machines == 1
 
 
-def test_warm_capacity_does_not_add_overhead_to_billed_memory_again() -> None:
+def test_warm_capacity_counts_only_fitting_requests_using_reserved_memory() -> None:
     now = datetime(2026, 9, 1, 1, tzinfo=UTC)
     target = warm_capacity_target(
         ResolvedProviderPolicy(
@@ -95,7 +95,11 @@ def test_warm_capacity_does_not_add_overhead_to_billed_memory_again() -> None:
             cpu_millicores=4000,
             memory_mb=4096,
         ),
-        [PlatformCpuArrival(now, cpu_millicores=500, reserved_memory_mib=3500)],
+        [
+            PlatformCpuArrival(now, cpu_millicores=500, reserved_memory_mib=3500),
+            PlatformCpuArrival(now, cpu_millicores=4500, reserved_memory_mib=500),
+            PlatformCpuArrival(now, cpu_millicores=500, reserved_memory_mib=5000),
+        ],
         (),
         current=1,
         lower_since=None,

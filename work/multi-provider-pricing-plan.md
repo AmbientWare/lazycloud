@@ -20,7 +20,9 @@ annual totals. The original mix assumed about 22% GPU jobs but incurred about
 95% of host costs on GPU machines. CPU-heavy cases improve the modeled margin;
 they are controlled scenarios, not measured customer demand.
 
-Hetzner activation is blocked on live acceptance and deployment configuration.
+Hetzner live acceptance and deployment configuration are outstanding. The owner
+approved acceptance on production with Ashburn warm from startup, other pools
+cold, and multiple node sizes. The merge/deploy hold above still applies.
 Source IP and metadata cannot authenticate a host against its own tenants.
 A node-scoped, short-lived, single-use bootstrap token has owner approval for
 delivery in that node's user-data. The narrow exception is recorded in

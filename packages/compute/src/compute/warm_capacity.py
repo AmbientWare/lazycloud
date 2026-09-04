@@ -38,19 +38,25 @@ def warm_capacity_target(
         min(600, launch_seconds[ceil(len(launch_seconds) * 0.95) - 1]) if launch_seconds else 600
     )
     buckets = max(ceil(3600 / horizon), 1)
+    node_cpu = schedulable_capacity(offer.cpu_millicores)
+    node_memory = schedulable_capacity(offer.memory_mb)
     cpu = [0] * buckets
     memory = [0] * buckets
     for arrival in arrivals:
         age = (to_utc(now) - to_utc(arrival.created_at)).total_seconds()
-        if not 0 <= age < 3600:
+        if (
+            not 0 <= age < 3600
+            or arrival.cpu_millicores > node_cpu
+            or arrival.reserved_memory_mib > node_memory
+        ):
             continue
         index = min(int(age // horizon), buckets - 1)
         cpu[index] += arrival.cpu_millicores
         memory[index] += arrival.reserved_memory_mib
     loads = sorted(
         max(
-            ceil(cpu_value / schedulable_capacity(offer.cpu_millicores)),
-            ceil(memory_value / schedulable_capacity(offer.memory_mb)),
+            ceil(cpu_value / node_cpu),
+            ceil(memory_value / node_memory),
         )
         for cpu_value, memory_value in zip(cpu, memory, strict=True)
     )
