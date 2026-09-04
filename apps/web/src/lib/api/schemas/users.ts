@@ -71,6 +71,26 @@ export type WorkspaceRole = z.infer<typeof workspaceRoleSchema>;
 export const invitableRoleSchema = z.enum(["administrator", "member"]);
 export type InvitableRole = z.infer<typeof invitableRoleSchema>;
 
+/**
+ * The address an invitation can be sent to, refused the way the server refuses it.
+ *
+ * The server's rule is the one that decides, so this mirrors it rather than
+ * inventing a looser one: a form that accepts what the API rejects turns a typo
+ * into an error the dialog was not written to explain.
+ */
+export const invitationEmailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(320, "Enter a single address such as name@example.com")
+  .refine((value) => {
+    const parts = value.split("@");
+    if (parts.length !== 2) return false;
+    const [local, domain] = parts;
+    if (!local || /\s/.test(value)) return false;
+    return domain.includes(".") && !domain.startsWith(".") && !domain.endsWith(".");
+  }, "Enter a single address such as name@example.com");
+
 export const workspaceInvitationSchema = z
   .object({
     id: z.string(),

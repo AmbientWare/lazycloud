@@ -8,7 +8,10 @@ from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_plan_changes import BillingPlanChangeIntentRepository
 from database.repositories.compute import AwsAccountConnectionRepository
 from database.repositories.custom_domains import CustomDomainRepository
-from database.repositories.identity import WorkspaceMemberRepository
+from database.repositories.identity import (
+    WorkspaceInvitationRepository,
+    WorkspaceMemberRepository,
+)
 from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
@@ -160,30 +163,69 @@ class DatabaseBillingAdmission:
         session: Session,
         *,
         workspace_id: str,
-        member_user_id: str | None,
+        member_user_id: str,
     ) -> None:
-        """Whether one more person may join a workspace this account owns.
-
-        `member_user_id` is None when the person has no account yet, which is an
-        invitation being sent: there is nobody to already be counted, so the seat
-        has to be free outright.
-        """
         resolved = self._billable_account(session, workspace_id=workspace_id)
         if resolved is None:
             return
         owner_user_id, terms = resolved
         self._assert_no_pending_plan_change(session, user_id=owner_user_id)
         repository = WorkspaceMemberRepository(session)
-        if member_user_id is not None and repository.is_member_for_owner(
+        if repository.is_member_for_owner(
             owner_user_id=owner_user_id,
             member_user_id=member_user_id,
         ):
             return
+        self._assert_seat_free(session, owner_user_id=owner_user_id, terms=terms)
+
+    def assert_may_invite_workspace_member(
+        self,
+        session: Session,
+        *,
+        workspace_id: str,
+        email: str,
+    ) -> None:
+        """Whether an offer to this address could be honoured if it were accepted now.
+
+        An open offer holds a seat: five invitations against one free seat would
+        send five emails and refuse four people at the door, and the refusal
+        should land on the administrator who can act on it. An address already
+        seated in one of this owner's workspaces takes no new seat, the same
+        allowance adding that account by id gets.
+        """
+        resolved = self._billable_account(session, workspace_id=workspace_id)
+        if resolved is None:
+            return
+        owner_user_id, terms = resolved
+        self._assert_no_pending_plan_change(session, user_id=owner_user_id)
+        members = WorkspaceMemberRepository(session)
+        if members.member_user_id_for_owner_email(owner_user_id=owner_user_id, email=email):
+            return
+        open_offers = WorkspaceInvitationRepository(session).distinct_open_email_count_for_owner(
+            owner_user_id, now=utc_now()
+        )
+        self._assert_seat_free(
+            session, owner_user_id=owner_user_id, terms=terms, held_by_offers=open_offers
+        )
+
+    def _assert_seat_free(
+        self,
+        session: Session,
+        *,
+        owner_user_id: str,
+        terms: AccountTerms,
+        held_by_offers: int = 0,
+    ) -> None:
         limit = terms.entitlements.max_members
-        member_count = repository.distinct_member_count_for_owner(owner_user_id)
-        if limit != "unlimited" and member_count >= limit:
+        if limit == "unlimited":
+            return
+        member_count = WorkspaceMemberRepository(session).distinct_member_count_for_owner(
+            owner_user_id
+        )
+        if member_count + held_by_offers >= limit:
+            held = f" and {held_by_offers} open invitations" if held_by_offers else ""
             raise CapacityLimitReachedError(
-                f"this account already has {member_count} members, "
+                f"this account already has {member_count} members{held}, "
                 f"which is the most its plan allows ({limit})"
             )
 

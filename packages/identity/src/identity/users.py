@@ -35,7 +35,7 @@ class WorkspaceMembershipAdmission(Protocol):
         session: Session,
         *,
         workspace_id: str,
-        member_user_id: str | None,
+        member_user_id: str,
     ) -> None: ...
 
 
@@ -208,11 +208,15 @@ class UserService:
         workspace_id: str,
         user_id: str,
         actor: AuthTokenRecord,
+        leaving: bool,
     ) -> bool:
         """Take a person out of a workspace, whether an administrator did it or they left.
 
         Leaving is the same removal by the person themself, and is recorded as
-        such: who ended a membership is the fact the audit history is asked for.
+        such, because who ended a membership is the fact the audit history is
+        asked for. Whoever authorized the call decides which it was and says so
+        here: that decision already gated the request, and re-deriving it would
+        let the record and the authorization disagree about the same act.
         """
         with self.context.database.session() as session:
             repository = WorkspaceMemberRepository(session)
@@ -227,19 +231,18 @@ class UserService:
                 )
             removed = repository.remove(workspace_id=workspace_id, user_id=user_id)
             if removed:
-                left = actor.user_id == user_id
                 WorkspaceAuditRepository(session).append(
                     workspace_id=workspace_id,
                     action=(
                         WorkspaceAuditAction.MemberLeft
-                        if left
+                        if leaving
                         else WorkspaceAuditAction.MemberRemoved
                     ),
                     actor=actor,
                     target_type=WorkspaceAuditTarget.Member,
                     target_id=user_id,
                     target_name=_member_name(session, user_id),
-                    summary="Left the workspace" if left else "Removed a member",
+                    summary="Left the workspace" if leaving else "Removed a member",
                     previous_value=membership.role.value,
                 )
             return removed
@@ -250,11 +253,19 @@ class UserService:
             return WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
 
 
+def display_name(user: UserRecord) -> str:
+    """How a person is labelled wherever the platform names them back to somebody.
+
+    One rule, because these labels sit beside each other in the audit history and
+    a member who reads as their address in one line and their name in the next
+    looks like two people.
+    """
+    return user.display_name or user.email
+
+
 def _member_name(session: Session, user_id: str) -> str:
     user = UserRepository(session).get(user_id)
-    if user is None:
-        return user_id
-    return user.display_name or user.email or user_id
+    return display_name(user) if user is not None else user_id
 
 
-__all__ = ["UserService", "WorkspaceMembershipAdmission"]
+__all__ = ["UserService", "WorkspaceMembershipAdmission", "display_name"]

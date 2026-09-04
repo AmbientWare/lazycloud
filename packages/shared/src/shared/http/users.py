@@ -9,6 +9,7 @@ from shared.http.workspaces import WorkspaceResponse
 from shared.identity import (
     PlatformRole,
     UserStatus,
+    WorkspaceInvitationRole,
     WorkspaceInvitationStatus,
     WorkspaceRole,
     normalize_invitation_email,
@@ -108,10 +109,8 @@ class WorkspaceMemberRoleRequest(HttpModel):
 
 
 class WorkspaceInvitationCreateRequest(HttpModel):
-    """Invite an address to a workspace. Owner is not a role an invitation can carry."""
-
     email: str = Field(min_length=3, max_length=320)
-    role: WorkspaceRole = WorkspaceRole.Member
+    role: WorkspaceInvitationRole = WorkspaceInvitationRole.Member
 
     @field_validator("email")
     @classmethod
@@ -125,7 +124,7 @@ class WorkspaceInvitationResponse(HttpModel):
     id: str
     workspace_id: str
     email: str
-    role: WorkspaceRole = WorkspaceRole.Member
+    role: WorkspaceInvitationRole = WorkspaceInvitationRole.Member
     status: WorkspaceInvitationStatus = WorkspaceInvitationStatus.Pending
     invited_by_user_id: str = ""
     invited_by_name: str = ""
@@ -146,7 +145,7 @@ class PendingInvitationResponse(HttpModel):
     workspace_id: str
     workspace_name: str
     email: str
-    role: WorkspaceRole = WorkspaceRole.Member
+    role: WorkspaceInvitationRole = WorkspaceInvitationRole.Member
     invited_by_name: str = ""
     expires_at: datetime
     created_at: datetime

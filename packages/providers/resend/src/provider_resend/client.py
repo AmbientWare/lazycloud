@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 from shared.email import EmailMessage
-from shared.errors import UpstreamUnavailableError
+from shared.errors import InvalidInputError, UpstreamUnavailableError
 
 API_BASE_URL = "https://api.resend.com"
 
@@ -48,12 +48,33 @@ class ResendEmailSender:
             raise UpstreamUnavailableError(f"Resend could not be reached: {exc}") from exc
         if response.is_success:
             return
-        raise UpstreamUnavailableError(
-            f"Resend refused the message ({response.status_code}): {_refusal(response)}"
-        )
+        _raise_refusal(response)
 
 
-def _refusal(response: httpx.Response) -> str:
+def _raise_refusal(response: httpx.Response) -> None:
+    """Say whether resending could ever work, because that is what the caller does next.
+
+    A malformed recipient is ours to fix and will be refused identically forever.
+    A rate limit, a rejected key and an unverified sending domain are not the
+    caller's doing and are fixed by waiting or by an operator, so they stay
+    retryable: reporting them as terminal would tell an administrator their
+    invitation can never be sent when a rotation is all it needs.
+    """
+    status_code = response.status_code
+    detail = _detail(response)
+    message = f"Resend refused the message ({status_code}): {detail}"
+    if status_code in {
+        httpx.codes.TOO_MANY_REQUESTS,
+        httpx.codes.UNAUTHORIZED,
+        httpx.codes.FORBIDDEN,
+    }:
+        raise UpstreamUnavailableError(message)
+    if httpx.codes.BAD_REQUEST <= status_code < httpx.codes.INTERNAL_SERVER_ERROR:
+        raise InvalidInputError(message)
+    raise UpstreamUnavailableError(message)
+
+
+def _detail(response: httpx.Response) -> str:
     try:
         body = _ErrorBody.model_validate_json(response.content)
     except ValidationError:

@@ -22,7 +22,11 @@ class ResendSettings(BaseSettings):
     """Must be on a domain the Resend account has verified, or every send is
     refused with a 403 naming the domain."""
 
-    timeout_seconds: float = Field(default=15.0, gt=0)
+    timeout_seconds: float = Field(default=8.0, gt=0)
+    """Lower than a background integration's, because a person is waiting on the
+    request that sends this. The invitation row is already committed when the
+    send runs, so a slow provider costs a resend rather than the invitation, and
+    a long wait here holds a worker that other requests need."""
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_RESEND_",

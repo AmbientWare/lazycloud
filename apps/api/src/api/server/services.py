@@ -176,7 +176,6 @@ from scheduler.state import (
 from scheduler.workers import SchedulerWorkerAdminService
 from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.container_requests import StopContainerReason
-from shared.email import EmailSender
 from shared.http.endpoints import (
     EndpointForwardRequest,
     EndpointForwardResponse,
@@ -574,7 +573,7 @@ class ApiServices(ApiServiceCore):
         ) = None,
         gateway_settings: GatewaySettings | None = None,
         stripe_settings: StripeSettings | None = None,
-        invitation_mailer: Callable[[], EmailSender] | None = None,
+        resend_settings: ResendSettings | None = None,
         workspace_change_stream_settings: WorkspaceChangeStreamSettings | None = None,
         agent_binary_settings: AgentBinarySettings | None = None,
         aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
@@ -771,7 +770,7 @@ class ApiServices(ApiServiceCore):
         # email credential still starts, and the invite route names what is missing.
         invitations = WorkspaceInvitationService(
             context,
-            mailer=invitation_mailer or ResendSettings().sender_factory(),
+            mailer=(resend_settings or ResendSettings()).sender_factory(),
             invitations_url=f"{gateway_config.public_http_url.rstrip('/')}/invitations",
         )
         # Neither adapter is constructed here — both are callables that read their

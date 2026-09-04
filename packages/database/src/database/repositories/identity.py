@@ -70,6 +70,7 @@ from shared.identity import (
     UserRecord,
     UserStatus,
     WorkspaceInvitationRecord,
+    WorkspaceInvitationRole,
     WorkspaceInvitationStatus,
     WorkspaceMemberRecord,
     WorkspaceRecord,
@@ -699,6 +700,30 @@ class WorkspaceMemberRepository:
         ).first()
         return workspace_member_record_from_table(row) if row is not None else None
 
+    def member_user_id_for_owner_email(self, *, owner_user_id: str, email: str) -> str | None:
+        """An account with this address already seated somewhere this owner pays for.
+
+        Inviting that address to a second workspace of the same owner takes no new
+        seat, which is the same allowance adding them by id gets.
+        """
+        owned = WorkspaceMemberTable.__table__.alias("owned_workspace_members")
+        members = WorkspaceMemberTable.__table__.alias("account_workspace_members")
+        value = self.session.scalar(
+            select(members.c.user_id)
+            .select_from(
+                owned.join(members, members.c.workspace_id == owned.c.workspace_id).join(
+                    UserTable, UserTable.id == members.c.user_id
+                )
+            )
+            .where(
+                owned.c.user_id == owner_user_id,
+                owned.c.role == WorkspaceRole.Owner.value,
+                func.lower(UserTable.email) == email,
+            )
+            .limit(1)
+        )
+        return str(value) if value is not None else None
+
 
 @dataclass(slots=True)
 class WorkspaceInvitationRepository:
@@ -709,10 +734,11 @@ class WorkspaceInvitationRepository:
         *,
         workspace_id: str,
         email: str,
-        role: WorkspaceRole,
+        role: WorkspaceInvitationRole,
         invited_by_user_id: str,
         expires_at: datetime,
     ) -> WorkspaceInvitationRecord:
+        """One open offer per address; the partial unique index is what refuses a second."""
         row = WorkspaceInvitationTable(
             workspace_id=workspace_id,
             email=email,
@@ -725,12 +751,10 @@ class WorkspaceInvitationRepository:
         try:
             self.session.flush()
         except IntegrityError as exc:
-            raise ConflictError(f"an invitation for {email} is already pending") from exc
+            raise ConflictError(
+                f"an invitation for {email} is already open. Resend that one instead"
+            ) from exc
         return workspace_invitation_record_from_table(row)
-
-    def get(self, invitation_id: str) -> WorkspaceInvitationRecord | None:
-        row = self.session.get(WorkspaceInvitationTable, invitation_id)
-        return workspace_invitation_record_from_table(row) if row is not None else None
 
     def lock(self, invitation_id: str) -> WorkspaceInvitationRecord | None:
         """The row, held against a concurrent answer to the same invitation."""
@@ -753,17 +777,42 @@ class WorkspaceInvitationRepository:
         )
         return [workspace_invitation_record_from_table(row) for row in rows]
 
-    def pending_for_email(
-        self, *, workspace_id: str, email: str
-    ) -> WorkspaceInvitationRecord | None:
-        row = self.session.scalars(
-            select(WorkspaceInvitationTable).where(
-                WorkspaceInvitationTable.workspace_id == workspace_id,
-                WorkspaceInvitationTable.email == email,
-                WorkspaceInvitationTable.status == WorkspaceInvitationStatus.Pending.value,
+    def distinct_open_email_count_for_owner(self, owner_user_id: str, *, now: datetime) -> int:
+        """Addresses with an open offer into any workspace this account owns.
+
+        Excludes addresses that already belong to a seated member of one of those
+        workspaces, so an offer to somebody already counted is not counted twice.
+        """
+        owned = WorkspaceMemberTable.__table__.alias("owned_workspace_members")
+        seated = WorkspaceMemberTable.__table__.alias("seated_workspace_members")
+        seated_emails = (
+            select(func.lower(UserTable.email))
+            .select_from(
+                owned.join(seated, seated.c.workspace_id == owned.c.workspace_id).join(
+                    UserTable, UserTable.id == seated.c.user_id
+                )
             )
-        ).first()
-        return workspace_invitation_record_from_table(row) if row is not None else None
+            .where(owned.c.user_id == owner_user_id, owned.c.role == WorkspaceRole.Owner.value)
+        )
+        return int(
+            self.session.scalar(
+                select(func.count(func.distinct(WorkspaceInvitationTable.email)))
+                .select_from(
+                    owned.join(
+                        WorkspaceInvitationTable,
+                        WorkspaceInvitationTable.workspace_id == owned.c.workspace_id,
+                    )
+                )
+                .where(
+                    owned.c.user_id == owner_user_id,
+                    owned.c.role == WorkspaceRole.Owner.value,
+                    WorkspaceInvitationTable.status == WorkspaceInvitationStatus.Pending.value,
+                    WorkspaceInvitationTable.expires_at > now,
+                    WorkspaceInvitationTable.email.not_in(seated_emails),
+                )
+            )
+            or 0
+        )
 
     def open_for_email(
         self, email: str, *, now: datetime

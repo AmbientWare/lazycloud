@@ -41,6 +41,7 @@ import {
   workspaceMembersQueryOptions,
 } from "@/lib/queries/members";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
+import { useWorkspaceSelection } from "@/lib/workspace-selection";
 
 const ROLE_LABELS: Record<WorkspaceMember["role"], string> = {
   owner: "Owner",
@@ -238,6 +239,7 @@ function MemberRow({
 }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const forgetWorkspaceName = useWorkspaceSelection((state) => state.forgetWorkspaceName);
   const setRole = useMutation({
     mutationFn: (role: InvitableRole) =>
       setWorkspaceMemberRole(workspace.name, member.user_id, role),
@@ -249,11 +251,14 @@ function MemberRow({
     mutationFn: () => removeWorkspaceMember(workspace.name, member.user_id),
     onSuccess: async () => {
       if (self) {
-        // Leaving takes this workspace out of the session, so the shell has to
-        // re-read it before it renders a page in a workspace you no longer reach.
+        // Leave the workspace's own pages first. Refetching the session while the
+        // shell is still mounted here would fire every workspace-scoped query
+        // against a workspace this account no longer reaches, and paint their
+        // 403s on the way out.
         onLeft();
+        forgetWorkspaceName(workspace.name);
+        await navigate({ to: "/dashboard" });
         await queryClient.invalidateQueries({ queryKey: currentSessionQueryOptions().queryKey });
-        void navigate({ to: "/dashboard" });
         return;
       }
       await queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.members(workspace.id) });
@@ -263,13 +268,16 @@ function MemberRow({
         description: error.message,
       }),
   });
+  const label = member.display_name || member.email;
+  // The owner leaves by transferring the workspace, so neither control is theirs.
   const editable = manages && member.role !== "owner" && !self;
+  const removable = member.role !== "owner" && (self || manages);
 
   return (
     <li className="flex items-center justify-between gap-3 py-3">
       <span className="min-w-0">
         <span className="block truncate text-sm font-medium">
-          {member.display_name || member.email}
+          {label}
           {self ? <span className="ml-1 text-xs text-muted-foreground">(you)</span> : null}
         </span>
         {member.email ? (
@@ -279,7 +287,7 @@ function MemberRow({
       <span className="flex shrink-0 items-center gap-2">
         {editable ? (
           <RoleSelect
-            aria-label={`Role for ${member.display_name || member.email}`}
+            aria-label={`Role for ${label}`}
             disabled={setRole.isPending}
             onChange={(role) => setRole.mutate(role)}
             value={member.role === "administrator" ? "administrator" : "member"}
@@ -287,32 +295,21 @@ function MemberRow({
         ) : (
           <span className="text-xs text-muted-foreground">{ROLE_LABELS[member.role]}</span>
         )}
-        {editable ? (
+        {removable ? (
           <Button
-            aria-label={`Remove ${member.display_name || member.email}`}
+            aria-label={self ? "Leave this workspace" : `Remove ${label}`}
             disabled={remove.isPending}
             onClick={() => remove.mutate()}
-            size="icon"
+            size={self ? "sm" : "icon"}
             type="button"
-            variant="ghost"
+            variant={self ? "outline" : "ghost"}
           >
             {remove.isPending ? (
               <Loader2 className="size-4 animate-spin" />
-            ) : (
+            ) : self ? null : (
               <X className="size-4" />
             )}
-          </Button>
-        ) : null}
-        {self && member.role !== "owner" ? (
-          <Button
-            disabled={remove.isPending}
-            onClick={() => remove.mutate()}
-            size="sm"
-            type="button"
-            variant="outline"
-          >
-            {remove.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
-            Leave
+            {self ? "Leave" : null}
           </Button>
         ) : null}
       </span>

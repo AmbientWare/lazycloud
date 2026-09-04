@@ -171,14 +171,14 @@ class WorkspaceMemberTable(IdPayloadTable, DatabaseBase):
 class WorkspaceInvitationTable(IdTable, DatabaseBase):
     """An offer of membership addressed to an email, kept after it is answered.
 
-    Rows are never deleted: a revoked or declined invitation is the workspace's
-    record that the offer was made, and the audit history points at it.
+    An answered row stays in its terminal status because the audit history points
+    at it; rows leave only with their workspace.
     """
 
     __tablename__ = "workspace_invitations"
     __table_args__: tuple[SchemaItem, ...] = (
-        # One open offer per address per workspace. Re-inviting resends the
-        # existing one rather than racing a second row into place.
+        # One open offer per address per workspace. A second invite is refused
+        # and the existing one resent, rather than racing a second row into place.
         Index(
             "uq_workspace_invitations_pending_email",
             "workspace_id",
@@ -188,8 +188,15 @@ class WorkspaceInvitationTable(IdTable, DatabaseBase):
             sqlite_where=text("status = 'pending'"),
         ),
         Index("ix_workspace_invitations_workspace", "workspace_id"),
-        # The invitee's lookup: everything addressed to the email they signed in with.
-        Index("ix_workspace_invitations_email", "email"),
+        # The invitee's lookup: everything still open that is addressed to the
+        # email they signed in with. Partial, so the history of answered offers
+        # does not grow the index every lookup walks.
+        Index(
+            "ix_workspace_invitations_open_email",
+            "email",
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
         CheckConstraint(
             "role IN ('administrator', 'member')",
             name="ck_workspace_invitations_role",

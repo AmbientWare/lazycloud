@@ -5,12 +5,20 @@ from datetime import timedelta
 
 import pytest
 from api.server.services import ApiServices
+from database.repositories.billing import BillingAccountRepository
 from database.repositories.identity import UserRepository
 from identity.auth import AuthService
 from identity.invitations import WorkspaceInvitationService
+from shared.billing_accounts import BillingAccountStatus
+from shared.billing_plans import BillingPlanId
 from shared.email import EmailMessage
 from shared.errors import ConflictError, NotFoundError
-from shared.identity import AuthTokenRecord, WorkspaceInvitationStatus, WorkspaceRole
+from shared.identity import (
+    AuthTokenRecord,
+    WorkspaceInvitationRole,
+    WorkspaceInvitationStatus,
+    WorkspaceRole,
+)
 from tests.service_fixtures import owned_workspace
 
 from billing import DatabaseBillingAdmission
@@ -38,8 +46,22 @@ def _account(services: ApiServices, name: str, email: str) -> tuple[str, AuthTok
 
 
 def _owner(services: ApiServices, workspace_id: str, email: str) -> tuple[str, AuthTokenRecord]:
-    """The fixture's owner, who is the account the workspace bills through."""
+    """The fixture's owner, on a plan with room for the people these tests invite.
+
+    The free plan is one seat and the owner holds it, so every invitation against
+    it is refused before anything about invitations is exercised. That refusal is
+    real and is proven where it belongs, in the billing owner's admission tests.
+    """
     owner = next(m for m in services.users.members(workspace_id) if m.role is WorkspaceRole.Owner)
+    with services.context.database.session() as session:
+        BillingAccountRepository(session).upsert(
+            user_id=owner.user_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id=f"cus_{owner.user_id}",
+            provider_subscription_id=f"sub_{owner.user_id}",
+            provider_credit_grant_id=f"credgr_{owner.user_id}",
+            plan=BillingPlanId.Team,
+        )
     return _signed_in(services, owner.user_id, "owner", email)
 
 
@@ -55,11 +77,12 @@ def _signed_in(
 def test_only_the_addressed_account_can_answer_an_invitation(
     isolated_services: ApiServices,
 ) -> None:
-    """The email on the invitation is the one place an address decides identity.
+    """The address on the invitation is the one place an email decides identity.
 
     Somebody else who learns the invitation id gets "not found", the same answer
-    as for an id that never existed, and the seat stays open for the person it
-    was offered to. Answering it twice cannot seat them twice.
+    as for an id that never existed, and the offer stays open for the person it
+    was made to. Answering it twice cannot seat them twice, and the address is
+    matched folded, so the case it was typed in does not decide who may accept.
     """
     workspace = owned_workspace(isolated_services.control_plane_service, "team")
     _owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
@@ -69,7 +92,7 @@ def test_only_the_addressed_account_can_answer_an_invitation(
     listing = service.invite(
         workspace.id,
         email="Invited@Example.test",
-        role=WorkspaceRole.Administrator,
+        role=WorkspaceInvitationRole.Administrator,
         actor=owner,
         admission=DatabaseBillingAdmission(),
     )
@@ -81,23 +104,22 @@ def test_only_the_addressed_account_can_answer_an_invitation(
         service.invite(
             workspace.id,
             email="invited@example.test",
-            role=WorkspaceRole.Member,
+            role=WorkspaceInvitationRole.Member,
             actor=owner,
             admission=DatabaseBillingAdmission(),
         )
 
-    _stranger_id, stranger = _account(isolated_services, "stranger", "stranger@example.test")
-    assert service.pending_for_user(_stranger_id) == []
+    stranger_id, stranger = _account(isolated_services, "stranger", "stranger@example.test")
+    assert service.pending_for_user(stranger_id) == []
     with pytest.raises(NotFoundError):
         service.accept(listing.invitation.id, actor=stranger, admission=DatabaseBillingAdmission())
 
-    invited_id, invited = _account(isolated_services, "invited", "invited@example.test")
-    pending = service.pending_for_user(invited_id)
-    assert [item.workspace.name for item in pending] == ["team"]
-    membership = service.accept(
+    invited_id, invited = _account(isolated_services, "invited", "INVITED@example.test")
+    assert [item.workspace.name for item in service.pending_for_user(invited_id)] == ["team"]
+    accepted = service.accept(
         listing.invitation.id, actor=invited, admission=DatabaseBillingAdmission()
     )
-    assert membership.role is WorkspaceRole.Administrator
+    assert accepted.membership.role is WorkspaceRole.Administrator
     assert isolated_services.users.membership(workspace_id=workspace.id, user_id=invited_id)
     with pytest.raises(ConflictError):
         service.accept(listing.invitation.id, actor=invited, admission=DatabaseBillingAdmission())
@@ -108,7 +130,7 @@ def test_only_the_addressed_account_can_answer_an_invitation(
         service.invite(
             workspace.id,
             email="invited@example.test",
-            role=WorkspaceRole.Member,
+            role=WorkspaceInvitationRole.Member,
             actor=owner,
             admission=DatabaseBillingAdmission(),
         )
@@ -125,7 +147,7 @@ def test_an_expired_or_revoked_invitation_cannot_be_accepted(
     revoked = service.invite(
         workspace.id,
         email="invited@example.test",
-        role=WorkspaceRole.Member,
+        role=WorkspaceInvitationRole.Member,
         actor=owner,
         admission=DatabaseBillingAdmission(),
     )
@@ -138,13 +160,13 @@ def test_an_expired_or_revoked_invitation_cannot_be_accepted(
 
     expiring = WorkspaceInvitationService(
         isolated_services.context,
-        mailer=lambda: _Outbox(),
+        mailer=_Outbox,
         invitations_url="https://lazycloud.test/invitations",
         ttl=timedelta(seconds=-1),
     ).invite(
         workspace.id,
         email="invited@example.test",
-        role=WorkspaceRole.Member,
+        role=WorkspaceInvitationRole.Member,
         actor=owner,
         admission=DatabaseBillingAdmission(),
     )
@@ -159,6 +181,38 @@ def test_an_expired_or_revoked_invitation_cannot_be_accepted(
     assert isolated_services.users.membership(workspace_id=workspace.id, user_id=invited_id) is None
 
 
+def test_accepting_grants_the_role_the_offer_named(isolated_services: ApiServices) -> None:
+    """An offer outstanding when somebody is added directly is still an admin's decision.
+
+    Consuming it silently would leave the person with the lesser role an
+    unrelated action gave them and no invitation left to resend.
+    """
+    workspace = owned_workspace(isolated_services.control_plane_service, "team")
+    _owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
+    service = _service(isolated_services, _Outbox())
+    invited_id, invited = _account(isolated_services, "invited", "invited@example.test")
+
+    listing = service.invite(
+        workspace.id,
+        email="invited@example.test",
+        role=WorkspaceInvitationRole.Administrator,
+        actor=owner,
+        admission=DatabaseBillingAdmission(),
+    )
+    isolated_services.users.add_member(
+        workspace_id=workspace.id,
+        user_id=invited_id,
+        role=WorkspaceRole.Member,
+        admission=DatabaseBillingAdmission(),
+    )
+
+    accepted = service.accept(
+        listing.invitation.id, actor=invited, admission=DatabaseBillingAdmission()
+    )
+
+    assert accepted.membership.role is WorkspaceRole.Administrator
+
+
 def test_a_member_may_leave_but_the_owner_may_not(isolated_services: ApiServices) -> None:
     workspace = owned_workspace(isolated_services.control_plane_service, "team")
     owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
@@ -166,15 +220,14 @@ def test_a_member_may_leave_but_the_owner_may_not(isolated_services: ApiServices
     isolated_services.users.add_member(
         workspace_id=workspace.id,
         user_id=member_id,
-        role=WorkspaceRole.Member,
         admission=DatabaseBillingAdmission(),
     )
 
     assert isolated_services.users.remove_member(
-        workspace_id=workspace.id, user_id=member_id, actor=member
+        workspace_id=workspace.id, user_id=member_id, actor=member, leaving=True
     )
     assert isolated_services.users.membership(workspace_id=workspace.id, user_id=member_id) is None
     with pytest.raises(ConflictError):
         isolated_services.users.remove_member(
-            workspace_id=workspace.id, user_id=owner_id, actor=owner
+            workspace_id=workspace.id, user_id=owner_id, actor=owner, leaving=True
         )

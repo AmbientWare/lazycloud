@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Response, status
 from identity.invitations import InvitationListing, PendingInvitation
+from pydantic import JsonValue
 from shared.http.users import (
     PendingInvitationListResponse,
     PendingInvitationResponse,
@@ -10,7 +11,7 @@ from shared.http.users import (
     WorkspaceInvitationResponse,
     WorkspaceMemberResponse,
 )
-from shared.identity import AuthScope, WorkspaceRole
+from shared.identity import AuthScope, WorkspaceInvitationRecord, WorkspaceRole
 
 from api.server.auth import read_principal, read_token, write_principal, write_token
 from api.server.dependencies import (
@@ -18,6 +19,7 @@ from api.server.dependencies import (
     current_services,
     require_user_principal,
 )
+from api.server.identifiers import resource_identifier
 from api.server.routers.control_plane.users import member_response
 from api.server.services import ApiServices
 from billing import DatabaseBillingAdmission
@@ -26,33 +28,44 @@ router = APIRouter()
 
 
 def _invitation_response(listing: InvitationListing) -> WorkspaceInvitationResponse:
-    invitation = listing.invitation
-    return WorkspaceInvitationResponse(
-        id=invitation.id,
-        workspace_id=invitation.workspace_id,
-        email=invitation.email,
-        role=invitation.role,
-        status=invitation.status,
-        invited_by_user_id=invitation.invited_by_user_id,
-        invited_by_name=listing.invited_by_name,
-        expires_at=invitation.expires_at,
-        created_at=invitation.created_at,
-        updated_at=invitation.updated_at,
+    return WorkspaceInvitationResponse.model_validate(
+        _invitation_fields(listing.invitation, _ADMINISTRATOR_FIELDS)
+        | {"invited_by_name": listing.invited_by_name}
     )
 
 
 def _pending_response(pending: PendingInvitation) -> PendingInvitationResponse:
-    invitation = pending.invitation
-    return PendingInvitationResponse(
-        id=invitation.id,
-        workspace_id=invitation.workspace_id,
-        workspace_name=pending.workspace.name,
-        email=invitation.email,
-        role=invitation.role,
-        invited_by_name=pending.invited_by_name,
-        expires_at=invitation.expires_at,
-        created_at=invitation.created_at,
+    """The invitee's view, which names the workspace and says nothing of who else was asked."""
+    return PendingInvitationResponse.model_validate(
+        _invitation_fields(pending.invitation, _INVITEE_FIELDS)
+        | {
+            "workspace_name": pending.workspace.name,
+            "invited_by_name": pending.invited_by_name,
+        }
     )
+
+
+# What leaves the API, stated once per audience rather than as two hand-copied
+# argument lists that a new field is silently missing from.
+_ADMINISTRATOR_FIELDS = {
+    "id",
+    "workspace_id",
+    "email",
+    "role",
+    "status",
+    "invited_by_user_id",
+    "expires_at",
+    "created_at",
+    "updated_at",
+}
+_INVITEE_FIELDS = {"id", "workspace_id", "email", "role", "expires_at", "created_at"}
+
+
+def _invitation_fields(
+    invitation: WorkspaceInvitationRecord,
+    fields: set[str],
+) -> dict[str, JsonValue]:
+    return invitation.model_dump(mode="json", include=fields)
 
 
 @router.get(
@@ -65,12 +78,19 @@ def list_workspace_invitations(
     principal: read_principal,
     services: ApiServices = Depends(current_services),
 ) -> WorkspaceInvitationListResponse:
+    """Who has been asked in but has not answered.
+
+    An administrator's view rather than a member's: these are the addresses of
+    people with no membership here, and a member who can read them learns who the
+    workspace is recruiting.
+    """
     workspace_id = authorize_token_workspace(
         services,
         principal.token,
         workspace,
         AuthScope.Read,
         platform_role=principal.platform_role,
+        required_role=WorkspaceRole.Administrator,
     )
     return WorkspaceInvitationListResponse(
         data=[_invitation_response(item) for item in services.invitations.pending(workspace_id)]
@@ -127,7 +147,11 @@ def resend_workspace_invitation(
         platform_role=principal.platform_role,
         required_role=WorkspaceRole.Administrator,
     )
-    listing = services.invitations.resend(workspace_id, invitation_id, actor=principal.token)
+    listing = services.invitations.resend(
+        workspace_id,
+        resource_identifier(invitation_id, resource="invitation"),
+        actor=principal.token,
+    )
     return _invitation_response(listing)
 
 
@@ -150,7 +174,11 @@ def revoke_workspace_invitation(
         platform_role=principal.platform_role,
         required_role=WorkspaceRole.Administrator,
     )
-    services.invitations.revoke(workspace_id, invitation_id, actor=principal.token)
+    services.invitations.revoke(
+        workspace_id,
+        resource_identifier(invitation_id, resource="invitation"),
+        actor=principal.token,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -163,7 +191,7 @@ def list_pending_invitations(
     token: read_token,
     services: ApiServices = Depends(current_services),
 ) -> PendingInvitationListResponse:
-    """What is waiting for the signed-in person, by the address their provider verified."""
+    """What is waiting for the signed-in person, by the address they signed in with."""
     user_id = require_user_principal(token)
     return PendingInvitationListResponse(
         data=[_pending_response(item) for item in services.invitations.pending_for_user(user_id)]
@@ -181,13 +209,13 @@ def accept_invitation(
     token: write_token,
     services: ApiServices = Depends(current_services),
 ) -> WorkspaceMemberResponse:
-    user_id = require_user_principal(token)
-    membership = services.invitations.accept(
-        invitation_id,
+    require_user_principal(token)
+    accepted = services.invitations.accept(
+        resource_identifier(invitation_id, resource="invitation"),
         actor=token,
         admission=DatabaseBillingAdmission(),
     )
-    return member_response(services.users.get(user_id), membership)
+    return member_response(accepted.user, accepted.membership)
 
 
 @router.post(
@@ -201,7 +229,10 @@ def decline_invitation(
     services: ApiServices = Depends(current_services),
 ) -> Response:
     require_user_principal(token)
-    services.invitations.decline(invitation_id, actor=token)
+    services.invitations.decline(
+        resource_identifier(invitation_id, resource="invitation"),
+        actor=token,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
