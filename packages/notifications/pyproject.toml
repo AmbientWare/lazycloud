@@ -1,14 +1,11 @@
 [project]
-name = "identity"
+name = "notifications"
 version = "0.1.0"
-description = "Authentication, authorization, token, and workspace identity services."
+description = "Transactional email: the outbox the platform queues into and the drain that delivers it."
 requires-python = ">=3.12"
 dependencies = [
     "lazycloud-shared==0.1.0",
-    "coordination",
     "database",
-    "notifications",
-    "pydantic>=2.8,<3",
 ]
 
 [build-system]

@@ -24,6 +24,7 @@ members = [
     "lazycloud-client",
     "lazycloud-shared",
     "networking",
+    "notifications",
     "observability",
     "operations",
     "provider-aws",
@@ -177,6 +178,7 @@ dependencies = [
     { name = "images" },
     { name = "lazycloud-shared" },
     { name = "networking" },
+    { name = "notifications" },
     { name = "observability" },
     { name = "operations" },
     { name = "provider-aws" },
@@ -215,6 +217,7 @@ requires-dist = [
     { name = "images", editable = "packages/images" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "networking", editable = "packages/networking" },
+    { name = "notifications", editable = "packages/notifications" },
     { name = "observability", editable = "packages/observability" },
     { name = "operations", editable = "packages/operations" },
     { name = "provider-aws", editable = "packages/providers/aws" },
@@ -1048,6 +1051,7 @@ dependencies = [
     { name = "coordination" },
     { name = "database" },
     { name = "lazycloud-shared" },
+    { name = "notifications" },
     { name = "pydantic" },
 ]
 
@@ -1056,6 +1060,7 @@ requires-dist = [
     { name = "coordination", editable = "packages/coordination" },
     { name = "database", editable = "packages/database" },
     { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "notifications", editable = "packages/notifications" },
     { name = "pydantic", specifier = ">=2.8,<3" },
 ]
 
@@ -1393,6 +1398,21 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/04/96/d931255cf9d11a84d6b54d882dba7434646467d568ccf070ea3418638df3/nodejs_wheel_binaries-24.16.0-py2.py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:f1a3d8f7b4491cbbd023ba3fc4e901fcca2d9fb80d57f24ba3890de8b1dbac03", size = 62841759, upload-time = "2026-05-30T16:51:59.407Z" },
     { url = "https://files.pythonhosted.org/packages/a2/7b/8b7a3f41bc255411be30b6d7d288aab8ffd9ea2055db8555ced3548007b9/nodejs_wheel_binaries-24.16.0-py2.py3-none-win_amd64.whl", hash = "sha256:bb136be9944f0662dcf1120f45193a6b75b13fac378971a95cc42c9f879a81aa", size = 42027734, upload-time = "2026-05-30T16:52:03.348Z" },
     { url = "https://files.pythonhosted.org/packages/17/66/1ed71f1f529b8ca727d42c7ceb9db0bef145ce4a13dfc86fb50aa44f3be6/nodejs_wheel_binaries-24.16.0-py2.py3-none-win_arm64.whl", hash = "sha256:8308940b5edd0a50dc5267ea36ba21c9f668e83fe0d9f293937174d3a7e31c36", size = 39714528, upload-time = "2026-05-30T16:52:06.421Z" },
+]
+
+[[package]]
+name = "notifications"
+version = "0.1.0"
+source = { editable = "packages/notifications" }
+dependencies = [
+    { name = "database" },
+    { name = "lazycloud-shared" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "database", editable = "packages/database" },
+    { name = "lazycloud-shared", editable = "packages/shared" },
 ]
 
 [[package]]
@@ -2088,11 +2108,13 @@ dependencies = [
     { name = "images" },
     { name = "lazycloud-shared" },
     { name = "networking" },
+    { name = "notifications" },
     { name = "observability" },
     { name = "operations" },
     { name = "provider-aws" },
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
+    { name = "provider-resend" },
     { name = "provider-stripe" },
     { name = "scheduler" },
     { name = "storage" },
@@ -2114,11 +2136,13 @@ requires-dist = [
     { name = "images", editable = "packages/images" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "networking", editable = "packages/networking" },
+    { name = "notifications", editable = "packages/notifications" },
     { name = "observability", editable = "packages/observability" },
     { name = "operations", editable = "packages/operations" },
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
+    { name = "provider-resend", editable = "packages/providers/resend" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "scheduler", editable = "packages/scheduler" },
     { name = "storage", editable = "packages/storage" },
@@ -2555,6 +2579,7 @@ dev = [
     { name = "lazycloud-shared" },
     { name = "lupa" },
     { name = "networking" },
+    { name = "notifications" },
     { name = "observability" },
     { name = "operations" },
     { name = "provider-aws" },
@@ -2596,6 +2621,7 @@ workspace = [
     { name = "lazycloud-client" },
     { name = "lazycloud-shared" },
     { name = "networking" },
+    { name = "notifications" },
     { name = "observability" },
     { name = "operations" },
     { name = "provider-aws" },
@@ -2644,6 +2670,7 @@ dev = [
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "lupa", specifier = ">=2.8" },
     { name = "networking", editable = "packages/networking" },
+    { name = "notifications", editable = "packages/notifications" },
     { name = "observability", editable = "packages/observability" },
     { name = "operations", editable = "packages/operations" },
     { name = "provider-aws", editable = "packages/providers/aws" },
@@ -2685,6 +2712,7 @@ workspace = [
     { name = "lazycloud-client", editable = "packages/lazycloud" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "networking", editable = "packages/networking" },
+    { name = "notifications", editable = "packages/notifications" },
     { name = "observability", editable = "packages/observability" },
     { name = "operations", editable = "packages/operations" },
     { name = "provider-aws", editable = "packages/providers/aws" },

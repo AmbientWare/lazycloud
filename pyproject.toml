@@ -19,6 +19,7 @@ workspace = [
     "identity",
     "images",
     "networking",
+    "notifications",
     "observability",
     "operations",
     "provider-clients",
@@ -74,6 +75,7 @@ members = [
     "packages/identity",
     "packages/images",
     "packages/networking",
+    "packages/notifications",
     "packages/observability",
     "packages/operations",
     "packages/provider-clients",
@@ -120,6 +122,7 @@ gateway = { workspace = true }
 identity = { workspace = true }
 images = { workspace = true }
 networking = { workspace = true }
+notifications = { workspace = true }
 observability = { workspace = true }
 operations = { workspace = true }
 provider-clients = { workspace = true }

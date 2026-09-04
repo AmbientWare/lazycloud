@@ -512,7 +512,8 @@ is never hand-written: it is rendered from `provider_aws.connection_policy` into
 | Cloudflare API token (control plane) | `.env`, `LAZYCLOUD_CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Zone > SSL and Certificates > Edit. This is the one the control plane serves custom hostnames with. |
 | Stripe webhook signing secret | `.env`, `LAZYCLOUD_STRIPE_WEBHOOK_SECRET` | Returned only when the endpoint is created. Replace the endpoint through `deploy/stripe`, take the new output, recreate `control-plane`. |
 | Stripe API key | `.env`, `LAZYCLOUD_STRIPE_API_KEY` | Roll the restricted key in the Stripe dashboard, update `.env`, recreate `control-plane`. |
-| Resend API key | `.env`, `LAZYCLOUD_RESEND_API_KEY` | Create a new key in the Resend dashboard, update `.env`, recreate `control-plane`, then delete the old key. |
+| Resend webhook secret | `.env`, `LAZYCLOUD_RESEND_WEBHOOK_SECRET` | Returned only when the endpoint is created. Re-register `POST /webhooks/resend` in the Resend dashboard, take the new secret, recreate `control-plane`. Mail keeps sending without it; only delivery reporting stops. |
+| Resend API key | `.env`, `LAZYCLOUD_RESEND_API_KEY` | Read by the scheduler, which sends the mail; the control plane only queues it. Create a new key in the Resend dashboard, update `.env`, recreate `scheduler`, then delete the old key. Queued messages are durable, so mail queued during the gap goes out after it. |
 
 Legacy credentials from the superseded architecture live outside the repo at
 `~/.lazycloud-legacy-secrets/secrets-backup/`. They are **not** rotated. Anything

@@ -125,6 +125,7 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
         retention_settings=RetentionSettings(),
         volume_metering=app_services.volume_metering,
         meter_outbox=app_services.meter_outbox,
+        email_outbox=app_services.email_outbox,
         plan_changes=app_services.plan_changes,
         billing_reconciliation=app_services.billing_reconciliation,
         billing_enforcement=app_services.billing_enforcement,

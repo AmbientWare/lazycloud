@@ -4,13 +4,13 @@ from datetime import datetime
 
 from pydantic import Field, field_validator
 
+from shared.email import EmailDeliveryState
 from shared.http.base import HttpModel
 from shared.http.workspaces import WorkspaceResponse
 from shared.identity import (
     PlatformRole,
     UserStatus,
     WorkspaceInvitationRole,
-    WorkspaceInvitationStatus,
     WorkspaceRole,
     normalize_invitation_email,
 )
@@ -119,15 +119,27 @@ class WorkspaceInvitationCreateRequest(HttpModel):
 
 
 class WorkspaceInvitationResponse(HttpModel):
-    """An invitation as its workspace's administrators see it."""
+    """An open offer as its workspace's administrators see it.
+
+    `expired` is the server's answer against the server's clock. A browser
+    comparing `expires_at` to its own would label offers by how far that clock
+    had drifted, so the figure is published rather than derivable.
+    """
 
     id: str
     workspace_id: str
     email: str
     role: WorkspaceInvitationRole = WorkspaceInvitationRole.Member
-    status: WorkspaceInvitationStatus = WorkspaceInvitationStatus.Pending
     invited_by_user_id: str = ""
     invited_by_name: str = ""
+    expired: bool = False
+    delivery: EmailDeliveryState = EmailDeliveryState.Queued
+    """What became of the message carrying the link, as the provider reported it.
+
+    Sending and arriving are different events minutes apart, so this is what
+    answers "they say they never got it" without anybody guessing.
+    """
+
     expires_at: datetime
     created_at: datetime
     updated_at: datetime
@@ -138,28 +150,26 @@ class WorkspaceInvitationListResponse(HttpModel):
     next: str = ""
 
 
-class PendingInvitationResponse(HttpModel):
-    """An invitation as the person it was sent to sees it, once signed in."""
+class InvitationPreviewResponse(HttpModel):
+    """What the link shows whoever holds it, before they answer.
 
-    id: str
+    Carries no address to match against and no invitation id: the link is the
+    whole of the claim, and echoing an id back would invite a caller to try
+    answering offers by guessing one.
+    """
+
     workspace_id: str
     workspace_name: str
     email: str
     role: WorkspaceInvitationRole = WorkspaceInvitationRole.Member
     invited_by_name: str = ""
+    expired: bool = False
     expires_at: datetime
-    created_at: datetime
-
-
-class PendingInvitationListResponse(HttpModel):
-    data: list[PendingInvitationResponse] = Field(default_factory=list)
-    next: str = ""
 
 
 __all__ = [
     "CurrentSessionResponse",
-    "PendingInvitationListResponse",
-    "PendingInvitationResponse",
+    "InvitationPreviewResponse",
     "SessionCreateRequest",
     "SessionResponse",
     "UserCreateRequest",

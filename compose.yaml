@@ -48,6 +48,7 @@ x-stripe-env: &stripe-env
   LAZYCLOUD_STRIPE_WEBHOOK_SECRET: "${LAZYCLOUD_STRIPE_WEBHOOK_SECRET:-}"
   LAZYCLOUD_RESEND_API_KEY: "${LAZYCLOUD_RESEND_API_KEY:-}"
   LAZYCLOUD_RESEND_FROM_ADDRESS: "${LAZYCLOUD_RESEND_FROM_ADDRESS:-LazyCloud <noreply@lazycloud.dev>}"
+  LAZYCLOUD_RESEND_WEBHOOK_SECRET: "${LAZYCLOUD_RESEND_WEBHOOK_SECRET:-}"
 
 # The GitHub App people sign in through. Empty by default: the stack boots and
 # every Compose step drives the platform with LAZYCLOUD_TOKEN, so only browser

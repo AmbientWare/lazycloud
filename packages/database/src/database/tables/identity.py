@@ -169,41 +169,27 @@ class WorkspaceMemberTable(IdPayloadTable, DatabaseBase):
 
 
 class WorkspaceInvitationTable(IdTable, DatabaseBase):
-    """An offer of membership addressed to an email, kept after it is answered.
+    """An offer of membership nobody has answered yet.
 
-    An answered row stays in its terminal status because the audit history points
-    at it; rows leave only with their workspace.
+    Only open offers are rows. Accepting, declining and revoking each delete
+    theirs, because the membership and the audit history are what record what
+    happened, and a table that also kept answered offers would be a second,
+    slower answer to the same question.
     """
 
     __tablename__ = "workspace_invitations"
     __table_args__: tuple[SchemaItem, ...] = (
         # One open offer per address per workspace. A second invite is refused
-        # and the existing one resent, rather than racing a second row into place.
-        Index(
-            "uq_workspace_invitations_pending_email",
-            "workspace_id",
-            "email",
-            unique=True,
-            postgresql_where=text("status = 'pending'"),
-            sqlite_where=text("status = 'pending'"),
-        ),
+        # and the standing one resent, rather than racing a second row in.
+        UniqueConstraint("workspace_id", "email", name="uq_workspace_invitations_workspace_email"),
+        # What the link presents, so it is what the lookup is keyed on. Unique
+        # because two offers answering to one token would make "which workspace
+        # did this link join" have two answers.
+        UniqueConstraint("token_hash", name="uq_workspace_invitations_token"),
         Index("ix_workspace_invitations_workspace", "workspace_id"),
-        # The invitee's lookup: everything still open that is addressed to the
-        # email they signed in with. Partial, so the history of answered offers
-        # does not grow the index every lookup walks.
-        Index(
-            "ix_workspace_invitations_open_email",
-            "email",
-            postgresql_where=text("status = 'pending'"),
-            sqlite_where=text("status = 'pending'"),
-        ),
         CheckConstraint(
             "role IN ('administrator', 'member')",
             name="ck_workspace_invitations_role",
-        ),
-        CheckConstraint(
-            "status IN ('pending', 'accepted', 'declined', 'revoked')",
-            name="ck_workspace_invitations_status",
         ),
         CheckConstraint("email = lower(email)", name="ck_workspace_invitations_email_folded"),
     )
@@ -214,21 +200,34 @@ class WorkspaceInvitationTable(IdTable, DatabaseBase):
         nullable=False,
     )
     email: Mapped[str] = mapped_column(String(320), nullable=False)
+    """Where the offer was sent. Not who may accept it: the link decides that,
+    and the membership binds to whichever account redeems it."""
+
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="member")
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    """SHA-256 of the secret in the link, never the secret. A database dump is
+    then a list of offers rather than a set of working keys to other people's
+    workspaces."""
+
     # Null once the inviter's account is gone; the offer they made still stands.
     invited_by_user_id: Mapped[str | None] = mapped_column(
         uuid_type,
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
-    resolved_by_user_id: Mapped[str | None] = mapped_column(
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    message_id: Mapped[str | None] = mapped_column(
         uuid_type,
-        ForeignKey("users.id", ondelete="SET NULL"),
+        ForeignKey("email_outbox.id", ondelete="SET NULL"),
         nullable=True,
     )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """The message that last carried this offer's link.
+
+    What an administrator is shown about delivery is read through here, so the
+    dashboard reports what the provider said rather than what the platform
+    hoped. Repointed on every resend, because the old message carries a link
+    that no longer opens anything and its fate stops being the answer.
+    """
 
 
 class WorkspaceTable(IdPayloadTable, DatabaseBase):
