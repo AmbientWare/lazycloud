@@ -260,7 +260,6 @@ from gateway.views import (
     agent_pool_transport,
     agent_route_view,
     agent_telemetry_state,
-    agent_worker_record,
     agent_worker_slot_view,
     machine_view,
     pool_config_from_unit,
@@ -2306,9 +2305,7 @@ class GatewayControlService:
             agent_state.machine_id,
         )
         worker = self._agent_machine_worker(agent_state)
-        if worker is None:
-            self._prune_agent_worker_slots(agent_state, keep_worker_id="", slots=slots)
-            return []
+        worker_id = agent_machine_worker_id(agent_state.machine_id)
 
         target_image = self.agent_worker_image or agent_worker_image(
             self.agent_worker_image_registry,
@@ -2316,15 +2313,19 @@ class GatewayControlService:
             self.agent_worker_image_tag,
         )
         slot_status = AgentWorkerSlotStatus.Active
-        active_image = active_worker_images.get(worker.worker_id, "")
+        active_image = active_worker_images.get(worker_id, "")
         image_revision = hashlib.sha256(target_image.encode("utf-8")).hexdigest()[:24]
-        if active_image == target_image and worker.status is SchedulerWorkerStatus.Available:
+        if (
+            worker is not None
+            and active_image == target_image
+            and worker.status is SchedulerWorkerStatus.Available
+        ):
             self.scheduler_worker_lookup.release_worker_rollout_slot(
                 worker.capacity_owner_id,
                 worker.worker_id,
                 image_revision,
             )
-        if active_image and active_image != target_image:
+        if worker is not None and active_image and active_image != target_image:
             worker, claimed = self._claim_worker_image_rollout(
                 worker,
                 image_revision=image_revision,
@@ -2337,16 +2338,15 @@ class GatewayControlService:
                     else AgentWorkerSlotStatus.Pending
                 )
 
-        existing = next((slot for slot in slots if slot.worker_id == worker.worker_id), None)
+        existing = next((slot for slot in slots if slot.worker_id == worker_id), None)
         token_plan = self._agent_worker_token(
             agent_state,
-            worker_id=worker.worker_id,
+            worker_id=worker_id,
             existing_slot=existing,
             billing_owner=billing_owner,
         )
         slot_plan = plan_agent_worker_slot(
             agent_state,
-            agent_worker_record(worker),
             slots,
             token_plan,
             billing_owner=billing_owner,
@@ -2356,7 +2356,7 @@ class GatewayControlService:
         )
         self._prune_agent_worker_slots(
             agent_state,
-            keep_worker_id=worker.worker_id,
+            keep_worker_id=worker_id,
             slots=slots,
         )
         if not slot_plan.accepted or slot_plan.slot is None:
@@ -2384,11 +2384,11 @@ class GatewayControlService:
                 "agent.worker-slot",
                 resource_type="agent",
                 resource_id=agent_state.machine_id,
-                message=f"agent worker slot created for {worker.worker_id}",
+                message=f"agent worker slot created for {worker_id}",
                 data={
                     "pool": agent_state.pool,
                     "machine_id": agent_state.machine_id,
-                    "worker_id": worker.worker_id,
+                    "worker_id": worker_id,
                 },
                 workspace_id=agent_state.workspace_id,
             )
@@ -2488,11 +2488,7 @@ class GatewayControlService:
         )
         if worker is None:
             return None
-        if (
-            worker.machine_id != agent_state.machine_id
-            or worker.pool != agent_state.pool
-            or worker.status is SchedulerWorkerStatus.Unavailable
-        ):
+        if worker.machine_id != agent_state.machine_id or worker.pool != agent_state.pool:
             return None
         with suppress(SchedulerRepositoryError):
             worker = self.scheduler_worker_lookup.reconcile_worker_capacity(worker.worker_id)

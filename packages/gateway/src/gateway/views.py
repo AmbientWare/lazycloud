@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from compute.agent_control import (
-    WorkerRecord,
-    WorkerStatus,
-)
 from compute.projection import ComputeUnitMode, PoolConfig, PrivateUnitState
 from compute.state import (
     ComputeAgentTokenState,
@@ -32,7 +28,6 @@ from shared.http.compute import UnitMachineMetricsResponse, UnitMachineResponse
 from shared.routing import (
     AgentBackendRoute,
 )
-from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.tasks import Task
 
 from compute import projection
@@ -268,33 +263,9 @@ def agent_worker_slot_view(slot: ComputeAgentWorkerSlotState) -> AgentWorkerSlot
     )
 
 
-def agent_worker_record(worker: SchedulerWorkerRecord) -> WorkerRecord:
-    return WorkerRecord(
-        id=worker.worker_id,
-        machine_id=worker.machine_id,
-        pool=worker.pool,
-        capacity_owner_id=worker.capacity_owner_id,
-        status=_agent_worker_status(worker.status),
-        total_cpu=worker.total_cpu_millicores,
-        total_memory=worker.total_memory_mib,
-        gpu=worker.gpu_type,
-        total_gpu_count=worker.total_gpu_count,
-    )
-
-
 def agent_pool_transport(state: ComputeAgentTokenState) -> str:
     value = state.metadata.get("pool_transport")
     return str(value) if value is not None else ""
-
-
-def _agent_worker_status(status: SchedulerWorkerStatus) -> WorkerStatus:
-    if status is SchedulerWorkerStatus.Available:
-        return WorkerStatus.Available
-    if status is SchedulerWorkerStatus.Pending:
-        return WorkerStatus.Pending
-    if status is SchedulerWorkerStatus.Draining:
-        return WorkerStatus.Draining
-    return WorkerStatus.Disabled
 
 
 def stub_for_task(control_plane: ControlPlaneService, task: Task) -> StubRecord | None:

@@ -10,14 +10,17 @@ from scheduler.agent_pool import (
     AgentWorkerPoolController,
 )
 from scheduler.fleet import SchedulerWorkerStatus
-from scheduler.state import SchedulerWorkerRecord
+from scheduler.state import RedisSchedulerWorkerRepository, SchedulerWorkerRecord
 from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
 from shared.compute_policy import MachinePool
 from shared.container_requests import schedulable_capacity
 from shared.scheduling import WorkerUnavailableReason
+from tests.real_redis import RealRedisActors
 
 
-def test_agent_worker_pool_reconciles_connected_machine_and_capacity() -> None:
+def test_agent_worker_pool_reconciles_connected_machine_and_capacity(
+    real_redis_actors: RealRedisActors,
+) -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
     machine = _agent_machine(
         machine_id="machine-one",
@@ -27,7 +30,7 @@ def test_agent_worker_pool_reconciles_connected_machine_and_capacity() -> None:
         gpu_count=1,
         last_heartbeat_at=now,
     )
-    workers = _WorkerRepo()
+    workers = RedisSchedulerWorkerRepository(real_redis_actors.client())
     controller = AgentWorkerPoolController(
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
@@ -58,7 +61,9 @@ def test_agent_worker_pool_reconciles_connected_machine_and_capacity() -> None:
     assert worker.gpu_type == "A4000"
 
 
-def test_agent_worker_pool_excludes_machine_with_failed_typed_preflight() -> None:
+def test_agent_worker_pool_excludes_machine_with_failed_typed_preflight(
+    real_redis_actors: RealRedisActors,
+) -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
     machine = _agent_machine(
         machine_id="machine-one",
@@ -74,7 +79,7 @@ def test_agent_worker_pool_excludes_machine_with_failed_typed_preflight() -> Non
             ],
         }
     )
-    workers = _WorkerRepo()
+    workers = RedisSchedulerWorkerRepository(real_redis_actors.client())
     controller = AgentWorkerPoolController(
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
@@ -91,7 +96,9 @@ def test_agent_worker_pool_excludes_machine_with_failed_typed_preflight() -> Non
     assert workers.get_worker(agent_machine_worker_id("machine-one")) is None
 
 
-def test_agent_worker_pool_disables_stale_machine_worker() -> None:
+def test_agent_worker_pool_disables_stale_machine_worker(
+    real_redis_actors: RealRedisActors,
+) -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
     machine = _agent_machine(
         machine_id="machine-one",
@@ -112,7 +119,8 @@ def test_agent_worker_pool_disables_stale_machine_worker() -> None:
         created_at=now,
         updated_at=now,
     )
-    workers = _WorkerRepo([worker])
+    workers = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    workers.add_worker(worker, now=now)
     controller = AgentWorkerPoolController(
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
@@ -131,7 +139,9 @@ def test_agent_worker_pool_disables_stale_machine_worker() -> None:
     assert unavailable_worker.status is SchedulerWorkerStatus.Unavailable
 
 
-def test_agent_worker_pool_does_not_readd_a_cordoned_machine_worker() -> None:
+def test_agent_worker_pool_does_not_readd_a_cordoned_machine_worker(
+    real_redis_actors: RealRedisActors,
+) -> None:
     """A cordon has to survive the pass that would otherwise undo it.
 
     `ensure_machine_worker` re-adds the worker of any schedulable machine whose
@@ -161,7 +171,8 @@ def test_agent_worker_pool_does_not_readd_a_cordoned_machine_worker() -> None:
         created_at=now,
         updated_at=now,
     )
-    workers = _WorkerRepo([worker])
+    workers = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    workers.add_worker(worker, now=now)
     controller = AgentWorkerPoolController(
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
@@ -180,7 +191,9 @@ def test_agent_worker_pool_does_not_readd_a_cordoned_machine_worker() -> None:
     assert outcome.action is not AgentPoolWorkerAction.Ensured
 
 
-def test_agent_worker_pool_reports_a_cordon_as_a_cordon() -> None:
+def test_agent_worker_pool_reports_a_cordon_as_a_cordon(
+    real_redis_actors: RealRedisActors,
+) -> None:
     """A cordoned machine is connected, so the disconnected diagnosis misleads."""
     now = datetime(2026, 1, 1, tzinfo=UTC)
     machine = _agent_machine(
@@ -203,7 +216,8 @@ def test_agent_worker_pool_reports_a_cordon_as_a_cordon() -> None:
         created_at=now,
         updated_at=now,
     )
-    workers = _WorkerRepo([worker])
+    workers = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    workers.add_worker(worker, now=now)
     controller = AgentWorkerPoolController(
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
@@ -222,6 +236,51 @@ def test_agent_worker_pool_reports_a_cordon_as_a_cordon() -> None:
     assert settled.unavailable_reason is WorkerUnavailableReason.MachineCordoned
 
 
+def test_machine_drain_survives_agent_pool_reconciliation(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    machine = _agent_machine(
+        machine_id="machine-one",
+        cpu_millicores=4000,
+        memory_mb=8192,
+        last_heartbeat_at=now,
+        capacity_state=AgentCapacityState.Draining,
+    )
+    workers = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    worker_id = agent_machine_worker_id(machine.machine_id)
+    workers.add_worker(
+        SchedulerWorkerRecord(
+            worker_id=worker_id,
+            capacity_owner_id=machine.capacity_owner_id,
+            machine_id=machine.machine_id,
+            pool=machine.pool,
+            status=SchedulerWorkerStatus.Available,
+            total_cpu_millicores=4000,
+            total_memory_mib=8192,
+            free_cpu_millicores=3000,
+            free_memory_mib=4096,
+        ),
+        now=now,
+    )
+    controller = AgentWorkerPoolController(
+        AgentPoolConfig(
+            capacity_owner_id=machine.capacity_owner_id,
+            workspace_id=machine.workspace_id,
+            pool=machine.pool,
+        ),
+        _MachineRepo([machine]),
+        workers,
+    )
+
+    controller.reconcile(now=now)
+    draining = workers.get_worker(worker_id)
+    assert draining is not None
+    assert draining.status is SchedulerWorkerStatus.Draining
+    controller.reconcile(now=now + timedelta(seconds=1))
+    assert workers.get_worker(worker_id) == draining
+
+
 class _MachineRepo:
     def __init__(self, machines: list[ComputeAgentTokenState]) -> None:
         self.machines = machines
@@ -237,66 +296,6 @@ class _MachineRepo:
             if machine.workspace_id == workspace_id
             and machine.capacity_owner_id == capacity_owner_id
         ]
-
-
-class _WorkerRepo:
-    def __init__(self, workers: list[SchedulerWorkerRecord] | None = None) -> None:
-        self.workers = {worker.worker_id: worker for worker in workers or []}
-
-    def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None:
-        return self.workers.get(worker_id)
-
-    def add_worker(
-        self,
-        worker: SchedulerWorkerRecord,
-        *,
-        ttl_seconds: int = 0,
-        now: datetime | None = None,
-    ) -> SchedulerWorkerRecord:
-        self.workers[worker.worker_id] = worker
-        return worker
-
-    def disable_worker(
-        self,
-        worker_id: str,
-        *,
-        reason: WorkerUnavailableReason = WorkerUnavailableReason.AgentDisconnected,
-        detail: str = "",
-        ttl_seconds: int = 0,
-        now: datetime | None = None,
-    ) -> SchedulerWorkerRecord:
-        worker = self.workers[worker_id]
-        updated = worker.model_copy(
-            update={
-                "status": SchedulerWorkerStatus.Unavailable,
-                "unavailable_reason": reason,
-                "unavailable_detail": detail,
-                "updated_at": now or worker.updated_at,
-            }
-        )
-        self.workers[worker_id] = updated
-        return updated
-
-    def update_worker_tenancy(
-        self,
-        worker_id: str,
-        *,
-        workspace_id: str,
-        owner_user_id: str,
-        priority: int,
-        now: datetime | None = None,
-    ) -> SchedulerWorkerRecord:
-        worker = self.workers[worker_id]
-        updated = worker.model_copy(
-            update={
-                "workspace_id": workspace_id,
-                "owner_user_id": owner_user_id,
-                "priority": priority,
-                "updated_at": now or worker.updated_at,
-            }
-        )
-        self.workers[worker_id] = updated
-        return updated
 
 
 def _agent_machine(
