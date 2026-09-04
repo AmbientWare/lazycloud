@@ -265,15 +265,15 @@ class _ClientProvider:
         return self.clients
 
 
-def _spec() -> AwsManagedPoolSpec:
+def _spec(*, desired_nodes: int = 1, max_nodes: int = 2) -> AwsManagedPoolSpec:
     return AwsManagedPoolSpec(
         workspace_id="12345678-1234-4123-8123-123456789abc",
         unit_name=UnitName("acceptance"),
         region="us-east-1",
         instance_type="m7i.xlarge",
         ami_id="ami-0123456789abcdef0",
-        desired_nodes=1,
-        max_nodes=2,
+        desired_nodes=desired_nodes,
+        max_nodes=max_nodes,
         root_volume_gib=50,
         node_instance_profile_arn=("arn:aws:iam::123456789012:instance-profile/compute-node"),
         vpc_id=_VPC_ID,
@@ -293,12 +293,11 @@ def _spec() -> AwsManagedPoolSpec:
 
 
 def test_managed_pool_accepts_fleet_capacity_and_enforces_its_ceiling() -> None:
-    values = {**_spec().model_dump(), "desired_nodes": 101, "max_nodes": 500}
-    spec = AwsManagedPoolSpec.model_validate(values)
+    spec = _spec(desired_nodes=101, max_nodes=500)
     assert spec.desired_nodes == 101
     assert spec.max_nodes == 500
     with pytest.raises(ValidationError, match="desired_nodes cannot exceed max_nodes"):
-        AwsManagedPoolSpec.model_validate({**values, "desired_nodes": 501})
+        _spec(desired_nodes=501, max_nodes=500)
 
 
 def _connection_target(
