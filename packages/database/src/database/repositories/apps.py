@@ -627,26 +627,61 @@ class StubRepository:
     def list(self, *, workspace_id: str) -> list[StubRecord]:
         return self.records.list(workspace_id=workspace_id)
 
-    def list_autoscaling_across_workspaces(self) -> list[AutoscalingStubRecord]:
+    def find_reusable(
+        self,
+        *,
+        workspace_id: str,
+        name: str,
+        app_id: str | None,
+        app_name: str | None,
+        undeployed_only: bool,
+    ) -> StubRecord | None:
+        statement = select(StubTable).where(
+            StubTable.workspace_id == workspace_id,
+            StubTable.name == name,
+            StubTable.app_id.is_(None) if app_id is None else StubTable.app_id == app_id,
+        )
+        if app_id is None and app_name is not None:
+            statement = statement.where(
+                StubTable.payload["metadata"]["app"].as_string() == app_name
+            )
+        if undeployed_only:
+            statement = statement.where(StubTable.payload["deployment_id"].as_string().is_(None))
+        row = self.session.scalars(
+            statement.order_by(StubTable.created_at.desc(), StubTable.id.asc()).limit(1)
+        ).first()
+        return StubRecord.model_validate(row.payload) if row is not None else None
+
+    def list_autoscaling_across_workspaces(
+        self,
+        *,
+        stub_ids: Sequence[str] | None = None,
+    ) -> list[AutoscalingStubRecord]:
+        statement = select(
+            StubTable.id,
+            StubTable.workspace_id,
+            StubTable.type,
+            StubTable.app_id,
+            StubTable.payload["deployment_id"].as_string(),
+            StubTable.payload["config"]["runtime"]["cpu"],
+            StubTable.payload["config"]["runtime"]["cpu_millicores"],
+            StubTable.payload["config"]["runtime"]["gpu"],
+            StubTable.payload["config"]["runtime"]["gpu_count"],
+            StubTable.payload["config"]["runtime"]["timeout_seconds"],
+            StubTable.payload["config"]["runtime"]["keep_warm"],
+            StubTable.payload["config"]["runtime"]["workspace_gpu_quota"],
+            StubTable.payload["config"]["runtime"]["workspace_cpu_quota_millicores"],
+            StubTable.payload["config"]["autoscaler"],
+            StubTable.payload["config"]["task_policy"],
+            StubTable.payload["config"]["metadata"]["autoscaling_enabled"].as_boolean(),
+        )
+        if stub_ids is not None:
+            wanted = list(dict.fromkeys(stub_ids))
+            if not wanted:
+                return []
+            statement = statement.where(StubTable.id.in_(wanted))
         rows = self.session.execute(
-            select(
-                StubTable.id,
-                StubTable.workspace_id,
-                StubTable.type,
-                StubTable.app_id,
-                StubTable.payload["deployment_id"].as_string(),
-                StubTable.payload["config"]["runtime"]["cpu"],
-                StubTable.payload["config"]["runtime"]["cpu_millicores"],
-                StubTable.payload["config"]["runtime"]["gpu"],
-                StubTable.payload["config"]["runtime"]["gpu_count"],
-                StubTable.payload["config"]["runtime"]["timeout_seconds"],
-                StubTable.payload["config"]["runtime"]["keep_warm"],
-                StubTable.payload["config"]["runtime"]["workspace_gpu_quota"],
-                StubTable.payload["config"]["runtime"]["workspace_cpu_quota_millicores"],
-                StubTable.payload["config"]["autoscaler"],
-                StubTable.payload["config"]["task_policy"],
-                StubTable.payload["config"]["metadata"]["autoscaling_enabled"].as_boolean(),
-            ).order_by(StubTable.created_at.desc(), StubTable.id.asc())
+            statement.order_by(StubTable.created_at.desc(), StubTable.id.asc())
         ).tuples()
         return [
             AutoscalingStubRecord(
@@ -735,6 +770,26 @@ class StubRepository:
         statement = select(StubTable).where(
             StubTable.workspace_id == workspace_id,
             StubTable.app_id == app_id,
+        )
+        return [StubRecord.model_validate(row.payload) for row in self.session.scalars(statement)]
+
+    def list_for_deployments(
+        self,
+        deployment_ids: Sequence[str],
+        *,
+        workspace_id: str,
+    ) -> list[StubRecord]:
+        wanted = tuple(dict.fromkeys(deployment_ids))
+        if not wanted:
+            return []
+        statement = (
+            select(StubTable)
+            .join(DeploymentTable, DeploymentTable.stub_id == StubTable.id)
+            .where(
+                DeploymentTable.id.in_(wanted),
+                DeploymentTable.workspace_id == workspace_id,
+                StubTable.workspace_id == workspace_id,
+            )
         )
         return [StubRecord.model_validate(row.payload) for row in self.session.scalars(statement)]
 

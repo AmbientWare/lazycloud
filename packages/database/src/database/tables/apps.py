@@ -201,6 +201,16 @@ class StubTable(IdPayloadTable, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("external_id", name="uq_stubs_external_id"),
         Index("ix_stubs_workspace", "workspace_id"),
+        Index(
+            "ix_stubs_reusable_identity",
+            "workspace_id",
+            "name",
+            "app_id",
+            "created_at",
+            "id",
+            postgresql_where=text("CAST((payload ->> 'deployment_id') AS VARCHAR) IS NULL"),
+            sqlite_where=text("JSON_EXTRACT(payload, '$.\"deployment_id\"') IS NULL"),
+        ),
         Index("ix_stubs_app_created", "app_id", "created_at", "id"),
         Index("ix_stubs_app_type_created", "app_id", "type", "created_at", "id"),
         Index("ix_stubs_payload_artifact_refs", "payload", postgresql_using="gin"),

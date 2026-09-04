@@ -21,6 +21,7 @@ from scheduler.autoscaling import (
     FunctionAutoscaler,
     PodAutoscaler,
 )
+from scheduler.autoscaling_targets import AutoscalingTargetService
 from scheduler.capacity_controls import SchedulerCapacityControllerProvider
 from scheduler.capacity_reservations import (
     CapacityReservationService,
@@ -217,6 +218,7 @@ class SchedulerRuntime:
             workloads=SchedulerWorkloadControls(
                 containers=dispatch_requests,
                 dispatch_wake=RedisWakeSignal(redis_client, CONTAINER_DISPATCH_WAKE_SCOPE),
+                autoscaling_targets=AutoscalingTargetService(scheduler_services.context),
                 function_autoscaler=AutoscalingDriver(
                     scheduler_services,
                     redis=redis_client,
