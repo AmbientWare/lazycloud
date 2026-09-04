@@ -28,12 +28,27 @@ const firstAppItem = {
 };
 
 async function mockSession(page: Page, beforeWorkspaceChange?: Promise<void>) {
+  const workspace = { id: "workspace-test", name: "acme", ...workspaceDefaults };
   await page.addInitScript(() => {
     localStorage.setItem("lazycloud_web_token", "test-token");
   });
-  await page.route("**/api/v1/workspaces?include_deleting=true", async (route) => {
+  await page.route("**/api/v1/sessions/current", async (route) => {
     await route.fulfill({
-      json: { workspaces: [{ id: "workspace-test", name: "acme", ...workspaceDefaults }] },
+      json: {
+        user: {
+          id: "user-test",
+          display_name: "Test User",
+          email: "test@example.com",
+          avatar_url: "",
+          github_user_id: "1234",
+          github_login: "test-user",
+          role: "member",
+          status: "active",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+        workspaces: [workspace],
+      },
     });
   });
   await page.route("**/api/v1/concurrency-limits*", async (route) => {
@@ -111,4 +126,6 @@ test("device approval page approves a pending CLI sign-in", async ({ page }) => 
   await expect(page.getByText("cli@laptop")).toBeVisible();
   await page.getByRole("button", { name: "Approve" }).click();
   await expect(page.getByText("CLI connected")).toBeVisible();
+  await page.getByRole("link", { name: "Go to dashboard" }).click();
+  await expect(page).toHaveURL(/\/w\/acme\/apps\/?$/);
 });
