@@ -114,6 +114,14 @@ class WorkerSchedulerRequestImageBuildExecutor(Protocol):
     def execute(self, request: SchedulerWorkerRequest) -> WorkerImageBuildExecutionResult: ...
 
 
+class WorkerSchedulerRequestImageBuildResultReporter(Protocol):
+    def report_image_build_result(
+        self,
+        request: SchedulerWorkerRequest,
+        result: WorkerImageBuildExecutionResult,
+    ) -> None: ...
+
+
 class WorkerSchedulerRequestExecutionService(Protocol):
     def execute(self, context: ContainerExecutionContext) -> ContainerExecutionResult: ...
 
@@ -126,6 +134,7 @@ class WorkerSchedulerRequestResult(ContractModel):
     request: SchedulerWorkerRequest | None = None
     execution: ContainerExecutionResult | None = None
     image_build: WorkerImageBuildExecutionResult | None = None
+    image_build_report_pending: bool = False
     delivery: WorkerDeliveredRequestPlan | None = None
     capacity_released: bool = False
     capacity_release_error: str = ""
@@ -166,6 +175,14 @@ class _Delivery:
 
 
 @dataclass(slots=True)
+class _PendingImageBuildResult:
+    request: SchedulerWorkerRequest
+    result: WorkerImageBuildExecutionResult
+    attempts: int = 0
+    report_after: float = 0.0
+
+
+@dataclass(slots=True)
 class WorkerSchedulerRequestProcessor:
     worker_id: str
     workers: WorkerSchedulerRequestWorkerRepository
@@ -188,6 +205,7 @@ class WorkerSchedulerRequestProcessor:
 
     lifecycle: WorkerSchedulerRequestLifecycle | None = None
     image_builds: WorkerSchedulerRequestImageBuildExecutor | None = None
+    image_build_results: WorkerSchedulerRequestImageBuildResultReporter | None = None
     usage_recorder: WorkerUsageWindowRecorder | None = None
     """Meters an image build, which runs here rather than under the runtime
     monitor an ordinary container is watched by. Required to run a build at all:
@@ -196,10 +214,17 @@ class WorkerSchedulerRequestProcessor:
 
     _background: dict[str, _BackgroundExecution] = field(default_factory=dict, init=False)
     _deliveries: dict[str, _Delivery] = field(default_factory=dict, init=False)
+    _pending_image_build_results: dict[str, _PendingImageBuildResult] = field(
+        default_factory=dict,
+        init=False,
+    )
     _delivery_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def run_once(self) -> WorkerSchedulerRequestResult:
         self._retry_acknowledgements()
+        reported = self._retry_image_build_result()
+        if reported is not None:
+            return reported
         completed = self._pop_completed_background()
         if completed is not None:
             return completed
@@ -247,7 +272,10 @@ class WorkerSchedulerRequestProcessor:
             return self._drop_request(request, delivery)
 
         if is_image_build_scheduler_request(request):
-            return self._release_capacity(request, self._execute_image_build_request(request))
+            result = self._execute_image_build_request(request)
+            if result.image_build_report_pending:
+                return result
+            return self._release_capacity(request, result)
 
         try:
             context = container_execution_context_from_scheduler_request(
@@ -582,8 +610,9 @@ class WorkerSchedulerRequestProcessor:
         request: SchedulerWorkerRequest,
     ) -> WorkerSchedulerRequestResult:
         image_builds = self.image_builds
+        image_build_results = self.image_build_results
         usage_recorder = self.usage_recorder
-        if image_builds is None or usage_recorder is None:
+        if image_builds is None or image_build_results is None or usage_recorder is None:
             return WorkerSchedulerRequestResult(
                 worker_id=self.worker_id,
                 status=WorkerSchedulerRequestStatus.Error,
@@ -593,6 +622,8 @@ class WorkerSchedulerRequestProcessor:
                 error_message=(
                     "image build executor is not configured"
                     if image_builds is None
+                    else "image build result reporter is not configured"
+                    if image_build_results is None
                     else "image build usage recorder is not configured"
                 ),
             )
@@ -610,18 +641,20 @@ class WorkerSchedulerRequestProcessor:
                 image_builds,
                 usage_recorder,
             )
-            self.containers.set_exit_code(
-                request.container_id,
-                0 if image_build.ok else 1,
-                termination_reason=StopContainerReason.Unknown,
-            )
-            self.containers.update_container_status(
-                request.container_id,
-                SchedulerContainerStatus.Complete
-                if image_build.ok
-                else SchedulerContainerStatus.Failed,
-                ttl_seconds=DEFAULT_CONTAINER_STATE_TTL_SECONDS,
-            )
+            try:
+                image_build_results.report_image_build_result(request, image_build)
+            except Exception as exc:
+                self._defer_image_build_result(request, image_build)
+                return WorkerSchedulerRequestResult(
+                    worker_id=self.worker_id,
+                    status=WorkerSchedulerRequestStatus.Error,
+                    action=WorkerSchedulerRequestAction.Execute,
+                    container_id=request.container_id,
+                    request=request,
+                    image_build=image_build,
+                    image_build_report_pending=True,
+                    error_message=f"image build result report failed: {type(exc).__name__}: {exc}",
+                )
         except Exception as exc:  # pragma: no cover - defensive owner boundary
             try:
                 self.containers.set_exit_code(
@@ -661,6 +694,64 @@ class WorkerSchedulerRequestProcessor:
             image_build=image_build,
             error_message=image_build.error_message,
         )
+
+    def _defer_image_build_result(
+        self,
+        request: SchedulerWorkerRequest,
+        result: WorkerImageBuildExecutionResult,
+    ) -> None:
+        self._pending_image_build_results[request.container_id] = _PendingImageBuildResult(
+            request=request,
+            result=result,
+            attempts=1,
+            report_after=monotonic() + WORKER_REQUEST_ACKNOWLEDGEMENT_BACKOFF_SECONDS,
+        )
+
+    def _retry_image_build_result(self) -> WorkerSchedulerRequestResult | None:
+        reporter = self.image_build_results
+        if reporter is None:
+            return None
+        now = monotonic()
+        pending = next(
+            (
+                item
+                for container_id, item in sorted(self._pending_image_build_results.items())
+                if item.report_after <= now
+            ),
+            None,
+        )
+        if pending is None:
+            return None
+        try:
+            reporter.report_image_build_result(pending.request, pending.result)
+        except Exception as exc:
+            pending.attempts += 1
+            pending.report_after = now + _acknowledgement_backoff(pending.attempts)
+            return WorkerSchedulerRequestResult(
+                worker_id=self.worker_id,
+                status=WorkerSchedulerRequestStatus.Error,
+                action=WorkerSchedulerRequestAction.Execute,
+                container_id=pending.request.container_id,
+                request=pending.request,
+                image_build=pending.result,
+                image_build_report_pending=True,
+                error_message=f"image build result report failed: {type(exc).__name__}: {exc}",
+            )
+        del self._pending_image_build_results[pending.request.container_id]
+        result = WorkerSchedulerRequestResult(
+            worker_id=self.worker_id,
+            status=(
+                WorkerSchedulerRequestStatus.Executed
+                if pending.result.ok
+                else WorkerSchedulerRequestStatus.Error
+            ),
+            action=WorkerSchedulerRequestAction.Execute,
+            container_id=pending.request.container_id,
+            request=pending.request,
+            image_build=pending.result,
+            error_message=pending.result.error_message,
+        )
+        return self._release_capacity(pending.request, result)
 
     def _metered_image_build(
         self,

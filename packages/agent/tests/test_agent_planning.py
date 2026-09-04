@@ -20,7 +20,7 @@ from agent.operations import (
     select_agent_gpu_devices,
     split_csv,
 )
-from shared.compute_enrollment import PreflightSeverity
+from shared.compute_enrollment import AgentWorkerSlotStatus, PreflightSeverity
 from shared.compute_policy import MachinePool
 from shared.gpu import normalize_gpu_type
 from shared.routing import BackendRouteTransport
@@ -148,12 +148,20 @@ def test_worker_slot_equality_and_reconciliation() -> None:
     assert same_worker_slot(active, unchanged)
     assert not same_worker_slot(active, changed)
 
+    image_changed = active.model_copy(update={"worker_image": "worker:new"})
+    prepare_plan = plan_worker_slot_reconciliation([image_changed], [active])
+    assert prepare_plan.actions[0].action is WorkerSlotAction.Prepare
+
     plan = plan_worker_slot_reconciliation([changed, new_slot], [active])
     assert [(item.worker_id, item.action) for item in plan.actions] == [
         ("worker-1", WorkerSlotAction.Restart),
         ("worker-2", WorkerSlotAction.Start),
     ]
     assert plan.changed
+
+    image_changed = image_changed.model_copy(update={"status": AgentWorkerSlotStatus.Pending})
+    switch_plan = plan_worker_slot_reconciliation([image_changed], [active])
+    assert switch_plan.actions[0].action is WorkerSlotAction.Restart
 
     stop_plan = plan_worker_slot_reconciliation([], [active])
     assert stop_plan.actions[0].action is WorkerSlotAction.Stop

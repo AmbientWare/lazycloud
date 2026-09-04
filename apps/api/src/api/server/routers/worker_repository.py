@@ -84,6 +84,8 @@ from worker.repository_payloads import (
     RemoveNetworkLockRequest,
     RemoveNetworkLockResponse,
     RemoveWorkerResponse,
+    ReportImageBuildResultRequest,
+    ReportImageBuildResultResponse,
     ResolveSourceCacheCleanupRequest,
     ResolveSourceCacheCleanupResponse,
     SaveCheckpointStateRequest,
@@ -595,6 +597,19 @@ def prepare_image_build_context_download(
     principal: WorkerPrincipal,
 ) -> PrepareImageBuildContextDownloadResponse:
     return service.prepare_image_build_context_download(request, principal=principal)
+
+
+@router.post(
+    "/worker-repository/report-image-build-result",
+    response_model=ReportImageBuildResultResponse,
+)
+def report_image_build_result(
+    request: ReportImageBuildResultRequest,
+    service: WorkerRepo,
+    principal: WorkerPrincipal,
+) -> ReportImageBuildResultResponse:
+    _require_worker_subject(principal, request.worker_id, action="image build result")
+    return service.report_image_build_result(request, principal=principal)
 
 
 @router.post(

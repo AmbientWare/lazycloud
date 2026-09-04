@@ -38,6 +38,7 @@ def run_api_server(
         port=port,
         log_level=log_level,
         workers=workers,
+        timeout_graceful_shutdown=20,
     )
 
 

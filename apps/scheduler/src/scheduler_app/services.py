@@ -246,7 +246,6 @@ class SchedulerAppServices:
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
                 agent_binary_url=capacity.aws_capacity.agent_binary_url,
-                worker_image_digest=capacity.aws_capacity.worker_image_digest,
             )
             if provider_resolver is not None
             else None

@@ -11,6 +11,7 @@ from shared.http.images import (
     VerifyImageBuildResponse,
 )
 from shared.http_transport import HttpChannel
+from shared.transport_retry import TRANSIENT_TRANSPORT_ERRORS, TransientRetry
 
 from lazycloud.control import workspace_path
 
@@ -61,10 +62,38 @@ class ImageControlClient:
         )
 
     def build_image(self, request: BuildImageRequest) -> Iterator[BuildImageResponse]:
-        for item in self.channel.stream_post(
-            self._scoped("/api/v1/images/build"), request.model_dump(mode="json")
-        ):
-            yield BuildImageResponse.model_validate(item)
+        retry = TransientRetry()
+        payload = request.model_dump(mode="json")
+        seen: set[tuple[str, str, str, bool, bool, str, bool, str, str, str]] = set()
+        while True:
+            try:
+                for item in self.channel.stream_post(
+                    self._scoped("/api/v1/images/build"),
+                    payload,
+                ):
+                    response = BuildImageResponse.model_validate(item)
+                    key = (
+                        response.image_id,
+                        response.build_id,
+                        response.msg,
+                        response.done,
+                        response.success,
+                        response.python_version,
+                        response.warning,
+                        response.status.value,
+                        response.phase.value,
+                        response.error,
+                    )
+                    if key not in seen:
+                        seen.add(key)
+                        retry.reset()
+                        yield response
+                    if response.done:
+                        return
+            except TRANSIENT_TRANSPORT_ERRORS as exc:
+                retry.backoff(exc)
+            else:
+                retry.backoff(ConnectionError("image build stream closed by control plane"))
 
 
 __all__ = [

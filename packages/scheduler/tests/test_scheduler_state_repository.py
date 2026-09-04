@@ -937,6 +937,45 @@ async def test_expired_worker_requeues_delivered_requests_but_not_ones_it_acted_
     assert requeued.retry_count == 1
 
 
+def test_worker_rollout_slots_bound_parallel_drains_and_fence_release(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    repo = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    owner_id = "11111111-1111-4111-8111-111111111111"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    assert repo.claim_worker_rollout_slot(
+        owner_id,
+        "worker-1",
+        "revision-a",
+        max_unavailable=2,
+        now=now,
+    )
+    assert repo.claim_worker_rollout_slot(
+        owner_id,
+        "worker-2",
+        "revision-a",
+        max_unavailable=2,
+        now=now,
+    )
+    assert not repo.claim_worker_rollout_slot(
+        owner_id,
+        "worker-3",
+        "revision-a",
+        max_unavailable=2,
+        now=now,
+    )
+    assert not repo.release_worker_rollout_slot(owner_id, "worker-1", "revision-b")
+    assert repo.release_worker_rollout_slot(owner_id, "worker-1", "revision-a")
+    assert repo.claim_worker_rollout_slot(
+        owner_id,
+        "worker-3",
+        "revision-a",
+        max_unavailable=2,
+        now=now,
+    )
+
+
 @pytest.mark.anyio
 async def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pull_locks(
     real_redis_actors: RealRedisActors,

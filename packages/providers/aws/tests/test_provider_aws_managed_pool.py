@@ -288,7 +288,6 @@ def _spec() -> AwsManagedPoolSpec:
                 f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
                 "lazycloud-agent-linux-amd64"
             ),
-            worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
         ),
     )
 
@@ -337,7 +336,8 @@ def test_managed_pool_ensure_is_idempotent_and_launches_into_the_stack_network()
     assert isinstance(encoded_user_data, str)
     user_data = base64.b64decode(encoded_user_data).decode()
     assert f"AGENT_SHA256={'a' * 64}" in user_data
-    assert f"WORKER_IMAGE_DIGEST=registry.example.com/worker@sha256:{'b' * 64}" in user_data
+    assert "WORKER_IMAGE_DIGEST" not in user_data
+    assert "--worker-image" not in user_data
     assert "ENROLLMENT_REQUEST_ID=12345678-1234-4123-8123-123456789abc" in user_data
     assert "X-aws-ec2-metadata-token" in user_data
     assert "--provider-instance-identity imds-v2" in user_data
@@ -415,7 +415,6 @@ def _pool_request(provider_ref: str) -> ProviderUnitRequest:
                 f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
                 "lazycloud-agent-linux-amd64"
             ),
-            worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
         ),
         provider_state=ComputeUnitProviderState(),
     )
@@ -431,7 +430,6 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
             "us-east-1": AwsManagedPoolBinaries(
                 agent_version="0.1.0",
                 agent_sha256="a" * 64,
-                worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
                 cpu_ami_id="ami-0123456789abcdef0",
             )
         },
@@ -447,11 +445,11 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
         desired_machines=2,
         max_machines=3,
     )
-
     assert created.desired_machines == 1
     assert updated.desired_machines == 2
     assert autoscaling.create_count == 1
     assert autoscaling.update_count == 1
+    assert sorted(ec2.launch_versions) == [1]
     assert autoscaling.vpc_zone_identifier == ",".join(_SUBNET_IDS)
     assert all(count == 1 for count in ec2.create_counts.values())
 
@@ -542,7 +540,6 @@ def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
             "us-east-1": AwsManagedPoolBinaries(
                 agent_version="0.1.0",
                 agent_sha256="a" * 64,
-                worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
                 cpu_ami_id="ami-0123456789abcdef0",
             )
         },
@@ -569,7 +566,6 @@ def test_pooled_provider_does_not_offer_unpriced_instance_types() -> None:
             "us-east-1": AwsManagedPoolBinaries(
                 agent_version="0.1.0",
                 agent_sha256="a" * 64,
-                worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
                 cpu_ami_id="ami-0123456789abcdef0",
                 gpu_ami_id="ami-1234567890abcdef0",
             )
@@ -587,7 +583,7 @@ def test_pooled_provider_does_not_offer_unpriced_instance_types() -> None:
     assert offers[0].hourly_cost_micros == 340_000
 
 
-def test_managed_pool_artifact_change_versions_template_and_updates_group() -> None:
+def test_managed_pool_agent_artifact_change_versions_template_and_updates_group() -> None:
     ec2 = _Ec2()
     autoscaling = _AutoScaling()
     provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
@@ -599,7 +595,6 @@ def test_managed_pool_artifact_change_versions_template_and_updates_group() -> N
                 update={
                     "agent_version": "0.2.0",
                     "agent_sha256": "c" * 64,
-                    "worker_image_digest": (f"registry.example.com/worker@sha256:{'d' * 64}"),
                 }
             )
         }
@@ -622,7 +617,6 @@ def test_managed_pool_artifact_change_versions_template_and_updates_group() -> N
     assert isinstance(encoded_user_data, str)
     user_data = base64.b64decode(encoded_user_data).decode()
     assert f"AGENT_SHA256={'c' * 64}" in user_data
-    assert f"WORKER_IMAGE_DIGEST=registry.example.com/worker@sha256:{'d' * 64}" in user_data
 
 
 def test_managed_pool_delete_converges_after_asg_instance_cleanup() -> None:

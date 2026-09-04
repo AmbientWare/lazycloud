@@ -150,6 +150,15 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     min_machines: int = Field(default=0, ge=0)
     max_machines: int = Field(default=0, ge=0)
     observed_machines: int = Field(default=0, ge=0)
+    replacement_machine_id: str = Field(default="", max_length=160)
+    """Superseded machine paired with one provider-side surge.
+
+    The surge is operational capacity and is deliberately not included in
+    ``desired_machines``. Keeping the pair durable lets a restarted controller
+    finish one replacement without interpreting ordinary desired capacity as
+    permission to shrink the pool.
+    """
+    replacement_template_version: str = Field(default="", max_length=160)
     generation: int = Field(default=1, ge=1)
     phase: ComputeUnitPhase = ComputeUnitPhase.Ready
     provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)

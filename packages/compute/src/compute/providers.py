@@ -45,7 +45,6 @@ class ProviderUnitBootstrap(ContractModel):
     agent_version: str
     agent_sha256: str
     agent_binary_url: str
-    worker_image_digest: str
 
     @field_validator("control_plane_url")
     @classmethod

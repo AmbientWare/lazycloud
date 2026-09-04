@@ -47,7 +47,6 @@ def _spec() -> AwsManagedPoolSpec:
             agent_version="0.1.0",
             agent_sha256=_AGENT_SHA256,
             agent_binary_url=_AGENT_BINARY_URL,
-            worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
         ),
     )
 

@@ -21,8 +21,16 @@ class ComputeMachineEnrollmentStatus(StringEnum):
 
 class AgentCapacityState(StringEnum):
     Available = "available"
+    Draining = "draining"
     Preempting = "preempting"
     Cordoned = "cordoned"
+
+
+class AgentWorkerSlotStatus(StringEnum):
+    Pending = "pending"
+    Active = "active"
+    Draining = "draining"
+    Deleted = "deleted"
 
 
 class PrivateNetworkEnrollmentPhase(StringEnum):
@@ -143,6 +151,7 @@ class ComputePreflightCheck(ContractModel):
 
 __all__ = [
     "AgentCapacityState",
+    "AgentWorkerSlotStatus",
     "ComputeCredentialStatus",
     "ComputeMachineEnrollmentStatus",
     "ComputePreflightCheck",
