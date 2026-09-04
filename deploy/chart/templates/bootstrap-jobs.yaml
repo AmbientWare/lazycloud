@@ -40,14 +40,14 @@ kind: Job
 metadata:
   name: database-bootstrap
   annotations:
-    # A PreSync hook, so migrations run to completion before anything that reads
-    # the schema is updated. In a wave alone the workloads would be applied in
-    # the same sync and race the migration; as a hook, Argo runs this and waits,
-    # and a failure stops the sync with the running deployment untouched.
-    argocd.argoproj.io/hook: PreSync
-    # The Job is deleted before the next run rather than left behind, because a
-    # Job's pod template is immutable and the image tag moves with every commit.
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    # A wave orders this, not a hook. Every PreSync hook runs ahead of every
+    # normal wave, the ExternalSecret among them, so a hook here asks for secret
+    # keys the Secret does not carry until wave -4 and the sync wedges on a
+    # container that cannot be created. Adding a credential is what triggers it,
+    # which is the moment the schema change needing one is being deployed.
+    # The wave already gives migrations the ordering they need: Argo holds -3
+    # until this Job completes, so nothing reading the schema is applied while
+    # it runs, and a failure stops the sync with the workloads untouched.
     argocd.argoproj.io/sync-wave: "-3"
     # Deleted and recreated rather than patched or replaced in place. A Job's
     # pod template is immutable, so the image tag moving with the commit makes
