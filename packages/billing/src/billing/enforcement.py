@@ -143,7 +143,10 @@ class BillingEnforcementService:
         provider and the delivery that opens the next one here.
         """
 
-        if account.payment_method_attached_at is not None:
+        if (
+            account.payment_method_attached_at is not None
+            or account.complimentary_since is not None
+        ):
             return False
         with self.database.session() as session:
             spent = BillingAllowanceRepository(session).current_period(

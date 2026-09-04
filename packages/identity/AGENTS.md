@@ -46,6 +46,15 @@ admin token kind and an account whose role says so confer it, and every caller
 asks there so the answer cannot differ between the authorization decision and a
 route that branches on it.
 
+The platform always keeps at least one active administrator. `UserService`
+refuses to demote or disable the last one, deciding from the set of
+administrator rows it locks rather than from a count read a moment earlier, so
+two writes each removing the other of the last two serialize and the second
+sees the first. Disabling counts as demoting because `platform_role` reads a
+disabled administrator as a member. The offline bootstrap writes through the
+repository and is deliberately outside the rule, because it is how an
+installation that has lost every administrator gets one back.
+
 ## Accounts and membership
 
 A workspace has exactly one member with the `owner` role, held by a partial

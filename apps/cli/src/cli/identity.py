@@ -17,10 +17,11 @@ from lazycloud.config import (
 )
 from lazycloud.json_contracts import validate_json_object
 from pydantic import JsonValue
+from shared.http.billing import BillingComplimentaryRequest
 from shared.http.system import TokenCreateRequest
-from shared.http.users import UserCreateRequest, UserRoleRequest
+from shared.http.users import UserCreateRequest, UserRoleRequest, UserStatusRequest
 from shared.http_transport import HttpChannel
-from shared.identity import PlatformRole
+from shared.identity import PlatformRole, UserStatus
 
 from cli.api_client import AdminApiClient, admin_api_client
 
@@ -145,21 +146,96 @@ def user_set_role(
     )
 
 
+def user_set_status(
+    ctx: typer.Context,
+    user_id: str,
+    active: Annotated[
+        bool,
+        typer.Option(
+            "--active/--disabled",
+            help="Disabling revokes every credential the account holds.",
+        ),
+    ] = True,
+) -> None:
+    """Enable or disable an existing account."""
+    response = admin_api_client().set_user_status(
+        user_id,
+        UserStatusRequest(status=UserStatus.Active if active else UserStatus.Disabled),
+    )
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Account status updated",
+        fields={
+            "account": response.display_name or response.github_login or response.id,
+            "status": response.status.value,
+        },
+        tone="success",
+    )
+
+
+def user_set_complimentary(
+    ctx: typer.Context,
+    user_id: str,
+    grant: Annotated[
+        bool,
+        typer.Option(
+            "--grant/--revoke",
+            help=(
+                "Waive the account's bill: Team-plan limits, no card needed, usage "
+                "tracked but never invoiced. Revoking returns it to its subscription."
+            ),
+        ),
+    ] = True,
+) -> None:
+    """Waive an account's bill, or stop waiving it."""
+    response = admin_api_client().set_billing_complimentary(
+        user_id, BillingComplimentaryRequest(complimentary=grant)
+    )
+    emit_result(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        title="Account billing updated",
+        fields={
+            "account": response.user.display_name or response.user.github_login or response.user.id,
+            "complimentary": (
+                timestamp(response.complimentary_since) if response.complimentary_since else "no"
+            ),
+            "plan": response.plan.value if response.plan else "none",
+        },
+        tone="success",
+    )
+
+
 def user_list(ctx: typer.Context) -> None:
-    users = admin_api_client().list_users().data
+    """Every account with its role, standing, and what it cost over the last month."""
+    client = admin_api_client()
+    rows: list[list[str]] = []
+    payload: list[JsonValue] = []
+    cursor = ""
+    while True:
+        page = client.list_billing_accounts(cursor=cursor)
+        for item in page.data:
+            payload.append(item.model_dump(mode="json"))
+            rows.append(
+                [
+                    item.user.display_name or item.user.github_login or item.user.id,
+                    item.user.role.value,
+                    item.user.status.value,
+                    "complimentary"
+                    if item.complimentary_since
+                    else (item.plan.value if item.plan else "none"),
+                    f"{item.recent_cost_nanos / 1_000_000_000:.2f}",
+                    item.user.id,
+                ]
+            )
+        cursor = page.next
+        if not cursor:
+            break
     if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in users])
+        print_payload(ctx, payload)
         return
-    rows = [
-        [
-            item.display_name or item.github_login or item.id,
-            item.role.value,
-            item.status.value,
-            item.id,
-        ]
-        for item in users
-    ]
-    console.print(table("Accounts", ["name", "role", "status", "id"], rows))
+    console.print(table("Accounts", ["name", "role", "status", "billing", "30d usd", "id"], rows))
 
 
 def token_create(
@@ -250,3 +326,5 @@ def token_revoke(ctx: typer.Context, token_id_or_name: str) -> None:
 user_app.command("create")(user_create)
 user_app.command("list")(user_list)
 user_app.command("set-role")(user_set_role)
+user_app.command("set-status")(user_set_status)
+user_app.command("set-complimentary")(user_set_complimentary)

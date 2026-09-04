@@ -33,7 +33,7 @@ class BillingMeterOutboxTable(TimestampMixin, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("identifier", name="uq_billing_meter_outbox_identifier"),
         CheckConstraint(
-            "status IN ('pending', 'sending', 'sent', 'abandoned')",
+            "status IN ('pending', 'sending', 'sent', 'abandoned', 'waived')",
             name="ck_billing_meter_outbox_status",
         ),
         CheckConstraint("value_nanos >= 0", name="ck_billing_meter_outbox_value"),

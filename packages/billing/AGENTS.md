@@ -198,6 +198,24 @@ admission decision, and the sweep.
   and a meter that reach no invoice, which is unbounded compute nobody is charged
   for. Provisioning at sign-in is what makes that state unreachable; the refusal
   is what makes it a fact rather than an expectation.
+- An administrator can waive an account's bill, and the waiver is a column on
+  the account rather than a plan. A plan is something the provider prices and the
+  rate card publishes; the rate card refuses a plan id it has no price for, and
+  the account row's check constraint refuses a plan value it does not know. A
+  waived account is held to the Team plan's terms as if a card were on file, so
+  the concurrency ceiling still bounds what the platform is exposed to, and its
+  subscription is left untouched so withdrawing the waiver puts it back on that
+  subscription with nothing to provision. The waiver is never read off the
+  platform role. Who pays is a billing fact and who administers is an
+  authorization fact, and a demotion must not switch somebody's bill on. Usage
+  is still priced into the ledger so the account can see it, and the meter
+  event that would carry it to the provider is written as `waived` rather than
+  left out. Every
+  priced record then owes exactly one outbox row whatever the account's standing
+  was, and the row is what tells reconciliation afterwards why that window
+  reached no invoice, since the waiver itself may be gone by then. Waived rows
+  are subtracted before the invoice comparison like abandoned ones and are no
+  divergence, and like abandoned ones they are never pruned.
 - An account with no card on file is the case that reasoning does not cover, and
   it is the one place an amount decides. There is no card to chase and no invoice
   that will ever be paid, so what such an account spends past its allowance is not
