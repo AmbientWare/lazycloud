@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+import pytest
 from api.server.services import ApiServices
 from compute.aws_connections import (
     AwsAccountConnectionService,
@@ -12,6 +13,7 @@ from compute.aws_connections import (
     AwsAuthorizationCleanupResult,
 )
 from compute.bucket_access import AwsConnectionBucketAccessReconciler
+from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.policy import WorkspaceComputePolicyService
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
@@ -31,8 +33,12 @@ from shared.aws_connections import (
     AwsManagedAuthorizationReference,
 )
 from shared.compute_policy import MachinePool
-from shared.errors import UpstreamUnavailableError
-from shared.http.aws_connections import AwsConnectionCreateRequest, AwsConnectionReconnectRequest
+from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.http.aws_connections import (
+    AwsConnectionCreateRequest,
+    AwsConnectionReconnectRequest,
+    AwsFleetEnsureRequest,
+)
 from shared.timestamps import utc_now
 from tests.service_fixtures import owned_workspace, workspace_owner_user_id
 
@@ -90,6 +96,7 @@ class _Planner:
             authorization_url=(
                 f"https://console.aws.amazon.com/cloudformation/g{generation}" if managed else None
             ),
+            network=network,
             node_role_arn=node_role_arn or f"arn:aws:iam::{account_id}:role/node",
             node_instance_profile_arn=node_instance_profile_arn
             or f"arn:aws:iam::{account_id}:instance-profile/node",
@@ -507,3 +514,72 @@ def test_a_workspace_without_its_own_account_still_reaches_the_shared_fleet(
         policies.connection_for_machine_pool(workspace=customer.name, pool=MachinePool("nobody"))
         is None
     )
+
+
+def test_fleet_ensure_preserves_authorization_and_reconciles_limits(
+    isolated_services: ApiServices,
+) -> None:
+    service = _service(isolated_services)
+    service.available_catalog = (
+        ComputeCatalogRegion(
+            region="us-east-1",
+            instances=(
+                ComputeCatalogInstance(
+                    instance_type="m7i.large", kind="cpu", cpu_millicores=2000, memory_mb=8192
+                ),
+            ),
+        ),
+    )
+    owner = _owner(isolated_services)
+    request = AwsFleetEnsureRequest(
+        account_id=ACCOUNT_ID,
+        role_arn=f"arn:aws:iam::{ACCOUNT_ID}:role/fleet",
+        external_id="fleet-ensure-test-external-identifier",
+        network=AwsAccountNetwork(
+            vpc_id="vpc-01234567",
+            subnet_ids=("subnet-01234567", "subnet-89abcdef"),
+            security_group_id="sg-01234567",
+        ),
+        max_cpu_instances=500,
+        max_gpu_instances=100,
+    )
+    created = service.ensure_fleet(request, user_id=owner)
+    assert service.ensure_fleet(request, user_id=owner) == created
+    configured = service.ensure_fleet(
+        request.model_copy(update={"max_cpu_instances": 200, "max_gpu_instances": 0}),
+        user_id=owner,
+    )
+    assert configured.compute.max_cpu_instances == 200
+    assert configured.compute.max_gpu_instances == 0
+    assert configured.compute.revision == created.compute.revision + 1
+    assert configured.pending_authorization == created.pending_authorization
+    assert configured.external_id == created.external_id
+
+
+def test_fleet_ensure_rejects_changed_infrastructure_without_changing_policy(
+    isolated_services: ApiServices,
+) -> None:
+    service = _service(isolated_services)
+    owner = _owner(isolated_services)
+    request = AwsFleetEnsureRequest(
+        account_id=ACCOUNT_ID,
+        role_arn=f"arn:aws:iam::{ACCOUNT_ID}:role/fleet",
+        external_id="fleet-ensure-test-external-identifier",
+        network=AwsAccountNetwork(
+            vpc_id="vpc-01234567",
+            subnet_ids=("subnet-01234567", "subnet-89abcdef"),
+            security_group_id="sg-01234567",
+        ),
+        max_cpu_instances=500,
+        max_gpu_instances=100,
+    )
+    created = service.ensure_fleet(request, user_id=owner)
+    changed = request.model_copy(
+        update={
+            "network": request.network.model_copy(update={"vpc_id": "vpc-ffffffff"}),
+            "max_cpu_instances": 200,
+        }
+    )
+    with pytest.raises(ConflictError, match="infrastructure"):
+        service.ensure_fleet(changed, user_id=owner)
+    assert service.get(user_id=owner) == created

@@ -38,6 +38,7 @@ spec:
     namespace: lazycloud-prod
   syncPolicy:
     automated:
+      enabled: true
       prune: true
       selfHeal: true
     syncOptions:

@@ -167,48 +167,6 @@ variable "fleet_cidr" {
   default     = "10.84.0.0/16"
 }
 
-variable "fleet_max_cpu_instances" {
-  description = "Maximum CPU instances the shared fleet may run across all CPU pools."
-  type        = number
-  default     = 500
-
-  validation {
-    condition     = var.fleet_max_cpu_instances >= 1 && floor(var.fleet_max_cpu_instances) == var.fleet_max_cpu_instances
-    error_message = "fleet_max_cpu_instances must be a positive integer."
-  }
-}
-
-variable "fleet_max_gpu_instances" {
-  description = "Maximum GPU instances the shared fleet may run across all GPU pools."
-  type        = number
-  default     = 100
-
-  validation {
-    condition     = var.fleet_max_gpu_instances >= 1 && floor(var.fleet_max_gpu_instances) == var.fleet_max_gpu_instances
-    error_message = "fleet_max_gpu_instances must be a positive integer."
-  }
-}
-
-variable "instance_hourly_micros" {
-  description = <<-EOT
-    Hourly price per instance type, in millionths of a dollar.
-
-    Empty by default, and that default is load-bearing. This is the one managed
-    capacity value a release cannot publish, so authoring it is what declares
-    that a deployment intends to run managed AWS capacity at all; supplying it
-    here for everyone would make the declaration meaningless and would demand a
-    release from deployments that have none. `terraform.tfvars.example` carries
-    a current us-east-1 map to paste in.
-
-    It is also the ranking `choose_offer` uses, so a wrong figure does not fail.
-    It silently changes which instance every workload lands on. Leave out any
-    type whose on-demand rate is not published rather than recording a zero:
-    zero wins every comparison.
-  EOT
-  type        = map(number)
-  default     = {}
-}
-
 variable "control_plane_service_accounts" {
   description = <<-EOT
     Service accounts permitted to assume the control plane's AWS identity.
@@ -217,8 +175,11 @@ variable "control_plane_service_accounts" {
     bucket and the connected-AWS control role trusts it, so "any pod in the
     namespace" is a larger grant than it looks.
   EOT
-  type        = list(string)
-  default     = ["control-plane", "scheduler"]
+  type = object({
+    controlPlane = string
+    scheduler    = string
+  })
+  default = { controlPlane = "control-plane", scheduler = "scheduler" }
 }
 
 variable "wireguard_bootstrap_service_account" {
@@ -237,16 +198,6 @@ variable "secrets_reader_service_account" {
   default     = "secrets-reader"
 }
 
-variable "wireguard_public_endpoint" {
-  description = "Stable DNS name or address agents use for the WireGuard UDP gateway, including port."
-  type        = string
-
-  validation {
-    condition     = can(regex("^[^:[:space:]]+:[0-9]{1,5}$", var.wireguard_public_endpoint))
-    error_message = "wireguard_public_endpoint must be a host and port, for example gateway.example.com:51820."
-  }
-}
-
 variable "redis_node_type" {
   description = "ElastiCache node type for the coordination Redis."
   type        = string
@@ -259,21 +210,12 @@ variable "redis_engine_version" {
   default     = "7.1"
 }
 
-
-variable "stripe_account_id" {
-  description = <<-EOT
-    The payment-provider account this deployment publishes its catalog into.
-
-    Named here rather than inferred from the key, because a key does not say
-    which account it belongs to and the catalog publisher checks the two against
-    each other before it writes. A key swapped for one from another account is
-    then a refusal instead of a set of plans and prices appearing somewhere
-    nobody meant.
-  EOT
-  type        = string
-
+variable "database_max_connections" {
+  description = "PostgreSQL server connection ceiling, exported for Helm pool budgeting."
+  type        = number
+  default     = 40
   validation {
-    condition     = startswith(var.stripe_account_id, "acct_")
-    error_message = "The payment-provider account id starts with acct_."
+    condition     = var.database_max_connections > 0 && floor(var.database_max_connections) == var.database_max_connections
+    error_message = "database_max_connections must be a positive integer."
   }
 }

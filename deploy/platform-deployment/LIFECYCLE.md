@@ -84,15 +84,12 @@ terraform -chdir=deploy/platform-deployment apply \
   -var="deployment=$DEPLOYMENT" \
   -var="github_environment=prod" \
   -var="planetscale_organization=<org>" \
-  -var="state_bucket=<state-bucket>" \
-  -var="wireguard_public_endpoint=gateway.example.com:51820"
+  -var="state_bucket=<state-bucket>"
 ```
 
-`terraform.tfvars` carries the instance price map and the payment-provider
-account id. Without the price map managed capacity stays off, and the symptom is
-pools that never launch rather than anything that fails. Without the account id
-the apply refuses, because the catalog publisher checks the credential against it
-and has nothing to check.
+Helm `environments/<environment>.yaml` carries the instance prices, Stripe
+account and WireGuard endpoint. The chart owns fleet ceilings and secret bindings.
+Use the existing prod environment as the shape, with the new environment's values.
 
 The module reads the cluster from `platform-core/lazycloud.tfstate` and refuses
 a deployment whose region differs from the cluster's.
@@ -142,7 +139,8 @@ render rather than by a pod that will not start.
 own when it does not, recording a different request id for each. Let the Job run
 without this and the credential exists only inside that pod, nothing afterwards
 has a bearer token, and supplying the value later is refused as an already
-completed bootstrap. The way back is resetting the schema.
+completed bootstrap. Use offline administrator recovery on a persistent
+installation; do not reset its schema.
 
 ### 5. The GitHub environment
 
@@ -154,7 +152,8 @@ the environment, not on the repository:
 ```sh
 gh secret set AWS_DEPLOY_ROLE_ARN --env prod \
   --body "$(terraform -chdir=deploy/platform-deployment output -raw deploy_role_arn)"
-gh secret set TF_STATE_BUCKET --body '<state-bucket>'
+gh variable set INFRASTRUCTURE_CONFIG_URI --env prod \
+  --body "$(terraform -chdir=deploy/platform-deployment output -raw infrastructure_config_uri)"
 ```
 
 Required reviewers on the `prod` environment are the approval gate for
@@ -239,7 +238,7 @@ Point the tunnel at the cluster once the control plane is Ready. `cloudflared`
 runs in the chart with more than one connector, so the tunnel is served by the
 cluster rather than by a host.
 
-Point the DNS name in `wireguard_public_endpoint` at the deployment's UDP load
+Point the DNS name in Helm `runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT` at the deployment's UDP load
 balancer on port 51820. This endpoint is separate from the Cloudflare HTTP
 tunnel. Confirm an enrolled agent and a platform peer report recent WireGuard
 handshakes before calling the private network ready.

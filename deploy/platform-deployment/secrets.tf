@@ -34,49 +34,6 @@ locals {
     LAZYCLOUD_FLEET_EXTERNAL_ID             = random_password.fleet_external_id.result
   }
 
-  # Named here so the runbook and the cluster agree on them. The document itself
-  # is written once by an operator; a value in this configuration is a value in
-  # the state file.
-  #
-  # This map is what the workloads are given, not what Secrets Manager holds. A
-  # value written to the document without a name here is never delivered, and
-  # nothing reports that: the process reads an unset variable and takes whatever
-  # branch it has for one. So adding a credential means editing this and running
-  # an apply, and the deploy that follows is what re-renders the ExternalSecret.
-  operator_variables = {
-    LAZYCLOUD_TOKEN                        = "Platform administrator bearer. Write it before the first sync: bootstrap adopts a configured credential and mints an unreachable one when it finds none."
-    LAZYCLOUD_GITHUB_CLIENT_ID             = "GitHub App client id for dashboard sign-in."
-    LAZYCLOUD_GITHUB_CLIENT_SECRET         = "GitHub App client secret."
-    LAZYCLOUD_CLOUDFLARE_API_TOKEN         = "Cloudflare token for custom hostnames. Zone SSL and Certificates, edit."
-    LAZYCLOUD_STRIPE_API_KEY               = "Stripe restricted key."
-    LAZYCLOUD_STRIPE_WEBHOOK_SECRET        = "Stripe webhook signing secret. Returned only at endpoint creation."
-    LAZYCLOUD_RESEND_API_KEY               = "Resend API key invitation mail is sent with, read by the scheduler."
-    LAZYCLOUD_RESEND_WEBHOOK_SECRET        = "Resend webhook signing secret. Returned only at endpoint creation."
-    LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID = "GitHub numeric user id that signs in as the first administrator. Empty leaves the bootstrap account reachable only by its token, and whoever signs in opens an ordinary member account instead."
-  }
-
-  # Which document each variable is read out of. Every workload gets these as
-  # environment, which is why the tunnel credential is not among them.
-  secret_environment = merge(
-    { for name in keys(local.operator_variables) : name => local.operator_secret },
-    {
-      LAZYCLOUD_DATABASE_URL           = local.platform_secret
-      LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY = local.platform_secret
-      LAZYCLOUD_CACHE_SERVICE_TOKEN    = local.platform_secret
-      # Both halves of this are the module's: the condition on the connection
-      # role's trust, and the value the registration presents. Declaring one
-      # without giving the other is a role that enforces an ID nothing sends.
-      LAZYCLOUD_FLEET_EXTERNAL_ID = local.platform_secret
-    },
-  )
-
-  # Materialised into the same Kubernetes Secret and mounted as a file by the one
-  # workload that reads it. `cloudflared` wants a credentials file rather than a
-  # value, and it has no business in the environment of workloads that never open
-  # it.
-  secret_files = {
-    LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS = local.platform_secret
-  }
 }
 
 resource "aws_secretsmanager_secret" "platform" {
@@ -94,11 +51,8 @@ resource "aws_secretsmanager_secret_version" "platform" {
 }
 
 resource "aws_secretsmanager_secret" "operator" {
-  name = local.operator_secret
-  description = format(
-    "Credentials from outside this deployment, as one JSON document. Keys: %s.",
-    join(", ", sort(keys(local.operator_variables))),
-  )
+  name        = local.operator_secret
+  description = "Operator-managed credentials. Property bindings are declared in the Helm chart."
 
   recovery_window_in_days = 0
 }

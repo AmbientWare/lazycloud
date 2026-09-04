@@ -105,8 +105,8 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
     region: str = Field(pattern=_REGION_PATTERN.pattern)
     instance_type: str
     ami_id: str = Field(pattern=_AMI_PATTERN.pattern)
-    desired_nodes: int = Field(ge=0, le=100)
-    max_nodes: int = Field(ge=1, le=100)
+    desired_nodes: int = Field(ge=0)
+    max_nodes: int = Field(ge=1)
     root_volume_gib: int = Field(ge=50, le=2048)
     node_instance_profile_arn: str
     vpc_id: str = Field(min_length=1)

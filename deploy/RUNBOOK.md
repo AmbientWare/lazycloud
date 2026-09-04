@@ -316,25 +316,21 @@ kubectl -n argocd patch application lazycloud-prod --type merge \
   -p '{"operation":{"sync":{"revision":"prod"}}}'
 ```
 
-`Deploy` on its own publishes no release. It reads the one the deployment already
-names from `s3://<deploy bucket>/current/release-manifest-url` and carries it
-forward, so shipping a code change does not take the fleet's managed capacity
-away. That file is written only by a run that published a release, and the deploy
-warns rather than proceeding quietly when there is none to read.
+Deploy reads the selected release from the deployment branch and carries it
+forward when no new release is requested. A missing release is an error before
+builds start. There is no mutable S3 release pointer.
 
 Images are built once per commit into repositories every deployment shares,
 so `Promote` finds every image already published and writes prod's values
 file. What crosses from staging is the image tag and the release URL; prod's
-tunnel, secrets and database are rendered from prod's own outputs.
+tunnel, secrets and database are rendered from prod's own infrastructure descriptor.
 
-Nothing here runs `helm`. A workflow that installs and a controller that
-reconciles are two opinions about what should be running, and they disagree where
-nobody is looking.
+CI runs Helm validation and rendering, but only Argo installs workloads.
 
-Expect a ship to replace every managed node. A new release moves each pool's
-launch template, and the scheduler drains the superseded machines onto it one at
-a time, surging a replacement before it cordons anything. Nothing is lost, but
-the fleet is briefly one node larger per pool.
+Worker-image releases use the in-place worker-agent rollout introduced in #134.
+Host AMI changes still require node replacement. Verify running workload survival
+and placement latency during a release; Kubernetes readiness alone does not prove
+either. Do not assume every image release should replace every managed node.
 
 Watching a deploy:
 
@@ -469,22 +465,15 @@ database.
 
 ### Adding an operator credential
 
-Writing a value to `lazycloud-prod/operator` is one of three steps and on its own
-does nothing. `local.operator_variables` in `deploy/platform-deployment` decides
-which names reach the workloads, the ExternalSecret is rendered from that list,
-and a deploy is what re-renders it. A value in the document with no name in the
-list is never delivered, and the process that wanted it reads an unset variable
-and takes whatever branch it has for one, silently.
+Add its property binding to `secrets.map` in the chart and add its name only to
+the consumers that need it under `environment`. Preserve the other properties
+when updating the operator-managed Secrets Manager document. Deploy the chart
+change. No Terraform apply is needed.
 
-So: add the name and its description to `operator_variables`, write the value
-with `aws secretsmanager put-secret-value`, run `terraform apply` so
-`secret_environment` carries it, then deploy. Confirm the pod can see it rather
-than assuming, because every layer here fails quietly:
-
-```sh
-kubectl -n lazycloud-prod get externalsecret -o jsonpath='{range .items[*].spec.data[*]}{.secretKey}{"\n"}{end}'
-kubectl -n lazycloud-prod exec statefulset/control-plane -c control-plane -- printenv LAZYCLOUD_<NAME>
-```
+Do not print credentials to verify delivery. Inspect the ExternalSecret condition
+and the container's key references, then exercise the credential's operation.
+For rotation, refresh the Secret and bump only the affected `secretRevisions`.
+See [configuration and pause procedures](CONFIGURATION.md).
 
 ### Schema changes
 
@@ -495,8 +484,8 @@ a revision fails on
 `test_a_model_changed_without_a_revision_is_caught_here`, which builds a
 database by running every revision and compares it to the metadata.
 
-Argo runs `lazycloud-admin database migrate` as a PreSync hook, so migrations
-finish before any workload that reads the schema is updated. A failed migration
+Argo runs `lazycloud-admin database migrate` as an ordered Sync-wave Job, after
+secret projection and before any workload that reads the schema is updated. A failed migration
 stops the sync with the running deployment untouched.
 
 A rollback to an image older than the schema is refused rather than migrated
