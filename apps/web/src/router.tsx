@@ -8,6 +8,7 @@ export function getRouter() {
   return createRouter({
     routeTree,
     scrollRestoration: true,
+    scrollToTopSelectors: [".marketing-site"],
     // Any route without an explicit boundary still degrades in place instead
     // of bubbling a render error to the document-level root boundary.
     defaultErrorComponent: RouteErrorFallback,

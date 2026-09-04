@@ -50,6 +50,10 @@
   margin-top: calc(-1 * var(--marketing-header-height));
 }
 
+.marketing-legal-hero {
+  padding-top: var(--marketing-header-height);
+}
+
 .marketing-hero {
   min-height: calc(680px + var(--marketing-header-height));
   padding-top: var(--marketing-header-height);
