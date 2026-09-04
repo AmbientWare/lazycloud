@@ -87,6 +87,8 @@ jobs:
             --set fleet.vpc_id=vpc-0 \
             --set "fleet.subnet_ids={subnet-a,subnet-b}" \
             --set fleet.security_group_id=sg-0 \
+            --set fleet.max_cpu_instances=500 \
+            --set fleet.max_gpu_instances=100 \
             >rendered.yaml
           test -s rendered.yaml
 

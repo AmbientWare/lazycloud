@@ -25,7 +25,6 @@ class PooledCapacityOwner(Protocol):
         requirements: ComputeResourceRequirements,
         region: str,
         desired_machines: int,
-        workspace_machine_limit: int,
         root_volume_gib: int,
         idle_timeout_seconds: int = 300,
         allowed_instance_types: tuple[str, ...] = (),
@@ -86,17 +85,11 @@ class ComputeCapacityPlacementService:
             return ComputeCapacityPlacementResult(pool=MachinePool(pool))
 
         configuration = connection.compute
-        machine_limit = (
-            configuration.max_gpu_instances
-            if request.requirements.gpu_count > 0
-            else configuration.max_cpu_instances
-        )
         self.compute.prepare_pooled_capacity(
             workspace=capacity_workspace,
             requirements=request.requirements,
             region=configuration.default_region,
             desired_machines=0,
-            workspace_machine_limit=machine_limit,
             root_volume_gib=configuration.root_volume_gib,
             idle_timeout_seconds=configuration.idle_timeout_seconds,
             allowed_instance_types=configuration.allowed_instance_types,

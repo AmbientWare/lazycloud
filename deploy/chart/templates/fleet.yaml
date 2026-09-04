@@ -78,7 +78,9 @@ spec:
                 {{- range .Values.fleet.subnet_ids }}
                 --subnet-id {{ . | quote }} \
                 {{- end }}
-                --security-group-id {{ required "fleet.security_group_id is required" .Values.fleet.security_group_id | quote }}
+                --security-group-id {{ required "fleet.security_group_id is required" .Values.fleet.security_group_id | quote }} \
+                --max-cpu {{ required "fleet.max_cpu_instances is required" .Values.fleet.max_cpu_instances }} \
+                --max-gpu {{ required "fleet.max_gpu_instances is required" .Values.fleet.max_gpu_instances }}
               lazycloud-admin --json cloud validate
           env:
             {{- include "lazycloud.env" . | nindent 12 }}

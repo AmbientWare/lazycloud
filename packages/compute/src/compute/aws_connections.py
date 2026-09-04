@@ -236,6 +236,10 @@ class AwsAccountConnectionService:
             node_role_arn=plan.node_role_arn,
             node_instance_profile_arn=plan.node_instance_profile_arn,
             network=plan.network,
+            compute=AwsAccountComputeConfiguration(
+                max_cpu_instances=request.max_cpu_instances,
+                max_gpu_instances=request.max_gpu_instances,
+            ),
             customer_action_url=plan.authorization_url,
             customer_action_label=("Continue in AWS" if plan.authorization_url else ""),
             next_reconcile_at=now,
@@ -1542,6 +1546,8 @@ class AwsAccountConnectionService:
             and pending is not None
             and pending.authorization_mode is mode
             and (request.role_arn is None or pending.role_arn == request.role_arn)
+            and existing.compute.max_cpu_instances == request.max_cpu_instances
+            and existing.compute.max_gpu_instances == request.max_gpu_instances
         )
 
 

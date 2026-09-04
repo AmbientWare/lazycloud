@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from pydantic import Field
-from shared.capacity import CapacityPoolSizingSnapshot
+from shared.capacity import CapacityOwnerKind, CapacityPoolSizingSnapshot
 from shared.compute_policy import (
     ComputeUnitRecord,
     MachinePool,
@@ -204,7 +204,8 @@ def plan_worker_pool_sizing(
             initial_target_reached=initial_target_reached,
             reason="worker-pool baseline and free headroom are satisfied",
         )
-    if current_units >= pool.max_machines:
+    provider_owns_ceiling = pool.capacity_owner_kind is CapacityOwnerKind.PooledProvider
+    if not provider_owns_ceiling and current_units >= pool.max_machines:
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.None_,
             capacity_owner_id=pool.capacity_owner_id,
@@ -233,7 +234,11 @@ def plan_worker_pool_sizing(
         capacity_owner_id=pool.capacity_owner_id,
         pool=pool.pool,
         current_units=current_units,
-        target_units=min(current_units + 1, pool.max_machines),
+        target_units=(
+            current_units + 1
+            if provider_owns_ceiling
+            else min(current_units + 1, pool.max_machines)
+        ),
         headroom=headroom,
         initial_target_reached=initial_target_reached,
         reason=(

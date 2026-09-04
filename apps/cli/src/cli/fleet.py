@@ -25,6 +25,7 @@ from lazycloud.cli.control import compute_client, workspace_client
 from lazycloud.json_contracts import validate_json_object
 from shared.aws_connections import AwsAccountConnectionPhase, AwsAccountNetwork
 from shared.contracts import ContractModel
+from shared.http.aws_connections import AwsComputeConfigurationUpdateRequest
 from shared.http.compute import UnitResponse
 from shared.http.errors import HttpApiError
 
@@ -54,6 +55,14 @@ def fleet_ensure(
             envvar="LAZYCLOUD_FLEET_EXTERNAL_ID",
         ),
     ],
+    max_cpu_instances: Annotated[
+        int,
+        typer.Option("--max-cpu", min=1, help="Shared-fleet CPU instance ceiling."),
+    ],
+    max_gpu_instances: Annotated[
+        int,
+        typer.Option("--max-gpu", min=1, help="Shared-fleet GPU instance ceiling."),
+    ],
 ) -> None:
     """Connect the platform's own account, or report the connection already there.
 
@@ -80,6 +89,21 @@ def fleet_ensure(
         # say which account was its own still describes itself
         # as a customer's, and its machines would serve nobody but us.
         adopted = client.adopt_fleet_account()
+        if (
+            adopted.compute.max_cpu_instances != max_cpu_instances
+            or adopted.compute.max_gpu_instances != max_gpu_instances
+        ):
+            adopted = client.update_compute_configuration(
+                AwsComputeConfigurationUpdateRequest(
+                    expected_revision=adopted.compute.revision,
+                    compute=adopted.compute.model_copy(
+                        update={
+                            "max_cpu_instances": max_cpu_instances,
+                            "max_gpu_instances": max_gpu_instances,
+                        }
+                    ),
+                )
+            )
         emit_result(
             ctx,
             payload=adopted.model_dump(mode="json"),
@@ -111,6 +135,8 @@ def fleet_ensure(
             subnet_ids=(subnet_id[0], subnet_id[1]),
             security_group_id=security_group_id,
         ),
+        max_cpu_instances=max_cpu_instances,
+        max_gpu_instances=max_gpu_instances,
         # This account is the platform's, so its machines are shared capacity that
         # serves every customer and bills to the fleet.
         platform_fleet=True,
