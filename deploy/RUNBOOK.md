@@ -467,6 +467,25 @@ after each deployment. Placement reads must stay proportional to current stubs
 and live containers, never to the number of tasks or containers retained in the
 database.
 
+### Adding an operator credential
+
+Writing a value to `lazycloud-prod/operator` is one of three steps and on its own
+does nothing. `local.operator_variables` in `deploy/platform-deployment` decides
+which names reach the workloads, the ExternalSecret is rendered from that list,
+and a deploy is what re-renders it. A value in the document with no name in the
+list is never delivered, and the process that wanted it reads an unset variable
+and takes whatever branch it has for one, silently.
+
+So: add the name and its description to `operator_variables`, write the value
+with `aws secretsmanager put-secret-value`, run `terraform apply` so
+`secret_environment` carries it, then deploy. Confirm the pod can see it rather
+than assuming, because every layer here fails quietly:
+
+```sh
+kubectl -n lazycloud-prod get externalsecret -o jsonpath='{range .items[*].spec.data[*]}{.secretKey}{"\n"}{end}'
+kubectl -n lazycloud-prod exec statefulset/control-plane -c control-plane -- printenv LAZYCLOUD_<NAME>
+```
+
 ### Schema changes
 
 The schema moves by migration. A change to any table adds a revision under
