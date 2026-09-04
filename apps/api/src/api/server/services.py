@@ -770,8 +770,8 @@ class ApiServices(ApiServiceCore):
             ).create()
         )
         payment_provider = stripe_config.provider_factory()
-        # No mailer here. Inviting queues a message and returns; the scheduler's
-        # drain is what holds the email credential and talks to the provider.
+        # No mailer here. Inviting queues a message and returns. The scheduler's
+        # drain holds the email credential and talks to the provider.
         invitations = WorkspaceInvitationService(
             context,
             invitations_url=f"{gateway_config.public_http_url.rstrip('/')}/invitations",

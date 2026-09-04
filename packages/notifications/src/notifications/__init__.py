@@ -1,21 +1,23 @@
 from notifications.deliveries import DeliveryReport, record_delivery
 from notifications.outbox import (
+    BODY_RETENTION,
     CLAIM_TTL,
     MAX_ATTEMPTS,
-    SENT_RETENTION,
     EmailDrainResult,
     EmailOutboxDrain,
+    discard_queued_email,
     enqueue_email,
     next_attempt_at,
 )
 
 __all__ = [
+    "BODY_RETENTION",
     "CLAIM_TTL",
     "MAX_ATTEMPTS",
-    "SENT_RETENTION",
     "DeliveryReport",
     "EmailDrainResult",
     "EmailOutboxDrain",
+    "discard_queued_email",
     "enqueue_email",
     "next_attempt_at",
     "record_delivery",

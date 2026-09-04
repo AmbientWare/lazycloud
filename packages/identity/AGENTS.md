@@ -80,15 +80,16 @@ and the message says so.
 
 Only open offers are rows. Accepting, declining and revoking each delete theirs,
 because the membership records an acceptance and the workspace audit history
-records every outcome; a table that also kept answered offers would be a second,
-slower account of the same events with nothing keeping the two in step. Whether
+records every outcome. A table that also kept answered offers would be a second,
+slower account of the same events, with nothing keeping the two in step. Whether
 an offer has expired is decided here against one clock and published as a field,
 never recomputed by whoever renders it, or two people looking at one workspace
 would disagree about which offers are live.
 
 Membership rows are written only at acceptance, so nothing reading
-`workspace_members` can mistake an offer for access. One open offer per address
-per workspace: a second invite is refused and names the resend instead.
+`workspace_members` can mistake an offer for access. There is one open offer per
+address per workspace, and a second invite is refused and names the resend
+instead.
 Accepting an offer carrying more authority than a membership someone was
 meanwhile given raises the role to what was offered, because the offer is a live
 administrator decision rather than a formality to consume.

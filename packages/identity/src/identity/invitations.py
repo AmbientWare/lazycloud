@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 
 from identity.auth import IdentityContext
 from identity.users import display_name
-from notifications import enqueue_email
+from notifications import discard_queued_email, enqueue_email
 
 INVITATION_TTL = timedelta(days=14)
 
@@ -228,6 +228,10 @@ class WorkspaceInvitationService:
                 ),
                 now=now,
             )
+            # The earlier message carries a link this resend has just killed.
+            # If it has not gone yet, it must not go: two invitations arriving
+            # and the older one answering 404 reads as the platform being broken.
+            discard_queued_email(session, invitation.message_id, now=now)
             invitation = invitations.reissue(
                 invitation.id,
                 token_hash=_hash_token(token),

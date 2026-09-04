@@ -1051,6 +1051,7 @@ dependencies = [
     { name = "coordination" },
     { name = "database" },
     { name = "lazycloud-shared" },
+    { name = "notifications" },
     { name = "pydantic" },
 ]
 
@@ -1059,6 +1060,7 @@ requires-dist = [
     { name = "coordination", editable = "packages/coordination" },
     { name = "database", editable = "packages/database" },
     { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "notifications", editable = "packages/notifications" },
     { name = "pydantic", specifier = ">=2.8,<3" },
 ]
 

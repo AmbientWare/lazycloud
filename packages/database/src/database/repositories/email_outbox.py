@@ -7,7 +7,7 @@ from datetime import datetime
 from database.tables.email_outbox import EmailOutboxTable
 from shared.email import EmailDeliveryState, EmailMessage
 from shared.timestamps import to_utc, utc_now
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -129,17 +129,32 @@ class EmailOutboxRepository:
         now: datetime,
         next_attempt_at: datetime,
         error: str,
+        refund_attempt: bool = False,
     ) -> bool:
+        """Put a claimed message back, due again at `next_attempt_at`.
+
+        `refund_attempt` gives back the attempt the claim charged, for the case
+        where nothing was tried. A deployment with no email credential would
+        otherwise spend its whole budget failing to build a sender, and the first
+        real provider error after somebody set the key would be the one that
+        abandoned the message.
+        """
+        values: dict[str, object] = {
+            "status": "pending",
+            "next_attempt_at": next_attempt_at,
+            "claim_token": None,
+            "claimed_at": None,
+            "last_error": error[:500],
+        }
+        if refund_attempt:
+            values["attempts"] = case(
+                (EmailOutboxTable.attempts > 0, EmailOutboxTable.attempts - 1),
+                else_=0,
+            )
         return self._settle(
             message_id=message_id,
             claim_token=claim_token,
-            values={
-                "status": "pending",
-                "next_attempt_at": next_attempt_at,
-                "claim_token": None,
-                "claimed_at": None,
-                "last_error": error[:500],
-            },
+            values=values,
             now=now,
         )
 
@@ -157,6 +172,30 @@ class EmailOutboxRepository:
             },
             now=now,
         )
+
+    def discard_if_unsent(self, message_id: str, *, now: datetime) -> bool:
+        """Drop a queued message nothing should deliver any more.
+
+        Only while it is still waiting. A message already handed to the provider
+        cannot be recalled, and one another drainer holds is not ours to settle.
+        """
+        result = self.session.execute(
+            update(EmailOutboxTable)
+            .where(EmailOutboxTable.id == message_id, EmailOutboxTable.status == "pending")
+            .values(
+                status="abandoned",
+                claim_token=None,
+                claimed_at=None,
+                html_body="",
+                text_body="",
+                redacted_at=now,
+                delivery_state=EmailDeliveryState.Failed.value,
+                last_error="superseded by a newer message",
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return _rowcount(result) > 0
 
     def reclaim(self, *, now: datetime, claimed_before: datetime) -> int:
         """Return rows a drainer took and never settled, so another can try them.
@@ -192,19 +231,23 @@ class EmailOutboxRepository:
             or 0
         )
 
-    def redact(self, *, sent_before: datetime, limit: int, now: datetime) -> int:
-        """Empty the bodies of messages already handed over, keeping the row.
+    def redact(self, *, before: datetime, limit: int, now: datetime) -> int:
+        """Empty the bodies of messages nothing will send again, keeping the row.
 
-        The body holds a working invitation link and the row is the delivery
-        record somebody reads afterwards, so the two are cleared separately: the
-        secret goes once the mail carrying it has gone, and what became of the
-        message stays.
+        The body holds a working invitation link, and the row is the delivery
+        record somebody reads afterwards, so the two are cleared separately. The
+        secret goes and what became of the message stays.
+
+        Written on age rather than on status, because an abandoned message keeps
+        its body just as a sent one does and nobody is ever going to deliver it.
+        A row still waiting its turn is left alone: emptying that one would send
+        somebody a message with no link in it.
         """
         doomed = (
             select(EmailOutboxTable.id)
             .where(
-                EmailOutboxTable.status == "sent",
-                EmailOutboxTable.sent_at < sent_before,
+                EmailOutboxTable.status.in_(("sent", "abandoned")),
+                EmailOutboxTable.updated_at < before,
                 EmailOutboxTable.redacted_at.is_(None),
             )
             .limit(limit)

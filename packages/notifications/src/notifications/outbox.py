@@ -26,12 +26,12 @@ malformed recipient, and none of those is fixed by waiting.
 """
 
 CLAIM_TTL = timedelta(minutes=5)
-SENT_RETENTION = timedelta(days=2)
-"""How long a sent message keeps its body.
+BODY_RETENTION = timedelta(days=2)
+"""How long a message keeps its body once nothing will send it again.
 
-Short, because the body holds a working invitation link and the mail carrying it
-has already gone. The row itself stays: it is the record of what became of the
-message, which somebody reads long after the contents stop mattering.
+Short, because the body holds a working invitation link. The row itself stays as
+the record of what became of the message, which somebody reads long after the
+contents stop mattering.
 """
 
 _RETRY_BASE = timedelta(seconds=10)
@@ -78,6 +78,23 @@ def enqueue_email(
     it, and the two commit together or neither does.
     """
     return EmailOutboxRepository(session).enqueue(message, now=now or utc_now())
+
+
+def discard_queued_email(
+    session: DatabaseSession,
+    message_id: str,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Stop a queued message going out, for when what it says is no longer true.
+
+    Only catches one still waiting its turn. A message already handed over
+    cannot be recalled, which is why a caller relying on this has to be correct
+    when the older message does arrive as well.
+    """
+    if not message_id:
+        return False
+    return EmailOutboxRepository(session).discard_if_unsent(message_id, now=now or utc_now())
 
 
 @dataclass(slots=True)
@@ -127,10 +144,10 @@ class EmailOutboxDrain:
         for index, item in enumerate(claimed):
             if index and self.monotonic() >= deadline:
                 # Out of time. The rest keep this sweep's claim, which ages out
-                # on CLAIM_TTL and returns them; leaving them claimed rather
-                # than settling them is what stops the same slow batch being
-                # retried in a tight loop. Never on the first message, so a
-                # provider slower than the whole budget still makes progress.
+                # on CLAIM_TTL and returns them. Leaving them claimed rather than
+                # settling them stops the same slow batch being retried in a
+                # tight loop. Never on the first message, so a provider slower
+                # than the whole budget still makes progress.
                 LOGGER.warning(
                     "email sweep ran out of time with %d messages unsent",
                     len(claimed) - index,
@@ -184,11 +201,11 @@ class EmailOutboxDrain:
             return EmailOutboxRepository(session).abandoned_total()
 
     def redact(self, *, now: datetime | None = None, limit: int = 1_000) -> int:
-        """Empty the bodies of messages already sent, keeping their delivery record."""
+        """Empty the bodies of settled messages, keeping their delivery record."""
         current = now or utc_now()
         with self.database.session() as session:
             return EmailOutboxRepository(session).redact(
-                sent_before=current - SENT_RETENTION,
+                before=current - BODY_RETENTION,
                 limit=limit,
                 now=current,
             )
@@ -223,6 +240,8 @@ class EmailOutboxDrain:
                     now=now,
                     next_attempt_at=next_attempt_at(item.attempts, now=now),
                     error=error,
+                    # Nothing was tried, so the claim's attempt is given back.
+                    refund_attempt=True,
                 )
 
 
@@ -234,9 +253,9 @@ def next_attempt_at(attempts: int, *, now: datetime) -> datetime:
 
 
 __all__ = [
+    "BODY_RETENTION",
     "CLAIM_TTL",
     "MAX_ATTEMPTS",
-    "SENT_RETENTION",
     "EmailDrainResult",
     "EmailOutboxDrain",
     "enqueue_email",

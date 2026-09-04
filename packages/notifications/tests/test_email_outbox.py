@@ -16,6 +16,7 @@ from notifications import (
     MAX_ATTEMPTS,
     DeliveryReport,
     EmailOutboxDrain,
+    discard_queued_email,
     enqueue_email,
     record_delivery,
 )
@@ -67,7 +68,7 @@ def _status(services: ApiServices, message_id: str) -> str:
 def test_a_queued_message_is_delivered_once_and_then_pruned(
     isolated_services: ApiServices,
 ) -> None:
-    """The queue is the durable half; the drain is the part that talks to anyone.
+    """The queue is the durable half. The drain is the part that talks to anyone.
 
     Redaction matters as much as sending here. A sent row still holds the
     rendered body, and an invitation's body holds a working link, so the body is
@@ -86,8 +87,8 @@ def test_a_queued_message_is_delivered_once_and_then_pruned(
     assert _status(isolated_services, message_id) == "sent"
     assert drain.drain().sent_count == 0
 
-    # The body goes once the mail carrying it has gone; the row stays, because
-    # it is the record of what became of the message.
+    # The body goes once the mail carrying it has gone. The row stays, because
+    # it records what became of the message.
     assert drain.redact(now=utc_now() + timedelta(days=30)) == 1
     assert _status(isolated_services, message_id) == "sent"
 
@@ -198,10 +199,27 @@ def test_a_deployment_with_no_email_provider_keeps_its_messages(
     message_id = _queue(isolated_services, _message())
     drain = EmailOutboxDrain(database=isolated_services.context.database, sender_factory=refuse)
 
-    result = drain.drain()
+    for _sweep in range(MAX_ATTEMPTS + 4):
+        drain.drain()
 
-    assert (result.sent_count, result.abandoned_count) == (0, 0)
     assert _status(isolated_services, message_id) == "pending"
+    # The claim charges an attempt and nothing was tried, so it is given back.
+    # Without the refund the budget drains while the deployment sits
+    # misconfigured, and the first real provider hiccup afterwards is the one
+    # that abandons the message.
+    with isolated_services.context.database.session() as session:
+        state = EmailOutboxRepository(session).get_status(message_id)
+    assert state is not None
+    assert state[1] == 0
+
+    # Once somebody sets the key, the message goes with its budget intact. Run
+    # past the backoff the last failed sweep set, which is what a scheduler
+    # ticking every thirty seconds does anyway.
+    sender = _Sender()
+    EmailOutboxDrain(
+        database=isolated_services.context.database, sender_factory=lambda: sender
+    ).drain(now=utc_now() + timedelta(minutes=5))
+    assert [item.to for item in sender.sent] == ["someone@example.test"]
 
 
 def test_a_delivery_report_lands_on_the_message_it_names(
@@ -261,3 +279,44 @@ def test_a_report_for_a_message_we_no_longer_hold_is_not_an_error(
                 occurred_at=utc_now(),
             ),
         )
+
+
+def test_a_message_nothing_should_send_is_stopped_while_it_still_can_be(
+    isolated_services: ApiServices,
+) -> None:
+    """Resending an invitation kills the link the queued message carries.
+
+    Letting that message go would deliver two invitations where the older one
+    answers 404, which reads as the platform being broken rather than as an
+    offer that moved.
+    """
+    stale = _queue(isolated_services, _message())
+    with isolated_services.context.database.session() as session:
+        assert discard_queued_email(session, stale)
+
+    sender = _Sender()
+    EmailOutboxDrain(
+        database=isolated_services.context.database, sender_factory=lambda: sender
+    ).drain()
+
+    assert sender.sent == []
+    assert _status(isolated_services, stale) == "abandoned"
+
+
+def test_an_abandoned_body_is_emptied_like_a_sent_one(
+    isolated_services: ApiServices,
+) -> None:
+    """Nobody is going to deliver it, and it still holds a working link."""
+    message_id = _queue(isolated_services, _message())
+    drain = EmailOutboxDrain(
+        database=isolated_services.context.database,
+        sender_factory=lambda: _Sender(error=InvalidInputError("refused for good")),
+    )
+    drain.drain()
+    assert _status(isolated_services, message_id) == "abandoned"
+
+    assert drain.redact(now=utc_now() + timedelta(days=30)) == 1
+    with isolated_services.context.database.session() as session:
+        row = session.get(EmailOutboxTable, message_id)
+        assert row is not None
+        assert (row.html_body, row.text_body) == ("", "")

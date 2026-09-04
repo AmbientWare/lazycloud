@@ -56,14 +56,18 @@ class ResendEmailSender:
             raise UpstreamUnavailableError(f"Resend could not be reached: {exc}") from exc
         if not response.is_success:
             _raise_refusal(response)
+        # Accepted, and the id is how a delivery event is matched to this
+        # message later. An empty one has to be caught here rather than defaulted
+        # through, or the message is sent and permanently unattributable.
         try:
-            return _SendResult.model_validate_json(response.content).id
+            accepted = _SendResult.model_validate_json(response.content)
         except ValidationError as exc:
-            # Accepted, and the id is how its delivery event is matched later.
-            # Without one the message is sent and permanently unattributable.
             raise UpstreamUnavailableError(
-                "Resend accepted the message but returned no id for it"
+                "Resend accepted the message but its answer was unreadable"
             ) from exc
+        if not accepted.id:
+            raise UpstreamUnavailableError("Resend accepted the message but named no id for it")
+        return accepted.id
 
 
 def _raise_refusal(response: httpx.Response) -> None:
