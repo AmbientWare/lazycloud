@@ -215,7 +215,7 @@ function Outcome({
       </div>
       <p className="text-sm text-muted-foreground">{children}</p>
       <Button variant="outline" size="sm" asChild>
-        <Link to="/">Go to dashboard</Link>
+        <Link to="/dashboard">Go to dashboard</Link>
       </Button>
     </div>
   );
