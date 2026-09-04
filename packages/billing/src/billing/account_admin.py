@@ -13,7 +13,7 @@ from shared.billing_accounts import BillingAccount
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError, NotFoundError
 from shared.events import EventLevel
-from shared.identity import UserRecord
+from shared.identity import PlatformRole, UserRecord, UserStatus
 from shared.timestamps import to_utc
 from sqlalchemy.orm import Session
 
@@ -82,14 +82,27 @@ class BillingAccountAdminService:
     session: Session
 
     def list(
-        self, *, after_user_id: str | None, limit: int, at: datetime
+        self,
+        *,
+        after_user_id: str | None,
+        limit: int,
+        at: datetime,
+        search: str = "",
+        role: PlatformRole | None = None,
+        status: UserStatus | None = None,
     ) -> AdministeredAccountPage:
         if limit <= 0 or limit > MAX_ACCOUNT_PAGE:
             raise InvalidInputError(f"limit must be between 1 and {MAX_ACCOUNT_PAGE}")
         since = to_utc(at) - RECENT_COST_WINDOW
         # One more than asked, so the page knows whether a next one exists
         # without a second read.
-        users = UserRepository(self.session).page(after_user_id=after_user_id, limit=limit + 1)
+        users = UserRepository(self.session).page(
+            after_user_id=after_user_id,
+            limit=limit + 1,
+            search=search,
+            role=role,
+            status=status,
+        )
         has_more = len(users) > limit
         users = users[:limit]
         user_ids = [user.id for user in users]

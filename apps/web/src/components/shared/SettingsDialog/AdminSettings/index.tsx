@@ -16,6 +16,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -32,7 +33,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { platformRoleSchema, type BillingAccountAdmin } from "@/lib/api/schemas";
+import { platformRoleSchema, userStatusSchema, type BillingAccountAdmin } from "@/lib/api/schemas";
 import { formatCostNanos } from "@/lib/money";
 
 import {
@@ -42,6 +43,65 @@ import {
 } from "./controller";
 
 const SELF_LOCKOUT = "You cannot change your own role or status. Ask another administrator.";
+
+const ANY = "any";
+
+/**
+ * What narrows the list.
+ *
+ * Every control here is handed to the server. The list pages, so filtering the
+ * rows already fetched would hide every match further down the walk and read as
+ * the account simply not existing.
+ */
+function AccountFilterBar({ controller }: { controller: AdminSettingsController }) {
+  const { filters } = controller;
+  return (
+    <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3 sm:flex-row">
+      <Input
+        aria-label="Search accounts by name, email, or GitHub login"
+        className="sm:flex-1"
+        onChange={(event) => controller.setSearch(event.target.value)}
+        placeholder="Search name, email, or GitHub login"
+        value={filters.search}
+      />
+      <Select
+        onValueChange={(value) =>
+          controller.setRoleFilter(value === ANY ? null : platformRoleSchema.parse(value))
+        }
+        value={filters.role ?? ANY}
+      >
+        <SelectTrigger aria-label="Filter by role" className="sm:w-40">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ANY}>Any role</SelectItem>
+          <SelectItem value="administrator">Administrator</SelectItem>
+          <SelectItem value="member">Member</SelectItem>
+        </SelectContent>
+      </Select>
+      <Select
+        onValueChange={(value) =>
+          controller.setStatusFilter(value === ANY ? null : userStatusSchema.parse(value))
+        }
+        value={filters.status ?? ANY}
+      >
+        <SelectTrigger aria-label="Filter by status" className="sm:w-36">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ANY}>Any status</SelectItem>
+          <SelectItem value="active">Active</SelectItem>
+          <SelectItem value="disabled">Disabled</SelectItem>
+        </SelectContent>
+      </Select>
+      {controller.narrowed ? (
+        <Button onClick={controller.clearFilters} type="button" variant="ghost">
+          Clear
+        </Button>
+      ) : null}
+    </div>
+  );
+}
 
 /** Every account on the platform, and what an administrator may do to each. */
 export function AdminSettings() {
@@ -63,6 +123,7 @@ export function AdminSettings() {
             {controller.error.message}
           </p>
         ) : null}
+        {controller.forbidden ? null : <AccountFilterBar controller={controller} />}
         <div className="min-h-0 flex-1 overflow-y-auto">
           {controller.isLoading ? (
             <AccountTableSkeleton />
@@ -71,7 +132,10 @@ export function AdminSettings() {
           ) : controller.loadError ? (
             <PanelError message={controller.loadError.message} />
           ) : controller.accounts.length === 0 ? (
-            <PanelEmpty message="No accounts yet" className="min-h-32 p-8" />
+            <PanelEmpty
+              message={controller.narrowed ? "No accounts match this search" : "No accounts yet"}
+              className="min-h-32 p-8"
+            />
           ) : (
             <AccountTable controller={controller} />
           )}

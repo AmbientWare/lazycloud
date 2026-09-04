@@ -15,7 +15,11 @@ import {
   type UserStatus,
 } from "@/lib/api/schemas";
 import { selectInfiniteList, type InfiniteListQueryData } from "@/lib/queries/infinite-list";
-import { accountQueryKeys } from "@/lib/queries/workspace-keys";
+import {
+  accountQueryKeys,
+  EVERY_ACCOUNT,
+  type AdminAccountsKeyParts,
+} from "@/lib/queries/workspace-keys";
 
 const ACCOUNTS = "/api/v1/billing/accounts";
 const USERS = "/api/v1/users";
@@ -28,13 +32,18 @@ const PAGE_SIZE = 50;
  * authorization decision rather than a dead token, so the client keeps the
  * session and the tab shows the refusal.
  */
-export function billingAccountsQueryOptions() {
+export function billingAccountsQueryOptions(scope: AdminAccountsKeyParts = EVERY_ACCOUNT) {
   return infiniteQueryOptions({
-    queryKey: accountQueryKeys.admin.accounts(),
+    queryKey: accountQueryKeys.admin.accounts(scope),
     initialPageParam: "",
     queryFn: ({ pageParam }) => {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
       if (pageParam) params.set("cursor", pageParam);
+      // Narrowed by the server. The list pages, so filtering what arrived would
+      // hide every match that had not been fetched yet.
+      if (scope.search) params.set("search", scope.search);
+      if (scope.role) params.set("role", scope.role);
+      if (scope.status) params.set("status", scope.status);
       return apiRequest(`${ACCOUNTS}?${params.toString()}`, billingAccountAdminListSchema);
     },
     getNextPageParam: nextAccountsCursor,

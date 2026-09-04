@@ -30,7 +30,7 @@ export function QuickstartEmptyState() {
   const { status: streamStatus } = useWorkspaceLiveUpdates();
 
   return (
-    <section className="panel grid min-h-[34rem] overflow-hidden rounded-md lg:grid-cols-[minmax(0,4fr)_minmax(0,6fr)]">
+    <section className="panel grid h-full min-h-[34rem] overflow-hidden rounded-md lg:grid-cols-[minmax(0,4fr)_minmax(0,6fr)]">
       <div className="flex min-w-0 flex-col justify-between gap-12 p-6 sm:p-8 lg:p-10">
         <div>
           <div className="flex size-11 items-center justify-center rounded-md border border-brand/25 bg-brand/10 text-brand">
