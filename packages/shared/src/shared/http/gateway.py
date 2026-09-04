@@ -213,8 +213,8 @@ class GetOrCreateStubRequest(HttpModel):
     docker_enabled: bool = False
     preemptible: bool = False
     pool: MachinePool = MachinePool(Field(default="", max_length=240))
-    region: ProductRegion | None = None
     """Pool this workload lands in, empty to take the default."""
+    region: ProductRegion | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     client_contract: ClientContract | None = None
     workspace: str = "default"

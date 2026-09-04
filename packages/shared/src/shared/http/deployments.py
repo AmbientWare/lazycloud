@@ -13,7 +13,7 @@ from shared.placement import ProductRegion
 
 
 class DeploymentResourcesResponse(HttpModel):
-    region: ProductRegion | None = None
+    region: ProductRegion | None = Field(default=None, exclude_if=lambda value: value is None)
     cpu: CpuRequest | None = None
     memory: MemoryRequest | None = None
     disk: str | None = None
