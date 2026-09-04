@@ -12,7 +12,6 @@ from shared.identity import (
     UserStatus,
     WorkspaceInvitationRecord,
     WorkspaceInvitationRole,
-    WorkspaceInvitationStatus,
     WorkspaceMemberRecord,
     WorkspaceRole,
 )
@@ -117,16 +116,18 @@ def workspace_member_record_from_table(row: WorkspaceMemberTable) -> WorkspaceMe
 def workspace_invitation_record_from_table(
     row: WorkspaceInvitationTable,
 ) -> WorkspaceInvitationRecord:
+    """Map an open offer, leaving the token hash where it is.
+
+    The record is what every caller above this passes around and projects into
+    responses, so the secret's digest has no business on it.
+    """
     return WorkspaceInvitationRecord(
         id=str(row.id),
         workspace_id=str(row.workspace_id),
         email=row.email,
         role=WorkspaceInvitationRole(row.role),
-        status=WorkspaceInvitationStatus(row.status),
         invited_by_user_id=_optional_id(row.invited_by_user_id),
-        resolved_by_user_id=_optional_id(row.resolved_by_user_id),
         expires_at=to_utc(row.expires_at),
-        resolved_at=to_utc_or_none(row.resolved_at),
         created_at=to_utc(row.created_at),
         updated_at=to_utc(row.updated_at),
     )

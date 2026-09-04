@@ -1,29 +1,36 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from dataclasses import dataclass, field
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from database.repositories.billing import BillingAccountRepository
+from database.repositories.email_outbox import EmailOutboxRepository
 from database.repositories.identity import UserRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
-from shared.email import EmailMessage
 from shared.identity import WorkspaceRole
+from shared.timestamps import utc_now
 from tests.service_fixtures import owned_workspace
 
 from billing import DatabaseBillingAdmission
 
+_INVITATIONS_PATH = "/invitations/"
 
-@dataclass(slots=True)
-class _Outbox:
-    sent: list[EmailMessage] = field(default_factory=list)
 
-    def send(self, message: EmailMessage) -> None:
-        self.sent.append(message)
+def _queued_link(services: ApiServices) -> str:
+    """The token the queued message carries. Nothing else ever holds it."""
+    with services.context.database.session() as session:
+        claimed = EmailOutboxRepository(session).claim(
+            now=utc_now(), limit=10, claim_token="test-drain"
+        )
+    for item in claimed:
+        for line in item.message.text.splitlines():
+            if _INVITATIONS_PATH in line:
+                return line.rsplit("/", 1)[1].strip()
+    raise AssertionError("no invitation link was queued")
 
 
 def _signed_in(services: ApiServices, name: str, email: str) -> tuple[str, dict[str, str]]:
@@ -69,7 +76,6 @@ def test_invitations_are_an_administrators_to_send_read_and_answered_by_their_ad
     read it would learn who the workspace is recruiting. Leaving needs no
     administrator, and removing somebody else still does.
     """
-    isolated_services.invitations.mailer = lambda: _Outbox()
     workspace = owned_workspace(isolated_services.control_plane_service, "team")
     owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
     member_id, member = _signed_in(isolated_services, "member", "member@example.test")
@@ -98,10 +104,12 @@ def test_invitations_are_an_administrators_to_send_read_and_answered_by_their_ad
     listed = client.get("/api/v1/workspaces/team/invitations", headers=owner)
     assert [item["id"] for item in listed.json()["data"]] == [created.json()["id"]]
 
-    invited_id, invited = _signed_in(isolated_services, "new", "new@example.test")
-    assert client.get("/api/v1/invitations", headers=member).json()["data"] == []
-    accepted = client.post(f"/api/v1/invitations/{created.json()['id']}/accept", headers=invited)
+    # Deliberately an address unlike the one invited: the link is what joins.
+    invited_id, invited = _signed_in(isolated_services, "new", "elsewhere@other.test")
+    token = _queued_link(isolated_services)
+    accepted = client.post(f"/api/v1/invitations/{token}/accept", headers=invited)
     assert accepted.status_code == 201, accepted.text
+    assert client.post(f"/api/v1/invitations/{token}/accept", headers=invited).status_code == 404
 
     kept = client.delete(f"/api/v1/workspaces/team/members/{invited_id}", headers=member)
     assert kept.status_code == 403, kept.text
@@ -114,20 +122,22 @@ def test_invitations_are_an_administrators_to_send_read_and_answered_by_their_ad
     }
 
 
-def test_a_malformed_invitation_id_is_refused_rather_than_reaching_the_database(
+def test_an_unknown_link_and_a_malformed_id_are_refused_rather_than_faulting(
     isolated_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
-    """A path segment that is not a uuid is a bad request, not a server fault.
+    """A link that opens nothing is a 404, and a bad id is a 400.
 
-    Unvalidated it reaches a uuid column and raises inside the driver, which
-    nothing maps, so the caller gets a 500 for their own typo.
+    The invitation id reaches a uuid column, and unvalidated it raises inside the
+    driver, which nothing maps, so the caller gets a 500 for their own typo. A
+    token is opaque and simply matches nothing.
     """
     workspace = owned_workspace(isolated_services.control_plane_service, "team")
     _owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
-    assert client.post("/api/v1/invitations/not-a-uuid/accept", headers=owner).status_code == 400
+    assert client.get("/api/v1/invitations/nothing-here", headers=owner).status_code == 404
+    assert client.post("/api/v1/invitations/nothing-here/accept", headers=owner).status_code == 404
     assert (
         client.delete("/api/v1/workspaces/team/invitations/not-a-uuid", headers=owner).status_code
         == 400

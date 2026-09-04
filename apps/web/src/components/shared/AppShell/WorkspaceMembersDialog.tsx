@@ -64,9 +64,6 @@ export function WorkspaceMembersDialog({
   onClose: () => void;
 }) {
   const { user } = useSession();
-  // Read once when the dialog opens: "expired" is a fact about the moment you
-  // looked, and a clock read on every render is what the purity rule forbids.
-  const [openedAt] = useState(() => Date.now());
   const members = useQuery(workspaceMembersQueryOptions(workspace.id, workspace.name));
   const me = members.data?.data.find((member) => member.user_id === user.id);
   const manages = me?.role === "owner" || me?.role === "administrator";
@@ -121,7 +118,6 @@ export function WorkspaceMembersDialog({
                     key={invitation.id}
                     workspace={workspace}
                     invitation={invitation}
-                    expired={Date.parse(invitation.expires_at) <= openedAt}
                   />
                 ))
               : null}
@@ -320,11 +316,9 @@ function MemberRow({
 function InvitationRow({
   workspace,
   invitation,
-  expired,
 }: {
   workspace: Workspace;
   invitation: WorkspaceInvitation;
-  expired: boolean;
 }) {
   const queryClient = useQueryClient();
   const refresh = () =>
@@ -349,7 +343,7 @@ function InvitationRow({
       <span className="min-w-0">
         <span className="block truncate text-sm font-medium">{invitation.email}</span>
         <span className="block truncate text-xs text-muted-foreground">
-          {expired ? "Invitation expired" : "Invited"}
+          {invitation.expired ? "Invitation expired" : "Invited"}
           {invitation.invited_by_name ? ` by ${invitation.invited_by_name}` : ""}
           {" · "}
           {ROLE_LABELS[invitation.role]}

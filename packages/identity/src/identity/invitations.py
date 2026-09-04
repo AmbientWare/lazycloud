@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import html
-from collections.abc import Callable
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -14,19 +15,16 @@ from database.repositories.identity import (
     WorkspaceRepository,
 )
 from shared.app_identity import DISPLAY_NAME
-from shared.deployment_settings import MissingDeploymentSettingError
-from shared.email import EmailMessage, EmailSender
-from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
+from shared.email import EmailMessage
+from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
 from shared.identity import (
     AuthTokenRecord,
     UserRecord,
     WorkspaceInvitationRecord,
     WorkspaceInvitationRole,
-    WorkspaceInvitationStatus,
     WorkspaceMemberRecord,
     WorkspaceRecord,
-    fold_email,
     normalize_invitation_email,
     workspace_role_covers,
 )
@@ -35,12 +33,13 @@ from sqlalchemy.orm import Session
 
 from identity.auth import IdentityContext
 from identity.users import display_name
+from notifications import enqueue_email
 
 INVITATION_TTL = timedelta(days=14)
 
 
 class WorkspaceInvitationAdmission(Protocol):
-    """Whether an offer to this address could be honoured if it were accepted now."""
+    """Whether an offer could be honoured if it were accepted now."""
 
     def assert_may_invite_workspace_member(
         self,
@@ -61,19 +60,26 @@ class WorkspaceInvitationAdmission(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class InvitationListing:
-    """An invitation beside the name of whoever sent it."""
+    """An open offer as its workspace's administrators see it.
+
+    `expired` is decided here against one clock rather than left to whoever
+    renders it, so two people looking at the same workspace cannot disagree
+    about which offers are still live.
+    """
 
     invitation: WorkspaceInvitationRecord
     invited_by_name: str = ""
+    expired: bool = False
 
 
 @dataclass(frozen=True, slots=True)
-class PendingInvitation:
-    """An invitation as the person it was sent to sees it."""
+class InvitationPreview:
+    """What a link shows the person holding it, before they answer."""
 
     invitation: WorkspaceInvitationRecord
     workspace: WorkspaceRecord
     invited_by_name: str = ""
+    expired: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,31 +88,35 @@ class AcceptedInvitation:
 
     membership: WorkspaceMemberRecord
     user: UserRecord
+    workspace: WorkspaceRecord
 
 
 class WorkspaceInvitationService:
-    """Offers of membership, from the administrator who sends one to the person who answers it.
+    """Offers of membership, from the administrator who sends one to whoever redeems it.
 
-    An invitation is addressed to an email, and the only account that can answer
-    it is one whose provider-reported address is that email. That comparison is
-    the single place an email decides anything about identity here, and it
-    happens under a row lock so two answers to one invitation cannot both
-    succeed. The address is the one the provider last told us about at sign-in,
-    so somebody who changes their primary address answers under the new one from
-    their next sign-in onwards.
+    An invitation is a link. Whoever opens it, signed in as any account, joins;
+    the membership binds to that account and the offer is gone. The address is
+    where the message was sent and decides nothing about who may accept, because
+    an address can be changed on the far side and reassigned to somebody else,
+    and an offer keyed on one would follow the address rather than the person it
+    was written for.
+
+    What protects the offer is the secret in the link: 32 bytes, stored only as
+    its SHA-256, redeemed under a row lock, and replaced whenever the offer is
+    sent again. Nothing sends the message inline. The row and the queued message
+    commit together and a drain delivers it, so no request waits on an email
+    provider and no offer exists that nobody was told about.
     """
 
     def __init__(
         self,
         context: IdentityContext,
         *,
-        mailer: Callable[[], EmailSender],
         invitations_url: str,
         ttl: timedelta = INVITATION_TTL,
     ) -> None:
         self.context = context
-        self.mailer = mailer
-        self.invitations_url = invitations_url
+        self.invitations_url = invitations_url.rstrip("/")
         self.ttl = ttl
 
     def invite(
@@ -123,6 +133,7 @@ class WorkspaceInvitationService:
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
         now = utc_now()
+        token = _new_token()
         with self.context.database.session() as session:
             workspace = _writable_workspace(session, workspace_id)
             members = WorkspaceMemberRepository(session)
@@ -133,16 +144,22 @@ class WorkspaceInvitationService:
                 workspace_id=workspace.id,
                 email=address,
             )
-            # The partial unique index is what refuses a second open offer; the
-            # repository turns it into the conflict that names the resend path.
             invitation = WorkspaceInvitationRepository(session).create(
                 workspace_id=workspace.id,
                 email=address,
                 role=role,
                 invited_by_user_id=actor.user_id,
+                token_hash=_hash_token(token),
                 expires_at=now + self.ttl,
             )
             inviter = _name_of(session, actor.user_id)
+            enqueue_email(
+                session,
+                self._message(
+                    invitation, workspace_name=workspace.name, inviter=inviter, token=token
+                ),
+                now=now,
+            )
             WorkspaceAuditRepository(session).append(
                 workspace_id=workspace.id,
                 action=WorkspaceAuditAction.MemberInvited,
@@ -153,8 +170,11 @@ class WorkspaceInvitationService:
                 summary=f"Invited {address} as {role}",
                 new_value=role.value,
             )
-        self._deliver(invitation, workspace, inviter)
-        return InvitationListing(invitation=invitation, invited_by_name=inviter)
+        return InvitationListing(
+            invitation=invitation,
+            invited_by_name=inviter,
+            expired=invitation.expired_at(now),
+        )
 
     def resend(
         self,
@@ -163,19 +183,33 @@ class WorkspaceInvitationService:
         *,
         actor: AuthTokenRecord,
     ) -> InvitationListing:
-        """Send the same offer again, with a fresh expiry, which is how an expired one returns.
+        """Send the offer again on a new link, which is also how an expired one returns.
 
-        The message still names whoever made the offer rather than whoever
-        pressed resend: the invitee is being told who wants them in, and that did
-        not change.
+        The old link stops working. A resend happens because the first message
+        went astray, and leaving its link live would leave whatever it went
+        astray into holding a way in. The message still names whoever made the
+        offer rather than whoever pressed resend, because the invitee is being
+        told who wants them in and that has not changed.
         """
         now = utc_now()
+        token = _new_token()
         with self.context.database.session() as session:
             workspace = _writable_workspace(session, workspace_id)
             invitations = WorkspaceInvitationRepository(session)
-            invitation = _pending_in_workspace(invitations.lock(invitation_id), workspace.id)
-            invitation = invitations.extend(invitation.id, expires_at=now + self.ttl)
+            invitation = _in_workspace(invitations.lock(invitation_id), workspace.id)
+            invitation = invitations.reissue(
+                invitation.id,
+                token_hash=_hash_token(token),
+                expires_at=now + self.ttl,
+            )
             inviter = _name_of(session, invitation.invited_by_user_id)
+            enqueue_email(
+                session,
+                self._message(
+                    invitation, workspace_name=workspace.name, inviter=inviter, token=token
+                ),
+                now=now,
+            )
             WorkspaceAuditRepository(session).append(
                 workspace_id=workspace.id,
                 action=WorkspaceAuditAction.InvitationResent,
@@ -185,8 +219,11 @@ class WorkspaceInvitationService:
                 target_name=invitation.email,
                 summary=f"Resent the invitation to {invitation.email}",
             )
-        self._deliver(invitation, workspace, inviter)
-        return InvitationListing(invitation=invitation, invited_by_name=inviter)
+        return InvitationListing(
+            invitation=invitation,
+            invited_by_name=inviter,
+            expired=invitation.expired_at(now),
+        )
 
     def revoke(
         self,
@@ -194,18 +231,13 @@ class WorkspaceInvitationService:
         invitation_id: str,
         *,
         actor: AuthTokenRecord,
-    ) -> WorkspaceInvitationRecord:
-        now = utc_now()
+    ) -> None:
+        """Withdraw the offer, which removes it. The audit history is what remembers."""
         with self.context.database.session() as session:
             workspace = _writable_workspace(session, workspace_id)
             invitations = WorkspaceInvitationRepository(session)
-            invitation = _pending_in_workspace(invitations.lock(invitation_id), workspace.id)
-            revoked = invitations.resolve(
-                invitation.id,
-                status=WorkspaceInvitationStatus.Revoked,
-                resolved_by_user_id=actor.user_id,
-                now=now,
-            )
+            invitation = _in_workspace(invitations.lock(invitation_id), workspace.id)
+            invitations.delete(invitation.id)
             WorkspaceAuditRepository(session).append(
                 workspace_id=workspace.id,
                 action=WorkspaceAuditAction.InvitationRevoked,
@@ -215,50 +247,55 @@ class WorkspaceInvitationService:
                 target_name=invitation.email,
                 summary=f"Revoked the invitation to {invitation.email}",
             )
-            return revoked
 
-    def pending(self, workspace_id: str) -> list[InvitationListing]:
+    def open_offers(self, workspace_id: str) -> list[InvitationListing]:
+        now = utc_now()
         with self.context.database.session() as session:
-            records = WorkspaceInvitationRepository(session).pending_for_workspace(workspace_id)
+            records = WorkspaceInvitationRepository(session).for_workspace(workspace_id)
             names = _names(session, [record.invited_by_user_id for record in records])
             return [
                 InvitationListing(
                     invitation=record,
                     invited_by_name=names.get(record.invited_by_user_id, ""),
+                    expired=record.expired_at(now),
                 )
                 for record in records
             ]
 
-    def pending_for_user(self, user_id: str) -> list[PendingInvitation]:
-        """Everything the signed-in person can still answer, by the address they signed in with."""
+    def preview(self, token: str) -> InvitationPreview:
+        """What the link opens onto: which workspace, who asked, and whether it still stands."""
+        now = utc_now()
         with self.context.database.session() as session:
-            user = _user(session, user_id)
-            address = fold_email(user.email)
-            if not address:
-                return []
-            rows = WorkspaceInvitationRepository(session).open_for_email(address, now=utc_now())
-            names = _names(session, [invitation.invited_by_user_id for invitation, _ in rows])
-            return [
-                PendingInvitation(
-                    invitation=invitation,
-                    workspace=workspace,
-                    invited_by_name=names.get(invitation.invited_by_user_id, ""),
-                )
-                for invitation, workspace in rows
-            ]
+            invitation = _found(WorkspaceInvitationRepository(session).by_token(_hash_token(token)))
+            workspace = WorkspaceRepository(session).get(invitation.workspace_id)
+            if workspace is None:
+                raise NotFoundError("invitation not found")
+            return InvitationPreview(
+                invitation=invitation,
+                workspace=workspace,
+                invited_by_name=_name_of(session, invitation.invited_by_user_id),
+                expired=invitation.expired_at(now),
+            )
 
     def accept(
         self,
-        invitation_id: str,
+        token: str,
         *,
         actor: AuthTokenRecord,
         admission: WorkspaceInvitationAdmission,
     ) -> AcceptedInvitation:
+        """Redeem the link as whoever is signed in.
+
+        Any account may redeem it, because holding the link is the claim being
+        made and the address it was mailed to may not be one this person still
+        reports. Redeeming under a row lock, and deleting the row, is what makes
+        the offer single-use: a second click finds nothing.
+        """
         now = utc_now()
         with self.context.database.session() as session:
             user = _user(session, actor.user_id)
             invitations = WorkspaceInvitationRepository(session)
-            invitation = _answerable(invitations.lock(invitation_id), user, now=now)
+            invitation = _redeemable(invitations.lock_by_token(_hash_token(token)), now=now)
             workspace = _writable_workspace(session, invitation.workspace_id)
             members = WorkspaceMemberRepository(session)
             membership = members.membership(workspace_id=workspace.id, user_id=user.id)
@@ -275,19 +312,13 @@ class WorkspaceInvitationService:
                     role=offered,
                 )
             elif not workspace_role_covers(membership.role, offered):
-                # Somebody was added directly while their invitation stood. The
-                # offer is still an administrator's live decision, so accepting
-                # grants what it named rather than consuming it for nothing.
+                # Added directly while the offer stood. The offer is still an
+                # administrator's live decision, so it grants what it named.
                 members.set_role(workspace_id=workspace.id, user_id=user.id, role=offered)
                 membership = members.membership(workspace_id=workspace.id, user_id=user.id)
                 if membership is None:
                     raise NotFoundError(f"user is not a member of this workspace: {user.id}")
-            invitations.resolve(
-                invitation.id,
-                status=WorkspaceInvitationStatus.Accepted,
-                resolved_by_user_id=user.id,
-                now=now,
-            )
+            invitations.delete(invitation.id)
             WorkspaceAuditRepository(session).append(
                 workspace_id=workspace.id,
                 action=WorkspaceAuditAction.InvitationAccepted,
@@ -295,23 +326,18 @@ class WorkspaceInvitationService:
                 target_type=WorkspaceAuditTarget.Member,
                 target_id=user.id,
                 target_name=display_name(user),
-                summary=f"Accepted an invitation and joined as {membership.role}",
+                summary=f"Accepted an invitation sent to {invitation.email}, "
+                f"joining as {membership.role}",
                 new_value=membership.role.value,
             )
-            return AcceptedInvitation(membership=membership, user=user)
+            return AcceptedInvitation(membership=membership, user=user, workspace=workspace)
 
-    def decline(self, invitation_id: str, *, actor: AuthTokenRecord) -> WorkspaceInvitationRecord:
+    def decline(self, token: str, *, actor: AuthTokenRecord) -> None:
         now = utc_now()
         with self.context.database.session() as session:
-            user = _user(session, actor.user_id)
             invitations = WorkspaceInvitationRepository(session)
-            invitation = _answerable(invitations.lock(invitation_id), user, now=now)
-            declined = invitations.resolve(
-                invitation.id,
-                status=WorkspaceInvitationStatus.Declined,
-                resolved_by_user_id=user.id,
-                now=now,
-            )
+            invitation = _redeemable(invitations.lock_by_token(_hash_token(token)), now=now)
+            invitations.delete(invitation.id)
             WorkspaceAuditRepository(session).append(
                 workspace_id=invitation.workspace_id,
                 action=WorkspaceAuditAction.InvitationDeclined,
@@ -319,44 +345,23 @@ class WorkspaceInvitationService:
                 target_type=WorkspaceAuditTarget.Invitation,
                 target_id=invitation.id,
                 target_name=invitation.email,
-                summary="Declined an invitation",
+                summary=f"Declined an invitation sent to {invitation.email}",
             )
-            return declined
 
-    def _deliver(
+    def _message(
         self,
         invitation: WorkspaceInvitationRecord,
-        workspace: WorkspaceRecord,
+        *,
+        workspace_name: str,
         inviter: str,
-    ) -> None:
-        """Send after the row is committed, so a refusal leaves an invitation to resend.
-
-        The row is the durable fact and the message is its delivery. Both failures
-        that reach here, a provider that refused and a deployment with no provider
-        configured, are reported with the invitation left standing, because the
-        thing to do about either is resend it once the cause is fixed. A missing
-        setting is translated rather than left to the generic handler: it arrives
-        as a `RuntimeError` naming the variable, and that name is the only thing
-        an operator can act on.
-        """
-        message = invitation_email(
+        token: str,
+    ) -> EmailMessage:
+        return invitation_email(
             invitation,
-            workspace_name=workspace.name,
+            workspace_name=workspace_name,
             inviter=inviter,
-            invitations_url=self.invitations_url,
+            link=f"{self.invitations_url}/{token}",
         )
-        try:
-            self.mailer().send(message)
-        except MissingDeploymentSettingError as exc:
-            raise UpstreamUnavailableError(
-                f"the invitation to {invitation.email} was recorded but this deployment "
-                f"cannot send email. Resend it once that is configured. {exc}"
-            ) from exc
-        except (InvalidInputError, UpstreamUnavailableError) as exc:
-            raise UpstreamUnavailableError(
-                f"the invitation to {invitation.email} was recorded but the email was not "
-                f"delivered. Resend it once email delivery is restored. {exc}"
-            ) from exc
 
 
 def invitation_email(
@@ -364,13 +369,13 @@ def invitation_email(
     *,
     workspace_name: str,
     inviter: str,
-    invitations_url: str,
+    link: str,
 ) -> EmailMessage:
-    """What the invited person reads: who asked, into what, and where to answer.
+    """What the invited person reads: who asked, into what, and the link that joins.
 
-    Nothing in the link is a credential. The page it opens asks the person to sign
-    in and then shows what is addressed to the email they signed in with, so a
-    forwarded message reaches nobody it was not sent to.
+    The link is the whole of the offer, so the message says plainly that it is
+    for them alone. Whoever opens it joins as whichever account they are signed
+    in as, which is what makes forwarding it a way to hand somebody else a seat.
     """
     who = inviter or f"A {DISPLAY_NAME} administrator"
     role = (
@@ -383,10 +388,11 @@ def invitation_email(
     text = (
         f"{who} invited you to join the workspace {workspace_name} on {DISPLAY_NAME} "
         f"as {role}.\n\n"
-        f"Sign in with the GitHub account whose primary email is {invitation.email} "
-        f"to accept or decline:\n{invitations_url}\n\n"
-        f"This invitation expires on {expires}. If you were not expecting it, "
-        "you can ignore this message."
+        f"Open this link to accept. You will be asked to sign in first if you are not "
+        f"already:\n{link}\n\n"
+        f"The link joins as whichever account you are signed in as, so keep it to "
+        f"yourself. It expires on {expires}. If you were not expecting this, you can "
+        "ignore this message."
     )
     h = html.escape
     body = (
@@ -397,25 +403,29 @@ def invitation_email(
         f"You have been invited to {h(workspace_name)}</h1>"
         f"<p><strong>{h(who)}</strong> invited you to join the workspace "
         f"<strong>{h(workspace_name)}</strong> on {h(DISPLAY_NAME)} as {role}.</p>"
-        f'<p style="margin:24px 0"><a href="{h(invitations_url)}" style="display:inline-block;'
+        f'<p style="margin:24px 0"><a href="{h(link)}" style="display:inline-block;'
         "background:#1a1a1a;color:#ffffff;padding:12px 20px;border-radius:6px;"
-        'text-decoration:none;font-weight:600">View invitation</a></p>'
-        '<p style="color:#555;font-size:14px">Sign in with the GitHub account whose primary '
-        f"email is <strong>{h(invitation.email)}</strong> to accept or decline. "
-        f"This invitation expires on {h(expires)}.</p>"
+        'text-decoration:none;font-weight:600">Accept invitation</a></p>'
+        '<p style="color:#555;font-size:14px">You will be asked to sign in first if you '
+        "are not already. The link joins as whichever account you are signed in as, so "
+        f"keep it to yourself. It expires on {h(expires)}.</p>"
         '<p style="color:#888;font-size:13px">If you were not expecting this, you can ignore '
         "this message.</p></div>"
     )
     return EmailMessage(to=invitation.email, subject=subject, html=body, text=text)
 
 
-def _writable_workspace(session: Session, workspace_id: str) -> WorkspaceRecord:
-    """The workspace, fenced against a deletion running beside this write.
+def _new_token() -> str:
+    return secrets.token_urlsafe(32)
 
-    The same key-share lock every other tenant-owned write takes: a membership or
-    an invitation committed after the purge began would be state the deleted
-    workspace cannot own.
-    """
+
+def _hash_token(token: str) -> str:
+    """What the database holds. A dump is then a list of offers, not a set of keys."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _writable_workspace(session: Session, workspace_id: str) -> WorkspaceRecord:
+    """The workspace, fenced against a deletion running beside this write."""
     return WorkspaceRepository(session).lock_active_owner(workspace_id)
 
 
@@ -437,43 +447,39 @@ def _name_of(session: Session, user_id: str) -> str:
     return _names(session, [user_id]).get(user_id, "")
 
 
-def _pending_in_workspace(
-    invitation: WorkspaceInvitationRecord | None,
-    workspace_id: str,
-) -> WorkspaceInvitationRecord:
-    """The invitation, if it is this workspace's and nobody has answered it.
-
-    One that does not exist and one belonging to another workspace answer the
-    same way, so an administrator of this workspace learns nothing about
-    invitations elsewhere.
-    """
-    if invitation is None or invitation.workspace_id != workspace_id:
+def _found(invitation: WorkspaceInvitationRecord | None) -> WorkspaceInvitationRecord:
+    if invitation is None:
         raise NotFoundError("invitation not found")
-    if invitation.status is not WorkspaceInvitationStatus.Pending:
-        raise ConflictError(f"the invitation was already {invitation.status}")
     return invitation
 
 
-def _answerable(
+def _in_workspace(
     invitation: WorkspaceInvitationRecord | None,
-    user: UserRecord,
+    workspace_id: str,
+) -> WorkspaceInvitationRecord:
+    """The offer, if it is this workspace's.
+
+    One that does not exist and one belonging to another workspace answer the
+    same way, so an administrator here learns nothing about offers elsewhere.
+    """
+    if invitation is None or invitation.workspace_id != workspace_id:
+        raise NotFoundError("invitation not found")
+    return invitation
+
+
+def _redeemable(
+    invitation: WorkspaceInvitationRecord | None,
     *,
     now: datetime,
 ) -> WorkspaceInvitationRecord:
-    """The invitation, if this person is who it was sent to and it is still open.
+    """The offer, if the link still opens it.
 
-    A mismatched address is reported as not found rather than forbidden, so an
-    invitation id says nothing about which address it is waiting on. Both sides
-    of the comparison are folded by `fold_email`, because an address stored one
-    way and read another is how the person it was sent to gets refused.
+    An unknown token and a spent one answer the same way, because a redeemed
+    offer leaves no row and there is nothing to tell them apart with.
     """
-    address = fold_email(user.email)
-    if invitation is None or not address or invitation.email != address:
-        raise NotFoundError("invitation not found")
-    if invitation.status is not WorkspaceInvitationStatus.Pending:
-        raise ConflictError(f"the invitation was already {invitation.status}")
-    if invitation.expires_at <= now:
-        raise ConflictError("the invitation has expired; ask to be invited again")
+    invitation = _found(invitation)
+    if invitation.expired_at(now):
+        raise ConflictError("this invitation has expired; ask for a new one")
     return invitation
 
 
@@ -481,7 +487,7 @@ __all__ = [
     "INVITATION_TTL",
     "AcceptedInvitation",
     "InvitationListing",
-    "PendingInvitation",
+    "InvitationPreview",
     "WorkspaceInvitationAdmission",
     "WorkspaceInvitationService",
     "invitation_email",

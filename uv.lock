@@ -24,6 +24,7 @@ members = [
     "lazycloud-client",
     "lazycloud-shared",
     "networking",
+    "notifications",
     "observability",
     "operations",
     "provider-aws",
@@ -177,6 +178,7 @@ dependencies = [
     { name = "images" },
     { name = "lazycloud-shared" },
     { name = "networking" },
+    { name = "notifications" },
     { name = "observability" },
     { name = "operations" },
     { name = "provider-aws" },
@@ -215,6 +217,7 @@ requires-dist = [
     { name = "images", editable = "packages/images" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "networking", editable = "packages/networking" },
+    { name = "notifications", editable = "packages/notifications" },
     { name = "observability", editable = "packages/observability" },
     { name = "operations", editable = "packages/operations" },
     { name = "provider-aws", editable = "packages/providers/aws" },
@@ -1396,6 +1399,21 @@ wheels = [
 ]
 
 [[package]]
+name = "notifications"
+version = "0.1.0"
+source = { editable = "packages/notifications" }
+dependencies = [
+    { name = "database" },
+    { name = "lazycloud-shared" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "database", editable = "packages/database" },
+    { name = "lazycloud-shared", editable = "packages/shared" },
+]
+
+[[package]]
 name = "observability"
 version = "0.1.0"
 source = { editable = "packages/observability" }
@@ -2088,11 +2106,13 @@ dependencies = [
     { name = "images" },
     { name = "lazycloud-shared" },
     { name = "networking" },
+    { name = "notifications" },
     { name = "observability" },
     { name = "operations" },
     { name = "provider-aws" },
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
+    { name = "provider-resend" },
     { name = "provider-stripe" },
     { name = "scheduler" },
     { name = "storage" },
@@ -2114,11 +2134,13 @@ requires-dist = [
     { name = "images", editable = "packages/images" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "networking", editable = "packages/networking" },
+    { name = "notifications", editable = "packages/notifications" },
     { name = "observability", editable = "packages/observability" },
     { name = "operations", editable = "packages/operations" },
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
+    { name = "provider-resend", editable = "packages/providers/resend" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "scheduler", editable = "packages/scheduler" },
     { name = "storage", editable = "packages/storage" },
@@ -2555,6 +2577,7 @@ dev = [
     { name = "lazycloud-shared" },
     { name = "lupa" },
     { name = "networking" },
+    { name = "notifications" },
     { name = "observability" },
     { name = "operations" },
     { name = "provider-aws" },
@@ -2596,6 +2619,7 @@ workspace = [
     { name = "lazycloud-client" },
     { name = "lazycloud-shared" },
     { name = "networking" },
+    { name = "notifications" },
     { name = "observability" },
     { name = "operations" },
     { name = "provider-aws" },
@@ -2644,6 +2668,7 @@ dev = [
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "lupa", specifier = ">=2.8" },
     { name = "networking", editable = "packages/networking" },
+    { name = "notifications", editable = "packages/notifications" },
     { name = "observability", editable = "packages/observability" },
     { name = "operations", editable = "packages/operations" },
     { name = "provider-aws", editable = "packages/providers/aws" },
@@ -2685,6 +2710,7 @@ workspace = [
     { name = "lazycloud-client", editable = "packages/lazycloud" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "networking", editable = "packages/networking" },
+    { name = "notifications", editable = "packages/notifications" },
     { name = "observability", editable = "packages/observability" },
     { name = "operations", editable = "packages/operations" },
     { name = "provider-aws", editable = "packages/providers/aws" },

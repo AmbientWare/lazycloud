@@ -262,15 +262,6 @@ class WorkspaceMemberRecord(ContractModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
-class WorkspaceInvitationStatus(StringEnum):
-    """What became of an invitation. Every value but pending is terminal."""
-
-    Pending = "pending"
-    Accepted = "accepted"
-    Declined = "declined"
-    Revoked = "revoked"
-
-
 class WorkspaceInvitationRole(StringEnum):
     """The roles an invitation can offer. Owner is transferred, never offered."""
 
@@ -304,25 +295,36 @@ def normalize_invitation_email(value: str) -> str:
 
 
 class WorkspaceInvitationRecord(ContractModel):
-    """An offer of membership addressed to an email, held until somebody answers it.
+    """An offer of membership that has not been answered yet.
 
-    Addressed to an email rather than an account because the person may have no
-    account yet. It becomes a membership only when a signed-in person whose
-    provider-verified address matches accepts it, and that acceptance is the
-    only place an email decides anything about identity.
+    Only open offers exist. Accepting, declining and revoking all remove the row,
+    because what became of an offer is a fact about the past and the audit
+    history is what keeps it. What is left is what somebody can still act on.
+
+    The address is where the offer was sent, and nothing else: whoever holds the
+    link accepts, and the membership binds to the account they are signed in as.
+    An address can move between people and an account can change the one it
+    reports, so an offer keyed on it would follow the address rather than the
+    person it was written for.
     """
 
     id: str
     workspace_id: str
     email: str
     role: WorkspaceInvitationRole = WorkspaceInvitationRole.Member
-    status: WorkspaceInvitationStatus = WorkspaceInvitationStatus.Pending
     invited_by_user_id: str = ""
-    resolved_by_user_id: str = ""
     expires_at: datetime
-    resolved_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+    def expired_at(self, now: datetime) -> bool:
+        """Whether this offer can still be answered, decided here and never by a caller.
+
+        A browser asking its own clock would label an offer by how far that clock
+        had drifted, and two people looking at one workspace would disagree about
+        which invitations are live.
+        """
+        return self.expires_at <= now
 
 
 class AuthTokenRecord(ContractModel):
@@ -367,7 +369,6 @@ __all__ = [
     "UserStatus",
     "WorkspaceInvitationRecord",
     "WorkspaceInvitationRole",
-    "WorkspaceInvitationStatus",
     "WorkspaceMemberRecord",
     "WorkspaceRecord",
     "WorkspaceRole",

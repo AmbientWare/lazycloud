@@ -231,7 +231,8 @@ export const accountQueryKeys = {
   },
   domains: () => [...accountRoot, "custom-domains"] as const,
   tokens: () => [...accountRoot, "tokens"] as const,
-  invitations: () => [...accountRoot, "invitations"] as const,
+  /** Keyed on the link's own secret, so two open invitations never share a cache entry. */
+  invitation: (token: string) => [...accountRoot, "invitation", token] as const,
   /**
    * What an administrator sees of every account on the platform. Under the
    * account root because who may read it is decided by the signed-in person,

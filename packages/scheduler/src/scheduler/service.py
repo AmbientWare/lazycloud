@@ -159,6 +159,27 @@ class SchedulerAbandonedMeterEvents(Protocol):
     def value_nanos(self) -> int: ...
 
 
+class SchedulerEmailDrainResult(Protocol):
+    @property
+    def sent_count(self) -> int: ...
+
+    @property
+    def retried_count(self) -> int: ...
+
+    @property
+    def abandoned_count(self) -> int: ...
+
+
+class SchedulerEmailOutboxService(Protocol):
+    """The sweep that delivers what a request already committed to sending."""
+
+    def drain(self, *, now: datetime | None = None) -> SchedulerEmailDrainResult: ...
+
+    def abandoned_backlog(self) -> int: ...
+
+    def prune(self, *, now: datetime | None = None, limit: int = 1_000) -> int: ...
+
+
 class SchedulerMeterOutboxService(Protocol):
     """The sweep that hands the provider what the pricer already owed it."""
 
@@ -390,6 +411,7 @@ class SchedulerCapacityControls:
 class SchedulerMaintenanceControls:
     volume_metering: SchedulerVolumeMeteringService | None = None
     meter_outbox: SchedulerMeterOutboxService | None = None
+    email_outbox: SchedulerEmailOutboxService | None = None
     plan_changes: SchedulerPlanChangeService | None = None
     billing_reconciliation: SchedulerBillingReconciliationService | None = None
     billing_enforcement: SchedulerBillingEnforcementService | None = None
@@ -417,6 +439,8 @@ class Scheduler:
     last_retention_at: datetime | None = field(default=None, init=False)
     next_retention_attempt_at: datetime | None = field(default=None, init=False)
     retention_consecutive_failures: int = field(default=0, init=False)
+    email_prune_interval_seconds: float = 3600.0
+    last_email_prune_at: datetime | None = field(default=None, init=False)
     event_prune_interval_seconds: float = 3600.0
     last_event_prune_at: datetime | None = field(default=None, init=False)
     meter_event_prune_interval_seconds: float = 3600.0
@@ -820,6 +844,7 @@ class Scheduler:
         plan_changes = self._settle_plan_changes(now=now)
         billing_reconciliation = self._best_effort_reconcile_billing(now=now)
         meter_events_pruned = self._best_effort_prune_meter_events(now=now)
+        self._best_effort_deliver_email(now=now)
         self._best_effort_reconcile_custom_domains(now=now)
         expired_tokens_pruned = (
             self._best_effort_prune_expired_tokens(now=now) if include_containers else 0
@@ -1096,6 +1121,49 @@ class Scheduler:
             release_token_lock(cron_job_locks, lock_key, token)
         self.last_billing_enforcement_at = current
         return result
+
+    def _best_effort_deliver_email(self, *, now: datetime | None = None) -> None:
+        """Hand the provider the messages requests have already committed to.
+
+        Best effort in the same sense as the rest of this pass: the outbox is
+        durable, so a failed sweep delays delivery rather than losing it, and the
+        next tick claims the same rows. What is not best effort is the standing
+        backlog of abandoned messages, which is logged whenever it is not zero,
+        because each one is somebody who was never told something.
+        """
+        email_outbox = self.maintenance.email_outbox
+        if email_outbox is None:
+            return
+        try:
+            drained = email_outbox.drain(now=now)
+        except Exception:
+            LOGGER.exception("scheduler email delivery failed")
+            return
+        if drained.abandoned_count:
+            LOGGER.error(
+                "scheduler abandoned %d email messages this sweep",
+                drained.abandoned_count,
+            )
+        try:
+            backlog = email_outbox.abandoned_backlog()
+        except Exception:
+            LOGGER.exception("scheduler could not read the abandoned email backlog")
+            return
+        if backlog:
+            LOGGER.error("%d email messages have been given up on", backlog)
+        current = now or utc_now()
+        if (
+            self.last_email_prune_at is not None
+            and (current - self.last_email_prune_at).total_seconds()
+            < self.email_prune_interval_seconds
+        ):
+            return
+        try:
+            email_outbox.prune(now=current)
+        except Exception:
+            LOGGER.exception("scheduler email pruning failed")
+            return
+        self.last_email_prune_at = current
 
     def _best_effort_prune_meter_events(self, *, now: datetime | None = None) -> int:
         meter_outbox = self.maintenance.meter_outbox

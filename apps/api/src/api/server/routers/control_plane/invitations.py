@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Response, status
-from identity.invitations import InvitationListing, PendingInvitation
-from pydantic import JsonValue
+from identity.invitations import InvitationListing, InvitationPreview
 from shared.http.users import (
-    PendingInvitationListResponse,
-    PendingInvitationResponse,
+    InvitationPreviewResponse,
     WorkspaceInvitationCreateRequest,
     WorkspaceInvitationListResponse,
     WorkspaceInvitationResponse,
     WorkspaceMemberResponse,
 )
-from shared.identity import AuthScope, WorkspaceInvitationRecord, WorkspaceRole
+from shared.identity import AuthScope, WorkspaceRole
 
 from api.server.auth import read_principal, read_token, write_principal, write_token
 from api.server.dependencies import (
@@ -28,44 +26,31 @@ router = APIRouter()
 
 
 def _invitation_response(listing: InvitationListing) -> WorkspaceInvitationResponse:
-    return WorkspaceInvitationResponse.model_validate(
-        _invitation_fields(listing.invitation, _ADMINISTRATOR_FIELDS)
-        | {"invited_by_name": listing.invited_by_name}
+    invitation = listing.invitation
+    return WorkspaceInvitationResponse(
+        id=invitation.id,
+        workspace_id=invitation.workspace_id,
+        email=invitation.email,
+        role=invitation.role,
+        invited_by_user_id=invitation.invited_by_user_id,
+        invited_by_name=listing.invited_by_name,
+        expired=listing.expired,
+        expires_at=invitation.expires_at,
+        created_at=invitation.created_at,
+        updated_at=invitation.updated_at,
     )
 
 
-def _pending_response(pending: PendingInvitation) -> PendingInvitationResponse:
-    """The invitee's view, which names the workspace and says nothing of who else was asked."""
-    return PendingInvitationResponse.model_validate(
-        _invitation_fields(pending.invitation, _INVITEE_FIELDS)
-        | {
-            "workspace_name": pending.workspace.name,
-            "invited_by_name": pending.invited_by_name,
-        }
+def _preview_response(preview: InvitationPreview) -> InvitationPreviewResponse:
+    return InvitationPreviewResponse(
+        workspace_id=preview.workspace.id,
+        workspace_name=preview.workspace.name,
+        email=preview.invitation.email,
+        role=preview.invitation.role,
+        invited_by_name=preview.invited_by_name,
+        expired=preview.expired,
+        expires_at=preview.invitation.expires_at,
     )
-
-
-# What leaves the API, stated once per audience rather than as two hand-copied
-# argument lists that a new field is silently missing from.
-_ADMINISTRATOR_FIELDS = {
-    "id",
-    "workspace_id",
-    "email",
-    "role",
-    "status",
-    "invited_by_user_id",
-    "expires_at",
-    "created_at",
-    "updated_at",
-}
-_INVITEE_FIELDS = {"id", "workspace_id", "email", "role", "expires_at", "created_at"}
-
-
-def _invitation_fields(
-    invitation: WorkspaceInvitationRecord,
-    fields: set[str],
-) -> dict[str, JsonValue]:
-    return invitation.model_dump(mode="json", include=fields)
 
 
 @router.get(
@@ -81,8 +66,8 @@ def list_workspace_invitations(
     """Who has been asked in but has not answered.
 
     An administrator's view rather than a member's: these are the addresses of
-    people with no membership here, and a member who can read them learns who the
-    workspace is recruiting.
+    people with no membership here, and a member who could read them would learn
+    who the workspace is recruiting.
     """
     workspace_id = authorize_token_workspace(
         services,
@@ -93,7 +78,7 @@ def list_workspace_invitations(
         required_role=WorkspaceRole.Administrator,
     )
     return WorkspaceInvitationListResponse(
-        data=[_invitation_response(item) for item in services.invitations.pending(workspace_id)]
+        data=[_invitation_response(item) for item in services.invitations.open_offers(workspace_id)]
     )
 
 
@@ -109,7 +94,12 @@ def create_workspace_invitation(
     principal: write_principal,
     services: ApiServices = Depends(current_services),
 ) -> WorkspaceInvitationResponse:
-    """Inviting someone is an administrator's decision, like adding them outright."""
+    """Inviting someone is an administrator's decision, like adding them outright.
+
+    Returns once the offer and its message are committed. Delivery happens on the
+    drain, so this does not wait on the email provider and a provider outage
+    delays the message rather than refusing the invitation.
+    """
     workspace_id = authorize_token_workspace(
         services,
         principal.token,
@@ -139,6 +129,7 @@ def resend_workspace_invitation(
     principal: write_principal,
     services: ApiServices = Depends(current_services),
 ) -> WorkspaceInvitationResponse:
+    """Send the offer again on a new link. The previous link stops working."""
     workspace_id = authorize_token_workspace(
         services,
         principal.token,
@@ -183,56 +174,63 @@ def revoke_workspace_invitation(
 
 
 @router.get(
-    "/api/v1/invitations",
-    response_model=PendingInvitationListResponse,
-    operation_id="list_pending_invitations",
+    "/api/v1/invitations/{token}",
+    response_model=InvitationPreviewResponse,
+    operation_id="preview_invitation",
 )
-def list_pending_invitations(
-    token: read_token,
+def preview_invitation(
+    token: str,
+    credential: read_token,
     services: ApiServices = Depends(current_services),
-) -> PendingInvitationListResponse:
-    """What is waiting for the signed-in person, by the address they signed in with."""
-    user_id = require_user_principal(token)
-    return PendingInvitationListResponse(
-        data=[_pending_response(item) for item in services.invitations.pending_for_user(user_id)]
-    )
+) -> InvitationPreviewResponse:
+    """What the link opens onto, so somebody sees what they are joining first.
+
+    Reading does not redeem: a mail scanner or a link preview follows this and
+    must not spend the offer. Signed in, because accepting will be, and bouncing
+    somebody to sign-in at the preview rather than at the button is one round
+    trip fewer through a flow that already leaves the site.
+    """
+    require_user_principal(credential)
+    return _preview_response(services.invitations.preview(token))
 
 
 @router.post(
-    "/api/v1/invitations/{invitation_id}/accept",
+    "/api/v1/invitations/{token}/accept",
     response_model=WorkspaceMemberResponse,
     status_code=status.HTTP_201_CREATED,
     operation_id="accept_invitation",
 )
 def accept_invitation(
-    invitation_id: str,
-    token: write_token,
+    token: str,
+    credential: write_token,
     services: ApiServices = Depends(current_services),
 ) -> WorkspaceMemberResponse:
-    require_user_principal(token)
+    """Redeem the link as whoever is signed in, and join.
+
+    A POST rather than a GET on the link itself, so nothing that merely follows
+    a URL, a scanner or a prefetch, can join a workspace on somebody's behalf.
+    """
+    require_user_principal(credential)
     accepted = services.invitations.accept(
-        resource_identifier(invitation_id, resource="invitation"),
-        actor=token,
+        token,
+        actor=credential,
         admission=DatabaseBillingAdmission(),
     )
     return member_response(accepted.user, accepted.membership)
 
 
 @router.post(
-    "/api/v1/invitations/{invitation_id}/decline",
+    "/api/v1/invitations/{token}/decline",
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="decline_invitation",
 )
 def decline_invitation(
-    invitation_id: str,
-    token: write_token,
+    token: str,
+    credential: write_token,
     services: ApiServices = Depends(current_services),
 ) -> Response:
-    require_user_principal(token)
-    services.invitations.decline(
-        resource_identifier(invitation_id, resource="invitation"),
-        actor=token,
-    )
+    require_user_principal(credential)
+    services.invitations.decline(token, actor=credential)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

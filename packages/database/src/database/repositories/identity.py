@@ -71,7 +71,6 @@ from shared.identity import (
     UserStatus,
     WorkspaceInvitationRecord,
     WorkspaceInvitationRole,
-    WorkspaceInvitationStatus,
     WorkspaceMemberRecord,
     WorkspaceRecord,
     WorkspaceRole,
@@ -83,6 +82,7 @@ from sqlalchemy import and_, case, delete, exists, func, or_, select, text, upda
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, class_mapper
+from sqlalchemy.sql.elements import ColumnElement
 
 _STRINGS_ADAPTER = TypeAdapter(list[str])
 
@@ -775,14 +775,15 @@ class WorkspaceInvitationRepository:
         email: str,
         role: WorkspaceInvitationRole,
         invited_by_user_id: str,
+        token_hash: str,
         expires_at: datetime,
     ) -> WorkspaceInvitationRecord:
-        """One open offer per address; the partial unique index is what refuses a second."""
+        """Write one open offer. The unique constraint is what refuses a second."""
         row = WorkspaceInvitationTable(
             workspace_id=workspace_id,
             email=email,
             role=role.value,
-            status=WorkspaceInvitationStatus.Pending.value,
+            token_hash=token_hash,
             invited_by_user_id=invited_by_user_id or None,
             expires_at=expires_at,
         )
@@ -796,31 +797,69 @@ class WorkspaceInvitationRepository:
         return workspace_invitation_record_from_table(row)
 
     def lock(self, invitation_id: str) -> WorkspaceInvitationRecord | None:
-        """The row, held against a concurrent answer to the same invitation."""
+        """The row, held against a concurrent answer to the same offer."""
+        return self._locked(WorkspaceInvitationTable.id == invitation_id)
+
+    def lock_by_token(self, token_hash: str) -> WorkspaceInvitationRecord | None:
+        """The offer a link presents, held so two clicks cannot both redeem it."""
+        return self._locked(WorkspaceInvitationTable.token_hash == token_hash)
+
+    def by_token(self, token_hash: str) -> WorkspaceInvitationRecord | None:
+        """The same lookup without the lock, for showing an offer before answering it."""
         row = self.session.scalars(
-            select(WorkspaceInvitationTable)
-            .where(WorkspaceInvitationTable.id == invitation_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+            select(WorkspaceInvitationTable).where(
+                WorkspaceInvitationTable.token_hash == token_hash
+            )
         ).first()
         return workspace_invitation_record_from_table(row) if row is not None else None
 
-    def pending_for_workspace(self, workspace_id: str) -> list[WorkspaceInvitationRecord]:
+    def for_workspace(self, workspace_id: str) -> list[WorkspaceInvitationRecord]:
+        """Every open offer, expired ones included: those are still an admin's to act on."""
         rows = self.session.scalars(
             select(WorkspaceInvitationTable)
-            .where(
-                WorkspaceInvitationTable.workspace_id == workspace_id,
-                WorkspaceInvitationTable.status == WorkspaceInvitationStatus.Pending.value,
-            )
+            .where(WorkspaceInvitationTable.workspace_id == workspace_id)
             .order_by(WorkspaceInvitationTable.created_at.asc())
         )
         return [workspace_invitation_record_from_table(row) for row in rows]
 
-    def distinct_open_email_count_for_owner(self, owner_user_id: str, *, now: datetime) -> int:
-        """Addresses with an open offer into any workspace this account owns.
+    def reissue(
+        self,
+        invitation_id: str,
+        *,
+        token_hash: str,
+        expires_at: datetime,
+    ) -> WorkspaceInvitationRecord:
+        """Give the offer a new secret and a fresh expiry.
 
-        Excludes addresses that already belong to a seated member of one of those
-        workspaces, so an offer to somebody already counted is not counted twice.
+        The old link stops working, which is the point: a resend exists because
+        the first message went astray, and leaving its link live would keep
+        whatever went astray with it usable.
+        """
+        row = self._row(invitation_id)
+        row.token_hash = token_hash
+        row.expires_at = expires_at
+        row.updated_at = utc_now()
+        self.session.flush()
+        return workspace_invitation_record_from_table(row)
+
+    def delete(self, invitation_id: str) -> bool:
+        """Take the offer off the table, however it was answered.
+
+        Nothing keeps answered offers: a membership records an acceptance and the
+        workspace audit history records every outcome, so a retained row would be
+        a second account of the same event with nothing keeping the two in step.
+        """
+        result = self.session.execute(
+            delete(WorkspaceInvitationTable).where(WorkspaceInvitationTable.id == invitation_id)
+        )
+        self.session.flush()
+        return isinstance(result, CursorResult) and result.rowcount > 0
+
+    def open_email_count_for_owner(self, owner_user_id: str, *, now: datetime) -> int:
+        """Addresses holding a live offer into any workspace this account owns.
+
+        Excludes addresses already seated in one of those workspaces, so an offer
+        to somebody who is counted as a member is not counted twice.
         """
         owned = WorkspaceMemberTable.__table__.alias("owned_workspace_members")
         seated = WorkspaceMemberTable.__table__.alias("seated_workspace_members")
@@ -845,7 +884,6 @@ class WorkspaceInvitationRepository:
                 .where(
                     owned.c.user_id == owner_user_id,
                     owned.c.role == WorkspaceRole.Owner.value,
-                    WorkspaceInvitationTable.status == WorkspaceInvitationStatus.Pending.value,
                     WorkspaceInvitationTable.expires_at > now,
                     WorkspaceInvitationTable.email.not_in(seated_emails),
                 )
@@ -853,57 +891,14 @@ class WorkspaceInvitationRepository:
             or 0
         )
 
-    def open_for_email(
-        self, email: str, *, now: datetime
-    ) -> list[tuple[WorkspaceInvitationRecord, WorkspaceRecord]]:
-        """Everything still answerable that is addressed to this email.
-
-        Joined to the workspace and narrowed to active ones here, because an
-        invitation into a workspace being deleted is not one anybody can act on.
-        """
-        rows = self.session.execute(
-            select(WorkspaceInvitationTable, WorkspaceTable)
-            .join(WorkspaceTable, WorkspaceTable.id == WorkspaceInvitationTable.workspace_id)
-            .where(
-                WorkspaceInvitationTable.email == email,
-                WorkspaceInvitationTable.status == WorkspaceInvitationStatus.Pending.value,
-                WorkspaceInvitationTable.expires_at > now,
-                WorkspaceTable.status == WorkspaceStatus.Active.value,
-            )
-            .order_by(WorkspaceInvitationTable.created_at.asc())
-        )
-        return [
-            (
-                workspace_invitation_record_from_table(invitation),
-                WorkspaceRecord.model_validate(workspace.payload),
-            )
-            for invitation, workspace in rows
-        ]
-
-    def extend(self, invitation_id: str, *, expires_at: datetime) -> WorkspaceInvitationRecord:
-        row = self._row(invitation_id)
-        row.expires_at = expires_at
-        row.updated_at = utc_now()
-        self.session.flush()
-        return workspace_invitation_record_from_table(row)
-
-    def resolve(
-        self,
-        invitation_id: str,
-        *,
-        status: WorkspaceInvitationStatus,
-        resolved_by_user_id: str,
-        now: datetime,
-    ) -> WorkspaceInvitationRecord:
-        if status is WorkspaceInvitationStatus.Pending:
-            raise ValueError("an invitation is resolved to a terminal status")
-        row = self._row(invitation_id)
-        row.status = status.value
-        row.resolved_by_user_id = resolved_by_user_id or None
-        row.resolved_at = now
-        row.updated_at = now
-        self.session.flush()
-        return workspace_invitation_record_from_table(row)
+    def _locked(self, condition: ColumnElement[bool]) -> WorkspaceInvitationRecord | None:
+        row = self.session.scalars(
+            select(WorkspaceInvitationTable)
+            .where(condition)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).first()
+        return workspace_invitation_record_from_table(row) if row is not None else None
 
     def _row(self, invitation_id: str) -> WorkspaceInvitationTable:
         row = self.session.get(WorkspaceInvitationTable, invitation_id)
