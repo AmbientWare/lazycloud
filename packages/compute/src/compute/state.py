@@ -13,7 +13,11 @@ from coordination.redis_serialization import (
 )
 from pydantic import Field, JsonValue, field_validator
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
+from shared.compute_enrollment import (
+    AgentCapacityState,
+    AgentWorkerSlotStatus,
+    ComputePreflightCheck,
+)
 from shared.compute_policy import MachinePool, UnitName
 from shared.contracts import ContractModel
 from shared.routing import AgentBackendRoute
@@ -28,13 +32,6 @@ DEFAULT_COMPUTE_AGENT_TOKEN_TTL_SECONDS = 86_400
 
 
 class ComputeUnitStatus(StrEnum):
-    Pending = "pending"
-    Active = "active"
-    Draining = "draining"
-    Deleted = "deleted"
-
-
-class AgentWorkerSlotStatus(StrEnum):
     Pending = "pending"
     Active = "active"
     Draining = "draining"

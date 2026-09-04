@@ -49,7 +49,6 @@ from images.service import ImageBuildExecutionController
 
 IMAGE_BUILD_STREAM_POLL_SECONDS = 0.25
 IMAGE_BUILD_RECORD_WAIT_TIMEOUT_SECONDS = 30.0
-IMAGE_BUILD_STREAM_CLOSED_REASON = "Build stream was closed."
 MAX_IMAGE_BUILD_CONTEXT_ARCHIVE_BYTES = 256 * 1024 * 1024
 MANAGED_PACKAGE_BUILD_CONTRACT_VERSION = 3
 
@@ -665,8 +664,7 @@ def _stream_image_execution(
             python_version=python_version,
         )
     finally:
-        if controller.is_alive:
-            controller.request_cancel(IMAGE_BUILD_STREAM_CLOSED_REASON)
+        controller.join(timeout=0)
 
 
 def _stream_build_id(

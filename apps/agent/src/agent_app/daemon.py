@@ -605,6 +605,22 @@ class DockerAgentWorkerController:
         active_by_id = {slot.worker_id: slot for slot in self.active_slots()}
         applied: list[AgentWorkerReconcileAction] = []
         for action in plan.actions:
+            if action.action not in {
+                WorkerSlotAction.Prepare,
+                WorkerSlotAction.Start,
+                WorkerSlotAction.Restart,
+            }:
+                continue
+            if action.slot is None:
+                continue
+            image = action.slot.worker_image or self.worker_image_override
+            if not image:
+                raise ValueError(f"worker image is required for slot {action.worker_id}")
+            self._ensure_worker_image(image)
+        for action in plan.actions:
+            if action.action is WorkerSlotAction.Prepare:
+                applied.append(action)
+                continue
             if action.action in {WorkerSlotAction.Stop, WorkerSlotAction.Restart}:
                 slot = active_by_id.pop(action.worker_id, None) or action.slot
                 if slot is not None:
@@ -652,7 +668,7 @@ class DockerAgentWorkerController:
             raise RuntimeError(msg)
 
     def _start(self, slot: AgentWorkerSlot, bootstrap: AgentBootstrap) -> None:
-        image = self.worker_image_override or slot.worker_image
+        image = slot.worker_image or self.worker_image_override
         if not image:
             msg = f"worker image is required for slot {slot.worker_id}"
             raise ValueError(msg)
@@ -1020,7 +1036,15 @@ class AgentDaemonService:
         private_network_started: bool = False,
         private_network_address: str = "",
     ) -> AgentDaemonRunResult:
-        stream = self.client.stream_agent(StreamAgentRequest(agent_token=state.agent_token))
+        active_slots = self.worker_controller.active_slots()
+        stream = self.client.stream_agent(
+            StreamAgentRequest(
+                agent_token=state.agent_token,
+                active_worker_images={
+                    slot.worker_id: slot.worker_image for slot in active_slots if slot.worker_image
+                },
+            )
+        )
         if not stream.ok:
             msg = stream.err_msg or "agent stream rejected"
             if stream.retryable:
@@ -1036,7 +1060,6 @@ class AgentDaemonService:
                 private_network_address=private_network_address,
             )
         desired_slots = [_agent_slot_from_gateway(slot) for slot in stream.slots]
-        active_slots = self.worker_controller.active_slots()
         plan = plan_worker_slot_reconciliation(
             desired_slots,
             active_slots,
@@ -1113,6 +1136,13 @@ class AgentDaemonService:
         private_network_started: bool,
         private_network_address: str,
     ) -> AgentDaemonRunResult:
+        if state.capacity_state is AgentCapacityState.Draining:
+            return _capacity_interruption_result(
+                state,
+                current_iterations=current_iterations,
+                private_network_started=private_network_started,
+                private_network_address=private_network_address,
+            )
         if state.capacity_state is AgentCapacityState.Cordoned:
             self.worker_controller.gracefully_stop_all(
                 grace_seconds=self.options.interruption_grace_seconds
@@ -1696,6 +1726,7 @@ def _agent_slot_from_gateway(slot: http.AgentWorkerSlot) -> AgentWorkerSlot:
         gpu_assignment=slot.gpu_assignment,
         network_prefix=slot.network_prefix,
         worker_image=slot.worker_image,
+        status=slot.status,
     )
 
 
@@ -1842,13 +1873,11 @@ def _recoverable_stream_error(exc: Exception) -> bool:
         return True
     return isinstance(
         exc,
-        (
-            ConnectionError,
-            TimeoutError,
-            OSError,
-            http_client.HTTPException,
-            urllib.error.URLError,
-        ),
+        ConnectionError
+        | TimeoutError
+        | OSError
+        | http_client.HTTPException
+        | urllib.error.URLError,
     )
 
 

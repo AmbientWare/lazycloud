@@ -91,6 +91,7 @@ from compute.provider_machines import (
     _require_internal_pooled_unit,
     _reservation_open,
     _utc,
+    provider_unit_request,
 )
 from compute.providers import (
     CapacityOwnerMutationLease,
@@ -1906,6 +1907,12 @@ class ComputeService:
                 else max(available, desired_machines, 1)
             )
             if desired_machines == 0:
+                unit = unit.model_copy(
+                    update={
+                        "replacement_machine_id": "",
+                        "replacement_template_version": "",
+                    }
+                )
                 operations = ComputeCapacityOperationRepository(session)
                 for operation in operations.list_open_for_owner(unit.capacity_owner_id):
                     operations.upsert(
@@ -1931,6 +1938,8 @@ class ComputeService:
                     observed_machines=unit.observed_machines,
                     phase=ComputeUnitPhase.Updating,
                     provider_state=unit.provider_state,
+                    replacement_machine_id=unit.replacement_machine_id,
+                    replacement_template_version=unit.replacement_template_version,
                 )
                 if intent is None:
                     raise ConflictError(f"compute pool {unit!r} capacity intent was superseded")
@@ -1955,12 +1964,13 @@ class ComputeService:
                     maximum=maximum,
                     observed=observed,
                 )
+            provider_request = self._provider_unit_request(intent, offer)
             snapshot = provider.pooled.set_unit_capacity(
                 # Creates the autoscaling group, and its launch template with
                 # it, when the pool has none yet.
-                self._provider_unit_request(intent, offer),
-                desired_machines=intent.desired_machines,
-                max_machines=intent.max_machines,
+                provider_request,
+                desired_machines=provider_request.desired_machines,
+                max_machines=provider_request.max_machines,
             )
             return self.provider_machines._apply_pooled_snapshot(
                 intent,
@@ -1974,7 +1984,7 @@ class ComputeService:
             raise
         except Exception as exc:
             self._mark_pooled_capacity_degraded(intent)
-            if isinstance(exc, (InvalidInputError, UpstreamUnavailableError)):
+            if isinstance(exc, InvalidInputError | UpstreamUnavailableError):
                 raise
             raise UpstreamUnavailableError(
                 f"compute pool {unit!r} provider capacity update failed"
@@ -2032,7 +2042,81 @@ class ComputeService:
             if record.instance_id and record.machine_id
         }
 
-    def internal_unit_cordoned_machines(
+    def begin_internal_unit_replacement(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+        machine_id: str,
+        *,
+        template_version: str,
+    ) -> ComputeUnitRecord:
+        """Durably pair one superseded machine with one operational surge."""
+
+        if not machine_id or not template_version:
+            raise InvalidInputError("replacement machine and template version are required")
+        with self.context.database.session() as session:
+            units = ComputeUnitRepository(session)
+            unit = _require_internal_pooled_unit(
+                units.get_by_capacity_owner_id(capacity_owner_id, for_update=True),
+                unit_ref=capacity_owner_id,
+            )
+            if unit.workspace_id != workspace_id:
+                raise NotFoundError(f"compute unit not found: {capacity_owner_id}")
+            if unit.replacement_machine_id:
+                if (
+                    unit.replacement_machine_id == machine_id
+                    and unit.replacement_template_version == template_version
+                ):
+                    return unit
+                raise ConflictError(
+                    f"compute pool {unit.name!r} already has a replacement in progress"
+                )
+            provider_machine = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+            if provider_machine is None or provider_machine.pool_id != unit.id:
+                raise NotFoundError(f"provider machine not found in compute unit: {machine_id}")
+            return units.upsert(
+                unit.model_copy(
+                    update={
+                        "replacement_machine_id": machine_id,
+                        "replacement_template_version": template_version,
+                        "generation": unit.generation + 1,
+                        "phase": ComputeUnitPhase.Updating,
+                        "status": ComputeUnitPhase.Updating.value,
+                    }
+                )
+            )
+
+    def clear_internal_unit_replacement(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+        machine_id: str,
+    ) -> ComputeUnitRecord:
+        """Clear a settled replacement pair without changing logical capacity."""
+
+        with self.context.database.session() as session:
+            units = ComputeUnitRepository(session)
+            unit = _require_internal_pooled_unit(
+                units.get_by_capacity_owner_id(capacity_owner_id, for_update=True),
+                unit_ref=capacity_owner_id,
+            )
+            if unit.workspace_id != workspace_id:
+                raise NotFoundError(f"compute unit not found: {capacity_owner_id}")
+            if not unit.replacement_machine_id:
+                return unit
+            if unit.replacement_machine_id != machine_id:
+                raise ConflictError(f"compute pool {unit.name!r} replacement ownership changed")
+            return units.upsert(
+                unit.model_copy(
+                    update={
+                        "replacement_machine_id": "",
+                        "replacement_template_version": "",
+                        "generation": unit.generation + 1,
+                    }
+                )
+            )
+
+    def internal_unit_draining_machines(
         self,
         workspace_id: str,
         capacity_owner_id: str,
@@ -2041,9 +2125,7 @@ class ComputeService:
 
         Read rather than inferred from the scheduler's worker records: a worker is
         `Unavailable` for a disconnect or a failed registration just as readily as
-        for a cordon, and only the enrollment says which. It also carries the clock
-        a drain deadline has to be measured from — a worker's `updated_at` moves
-        with every heartbeat, so a deadline keyed on it never arrives.
+        for maintenance, and only the enrollment says which.
         """
         with self.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session).list_for_unit(
@@ -2054,11 +2136,11 @@ class ComputeService:
             enrollment.machine_id: enrollment.capacity_observed_at
             for enrollment in enrollments
             if enrollment.machine_id
-            and enrollment.capacity_state is not AgentCapacityState.Available
+            and enrollment.capacity_state is AgentCapacityState.Draining
             and enrollment.capacity_observed_at is not None
         }
 
-    def cordon_internal_unit_machine(
+    def drain_internal_unit_machine(
         self,
         workspace_id: str,
         machine_id: str,
@@ -2069,9 +2151,9 @@ class ComputeService:
         """Stop a machine being given new work, durably.
 
         Narrow on purpose: capacity state, its reason, and when it was observed,
-        and nothing else. The enrollment is where a cordon survives — the
+        and nothing else. The enrollment is where a planned drain survives. The
         scheduler's worker record is rewritten by reconcile passes and by the node
-        itself, so a cordon written there is undone by whichever runs next.
+        itself, so a drain written only there is undone by whichever runs next.
 
         Setting it is the whole of stopping the machine. Schedulability reads it,
         so the worker is disabled on the next pass and stays disabled; the
@@ -2090,7 +2172,7 @@ class ComputeService:
             enrollments.save(
                 enrollment.model_copy(
                     update={
-                        "capacity_state": AgentCapacityState.Cordoned,
+                        "capacity_state": AgentCapacityState.Draining,
                         "capacity_reason": reason,
                         "capacity_observed_at": current_time,
                     }
@@ -2124,9 +2206,22 @@ class ComputeService:
         )
         if self.scheduler_hooks is not None:
             self.scheduler_hooks.disable_machine(machine_id, "idle_pool_scale_down")
-        target = max(unit.desired_machines - 1, unit.min_machines)
+        replacement = unit.replacement_machine_id == machine_id
+        target = (
+            unit.desired_machines
+            if replacement
+            else max(unit.desired_machines - 1, unit.min_machines)
+        )
         return self.provider_machines._apply_pooled_snapshot(
-            unit.model_copy(update={"desired_machines": target}),
+            unit.model_copy(
+                update={
+                    "desired_machines": target,
+                    "replacement_machine_id": "" if replacement else unit.replacement_machine_id,
+                    "replacement_template_version": (
+                        "" if replacement else unit.replacement_template_version
+                    ),
+                }
+            ),
             offer,
             snapshot,
             provider=provider.pooled,
@@ -2944,22 +3039,7 @@ class ComputeService:
         pool: ComputeUnitRecord,
         offer: ComputeOffer,
     ) -> ProviderUnitRequest:
-        if self.pool_bootstrap_factory is None or pool.provider_connection_id is None:
-            raise RuntimeError("provider pool bootstrap is not configured")
-        return ProviderUnitRequest(
-            workspace_id=pool.workspace_id,
-            unit_id=pool.id,
-            unit_name=pool.name,
-            provider_ref=pool.provider_ref,
-            provider_connection_id=pool.provider_connection_id,
-            generation=pool.generation,
-            offer=offer,
-            desired_machines=pool.desired_machines,
-            max_machines=pool.max_machines,
-            root_volume_gib=pool.root_volume_gib,
-            bootstrap=self.pool_bootstrap_factory.bootstrap(pool, offer),
-            provider_state=pool.provider_state,
-        )
+        return provider_unit_request(self.pool_bootstrap_factory, pool, offer)
 
     def _retire_proven_provider_pool_machines(
         self,

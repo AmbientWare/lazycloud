@@ -35,6 +35,7 @@ from scheduler.pool_drain import WorkerPoolDrainService
 from scheduler.pool_state import SchedulerPoolStateService
 from scheduler.preemption import (
     SchedulerCapacityInterruptionService,
+    SchedulerWorkerMaintenanceService,
     SchedulerWorkerPreemptionService,
 )
 from scheduler.service import (
@@ -284,6 +285,7 @@ class SchedulerRuntime:
                     DatabaseCapacityInterruptionSource(
                         scheduler_services.context.database,
                     ),
+                    SchedulerWorkerMaintenanceService(worker_states),
                 ),
             ),
             maintenance=SchedulerMaintenanceControls(

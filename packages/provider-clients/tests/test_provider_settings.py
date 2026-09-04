@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
-from agent.binary import AgentBinarySettings
 from provider_clients.settings import (
     AwsAccountConnectionSettings,
     AwsCapacitySettings,
@@ -59,24 +56,8 @@ def test_aws_capacity_settings_reject_partial_and_mutable_artifacts() -> None:
     )
     assert not released_only.configured
 
-    capacity = AwsCapacitySettings(
-        worker_image_digest="registry.example.com/worker:latest",
-        agent_binary_url=(
-            f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'b' * 64}/"
-            "lazycloud-agent-linux-amd64"
-        ),
-        cpu_ami_ids={"us-east-1": "ami-0123456789abcdef0"},
-        gpu_ami_ids={"us-east-1": "ami-0fedcba9876543210"},
-        instance_hourly_micros={"m7i.xlarge": 340_000},
-    )
-    artifact = AgentBinarySettings(
-        binary_dir=Path("/opt/lazycloud/agent"),
-        binary_version="0.1.0",
-        binary_sha256_by_arch={"amd64": "b" * 64},
-    )
-
     with pytest.raises(ValidationError, match="worker_image_digest"):
-        capacity.binaries_by_region(artifact)
+        AwsCapacitySettings(worker_image_digest="registry.example.com/worker:latest")
 
 
 def test_a_deployment_that_wants_no_gpus_can_still_use_aws() -> None:

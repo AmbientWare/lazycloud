@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Protocol
 from uuid import uuid4
 
 from pydantic import Field, JsonValue
@@ -27,6 +28,12 @@ DEFAULT_IMAGE_BUILD_CONTAINER_ADDRESS_WAIT_SECONDS = 180.0
 DEFAULT_IMAGE_BUILD_CONTAINER_ADDRESS_POLL_SECONDS = 0.1
 DEFAULT_SCHEDULER_BUILD_REGISTRY_CREDENTIAL_TTL_SECONDS = 5 * 60
 IMAGE_BUILD_REQUEST_KIND = IMAGE_BUILD_WORKLOAD_ID
+
+
+class ImageBuildContainerStateStore(Protocol):
+    def delete_pending_build_container(self, container_id: str) -> bool: ...
+
+    def mark_build_container_stopping(self, container_id: str, ttl_seconds: int) -> bool: ...
 
 
 class ImageBuildSchedulerCredentialSource(StrEnum):

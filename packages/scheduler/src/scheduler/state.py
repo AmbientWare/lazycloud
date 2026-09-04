@@ -52,6 +52,7 @@ from scheduler.fleet import (
     WorkerPoolStateSnapshot,
 )
 from scheduler.preemption import (
+    WorkerPlannedDrainOperation,
     WorkerPreemptionOperation,
     WorkerPreemptionQueueResult,
 )
@@ -308,6 +309,41 @@ for index = 1, request_count do
 end
 redis.call("SET", KEYS[6], ARGV[2], "EX", ARGV[10])
 return requeued
+"""
+
+CLAIM_WORKER_ROLLOUT_SLOT_SCRIPT = """
+local expired = redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[3])
+for _, worker_id in ipairs(expired) do
+    redis.call("ZREM", KEYS[1], worker_id)
+    redis.call("HDEL", KEYS[2], worker_id)
+end
+if redis.call("ZSCORE", KEYS[1], ARGV[1]) then
+    redis.call("ZADD", KEYS[1], ARGV[4], ARGV[1])
+    redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
+    redis.call("EXPIRE", KEYS[1], ARGV[6])
+    redis.call("EXPIRE", KEYS[2], ARGV[6])
+    return 1
+end
+if redis.call("ZCARD", KEYS[1]) >= tonumber(ARGV[5]) then
+    return 0
+end
+redis.call("ZADD", KEYS[1], ARGV[4], ARGV[1])
+redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
+redis.call("EXPIRE", KEYS[1], ARGV[6])
+redis.call("EXPIRE", KEYS[2], ARGV[6])
+return 1
+"""
+
+RELEASE_WORKER_ROLLOUT_SLOT_SCRIPT = """
+if redis.call("HGET", KEYS[2], ARGV[1]) ~= ARGV[2] then
+    return 0
+end
+redis.call("ZREM", KEYS[1], ARGV[1])
+redis.call("HDEL", KEYS[2], ARGV[1])
+if redis.call("ZCARD", KEYS[1]) == 0 then
+    redis.call("DEL", KEYS[1], KEYS[2])
+end
+return 1
 """
 
 RESERVE_CONCURRENCY_SCRIPT = """
@@ -666,6 +702,22 @@ class SchedulerStateKeys:
             "mutation-lock",
         )
 
+    def worker_rollout_slots(self, capacity_owner_id: str) -> str:
+        return self.redis.key(
+            self.namespace,
+            "capacity-owners",
+            capacity_owner_key_segment(capacity_owner_id),
+            "worker-rollout-slots",
+        )
+
+    def worker_rollout_revisions(self, capacity_owner_id: str) -> str:
+        return self.redis.key(
+            self.namespace,
+            "capacity-owners",
+            capacity_owner_key_segment(capacity_owner_id),
+            "worker-rollout-revisions",
+        )
+
     def network_container_ip(self, network_prefix: str, container_id: str) -> str:
         return self.redis.key("worker-network", network_prefix, "containers", container_id, "ip")
 
@@ -949,6 +1001,77 @@ class RedisSchedulerWorkerRepository:
         *,
         now: datetime,
     ) -> WorkerPreemptionQueueResult:
+        return self._transition_worker_requests(
+            operation,
+            status=SchedulerWorkerStatus.Unavailable,
+            now=now,
+        )
+
+    def drain_worker_for_maintenance(
+        self,
+        operation: WorkerPlannedDrainOperation,
+        *,
+        now: datetime,
+    ) -> WorkerPreemptionQueueResult:
+        return self._transition_worker_requests(
+            operation,
+            status=SchedulerWorkerStatus.Draining,
+            now=now,
+        )
+
+    def claim_worker_rollout_slot(
+        self,
+        capacity_owner_id: str,
+        worker_id: str,
+        target_revision: str,
+        *,
+        max_unavailable: int,
+        now: datetime,
+        ttl_seconds: int = 300,
+    ) -> bool:
+        if max_unavailable <= 0:
+            return False
+        expires_at = now.timestamp() + max(ttl_seconds, 1)
+        key_ttl_seconds = max(ttl_seconds * 2, 2)
+        return bool(
+            self.redis.eval_scalar(
+                CLAIM_WORKER_ROLLOUT_SLOT_SCRIPT,
+                2,
+                self.keys.worker_rollout_slots(capacity_owner_id),
+                self.keys.worker_rollout_revisions(capacity_owner_id),
+                worker_id,
+                target_revision,
+                now.timestamp(),
+                expires_at,
+                max_unavailable,
+                key_ttl_seconds,
+            )
+        )
+
+    def release_worker_rollout_slot(
+        self,
+        capacity_owner_id: str,
+        worker_id: str,
+        target_revision: str,
+    ) -> bool:
+        return bool(
+            self.redis.eval_scalar(
+                RELEASE_WORKER_ROLLOUT_SLOT_SCRIPT,
+                2,
+                self.keys.worker_rollout_slots(capacity_owner_id),
+                self.keys.worker_rollout_revisions(capacity_owner_id),
+                worker_id,
+                target_revision,
+            )
+        )
+
+    def _transition_worker_requests(
+        self,
+        operation: WorkerPreemptionOperation | WorkerPlannedDrainOperation,
+        *,
+        status: SchedulerWorkerStatus,
+        now: datetime,
+    ) -> WorkerPreemptionQueueResult:
         def write() -> WorkerPreemptionQueueResult:
             worker = self.get_worker(operation.worker_id)
             if worker is None:
@@ -969,16 +1092,14 @@ class RedisSchedulerWorkerRepository:
                 or (operation.machine_id and worker.machine_id != operation.machine_id)
             ):
                 raise SchedulerRepositoryError(
-                    f"worker {operation.worker_id} preemption session fence is stale"
+                    f"worker {operation.worker_id} interruption session fence is stale"
                 )
             payloads = self.redis.hash_get_all(
                 self.keys.worker_request_payloads(operation.worker_id)
             )
             requests: list[SchedulerWorkerRequest] = []
-            # Queued and in-flight alike: a preempted machine keeps neither, and a
-            # request the worker was handed is exactly as lost as one it never saw
-            # unless something takes it back. The script decides which of them may
-            # be requeued.
+            # Queued and in-flight alike: an unavailable worker keeps neither.
+            # The script decides which requests have not started and may move.
             for list_key in (
                 self.keys.worker_requests(operation.worker_id),
                 self.keys.worker_inflight_requests(operation.worker_id),
@@ -1008,7 +1129,7 @@ class RedisSchedulerWorkerRepository:
             updated_worker_fields = redis_serialization.dump_model_hash(
                 worker.model_copy(
                     update={
-                        "status": SchedulerWorkerStatus.Unavailable,
+                        "status": status,
                         "resource_version": worker.resource_version + 1,
                         "updated_at": now,
                     }
@@ -1041,20 +1162,20 @@ class RedisSchedulerWorkerRepository:
                     *request_args,
                 )
             )
-            status = int(result[0]) if result else 0
-            if status == -1:
+            result_code = int(result[0]) if result else 0
+            if result_code == -1:
                 raise WorkerStateNotFoundError(operation.worker_id)
-            if status == -2:
+            if result_code == -2:
                 raise SchedulerRepositoryError(
-                    f"worker {operation.worker_id} preemption session fence is stale"
+                    f"worker {operation.worker_id} interruption session fence is stale"
                 )
             updated = self.get_worker(operation.worker_id)
             if updated is None:
                 raise WorkerStateNotFoundError(operation.worker_id)
             return WorkerPreemptionQueueResult(
                 worker=updated,
-                changed=status == 1,
-                requeued_request_ids=result[1:] if status == 1 else [],
+                changed=result_code == 1,
+                requeued_request_ids=result[1:] if result_code == 1 else [],
             )
 
         return self._with_worker_lock(operation.worker_id, write)

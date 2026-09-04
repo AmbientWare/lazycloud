@@ -48,7 +48,6 @@ _REQUIRED_PROVIDER_SYMBOLS = (
 
 _DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 _ENROLLMENT_PATTERN = r"^[A-Za-z0-9_-]{16,128}$"
-_WORKER_IMAGE_PATTERN = r"^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$"
 
 
 class NodeBootstrapError(ValueError):
@@ -85,7 +84,6 @@ class NodeBootstrapSettings(ContractModel):
     enrollment_request_id: str = Field(pattern=_ENROLLMENT_PATTERN)
     agent_binary_url: str
     agent_sha256: str = Field(pattern=_DIGEST_PATTERN)
-    worker_image_digest: str = Field(pattern=_WORKER_IMAGE_PATTERN)
     gpu_count: int = Field(default=0, ge=0, le=8)
 
     @field_validator("control_plane_url")
@@ -133,7 +131,6 @@ CONTROL_PLANE_URL=__CONTROL_PLANE_URL__
 ENROLLMENT_REQUEST_ID=__ENROLLMENT_REQUEST_ID__
 AGENT_SHA256=__AGENT_SHA256__
 AGENT_BINARY_URL=__AGENT_BINARY_URL__
-WORKER_IMAGE_DIGEST=__WORKER_IMAGE_DIGEST__
 GPU_COUNT=__GPU_COUNT__
 AGENT_STATE_DIR=__AGENT_STATE_DIR__
 
@@ -196,7 +193,6 @@ bootstrap_main() {
     --machine-fingerprint "$(node_fingerprint)" \\
     --hostname "$(node_hostname)" \\
     --executor container \\
-    --worker-image "$WORKER_IMAGE_DIGEST" \\
     --max-gpus "$GPU_COUNT" \\
     --state-dir "$AGENT_STATE_DIR"
 }
@@ -232,7 +228,6 @@ def node_bootstrap_script(
         "__ENROLLMENT_REQUEST_ID__": settings.enrollment_request_id,
         "__AGENT_SHA256__": settings.agent_sha256,
         "__AGENT_BINARY_URL__": settings.agent_binary_url,
-        "__WORKER_IMAGE_DIGEST__": settings.worker_image_digest,
         "__GPU_COUNT__": str(settings.gpu_count),
         "__AGENT_STATE_DIR__": AGENT_STATE_DIR,
         **dict(profile.values),
