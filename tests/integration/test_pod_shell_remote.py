@@ -799,6 +799,10 @@ def test_shell_websocket_proxies_bidirectional_terminal_bytes(
             scheduler_containers=scheduler_containers,
             transport_factory=_RecordingTransportFactory(_RecordingTransport()),
         ),
+        # The websocket route resolves its backend on the event loop, so a
+        # service without these reaches it with no way to route.
+        async_database=isolated_services.require_async_io().database,
+        async_scheduler_containers=_FakeAsyncShellContainers(scheduler_containers),
     )
     client = client_stack.enter_context(
         TestClient(create_app(isolated_services, shell_service=shell_service))
@@ -951,6 +955,22 @@ class _FakeSchedulerContainers:
         if self.address_map.container_id == container_id:
             return self.address_map
         return SchedulerContainerAddressMap(container_id=container_id)
+
+
+@dataclass(slots=True)
+class _FakeAsyncShellContainers:
+    """The same answers as the synchronous fake, on the event loop.
+
+    The websocket shell route resolves its backend asynchronously, so a service
+    built without this reaches the route with nothing to route through and the
+    connection closes on "asynchronous shell routing is not configured". Reading
+    from the synchronous fake keeps one source of truth for both paths.
+    """
+
+    containers: _FakeSchedulerContainers
+
+    async def get_container_address_map(self, container_id: str) -> SchedulerContainerAddressMap:
+        return self.containers.get_container_address_map(container_id)
 
 
 @dataclass(slots=True)

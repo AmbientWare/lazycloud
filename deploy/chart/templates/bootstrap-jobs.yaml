@@ -40,6 +40,14 @@ kind: Job
 metadata:
   name: database-bootstrap
   annotations:
+    # A PreSync hook, so migrations run to completion before anything that reads
+    # the schema is updated. In a wave alone the workloads would be applied in
+    # the same sync and race the migration; as a hook, Argo runs this and waits,
+    # and a failure stops the sync with the running deployment untouched.
+    argocd.argoproj.io/hook: PreSync
+    # The Job is deleted before the next run rather than left behind, because a
+    # Job's pod template is immutable and the image tag moves with every commit.
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
     argocd.argoproj.io/sync-wave: "-3"
     # Deleted and recreated rather than patched or replaced in place. A Job's
     # pod template is immutable, so the image tag moving with the commit makes
@@ -67,7 +75,7 @@ spec:
       containers:
         - name: database-bootstrap
           image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
-          command: ["lazycloud-admin", "database", "initialize"]
+          command: ["lazycloud-admin", "database", "migrate"]
           env:
             {{- include "lazycloud.env" . | nindent 12 }}
             {{- include "lazycloud.databaseEnv" .Values.bootstrap.database | nindent 12 }}
