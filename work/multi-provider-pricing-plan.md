@@ -6,9 +6,12 @@ The combined feature branch remains a draft. Provider-neutral capacity, warm
 and cold lifecycle, GPU CPU backfill, region contracts, and forward billing
 migrations are implemented. Regional prices are not published.
 
-The simulation is local validation material. Check it against production
-decisions and billing, but do not include its code or generated outputs in the
-pull request or shipped product.
+The simulation is checked local validation material. Its 192 main paths and
+48 sensitivity paths reconcile monthly and annual accounting against the final
+reserved-memory controller. Its code and generated outputs are excluded from
+the pull request and shipped product. Demand remains estimated. These scenarios
+do not justify lower compute prices or establish an overall margin improvement
+from CPU backfill, so the backfill merge condition below remains unmet.
 
 Hetzner activation is blocked on secure host enrollment and live acceptance.
 Source IP and metadata cannot authenticate a host against its own tenants.
