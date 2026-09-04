@@ -64,7 +64,6 @@ _ENROLLMENT_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 _INSTANCE_ID_PATTERN = re.compile(r"^i-[0-9a-f]{8,17}$")
 _REGION_PATTERN = re.compile(r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
 _SAFE_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-_WORKER_IMAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
 # Fallback only. A block device mapping resizes the root volume only when its
 # device name matches the AMI's own root device, so the AMI is asked first.
 _DEFAULT_ROOT_DEVICE_NAME = "/dev/xvda"
@@ -80,7 +79,6 @@ class AwsManagedPoolBootstrap(AwsManagedPoolModel):
     agent_version: str = Field(pattern=_SAFE_VERSION_PATTERN.pattern)
     agent_sha256: str = Field(pattern=_DIGEST_PATTERN.pattern)
     agent_binary_url: str
-    worker_image_digest: str = Field(pattern=_WORKER_IMAGE_PATTERN.pattern)
     gpu_count: int = Field(default=0, ge=0, le=8)
 
     @field_validator("control_plane_url")
@@ -97,7 +95,6 @@ class AwsManagedPoolBootstrap(AwsManagedPoolModel):
 class AwsManagedPoolBinaries(AwsManagedPoolModel):
     agent_version: str = Field(pattern=_SAFE_VERSION_PATTERN.pattern)
     agent_sha256: str = Field(pattern=_DIGEST_PATTERN.pattern)
-    worker_image_digest: str = Field(pattern=_WORKER_IMAGE_PATTERN.pattern)
     cpu_ami_id: str | None = Field(default=None, pattern=_AMI_PATTERN.pattern)
     gpu_ami_id: str | None = Field(default=None, pattern=_AMI_PATTERN.pattern)
 
@@ -1252,7 +1249,6 @@ def aws_managed_pool_bootstrap_script(spec: AwsManagedPoolSpec) -> str:
         enrollment_request_id=bootstrap.enrollment_request_id,
         agent_binary_url=bootstrap.agent_binary_url,
         agent_sha256=bootstrap.agent_sha256,
-        worker_image_digest=bootstrap.worker_image_digest,
         gpu_count=bootstrap.gpu_count,
     )
     return node_bootstrap_script(settings, AWS_NODE_BOOTSTRAP_PROFILE)

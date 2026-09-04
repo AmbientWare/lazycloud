@@ -51,7 +51,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         default_instance_type=current.default_instance_type,
         initial_cpu_workers=1,
         min_cpu_workers=1,
-        max_cpu_instances=max(1, current.max_cpu_instances),
+        max_cpu_instances=(
+            None if current.max_cpu_instances is None else max(1, current.max_cpu_instances)
+        ),
         max_gpu_instances=current.max_gpu_instances,
         min_free_cpu_millicores=1_000,
         min_free_memory_mib=1_024,

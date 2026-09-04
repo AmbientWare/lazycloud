@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 
+from .release_manifest import WORKER_IMAGE_PATTERN
+
 _AMI_PATTERN = re.compile(r"ami-[0-9a-f]{8,17}")
 _AWS_PRINCIPAL_PATTERN = re.compile(
     r"arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:"
@@ -149,8 +151,11 @@ class AwsCapacitySettings(BaseModel):
 
     @field_validator("worker_image_digest")
     @classmethod
-    def normalize_worker_image_digest(cls, value: str) -> str:
-        return value.strip().lower()
+    def validate_worker_image_digest(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized and WORKER_IMAGE_PATTERN.fullmatch(normalized) is None:
+            raise ValueError("worker_image_digest must name an immutable sha256 digest")
+        return normalized
 
     @field_validator("agent_binary_url")
     @classmethod
@@ -254,7 +259,6 @@ class AwsCapacitySettings(BaseModel):
             region: AwsManagedPoolBinaries(
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
-                worker_image_digest=self.worker_image_digest,
                 cpu_ami_id=self.cpu_ami_ids.get(region),
                 gpu_ami_id=self.gpu_ami_ids.get(region),
             )

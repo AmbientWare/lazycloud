@@ -1759,7 +1759,6 @@ class _Bootstrap:
                 f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
                 "lazycloud-agent-linux-amd64"
             ),
-            worker_image_digest=f"registry.example.com/worker@sha256:{'b' * 64}",
         )
 
     def release(self, pool: ComputeUnitRecord) -> None:

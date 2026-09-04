@@ -41,6 +41,7 @@ from scheduler.capacity_reservations import (
     RedisCapacityReservationRepository,
 )
 from scheduler.fleet import SchedulerContainerStatus
+from scheduler.preemption import SchedulerWorkerMaintenanceService
 from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
@@ -49,6 +50,7 @@ from scheduler.state import (
 )
 from shared.compute_enrollment import (
     AgentCapacityState,
+    AgentWorkerSlotStatus,
     ComputeCredentialStatus,
     ComputePreflightCheck,
     MachineReadinessPhase,
@@ -65,6 +67,7 @@ from shared.errors import ConflictError, InvalidInputError
 from shared.http.compute import MachineJoinCommandRequest, UnitMachineResponse
 from shared.http.gateway import AgentCapacityInterruptionRequest
 from shared.identity import TokenKind, WorkspaceStatus
+from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
 from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.real_redis import RealRedisActors
@@ -111,13 +114,16 @@ def _gateway(
     private_network_connector: _PrivateNetworkConnector | None = None,
 ) -> GatewayControlService:
     selected_redis = redis or RedisClient(FakeRedis(), key_prefix=key_prefix)
+    scheduler_workers = RedisSchedulerWorkerRepository(selected_redis)
+    scheduler_containers = RedisSchedulerContainerRepository(selected_redis)
     _publish_wireguard_gateway(services)
     return replace(
         services.gateway_service,
         compute_state=RedisComputeStateRepository(selected_redis),
-        scheduler_workers=RedisSchedulerWorkerRepository(selected_redis),
-        scheduler_containers=RedisSchedulerContainerRepository(selected_redis),
+        scheduler_workers=scheduler_workers,
+        scheduler_containers=scheduler_containers,
         scheduler_pool_states=RedisWorkerPoolStateRepository(selected_redis),
+        scheduler_maintenance=SchedulerWorkerMaintenanceService(scheduler_workers),
         capacity_reservations=CapacityReservationService(
             RedisCapacityReservationRepository(selected_redis),
             lambda: [],
@@ -299,6 +305,85 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
 
     with pytest.raises(ConflictError, match="machine limit"):
         gateway.join_agent(_join_request(bootstrap.token, fingerprint="other-host"))
+
+
+def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+    request: pytest.FixtureRequest,
+) -> None:
+    redis = real_redis_actors.client()
+    services = _services_with_redis(isolated_services, redis, request)
+    workspace_id = _workspace_id(services)
+    pool = MachinePool("worker-image-update")
+    unit = services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
+    gateway = replace(
+        _gateway(
+            services,
+            key_prefix="worker-image-update",
+            redis=redis,
+        ),
+        agent_worker_image="registry.test/worker@sha256:old",
+    )
+    assert isinstance(gateway.scheduler_workers, RedisSchedulerWorkerRepository)
+    assert isinstance(gateway.scheduler_containers, RedisSchedulerContainerRepository)
+    scheduler_workers = gateway.scheduler_workers
+    scheduler_containers = gateway.scheduler_containers
+    bootstrap = _create_join_token(gateway, pool, workspace_id)
+    joined = gateway.join_agent(_join_request(bootstrap.token))
+    _bind_private_network(gateway, workspace_id, joined.agent_token, joined.machine_id)
+    worker_id = agent_machine_worker_id(joined.machine_id)
+    scheduler_workers.add_worker(
+        SchedulerWorkerRecord(
+            worker_id=worker_id,
+            pool=pool,
+            capacity_owner_id=unit.capacity_owner_id,
+            workspace_id=workspace_id,
+            machine_id=joined.machine_id,
+            status=SchedulerWorkerStatus.Available,
+        )
+    )
+    current_image = {worker_id: "registry.test/worker@sha256:old"}
+    assert (
+        gateway.stream_agent(
+            StreamAgentRequest(agent_token=joined.agent_token, active_worker_images=current_image)
+        )
+        .slots[0]
+        .status
+        is AgentWorkerSlotStatus.Active
+    )
+
+    container = SchedulerContainerState(
+        container_id="running-during-worker-image-update",
+        workspace_id=workspace_id,
+        stub_id="running-workload",
+        worker_id=worker_id,
+        status=SchedulerContainerStatus.Running,
+    )
+    scheduler_containers.set_container_state(container)
+    gateway = replace(
+        gateway,
+        agent_worker_image="registry.test/worker@sha256:new",
+    )
+
+    draining = gateway.stream_agent(
+        StreamAgentRequest(agent_token=joined.agent_token, active_worker_images=current_image)
+    )
+
+    assert draining.slots[0].worker_image == "registry.test/worker@sha256:new"
+    assert draining.slots[0].status is AgentWorkerSlotStatus.Draining
+    drained_worker = scheduler_workers.get_worker(worker_id)
+    assert drained_worker is not None
+    assert drained_worker.status is SchedulerWorkerStatus.Draining
+
+    scheduler_containers.update_container_status(
+        container.container_id,
+        SchedulerContainerStatus.Complete,
+    )
+    switch = gateway.stream_agent(
+        StreamAgentRequest(agent_token=joined.agent_token, active_worker_images=current_image)
+    )
+    assert switch.slots[0].status is AgentWorkerSlotStatus.Pending
 
 
 def test_private_network_registration_requires_a_fresh_handshake(

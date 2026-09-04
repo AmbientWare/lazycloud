@@ -20,13 +20,13 @@ from images.execution import (
     ImageBuildExecutorKind,
     emit_image_build_event,
 )
-from images.lifecycle import ImageBuildContainerStateStore
 from images.scheduling import (
     DEFAULT_IMAGE_BUILD_CONTAINER_ADDRESS_POLL_SECONDS,
     DEFAULT_IMAGE_BUILD_CONTAINER_ADDRESS_WAIT_SECONDS,
     DEFAULT_IMAGE_BUILD_CONTAINER_CPU_MILLICORES,
     DEFAULT_IMAGE_BUILD_CONTAINER_MEMORY_MIB,
     IMAGE_BUILD_REQUEST_KIND,
+    ImageBuildContainerStateStore,
     plan_image_build_container_request,
 )
 from shared.containers import ContainerRecord

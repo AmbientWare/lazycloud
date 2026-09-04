@@ -28,6 +28,10 @@ class WorkerPreemptionOperation(ContractModel):
     observed_at: datetime
 
 
+class WorkerPlannedDrainOperation(WorkerPreemptionOperation):
+    """Fenced request to stop new placement without stopping started work."""
+
+
 class WorkerPreemptionQueueResult(ContractModel):
     worker: SchedulerWorkerRecord
     changed: bool = False
@@ -66,6 +70,13 @@ class WorkerPreemptionRepository(Protocol):
         now: datetime,
     ) -> WorkerPreemptionQueueResult: ...
 
+    def drain_worker_for_maintenance(
+        self,
+        operation: WorkerPlannedDrainOperation,
+        *,
+        now: datetime,
+    ) -> WorkerPreemptionQueueResult: ...
+
     def has_recoverable_container_request(
         self,
         container_id: str,
@@ -93,6 +104,15 @@ class SchedulerWorkerPreemption(Protocol):
     def preempt_worker(
         self,
         operation: WorkerPreemptionOperation,
+        *,
+        now: datetime | None = None,
+    ) -> WorkerPreemptionResult: ...
+
+
+class SchedulerWorkerMaintenance(Protocol):
+    def drain_worker(
+        self,
+        operation: WorkerPlannedDrainOperation,
         *,
         now: datetime | None = None,
     ) -> WorkerPreemptionResult: ...
@@ -157,10 +177,32 @@ class SchedulerWorkerPreemptionService:
 
 
 @dataclass(slots=True)
+class SchedulerWorkerMaintenanceService:
+    workers: WorkerPreemptionRepository
+
+    def drain_worker(
+        self,
+        operation: WorkerPlannedDrainOperation,
+        *,
+        now: datetime | None = None,
+    ) -> WorkerPreemptionResult:
+        queued = self.workers.drain_worker_for_maintenance(
+            operation,
+            now=now or utc_now(),
+        )
+        return WorkerPreemptionResult(
+            worker=queued.worker,
+            changed=queued.changed,
+            requeued_request_ids=queued.requeued_request_ids,
+        )
+
+
+@dataclass(slots=True)
 class SchedulerCapacityInterruptionService:
     preemption: SchedulerWorkerPreemption
     workers: WorkerPreemptionRepository
     source: CapacityInterruptionSource | None = None
+    maintenance: SchedulerWorkerMaintenance | None = None
 
     def reconcile(self, *, now: datetime | None = None) -> list[WorkerPreemptionResult]:
         if self.source is None:
@@ -178,6 +220,7 @@ class SchedulerCapacityInterruptionService:
         now: datetime | None = None,
     ) -> list[WorkerPreemptionResult]:
         if interruption.state not in {
+            AgentCapacityState.Draining,
             AgentCapacityState.Preempting,
             AgentCapacityState.Cordoned,
         }:
@@ -200,7 +243,17 @@ class SchedulerCapacityInterruptionService:
                 reason=interruption.reason,
                 observed_at=interruption.observed_at,
             )
-            results.append(self.preemption.preempt_worker(operation, now=current_time))
+            if interruption.state is AgentCapacityState.Draining:
+                if self.maintenance is None:
+                    raise RuntimeError("planned worker maintenance service is not configured")
+                results.append(
+                    self.maintenance.drain_worker(
+                        WorkerPlannedDrainOperation.model_validate(operation.model_dump()),
+                        now=current_time,
+                    )
+                )
+            else:
+                results.append(self.preemption.preempt_worker(operation, now=current_time))
         return results
 
 
@@ -209,8 +262,11 @@ __all__ = [
     "CapacityInterruptionSource",
     "SchedulerCapacityInterruption",
     "SchedulerCapacityInterruptionService",
+    "SchedulerWorkerMaintenance",
+    "SchedulerWorkerMaintenanceService",
     "SchedulerWorkerPreemption",
     "SchedulerWorkerPreemptionService",
+    "WorkerPlannedDrainOperation",
     "WorkerPreemptionContainerRepository",
     "WorkerPreemptionContainerStopper",
     "WorkerPreemptionOperation",

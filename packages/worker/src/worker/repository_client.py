@@ -13,6 +13,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.checkpoints import AutomaticCheckpointCreationLease, CheckpointRecord
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
+from shared.image_building.records import BuildStatus
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsPayload
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
@@ -46,6 +47,7 @@ from worker.events import (
     ContainerLifecyclePayload,
     WorkerStreamEvent,
 )
+from worker.image_build_execution import WorkerImageBuildExecutionResult
 from worker.origin_access import (
     CacheOriginCredentialRequest,
     ImageArchiveUploadCredentialRequest,
@@ -115,6 +117,8 @@ from worker.repository_payloads import (
     RemoveNetworkLockRequest,
     RemoveNetworkLockResponse,
     RemoveWorkerResponse,
+    ReportImageBuildResultRequest,
+    ReportImageBuildResultResponse,
     ResolveSourceCacheCleanupRequest,
     ResolveSourceCacheCleanupResponse,
     SaveCheckpointStateRequest,
@@ -154,6 +158,13 @@ from worker.tools import ContainerCredentialRequest, ContainerCredentials
 type JsonObject = dict[str, JsonValue]
 
 _JSON_OBJECT: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
+
+
+def _bounded_image_build_log(value: str) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= 8 * 1024:
+        return value
+    return encoded[: 8 * 1024].decode("utf-8", errors="ignore")
 
 
 class WorkerRepositoryClientError(RuntimeError):
@@ -322,6 +333,16 @@ class WorkerRepositoryHttpClient:
             "/worker-repository/acknowledge-container-request",
             request,
             AcknowledgeContainerRequestResponse,
+        )
+
+    def report_image_build_result(
+        self,
+        request: ReportImageBuildResultRequest,
+    ) -> ReportImageBuildResultResponse:
+        return self._post_model(
+            "/worker-repository/report-image-build-result",
+            request,
+            ReportImageBuildResultResponse,
         )
 
     def acknowledge_worker_event(self, event_id: str, worker_id: str) -> None:
@@ -855,6 +876,31 @@ class RemoteSchedulerWorkerRepository:
                 container_id=container_id,
             )
         ).acknowledged
+
+    def report_image_build_result(
+        self,
+        request: SchedulerWorkerRequest,
+        result: WorkerImageBuildExecutionResult,
+    ) -> None:
+        response = self.client.report_image_build_result(
+            ReportImageBuildResultRequest(
+                worker_id=self.state.worker_id,
+                workspace_id=request.workspace_id,
+                container_id=request.container_id,
+                build_id=result.build_id,
+                image_id=result.image_id,
+                status=BuildStatus.Complete if result.ok else BuildStatus.Failed,
+                object_key=result.object_key,
+                archive_size_bytes=result.archive_size_bytes,
+                archive_sha256=result.archive_sha256,
+                logs=[_bounded_image_build_log(line) for line in result.logs[-256:]],
+                error_message=result.error_message[:65_536],
+            )
+        )
+        if not response.accepted:
+            raise WorkerRepositoryClientError(
+                f"image build result was not accepted for {result.build_id!r}"
+            )
 
     def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None:
         return self.client.get_worker_by_id(WorkerIdRequest(worker_id=worker_id)).worker

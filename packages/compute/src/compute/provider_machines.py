@@ -185,6 +185,7 @@ def provider_unit_request(
 ) -> ProviderUnitRequest:
     if pool_bootstrap_factory is None or pool.provider_connection_id is None:
         raise RuntimeError("provider pool bootstrap is not configured")
+    desired_machines, max_machines = provider_unit_operational_capacity(pool)
     return ProviderUnitRequest(
         workspace_id=pool.workspace_id,
         unit_id=pool.id,
@@ -193,12 +194,19 @@ def provider_unit_request(
         provider_connection_id=pool.provider_connection_id,
         generation=pool.generation,
         offer=offer,
-        desired_machines=pool.desired_machines,
-        max_machines=pool.max_machines,
+        desired_machines=desired_machines,
+        max_machines=max_machines,
         root_volume_gib=pool.root_volume_gib,
         bootstrap=pool_bootstrap_factory.bootstrap(pool, offer),
         provider_state=pool.provider_state,
     )
+
+
+def provider_unit_operational_capacity(pool: ComputeUnitRecord) -> tuple[int, int]:
+    """Capacity sent to the provider, including an active replacement surge."""
+
+    desired = pool.desired_machines + int(bool(pool.replacement_machine_id))
+    return desired, max(pool.max_machines, desired, 1)
 
 
 def publish_workspace_change(
@@ -530,6 +538,8 @@ class ProviderMachineReconciler:
                     observed_machines=snapshot.observed_machines,
                     phase=phase,
                     provider_state=provider_state,
+                    replacement_machine_id=pool.replacement_machine_id,
+                    replacement_template_version=pool.replacement_template_version,
                 )
             else:
                 updated = repository.apply_provider_state(

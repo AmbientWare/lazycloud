@@ -264,6 +264,7 @@ def agent_worker_slot_view(slot: ComputeAgentWorkerSlotState) -> AgentWorkerSlot
         gpu_assignment=slot.gpu_assignment,
         network_prefix=slot.network_prefix,
         worker_image=slot.worker_image,
+        status=slot.status,
     )
 
 
@@ -291,6 +292,8 @@ def _agent_worker_status(status: SchedulerWorkerStatus) -> WorkerStatus:
         return WorkerStatus.Available
     if status is SchedulerWorkerStatus.Pending:
         return WorkerStatus.Pending
+    if status is SchedulerWorkerStatus.Draining:
+        return WorkerStatus.Draining
     return WorkerStatus.Disabled
 
 

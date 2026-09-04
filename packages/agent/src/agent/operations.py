@@ -23,7 +23,11 @@ from shared.app_identity import (
     NAME,
 )
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.compute_enrollment import AgentCapacityState, PreflightSeverity
+from shared.compute_enrollment import (
+    AgentCapacityState,
+    AgentWorkerSlotStatus,
+    PreflightSeverity,
+)
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.env import (
@@ -826,6 +830,7 @@ class WorkerExecutor(StrEnum):
 
 class WorkerSlotAction(StrEnum):
     Keep = "keep"
+    Prepare = "prepare"
     Start = "start"
     Restart = "restart"
     Stop = "stop"
@@ -1006,6 +1011,7 @@ class AgentWorkerSlot(ContractModel):
     gpu_assignment: str = ""
     network_prefix: str = ""
     worker_image: str = ""
+    status: AgentWorkerSlotStatus = AgentWorkerSlotStatus.Active
 
     @field_validator(
         "cpu_millicores",
@@ -1583,6 +1589,15 @@ def plan_worker_slot_reconciliation(
         elif same_worker_slot(active, desired):
             action = WorkerSlotAction.Keep
             reason = "worker slot is unchanged"
+        elif desired.status is AgentWorkerSlotStatus.Draining:
+            action = WorkerSlotAction.Prepare
+            reason = "worker image is prepared while the current worker drains"
+        elif desired.status is AgentWorkerSlotStatus.Pending:
+            action = WorkerSlotAction.Restart
+            reason = "worker slot is drained and ready to switch"
+        elif active.worker_image != desired.worker_image:
+            action = WorkerSlotAction.Prepare
+            reason = "worker image is awaiting restart authorization"
         else:
             action = WorkerSlotAction.Restart
             reason = "worker slot changed"

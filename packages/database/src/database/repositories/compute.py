@@ -576,6 +576,8 @@ class ComputeUnitRepository:
         observed_machines: int,
         phase: ComputeUnitPhase,
         provider_state: ComputeUnitProviderState,
+        replacement_machine_id: str | None = None,
+        replacement_template_version: str | None = None,
     ) -> ComputeUnitRecord | None:
         current = self.get(pool_id, for_update=True)
         if current is None or current.generation != expected_generation:
@@ -589,6 +591,16 @@ class ComputeUnitRepository:
                 "phase": phase,
                 "status": phase.value,
                 "provider_state": provider_state,
+                "replacement_machine_id": (
+                    current.replacement_machine_id
+                    if replacement_machine_id is None
+                    else replacement_machine_id
+                ),
+                "replacement_template_version": (
+                    current.replacement_template_version
+                    if replacement_template_version is None
+                    else replacement_template_version
+                ),
             }
         )
         return self.upsert(updated)
@@ -1314,6 +1326,7 @@ class ComputeMachineEnrollmentRepository:
                 ComputeMachineEnrollmentTable.status == ComputeMachineEnrollmentStatus.Active.value,
                 ComputeMachineEnrollmentTable.capacity_state.in_(
                     (
+                        AgentCapacityState.Draining.value,
                         AgentCapacityState.Preempting.value,
                         AgentCapacityState.Cordoned.value,
                     )

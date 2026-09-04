@@ -318,7 +318,7 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
             name="ck_compute_machine_enrollments_generation",
         ),
         CheckConstraint(
-            "capacity_state IN ('available', 'preempting', 'cordoned')",
+            "capacity_state IN ('available', 'draining', 'preempting', 'cordoned')",
             name="ck_compute_machine_enrollments_capacity_state",
         ),
         Index(

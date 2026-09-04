@@ -84,6 +84,7 @@ from worker.runtime_config import (
 )
 from worker.scheduler_requests import (
     WorkerSchedulerRequestContainerRepository,
+    WorkerSchedulerRequestImageBuildResultReporter,
     WorkerSchedulerRequestProcessor,
     WorkerSchedulerRequestWorkerRepository,
 )
@@ -102,6 +103,7 @@ from worker.workspace_credential_refresh import WorkspaceCredentialRefresher
 
 
 class WorkerProcessWorkerRepository(
+    WorkerSchedulerRequestImageBuildResultReporter,
     WorkerSchedulerRequestWorkerRepository,
     WorkerLifecycleRepository,
     Protocol,
@@ -358,6 +360,7 @@ def assemble_worker_process_services(
         execution=execution,
         lifecycle=lifecycle,
         image_builds=image_builds,
+        image_build_results=worker_repository,
         usage_recorder=usage_supervisor,
         worker_gpu_type=registration.gpu_type,
         # The worker's own slot, not the machine: several workers share a host,

@@ -99,6 +99,7 @@ def test_worker_scheduler_request_processor_executes_image_build_branch() -> Non
     workers = _WorkerRepository(requests=[request])
     execution = _ExecutionService()
     image_builds = _ImageBuildExecutionService()
+    image_build_results = _ImageBuildResultReporter()
     containers = _ContainerRepository(
         states={"ctr-1": _state(request, status=SchedulerContainerStatus.Pending)}
     )
@@ -109,6 +110,7 @@ def test_worker_scheduler_request_processor_executes_image_build_branch() -> Non
         execution=execution,
         worker_gpu_type="",
         image_builds=image_builds,
+        image_build_results=image_build_results,
         usage_recorder=_UsageWindowRecorder(),
     )
 
@@ -120,16 +122,11 @@ def test_worker_scheduler_request_processor_executes_image_build_branch() -> Non
     assert result.image_build is not None
     assert result.image_build.object_key == "image-1.rclip"
     assert image_builds.requests == [request]
+    assert image_build_results.reports == [(request, result.image_build)]
     assert execution.contexts == []
-    assert containers.status_updates == [
-        ("ctr-1", SchedulerContainerStatus.Running),
-        ("ctr-1", SchedulerContainerStatus.Complete),
-    ]
-    assert containers.exit_codes == [("ctr-1", 0)]
-    assert containers.ttls == [
-        DEFAULT_CONTAINER_STATE_TTL_SECONDS,
-        DEFAULT_CONTAINER_STATE_TTL_SECONDS,
-    ]
+    assert containers.status_updates == [("ctr-1", SchedulerContainerStatus.Running)]
+    assert containers.exit_codes == []
+    assert containers.ttls == [DEFAULT_CONTAINER_STATE_TTL_SECONDS]
 
 
 def test_worker_scheduler_request_processor_bills_an_image_build_that_failed() -> None:
@@ -161,13 +158,14 @@ def test_worker_scheduler_request_processor_bills_an_image_build_that_failed() -
         execution=_ExecutionService(),
         worker_gpu_type="A100",
         image_builds=_FailingImageBuildExecutionService(),
+        image_build_results=_ImageBuildResultReporter(),
         usage_recorder=usage,
     )
 
     result = processor.run_once()
 
     assert result.status is WorkerSchedulerRequestStatus.Error
-    assert containers.exit_codes == [("ctr-1", 1)]
+    assert containers.exit_codes == []
     [window] = usage.windows
     assert window.container_id == "ctr-1"
     assert window.duration_ms > 0
@@ -657,6 +655,20 @@ class _FailingImageBuildExecutionService:
             status=WorkerImageBuildStatus.Failed,
             error_message="image archive build failed",
         )
+
+
+@dataclass(slots=True)
+class _ImageBuildResultReporter:
+    reports: list[tuple[SchedulerWorkerRequest, WorkerImageBuildExecutionResult]] = field(
+        default_factory=list
+    )
+
+    def report_image_build_result(
+        self,
+        request: SchedulerWorkerRequest,
+        result: WorkerImageBuildExecutionResult,
+    ) -> None:
+        self.reports.append((request, result))
 
 
 @dataclass(slots=True)

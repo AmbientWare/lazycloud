@@ -8,6 +8,7 @@ from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial
+from math import ceil
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -107,6 +108,10 @@ from observability.stream_state import AsyncRedisEventStreamRepository, RedisEve
 from observability.usage import UsageService
 from operations.management import ManagementService
 from pydantic import JsonValue
+from scheduler.preemption import (
+    SchedulerWorkerMaintenance,
+    WorkerPlannedDrainOperation,
+)
 from scheduler.state import (
     RedisWorkerPoolStateRepository,
     SchedulerRepositoryError,
@@ -120,6 +125,7 @@ from shared.app_identity import AGENT_NAME, CONTAINER_WORKER_IMAGE
 from shared.app_slug import app_slug_or_default, validate_app_slug
 from shared.compute_enrollment import (
     AgentCapacityState,
+    AgentWorkerSlotStatus,
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
     MachineReadinessPhase,
@@ -395,11 +401,13 @@ class GatewayControlService:
     runtime_origin: Callable[[], str]
     private_network_connector: BackendConnector = field(default_factory=SocketBackendConnector)
     capacity_interruption_sink: AgentCapacityInterruptionSink | None = None
+    scheduler_maintenance: SchedulerWorkerMaintenance | None = None
     route_authenticator: BackendRouteAuthenticator | None = None
     agent_cluster_name: str = AGENT_NAME
     agent_worker_image_registry: str = ""
     agent_worker_image_name: str = CONTAINER_WORKER_IMAGE
     agent_worker_image_tag: str = "local"
+    agent_worker_image: str = ""
     agent_artifact_version: str = ""
     agent_sha256_by_arch: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
     async_http_client: AsyncBackendHttpClient | None = None
@@ -533,9 +541,9 @@ class GatewayControlService:
                         "object upload and claim cleanup failed",
                         [exc, abort_error],
                     ) from None
-            if isinstance(exc, (KeyError, ValueError)):
+            if isinstance(exc, KeyError | ValueError):
                 raise _domain_error(exc) from exc
-            if isinstance(exc, (AsyncBackendHttpError, RuntimeError, OSError)):
+            if isinstance(exc, AsyncBackendHttpError | RuntimeError | OSError):
                 raise UpstreamUnavailableError(str(exc)) from exc
             raise
         return PutObjectResponse(object_id=record.id)
@@ -2167,13 +2175,19 @@ class GatewayControlService:
                 response_state.capacity_owner_id,
                 workspace_id=response_state.workspace_id,
             )
-            agent_slots = self._agent_slots_for_machine(
-                response_state,
-                billing_owner=billing_owner_for_unit(bootstrap_unit),
-            )
             bootstrap_pool = self.unit_state_coordinator.private_unit_state(
                 bootstrap_unit,
                 workspace_id=response_state.workspace_id,
+            )
+            agent_slots = self._agent_slots_for_machine(
+                response_state,
+                billing_owner=billing_owner_for_unit(bootstrap_unit),
+                active_worker_images=request.active_worker_images,
+                rollout_fleet_size=max(
+                    bootstrap_unit.desired_machines,
+                    bootstrap_unit.observed_machines,
+                    1,
+                ),
             )
             bootstrap = build_agent_bootstrap_config(
                 response_state.workspace_id,
@@ -2283,6 +2297,8 @@ class GatewayControlService:
         agent_state: ComputeAgentTokenState,
         *,
         billing_owner: UsageBillingOwner,
+        active_worker_images: Mapping[str, str],
+        rollout_fleet_size: int,
     ) -> list[ComputeAgentWorkerSlotState]:
         slots = self.compute_states.list_agent_worker_slot_states(
             agent_state.workspace_id,
@@ -2293,6 +2309,33 @@ class GatewayControlService:
         if worker is None:
             self._prune_agent_worker_slots(agent_state, keep_worker_id="", slots=slots)
             return []
+
+        target_image = self.agent_worker_image or agent_worker_image(
+            self.agent_worker_image_registry,
+            self.agent_worker_image_name,
+            self.agent_worker_image_tag,
+        )
+        slot_status = AgentWorkerSlotStatus.Active
+        active_image = active_worker_images.get(worker.worker_id, "")
+        image_revision = hashlib.sha256(target_image.encode("utf-8")).hexdigest()[:24]
+        if active_image == target_image and worker.status is SchedulerWorkerStatus.Available:
+            self.scheduler_worker_lookup.release_worker_rollout_slot(
+                worker.capacity_owner_id,
+                worker.worker_id,
+                image_revision,
+            )
+        if active_image and active_image != target_image:
+            worker, claimed = self._claim_worker_image_rollout(
+                worker,
+                image_revision=image_revision,
+                fleet_size=rollout_fleet_size,
+            )
+            if claimed and worker.status is SchedulerWorkerStatus.Draining:
+                slot_status = (
+                    AgentWorkerSlotStatus.Draining
+                    if self._worker_has_started_containers(worker.worker_id)
+                    else AgentWorkerSlotStatus.Pending
+                )
 
         existing = next((slot for slot in slots if slot.worker_id == worker.worker_id), None)
         token_plan = self._agent_worker_token(
@@ -2308,11 +2351,8 @@ class GatewayControlService:
             token_plan,
             billing_owner=billing_owner,
             cluster_name=self.agent_cluster_name,
-            worker_image=agent_worker_image(
-                self.agent_worker_image_registry,
-                self.agent_worker_image_name,
-                self.agent_worker_image_tag,
-            ),
+            worker_image=target_image,
+            status=slot_status,
         )
         self._prune_agent_worker_slots(
             agent_state,
@@ -2353,6 +2393,91 @@ class GatewayControlService:
                 workspace_id=agent_state.workspace_id,
             )
         return [saved]
+
+    def _claim_worker_image_rollout(
+        self,
+        worker: SchedulerWorkerRecord,
+        *,
+        image_revision: str,
+        fleet_size: int,
+    ) -> tuple[SchedulerWorkerRecord, bool]:
+        if self.scheduler_maintenance is None:
+            raise RuntimeError("scheduler worker maintenance is not configured")
+        max_unavailable = max(1, ceil(max(fleet_size, 1) * 0.1))
+        current_time = utc_now()
+        try:
+            with (
+                self.capacity_reservations.mutation_lock(worker.capacity_owner_id),
+                self.capacity_reservations.dispatch_lock(worker.capacity_owner_id),
+            ):
+                current = self.scheduler_worker_lookup.get_worker(worker.worker_id)
+                if current is None or current.capacity_owner_id != worker.capacity_owner_id:
+                    return worker, False
+                if current.status is SchedulerWorkerStatus.Available:
+                    try:
+                        pool_state = self.scheduler_pool_state_repository.get_state(
+                            worker.capacity_owner_id
+                        )
+                    except SchedulerRepositoryError:
+                        if fleet_size > 1:
+                            return current, False
+                    else:
+                        minimum_available = max(fleet_size - max_unavailable, 0)
+                        if pool_state.available_workers - 1 < minimum_available:
+                            return current, False
+                elif current.status is not SchedulerWorkerStatus.Draining:
+                    return current, False
+                claimed = self.scheduler_worker_lookup.claim_worker_rollout_slot(
+                    current.capacity_owner_id,
+                    current.worker_id,
+                    image_revision,
+                    max_unavailable=max_unavailable,
+                    now=current_time,
+                )
+                if not claimed or current.status is SchedulerWorkerStatus.Draining:
+                    return current, claimed
+                try:
+                    drained = self.scheduler_maintenance.drain_worker(
+                        WorkerPlannedDrainOperation(
+                            operation_id=(
+                                f"worker-image-{image_revision}-{current.resource_version}"
+                            ),
+                            worker_id=current.worker_id,
+                            capacity_owner_id=current.capacity_owner_id,
+                            machine_id=current.machine_id,
+                            expected_resource_version=current.resource_version,
+                            reason="worker image update",
+                            observed_at=current_time,
+                        )
+                    ).worker
+                except Exception:
+                    self.scheduler_worker_lookup.release_worker_rollout_slot(
+                        current.capacity_owner_id,
+                        current.worker_id,
+                        image_revision,
+                    )
+                    raise
+                return drained, True
+        except ConflictError:
+            current = self.scheduler_worker_lookup.get_worker(worker.worker_id)
+            return current or worker, False
+
+    def _worker_has_started_containers(self, worker_id: str) -> bool:
+        for container in self.scheduler_container_lookup.list_by_worker(worker_id):
+            if container.status in {
+                SchedulerContainerStatus.Running,
+                SchedulerContainerStatus.Stopping,
+            }:
+                return True
+            if (
+                container.status is SchedulerContainerStatus.Pending
+                and not self.scheduler_worker_lookup.has_recoverable_container_request(
+                    container.container_id,
+                    worker_id=worker_id,
+                )
+            ):
+                return True
+        return False
 
     def _agent_machine_worker(
         self,

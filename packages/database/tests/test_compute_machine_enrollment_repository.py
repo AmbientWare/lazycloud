@@ -15,7 +15,7 @@ from shared.compute_policy import MachinePool
 from shared.timestamps import utc_now
 
 
-def test_active_capacity_interruptions_return_only_preempting_machines(
+def test_active_capacity_interruptions_return_planned_drains_and_preemptions(
     isolated_services: ApiServices,
 ) -> None:
     pool = MachinePool("interruption-test")
@@ -26,7 +26,11 @@ def test_active_capacity_interruptions_return_only_preempting_machines(
         assert owner is not None
         machines = MachineRepository(session)
         enrollments = ComputeMachineEnrollmentRepository(session)
-        for state in (AgentCapacityState.Preempting, AgentCapacityState.Available):
+        for state in (
+            AgentCapacityState.Draining,
+            AgentCapacityState.Preempting,
+            AgentCapacityState.Available,
+        ):
             machine_id = str(uuid4())
             machines.upsert(
                 Machine(id=machine_id, pool=pool, provider="aws"),
@@ -48,8 +52,11 @@ def test_active_capacity_interruptions_return_only_preempting_machines(
                 )
             )
 
-        [interruption] = enrollments.list_active_capacity_interruptions()
+        interruptions = enrollments.list_active_capacity_interruptions()
 
-    assert interruption.state is AgentCapacityState.Preempting
-    assert interruption.reason == "provider interruption"
-    assert interruption.observed_at == now
+    assert {interruption.state for interruption in interruptions} == {
+        AgentCapacityState.Draining,
+        AgentCapacityState.Preempting,
+    }
+    assert {interruption.reason for interruption in interruptions} == {"provider interruption"}
+    assert {interruption.observed_at for interruption in interruptions} == {now}

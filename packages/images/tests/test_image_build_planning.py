@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -540,7 +540,6 @@ def test_image_control_stream_uses_execution_terminal_after_durable_record_clean
         credential_plan: ImageBuildCredentialPlan | None = None,
         registry_credential_payload: str | None = None,
         build_args: dict[str, str] | None = None,
-        on_build_started: Callable[[ImageBuildRecord], None] | None = None,
     ) -> ImageBuildExecution:
         execution = original_execute(
             service,
@@ -550,7 +549,6 @@ def test_image_control_stream_uses_execution_terminal_after_durable_record_clean
             credential_plan=credential_plan,
             registry_credential_payload=registry_credential_payload,
             build_args=build_args,
-            on_build_started=on_build_started,
         )
         with service.context.database.session() as session:
             removed = ImageBuildRepository(session).delete_across_workspaces(execution.record.id)
@@ -596,7 +594,7 @@ def test_image_control_secret_version_invalidates_identity_and_inline_values_fai
     assert "stored secret names" in inline.reason
 
 
-def test_image_control_service_cancels_running_build_when_stream_closes(
+def test_image_control_service_keeps_running_build_when_stream_closes(
     isolated_services: ApiServices,
 ) -> None:
     started = threading.Event()
@@ -610,7 +608,10 @@ def test_image_control_service_cancels_running_build_when_stream_closes(
             del request
             started.set()
             release.wait(timeout=5)
-            return ImageBuildExecutionResult(status=BuildStatus.Complete)
+            return ImageBuildExecutionResult(
+                status=BuildStatus.Complete,
+                cache_metadata={"executor": "blocking-test"},
+            )
 
     isolated_services.images.executor = BlockingExecutor()
     stream = _build_image(
@@ -626,9 +627,32 @@ def test_image_control_service_cancels_running_build_when_stream_closes(
 
         stream.close()
 
-        cancelled = isolated_services.images.get(first_response.build_id)
-        assert cancelled.status is BuildStatus.Cancelled
-        assert cancelled.error == "Build stream was closed."
+        running = isolated_services.images.get(first_response.build_id)
+        assert running.status in {BuildStatus.Pending, BuildStatus.Running}
+        resumed_stream = _build_image(
+            _image_control_service(isolated_services),
+            isolated_services,
+            BuildImageRequest(python_packages=[]),
+        )
+        resumed_response = next(resumed_stream)
+        resumed_stream.close()
+        assert resumed_response.build_id == first_response.build_id
+        assert isolated_services.images.active_background_execution_count == 1
+        release.set()
+        observed = [running.status]
+        completed = running
+        for _ in range(200):
+            completed = isolated_services.images.get(first_response.build_id)
+            observed.append(completed.status)
+            if (
+                completed.status is BuildStatus.Complete
+                and isolated_services.images.active_background_execution_count == 0
+            ):
+                break
+            time.sleep(0.01)
+        assert completed.status is BuildStatus.Complete
+        assert isolated_services.images.active_background_execution_count == 0
+        assert observed[0] in {BuildStatus.Pending, BuildStatus.Running}
     finally:
         release.set()
 
@@ -703,9 +727,7 @@ def test_runtime_image_build_start_and_cancel_are_persisted(isolated_services: A
     image_events = isolated_services.events.list()
     cancel_events = [event for event in image_events if event.action == "image.build.cancelled"]
     assert cancel_events
-    actions = cancel_events[-1].data["actions"]
-    assert isinstance(actions, list)
-    assert "kill-container" in actions
+    assert cancel_events[-1].data["build_container_cancel_status"] == "not-found"
 
 
 def _json_object(value: JsonValue, *, name: str) -> dict[str, JsonValue]:

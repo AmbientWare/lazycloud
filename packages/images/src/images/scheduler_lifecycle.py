@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from scheduler.state import ContainerStateNotFoundError, RedisSchedulerContainerRepository
 from shared.scheduling import SchedulerContainerStatus
 
-from images.lifecycle import ImageBuildContainerStateStore
+from images.scheduling import ImageBuildContainerStateStore
 
 
 @dataclass(slots=True)

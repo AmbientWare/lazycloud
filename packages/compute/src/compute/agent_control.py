@@ -16,6 +16,7 @@ from pydantic import Field, field_validator
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import (
     AgentCapacityState,
+    AgentWorkerSlotStatus,
     ComputeMachineEnrollmentStatus,
     ComputePreflightCheck,
     MachineReadinessPhase,
@@ -107,6 +108,7 @@ was provisioned through."""
 class WorkerStatus(StrEnum):
     Pending = "pending"
     Available = "available"
+    Draining = "draining"
     Disabled = "disabled"
 
 
@@ -1279,6 +1281,7 @@ def plan_agent_worker_slot(
     billing_owner: UsageBillingOwner,
     cluster_name: str,
     worker_image: str,
+    status: AgentWorkerSlotStatus | None = None,
 ) -> AgentWorkerSlotControlPlan:
     if (
         worker is None
@@ -1311,6 +1314,7 @@ def plan_agent_worker_slot(
         billing_owner=billing_owner,
         cluster_name=cluster_name,
         worker_image=worker_image,
+        status=status or _agent_worker_slot_status(worker.status),
         existing=existing,
     )
     return AgentWorkerSlotControlPlan(
@@ -1336,6 +1340,7 @@ def agent_worker_slot_state(
     billing_owner: UsageBillingOwner,
     cluster_name: str,
     worker_image: str,
+    status: AgentWorkerSlotStatus = AgentWorkerSlotStatus.Active,
     existing: ComputeAgentWorkerSlotState | None = None,
 ) -> ComputeAgentWorkerSlotState:
     return ComputeAgentWorkerSlotState(
@@ -1354,8 +1359,17 @@ def agent_worker_slot_state(
         billing_owner=billing_owner,
         network_prefix=worker_network_prefix(cluster_name, agent_state.machine_id),
         worker_image=worker_image,
+        status=status,
         created_at=existing.created_at if existing else utc_now(),
     )
+
+
+def _agent_worker_slot_status(status: WorkerStatus) -> AgentWorkerSlotStatus:
+    if status is WorkerStatus.Pending:
+        return AgentWorkerSlotStatus.Pending
+    if status is WorkerStatus.Draining:
+        return AgentWorkerSlotStatus.Draining
+    return AgentWorkerSlotStatus.Active
 
 
 def agent_worker_image(registry: str, name: str, tag: str = "") -> str:

@@ -17,6 +17,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TypeVar
 
+from shared.http.errors import HttpTransportError
+
 T = TypeVar("T")
 
 TRANSIENT_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
@@ -25,6 +27,7 @@ TRANSIENT_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
     urllib.error.URLError,
     http.client.IncompleteRead,
     http.client.BadStatusLine,
+    HttpTransportError,
 )
 
 

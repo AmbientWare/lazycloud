@@ -4,7 +4,11 @@ from compute.agent_control import AgentBootstrapConfig
 from pydantic import Field, JsonValue, field_validator
 from shared.bytes_transport import decode_bytes, encode_bytes
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
+from shared.compute_enrollment import (
+    AgentCapacityState,
+    AgentWorkerSlotStatus,
+    ComputePreflightCheck,
+)
 from shared.compute_policy import MachinePool
 from shared.http.base import HttpModel
 from shared.identity import AuthScope
@@ -171,10 +175,12 @@ class AgentWorkerSlot(HttpModel):
     gpu_assignment: str = ""
     network_prefix: str = ""
     worker_image: str = ""
+    status: AgentWorkerSlotStatus = AgentWorkerSlotStatus.Active
 
 
 class StreamAgentRequest(HttpModel):
     agent_token: str
+    active_worker_images: dict[str, str] = Field(default_factory=dict)
 
 
 class StreamAgentResponse(HttpModel):

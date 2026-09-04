@@ -170,6 +170,8 @@ from worker.repository_payloads import (
     RemoveNetworkLockRequest,
     RemoveNetworkLockResponse,
     RemoveWorkerResponse,
+    ReportImageBuildResultRequest,
+    ReportImageBuildResultResponse,
     ResolveSourceCacheCleanupRequest,
     ResolveSourceCacheCleanupResponse,
     SaveCheckpointStateRequest,
@@ -1746,6 +1748,61 @@ class WorkerRepositoryService:
             sha256=record.sha256,
             expires_at=utc_now() + timedelta(seconds=IMAGE_BUILD_CONTEXT_DOWNLOAD_SECONDS),
         )
+
+    def report_image_build_result(
+        self,
+        request: ReportImageBuildResultRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> ReportImageBuildResultResponse:
+        self._authorize_worker_tenancy(
+            principal,
+            request.workspace_id,
+            operation="image build result",
+        )
+        state = self.containers.get_container_state(request.container_id)
+        if state is None:
+            raise AuthorizationDeniedError("image build result container is not assigned")
+        if state.workspace_id != request.workspace_id:
+            raise AuthorizationDeniedError("image build result workspace does not match container")
+        if state.worker_id != principal.worker_id:
+            raise AuthorizationDeniedError("image build result is bound to the assigned worker")
+        if state.image_build_id != request.build_id or state.image_id != request.image_id:
+            raise AuthorizationDeniedError("image build result does not match the assigned build")
+        dependencies = self.dependencies
+        if dependencies is None:
+            raise UpstreamUnavailableError("image build service is required for result reporting")
+        record = dependencies.images.record_worker_execution_result(
+            request.build_id,
+            workspace_id=request.workspace_id,
+            image_id=request.image_id,
+            container_id=request.container_id,
+            status=request.status,
+            object_key=request.object_key,
+            archive_size_bytes=request.archive_size_bytes,
+            archive_sha256=request.archive_sha256,
+            logs=request.logs,
+            error_message=request.error_message,
+        )
+        self.set_container_exit_code(
+            SetContainerExitCodeRequest(
+                container_id=request.container_id,
+                exit_code=0 if record.status is BuildStatus.Complete else 1,
+            ),
+            principal=principal,
+        )
+        self.update_container_status(
+            UpdateContainerStatusRequest(
+                container_id=request.container_id,
+                status=(
+                    SchedulerContainerStatus.Complete
+                    if record.status is BuildStatus.Complete
+                    else SchedulerContainerStatus.Failed
+                ),
+            ),
+            principal=principal,
+        )
+        return ReportImageBuildResultResponse(accepted=True, status=record.status)
 
     def get_container_credentials(
         self,

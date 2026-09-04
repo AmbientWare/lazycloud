@@ -59,6 +59,8 @@ from gateway.http import (
 )
 from gateway.service import GatewayControlService
 from identity.auth import AuthorizationDeniedError, AuthService
+from images.execution import ManifestImageBuildExecutor
+from images.service import ImageBuildService
 from operations.container_shutdown import ContainerShutdownService
 from pydantic import JsonValue, TypeAdapter
 from scheduler.containers import SchedulerContainerDispatchStatus
@@ -90,7 +92,7 @@ from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.http.errors import ErrorResponse
 from shared.identity import AuthScope, TokenKind, WorkspaceStorageConfig
 from shared.image_building.authoring import ImageSpec
-from shared.image_building.records import ImageRecord
+from shared.image_building.records import BuildStatus, ImageRecord
 from shared.objects import ObjectRecord
 from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
 from shared.source_cache_cleanup import (
@@ -142,6 +144,7 @@ from worker.repository_payloads import (
     PublishContainerLifecycleRequest,
     RecordWorkerUsageResponse,
     ReleaseAutomaticCheckpointLeaseRequest,
+    ReportImageBuildResultRequest,
     SaveCheckpointStateRequest,
     SetContainerAddressMapRequest,
     SetContainerAddressRequest,
@@ -213,6 +216,68 @@ def test_image_build_credentials_reject_wrong_assigned_worker(
                 worker_id="worker-2",
             ),
         )
+
+
+def test_worker_result_durably_finishes_a_build_and_is_idempotent(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    images = ImageBuildService(
+        isolated_services.context,
+        executor=ManifestImageBuildExecutor(),
+    )
+    service = _worker_repository_service(isolated_services, redis)
+    assert service.dependencies is not None
+    service.dependencies = replace(service.dependencies, images=images)
+    workspace_id = ControlPlaneService(isolated_services.context).get_workspace().id
+    execution = images.start(
+        ImageSpec(commands=["python -V"]),
+        workspace_id=workspace_id,
+    )
+    container_id = execution.session.container_id
+    service.containers.set_container_state(
+        SchedulerContainerState(
+            container_id=container_id,
+            stub_id="image-build",
+            workspace_id=workspace_id,
+            worker_id="worker-1",
+            image_build_id=execution.record.id,
+            image_id=execution.record.image_id or "",
+            status=SchedulerContainerStatus.Running,
+        )
+    )
+    request = ReportImageBuildResultRequest(
+        worker_id="worker-1",
+        workspace_id=workspace_id,
+        container_id=container_id,
+        build_id=execution.record.id,
+        image_id=execution.record.image_id or "",
+        status=BuildStatus.Complete,
+        object_key=f"images/{execution.record.image_id}.rclip",
+        archive_size_bytes=1024,
+        archive_sha256="a" * 64,
+        logs=["image archive published"],
+    )
+    principal = WorkerRepositoryPrincipal(
+        workspace_id=workspace_id,
+        worker_id="worker-1",
+    )
+
+    with pytest.raises(AuthorizationDeniedError, match="assigned worker"):
+        service.report_image_build_result(
+            request,
+            principal=principal.model_copy(update={"worker_id": "worker-2"}),
+        )
+    first = service.report_image_build_result(request, principal=principal)
+    repeated = service.report_image_build_result(request, principal=principal)
+
+    assert first.accepted and repeated.accepted
+    assert first.status is BuildStatus.Complete
+    assert images.get(execution.record.id, workspace_id=workspace_id).status is BuildStatus.Complete
+    state = service.containers.get_container_state(container_id)
+    assert state is not None
+    assert state.status is SchedulerContainerStatus.Complete
 
 
 def test_automatic_checkpoint_lease_is_bound_to_assigned_container_and_worker(

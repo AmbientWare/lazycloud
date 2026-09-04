@@ -9,6 +9,7 @@ from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.identity import AuthTokenRecord, TokenKind
 from shared.image_building.credentials import normalize_registry_host
+from shared.image_building.records import BuildStatus
 from shared.logs import ContainerLogEntryKind
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsPayload
 from shared.routing import AgentBackendRoute
@@ -394,6 +395,45 @@ class PrepareImageBuildContextDownloadResponse(WorkerRepositoryResponse):
     content_length: int = Field(default=0, ge=0)
     sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     expires_at: datetime | None = None
+
+
+class ReportImageBuildResultRequest(ContractModel):
+    worker_id: str
+    workspace_id: str
+    container_id: str
+    build_id: str
+    image_id: str
+    status: BuildStatus
+    object_key: str = ""
+    archive_size_bytes: int = Field(default=0, ge=0)
+    archive_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
+    logs: list[str] = Field(default_factory=list, max_length=256)
+    error_message: str = Field(default="", max_length=65_536)
+
+    @field_validator("logs")
+    @classmethod
+    def log_lines_must_fit_ingestion_boundary(cls, values: list[str]) -> list[str]:
+        if any(len(value.encode("utf-8")) > 8 * 1024 for value in values):
+            raise ValueError("image build result log line exceeds 8192 bytes")
+        return values
+
+    @model_validator(mode="after")
+    def require_terminal_result(self) -> ReportImageBuildResultRequest:
+        if self.status not in {BuildStatus.Complete, BuildStatus.Failed}:
+            raise ValueError("reported image build result must be terminal")
+        if self.status is BuildStatus.Complete:
+            if not self.object_key:
+                raise ValueError("completed image build result requires an archive object key")
+            if self.archive_size_bytes <= 0:
+                raise ValueError("completed image build result requires a positive archive size")
+            if not self.archive_sha256:
+                raise ValueError("completed image build result requires an archive digest")
+        return self
+
+
+class ReportImageBuildResultResponse(WorkerRepositoryResponse):
+    accepted: bool = False
+    status: BuildStatus | None = None
 
 
 class GetContainerCredentialsResponse(WorkerRepositoryResponse):

@@ -162,6 +162,7 @@ from scheduler.preemption import (
     CapacityInterruption,
     SchedulerCapacityInterruption,
     SchedulerCapacityInterruptionService,
+    SchedulerWorkerMaintenanceService,
     SchedulerWorkerPreemptionService,
 )
 from scheduler.routes import SchedulerBackendRouteResolver
@@ -850,7 +851,6 @@ class ApiServices(ApiServiceCore):
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
                 agent_binary_url=aws_capacity_config.agent_binary_url,
-                worker_image_digest=aws_capacity_config.worker_image_digest,
             )
 
         scheduler_hooks = SchedulerComputeHooks(
@@ -990,6 +990,7 @@ class ApiServices(ApiServiceCore):
             events,
             resolved_image_build_executor,
             publication_composition.publisher,
+            container_control=containers,
             archive_settings=image_archive_config,
             archive_store=resolved_image_archive_store,
         )
@@ -1156,6 +1157,7 @@ class ApiServices(ApiServiceCore):
         image_dependencies_quiesced = True
         try:
             self.images.close()
+            image_dependencies_quiesced = self.images.active_background_execution_count == 0
         except Exception as exc:
             failures.append(exc)
             image_dependencies_quiesced = self.images.active_background_execution_count == 0
@@ -1500,8 +1502,11 @@ def _gateway_control_service(
                     core.containers,
                 ),
                 scheduler_workers,
+                maintenance=SchedulerWorkerMaintenanceService(scheduler_workers),
             )
         ),
+        scheduler_maintenance=SchedulerWorkerMaintenanceService(scheduler_workers),
+        agent_worker_image=core.aws_capacity_settings.worker_image_digest,
         async_http_client=async_http,
     )
 

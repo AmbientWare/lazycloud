@@ -29,7 +29,6 @@ class PoolBootstrapProvisioner:
     agent_version: str
     agent_sha256: str
     agent_binary_url: str
-    worker_image_digest: str
 
     def bootstrap(
         self,
@@ -43,7 +42,6 @@ class PoolBootstrapProvisioner:
             agent_version=self.agent_version,
             agent_sha256=self.agent_sha256,
             agent_binary_url=self.agent_binary_url,
-            worker_image_digest=self.worker_image_digest,
         )
 
 
@@ -53,7 +51,6 @@ def pool_bootstrap_provisioner(
     agent_version: str,
     agent_sha256: str,
     agent_binary_url: str,
-    worker_image_digest: str,
 ) -> PoolBootstrapProvisioner:
     """Build the provisioner both the API and the scheduler compose.
 
@@ -67,7 +64,6 @@ def pool_bootstrap_provisioner(
         agent_version=agent_version,
         agent_sha256=agent_sha256,
         agent_binary_url=agent_binary_url,
-        worker_image_digest=worker_image_digest,
     )
 
 
