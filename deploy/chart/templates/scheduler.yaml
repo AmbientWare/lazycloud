@@ -101,7 +101,9 @@ spec:
           readinessProbe:
             exec:
               command:
-                - process-liveness
+                - python
+                - -m
+                - shared.process_liveness
                 - --max-age-seconds
                 - {{ .Values.scheduler.livenessMaxAgeSeconds | quote }}
                 {{- range .Values.scheduler.loopNames }}
@@ -112,7 +114,9 @@ spec:
           livenessProbe:
             exec:
               command:
-                - process-liveness
+                - python
+                - -m
+                - shared.process_liveness
                 - --max-age-seconds
                 - {{ .Values.scheduler.livenessMaxAgeSeconds | quote }}
                 {{- range .Values.scheduler.loopNames }}
