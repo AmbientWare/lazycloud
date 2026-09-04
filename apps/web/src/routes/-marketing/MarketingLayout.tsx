@@ -6,18 +6,12 @@ import { Clouds } from "@/components/canvasui/Clouds";
 import { DOCS_URL, EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
-import {
-  Glyph,
-  GetStartedButton,
-  PendingLink,
-  shell,
-  type MarketingRoute,
-} from "./MarketingPrimitives";
+import { Glyph, GetStartedButton, shell, type MarketingRoute } from "./MarketingPrimitives";
 
 import "./marketing.css";
 
 /* Only what this build can actually reach. The examples gallery lives outside
-   this app and is absent from some deployments, so it is configured or left out —
+   this app and is absent from some deployments, so it is configured or left out;
    a menu entry that goes nowhere is worse than a shorter menu. */
 const navigation: readonly { label: string; to?: MarketingRoute; href?: string }[] = [
   ...(EXAMPLES_URL ? [{ label: "Examples", href: EXAMPLES_URL }] : []),
@@ -33,7 +27,7 @@ const navLink =
 const navLinkActive = "data-[status=active]:font-semibold data-[status=active]:text-foreground";
 
 const footerLink =
-  "inline-flex min-h-8 w-max items-center text-xs text-muted-foreground hover:text-foreground [@media(pointer:coarse)]:min-h-11";
+  "inline-flex min-h-9 w-max items-center text-[13px] text-muted-foreground transition-colors hover:text-foreground [@media(pointer:coarse)]:min-h-11";
 
 /* Public routes use the same dark palette as the workspace. */
 export function MarketingLayout({ children }: { children: ReactNode }) {
@@ -131,61 +125,43 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
         <div
           className={cn(
             shell,
-            "grid grid-cols-[0.8fr_1.2fr] gap-22 py-14 max-lg:grid-cols-1 max-lg:gap-10 sm:py-16 lg:py-18",
+            "flex items-center justify-between gap-x-10 gap-y-5 py-7 max-md:flex-col max-md:items-start sm:py-8",
           )}
         >
-          <div>
-            <Link
-              className="inline-flex min-h-11 w-max items-center gap-2.5 text-[17px] font-semibold tracking-[-0.025em]"
-              to="/"
-              aria-label="LazyCloud home"
-            >
-              <CloudMark />
-              <span>LazyCloud</span>
-            </Link>
-            <p className="mt-4.5 max-w-[310px] text-[13px] text-muted-foreground">
-              A cloud platform for developers and coding agents.
-            </p>
-          </div>
+          <Link
+            className="inline-flex min-h-11 w-max shrink-0 items-center gap-2.5 text-[17px] font-semibold tracking-[-0.025em]"
+            to="/"
+            aria-label="LazyCloud home"
+          >
+            <CloudMark />
+            <span>LazyCloud</span>
+          </Link>
           <nav
-            className="grid grid-cols-4 gap-x-7 gap-y-10 max-sm:grid-cols-2"
+            className="flex flex-wrap items-center gap-x-5 gap-y-1 md:justify-end"
             aria-label="Footer navigation"
           >
-            <FooterColumn title="Product">
-              {EXAMPLES_URL ? (
-                <a className={footerLink} href={EXAMPLES_URL}>
-                  Examples
-                </a>
-              ) : null}
-              <Link className={footerLink} to="/pricing">
-                Pricing
-              </Link>
-            </FooterColumn>
-            <FooterColumn title="Developers">
-              <a className={footerLink} href={DOCS_URL}>
-                Docs
+            <Link className={footerLink} to="/pricing">
+              Pricing
+            </Link>
+            {EXAMPLES_URL ? (
+              <a className={footerLink} href={EXAMPLES_URL}>
+                Examples
               </a>
-            </FooterColumn>
-            <FooterColumn title="Workloads">
-              <PendingLink className={footerLink}>Applications + APIs</PendingLink>
-              <PendingLink className={footerLink}>Background work</PendingLink>
-              <PendingLink className={footerLink}>Agent sandboxes</PendingLink>
-            </FooterColumn>
-            <FooterColumn title="Platform">
-              <PendingLink className={footerLink}>Functions</PendingLink>
-              <PendingLink className={footerLink}>Typed clients</PendingLink>
-              <PendingLink className={footerLink}>Connected compute</PendingLink>
-            </FooterColumn>
+            ) : null}
+            <a className={footerLink} href={DOCS_URL}>
+              Docs
+            </a>
+            <a className={footerLink} href="mailto:support@lazycloud.dev">
+              Support
+            </a>
+            <Link className={footerLink} to="/legal/privacy">
+              Privacy
+            </Link>
+            <Link className={footerLink} to="/legal/terms">
+              Terms
+            </Link>
           </nav>
-        </div>
-        <div
-          className={cn(
-            shell,
-            "flex justify-between gap-2 border-t border-border pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] font-mono text-[9px] text-muted-foreground max-[420px]:flex-col",
-          )}
-        >
-          <span>© 2026 LazyCloud</span>
-          <span>Run on LazyCloud, AWS, or your own Linux machines.</span>
+          <p className="shrink-0 font-mono text-xs text-muted-foreground">© 2026 LazyCloud</p>
         </div>
       </footer>
     </Clouds>
@@ -283,17 +259,6 @@ function MobileNavigation() {
           </div>
         </nav>
       ) : null}
-    </div>
-  );
-}
-
-function FooterColumn({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-2.5">
-      <span className="mb-1 font-mono text-[9px] tracking-[0.1em] text-muted-foreground uppercase">
-        {title}
-      </span>
-      {children}
     </div>
   );
 }

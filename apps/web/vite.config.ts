@@ -99,6 +99,7 @@ function isMarketingSharedModule(id: string): boolean {
   const normalized = id.replaceAll("\\", "/");
   return [
     "/apps/web/src/routes/-marketing/MarketingLayout.tsx",
+    "/apps/web/src/routes/-marketing/LegalDocument.tsx",
     "/apps/web/src/routes/-marketing/MarketingPrimitives.tsx",
     "/apps/web/src/routes/-marketing/marketing.css",
   ].some((path) => normalized.endsWith(path));
@@ -173,7 +174,7 @@ export default defineConfig({
           outputPath: "/_shell",
         },
       },
-      pages: [{ path: "/" }],
+      pages: [{ path: "/" }, { path: "/legal/privacy" }, { path: "/legal/terms" }],
       prerender: {
         enabled: true,
         failOnError: true,

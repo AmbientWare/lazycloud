@@ -15,6 +15,8 @@ import { Route as DashboardRouteImport } from "./routes/dashboard"
 import { Route as CallbackRouteImport } from "./routes/callback"
 import { Route as ActivateRouteImport } from "./routes/activate"
 import { Route as IndexRouteImport } from "./routes/index"
+import { Route as LegalTermsRouteImport } from "./routes/legal/terms"
+import { Route as LegalPrivacyRouteImport } from "./routes/legal/privacy"
 import { Route as WWorkspaceRouteRouteImport } from "./routes/w/$workspace/route"
 import { Route as WWorkspaceIndexRouteImport } from "./routes/w/$workspace/index"
 import { Route as WWorkspaceTasksRouteImport } from "./routes/w/$workspace/tasks"
@@ -59,6 +61,16 @@ const IndexRoute = IndexRouteImport.update({
   path: "/",
   getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import("./routes/index.lazy").then((d) => d.Route))
+const LegalTermsRoute = LegalTermsRouteImport.update({
+  id: "/legal/terms",
+  path: "/legal/terms",
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import("./routes/legal/terms.lazy").then((d) => d.Route))
+const LegalPrivacyRoute = LegalPrivacyRouteImport.update({
+  id: "/legal/privacy",
+  path: "/legal/privacy",
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import("./routes/legal/privacy.lazy").then((d) => d.Route))
 const WWorkspaceRouteRoute = WWorkspaceRouteRouteImport.update({
   id: "/w/$workspace",
   path: "/w/$workspace",
@@ -138,6 +150,8 @@ export interface FileRoutesByFullPath {
   "/pricing": typeof PricingRoute
   "/signin": typeof SigninRoute
   "/w/$workspace": typeof WWorkspaceRouteRouteWithChildren
+  "/legal/privacy": typeof LegalPrivacyRoute
+  "/legal/terms": typeof LegalTermsRoute
   "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
   "/w/$workspace/": typeof WWorkspaceIndexRoute
   "/w/$workspace/apps/$appId": typeof WWorkspaceAppsAppIdRouteWithChildren
@@ -158,6 +172,8 @@ export interface FileRoutesByTo {
   "/dashboard": typeof DashboardRoute
   "/pricing": typeof PricingRoute
   "/signin": typeof SigninRoute
+  "/legal/privacy": typeof LegalPrivacyRoute
+  "/legal/terms": typeof LegalTermsRoute
   "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
   "/w/$workspace": typeof WWorkspaceIndexRoute
   "/w/$workspace/apps/$appId": typeof WWorkspaceAppsAppIdRouteWithChildren
@@ -180,6 +196,8 @@ export interface FileRoutesById {
   "/pricing": typeof PricingRoute
   "/signin": typeof SigninRoute
   "/w/$workspace": typeof WWorkspaceRouteRouteWithChildren
+  "/legal/privacy": typeof LegalPrivacyRoute
+  "/legal/terms": typeof LegalTermsRoute
   "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
   "/w/$workspace/": typeof WWorkspaceIndexRoute
   "/w/$workspace/apps/$appId": typeof WWorkspaceAppsAppIdRouteWithChildren
@@ -203,6 +221,8 @@ export interface FileRouteTypes {
     | "/pricing"
     | "/signin"
     | "/w/$workspace"
+    | "/legal/privacy"
+    | "/legal/terms"
     | "/w/$workspace/tasks"
     | "/w/$workspace/"
     | "/w/$workspace/apps/$appId"
@@ -223,6 +243,8 @@ export interface FileRouteTypes {
     | "/dashboard"
     | "/pricing"
     | "/signin"
+    | "/legal/privacy"
+    | "/legal/terms"
     | "/w/$workspace/tasks"
     | "/w/$workspace"
     | "/w/$workspace/apps/$appId"
@@ -244,6 +266,8 @@ export interface FileRouteTypes {
     | "/pricing"
     | "/signin"
     | "/w/$workspace"
+    | "/legal/privacy"
+    | "/legal/terms"
     | "/w/$workspace/tasks"
     | "/w/$workspace/"
     | "/w/$workspace/apps/$appId"
@@ -266,6 +290,8 @@ export interface RootRouteChildren {
   PricingRoute: typeof PricingRoute
   SigninRoute: typeof SigninRoute
   WWorkspaceRouteRoute: typeof WWorkspaceRouteRouteWithChildren
+  LegalPrivacyRoute: typeof LegalPrivacyRoute
+  LegalTermsRoute: typeof LegalTermsRoute
 }
 
 declare module "@tanstack/react-router" {
@@ -310,6 +336,20 @@ declare module "@tanstack/react-router" {
       path: "/"
       fullPath: "/"
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/legal/terms": {
+      id: "/legal/terms"
+      path: "/legal/terms"
+      fullPath: "/legal/terms"
+      preLoaderRoute: typeof LegalTermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/legal/privacy": {
+      id: "/legal/privacy"
+      path: "/legal/privacy"
+      fullPath: "/legal/privacy"
+      preLoaderRoute: typeof LegalPrivacyRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/w/$workspace": {
@@ -482,6 +522,8 @@ const rootRouteChildren: RootRouteChildren = {
   PricingRoute: PricingRoute,
   SigninRoute: SigninRoute,
   WWorkspaceRouteRoute: WWorkspaceRouteRouteWithChildren,
+  LegalPrivacyRoute: LegalPrivacyRoute,
+  LegalTermsRoute: LegalTermsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
