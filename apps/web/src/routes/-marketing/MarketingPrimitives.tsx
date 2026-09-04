@@ -3,6 +3,7 @@ import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
+import { useAuthToken } from "@/hooks/use-auth-token";
 import { githubSignInHref } from "@/lib/queries/auth";
 import { cn } from "@/lib/utils";
 
@@ -99,10 +100,11 @@ export function MarketingButton({
 /**
  * The way in, wherever a marketing page asks for one.
  *
- * A real anchor rather than a scripted click: leaving for GitHub is a document
- * navigation, so middle-click and right-click behave the way they look. `outline`
- * with an explicit foreground because `marketing-action-primary` paints a light
- * brand wash — the default variant's light-on-primary text fails contrast on it.
+ * A browser that already holds a credential enters the dashboard without
+ * restarting OAuth. The signed-out action remains a real anchor because leaving
+ * for GitHub is a document navigation. `outline` has an explicit foreground
+ * because `marketing-action-primary` paints a light brand wash whose default
+ * light-on-primary text fails contrast.
  */
 export function GetStartedButton({
   className,
@@ -111,6 +113,14 @@ export function GetStartedButton({
   className?: string;
   label?: string;
 }) {
+  const token = useAuthToken();
+  const content = (
+    <>
+      <span>{token ? "Dashboard" : label}</span>
+      <Glyph>{token ? "→" : "↗"}</Glyph>
+    </>
+  );
+
   return (
     <Button
       asChild
@@ -121,10 +131,11 @@ export function GetStartedButton({
         className,
       )}
     >
-      <a href={githubSignInHref("/dashboard")}>
-        <span>{label}</span>
-        <Glyph>↗</Glyph>
-      </a>
+      {token ? (
+        <Link to="/dashboard">{content}</Link>
+      ) : (
+        <a href={githubSignInHref("/dashboard")}>{content}</a>
+      )}
     </Button>
   );
 }
