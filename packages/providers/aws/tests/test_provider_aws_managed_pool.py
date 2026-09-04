@@ -27,7 +27,7 @@ from provider_aws import (
     AwsProviderControlError,
     AwsProviderControlErrorCode,
 )
-from pydantic import SecretStr, TypeAdapter
+from pydantic import SecretStr, TypeAdapter, ValidationError
 from shared.aws_connections import AwsAccountNetwork
 from shared.compute_policy import (
     ComputeCapacityMode,
@@ -290,6 +290,15 @@ def _spec() -> AwsManagedPoolSpec:
             ),
         ),
     )
+
+
+def test_managed_pool_accepts_fleet_capacity_and_enforces_its_ceiling() -> None:
+    values = {**_spec().model_dump(), "desired_nodes": 101, "max_nodes": 500}
+    spec = AwsManagedPoolSpec.model_validate(values)
+    assert spec.desired_nodes == 101
+    assert spec.max_nodes == 500
+    with pytest.raises(ValidationError, match="desired_nodes cannot exceed max_nodes"):
+        AwsManagedPoolSpec.model_validate({**values, "desired_nodes": 501})
 
 
 def _connection_target(
