@@ -26,10 +26,6 @@ class Location(ApiModel):
     network_zone: str
 
 
-class Datacenter(ApiModel):
-    location: Location
-
-
 class Price(ApiModel):
     net: Decimal
 
@@ -87,7 +83,7 @@ class Server(ApiModel):
     status: str
     created: datetime
     labels: dict[str, str]
-    datacenter: Datacenter
+    location: Location
     server_type: ServerType
     public_net: PublicNet
     volumes: tuple[int, ...]
@@ -126,12 +122,31 @@ class TypesResponse(ApiModel):
     meta: Meta
 
 
+class PrimaryIPPrice(ApiModel):
+    type: str
+    prices: tuple[LocationPrice, ...]
+
+
+class Pricing(ApiModel):
+    currency: str
+    primary_ips: tuple[PrimaryIPPrice, ...]
+
+
+class PricingResponse(ApiModel):
+    pricing: Pricing
+
+
 class ServerResponse(ApiModel):
     server: Server
 
 
 class ImageResponse(ApiModel):
     image: Image
+
+
+class ImagesResponse(ApiModel):
+    images: tuple[Image, ...]
+    meta: Meta
 
 
 class PrimaryIPsResponse(ApiModel):
@@ -195,6 +210,9 @@ class HetznerClient:
             yield from response.server_types
             page = response.meta.pagination.next_page
 
+    def pricing(self) -> Pricing:
+        return PricingResponse.model_validate_json(self._request("GET", "/pricing")).pricing
+
     def servers(self, labels: str) -> Iterator[Server]:
         page: int | None = 1
         while page is not None:
@@ -227,6 +245,24 @@ class HetznerClient:
 
     def image(self, image_id: int) -> Image:
         return ImageResponse.model_validate_json(self._request("GET", f"/images/{image_id}")).image
+
+    def snapshots(self, labels: str) -> Iterator[Image]:
+        page: int | None = 1
+        while page is not None:
+            response = ImagesResponse.model_validate_json(
+                self._request(
+                    "GET",
+                    "/images",
+                    params={
+                        "page": page,
+                        "per_page": 50,
+                        "type": "snapshot",
+                        "label_selector": labels,
+                    },
+                )
+            )
+            yield from response.images
+            page = response.meta.pagination.next_page
 
     def primary_ips(self, labels: str) -> Iterator[PrimaryIP]:
         page: int | None = 1

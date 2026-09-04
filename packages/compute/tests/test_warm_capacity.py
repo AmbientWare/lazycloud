@@ -32,7 +32,6 @@ def test_warm_capacity_absorbs_launch_window_demand_and_shrinks_gradually() -> N
         default_region="ash",
         allowed_regions=("ash",),
         warm_cpu_min=1,
-        warm_cpu_max=4,
     )
     offer = ComputeOffer(
         id="ccx23",
@@ -87,7 +86,6 @@ def test_warm_capacity_does_not_add_overhead_to_billed_memory_again() -> None:
             default_region="ash",
             allowed_regions=("ash",),
             warm_cpu_min=1,
-            warm_cpu_max=4,
         ),
         ComputeOffer(
             id="memory-bound-node",

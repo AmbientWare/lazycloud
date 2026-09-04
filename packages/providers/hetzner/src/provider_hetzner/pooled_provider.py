@@ -230,7 +230,7 @@ class HetznerPooledProvider:
             or server.labels.get(_UNIT_LABEL) != request.unit_id
             or server.labels.get(_PROVIDER_LABEL) != provider_label(self.provider_ref)
             or not server.labels.get(_LAUNCH_LABEL)
-            or server.datacenter.location.name != request.offer.region
+            or server.location.name != request.offer.region
             or server.server_type.name != request.offer.instance_type
         ):
             raise ValueError("Hetzner server does not belong to the requested capacity unit")
@@ -244,7 +244,7 @@ class HetznerPooledProvider:
             provider_instance_id=str(server.id),
             unit_id=server.labels[_UNIT_LABEL],
             server_name=server.name,
-            region=server.datacenter.location.name,
+            region=server.location.name,
             generation=int(server.labels[_GENERATION_LABEL]),
         )
 
@@ -294,7 +294,7 @@ class HetznerPooledProvider:
                 provider_instance_id=str(server.id),
                 status=_status(server.status),
                 address=server.public_net.ipv4.ip if server.public_net.ipv4 else "",
-                availability_zone=server.datacenter.location.name,
+                availability_zone=server.location.name,
                 storage_volume_ids=tuple(str(value) for value in server.volumes),
                 booted_template_version=server.labels.get(_RELEASE_LABEL, ""),
                 billing_started_at=server.created,

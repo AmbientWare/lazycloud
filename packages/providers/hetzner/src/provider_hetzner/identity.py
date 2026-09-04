@@ -40,10 +40,10 @@ def verify_node(
         or server.labels.get("lazycloud-unit") != target.unit_id
         or server.labels.get("lazycloud-provider") != provider_label(target.provider_ref)
         or server.labels.get("lazycloud-launch") != target.launch_id
-        or server.datacenter.location.name != target.region
+        or server.location.name != target.region
     ):
         raise InvalidInputError("Hetzner host does not match the enrolled launch")
-    return HetznerNodeEvidence(str(server.id), server.datacenter.location.name)
+    return HetznerNodeEvidence(str(server.id), server.location.name)
 
 
 def node_evidence() -> HetznerNodeEvidence:

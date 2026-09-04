@@ -859,7 +859,6 @@ class ApiServices(ApiServiceCore):
                 platform_providers=configured_platform_compute_providers(
                     platform_capacity_config, launch_credentials=provider_node_launches
                 ),
-                platform_cost_ceilings=platform_capacity_config.aws_hourly_cost_ceiling_micros,
                 gateway_origin=gateway_config.public_http_url,
                 presigned_origin=object_store_config.presigned_endpoint_url or "",
                 backend_route=resolved_backend_route_settings,

@@ -209,20 +209,6 @@ variable "instance_hourly_micros" {
   default     = {}
 }
 
-variable "platform_aws_hourly_cost_ceiling_micros" {
-  description = "Reviewed maximum AWS instance cost by capability key, for platform-owned capacity only. Missing capabilities cannot acquire new machines."
-  type        = map(number)
-  default     = {}
-
-  validation {
-    condition = alltrue([
-      for key, value in var.platform_aws_hourly_cost_ceiling_micros :
-      startswith(key, "aws:") && value > 0 && floor(value) == value
-    ])
-    error_message = "Use AWS capability keys and positive whole microdollar ceilings."
-  }
-}
-
 variable "control_plane_service_accounts" {
   description = <<-EOT
     Service accounts permitted to assume the control plane's AWS identity.

@@ -487,7 +487,7 @@ class ComputeService:
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.TemporarilyUnavailable,
-                reason="provider offer exceeds its allowed capacity or cost policy",
+                reason="provider offer is outside its allowed regions or machine types",
                 desired_unit=desired_unit,
             )
         try:
@@ -1556,7 +1556,7 @@ class ComputeService:
             )
         except ValueError as exc:
             raise ManagedComputeLaunchError(
-                "no provider capacity matches the workload requirements and cost policy",
+                "no provider capacity matches the workload requirements and placement policy",
                 code="offer_unavailable",
             ) from exc
         provider = next(item for item in providers if item.ref == offer.provider)
@@ -1897,7 +1897,7 @@ class ComputeService:
                 _, offer = self._resolved_internal_unit_provider(unit)
                 if not provider.policy.accepts(offer):
                     raise ConflictError(
-                        "provider offer exceeds its allowed capacity or cost policy"
+                        "provider offer is outside its allowed regions or machine types"
                     )
             if unit.provider_state.degraded_reason is not None:
                 # An explicit capacity mutation supersedes the durable degraded
@@ -2481,7 +2481,7 @@ class ComputeService:
             cost_policy_allows = provider.policy is not None and provider.policy.accepts(offer)
             degraded = current.provider_state.degraded_reason is not None or not cost_policy_allows
             if not cost_policy_allows:
-                LOGGER.warning("provider cost policy prevents restoring pool %s", current.id)
+                LOGGER.warning("provider placement policy prevents restoring pool %s", current.id)
             request = self._provider_unit_request(current, offer)
             snapshot = (
                 # A durably degraded pool stopped relaunching: observe and prove

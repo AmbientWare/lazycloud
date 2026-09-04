@@ -4,7 +4,8 @@
 
 The combined feature branch remains a draft. Provider-neutral capacity, warm
 and cold lifecycle, GPU CPU backfill, region contracts, and forward billing
-migrations are implemented. Regional prices are not published.
+migrations are implemented. Regional prices are not published. Merge and deploy
+are on hold until the owner finishes the other feature and releases the hold.
 
 The simulation is checked local validation material. Its 192 main paths and
 48 sensitivity paths reconcile monthly and annual accounting against the final
@@ -27,11 +28,15 @@ delivery in that node's user-data. The narrow exception is recorded in
 and binds a node-generated credential. Retries resume the existing enrollment.
 The forward `0007` migration preserves deployed state. Host credential
 publication is atomic and root-only; API validation does not echo credentials.
-No Hetzner server has been provisioned by this implementation run.
+A host image was baked in Ashburn, `ash`, using temporary Hetzner servers.
+Snapshot `428154317` is retained. The exact build servers, primary IPs, and
+temporary SSH keys were verified absent; the preexisting project SSH key remains.
+This proves image preparation, not secure enrollment or a customer workload.
 
-Deployment requires an explicitly selected Hetzner project and protected token
-location, reviewed supplier purchase ceilings, and the disposable host workflow
-in `deploy/hetzner/README.md`. The documented `default-test` AWS profile currently
+The selected project's token is stored outside the repository with owner-only
+permissions. Deployment still requires the protected operator configuration and
+the disposable workload acceptance in `deploy/hetzner/README.md`.
+The documented `default-test` AWS profile currently
 receives AccessDenied when assuming its operator role. Root credentials are not
 an alternative for acceptance or deployment automation.
 
@@ -51,8 +56,8 @@ storage, and egress.
 - Free uses automatic placement. Team may choose a supported region.
 - A selected region changes the compute rate class. Customers never select a
   supplier or set a rate class themselves.
-- A cost ceiling prevents an expensive fallback from running at an
-  unprofitable base price.
+- Account admission owns plan concurrency and billing limits. No new per-provider
+  purchase ceilings or Hetzner node caps are required.
 
 The initial pricing target is a 40% direct gross margin after supplier compute,
 provider disks and network charges, payment fees, launch failures, idle
@@ -91,7 +96,7 @@ platform suppliers do not need an AWS connection row.
 
 The provider resolver returns the facts generic compute needs: provider ref,
 capacity workspace, pool, platform-fleet status, allowed regions and instance
-types, CPU and GPU ceilings, root disk policy, idle policy, and provider
+types, existing AWS connection limits, root disk policy, idle policy, and provider
 implementation. Generic compute must not read `AwsAccountConnection`.
 
 At dispatch, placement resolves a private `rate_class` from the accepted
@@ -124,12 +129,10 @@ discarding the remaining paid hour.
 ### Offer selection and failure behavior
 
 The existing offer filter and cheapest-compatible selection remain the base.
-Each rate class supplies a maximum loaded offer cost by capability. Selection
-may use any healthy offer below that ceiling.
-
-If no offer meets the workload, region, reliability, and cost requirements,
-the request stays queued or fails with a named capacity error. It must not run
-on expensive fallback capacity at a price that loses money.
+There is no supplier-price ceiling. If no offer meets the workload, region, and
+reliability requirements, the request stays queued or fails with a named
+capacity error. A more expensive compatible offer may be selected, so placement
+does not guarantee a profitable margin. Pricing review must account for this.
 
 ### GPU CPU backfill
 
@@ -406,15 +409,13 @@ Work:
 - Implement billing-boundary-aware idle deletion.
 - Add the adaptive platform warm controller for the default Hetzner CPU region.
 - Keep non-default regions and GPU pools at zero.
-- Apply rate-class cost ceilings during offer acquisition.
 
 Proof:
 
 - The default CPU region maintains its calculated floor.
 - Other regions begin and return to zero.
 - Idle deletion stays inside the paid quantum without crossing the next one.
-- An unavailable cheap offer selects the next offer below the ceiling and
-  refuses all offers above it.
+- An unavailable cheap offer selects the next compatible offer.
 
 #### Agent 3C: SDK and CLI region authoring
 
@@ -521,7 +522,7 @@ Run:
 - Seeded 12-month simulations at 100, 500, and 1,000 active accounts.
 - A live default-region Hetzner warm-pool workflow.
 - A live cold-region create, enroll, run, reuse, and delete workflow.
-- Failover below the cost ceiling and refusal above it.
+- Failover to the next compatible offer with cost attribution preserved.
 - Existing connected-AWS provisioning, enrollment, scaling, and teardown.
 - Automatic and Team region-selected billing through API, ledger, invoice
   outbox, SDK, CLI, and web display.
@@ -534,7 +535,6 @@ Only then select:
 - Supported GPU supplier and catalog.
 - Regional rate classes and multipliers.
 - Default-region warm policy and billing-aware idle interval.
-- Provider-specific cost ceilings.
 
 ## Simulation outputs
 
@@ -555,7 +555,7 @@ Operational outputs:
 - CPU, memory, and GPU utilization.
 - Paid node-hours, customer resource-hours, idle cost, and billing-rounding
   waste.
-- Jobs served, queued, failed, retried, and rejected by the cost ceiling.
+- Jobs served, queued, failed, and retried.
 - Startup latency p50, p95, and p99.
 - Warm hits, cold starts, launches, and deletions.
 - Backfill revenue, evictions, retries, and lost work.
@@ -581,6 +581,6 @@ The report defines the money terms beside the numbers:
 - Do not enable CPU backfill until the event simulation shows it improves total
   margin without increasing GPU starvation.
 - Do not advertise a region until image availability, identity verification,
-  cleanup, and the cost ceiling have live evidence.
+  cleanup, and published pricing have live evidence.
 - Any unavailable external credential is an acceptance gap. Do not replace it
   with a mock provider.

@@ -125,9 +125,7 @@ class ResolvedProviderPolicy(ContractModel):
     root_volume_gib: int = Field(default=200, ge=50, le=2048)
     idle_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
     allowed_instance_types: tuple[str, ...] = ()
-    hourly_cost_ceiling_micros: dict[str, int] = Field(default_factory=dict)
     warm_cpu_min: int = Field(default=0, ge=0)
-    warm_cpu_max: int = Field(default=8, ge=0)
     warm_decrease_after_seconds: int = Field(default=600, ge=60, le=86_400)
 
     @model_validator(mode="after")
@@ -136,10 +134,6 @@ class ResolvedProviderPolicy(ContractModel):
             raise ValueError("provider policy requires a capacity workspace and pool")
         if self.default_region not in self.allowed_regions:
             raise ValueError("provider default region must be allowed")
-        if any(value <= 0 for value in self.hourly_cost_ceiling_micros.values()):
-            raise ValueError("provider hourly cost ceilings must be positive")
-        if self.warm_cpu_min > self.warm_cpu_max:
-            raise ValueError("provider warm CPU minimum cannot exceed maximum")
         if self.max_cpu_instances is not None and self.warm_cpu_min > self.max_cpu_instances:
             raise ValueError("provider warm CPU minimum cannot exceed provider capacity limit")
         return self
@@ -148,17 +142,8 @@ class ResolvedProviderPolicy(ContractModel):
         return self.max_gpu_instances if gpu else self.max_cpu_instances
 
     def accepts(self, offer: ComputeOffer) -> bool:
-        ceiling = self.hourly_cost_ceiling_micros.get(offer.capability_key)
-        return (
-            offer.region in self.allowed_regions
-            and (
-                not self.allowed_instance_types
-                or offer.instance_type in self.allowed_instance_types
-            )
-            and (
-                (not self.platform_fleet and not self.hourly_cost_ceiling_micros)
-                or (ceiling is not None and offer.hourly_cost_micros <= ceiling)
-            )
+        return offer.region in self.allowed_regions and (
+            not self.allowed_instance_types or offer.instance_type in self.allowed_instance_types
         )
 
 

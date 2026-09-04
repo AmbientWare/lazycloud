@@ -15,6 +15,30 @@ or the image. Source IP is not an authenticator.
 This change has no live Hetzner acceptance record. Do not activate it in
 production until the disposable workflow below passes.
 
+## Deployment flow
+
+Hetzner uses the same release split as AWS. Prepare the host image once with
+the `Hetzner Node Images` workflow, configure the project once in the deployment's
+operator secret, then use the existing Ship workflow for application releases.
+Ship does not rebuild host images or need another provider-specific deploy.
+
+The initial location is Ashburn, `ash`. Keep other locations disabled until
+their images, costs and acceptance are reviewed. CCX33 has enough included disk
+for the current 200-GiB node policy; the CCX23 build server is only temporary.
+
+Before the first image build, an operator must place the selected project's
+token in the GitHub `release` environment secret `HCLOUD_TOKEN`. The local token
+file is not uploaded automatically. Dispatch from `main`:
+
+```sh
+gh workflow run hetzner-node-images.yml --ref main \
+  -f base_image_id=BASE_IMAGE_ID -f location=ash
+```
+
+The workflow uploads a credential-free `hetzner-node-image-<run-id>` artifact.
+Download its `hetzner-node-image.json` manifest for the configuration command
+below. A successful image build does not prove that a workload can run.
+
 ## Prepare a host image
 
 Choose the project explicitly. Supply its token through `HCLOUD_TOKEN`, never
@@ -27,7 +51,7 @@ Run from the repository root:
 ```sh
 uv run python -m deploy.hetzner.bake --help
 uv run python -m deploy.hetzner.bake \
-  --base-image-id BASE_IMAGE_ID --location fsn1 \
+  --base-image-id BASE_IMAGE_ID --location ash \
   --manifest /absolute/path/to/new-bake-manifest.json
 ```
 
@@ -53,6 +77,41 @@ It does not prove the image boots or the runtime works.
 
 ## Configure capacity
 
+`configure.py` prepares the operator document without editing JSON by hand.
+First export the current deployment operator document using an approved AWS
+operator identity into an owner-only file outside the repository. Do not start
+from an empty document on an existing deployment. The command preserves other
+operator fields and provider bindings, and refuses to replace a different
+policy already using the same binding ref.
+
+Choose a private output directory with mode `0700`; both the token file and
+exported operator document must be owner-only. Then run:
+
+```sh
+uv run python -m deploy.hetzner.configure \
+  --manifest /absolute/path/to/hetzner-node-image.json \
+  --token-file /absolute/path/to/hetzner-token \
+  --operator-document /private/path/operator-current.json \
+  --output /private/path/operator-with-hetzner.json \
+  --workspace-id PLATFORM_CAPACITY_WORKSPACE_ID \
+  --server-type ccx33
+```
+
+The command checks the manifest against the current host recipe and the
+snapshot in the token's actual project. It checks disk size and reports the
+current supplier price including IPv4. It writes a new `0600` document
+outside the repository, never credentials to stdout. The initial binding uses
+only the manifest's location and a zero warm floor. Repeating the same setup
+preserves an identical binding; changing an active binding needs explicit review.
+USD and IPv4 prices come from the project's API. A project billed in another
+currency requires an explicit reviewed `--usd-per-currency-unit` conversion.
+
+This prepares a local document only. The operator must publish it to the
+existing `<deployment>/operator` secret before deployment, checking that no
+other operator changed the source document meanwhile. Do not upload this
+credential-bearing file as a GitHub artifact. Complete build-resource cleanup
+and live acceptance before enabling a warm floor.
+
 Before applying the deployment's new secret map, add
 `LAZYCLOUD_PLATFORM_CAPACITY_HETZNER` to the existing operator secret document,
 preserving every other field. Its value is a JSON array. Use `[]` if no project
@@ -68,23 +127,17 @@ Each binding follows `provider_clients.settings.HetznerCapacityBinding`:
 - `usd_per_currency_unit` converts the project's API currency into USD.
 - `primary_ipv4_hourly_micros` adds the reviewed IP charge to server offers.
 - `policy` names the existing platform capacity workspace, pool, allowed and
-  default native regions, instance limits, disk requirement, and cost ceilings.
+  default native regions, disk requirement, and idle behavior.
   Set `platform_fleet` to true. Set `warm_cpu_min` to 1 only on the chosen
-  default binding; every other binding uses 0. Bound `warm_cpu_max` and
-  `max_cpu_instances` to the approved spend.
+  default binding; every other binding uses 0. The warm target follows measured
+  arrivals without a separate provider maximum.
 
-Policy ceilings use exact capability keys, for example
-`hetzner:fsn1:ccx33:amd64:runsc`, in USD microdollars per server-hour. They are
-supplier purchase limits, not retail rates or margin guarantees. Budget for
-idle time, image transfers, object-store access, IPs, and fees separately.
-The requested root volume must fit the SKU's included disk.
-
-AWS platform capacity also requires reviewed ceilings. Set Terraform's
-`platform_aws_hourly_cost_ceiling_micros`, keyed like
-`aws:us-east-1:g6.xlarge:amd64:runsc`, before deployment. A missing capability
-cannot buy or restore machines. Customer-connected AWS is unaffected. Do not
-derive these ceilings blindly from supplier prices: that would approve any
-price without checking the revenue it can earn.
+Account admission enforces plan concurrency and billing limits. Hetzner adds no
+node-count or supplier-price ceiling. Existing AWS connection limits remain.
+The scheduler ranks compatible offers by cost, but does not guarantee a margin
+or stop scaling when supplier prices rise. Budget for idle time, image transfers,
+object-store access, IPs, and fees separately. The requested root volume must
+fit the SKU's included disk.
 
 Both API and scheduler must receive the same settings and release manifest.
 Apply the forward launch-credential migration before starting either process.
@@ -96,7 +149,7 @@ or reach provider metadata through their network namespace.
 
 Use an approved non-production target with reachable object storage, public
 bootstrap origin, private callback routes, and the release's real agent binary.
-Start with one allowed SKU, one default location, a one-node maximum, and zero
+Start with one allowed SKU, one default location, one CPU request, and zero
 warm nodes. Name every created unit, server, IP, enrollment, worker, and image
 in the acceptance record.
 
@@ -116,9 +169,10 @@ Only then enable the one-node warm floor. Regional selection remains unavailable
 until explicit regional compute rates are reviewed and published. Omitting a
 region uses Auto pricing regardless of the supplier that runs the container.
 
-For rollback, first lower the warm floor and stop new acquisitions with the
-binding's limits. Let active work finish and let the normal drain delete idle
-nodes. Keep the binding, token, images, and new application version until all
+Rollback needs a maintenance window that stops new platform workload admission.
+Lower the warm floor, let active work finish, and let the normal drain delete idle
+nodes. There is no provider purchase-limit switch. Keep the binding, token,
+images, and new application version until all
 units prove cleanup. Removing credentials first strands paid capacity.
 
 Forward database migrations preserve deployed state. Do not reset a deployed

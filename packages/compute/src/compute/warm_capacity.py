@@ -54,7 +54,7 @@ def warm_capacity_target(
         )
         for cpu_value, memory_value in zip(cpu, memory, strict=True)
     )
-    target = min(policy.warm_cpu_max, max(policy.warm_cpu_min, loads[ceil(buckets * 0.95) - 1]))
+    target = max(policy.warm_cpu_min, loads[ceil(buckets * 0.95) - 1])
     if target >= current:
         return WarmCapacityTarget(target, None)
     if lower_since is None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from agent.binary import AgentBinarySettings
 from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
@@ -111,7 +111,6 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
     client_provider: Boto3AwsManagedPoolClientProvider
     capacity_workspace: Callable[[AwsAccountConnection], str]
     platform_providers: tuple[ResolvedComputeProvider, ...] = ()
-    platform_cost_ceilings: Mapping[str, int] = field(default_factory=lambda: dict[str, int]())
 
     def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
         return self.platform_providers
@@ -180,9 +179,6 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
                 root_volume_gib=connection.compute.root_volume_gib,
                 idle_timeout_seconds=connection.compute.idle_timeout_seconds,
                 allowed_instance_types=connection.compute.allowed_instance_types,
-                hourly_cost_ceiling_micros=(
-                    dict(self.platform_cost_ceilings) if connection.platform_fleet else {}
-                ),
             ),
             pooled=AwsConnectedAccountPooledProvider(
                 provider_ref=provider_ref,
@@ -205,7 +201,6 @@ def workspace_compute_provider_resolver(
     presigned_origin: str = "",
     backend_route: BackendRouteSettings,
     platform_providers: tuple[ResolvedComputeProvider, ...] = (),
-    platform_cost_ceilings: Mapping[str, int] | None = None,
 ) -> WorkspaceComputeProviderResolver:
     validate_remote_provider_network_configuration(
         gateway_origin=gateway_origin,
@@ -221,7 +216,6 @@ def workspace_compute_provider_resolver(
         connections=connections,
         capacity_workspace=capacity_workspace,
         platform_providers=platform_providers,
-        platform_cost_ceilings=platform_cost_ceilings or {},
         binaries_by_region=artifacts,
         instance_hourly_micros=capacity_settings.instance_hourly_micros,
         allowed_instance_types=frozenset(),

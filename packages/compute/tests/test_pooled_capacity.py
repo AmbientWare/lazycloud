@@ -445,8 +445,6 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
             platform_fleet=True,
             default_region=offer.region,
             allowed_regions=(offer.region,),
-            max_cpu_instances=2,
-            hourly_cost_ceiling_micros={offer.capability_key: offer.hourly_cost_micros},
         ),
     )
     resolver = WorkspaceComputeProviderResolver(
@@ -481,8 +479,8 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
         capacity_owner_mutations=_MutationLeases(),
     )
     assert restarted.reconcile_pooled_capacity()[0].id == unit.id
-    with pytest.raises(ConflictError, match="capacity limit"):
-        restarted.scale_internal_unit(workspace_id, unit.id, 3, before_mutation=_allow_scale)
+    scaled = restarted.scale_internal_unit(workspace_id, unit.id, 3, before_mutation=_allow_scale)
+    assert scaled.desired_machines == 3
 
 
 def test_internal_pool_lookup_is_workspace_scoped(isolated_services: ApiServices) -> None:

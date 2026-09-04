@@ -300,14 +300,11 @@ class HetznerCapacityBinding(BaseModel):
             raise ValueError(f"{self.ref} requires allowed server types")
         if not set(self.policy.allowed_regions) <= self.images_by_location.keys():
             raise ValueError(f"{self.ref} requires a release image for every allowed location")
-        if not self.policy.hourly_cost_ceiling_micros:
-            raise ValueError(f"{self.ref} requires supplier cost ceilings")
         return self
 
 
 class PlatformCapacitySettings(BaseSettings):
     hetzner: tuple[HetznerCapacityBinding, ...] = ()
-    aws_hourly_cost_ceiling_micros: dict[str, int] = Field(default_factory=dict)
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_PLATFORM_CAPACITY_",
@@ -317,11 +314,6 @@ class PlatformCapacitySettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_bindings(self) -> PlatformCapacitySettings:
-        for capability, ceiling in self.aws_hourly_cost_ceiling_micros.items():
-            if not capability.startswith("aws:") or ceiling <= 0:
-                raise ValueError(
-                    "AWS platform cost ceilings require AWS capabilities and positive costs"
-                )
         if len({binding.ref for binding in self.hetzner}) != len(self.hetzner):
             raise ValueError("platform provider refs must be unique")
         if len({binding.policy.workspace_id for binding in self.hetzner}) > 1:

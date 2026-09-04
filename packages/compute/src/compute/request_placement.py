@@ -121,7 +121,7 @@ class ComputeCapacityPlacementService:
             )
         except ValueError as exc:
             raise UpstreamUnavailableError(
-                "no provider capacity meets the workload, region, and supplier cost ceiling",
+                "no provider capacity meets the workload and region requirements",
                 code="offer_unavailable",
             ) from exc
         selected = next(provider for provider in providers if provider.ref == offer.provider)

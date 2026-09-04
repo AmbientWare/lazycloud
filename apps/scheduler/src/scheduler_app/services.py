@@ -253,7 +253,6 @@ class SchedulerAppServices:
                 platform_providers=configured_platform_compute_providers(
                     platform_capacity, launch_credentials=provider_node_launches
                 ),
-                platform_cost_ceilings=platform_capacity.aws_hourly_cost_ceiling_micros,
                 gateway_origin=gateway_origin,
                 presigned_origin=storage.object_store.presigned_endpoint_url or "",
                 backend_route=network.backend_routes,

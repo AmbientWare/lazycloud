@@ -16,6 +16,15 @@ from agent.operations import build_agent_install_script
 _DIRECTORY = Path(__file__).resolve().parent
 
 
+def host_recipe_sha256(base_image_id: int) -> str:
+    return sha256(
+        build_agent_install_script().encode()
+        + (_DIRECTORY / "prepare-host.sh").read_bytes()
+        + (_DIRECTORY / "node.pkr.hcl").read_bytes()
+        + str(base_image_id).encode()
+    ).hexdigest()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-image-id", type=int, required=True)
@@ -35,12 +44,7 @@ def main() -> None:
         parser.error("HCLOUD_ENDPOINT overrides are not supported")
 
     runtime = build_agent_install_script()
-    recipe = sha256(
-        runtime.encode()
-        + (_DIRECTORY / "prepare-host.sh").read_bytes()
-        + (_DIRECTORY / "node.pkr.hcl").read_bytes()
-        + str(args.base_image_id).encode()
-    ).hexdigest()
+    recipe = host_recipe_sha256(args.base_image_id)
     bake_id = str(uuid4())
     print(f"Hetzner bake {bake_id}; recipe {recipe}; location {args.location}", flush=True)
     if args.validate:

@@ -1,0 +1,66 @@
+name: Hetzner Node Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_image_id:
+        description: Immutable Ubuntu 24.04 x86 image ID in the selected project
+        required: true
+        type: string
+      location:
+        description: Location approved for the temporary build server
+        required: true
+        default: ash
+        type: choice
+        options: [ash, hil, fsn1, nbg1, hel1, sin]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hetzner-node-images
+  cancel-in-progress: false
+
+jobs:
+  cpu:
+    name: Bake Hetzner CPU host image
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Refuse anything but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Hetzner Node Images runs from main."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+
+      - name: Install Packer
+        uses: hashicorp/setup-packer@c4e4b2636b98ce7566f9ec9c309e26821f695bd2
+        with:
+          version: "1.14.3"
+
+      - name: Bake host image
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          BASE_IMAGE_ID: ${{ inputs.base_image_id }}
+          LOCATION: ${{ inputs.location }}
+        run: |
+          set -euo pipefail
+          uv run --group workspace python -m deploy.hetzner.bake \
+            --base-image-id "${BASE_IMAGE_ID}" \
+            --location "${LOCATION}" \
+            --manifest hetzner-node-image.json
+
+      - name: Upload image manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: hetzner-node-image-${{ github.run_id }}
+          path: hetzner-node-image.json
+          if-no-files-found: error
