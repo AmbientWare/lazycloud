@@ -332,6 +332,9 @@ class AutoscalingDriver:
     container_states: SchedulerContainerStateReader
     container_requests: ContainerRequestReader
 
+    def selects(self, stub: AutoscalingStub) -> bool:
+        return self.workload.selects(stub) and _autoscaling_enabled(stub)
+
     def reconcile(
         self,
         *,
@@ -341,7 +344,7 @@ class AutoscalingDriver:
         stubs = tuple(
             stub
             for stub in self.services.scheduler_workloads.list_autoscaling_stubs()
-            if self.workload.selects(stub) and _autoscaling_enabled(stub)
+            if self.selects(stub)
         )
         snapshot = load_autoscaling_placement_snapshot(
             self.services,
@@ -359,11 +362,7 @@ class AutoscalingDriver:
         limit: int = 100,
     ) -> list[AutoscaleResult]:
         current_time = now or utc_now()
-        stubs = [
-            stub
-            for stub in snapshot.stubs
-            if self.workload.selects(stub) and _autoscaling_enabled(stub)
-        ][: max(limit, 0)]
+        stubs = [stub for stub in snapshot.stubs if self.selects(stub)][: max(limit, 0)]
         signals = self.workload.samples(stubs)
         results: list[AutoscaleResult] = []
         for stub in stubs:

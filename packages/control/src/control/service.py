@@ -24,7 +24,7 @@ from database.repositories.identity import (
     WorkspaceRepository,
     new_signing_key,
 )
-from database.repositories.orchestration import ContainerRepository
+from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
 from database.tables.apps import StubTable
 from database.tables.identity import ConcurrencyLimitTable, WorkspaceTable
@@ -33,6 +33,7 @@ from identity.auth import AuthService
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import DEFAULT_RESOURCE_TYPE
+from shared.autoscaler_state import autoscaler_target_kind
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.deployment_records import Deployment
@@ -695,25 +696,19 @@ class ControlPlaneService:
         metadata_payload = dict(metadata) if metadata is not None else {}
         with self.context.database.session() as session:
             repository = _stub_records(session)
-            stubs = repository.list(workspace_id=workspace_record.id)
             logical_app = metadata_payload.get("app")
             app_name = logical_app if isinstance(logical_app, str) and logical_app else None
             existing = (
-                _stub_by_name_and_app(stubs, name, app_id=app_id, app_name=app_name)
+                StubRepository(session).find_reusable(
+                    workspace_id=workspace_record.id,
+                    name=name,
+                    app_id=app_id,
+                    app_name=app_name,
+                    undeployed_only=deployment_id is None,
+                )
                 if reuse_existing
                 else None
             )
-            if existing is not None and deployment_id is None:
-                existing = next(
-                    (
-                        item
-                        for item in stubs
-                        if item.name == name
-                        and _stub_has_app_identity(item, app_id=app_id, app_name=app_name)
-                        and item.deployment_id is None
-                    ),
-                    None,
-                )
             now = utc_now()
             config_payload = (
                 config
@@ -766,6 +761,14 @@ class ControlPlaneService:
                     name=name,
                 )
                 change = WorkspaceChangeType.Updated
+            target_kind = autoscaler_target_kind(record.kind)
+            if target_kind is not None:
+                AutoscalingTargetRepository(session).activate(
+                    stub_id=record.id,
+                    workspace_id=record.workspace_id,
+                    target_kind=target_kind,
+                    due_at=now,
+                )
         self._publish_stub_change(record, change)
         return record
 
@@ -835,9 +838,12 @@ class ControlPlaneService:
         records.sort(key=lambda item: (item.workspace_id, item.name))
         return records
 
-    def list_autoscaling_stubs(self) -> list[AutoscalingStubRecord]:
+    def list_autoscaling_stubs(
+        self,
+        stub_ids: Sequence[str] | None = None,
+    ) -> list[AutoscalingStubRecord]:
         with self.context.database.session() as session:
-            return StubRepository(session).list_autoscaling_across_workspaces()
+            return StubRepository(session).list_autoscaling_across_workspaces(stub_ids=stub_ids)
 
     def discard_deployment_registration_stub(
         self,
@@ -927,6 +933,14 @@ class ControlPlaneService:
                 workspace_id=stub.workspace_id,
                 name=stub.name,
             )
+            target_kind = autoscaler_target_kind(updated_stub.kind)
+            if target_kind is not None:
+                AutoscalingTargetRepository(session).activate(
+                    stub_id=updated_stub.id,
+                    workspace_id=updated_stub.workspace_id,
+                    target_kind=target_kind,
+                    due_at=updated_stub.updated_at,
+                )
         self._publish_stub_change(updated_stub, WorkspaceChangeType.Updated)
         updated = tuple(sorted(fields))
         return StubConfigUpdateResult(
@@ -1614,36 +1628,6 @@ def _workspace_storage_available(storage: WorkspaceStorageConfig) -> bool:
 
 def _stub_by_name(records: list[StubRecord], name: str) -> StubRecord | None:
     return next((item for item in records if item.name == name), None)
-
-
-def _stub_by_name_and_app(
-    records: list[StubRecord],
-    name: str,
-    *,
-    app_id: str | None,
-    app_name: str | None = None,
-) -> StubRecord | None:
-    return next(
-        (
-            item
-            for item in records
-            if item.name == name and _stub_has_app_identity(item, app_id=app_id, app_name=app_name)
-        ),
-        None,
-    )
-
-
-def _stub_has_app_identity(
-    stub: StubRecord,
-    *,
-    app_id: str | None,
-    app_name: str | None,
-) -> bool:
-    if stub.app_id != app_id:
-        return False
-    if app_id is not None or app_name is None:
-        return True
-    return stub.metadata.get("app") == app_name
 
 
 def _limit_by_name(

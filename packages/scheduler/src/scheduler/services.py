@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from compute.service import ComputeService
 from database.records.apps import AppRecord, AutoscalingStubRecord, StubRecord
+from database.records.autoscaling import AutoscalingTargetClaim
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
@@ -102,6 +103,23 @@ class SchedulerAutoscalerStateService(Protocol):
     ) -> list[AutoscalerStateRecord]: ...
 
 
+class SchedulerAutoscalingTargetService(Protocol):
+    def claim_due(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+        lease_seconds: float,
+    ) -> list[AutoscalingTargetClaim]: ...
+
+    def complete_many(
+        self,
+        completions: Sequence[tuple[AutoscalingTargetClaim, datetime | None]],
+        *,
+        now: datetime,
+    ) -> int: ...
+
+
 class SchedulerDeploymentService(Protocol):
     def get(self, deployment_id_or_name: str) -> Deployment: ...
 
@@ -149,7 +167,10 @@ class SchedulerContainerService(Protocol):
 class SchedulerWorkloadDirectory(Protocol):
     def list_stubs(self, *, workspace: str | None = None) -> list[StubRecord]: ...
 
-    def list_autoscaling_stubs(self) -> list[AutoscalingStubRecord]: ...
+    def list_autoscaling_stubs(
+        self,
+        stub_ids: Sequence[str] | None = None,
+    ) -> list[AutoscalingStubRecord]: ...
 
     def get_stub(
         self,

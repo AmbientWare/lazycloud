@@ -17,6 +17,7 @@ from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSen
 from database.repositories.execution import TaskRepository
 from database.repositories.images import ImageArchiveRepository
 from database.repositories.orchestration import (
+    AutoscalingTargetRepository,
     ContainerPageCursor,
     ContainerRepository,
 )
@@ -25,6 +26,7 @@ from foundation.ids import optional_uuid
 from observability.events import EventService
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import Field
+from shared.autoscaler_state import autoscaler_target_kind
 from shared.container_requests import (
     OciRuntimeName,
     StopContainerReason,
@@ -33,6 +35,7 @@ from shared.container_requests import (
 )
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
+from shared.deployments import StubKind
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.events import EventLevel
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
@@ -456,6 +459,18 @@ class ContainerService:
             workspace_cpu_quota_millicores=options.workspace_cpu_quota_millicores,
             payload=payload.model_dump(mode="json"),
         )
+        try:
+            stub_kind = StubKind(options.stub_type)
+        except ValueError:
+            stub_kind = None
+        target_kind = autoscaler_target_kind(stub_kind) if stub_kind is not None else None
+        if record.stub_id and target_kind is not None:
+            with self.context.database.session() as session:
+                AutoscalingTargetRepository(session).activate(
+                    stub_id=record.stub_id,
+                    workspace_id=record.workspace_id,
+                    target_kind=target_kind,
+                )
         return self.scheduler.submit(request, ready_at=options.ready_at)
 
     def _authorized_archive_sha256(self, image_id: str, *, workspace_id: str) -> str:

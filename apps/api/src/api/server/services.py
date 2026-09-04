@@ -385,8 +385,11 @@ class ApiSchedulerWorkloadControl:
     def list_stubs(self, *, workspace: str | None = None) -> list[StubRecord]:
         return self.control_plane.list_stubs(workspace=workspace)
 
-    def list_autoscaling_stubs(self) -> list[AutoscalingStubRecord]:
-        return self.control_plane.list_autoscaling_stubs()
+    def list_autoscaling_stubs(
+        self,
+        stub_ids: Sequence[str] | None = None,
+    ) -> list[AutoscalingStubRecord]:
+        return self.control_plane.list_autoscaling_stubs(stub_ids)
 
     def get_stub(
         self,

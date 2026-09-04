@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -19,6 +20,7 @@ from database.tables.base import (
     DatabaseBase,
     IdPayloadTable,
     NamedWorkspacePayloadTable,
+    TimestampMixin,
     uuid_type,
 )
 
@@ -39,6 +41,45 @@ class AutoscalerStateTable(NamedWorkspacePayloadTable, DatabaseBase):
     target_kind: Mapped[str] = mapped_column(String(80), nullable=False)
     target_id: Mapped[str] = mapped_column(String(160), nullable=False)
     decision: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+
+
+class AutoscalingTargetTable(TimestampMixin, DatabaseBase):
+    __tablename__ = "autoscaling_targets"
+    __table_args__: tuple[SchemaItem, ...] = (
+        CheckConstraint("generation >= 1", name="ck_autoscaling_targets_generation"),
+        CheckConstraint(
+            "target_kind IN ('function', 'endpoint', 'pod')",
+            name="ck_autoscaling_targets_kind",
+        ),
+        CheckConstraint(
+            "(claim_token IS NULL) = (claim_expires_at IS NULL)",
+            name="ck_autoscaling_targets_claim",
+        ),
+        Index(
+            "ix_autoscaling_targets_due",
+            "due_at",
+            "stub_id",
+        ),
+        Index("ix_autoscaling_targets_workspace", "workspace_id"),
+    )
+
+    stub_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("stubs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    target_kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    claim_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    claim_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class MachineTable(IdPayloadTable, DatabaseBase):
@@ -103,14 +144,28 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
         Index("ix_containers_status_created", "status", "created_at", "id"),
         Index("ix_containers_stub", "stub_id"),
         Index(
-            "ix_containers_stub_autoscaling",
+            "ix_containers_stub_live",
             "stub_id",
-            "status",
-            "finished_at",
             "created_at",
             "id",
-            postgresql_where=text("status IN ('pending', 'running', 'failed')"),
-            sqlite_where=text("status IN ('pending', 'running', 'failed')"),
+            postgresql_where=text("status IN ('pending', 'running')"),
+            sqlite_where=text("status IN ('pending', 'running')"),
+        ),
+        Index(
+            "ix_containers_stub_failed_created",
+            "stub_id",
+            "created_at",
+            "id",
+            postgresql_where=text("status = 'failed'"),
+            sqlite_where=text("status = 'failed'"),
+        ),
+        Index(
+            "ix_containers_stub_failed_finished",
+            "stub_id",
+            "finished_at",
+            "id",
+            postgresql_where=text("status = 'failed' AND finished_at IS NOT NULL"),
+            sqlite_where=text("status = 'failed' AND finished_at IS NOT NULL"),
         ),
         Index("ix_containers_worker_status", "worker_id", "status"),
         Index("ix_containers_machine_status", "machine_id", "status"),

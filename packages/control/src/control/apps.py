@@ -17,6 +17,7 @@ from database.repositories.apps import (
 )
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.execution import EventRepository
+from database.repositories.orchestration import AutoscalingTargetRepository
 from foundation.ids import try_uuid
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
@@ -27,6 +28,7 @@ from shared.app_lifecycle import (
     AppLifecycleTarget,
 )
 from shared.app_slug import validate_app_slug
+from shared.autoscaler_state import autoscaler_target_kind
 from shared.container_requests import ContainerShutdownTarget
 from shared.errors import (
     ConflictError,
@@ -546,10 +548,42 @@ class AppService:
                     "deleted_at": now if target is AppLifecycleTarget.Deleted else None,
                 }
             )
+            resumed_deployment_ids = (
+                [
+                    intent.deployment_id
+                    for intent in AppDeploymentIntentRepository(session).list(app_id=app.id)
+                ]
+                if target is AppLifecycleTarget.Active
+                else []
+            )
             if target is not AppLifecycleTarget.Paused:
                 AppDeploymentIntentRepository(session).clear(app_id=app.id)
             AppContainerShutdownIntentRepository(session).clear(app_id=app.id)
-            return repository.upsert(completed)
+            completed = repository.upsert(completed)
+            if target is AppLifecycleTarget.Active:
+                targets = AutoscalingTargetRepository(session)
+                stubs = StubRepository(session)
+                resumed_stubs = stubs.list_for_deployments(
+                    resumed_deployment_ids,
+                    workspace_id=app.workspace_id,
+                )
+                current_stub = (
+                    stubs.get(completed.stub_id, workspace_id=app.workspace_id)
+                    if completed.stub_id is not None
+                    else None
+                )
+                by_id = {stub.id: stub for stub in resumed_stubs}
+                if current_stub is not None:
+                    by_id[current_stub.id] = current_stub
+                for stub in by_id.values():
+                    target_kind = autoscaler_target_kind(stub.kind)
+                    if target_kind is not None:
+                        targets.activate(
+                            stub_id=stub.id,
+                            workspace_id=stub.workspace_id,
+                            target_kind=target_kind,
+                        )
+            return completed
 
     def _capture_container_shutdown_intents(
         self,

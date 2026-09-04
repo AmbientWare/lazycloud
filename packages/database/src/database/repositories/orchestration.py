@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from secrets import token_urlsafe
 from typing import Any
 from uuid import uuid4
 
+from database.records.autoscaling import AutoscalingTargetClaim
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.common import (
     GlobalTableRepository,
@@ -19,6 +21,7 @@ from database.tables.orchestration import (
     AgentLeaseTable,
     AgentTable,
     AutoscalerStateTable,
+    AutoscalingTargetTable,
     ContainerTable,
     MachineTable,
     RouteTable,
@@ -36,13 +39,157 @@ from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, Containe
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.routing import AgentBackendRoute
-from sqlalchemy import Select, and_, func, or_, select, text
+from sqlalchemy import Select, and_, case, func, or_, select, text, union_all
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy.orm.attributes import flag_modified
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
+
+
+@dataclass(slots=True)
+class AutoscalingTargetRepository:
+    session: Session
+
+    def activate(
+        self,
+        *,
+        stub_id: str,
+        workspace_id: str,
+        target_kind: AutoscalerTargetKind,
+        due_at: datetime | None = None,
+    ) -> None:
+        current_time = due_at or datetime.now(UTC)
+        values: dict[str, str | int | datetime | None] = {
+            "stub_id": stub_id,
+            "workspace_id": workspace_id,
+            "target_kind": target_kind.value,
+            "due_at": current_time,
+            "generation": 1,
+            "claim_token": None,
+            "claim_expires_at": None,
+            "created_at": current_time,
+            "updated_at": current_time,
+        }
+        dialect = self.session.get_bind().dialect.name
+        if dialect == "postgresql":
+            insert = postgresql_insert(AutoscalingTargetTable).values(**values)
+        elif dialect == "sqlite":
+            insert = sqlite_insert(AutoscalingTargetTable).values(**values)
+        else:
+            raise RuntimeError("autoscaling targets require PostgreSQL or SQLite")
+        earlier_due_at = case(
+            (AutoscalingTargetTable.due_at > insert.excluded.due_at, insert.excluded.due_at),
+            else_=AutoscalingTargetTable.due_at,
+        )
+        self.session.execute(
+            insert.on_conflict_do_update(
+                index_elements=[AutoscalingTargetTable.stub_id],
+                set_={
+                    "workspace_id": insert.excluded.workspace_id,
+                    "target_kind": insert.excluded.target_kind,
+                    "due_at": earlier_due_at,
+                    "generation": AutoscalingTargetTable.generation + 1,
+                    "updated_at": insert.excluded.updated_at,
+                },
+            )
+        )
+
+    def claim_due(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int,
+        lease_seconds: float,
+    ) -> list[AutoscalingTargetClaim]:
+        if limit <= 0:
+            return []
+        current_time = now or datetime.now(UTC)
+        token = token_urlsafe(24)
+        statement = (
+            select(AutoscalingTargetTable)
+            .where(
+                AutoscalingTargetTable.due_at <= current_time,
+                or_(
+                    AutoscalingTargetTable.claim_token.is_(None),
+                    AutoscalingTargetTable.claim_expires_at <= current_time,
+                ),
+            )
+            .order_by(AutoscalingTargetTable.due_at.asc(), AutoscalingTargetTable.stub_id.asc())
+            .limit(limit)
+        )
+        if self.session.get_bind().dialect.name == "postgresql":
+            statement = statement.with_for_update(skip_locked=True)
+        else:
+            statement = statement.with_for_update()
+        rows = list(self.session.scalars(statement))
+        claim_expires_at = current_time + timedelta(seconds=max(lease_seconds, 0.0))
+        claims: list[AutoscalingTargetClaim] = []
+        for row in rows:
+            row.claim_token = token
+            row.claim_expires_at = claim_expires_at
+            row.updated_at = current_time
+            claims.append(
+                AutoscalingTargetClaim(
+                    stub_id=row.stub_id,
+                    workspace_id=row.workspace_id,
+                    target_kind=AutoscalerTargetKind(row.target_kind),
+                    generation=row.generation,
+                    token=token,
+                    due_at=row.due_at,
+                )
+            )
+        self.session.flush()
+        return claims
+
+    def complete(
+        self,
+        claim: AutoscalingTargetClaim,
+        *,
+        next_reconcile_at: datetime | None,
+        now: datetime | None = None,
+    ) -> bool:
+        return (
+            self.complete_many(
+                ((claim, next_reconcile_at),),
+                now=now,
+            )
+            == 1
+        )
+
+    def complete_many(
+        self,
+        completions: Sequence[tuple[AutoscalingTargetClaim, datetime | None]],
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        if not completions:
+            return 0
+        by_stub_id = {claim.stub_id: (claim, due_at) for claim, due_at in completions}
+        statement = select(AutoscalingTargetTable).where(
+            AutoscalingTargetTable.stub_id.in_(by_stub_id)
+        )
+        if self.session.get_bind().dialect.name == "postgresql":
+            statement = statement.with_for_update()
+        rows = list(self.session.scalars(statement))
+        completed = 0
+        current_time = now or datetime.now(UTC)
+        for row in rows:
+            claim, next_reconcile_at = by_stub_id[row.stub_id]
+            if row.claim_token != claim.token:
+                continue
+            completed += 1
+            if row.generation == claim.generation and next_reconcile_at is None:
+                self.session.delete(row)
+                continue
+            if row.generation == claim.generation and next_reconcile_at is not None:
+                row.due_at = next_reconcile_at
+            row.claim_token = None
+            row.claim_expires_at = None
+            row.updated_at = current_time
+        self.session.flush()
+        return completed
 
 
 @dataclass(slots=True)
@@ -525,26 +672,24 @@ class ContainerRepository:
         wanted = tuple(dict.fromkeys(stub_ids))
         if not wanted:
             return []
-        statement = (
-            select(ContainerTable)
-            .where(
-                ContainerTable.stub_id.in_(wanted),
-                or_(
-                    ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
-                    and_(
-                        ContainerTable.status == ContainerStatus.Failed.value,
-                        or_(
-                            ContainerTable.created_at >= failed_since,
-                            ContainerTable.finished_at >= failed_since,
-                        ),
-                    ),
-                ),
-            )
-            .order_by(
-                ContainerTable.stub_id.asc(),
-                ContainerTable.created_at.desc(),
-                ContainerTable.id.desc(),
-            )
+        live = select(ContainerTable).where(
+            ContainerTable.stub_id.in_(wanted),
+            ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+        )
+        failed = select(ContainerTable).where(
+            ContainerTable.stub_id.in_(wanted),
+            ContainerTable.status == ContainerStatus.Failed.value,
+            or_(
+                ContainerTable.created_at >= failed_since,
+                ContainerTable.finished_at >= failed_since,
+            ),
+        )
+        candidates = union_all(live, failed).subquery()
+        candidate = aliased(ContainerTable, candidates)
+        statement = select(candidate).order_by(
+            candidate.stub_id.asc(),
+            candidate.created_at.desc(),
+            candidate.id.desc(),
         )
         return [
             ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
