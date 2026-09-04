@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { productRegionSchema } from "./placement";
 
 export const billingPlanIdSchema = z.enum(["free", "team"]);
 export type BillingPlanId = z.infer<typeof billingPlanIdSchema>;
@@ -32,6 +33,7 @@ export const planEntitlementsSchema = z
     connected_cloud: z.boolean(),
     custom_domains: z.boolean(),
     self_hosted: z.boolean(),
+    region_selection: z.boolean(),
   })
   .strict();
 export type PlanEntitlements = z.infer<typeof planEntitlementsSchema>;
@@ -75,9 +77,39 @@ const publishedGpuRateSchema = z
   })
   .strict();
 
+export const publishedPlacementRateSchema = z
+  .object({
+    rate_class: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z][a-z0-9_-]*$/),
+    region: productRegionSchema.nullable(),
+    name: z.string(),
+    multiplier: z
+      .string()
+      .regex(/^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/)
+      .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0),
+    compute_rates: z.array(
+      z
+        .object({
+          billing_owner: billingOwnerSchema,
+          gpu_type: z.string(),
+          nanos_per_container_hour: z.number().int().nonnegative(),
+          nanos_per_cpu_core_hour: z.number().int().nonnegative(),
+          nanos_per_memory_gib_hour: z.number().int().nonnegative(),
+          nanos_per_gpu_card_hour: z.number().int().nonnegative(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type PublishedPlacementRate = z.infer<typeof publishedPlacementRateSchema>;
+
 export const pricingCatalogSchema = z
   .object({
     pricing_version: z.string(),
+    metered_rates_effective_at: z.string().datetime({ offset: true }),
     currency: z.string().regex(/^[A-Z]{3}$/),
     connected_cloud_management_fee_percent: z.number().int().min(0).max(100),
     no_payment_method: z
@@ -90,6 +122,7 @@ export const pricingCatalogSchema = z
     plans: z.array(publishedPlanSchema),
     shape_rates: z.array(publishedShapeRateSchema),
     gpu_rates: z.array(publishedGpuRateSchema),
+    placement_rates: z.array(publishedPlacementRateSchema),
     platform_rate: z
       .object({
         nanos_per_egress_gib: z.number().int().nonnegative(),

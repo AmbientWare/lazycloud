@@ -53,6 +53,7 @@ locals {
     LAZYCLOUD_RESEND_API_KEY               = "Resend API key invitation mail is sent with, read by the scheduler."
     LAZYCLOUD_RESEND_WEBHOOK_SECRET        = "Resend webhook signing secret. Returned only at endpoint creation."
     LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID = "GitHub numeric user id that signs in as the first administrator. Empty leaves the bootstrap account reachable only by its token, and whoever signs in opens an ordinary member account instead."
+    LAZYCLOUD_PLATFORM_CAPACITY_HETZNER    = "JSON array of Hetzner project bindings, tokens, image IDs and capacity policies. Write [] when no project is configured."
   }
 
   # Which document each variable is read out of. Every workload gets these as

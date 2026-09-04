@@ -54,7 +54,12 @@ from provider_aws import AwsEcrImageRegistry
 from provider_clients import (
     workspace_compute_provider_resolver,
 )
-from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
+from provider_clients.settings import (
+    AwsAccountConnectionSettings,
+    AwsCapacitySettings,
+    PlatformCapacitySettings,
+)
+from provider_clients.workspace_compute import configured_platform_compute_providers
 from provider_cloudflare import CloudflareSettings
 from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
@@ -66,6 +71,7 @@ from scheduler.containers import (
     CONTAINER_DISPATCH_WAKE_SCOPE,
     SchedulerContainerRequestService,
 )
+from scheduler.preemption import SchedulerGpuBackfillPreemptionService
 from scheduler.services import SchedulerWorkloadDirectory
 from scheduler.state import (
     RedisSchedulerContainerRepository,
@@ -224,16 +230,21 @@ class SchedulerAppServices:
         container_repository = RedisSchedulerContainerRepository(redis)
         # See the API composition: the resolver exists only where connected AWS is
         # configured, and a half-configured deployment is rejected by settings.
+        platform_capacity = PlatformCapacitySettings()
+        connection_directory = AwsAccountConnectionDirectory(context)
         provider_resolver = (
             workspace_compute_provider_resolver(
                 capacity.aws_capacity,
                 capacity.agent_binaries,
-                connections=AwsAccountConnectionDirectory(context).list_for_workspace,
+                connections=connection_directory.list_for_workspace,
+                capacity_workspace=connection_directory.capacity_workspace,
+                platform_providers=configured_platform_compute_providers(platform_capacity),
+                platform_cost_ceilings=platform_capacity.aws_hourly_cost_ceiling_micros,
                 gateway_origin=gateway_origin,
                 presigned_origin=storage.object_store.presigned_endpoint_url or "",
                 backend_route=network.backend_routes,
             )
-            if capacity.aws_connections.configured
+            if capacity.aws_connections.configured or platform_capacity.hetzner
             else None
         )
         agent_version, agent_sha256 = (
@@ -301,6 +312,9 @@ class SchedulerAppServices:
             event_bus=RedisEventBus(redis),
             workspace_changes=workspace_changes,
             runtime_state=container_runtime_state,
+        )
+        container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
+            worker_repository, container_repository, containers
         )
         # After the container service, because stopping containers is the whole
         # of what this sweep does.

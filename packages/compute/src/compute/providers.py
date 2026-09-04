@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
@@ -17,6 +17,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.contracts import ContractModel
+from shared.timestamps import to_utc
 from shared.urls import normalize_http_origin
 
 from compute.agent_control import MachineWorkerAvailability
@@ -29,6 +30,24 @@ class ProviderMachineStatus:
     Terminated = "terminated"
     Unhealthy = "unhealthy"
     Unknown = "unknown"
+
+
+def next_billing_renewal(
+    *,
+    started_at: datetime,
+    minimum_seconds: int,
+    quantum_seconds: int,
+    now: datetime,
+) -> datetime | None:
+    if quantum_seconds == 0:
+        return None
+    first_boundary = to_utc(started_at) + timedelta(seconds=max(minimum_seconds, quantum_seconds))
+    elapsed = (to_utc(now) - first_boundary).total_seconds()
+    if elapsed < 0:
+        return first_boundary
+    return first_boundary + timedelta(
+        seconds=(int(elapsed // quantum_seconds) + 1) * quantum_seconds
+    )
 
 
 class ProviderCapacityPhase(StrEnum):
@@ -57,7 +76,7 @@ class ProviderUnitRequest(ContractModel):
     unit_id: str
     unit_name: UnitName
     provider_ref: str
-    provider_connection_id: str
+    provider_connection_id: str | None
     generation: int
     offer: ComputeOffer
     desired_machines: int
@@ -90,6 +109,57 @@ class ProviderUnitInstance(ContractModel):
     # forward without disturbing running instances, so this is the only value
     # that identifies the release a node is actually on.
     booted_template_version: str = ""
+    billing_started_at: datetime | None = None
+    billing_minimum_seconds: int = Field(default=0, ge=0)
+    billing_quantum_seconds: int = Field(default=0, ge=0)
+
+
+class ResolvedProviderPolicy(ContractModel):
+    workspace_id: str
+    pool: MachinePool
+    platform_fleet: bool
+    default_region: str
+    allowed_regions: tuple[str, ...]
+    max_cpu_instances: int | None = Field(default=None, ge=0)
+    max_gpu_instances: int | None = Field(default=None, ge=0)
+    root_volume_gib: int = Field(default=200, ge=50, le=2048)
+    idle_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
+    allowed_instance_types: tuple[str, ...] = ()
+    hourly_cost_ceiling_micros: dict[str, int] = Field(default_factory=dict)
+    warm_cpu_min: int = Field(default=0, ge=0)
+    warm_cpu_max: int = Field(default=8, ge=0)
+    warm_decrease_after_seconds: int = Field(default=600, ge=60, le=86_400)
+
+    @model_validator(mode="after")
+    def validate_policy(self) -> ResolvedProviderPolicy:
+        if not self.workspace_id or not self.pool:
+            raise ValueError("provider policy requires a capacity workspace and pool")
+        if self.default_region not in self.allowed_regions:
+            raise ValueError("provider default region must be allowed")
+        if any(value <= 0 for value in self.hourly_cost_ceiling_micros.values()):
+            raise ValueError("provider hourly cost ceilings must be positive")
+        if self.warm_cpu_min > self.warm_cpu_max:
+            raise ValueError("provider warm CPU minimum cannot exceed maximum")
+        if self.max_cpu_instances is not None and self.warm_cpu_min > self.max_cpu_instances:
+            raise ValueError("provider warm CPU minimum cannot exceed provider capacity limit")
+        return self
+
+    def machine_limit(self, *, gpu: bool) -> int | None:
+        return self.max_gpu_instances if gpu else self.max_cpu_instances
+
+    def accepts(self, offer: ComputeOffer) -> bool:
+        ceiling = self.hourly_cost_ceiling_micros.get(offer.capability_key)
+        return (
+            offer.region in self.allowed_regions
+            and (
+                not self.allowed_instance_types
+                or offer.instance_type in self.allowed_instance_types
+            )
+            and (
+                (not self.platform_fleet and not self.hourly_cost_ceiling_micros)
+                or (ceiling is not None and offer.hourly_cost_micros <= ceiling)
+            )
+        )
 
 
 class ProviderUnitSnapshot(ContractModel):
@@ -184,6 +254,7 @@ class ResolvedComputeProvider:
     connection_id: str | None = None
     direct: DirectMachineProvider | None = None
     pooled: PooledCapacityProvider | None = None
+    policy: ResolvedProviderPolicy | None = None
 
     def __post_init__(self) -> None:
         if self.capacity_mode is ComputeCapacityMode.Direct and (
@@ -191,12 +262,14 @@ class ResolvedComputeProvider:
         ):
             raise ValueError("direct provider resolution is invalid")
         if self.capacity_mode is ComputeCapacityMode.Pooled and (
-            self.pooled is None or self.direct is not None or self.connection_id is None
+            self.pooled is None or self.direct is not None or self.policy is None
         ):
             raise ValueError("pooled provider resolution is invalid")
 
 
 class ComputeProviderResolver(Protocol):
+    def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]: ...
+
     def list_providers(self, workspace_id: str) -> Iterable[ResolvedComputeProvider]: ...
 
     def resolve(self, workspace_id: str, provider_ref: str) -> ResolvedComputeProvider: ...

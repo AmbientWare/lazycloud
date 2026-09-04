@@ -1,19 +1,33 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from database.repositories.billing_rates import PlatformRateRepository, RatePublication
+from database.repositories.billing_rates import (
+    ComputeRateRepository,
+    PlatformRateRepository,
+    RatePublication,
+)
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_rates import PlatformRateTable
+from shared.billing_quotes import (
+    ContainerShape,
+    LedgerBasis,
+    LedgerComponent,
+    MeteredSpan,
+    PricedSpan,
+    price_span,
+)
 from shared.errors import ConflictError
 from shared.timestamps import to_utc, utc_now
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
     METERING_WINDOW_STARTED_AT_METADATA_KEY,
+    UsageBillingOwner,
     UsageMetric,
     UsageRecord,
     UsageUnit,
@@ -92,3 +106,44 @@ def test_a_boundary_republished_unchanged_writes_nothing_and_one_republished_oth
     with isolated_services.context.database.session() as session:
         rows = session.scalars(select(PlatformRateTable)).all()
     assert [row.nanos_per_egress_byte for row in rows] == [Decimal(1)]
+
+
+def test_regional_rates_are_isolated_from_automatic_prices(
+    isolated_services: ApiServices,
+) -> None:
+    now = utc_now()
+    shape = ContainerShape(UsageBillingOwner.PlatformFleet, "", 1000, 1024, 0)
+    regional = replace(shape, rate_class="eu-central-standard")
+    with isolated_services.context.database.session() as session:
+        rates = ComputeRateRepository(session)
+        for placed, rate in ((shape, Decimal(2)), (regional, Decimal(3))):
+            rates.publish(
+                billing_owner=placed.billing_owner,
+                rate_class=placed.rate_class,
+                gpu_type="",
+                pricing_version="test.regions",
+                effective_at=now,
+                nanos_per_container_second=Decimal(0),
+                nanos_per_cpu_core_second=rate,
+                nanos_per_memory_gib_second=Decimal(0),
+                nanos_per_gpu_card_second=Decimal(0),
+            )
+        span = MeteredSpan(
+            component=LedgerComponent.Cpu,
+            basis=LedgerBasis.Reserved,
+            started_at=now,
+            ended_at=now + timedelta(seconds=60),
+            quantity=Decimal(60),
+        )
+        for placed, expected in ((shape, 120), (regional, 180)):
+            priced = price_span(
+                span,
+                rates.quotes_for(
+                    shape=placed,
+                    components=(LedgerComponent.Cpu,),
+                    started_at=span.started_at,
+                    ended_at=span.ended_at,
+                ),
+            )
+            assert isinstance(priced, PricedSpan)
+            assert priced.cost_nanos == expected

@@ -29,12 +29,12 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
         UniqueConstraint("capacity_owner_id", name="uq_compute_units_capacity_owner_id"),
         Index("ix_compute_units_workspace_pool", "workspace_id", "pool"),
         Index(
-            "ix_compute_units_active_connection_gpu",
-            "provider_connection_id",
+            "ix_compute_units_active_provider_gpu",
+            "provider_ref",
             "worker_gpu_count",
             "desired_machines",
-            postgresql_where=text("provider_connection_id IS NOT NULL AND desired_machines > 0"),
-            sqlite_where=text("provider_connection_id IS NOT NULL AND desired_machines > 0"),
+            postgresql_where=text("provider_ref <> '' AND desired_machines > 0"),
+            sqlite_where=text("provider_ref <> '' AND desired_machines > 0"),
         ),
         Index(
             "uq_compute_units_internal_placement",
@@ -54,6 +54,14 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
             name="ck_compute_units_machine_capacity",
         ),
         CheckConstraint("generation > 0", name="ck_compute_units_generation"),
+        CheckConstraint(
+            "visibility <> 'internal' OR (provider_ref <> '' AND region <> '' "
+            "AND offer_id <> '' AND capability_key <> '' AND capacity_mode = 'pooled' "
+            "AND capacity_owner_kind = 'pooled_provider' AND capacity_owner_id = id "
+            "AND (provider_connection_id IS NOT NULL "
+            "OR COALESCE(CAST(payload->>'platform_fleet' AS BOOLEAN), false)))",
+            name="ck_compute_units_internal_provider_identity",
+        ),
         CheckConstraint(
             "min_free_cpu_millicores >= 0 AND min_free_memory_mib >= 0 "
             "AND min_free_gpu_count >= 0 AND worker_cpu_millicores >= 0 "

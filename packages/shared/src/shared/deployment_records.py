@@ -14,6 +14,7 @@ from shared.deployments import DeploymentKind
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageSpec
 from shared.lifecycle import LifecycleHooks
+from shared.placement import ProductRegion, validate_region_pool
 from shared.resources import parse_memory_mib
 from shared.tasks import RetryPolicy
 from shared.timestamps import utc_now
@@ -49,6 +50,7 @@ DEFAULT_POD_KEEP_WARM_SECONDS = 600
 
 
 class Resources(ContractModel):
+    region: ProductRegion | None = None
     cpu: CpuRequest | None = None
     memory: MemoryRequest | None = None
     disk: str = DEFAULT_DISK
@@ -348,6 +350,10 @@ class DeploymentSpec(ContractModel):
 
     @model_validator(mode="after")
     def workload_configuration_is_canonical(self) -> DeploymentSpec:
+        pool = self.metadata.get("pool")
+        if isinstance(pool, dict):
+            pool = pool.get("name")
+        validate_region_pool(self.resources.region, pool if isinstance(pool, str) else None)
         # A schedule fires an invocation, and a function is the only kind that
         # has one. Refused here rather than at the tick, where the schedule
         # exists, fires against a stub that cannot serve it, and records the

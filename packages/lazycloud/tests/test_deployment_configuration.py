@@ -4,6 +4,7 @@ import pytest
 from lazycloud.session.deployment import _stub_request_from_spec
 from pydantic import ValidationError
 from shared.http.gateway import GetOrCreateStubRequest
+from shared.placement import ProductRegion
 
 from lazycloud import App
 
@@ -32,3 +33,35 @@ def test_sdk_rejects_zero_concurrency_before_transport() -> None:
         @app.endpoint(name="invalid", concurrency=0)
         def invalid() -> str:
             return "no"
+
+
+def test_every_workload_preserves_region_intent_through_the_gateway_contract() -> None:
+    app = App("regional_workloads")
+
+    @app.function(region="eu-central")
+    def function() -> str:
+        return "ok"
+
+    @app.endpoint(region="eu-central")
+    def endpoint() -> str:
+        return "ok"
+
+    @app.asgi(region="eu-central")
+    def asgi() -> str:
+        return "ok"
+
+    pod = app.pod(name="pod", region="eu-central")
+    sandbox = app.sandbox(name="sandbox", region="eu-central")
+    for workload in (function, endpoint, asgi, pod, sandbox):
+        spec = workload.spec()
+        request = _stub_request_from_spec(spec, workspace="workspace-1")
+        round_trip = GetOrCreateStubRequest.model_validate_json(request.model_dump_json())
+        assert spec.resources.region is ProductRegion.EuCentral
+        assert round_trip.region is ProductRegion.EuCentral
+
+    function.configure(region="us-east")
+    assert function.spec().resources.region is ProductRegion.UsEast
+    assert app.pod(name="automatic").spec().resources.region is None
+
+    with pytest.raises(ValidationError, match="region and an explicit pool"):
+        app.pod(name="conflicting", region="eu-central", pool="private").spec()

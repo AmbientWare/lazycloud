@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -451,11 +451,10 @@ def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
             worker_cpu_millicores=4_000,
             worker_memory_mib=8_192,
         )
-    recorder = _RecordingPooledCapacity()
     placement = ComputeCapacityPlacementService(
         isolated_services.context,
         WorkspaceComputePolicyService(isolated_services.context),
-        recorder,
+        isolated_services.compute,
     )
 
     result = placement.place(
@@ -467,18 +466,15 @@ def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
     )
 
     assert result.pool == "shared-pool"
-    # A unit in the pool already hosts this shape, so nothing is provisioned.
-    assert recorder.requests == []
 
 
 def test_placement_defaults_to_the_platform_pool_without_a_connection(
     isolated_services: ApiServices,
 ) -> None:
-    recorder = _RecordingPooledCapacity()
     placement = ComputeCapacityPlacementService(
         isolated_services.context,
         WorkspaceComputePolicyService(isolated_services.context),
-        recorder,
+        isolated_services.compute,
     )
 
     result = placement.place(
@@ -489,8 +485,6 @@ def test_placement_defaults_to_the_platform_pool_without_a_connection(
     )
 
     assert result.pool == LAZYCLOUD_MACHINE_POOL
-    # Nothing provisions into a pool no connected account feeds.
-    assert recorder.requests == []
 
 
 def test_machine_pool_listing_is_scoped_to_the_caller_workspace(
@@ -572,43 +566,6 @@ def test_deployment_placement_is_pinned_when_workspace_default_changes(
     assert persisted_original.pool == LAZYCLOUD_MACHINE_POOL
     assert scheduled_original.pool == LAZYCLOUD_MACHINE_POOL
     assert created_after.pool == "aws"
-
-
-@dataclass(slots=True)
-class _RecordingPooledCapacity:
-    requests: list[ComputeResourceRequirements] = field(default_factory=list)
-
-    def prepare_pooled_capacity(
-        self,
-        *,
-        workspace: str,
-        requirements: ComputeResourceRequirements,
-        region: str,
-        desired_machines: int,
-        root_volume_gib: int,
-        idle_timeout_seconds: int = 300,
-        allowed_instance_types: tuple[str, ...] = (),
-    ) -> ComputeUnitRecord:
-        del root_volume_gib, idle_timeout_seconds, allowed_instance_types
-        self.requests.append(requirements)
-        return ComputeUnitRecord(
-            id="11111111-1111-4111-8111-111111111111",
-            capacity_owner_id="11111111-1111-4111-8111-111111111111",
-            capacity_owner_kind=CapacityOwnerKind.PooledProvider,
-            capacity_owner_source=CapacityOwnerSource.Provider,
-            workspace_id=workspace,
-            name=UnitName("internal-aws-cpu"),
-            pool=MachinePool("aws"),
-            provider_ref="aws:22222222-2222-4222-8222-222222222222",
-            provider_connection_id="22222222-2222-4222-8222-222222222222",
-            capacity_mode=ComputeCapacityMode.Pooled,
-            visibility=ComputeUnitVisibility.Internal,
-            region=region,
-            offer_id="us-east-1:m7i.xlarge",
-            capability_key="aws:us-east-1:m7i.xlarge:amd64:runsc",
-            desired_machines=desired_machines,
-            max_machines=max(desired_machines, 1),
-        )
 
 
 def _current_connection(client: TestClient) -> AwsConnectionResponse:

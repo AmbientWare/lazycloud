@@ -32,6 +32,8 @@ class ComputeOffer(ContractModel):
     gpu_count: int = 0
     node_count: int = 0
     hourly_cost_micros: int = 0
+    billing_minimum_seconds: int = Field(default=0, ge=0)
+    billing_quantum_seconds: int = Field(default=0, ge=0)
     reliability: float = 0.0
     available: int = 1
     capacity_mode: ComputeCapacityMode = ComputeCapacityMode.Direct

@@ -9,9 +9,11 @@ from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.deployments import DeploymentKind
 from shared.http.base import HttpModel
 from shared.http.stubs import StubResponse
+from shared.placement import ProductRegion
 
 
 class DeploymentResourcesResponse(HttpModel):
+    region: ProductRegion | None = None
     cpu: CpuRequest | None = None
     memory: MemoryRequest | None = None
     disk: str | None = None

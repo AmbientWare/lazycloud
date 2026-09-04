@@ -79,6 +79,7 @@ class AgentBridgeNetworkOperation(StrEnum):
     ConfigureNamespace = "configure-namespace"
     EnableMasquerade = "enable-masquerade"
     AllowForwarding = "allow-forwarding"
+    BlockProviderMetadata = "block-provider-metadata"
     ProbeGatewayEgress = "probe-gateway-egress"
     ExposePort = "expose-port"
     UnexposePort = "unexpose-port"
@@ -964,6 +965,30 @@ class AgentBridgeNetworkBackend:
         capabilities: HostNetworkCapabilities,
     ) -> list[NetworkCommand]:
         commands: list[NetworkCommand] = []
+        # Before NAT and tenant allowlists: a sandbox must never read node
+        # metadata or bootstrap credentials through the host's source address.
+        destinations = [(self.config.iptables_binary, "169.254.0.0/16")]
+        if capabilities.ipv6_enabled:
+            destinations.extend(
+                (self.config.ip6tables_binary, address)
+                for address in (
+                    "fd00:ec2::254/128",
+                    "fd20:ce::254/128",
+                    "fd00:a9fe:a9fe::1/128",
+                    "fe80::a9fe:a9fe/128",
+                )
+            )
+        for binary, destination in destinations:
+            commands.extend(
+                self._ensure_firewall_rule(
+                    binary=binary,
+                    table="raw",
+                    chain="PREROUTING",
+                    rule=["-i", self.config.bridge_name, "-d", destination, "-j", "DROP"],
+                    operation=AgentBridgeNetworkOperation.BlockProviderMetadata,
+                    insert=True,
+                )
+            )
         commands.extend(
             self._ensure_firewall_rule(
                 binary=self.config.iptables_binary,

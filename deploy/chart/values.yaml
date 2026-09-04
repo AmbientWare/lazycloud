@@ -165,7 +165,7 @@ bootstrap:
 # commit; publishing different figures at an instant already published for is
 # refused rather than repricing what a customer was shown.
 billing:
-  ratesEffectiveAt: "2026-01-01T00:00:00Z"
+  ratesEffectiveAt: "2026-09-11T00:00:00Z"
 
 # The class every claim in this chart names. Cluster-scoped, so it is created
 # once by `deploy/platform-core` rather than by each deployment's chart.

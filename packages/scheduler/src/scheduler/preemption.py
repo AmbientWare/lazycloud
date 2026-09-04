@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -14,6 +15,8 @@ from shared.scheduling import (
     SchedulerContainerState,
     SchedulerContainerStatus,
     SchedulerWorkerRecord,
+    SchedulerWorkerRequest,
+    gpu_count_for_capacity,
 )
 from shared.timestamps import utc_now
 
@@ -174,6 +177,77 @@ class SchedulerWorkerPreemptionService:
             requeued_request_ids=queued.requeued_request_ids,
             stopped_container_ids=stopped,
         )
+
+
+class GpuBackfillWorkerRepository(Protocol):
+    def mark_gpu_backfill_evictions(
+        self,
+        worker: SchedulerWorkerRecord,
+        gpu_request_id: str,
+        container_ids: list[str],
+        *,
+        now: datetime | None = None,
+    ) -> list[str]: ...
+
+
+def select_gpu_backfill_victims(
+    request: SchedulerWorkerRequest,
+    worker: SchedulerWorkerRecord,
+    containers: Sequence[SchedulerContainerState],
+    *,
+    reserved_memory_mib: int,
+) -> list[str]:
+    gpu_count = gpu_count_for_capacity(request.gpu, request.gpu_count)
+    if gpu_count <= 0 or worker.free_gpu_count < gpu_count:
+        return []
+    needed_cpu = request.cpu_millicores - worker.free_cpu_millicores
+    needed_memory = reserved_memory_mib - worker.free_memory_mib
+    if needed_cpu <= 0 and needed_memory <= 0:
+        return []
+    victims: list[str] = []
+    for container in sorted(containers, key=lambda item: item.scheduled_at, reverse=True):
+        if (
+            container.worker_id != worker.worker_id
+            or not container.backfill
+            or not container.preemptible
+            or container.gpu_count != 0
+            or container.status
+            not in {SchedulerContainerStatus.Pending, SchedulerContainerStatus.Running}
+        ):
+            continue
+        victims.append(container.container_id)
+        needed_cpu -= container.cpu_millicores
+        needed_memory -= container.memory_mib
+        if needed_cpu <= 0 and needed_memory <= 0:
+            return victims
+    return []
+
+
+@dataclass(slots=True)
+class SchedulerGpuBackfillPreemptionService:
+    workers: GpuBackfillWorkerRepository
+    containers: WorkerPreemptionContainerRepository
+    stopper: WorkerPreemptionContainerStopper
+
+    def recover(
+        self,
+        request: SchedulerWorkerRequest,
+        worker: SchedulerWorkerRecord,
+        *,
+        reserved_memory_mib: int,
+    ) -> bool:
+        victims = select_gpu_backfill_victims(
+            request,
+            worker,
+            self.containers.list_by_worker(worker.worker_id),
+            reserved_memory_mib=reserved_memory_mib,
+        )
+        if not victims:
+            return False
+        marked = self.workers.mark_gpu_backfill_evictions(worker, request.container_id, victims)
+        for container_id in marked:
+            self.stopper.stop(container_id, reason=StopContainerReason.Preempted)
+        return True
 
 
 @dataclass(slots=True)

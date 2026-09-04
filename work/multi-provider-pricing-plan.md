@@ -1,5 +1,17 @@
 # Multi-provider placement and pricing plan
 
+## Implementation status
+
+The combined feature branch remains a draft. Provider-neutral capacity, warm
+and cold lifecycle, GPU CPU backfill, region contracts, and forward billing
+migrations are implemented. Regional prices are not published.
+
+Hetzner activation is blocked on secure host enrollment and live acceptance.
+Source IP and metadata cannot authenticate a host against its own tenants.
+A node-scoped, short-lived, single-use bootstrap token needs an owner-approved
+exception to the prohibition on credentials in provider-readable configuration.
+No Hetzner server has been provisioned by this implementation run.
+
 ## Outcome
 
 LazyCloud will sell two plans, Free and Team, with usage-based compute,
@@ -114,7 +126,8 @@ CPU workload. Do not launch a GPU machine for CPU work.
 
 ## Parallel execution map
 
-Every implementation slice gets its own branch, worktree, and pull request.
+The implementation uses one feature branch and one combined pull request, as
+requested by the owner. Agents edit disjoint owners in the shared worktree.
 The manager reviews each returned change and runs integrated acceptance. Root
 workspace files, dependency manifests, package exports, and lockfiles belong to
 the integration owner unless a slice names them explicitly.
@@ -216,7 +229,8 @@ Proof:
 
 ### Wave 2: supplier, billing, and event simulation
 
-Start after Wave 1 is merged. These agents own disjoint packages.
+Start after Wave 1 is integrated on the feature branch. These agents own
+disjoint packages.
 
 #### Agent 2A: Hetzner pooled provider
 
@@ -235,8 +249,10 @@ Work:
   server.
 - Prove the enrollment identity design against a live disposable server. Do not
   embed a reusable authenticator in cloud-init. Provider API labels, expected
-  address, one-time enrollment state, and the trusted network peer must all
-  agree before enrollment succeeds.
+  address, and metadata are not host authentication because tenant code shares
+  the host's public source IP. Establish an independently authenticated host
+  identity before enrollment succeeds. The credential delivery decision above
+  must be resolved before implementing that boundary.
 
 Proof:
 
@@ -289,7 +305,7 @@ Proof:
 
 Own:
 
-- `work/pricing_economics_simulator.py`
+- New `work/provider_pricing_simulator.py`
 - New modules under `work/pricing_simulation/`, except `contracts.py`
 - Generated Markdown, CSV, and JSON outputs under `work/`
 

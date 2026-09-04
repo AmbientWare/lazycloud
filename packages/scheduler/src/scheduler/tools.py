@@ -8,6 +8,7 @@ from pydantic import Field, JsonValue, model_validator
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.gpu import gpu_preference_accepts
+from shared.placement import ProductRegion
 from shared.scheduling import worker_serves_owner
 from shared.timestamps import utc_now
 
@@ -30,6 +31,8 @@ class WorkerPoolCapacity(ContractModel):
 
 
 class SchedulingRequest(ContractModel):
+    backfill: bool = False
+    region: ProductRegion | None = None
     id: str
     owner_user_id: str = ""
     """Account that owns the requesting workspace; what private placement compares."""
@@ -52,6 +55,7 @@ class SchedulingRequest(ContractModel):
 
 
 class WorkerCapacity(ContractModel):
+    region: ProductRegion | None = None
     worker_id: str
     pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     owner_user_id: str = ""
@@ -106,6 +110,8 @@ class WorkerCapacity(ContractModel):
         # which other tenant owns the worker is not theirs to learn.
         if not self.serves_owner(request.owner_user_id):
             return "worker is private to another account"
+        if request.region is not None and self.region != request.region:
+            return "worker is outside the selected region"
         if request.pool_selector and request.pool_selector != self.pool:
             return f"pool selector {request.pool_selector!r} != pool {self.pool!r}"
         if not request.pool_selector and self.requires_pool_selector:
@@ -116,7 +122,7 @@ class WorkerCapacity(ContractModel):
             return "worker is preemptible but request is not"
         if request.gpu_count > 0 and not self.total_gpu:
             return "request needs a GPU worker"
-        if request.gpu_count == 0 and self.gpu_type:
+        if request.gpu_count == 0 and self.gpu_type and not request.backfill:
             return "worker is GPU-only"
         if self.free_cpu < request.cpu:
             return f"free cpu {self.free_cpu} < {request.cpu}"
@@ -128,6 +134,8 @@ class WorkerCapacity(ContractModel):
 
     def can_fit(self, request: SchedulingRequest) -> bool:
         if not self.serves_owner(request.owner_user_id):
+            return False
+        if request.region is not None and self.region != request.region:
             return False
         if request.pool_selector and request.pool_selector != self.pool:
             return False
@@ -146,7 +154,9 @@ class WorkerCapacity(ContractModel):
         if request.gpu_count > 0:
             if not gpu_preference_accepts(request.gpu, self.gpu_type):
                 return False
-        elif self.gpu_type:
+        elif self.gpu_type and (
+            not request.backfill or not request.preemptible or self.free_gpu >= self.total_gpu
+        ):
             return False
         return (
             self.free_cpu >= request.cpu
@@ -168,6 +178,37 @@ class PlannedDispatch(ContractModel):
     worker_id: str
     request_id: str
     pool: MachinePool
+
+
+def select_backfill_worker(
+    request: SchedulingRequest,
+    workers: Iterable[WorkerCapacity],
+    queued_gpu_requests: Iterable[SchedulingRequest],
+) -> WorkerCapacity | None:
+    if request.gpu_count or request.gpu or not request.preemptible:
+        return None
+    pending_gpu = tuple(item for item in queued_gpu_requests if item.gpu_count > 0)
+    candidates = [
+        worker
+        for worker in workers
+        if worker.total_gpu > 0
+        and worker.free_gpu < worker.total_gpu
+        and not worker.pending
+        and not any(gpu_request_matches_worker(item, worker) for item in pending_gpu)
+    ]
+    return select_worker_for_request(request.model_copy(update={"backfill": True}), candidates)
+
+
+def gpu_request_matches_worker(request: SchedulingRequest, worker: WorkerCapacity) -> bool:
+    if request.gpu_count <= 0:
+        return False
+    return worker.model_copy(
+        update={
+            "free_cpu": worker.total_cpu,
+            "free_memory_mib": worker.total_memory_mib,
+            "free_gpu": worker.total_gpu,
+        }
+    ).can_fit(request)
 
 
 class WorkerCapacityReservation(ContractModel):

@@ -25,6 +25,7 @@ from shared.http.gateway import (
     SyncContainerWorkspaceResponse,
 )
 from shared.http.pods import CreatePodRequest, CreatePodResponse
+from shared.placement import ProductRegion
 from typing_extensions import Self
 
 from lazycloud.abstractions.image import Image
@@ -99,6 +100,7 @@ class PodOptions(TypedDict, total=False):
     allow_list: list[str] | None
     docker_enabled: bool
     preemptible: bool
+    region: str | None
     pool: PoolInput
     provider: str | None
     metadata: dict[str, Any]
@@ -209,6 +211,7 @@ class Pod(ControlClientConfigMixin):
     allow_list: list[str] | None = None
     docker_enabled: bool = False
     preemptible: bool = False
+    region: str | None = None
     pool: PoolInput = None
     provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -273,6 +276,7 @@ class Pod(ControlClientConfigMixin):
             kind=DeploymentKind.Pod,
             image=self.image.spec(),
             resources=Resources(
+                region=ProductRegion(self.region) if self.region is not None else None,
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,
@@ -327,6 +331,7 @@ class Pod(ControlClientConfigMixin):
         keep_warm: int | None = None,
         secrets: list[str] | None = None,
         tcp: bool | None = None,
+        region: str | None = None,
         pool: PoolInput = None,
         preemptible: bool | None = None,
     ) -> Self:
@@ -357,6 +362,8 @@ class Pod(ControlClientConfigMixin):
             self.tcp = tcp
         if pool is not None:
             self.pool = pool
+        if region is not None:
+            self.region = region
         if preemptible is not None:
             self.preemptible = preemptible
         return self

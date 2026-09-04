@@ -22,6 +22,21 @@ nothing may derive one, because a rate boundary is a figure customers are charge
 either side of. It changes in the same commit as the figures in
 `packages/shared/src/shared/billing_rate_card.py`.
 
+The reviewed cutover is September 11, 2026 at 00:00 UTC. Egress becomes
+$0.13/GiB then. Compute and storage prices stay unchanged. The public catalog
+states that effective date. `billing publish-rates` requires the same boundary
+and publishes the reviewed history in one transaction. A fresh installation
+gets the previous rates through the cutover, so starting before September 11
+does not create unpriced usage. Existing rate rows are verified and preserved;
+completed ledger segments are never changed.
+
+Before deployment, preview with `lazycloud-admin billing publish-rates
+--effective-at 2026-09-11T00:00:00Z`. The bootstrap Job adds `--confirm` during
+sync. If deployment is delayed beyond the cutover and usage has already been
+priced after it, publication refuses. Choose a new future date in the reviewed
+rate card and this value before deploying. Do not change an existing rate
+boundary or ledger row to make the sync pass.
+
 ## The order the bootstrap runs in
 
 Sync waves, not preference. The schema must exist before an administrator can be

@@ -78,8 +78,14 @@ class ProviderNodeEnrollmentService:
     events: GatewayEventSink | None = None
     rate_limiter: RedisClient | None = None
     proof_max_inflight: int = 8
+    client_ip_header: str = ""
 
-    def enroll(self, request: ProviderNodeEnrollmentRequest) -> JoinAgentResponse:
+    def enroll(
+        self,
+        request: ProviderNodeEnrollmentRequest,
+        *,
+        peer_address: str = "",
+    ) -> JoinAgentResponse:
         pool, connection = self._enrollment_target(request)
         self._verify_active_node(
             pool=pool,
@@ -88,13 +94,14 @@ class ProviderNodeEnrollmentService:
             region=request.region,
             provider_instance_id=request.provider_instance_id,
             identity_proof_url=request.identity_proof_url,
+            peer_address=peer_address,
         )
         join_token = self._issue_join_token(
             pool.id,
             pool.workspace_id,
             pool.pool,
             pool.capacity_owner_id,
-            owner_user_id=connection.user_id,
+            owner_user_id=self._pool_owner(pool),
         )
         joined = self.gateway.join_agent(
             JoinAgentRequest(
@@ -181,6 +188,8 @@ class ProviderNodeEnrollmentService:
     def report_failure(
         self,
         request: ProviderNodeBootstrapFailureRequest,
+        *,
+        peer_address: str = "",
     ) -> ProviderNodeBootstrapFailureResponse:
         pool, connection = self._enrollment_target(request)
         self._verify_active_node(
@@ -190,6 +199,7 @@ class ProviderNodeEnrollmentService:
             region=request.region,
             provider_instance_id=request.provider_instance_id,
             identity_proof_url=request.identity_proof_url,
+            peer_address=peer_address,
         )
         excerpt = _sanitized_excerpt(request.diagnostic_excerpt)
         observed = self.compute.record_provider_bootstrap_status(
@@ -226,6 +236,8 @@ class ProviderNodeEnrollmentService:
     def record_phase(
         self,
         request: ProviderNodeBootstrapPhaseRequest,
+        *,
+        peer_address: str = "",
     ) -> ProviderNodeBootstrapFailureResponse:
         pool, connection = self._enrollment_target(request)
         self._verify_active_node(
@@ -235,6 +247,7 @@ class ProviderNodeEnrollmentService:
             region=request.region,
             provider_instance_id=request.provider_instance_id,
             identity_proof_url=request.identity_proof_url,
+            peer_address=peer_address,
         )
         observed = self.compute.record_provider_bootstrap_status(
             pool_id=pool.id,
@@ -253,11 +266,12 @@ class ProviderNodeEnrollmentService:
         self,
         *,
         pool: ComputeUnitRecord,
-        connection: AwsAccountConnection,
+        connection: AwsAccountConnection | None,
         provider: ProviderKind,
         region: str,
         provider_instance_id: str,
         identity_proof_url: str,
+        peer_address: str,
     ) -> None:
         if not pool.provider_state.resource_id:
             raise UpstreamUnavailableError("provider pool identity is not established")
@@ -280,6 +294,7 @@ class ProviderNodeEnrollmentService:
                     region=region,
                     provider_instance_id=provider_instance_id,
                     proof_url=SecretStr(identity_proof_url),
+                    peer_address=peer_address,
                 ),
                 pool=pool,
                 connection=connection,
@@ -341,9 +356,7 @@ class ProviderNodeEnrollmentService:
             | ProviderNodeBootstrapFailureRequest
             | ProviderNodeBootstrapPhaseRequest
         ),
-    ) -> tuple[ComputeUnitRecord, AwsAccountConnection]:
-        if request.provider is not ProviderKind.Aws:
-            raise InvalidInputError(f"unsupported provider node: {request.provider.value}")
+    ) -> tuple[ComputeUnitRecord, AwsAccountConnection | None]:
         with self.gateway.services.context.database.session() as session:
             pool = ComputeUnitRepository(session).get(request.enrollment_request_id)
             if pool is None:
@@ -352,11 +365,16 @@ class ProviderNodeEnrollmentService:
                 pool.visibility is not ComputeUnitVisibility.Internal
                 or pool.capacity_mode is not ComputeCapacityMode.Pooled
                 or pool.phase not in _ENROLLABLE_UNIT_PHASES
-                or not pool.provider_ref.startswith("aws:")
-                or pool.provider_connection_id is None
+                or not pool.provider_ref.startswith(f"{request.provider.value}:")
                 or pool.region != request.region
             ):
                 raise InvalidInputError("provider node enrollment request is not active")
+            if request.provider is ProviderKind.Hetzner:
+                if not pool.platform_fleet or pool.provider_connection_id is not None:
+                    raise InvalidInputError("Hetzner provider binding is not platform capacity")
+                return pool, None
+            if pool.provider_connection_id is None:
+                raise InvalidInputError("AWS provider connection is unavailable")
             connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id)
             # The account behind the unit's workspace, not the workspace itself: one
             # connection backs every workspace its owner holds, so the tenancy check
@@ -373,6 +391,13 @@ class ProviderNodeEnrollmentService:
         ):
             raise InvalidInputError("provider node connection is not active")
         return pool, connection
+
+    def _pool_owner(self, pool: ComputeUnitRecord) -> str:
+        with self.gateway.services.context.database.session() as session:
+            owner = WorkspaceMemberRepository(session).owner(pool.workspace_id)
+        if owner is None:
+            raise InvalidInputError("provider capacity workspace has no owner")
+        return owner.user_id
 
     def _issue_join_token(
         self,

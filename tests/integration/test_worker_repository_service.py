@@ -94,6 +94,7 @@ from shared.identity import AuthScope, TokenKind, WorkspaceStorageConfig
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus, ImageRecord
 from shared.objects import ObjectRecord
+from shared.placement import ProductRegion
 from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
 from shared.source_cache_cleanup import (
     WorkerCacheGenerationRecord,
@@ -2552,6 +2553,7 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
                 # Which capacity this account's work prefers is the unit's to
                 # decide, so a host that names its own is answered the same way.
                 priority=2**31 - 1,
+                region=ProductRegion.EuCentral,
                 total_cpu_millicores=1000,
                 total_memory_mib=1024,
                 free_cpu_millicores=1000,
@@ -2572,6 +2574,7 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
     assert stored.private_worker is True
     assert stored.owner_user_id == workspace_owner_user_id(isolated_services.context, workspace_id)
     assert stored.priority == joined_unit.priority
+    assert stored.region is None
 
 
 def _join_gateway_agent(

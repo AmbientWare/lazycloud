@@ -24,6 +24,7 @@ from compute.providers import (
     ProviderUnitRequest,
     ProviderUnitSnapshot,
     ResolvedComputeProvider,
+    ResolvedProviderPolicy,
 )
 from compute.reclaim import ComputeReclaimPolicy
 from compute.service import ComputeService
@@ -45,6 +46,8 @@ from database.repositories.orchestration import (
     WorkerRepository,
 )
 from database.repositories.source_cache import SourceCacheCleanupRepository
+from provider_aws import Boto3AwsManagedPoolClientProvider
+from provider_clients.workspace_compute import WorkspaceComputeProviderResolver
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -75,6 +78,7 @@ from shared.compute_policy import (
     ComputeUnitPhase,
     ComputeUnitProviderState,
     ComputeUnitRecord,
+    MachinePool,
     UnitName,
 )
 from shared.containers import ContainerRecord, ContainerStatus
@@ -88,6 +92,7 @@ _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 @dataclass(slots=True)
 class _PooledProvider:
     desired: int = 0
+    offer: ComputeOffer = field(default_factory=lambda: _offer())
     ensure_calls: list[ProviderUnitRequest] = field(default_factory=list)
     describe_calls: list[ProviderUnitRequest] = field(default_factory=list)
     capacity_calls: list[tuple[int, int]] = field(default_factory=list)
@@ -99,7 +104,7 @@ class _PooledProvider:
     delete_failure: Exception | None = None
 
     def list_offers(self) -> Iterable[ComputeOffer]:
-        return (_offer(),)
+        return (self.offer,)
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
         self.ensure_calls.append(request)
@@ -261,6 +266,10 @@ class _MutationLeases:
 @dataclass(frozen=True, slots=True)
 class _Resolver(ComputeProviderResolver):
     provider: _PooledProvider
+    services: ApiServices
+
+    def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
+        return ()
 
     def list_providers(self, workspace_id: str) -> Iterable[ResolvedComputeProvider]:
         del workspace_id
@@ -273,11 +282,24 @@ class _Resolver(ComputeProviderResolver):
         return self._resolved()
 
     def _resolved(self) -> ResolvedComputeProvider:
+        with self.services.context.database.session() as session:
+            connection = AwsAccountConnectionRepository(session).get(_CONNECTION_ID)
+            workspace_id = self.services.context.workspace(session, "default").id
+        assert connection is not None
         return ResolvedComputeProvider(
             ref=f"aws:{_CONNECTION_ID}",
             capacity_mode=ComputeCapacityMode.Pooled,
             connection_id=_CONNECTION_ID,
             pooled=self.provider,
+            policy=ResolvedProviderPolicy(
+                workspace_id=workspace_id,
+                pool=connection.pool,
+                platform_fleet=connection.platform_fleet,
+                default_region=connection.compute.default_region,
+                allowed_regions=connection.compute.allowed_regions,
+                max_cpu_instances=connection.compute.max_cpu_instances,
+                max_gpu_instances=connection.compute.max_gpu_instances,
+            ),
         )
 
 
@@ -347,7 +369,7 @@ def test_internal_pool_scale_enforces_connection_capacity_limit(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -406,11 +428,68 @@ def test_internal_pool_scale_enforces_connection_capacity_limit(
     assert provider.capacity_calls == expected_capacity_calls
 
 
+def test_platform_capacity_reconciles_without_an_aws_connection(
+    isolated_services: ApiServices,
+) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.workspace(session, "default").id
+    offer = _offer().model_copy(update={"provider": "hetzner:platform", "cloud": "hetzner"})
+    provider = _PooledProvider(offer=offer)
+    resolved = ResolvedComputeProvider(
+        ref=offer.provider,
+        capacity_mode=ComputeCapacityMode.Pooled,
+        pooled=provider,
+        policy=ResolvedProviderPolicy(
+            workspace_id=workspace_id,
+            pool=MachinePool("lazycloud"),
+            platform_fleet=True,
+            default_region=offer.region,
+            allowed_regions=(offer.region,),
+            max_cpu_instances=2,
+            hourly_cost_ceiling_micros={offer.capability_key: offer.hourly_cost_micros},
+        ),
+    )
+    resolver = WorkspaceComputeProviderResolver(
+        connections=lambda _workspace: (),
+        capacity_workspace=lambda _connection: workspace_id,
+        binaries_by_region={},
+        instance_hourly_micros={},
+        allowed_instance_types=frozenset(),
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+        platform_providers=(resolved,),
+    )
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=resolver,
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    unit = compute.prepare_pooled_capacity(
+        workspace=workspace_id,
+        requirements=ComputeResourceRequirements(cpu_millicores=1000, memory_mb=1024),
+        region=offer.region,
+        desired_machines=1,
+        root_volume_gib=200,
+    )
+    assert unit.provider_connection_id is None
+    assert unit.platform_fleet
+    compute.reconcile_pooled_capacity()
+    restarted = ComputeService(
+        isolated_services.context,
+        provider_resolver=resolver,
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    assert restarted.reconcile_pooled_capacity()[0].id == unit.id
+    with pytest.raises(ConflictError, match="capacity limit"):
+        restarted.scale_internal_unit(workspace_id, unit.id, 3, before_mutation=_allow_scale)
+
+
 def test_internal_pool_lookup_is_workspace_scoped(isolated_services: ApiServices) -> None:
     _seed_connection(isolated_services)
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(_PooledProvider()),
+        provider_resolver=_Resolver(_PooledProvider(), isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -433,7 +512,7 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -533,7 +612,7 @@ def test_scale_zero_persists_intent_and_releases_operations_before_provider_muta
     leases = _MutationLeases()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=leases,
     )
@@ -589,7 +668,7 @@ def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -642,7 +721,7 @@ def test_internal_pool_scale_maps_mutation_coordinator_failure(
     leases = _MutationLeases(on_acquire=fail_acquire)
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=leases,
     )
@@ -670,7 +749,7 @@ def test_scale_zero_skips_provider_only_after_durable_convergence(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -713,7 +792,7 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -764,7 +843,7 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -855,7 +934,7 @@ def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
     provider = _PooledProvider()
     scale_compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -883,7 +962,7 @@ def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
     reconcile_leases.on_acquire = scale_before_reconcile
     reconciler = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=reconcile_leases,
     )
@@ -913,7 +992,7 @@ def test_pooled_capacity_unit_comes_from_the_provider_authoritative_count(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -952,7 +1031,7 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1016,7 +1095,7 @@ def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1062,7 +1141,7 @@ def test_connection_drain_deletes_hidden_capacity_idempotently(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1112,7 +1191,7 @@ def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1151,7 +1230,7 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
     provider = _PooledProvider(lingering_storage={instance_id})
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1230,7 +1309,7 @@ def test_pooled_scale_down_projects_updating_during_provider_termination(
     provider = _AsyncScaleDownProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1263,7 +1342,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
     hooks = _SchedulerHooks()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         scheduler_hooks=hooks,
@@ -1406,7 +1485,7 @@ def test_internal_pool_bootstrap_phase_deadline_reclaims_only_after_it_elapses(
     hooks = _SchedulerHooks(intake_observing_since=datetime.now(UTC) - timedelta(hours=1))
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         scheduler_hooks=hooks,
@@ -1454,7 +1533,7 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         reclaim=ComputeReclaimPolicy(max_launch_attempts=2),
@@ -1536,7 +1615,7 @@ def test_zero_capacity_policy_update_drives_internal_pool_desired_to_zero(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1581,7 +1660,7 @@ def test_policy_owned_capacity_tracks_lowered_and_raised_bounds(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1632,7 +1711,7 @@ def test_lowered_policy_floor_does_not_terminate_a_machine_running_work(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1875,7 +1954,7 @@ def test_degraded_pool_refuses_acquisition_and_placement_does_not_clear_it(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1945,7 +2024,7 @@ def test_capacity_asked_for_again_revives_a_deleted_pool(
     provider = _PooledProvider()
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1998,7 +2077,7 @@ def test_an_unbuilt_pool_is_not_deleted_by_the_account_it_has_not_been_built_in(
     _seed_connection(isolated_services)
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(_EmptyAccountProvider()),
+        provider_resolver=_Resolver(_EmptyAccountProvider(), isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -2113,7 +2192,7 @@ def _serving_pool(
     _seed_connection(isolated_services)
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         scheduler_hooks=hooks,

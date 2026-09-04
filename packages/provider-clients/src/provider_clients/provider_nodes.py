@@ -105,6 +105,8 @@ def provider_node_identity_evidence_provider(
 ) -> ProviderNodeIdentityEvidenceProvider:
     if provider is ProviderKind.Aws:
         return _AwsProviderNodeIdentityEvidenceProvider(AwsEc2ProviderNodeIdentityProofProvider())
+    if provider is ProviderKind.Hetzner:
+        raise ProviderNodeIdentityEvidenceError("Hetzner secure host enrollment is unavailable")
     raise ValueError(f"provider node identity {provider.value!r} is not supported")
 
 
@@ -158,12 +160,16 @@ class AwsProviderNodeIdentityAdapter(ProviderNodeIdentityVerifier):
         proof: ProviderNodeIdentityProof,
         *,
         pool: ComputeUnitRecord,
-        connection: AwsAccountConnection,
+        connection: AwsAccountConnection | None,
         provider_instance_ids: tuple[str, ...],
     ) -> VerifiedProviderNodeIdentity:
         if proof.provider is not ProviderKind.Aws:
             raise InvalidInputError(f"unsupported provider node identity: {proof.provider.value}")
-        if connection.node_role_arn is None or connection.node_instance_profile_arn is None:
+        if (
+            connection is None
+            or connection.node_role_arn is None
+            or connection.node_instance_profile_arn is None
+        ):
             raise UpstreamUnavailableError("AWS node identity is not ready")
         if not pool.provider_state.resource_id:
             raise UpstreamUnavailableError("AWS provider pool identity is not ready")
@@ -208,6 +214,28 @@ class AwsProviderNodeIdentityAdapter(ProviderNodeIdentityVerifier):
             provider_resource_id=verified.autoscaling_group_name,
             verified_at=utc_now(),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderNodeIdentityRegistry:
+    aws: AwsProviderNodeIdentityAdapter
+
+    def verify(
+        self,
+        proof: ProviderNodeIdentityProof,
+        *,
+        pool: ComputeUnitRecord,
+        connection: AwsAccountConnection | None,
+        provider_instance_ids: tuple[str, ...],
+    ) -> VerifiedProviderNodeIdentity:
+        if proof.provider is ProviderKind.Aws:
+            return self.aws.verify(
+                proof,
+                pool=pool,
+                connection=connection,
+                provider_instance_ids=provider_instance_ids,
+            )
+        raise UpstreamUnavailableError("Hetzner secure host enrollment is unavailable")
 
 
 __all__ = [

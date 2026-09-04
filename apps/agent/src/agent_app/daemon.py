@@ -161,6 +161,7 @@ type AgentCapacityInterruptionDetector = Callable[[], AgentCapacityInterruptionN
 
 class ProviderInstanceIdentityMode(StrEnum):
     ImdsV2 = "imds-v2"
+    HetznerMetadata = "hetzner-metadata"
 
 
 class AgentCapacityInterruptionDetectionError(RuntimeError):
@@ -234,8 +235,14 @@ class AgentDaemonOptions(ContractModel):
             )
         if all(provider_values) and (self.join_token or self.join_token_file):
             raise ValueError("join credentials and provider enrollment cannot be combined")
-        if all(provider_values) and self.provider is not ProviderKind.Aws:
-            raise ValueError("provider enrollment is only supported for AWS")
+        if all(provider_values):
+            expected = (
+                ProviderInstanceIdentityMode.ImdsV2
+                if self.provider is ProviderKind.Aws
+                else ProviderInstanceIdentityMode.HetznerMetadata
+            )
+            if self.provider_instance_identity is not expected:
+                raise ValueError("provider instance identity mode does not match provider")
         return self
 
 
@@ -1262,11 +1269,8 @@ class AgentDaemonService:
         return _agent_state_from_join_response(response, gateway_url=gateway_url)
 
     def _enroll_provider_node(self, *, gateway_url: str) -> AgentState:
-        if (
-            self.options.provider is not ProviderKind.Aws
-            or self.options.provider_instance_identity is not ProviderInstanceIdentityMode.ImdsV2
-        ):
-            raise ValueError("AWS provider node enrollment requires IMDSv2 instance identity")
+        if self.options.provider is None:
+            raise ValueError("provider node enrollment requires a provider")
         registration = self._machine_registration()
         proof_provider = self.provider_identity or provider_node_identity_evidence_provider(
             self.options.provider

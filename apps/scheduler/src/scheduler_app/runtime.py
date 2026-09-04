@@ -351,6 +351,7 @@ def _container_requests_with_capacity(
         lifecycle_events=base.lifecycle_events,
         workspace_owners=base.workspace_owners,
         capacity_reservations=capacity_reservations,
+        backfill_preemption=base.backfill_preemption,
         usage=base.usage,
         requeue_delay_seconds=base.requeue_delay_seconds,
         max_retry_count=base.max_retry_count,

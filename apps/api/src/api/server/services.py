@@ -130,11 +130,14 @@ from provider_clients import (
     configured_aws_compute_catalog,
     workspace_compute_provider_resolver,
 )
+from provider_clients.provider_nodes import ProviderNodeIdentityRegistry
 from provider_clients.settings import (
     AwsAccountConnectionSettings,
     AwsCapacityReconciliationSettings,
     AwsCapacitySettings,
+    PlatformCapacitySettings,
 )
+from provider_clients.workspace_compute import configured_platform_compute_providers
 from provider_cloudflare import CloudflareSettings
 from provider_github import GitHubAppSettings
 from provider_resend import ResendSettings
@@ -162,6 +165,7 @@ from scheduler.preemption import (
     CapacityInterruption,
     SchedulerCapacityInterruption,
     SchedulerCapacityInterruptionService,
+    SchedulerGpuBackfillPreemptionService,
     SchedulerWorkerMaintenanceService,
     SchedulerWorkerPreemptionService,
 )
@@ -472,6 +476,7 @@ class ApiServiceCore:
     agent_binary_settings: AgentBinarySettings
     aws_account_connection_settings: AwsAccountConnectionSettings
     aws_capacity_settings: AwsCapacitySettings
+    platform_capacity_settings: PlatformCapacitySettings
     aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings
     backend_route_settings: BackendRouteSettings
     object_store_settings: S3ObjectStoreSettings
@@ -583,6 +588,7 @@ class ApiServices(ApiServiceCore):
         agent_binary_settings: AgentBinarySettings | None = None,
         aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
         aws_capacity_settings: AwsCapacitySettings | None = None,
+        platform_capacity_settings: PlatformCapacitySettings | None = None,
         aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings | None = None,
         backend_route_settings: BackendRouteSettings | None = None,
         object_store_settings: S3ObjectStoreSettings | None = None,
@@ -648,6 +654,7 @@ class ApiServices(ApiServiceCore):
             aws_account_connection_settings or AwsAccountConnectionSettings()
         )
         aws_capacity_config = aws_capacity_settings or AwsCapacitySettings()
+        platform_capacity_config = platform_capacity_settings or PlatformCapacitySettings()
         aws_capacity_reconciliation_config = (
             aws_capacity_reconciliation_settings or AwsCapacityReconciliationSettings()
         )
@@ -835,11 +842,14 @@ class ApiServices(ApiServiceCore):
                 aws_capacity_config,
                 agent_artifact_config,
                 connections=aws_connection_directory.list_for_workspace,
+                capacity_workspace=aws_connection_directory.capacity_workspace,
+                platform_providers=configured_platform_compute_providers(platform_capacity_config),
+                platform_cost_ceilings=platform_capacity_config.aws_hourly_cost_ceiling_micros,
                 gateway_origin=gateway_config.public_http_url,
                 presigned_origin=object_store_config.presigned_endpoint_url or "",
                 backend_route=resolved_backend_route_settings,
             )
-            if aws_account_connection_config.configured
+            if aws_account_connection_config.configured or platform_capacity_config.hetzner
             else None
         )
 
@@ -919,6 +929,9 @@ class ApiServices(ApiServiceCore):
             event_bus=RedisEventBus(redis),
             workspace_changes=workspace_changes,
             runtime_state=container_runtime_state,
+        )
+        container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
+            worker_repository, container_repository, containers
         )
         container_shutdowns = ContainerShutdownService(
             container_repository,
@@ -1030,6 +1043,7 @@ class ApiServices(ApiServiceCore):
             agent_binary_settings=agent_artifact_config,
             aws_account_connection_settings=aws_account_connection_config,
             aws_capacity_settings=aws_capacity_config,
+            platform_capacity_settings=platform_capacity_config,
             aws_capacity_reconciliation_settings=aws_capacity_reconciliation_config,
             backend_route_settings=resolved_backend_route_settings,
             object_store_settings=object_store_config,
@@ -1304,9 +1318,12 @@ def _compose_api_services(
             events=core.events,
             rate_limiter=redis,
             proof_max_inflight=public_ingress_config.provider_node_proof_max_inflight,
-            identity_verifier=AwsProviderNodeIdentityAdapter(
-                http_client=BoundedProviderNodeIdentityHttpClient(),
-                replay_guard=RedisProviderNodeIdentityReplayGuard(redis),
+            client_ip_header=public_ingress_config.client_ip_header,
+            identity_verifier=ProviderNodeIdentityRegistry(
+                aws=AwsProviderNodeIdentityAdapter(
+                    http_client=BoundedProviderNodeIdentityHttpClient(),
+                    replay_guard=RedisProviderNodeIdentityReplayGuard(redis),
+                ),
             ),
         )
         if core.compute.provider_resolver is not None
@@ -1373,6 +1390,7 @@ def _compose_api_services(
         agent_binary_settings=core.agent_binary_settings,
         aws_account_connection_settings=core.aws_account_connection_settings,
         aws_capacity_settings=core.aws_capacity_settings,
+        platform_capacity_settings=core.platform_capacity_settings,
         aws_capacity_reconciliation_settings=core.aws_capacity_reconciliation_settings,
         backend_route_settings=core.backend_route_settings,
         object_store_settings=core.object_store_settings,

@@ -5,13 +5,15 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
+from math import ceil
 from typing import Protocol, runtime_checkable
 
-from compute.providers import ProviderUnitSnapshot
+from compute.providers import ProviderUnitSnapshot, next_billing_renewal
 from compute.service import ComputeService
 from compute.state import ComputeUnitState, RedisComputeStateRepository
 from pydantic import Field
 from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
+from shared.container_requests import schedulable_capacity
 from shared.contracts import ContractModel
 from shared.env import truthy_env_value
 from shared.errors import ConflictError
@@ -299,6 +301,26 @@ class ManagedComputeWorkerPoolDrainController:
         workers_by_machine = _workers_by_machine(
             self.workers.list_workers_for_capacity_owner(self.capacity_owner_id)
         )
+        machines_by_instance = self.compute.internal_unit_machine_by_instance(
+            self.state.workspace_id,
+            self.capacity_owner_id,
+        )
+        paid_machines = {
+            machines_by_instance[instance.provider_instance_id]
+            for instance in observation.snapshot.instances
+            if instance.provider_instance_id in machines_by_instance
+            and instance.billing_started_at is not None
+            and (
+                renewal := next_billing_renewal(
+                    started_at=instance.billing_started_at,
+                    minimum_seconds=instance.billing_minimum_seconds,
+                    quantum_seconds=instance.billing_quantum_seconds,
+                    now=current_time,
+                )
+            )
+            is not None
+            and renewal - current_time > timedelta(seconds=60)
+        }
         candidate = _idle_machine_candidate(
             workers_by_machine,
             self.workers,
@@ -306,6 +328,23 @@ class ManagedComputeWorkerPoolDrainController:
             now=current_time,
             idle_seconds=config.idle_seconds,
             retain_machines=config.min_workers,
+            paid_machine_ids=paid_machines,
+            reserve_idle_machines=(
+                max(
+                    ceil(
+                        current_unit.min_free_cpu_millicores
+                        / schedulable_capacity(current_unit.worker_cpu_millicores)
+                    ),
+                    ceil(
+                        current_unit.min_free_memory_mib
+                        / schedulable_capacity(current_unit.worker_memory_mib)
+                    ),
+                )
+                if current_unit.platform_fleet
+                and current_unit.worker_cpu_millicores > 0
+                and current_unit.worker_memory_mib > 0
+                else 0
+            ),
         )
         if candidate is None:
             return WorkerPoolDrainResult(
@@ -322,7 +361,7 @@ class ManagedComputeWorkerPoolDrainController:
         )
         desired_replicas = pooled.desired_machines
         observed_replicas = pooled.observed_machines
-        reason = "released idle connected provider machine"
+        reason = "released idle provider machine"
         return WorkerPoolDrainResult(
             capacity_owner_id=self.capacity_owner_id,
             pool=self.pool,
@@ -724,6 +763,8 @@ def _idle_machine_candidate(
     now: datetime,
     idle_seconds: float,
     retain_machines: int,
+    paid_machine_ids: set[str],
+    reserve_idle_machines: int,
 ) -> _IdleMachineCandidate | None:
     healthy_machines = [
         (machine_id, workers)
@@ -740,16 +781,18 @@ def _idle_machine_candidate(
         machine_id for machine_id, _workers in healthy_machines[:retain_machines]
     }
     candidates: list[_IdleMachineCandidate] = []
+    idle_count = 0
     for machine_id, workers in workers_by_machine.items():
-        if machine_id in retained_machine_ids:
-            continue
         if _pool_has_active_containers(workers, requests, containers):
             continue
         idle_workers = _idle_workers(workers, now, idle_seconds)
         if len(idle_workers) != len(workers):
             continue
+        idle_count += 1
+        if machine_id in retained_machine_ids or machine_id in paid_machine_ids:
+            continue
         candidates.append(_IdleMachineCandidate(machine_id=machine_id, workers=idle_workers))
-    if not candidates:
+    if not candidates or idle_count <= reserve_idle_machines:
         return None
     # Scale-out nodes begin with an empty image cache. Retire the newest idle
     # machine so the long-lived node keeps the cache it accumulated serving work.

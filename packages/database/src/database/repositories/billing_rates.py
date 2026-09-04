@@ -11,6 +11,7 @@ from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
 from shared.billing_quotes import BilledDimension, ContainerShape, LedgerComponent, Quote
 from shared.enums import StringEnum
 from shared.errors import ConflictError, InvalidInputError
+from shared.placement import AUTO_RATE_CLASS, PlacementRateClass
 from shared.timestamps import to_utc, to_utc_or_none
 from shared.usage import UsageBillingOwner
 from sqlalchemy import func, or_, select
@@ -58,6 +59,7 @@ class ComputeRateRepository:
             select(ComputeRateTable)
             .where(
                 ComputeRateTable.billing_owner == shape.billing_owner.value,
+                ComputeRateTable.rate_class == shape.rate_class,
                 ComputeRateTable.gpu_type == shape.gpu_type,
                 ComputeRateTable.effective_at < ended_at,
                 or_(
@@ -80,6 +82,7 @@ class ComputeRateRepository:
         nanos_per_cpu_core_second: Decimal,
         nanos_per_memory_gib_second: Decimal,
         nanos_per_gpu_card_second: Decimal,
+        rate_class: PlacementRateClass = AUTO_RATE_CLASS,
     ) -> RatePublication:
         """Close the rate in force and open its successor, in one transaction.
 
@@ -96,10 +99,11 @@ class ComputeRateRepository:
         """
 
         moment = to_utc(effective_at)
-        subject = f"{billing_owner.value}/{gpu_type or 'cpu'}"
+        subject = f"{billing_owner.value}/{rate_class}/{gpu_type or 'cpu'}"
         published = self.session.scalars(
             select(ComputeRateTable).where(
                 ComputeRateTable.billing_owner == billing_owner.value,
+                ComputeRateTable.rate_class == rate_class,
                 ComputeRateTable.gpu_type == gpu_type,
                 ComputeRateTable.effective_at == moment,
             )
@@ -137,6 +141,7 @@ class ComputeRateRepository:
                 select(func.max(BillingLedgerSegmentTable.segment_ended_at)).where(
                     BillingLedgerSegmentTable.dimension == BilledDimension.ComputeRuntime.value,
                     BillingLedgerSegmentTable.billing_owner == billing_owner.value,
+                    BillingLedgerSegmentTable.rate_class == rate_class,
                     BillingLedgerSegmentTable.gpu_type == gpu_type,
                 )
             ),
@@ -145,6 +150,7 @@ class ComputeRateRepository:
             select(ComputeRateTable)
             .where(
                 ComputeRateTable.billing_owner == billing_owner.value,
+                ComputeRateTable.rate_class == rate_class,
                 ComputeRateTable.gpu_type == gpu_type,
                 ComputeRateTable.effective_at < moment,
                 or_(
@@ -160,6 +166,7 @@ class ComputeRateRepository:
             ComputeRateTable(
                 id=str(uuid4()),
                 billing_owner=billing_owner.value,
+                rate_class=rate_class,
                 gpu_type=gpu_type,
                 pricing_version=pricing_version,
                 effective_at=moment,

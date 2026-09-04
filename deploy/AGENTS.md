@@ -11,8 +11,8 @@ substitutes, and gives every service an explicit owner and health check.
 - Never commit secrets, generated credentials, or local state. A value that
   identifies a resource may live here; a value that authenticates to one may
   not, and belongs in a file the deployment points at.
-- While predeployment, maintain one fresh-install database baseline and no
-  historical transition paths.
+- The platform is deployed. Add forward Alembic revisions and preserve existing
+  records. Never edit the original baseline or reset a deployed database.
 - A deployment value is usually read on several independent paths, so correcting
   one place proves nothing about the rest. When a name, origin, or credential
   changes, find every consumer of it in the same change.

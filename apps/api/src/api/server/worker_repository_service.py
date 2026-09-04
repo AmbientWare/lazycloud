@@ -68,6 +68,7 @@ from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeT
 from shared.identity import AuthScope, TokenStatus
 from shared.image_building.records import BuildStatus
 from shared.objects import ObjectRecord
+from shared.placement import product_region
 from shared.realtime.contracts import EventRecordType
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
@@ -876,6 +877,7 @@ class WorkerRepositoryService:
                 # a pool no workload asks for, and the machine has to be replaced
                 # for a name to change. Told, not asserted.
                 "pool": unit.pool,
+                "region": product_region(unit.region),
                 # Whose pool this is decides who may land on it, so the unit
                 # answers rather than the machine. A worker is launched by an
                 # agent holding a config that cannot see the unit, so left to the

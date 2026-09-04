@@ -534,21 +534,21 @@ def test_placing_a_container_records_the_shape_it_will_be_priced_on(
         recorded = ContainerBillingShapeRepository(session).shape_for(container.id)
     assert recorded == placed
 
-    # A placement is decided once. A retried assignment restates it rather than
-    # repricing a container that is already running.
     persistence.assign_runtime(
         container_id=container.id,
         workspace_id=workspace_id,
         runtime_worker_id="compose-worker",
         runtime_machine_id="compose-machine",
-        shape=ContainerShape(
-            billing_owner=UsageBillingOwner.PlatformFleet,
-            gpu_type="",
-            cpu_millicores=1,
-            memory_mib=1,
-            gpu_count=0,
-        ),
+        shape=placed,
     )
+    with pytest.raises(ConflictError, match="cannot be changed"):
+        persistence.assign_runtime(
+            container_id=container.id,
+            workspace_id=workspace_id,
+            runtime_worker_id="compose-worker",
+            runtime_machine_id="compose-machine",
+            shape=replace(placed, rate_class="eu-central-standard"),
+        )
     with isolated_services.context.database.session() as session:
         assert ContainerBillingShapeRepository(session).shape_for(container.id) == placed
 

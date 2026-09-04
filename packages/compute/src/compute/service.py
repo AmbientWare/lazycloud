@@ -25,7 +25,6 @@ from database.types import DatabaseSession
 from foundation.ids import optional_uuid
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue, TypeAdapter
-from shared.aws_connections import AwsAccountConnection
 from shared.capacity import (
     CapacityAcquisitionRequest,
     CapacityAcquisitionResult,
@@ -57,7 +56,7 @@ from shared.compute_policy import (
     MachinePool,
     UnitName,
 )
-from shared.container_requests import OciRuntimeName
+from shared.container_requests import OciRuntimeName, schedulable_capacity
 from shared.containers import ContainerStatus
 from shared.contracts import ContractModel
 from shared.errors import (
@@ -108,6 +107,7 @@ from compute.providers import (
 from compute.reclaim import ComputeReclaimPolicy
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
 from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
+from compute.warm_capacity import warm_capacity_target
 
 LOGGER = logging.getLogger(__name__)
 
@@ -483,6 +483,13 @@ class ComputeService:
                 reason="requested unit does not match the capacity owner's fixed worker shape",
                 desired_unit=desired_unit,
             )
+        if provider.policy is None or not provider.policy.accepts(offer):
+            return _capacity_result(
+                request,
+                CapacityAcquisitionStatus.TemporarilyUnavailable,
+                reason="provider offer exceeds its allowed capacity or cost policy",
+                desired_unit=desired_unit,
+            )
         try:
             snapshot = provider.pooled.describe_unit(
                 self._provider_unit_request(current_pool, offer)
@@ -499,24 +506,8 @@ class ComputeService:
             )
         with self.context.database.session() as session:
             pools = ComputeUnitRepository(session)
-            if current_pool.provider_connection_id is None:
-                return _capacity_result(
-                    request,
-                    CapacityAcquisitionStatus.TemporarilyUnavailable,
-                    reason="capacity owner connection is unavailable",
-                    desired_unit=desired_unit,
-                )
-            connection = AwsAccountConnectionRepository(session).get(
-                current_pool.provider_connection_id,
-                for_update=True,
-            )
-            if connection is None:
-                return _capacity_result(
-                    request,
-                    CapacityAcquisitionStatus.TemporarilyUnavailable,
-                    reason="capacity owner connection is unavailable",
-                    desired_unit=desired_unit,
-                )
+            assert provider.policy is not None
+            pools.lock_capacity_workspace(provider.policy.workspace_id)
             locked_pool = pools.get(current_pool.id, for_update=True)
             if locked_pool is None:
                 return _capacity_result(
@@ -547,12 +538,11 @@ class ComputeService:
                     )
             else:
                 current_units = max(snapshot.desired_machines, locked_pool.desired_machines)
-                machine_limit = _connection_machine_limit(
-                    connection,
+                machine_limit = provider.policy.machine_limit(
                     gpu=_pool_gpu_capacity(locked_pool),
                 )
-                other_desired = pools.desired_capacity_for_provider_connection(
-                    connection.id,
+                other_desired = pools.desired_capacity_for_provider(
+                    provider.ref,
                     gpu=_pool_gpu_capacity(locked_pool),
                     excluding_unit_id=locked_pool.id,
                 )
@@ -1317,6 +1307,15 @@ class ComputeService:
                     workspace_id=workspace_id,
                 )
 
+    def pooled_providers(self, workspace_id: str) -> tuple[ResolvedComputeProvider, ...]:
+        if self.provider_resolver is None:
+            return ()
+        return tuple(
+            provider
+            for provider in self.provider_resolver.list_providers(workspace_id)
+            if provider.capacity_mode is ComputeCapacityMode.Pooled
+        )
+
     def prepare_pooled_capacity(
         self,
         *,
@@ -1327,6 +1326,7 @@ class ComputeService:
         root_volume_gib: int,
         idle_timeout_seconds: int = 300,
         allowed_instance_types: tuple[str, ...] = (),
+        provider_ref: str = "",
     ) -> ComputeUnitRecord:
         return self._prepare_pooled_capacity(
             workspace=workspace,
@@ -1337,6 +1337,7 @@ class ComputeService:
             idle_timeout_seconds=idle_timeout_seconds,
             allowed_instance_types=allowed_instance_types,
             baseline=None,
+            provider_ref=provider_ref,
         )
 
     def workspace_has_ready_connection(self, workspace: str) -> bool:
@@ -1362,7 +1363,18 @@ class ComputeService:
         idle_timeout_seconds: int,
     ) -> ComputeUnitRecord:
         """Reconcile the permanent CPU floor for an AWS-default workspace."""
-
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
+        if connection is None:
+            raise UpstreamUnavailableError("AWS baseline connection is unavailable")
+        if connection.platform_fleet:
+            initial_machines = 0
+            min_machines = 0
+            min_free_cpu_millicores = 0
+            min_free_memory_mib = 0
         pool = self._prepare_pooled_capacity(
             workspace=workspace,
             requirements=ComputeResourceRequirements(),
@@ -1371,6 +1383,7 @@ class ComputeService:
             root_volume_gib=root_volume_gib,
             idle_timeout_seconds=idle_timeout_seconds,
             allowed_instance_types=(instance_type,),
+            provider_ref=f"aws:{connection.id}",
             baseline=_PooledCapacityBaseline(
                 initial_machines=initial_machines,
                 min_machines=min_machines,
@@ -1406,15 +1419,26 @@ class ComputeService:
 
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
+            if connection is None:
+                return
+            provider_ref = f"aws:{connection.id}"
             self._clear_other_internal_pool_floors(
                 session,
                 workspace_id=workspace_id,
                 keep_pool_id=None,
+                provider_ref=provider_ref,
             )
         if not release_capacity:
             return
         with self.context.database.session() as session:
-            pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
+            pools = [
+                unit
+                for unit in ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
+                if unit.provider_ref == provider_ref
+            ]
             protected = {
                 pool.id: self._machines_holding_active_work(
                     session,
@@ -1482,6 +1506,7 @@ class ComputeService:
         idle_timeout_seconds: int,
         allowed_instance_types: tuple[str, ...],
         baseline: _PooledCapacityBaseline | None,
+        provider_ref: str = "",
     ) -> ComputeUnitRecord:
         if self.provider_resolver is None or self.pool_bootstrap_factory is None:
             raise ManagedComputeLaunchError(
@@ -1493,7 +1518,9 @@ class ComputeService:
         providers = [
             provider
             for provider in self.provider_resolver.list_providers(workspace_id)
-            if provider.capacity_mode is ComputeCapacityMode.Pooled and provider.pooled is not None
+            if provider.capacity_mode is ComputeCapacityMode.Pooled
+            and provider.pooled is not None
+            and (not provider_ref or provider.ref == provider_ref)
         ]
         if not providers:
             raise ManagedComputeLaunchError(
@@ -1503,19 +1530,20 @@ class ComputeService:
         offers: list[ComputeOffer] = []
         for provider in providers:
             pooled = provider.pooled
-            if pooled is None:
+            if pooled is None or provider.policy is None:
                 continue
             offers.extend(
                 offer
                 for offer in pooled.list_offers()
-                if offer.region == region
+                if (not region or offer.region == region)
+                and provider.policy.accepts(offer)
                 and (not allowed_instance_types or offer.instance_type in allowed_instance_types)
             )
         try:
             offer = choose_offer(
                 offers,
                 OfferRequest(
-                    regions=[region],
+                    regions=[region] if region else [],
                     min_cpu_millicores=requirements.cpu_millicores,
                     min_memory_mb=requirements.memory_mb,
                     min_storage_mb=root_volume_gib * 1024,
@@ -1528,15 +1556,16 @@ class ComputeService:
             )
         except ValueError as exc:
             raise ManagedComputeLaunchError(
-                "no connected AWS capacity matches the workload requirements",
+                "no provider capacity matches the workload requirements and cost policy",
                 code="offer_unavailable",
             ) from exc
         provider = next(item for item in providers if item.ref == offer.provider)
-        if provider.connection_id is None or provider.pooled is None:
+        if provider.policy is None or provider.pooled is None:
             raise ManagedComputeLaunchError(
-                "pooled compute provider connection is unavailable",
+                "pooled compute provider policy is unavailable",
                 code="provider_unavailable",
             )
+        workspace_id = provider.policy.workspace_id
         unit_id, unit_name = internal_unit_identity(
             workspace_id=workspace_id,
             provider_ref=provider.ref,
@@ -1545,21 +1574,10 @@ class ComputeService:
             root_volume_gib=root_volume_gib,
         )
         with self.context.database.session() as session:
-            # The connection owns the pool its units feed. Deriving it from the
-            # unit's own name would put every AWS unit in a pool named after
-            # itself, which no workload asks for.
-            connection = AwsAccountConnectionRepository(session).get(
-                provider.connection_id,
-                for_update=True,
-            )
-            if connection is None:
-                raise ManagedComputeLaunchError(
-                    "pooled compute provider connection is unavailable",
-                    code="provider_unavailable",
-                )
-            unit_pool = connection.pool
-            unit_platform_fleet = connection.platform_fleet
+            unit_pool = provider.policy.pool
+            unit_platform_fleet = provider.policy.platform_fleet
             repository = ComputeUnitRepository(session)
+            repository.lock_capacity_workspace(provider.policy.workspace_id)
             current = repository.get_by_identity(
                 workspace_id=workspace_id,
                 provider_ref=provider.ref,
@@ -1568,12 +1586,11 @@ class ComputeService:
                 root_volume_gib=root_volume_gib,
                 for_update=True,
             )
-            machine_limit = _connection_machine_limit(
-                connection,
+            machine_limit = provider.policy.machine_limit(
                 gpu=requirements.gpu_count > 0,
             )
-            other_desired = repository.desired_capacity_for_provider_connection(
-                connection.id,
+            other_desired = repository.desired_capacity_for_provider(
+                provider.ref,
                 gpu=requirements.gpu_count > 0,
                 excluding_unit_id=current.id if current is not None else None,
             )
@@ -1619,11 +1636,13 @@ class ComputeService:
                             current.desired_machines,
                         ),
                     )
+                    if provider.policy.platform_fleet:
+                        desired = current.desired_machines
             if requested_machines > 0 and desired < requested_machines:
                 assert machine_limit is not None
                 raise CapacityLimitReachedError(
-                    f"connected account compute limit reached: {requested_machines} machines "
-                    f"requested, {desired} available within the account limit of "
+                    f"provider compute limit reached: {requested_machines} machines "
+                    f"requested, {desired} available within the provider limit of "
                     f"{machine_limit}"
                 )
             maximum = (
@@ -1678,6 +1697,7 @@ class ComputeService:
                 provider=provider.ref,
                 selector=unit_name,
                 source="workspace_policy",
+                config=current.config if current is not None else {},
                 provider_ref=provider.ref,
                 provider_connection_id=provider.connection_id,
                 capacity_mode=ComputeCapacityMode.Pooled,
@@ -1686,6 +1706,7 @@ class ComputeService:
                 offer_id=offer.id,
                 capability_key=offer.capability_key,
                 desired_machines=desired,
+                offer_hourly_cost_micros=offer.hourly_cost_micros,
                 initial_machines=min(max(initial, minimum), maximum),
                 min_machines=minimum,
                 max_machines=maximum,
@@ -1739,6 +1760,7 @@ class ComputeService:
                     session,
                     workspace_id=workspace_id,
                     keep_pool_id=current.id,
+                    provider_ref=provider.ref,
                 )
         if self.scheduler_hooks is not None:
             self.scheduler_hooks.register_internal_unit(current, offer)
@@ -1756,6 +1778,7 @@ class ComputeService:
         *,
         workspace_id: str,
         keep_pool_id: str | None,
+        provider_ref: str,
     ) -> None:
         """Drop every durable floor the baseline no longer owns.
 
@@ -1771,7 +1794,7 @@ class ComputeService:
             "min_free_gpu_count": 0,
         }
         for unit in units.list_internal(workspace_id=workspace_id):
-            if unit.id == keep_pool_id:
+            if unit.id == keep_pool_id or unit.provider_ref != provider_ref:
                 continue
             if all(getattr(unit, field) == value for field, value in cleared.items()):
                 continue
@@ -1858,20 +1881,24 @@ class ComputeService:
                 workspace_id=workspace_id,
                 unit_ref=capacity_owner_id,
             )
-            if initial.provider_connection_id is None:
-                raise UpstreamUnavailableError("compute pool connection is unavailable")
-            connection = AwsAccountConnectionRepository(session).get(
-                initial.provider_connection_id,
-                for_update=True,
-            )
-            if connection is None:
-                raise UpstreamUnavailableError("compute pool connection is unavailable")
+            if self.provider_resolver is None:
+                raise UpstreamUnavailableError("compute provider resolver is unavailable")
+            provider = self.provider_resolver.resolve(workspace_id, initial.provider_ref)
+            if provider.policy is None:
+                raise UpstreamUnavailableError("compute provider policy is unavailable")
+            units.lock_capacity_workspace(provider.policy.workspace_id)
             unit = _require_workspace_internal_pooled_unit(
                 units.get_by_capacity_owner_id(capacity_owner_id, for_update=True),
                 workspace_id=workspace_id,
                 unit_ref=capacity_owner_id,
             )
             before_mutation(unit)
+            if desired_machines > unit.desired_machines:
+                _, offer = self._resolved_internal_unit_provider(unit)
+                if not provider.policy.accepts(offer):
+                    raise ConflictError(
+                        "provider offer exceeds its allowed capacity or cost policy"
+                    )
             if unit.provider_state.degraded_reason is not None:
                 # An explicit capacity mutation supersedes the durable degraded
                 # reason and re-enables capacity restoration.
@@ -1882,12 +1909,11 @@ class ComputeService:
                         )
                     }
                 )
-            machine_limit = _connection_machine_limit(
-                connection,
+            machine_limit = provider.policy.machine_limit(
                 gpu=_pool_gpu_capacity(unit),
             )
-            other_desired = units.desired_capacity_for_provider_connection(
-                connection.id,
+            other_desired = units.desired_capacity_for_provider(
+                provider.ref,
                 gpu=_pool_gpu_capacity(unit),
                 excluding_unit_id=unit.id,
             )
@@ -1898,8 +1924,7 @@ class ComputeService:
                 )
             if available is not None and desired_machines > available:
                 raise ConflictError(
-                    "connected account pooled compute capacity limit leaves "
-                    f"{available} machines available"
+                    f"provider pooled compute capacity limit leaves {available} machines available"
                 )
             maximum = (
                 max(unit.max_machines, desired_machines, 1)
@@ -2200,32 +2225,45 @@ class ComputeService:
             )
         if record is None or record.instance_id is None:
             raise KeyError(f"provider instance for machine not found: {machine_id}")
+        replacement = unit.replacement_machine_id == machine_id
+        prior_target = record.metadata.get("capacity_release_target")
+        target = (
+            unit.desired_machines
+            if isinstance(prior_target, int)
+            else unit.desired_machines
+            if replacement
+            else max(unit.desired_machines - 1, unit.min_machines)
+        )
+        intent = unit.model_copy(
+            update={
+                "desired_machines": target,
+                "replacement_machine_id": "" if replacement else unit.replacement_machine_id,
+                "replacement_template_version": ""
+                if replacement
+                else unit.replacement_template_version,
+            }
+        )
+        with self.context.database.session() as session:
+            ComputeUnitRepository(session).upsert(intent)
+            ComputeProviderInstanceRepository(session).upsert(
+                record.model_copy(
+                    update={
+                        "metadata": {**record.metadata, "capacity_release_target": target},
+                    }
+                )
+            )
         snapshot = provider.pooled.release_machine(
-            self._provider_unit_request(unit, offer),
+            self._provider_unit_request(intent, offer),
             record.instance_id,
         )
         if self.scheduler_hooks is not None:
             self.scheduler_hooks.disable_machine(machine_id, "idle_pool_scale_down")
-        replacement = unit.replacement_machine_id == machine_id
-        target = (
-            unit.desired_machines
-            if replacement
-            else max(unit.desired_machines - 1, unit.min_machines)
-        )
         return self.provider_machines._apply_pooled_snapshot(
-            unit.model_copy(
-                update={
-                    "desired_machines": target,
-                    "replacement_machine_id": "" if replacement else unit.replacement_machine_id,
-                    "replacement_template_version": (
-                        "" if replacement else unit.replacement_template_version
-                    ),
-                }
-            ),
+            intent,
             offer,
             snapshot,
             provider=provider.pooled,
-            update_capacity=True,
+            update_capacity=False,
         )
 
     def release_bound_internal_pool_machine(
@@ -2260,6 +2298,7 @@ class ComputeService:
     ) -> list[ComputeUnitRecord]:
         current_time = _utc(now)
         mutations = self._required_capacity_owner_mutations()
+        self.reconcile_platform_warm_capacity(now=current_time)
         with self.context.database.session() as session:
             pools = ComputeUnitRepository(session).list_internal_across_workspaces()
         # Every step from here is a silent no-op when it declines, and the whole
@@ -2299,6 +2338,106 @@ class ComputeService:
                 )
         return reconciled
 
+    def reconcile_platform_warm_capacity(self, *, now: datetime) -> None:
+        if self.provider_resolver is None:
+            return
+        for provider in self.provider_resolver.list_platform_providers():
+            policy = provider.policy
+            if policy is None or provider.pooled is None:
+                continue
+            try:
+                if policy.warm_cpu_min == 0:
+                    with self.context.database.session() as session:
+                        self._clear_other_internal_pool_floors(
+                            session,
+                            workspace_id=policy.workspace_id,
+                            keep_pool_id=None,
+                            provider_ref=provider.ref,
+                        )
+                    continue
+                offers = [offer for offer in provider.pooled.list_offers() if policy.accepts(offer)]
+                offer = choose_offer(
+                    offers,
+                    OfferRequest(
+                        regions=[policy.default_region],
+                        min_storage_mb=policy.root_volume_gib * 1024,
+                        nodes=1,
+                    ),
+                )
+                unit_id, _ = internal_unit_identity(
+                    workspace_id=policy.workspace_id,
+                    provider_ref=provider.ref,
+                    region=offer.region,
+                    capability_key=offer.capability_key,
+                    root_volume_gib=policy.root_volume_gib,
+                )
+                with self._required_capacity_owner_mutations().mutation_lock(unit_id):
+                    with self.context.database.session() as session:
+                        repository = ComputeUnitRepository(session)
+                        current = repository.get(unit_id)
+                        arrivals = repository.recent_platform_cpu_arrivals(now - timedelta(hours=1))
+                        machines = ComputeProviderInstanceRepository(session).list_for_pool(unit_id)
+                    lower_since_raw = current.config.get("warm_lower_since") if current else None
+                    lower_since = (
+                        to_utc(datetime.fromisoformat(lower_since_raw))
+                        if isinstance(lower_since_raw, str)
+                        else None
+                    )
+                    target = warm_capacity_target(
+                        policy,
+                        offer,
+                        arrivals,
+                        machines,
+                        current=current.min_machines if current else policy.warm_cpu_min,
+                        lower_since=lower_since,
+                        now=now,
+                    )
+                    unit = self._prepare_pooled_capacity(
+                        workspace=policy.workspace_id,
+                        provider_ref=provider.ref,
+                        requirements=ComputeResourceRequirements(),
+                        region=offer.region,
+                        desired_machines=target.machines,
+                        root_volume_gib=policy.root_volume_gib,
+                        idle_timeout_seconds=policy.idle_timeout_seconds,
+                        allowed_instance_types=(offer.instance_type,),
+                        baseline=_PooledCapacityBaseline(
+                            initial_machines=target.machines,
+                            min_machines=target.machines,
+                            min_free_cpu_millicores=(
+                                target.machines * schedulable_capacity(offer.cpu_millicores)
+                            ),
+                            min_free_memory_mib=(
+                                target.machines * schedulable_capacity(offer.memory_mb)
+                            ),
+                        ),
+                    )
+                    with self.context.database.session() as session:
+                        repository = ComputeUnitRepository(session)
+                        latest = repository.get(unit.id, for_update=True)
+                        if latest is None:
+                            raise LookupError(
+                                "platform warm unit disappeared during reconciliation"
+                            )
+                        repository.upsert(
+                            latest.model_copy(
+                                update={
+                                    "config": {
+                                        **latest.config,
+                                        "warm_lower_since": (
+                                            target.lower_since.isoformat()
+                                            if target.lower_since
+                                            else None
+                                        ),
+                                    },
+                                }
+                            )
+                        )
+            except Exception:
+                LOGGER.exception(
+                    "platform warm capacity reconciliation failed for %s", provider.ref
+                )
+
     def _reconcile_pooled_pool(
         self,
         pool_id: str,
@@ -2313,7 +2452,7 @@ class ComputeService:
         if current.phase is ComputeUnitPhase.Deleted:
             self._retire_proven_provider_pool_machines(current, now=now)
             return None
-        current = self._unit_matching_its_connection(current, now=now)
+        current = self._unit_matching_its_provider(current, now=now)
         try:
             provider, offer = self._resolved_internal_unit_provider(current)
             pooled = provider.pooled
@@ -2339,7 +2478,10 @@ class ComputeService:
                 now=now,
             )
             current = self._relaunch_degraded_pool_after_interval(current, now=now)
-            degraded = current.provider_state.degraded_reason is not None
+            cost_policy_allows = provider.policy is not None and provider.policy.accepts(offer)
+            degraded = current.provider_state.degraded_reason is not None or not cost_policy_allows
+            if not cost_policy_allows:
+                LOGGER.warning("provider cost policy prevents restoring pool %s", current.id)
             request = self._provider_unit_request(current, offer)
             snapshot = (
                 # A durably degraded pool stopped relaunching: observe and prove
@@ -2386,43 +2528,33 @@ class ComputeService:
         with dispatch_fence.dispatch_lock(pool.capacity_owner_id):
             return pooled.ensure_unit(request)
 
-    def _unit_matching_its_connection(
+    def _unit_matching_its_provider(
         self,
         unit: ComputeUnitRecord,
         *,
         now: datetime,
     ) -> ComputeUnitRecord:
-        """Bring a unit's pool identity back to what its connection now says.
-
-        The connection decides which pool its units feed and whether they are the
-        platform's own capacity, and preparing capacity stamps both onto the unit.
-        Preparing is demand-driven, though, so a unit that already holds the
-        machines it was asked for is never rebuilt: without this, a connection
-        corrected after its units exist leaves them feeding a pool no workload
-        names, and nothing converges them for as long as they keep working.
-
-        Narrow on purpose. Only the two fields the connection owns move, and a
-        unit that already agrees is left untouched rather than rewritten.
-        """
-        if unit.provider_connection_id is None:
+        """Reconcile the pool and ownership from its authoritative provider policy."""
+        if self.provider_resolver is None:
+            raise UpstreamUnavailableError("compute provider resolver is unavailable")
+        provider = self.provider_resolver.resolve(unit.workspace_id, unit.provider_ref)
+        policy = provider.policy
+        if policy is None:
+            raise UpstreamUnavailableError("compute provider policy is unavailable")
+        if unit.pool == policy.pool and unit.platform_fleet == policy.platform_fleet:
             return unit
         with self.context.database.session() as session:
-            connection = AwsAccountConnectionRepository(session).get(unit.provider_connection_id)
-            if connection is None:
-                return unit
-            if unit.pool == connection.pool and unit.platform_fleet == connection.platform_fleet:
-                return unit
             updated = ComputeUnitRepository(session).upsert(
                 unit.model_copy(
                     update={
-                        "pool": connection.pool,
-                        "platform_fleet": connection.platform_fleet,
+                        "pool": policy.pool,
+                        "platform_fleet": policy.platform_fleet,
                         "updated_at": now,
                     }
                 )
             )
         LOGGER.info(
-            "compute unit %s follows its connection: pool %s -> %s, platform fleet %s -> %s",
+            "compute unit %s follows its provider: pool %s -> %s, platform fleet %s -> %s",
             unit.name,
             unit.pool,
             updated.pool,
@@ -2628,6 +2760,7 @@ class ComputeService:
                     session,
                     workspace_id=workspace_id,
                     keep_pool_id=None,
+                    provider_ref=f"aws:{connection_id}",
                 )
 
         for unit in pools:
@@ -3270,17 +3403,9 @@ def _zero_capacity_converged(pool: ComputeUnitRecord) -> bool:
 
 
 def _owns_provider_pool_capacity(pool: ComputeUnitRecord) -> bool:
-    """Answer whether a provider holds a pool object of its own for this record.
+    """Whether a provider owns the lifecycle of this capacity unit."""
 
-    Only a pool bound to a provider connection has one. Every other pool's
-    machines are launched individually and are fully accounted for by their own
-    provider instance records.
-    """
-
-    return (
-        pool.capacity_owner_kind is CapacityOwnerKind.PooledProvider
-        and pool.provider_connection_id is not None
-    )
+    return pool.capacity_owner_kind is CapacityOwnerKind.PooledProvider and bool(pool.provider_ref)
 
 
 def _pool_gpu_capacity(pool: ComputeUnitRecord) -> bool:
@@ -3297,11 +3422,3 @@ def _require_workspace_internal_pooled_unit(
     if pooled.workspace_id != workspace_id:
         raise NotFoundError(f"compute unit not found: {unit_ref}")
     return pooled
-
-
-def _connection_machine_limit(
-    connection: AwsAccountConnection,
-    *,
-    gpu: bool,
-) -> int | None:
-    return connection.compute.max_gpu_instances if gpu else connection.compute.max_cpu_instances

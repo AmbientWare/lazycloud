@@ -71,7 +71,8 @@ output "runtime_configuration" {
     # JSON, because the settings field is a map and the host environment carries
     # strings. Empty advertises no instance types, which is a control plane with
     # no managed capacity rather than a failure.
-    LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS = jsonencode(var.instance_hourly_micros)
+    LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS              = jsonencode(var.instance_hourly_micros)
+    LAZYCLOUD_PLATFORM_CAPACITY_AWS_HOURLY_COST_CEILING_MICROS = jsonencode(var.platform_aws_hourly_cost_ceiling_micros)
     # What a customer's account is told to trust. Published here rather than
     # left to an operator, because a value carried by hand is a step that has to
     # be remembered on every stand-up and reports its absence as a refused

@@ -36,7 +36,9 @@ from shared.billing_quotes import (
     price_span,
     reserved_quantity,
 )
+from shared.errors import ConflictError
 from shared.payments import METER_EVENT_NAMES
+from shared.placement import AUTO_RATE_CLASS
 from shared.timestamps import to_utc, utc_now
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
@@ -85,6 +87,7 @@ class ContainerBillingShapeRepository:
             "container_id": container_id,
             "workspace_id": workspace_id,
             "billing_owner": shape.billing_owner.value,
+            "rate_class": shape.rate_class,
             "gpu_type": shape.gpu_type,
             "cpu_millicores": shape.cpu_millicores,
             "memory_mib": shape.memory_mib,
@@ -99,12 +102,19 @@ class ContainerBillingShapeRepository:
         )
         self.session.flush()
 
+        row = self.session.get(ContainerBillingShapeTable, container_id)
+        if row is None:
+            raise RuntimeError("billing shape insert did not persist")
+        if row.workspace_id != workspace_id or self.shape_for(container_id) != shape:
+            raise ConflictError("a container's recorded billing placement cannot be changed")
+
     def shape_for(self, container_id: str) -> ContainerShape | None:
         row = self.session.get(ContainerBillingShapeTable, container_id)
         if row is None:
             return None
         return ContainerShape(
             billing_owner=UsageBillingOwner(row.billing_owner),
+            rate_class=row.rate_class,
             gpu_type=row.gpu_type,
             cpu_millicores=row.cpu_millicores,
             memory_mib=row.memory_mib,
@@ -513,6 +523,11 @@ def _segment_values(
         "task_id": record.labels.get("task_id", ""),
         "worker_id": _text(record.metadata.get("worker_id")) or record.labels.get("worker_id", ""),
         "billing_owner": shape.billing_owner.value if shape is not None else "",
+        "rate_class": (
+            shape.rate_class
+            if shape is not None and span.dimension is BilledDimension.ComputeRuntime
+            else AUTO_RATE_CLASS
+        ),
         "gpu_type": shape.gpu_type if shape is not None else "",
         "span_started_at": span.started_at,
         "span_ended_at": span.ended_at,

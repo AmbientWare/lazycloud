@@ -261,6 +261,7 @@ class PodControlService:
                 workspace_id=stub.workspace_id,
                 gpu=plan.gpu,
                 gpu_count=plan.gpu_count,
+                region=config.runtime.region,
             )
             container = ContainerRecord(
                 id=plan.container_id,
@@ -356,6 +357,7 @@ class PodControlService:
                     gpu=list(container.gpu),
                     gpu_count=container.gpu_count,
                     pool_selector=config.runtime.pool_selector or "",
+                    region=config.runtime.region,
                     runtime=config.runtime.runtime,
                     runtime_class=config.runtime.runtime_class or "",
                     docker_enabled=config.runtime.docker_enabled,

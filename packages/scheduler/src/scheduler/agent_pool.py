@@ -18,6 +18,7 @@ from shared.compute_policy import (
 )
 from shared.container_requests import OciRuntimeName, schedulable_capacity
 from shared.contracts import ContractModel
+from shared.placement import ProductRegion, product_region
 from shared.scheduling import (
     SchedulerWorkerRecord,
     SchedulerWorkerStatus,
@@ -36,6 +37,7 @@ class AgentPoolWorkerAction(StrEnum):
 
 
 class AgentPoolConfig(ContractModel):
+    region: ProductRegion | None = None
     workspace_id: str
     pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
@@ -102,6 +104,7 @@ class AgentWorkerRepository(Protocol):
         workspace_id: str,
         owner_user_id: str,
         priority: int,
+        region: ProductRegion | None = None,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord: ...
 
@@ -217,6 +220,7 @@ class AgentWorkerPoolController:
             worker.owner_user_id == machine.owner_user_id
             and worker.workspace_id == machine.workspace_id
             and worker.priority == self.config.priority
+            and worker.region == self.config.region
         ):
             return AgentPoolWorkerResult(
                 action=AgentPoolWorkerAction.Existing,
@@ -229,6 +233,7 @@ class AgentWorkerPoolController:
             workspace_id=machine.workspace_id,
             owner_user_id=machine.owner_user_id,
             priority=self.config.priority,
+            region=self.config.region,
             now=now,
         )
         return AgentPoolWorkerResult(
@@ -280,6 +285,7 @@ def agent_pool_config_from_pool(pool: ComputeUnitRecord) -> AgentPoolConfig | No
     if pool.capacity_owner_kind is not CapacityOwnerKind.WorkspaceAgent:
         return None
     return AgentPoolConfig(
+        region=product_region(pool.region),
         workspace_id=pool.workspace_id,
         pool=pool.pool,
         capacity_owner_id=pool.capacity_owner_id,
@@ -293,6 +299,7 @@ def agent_pool_config_from_compute_state(state: ComputeUnitState) -> AgentPoolCo
     config = _pool_config_from_metadata(state)
     normalized = normalize_unit_config(config)
     return AgentPoolConfig(
+        region=product_region(str(state.metadata.get("region") or "")),
         workspace_id=state.workspace_id,
         pool=state.pool,
         capacity_owner_id=state.capacity_owner_id,
@@ -319,6 +326,7 @@ def agent_machine_worker_record(
     memory_mib = schedulable_capacity(machine.memory_mb)
     gpu_types = _machine_gpu_types(machine, config)
     return SchedulerWorkerRecord(
+        region=config.region,
         worker_id=agent_machine_worker_id(machine.machine_id),
         pool=config.pool,
         # The machine's own owner, not the controller's: a joined machine in a

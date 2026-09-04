@@ -11,6 +11,7 @@ from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
+from shared.placement import ProductRegion
 from shared.routing import AgentBackendRoute
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
@@ -60,6 +61,8 @@ class SchedulerContainerSubmitStatus(StringEnum):
 
 
 class SchedulerWorkerRequest(ContractModel):
+    backfill: bool = False
+    region: ProductRegion | None = None
     workspace_id: str
     stub_id: str
     deployment_id: str = ""
@@ -157,6 +160,7 @@ def worker_serves_owner(
 
 
 class SchedulerWorkerRecord(ContractModel):
+    region: ProductRegion | None = None
     worker_id: str
     pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
@@ -241,6 +245,10 @@ class SchedulerWorkerRecord(ContractModel):
 
 
 class SchedulerContainerState(ContractModel):
+    backfill: bool = False
+    preemptible: bool = False
+    backfill_eviction_requested: bool = False
+    backfill_eviction_claim_until: float = Field(default=0, ge=0)
     container_id: str
     stub_id: str
     workspace_id: str
