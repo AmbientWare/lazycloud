@@ -191,6 +191,15 @@ export const workspaceQueryKeys = {
   },
 } as const;
 
+export type AdminAccountsKeyParts = {
+  search: string;
+  role: string | null;
+  status: string | null;
+};
+
+/** The unnarrowed list, and the key every mutation patches. */
+export const EVERY_ACCOUNT: AdminAccountsKeyParts = { search: "", role: null, status: null };
+
 const accountRoot = ["account"] as const;
 
 /**
@@ -240,7 +249,15 @@ export const accountQueryKeys = {
    */
   admin: {
     root: () => [...accountRoot, "admin"] as const,
-    accounts: () => [...accountRoot, "admin", "accounts"] as const,
+    // Keyed on the narrowing, so each search and filter caches its own pages
+    // and changing one starts a fresh walk rather than appending to the last.
+    accounts: Object.assign(
+      // Keyed on the narrowing, so each search and filter caches its own pages
+      // and changing one starts a fresh walk rather than appending to the last.
+      (scope: AdminAccountsKeyParts = EVERY_ACCOUNT) =>
+        [...accountRoot, "admin", "accounts", scope] as const,
+      { root: () => [...accountRoot, "admin", "accounts"] as const },
+    ),
   },
 } as const;
 

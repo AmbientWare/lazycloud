@@ -35,7 +35,7 @@ from shared.http.usage import (
     UsageCostListResponse,
     UsageCostSeriesResponse,
 )
-from shared.identity import UserIdentityRecord
+from shared.identity import PlatformRole, UserIdentityRecord, UserStatus
 from shared.payments import BILLING_CURRENCY
 from shared.timestamps import utc_now
 
@@ -388,12 +388,21 @@ def list_billing_accounts(
     _auth: admin_access,
     limit: int = Query(50, ge=1, le=MAX_ACCOUNT_PAGE),
     cursor: str | None = None,
+    search: str = Query("", max_length=200),
+    role: PlatformRole | None = None,
+    status: UserStatus | None = None,
     services: ApiServices = Depends(current_services),
 ) -> BillingAccountAdminListResponse:
     """Every account on the platform with its standing and recent spend.
 
     Walked by user rather than by billing row, so an account that has not
     signed in yet is listed beside the ones that have.
+
+    `search` matches a display name, an email address, or the GitHub login,
+    because those are the three things an operator has when somebody asks them
+    to look an account up. Narrowing happens in the query rather than in the
+    browser: the list pages, so filtering what arrived would hide every match
+    that had not been fetched yet.
     """
 
     with services.context.database.session() as session:
@@ -401,6 +410,9 @@ def list_billing_accounts(
             after_user_id=decode_account_cursor(cursor),
             limit=limit,
             at=utc_now(),
+            search=search,
+            role=role,
+            status=status,
         )
     identities = services.users.identities([row.user.id for row in page.rows])
     return BillingAccountAdminListResponse(

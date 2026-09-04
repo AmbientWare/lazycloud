@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   useInfiniteQuery,
   useMutation,
@@ -25,6 +25,26 @@ import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 type AccountPages = InfiniteData<BillingAccountAdminList, string>;
 
+const NO_FILTERS: AccountFilters = { search: "", role: null, status: null };
+
+const SEARCH_DEBOUNCE_MS = 250;
+
+/**
+ * A value that settles before anything acts on it.
+ *
+ * The search runs against every account rather than the page in hand, so each
+ * keystroke would otherwise be a round trip and the answers would arrive out of
+ * order.
+ */
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return settled;
+}
+
 /**
  * The three things an administrator can do to an account that are worth a
  * second look before they happen. Each takes something away, and two of them
@@ -44,8 +64,21 @@ type Command =
 
 type CommandResult = { user: User } | { account: BillingAccountAdmin };
 
+export type AccountFilters = {
+  search: string;
+  role: PlatformRole | null;
+  status: User["status"] | null;
+};
+
 export type AdminSettingsController = {
   accounts: readonly BillingAccountAdmin[];
+  filters: AccountFilters;
+  setSearch: (search: string) => void;
+  setRoleFilter: (role: PlatformRole | null) => void;
+  setStatusFilter: (status: User["status"] | null) => void;
+  clearFilters: () => void;
+  /** Whether anything is narrowing the list, which decides what an empty one means. */
+  narrowed: boolean;
   isLoading: boolean;
   loadError: Error | null;
   forbidden: boolean;
@@ -79,7 +112,13 @@ export function useAdminSettingsController({
   actingUserId: string;
 }): AdminSettingsController {
   const queryClient = useQueryClient();
-  const query = useInfiniteQuery(billingAccountsQueryOptions());
+  const [filters, setFilters] = useState<AccountFilters>(NO_FILTERS);
+  // Typing should not fire a request per keystroke, and the search runs against
+  // every account rather than the page in hand, so each one is a round trip.
+  const search = useDebounced(filters.search, SEARCH_DEBOUNCE_MS);
+  const query = useInfiniteQuery(
+    billingAccountsQueryOptions({ search, role: filters.role, status: filters.status }),
+  );
   const list = selectBillingAccountList(query.data, query.hasNextPage);
   const [confirming, setConfirming] = useState<PendingConfirmation | null>(null);
 
@@ -96,6 +135,8 @@ export function useAdminSettingsController({
   });
 
   const isSelf = (account: BillingAccountAdmin) => account.user.id === actingUserId;
+
+  const narrowed = Boolean(filters.search || filters.role || filters.status);
 
   const run = (next: Command) => {
     if (command.isPending) return;
@@ -149,6 +190,12 @@ export function useAdminSettingsController({
 
   return {
     accounts: list.items,
+    filters,
+    setSearch: (search) => setFilters((current) => ({ ...current, search })),
+    setRoleFilter: (role) => setFilters((current) => ({ ...current, role })),
+    setStatusFilter: (status) => setFilters((current) => ({ ...current, status })),
+    clearFilters: () => setFilters(NO_FILTERS),
+    narrowed,
     isLoading: query.isPending,
     loadError: query.error,
     forbidden: query.error instanceof ApiError && query.error.status === 403,
@@ -187,15 +234,20 @@ function patchAccount(
   userId: string,
   patch: (row: BillingAccountAdmin) => BillingAccountAdmin,
 ): void {
-  queryClient.setQueryData<AccountPages>(accountQueryKeys.admin.accounts(), (current) =>
-    current
-      ? {
-          ...current,
-          pages: current.pages.map((page) => ({
-            ...page,
-            data: page.data.map((row) => (row.user.id === userId ? patch(row) : row)),
-          })),
-        }
-      : current,
+  // Every cached narrowing, not just the one on screen. The same account sits
+  // in each list it matches, and patching only the visible one leaves the
+  // others holding the row as it was before the change.
+  queryClient.setQueriesData<AccountPages>(
+    { queryKey: accountQueryKeys.admin.accounts.root() },
+    (current) =>
+      current
+        ? {
+            ...current,
+            pages: current.pages.map((page) => ({
+              ...page,
+              data: page.data.map((row) => (row.user.id === userId ? patch(row) : row)),
+            })),
+          }
+        : current,
   );
 }
