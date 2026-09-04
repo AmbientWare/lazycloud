@@ -4,10 +4,15 @@ The adapter uses dedicated x86 Cloud servers and the existing agent, gVisor,
 WireGuard, storage, and metering paths. It does not support shared-CPU servers,
 Hetzner Robot, attached volumes, or GPUs. GPU capacity remains on AWS.
 
-Secure Hetzner host enrollment is not implemented. Source-IP matching cannot
-distinguish an agent from tenant code on the same node. The current adapter
-must not acquire capacity or issue credentials until that boundary is fixed.
-This change also has no live Hetzner acceptance record. Do not activate it in
+Each server receives a unique, short-lived bootstrap token through its own
+user-data. The control plane stores it encrypted and binds it to the server's
+launch before redemption. The node generates its own credential locally before
+the first request. Redemption consumes the bootstrap token once and binds that
+node credential; successful reporting removes the local bootstrap token.
+Neither a project API token nor a reusable join credential goes into user-data
+or the image. Source IP is not an authenticator.
+
+This change has no live Hetzner acceptance record. Do not activate it in
 production until the disposable workflow below passes.
 
 ## Prepare a host image
@@ -82,10 +87,10 @@ derive these ceilings blindly from supplier prices: that would approve any
 price without checking the revenue it can earn.
 
 Both API and scheduler must receive the same settings and release manifest.
-Enrollment requires the actual public source IP. The public ingress must strip
-untrusted client-IP headers and supply the single trusted header configured in
-`LAZYCLOUD_PUBLIC_INGRESS_CLIENT_IP_HEADER`. Never trust an arbitrary forwarded
-header. A missing or wrong address is an enrollment failure.
+Apply the forward launch-credential migration before starting either process.
+The node's root-only state directory holds its launch ID, bootstrap token, and
+locally generated node credential. Tenant containers cannot read that directory
+or reach provider metadata through their network namespace.
 
 ## Disposable acceptance and rollout
 
@@ -100,7 +105,8 @@ enrollment, provider server, bootstrap log, scheduler request, and worker log.
 Prove the returned function result and usage charge. Confirm a second compatible
 request shares existing or pending capacity rather than buying another node.
 
-Run separate checks for wrong source IP and server ID, restart reconciliation,
+Run separate checks for expired or replayed bootstrap tokens, wrong node
+credentials and server IDs, restart reconciliation after an uncertain create,
 idle deletion near the paid-hour boundary, and deletion after failed bootstrap.
 Prove that deleting the exact server does not recreate it. Confirm the server
 and primary IP are absent and no volume was attached. Preserve shared images

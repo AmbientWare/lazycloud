@@ -21,6 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
 from typing import Protocol
+from urllib.parse import urlparse
 
 from agent.operations import (
     AGENT_AUTHORITY_REVOKED_FILE,
@@ -82,7 +83,6 @@ from provider_aws import (
     AwsSpotInterruptionMonitorError,
 )
 from provider_clients import (
-    ProviderNodeIdentityEvidence,
     ProviderNodeIdentityEvidenceProvider,
     provider_node_identity_evidence_provider,
 )
@@ -161,7 +161,7 @@ type AgentCapacityInterruptionDetector = Callable[[], AgentCapacityInterruptionN
 
 class ProviderInstanceIdentityMode(StrEnum):
     ImdsV2 = "imds-v2"
-    HetznerMetadata = "hetzner-metadata"
+    HetznerBootstrap = "hetzner-bootstrap"
 
 
 class AgentCapacityInterruptionDetectionError(RuntimeError):
@@ -236,10 +236,15 @@ class AgentDaemonOptions(ContractModel):
         if all(provider_values) and (self.join_token or self.join_token_file):
             raise ValueError("join credentials and provider enrollment cannot be combined")
         if all(provider_values):
+            if (
+                self.provider is ProviderKind.Hetzner
+                and urlparse(self.gateway_url).scheme != "https"
+            ):
+                raise ValueError("Hetzner host enrollment requires an HTTPS gateway")
             expected = (
                 ProviderInstanceIdentityMode.ImdsV2
                 if self.provider is ProviderKind.Aws
-                else ProviderInstanceIdentityMode.HetznerMetadata
+                else ProviderInstanceIdentityMode.HetznerBootstrap
             )
             if self.provider_instance_identity is not expected:
                 raise ValueError("provider instance identity mode does not match provider")
@@ -824,25 +829,21 @@ class AgentDaemonService:
     provider_identity: ProviderNodeIdentityEvidenceProvider | None = None
     _bootstrap_failure_reported: bool = False
 
-    def _provider_proof(self) -> ProviderNodeIdentityEvidence:
+    def _provider_evidence_provider(self) -> ProviderNodeIdentityEvidenceProvider:
         if self.options.provider is None:
             msg = "provider node reporting requires a provider"
             raise ValueError(msg)
-        provider = self.provider_identity or provider_node_identity_evidence_provider(
-            self.options.provider
+        return self.provider_identity or provider_node_identity_evidence_provider(
+            self.options.provider, state_dir=self.state_store.state_dir
         )
-        return provider.create()
 
     def _report_bootstrap_phase(self, phase: MachineBootstrapPhase) -> None:
-        """Best effort: a report must never break the boot it narrates.
-
-        Each report mints a fresh identity proof — proofs are single-use, so
-        reusing one would read as a replay and be rejected.
-        """
+        """Best effort: a phase report must not prevent enrollment retries."""
         if not self.options.provider_enrollment_request:
             return
         with suppress(Exception):
-            proof = self._provider_proof()
+            provider = self._provider_evidence_provider()
+            proof = provider.create()
             self.client.record_provider_node_bootstrap_phase(
                 ProviderNodeBootstrapPhaseRequest(
                     enrollment_request_id=self.options.provider_enrollment_request,
@@ -850,9 +851,13 @@ class AgentDaemonService:
                     region=proof.region,
                     provider_instance_id=proof.provider_instance_id,
                     identity_proof_url=proof.proof_url.get_secret_value(),
+                    launch_id=proof.launch_id,
+                    bootstrap_token=proof.bootstrap_token.get_secret_value(),
+                    node_agent_token=proof.node_agent_token.get_secret_value(),
                     phase=phase,
                 )
             )
+            provider.acknowledge()
 
     def _report_bootstrap_failure(self, reason: MachineBootstrapFailureReason) -> None:
         if not self.options.provider_enrollment_request or self._bootstrap_failure_reported:
@@ -862,7 +867,8 @@ class AgentDaemonService:
         # leaves a machine no one can reach.
         excerpt = traceback.format_exc()[-8192:]
         with suppress(Exception):
-            proof = self._provider_proof()
+            provider = self._provider_evidence_provider()
+            proof = provider.create()
             self.client.record_provider_node_bootstrap_failure(
                 ProviderNodeBootstrapFailureRequest(
                     enrollment_request_id=self.options.provider_enrollment_request,
@@ -870,10 +876,14 @@ class AgentDaemonService:
                     region=proof.region,
                     provider_instance_id=proof.provider_instance_id,
                     identity_proof_url=proof.proof_url.get_secret_value(),
+                    launch_id=proof.launch_id,
+                    bootstrap_token=proof.bootstrap_token.get_secret_value(),
+                    node_agent_token=proof.node_agent_token.get_secret_value(),
                     failure_reason=reason,
                     diagnostic_excerpt=excerpt,
                 )
             )
+            provider.acknowledge()
 
     def run(self) -> AgentDaemonRunResult:
         self.state_store.begin_run()
@@ -1272,9 +1282,7 @@ class AgentDaemonService:
         if self.options.provider is None:
             raise ValueError("provider node enrollment requires a provider")
         registration = self._machine_registration()
-        proof_provider = self.provider_identity or provider_node_identity_evidence_provider(
-            self.options.provider
-        )
+        proof_provider = self._provider_evidence_provider()
         proof = proof_provider.create()
         if proof.provider is not self.options.provider:
             raise ValueError("provider node identity evidence returned the wrong provider")
@@ -1284,6 +1292,9 @@ class AgentDaemonService:
             region=proof.region,
             provider_instance_id=proof.provider_instance_id,
             identity_proof_url=proof.proof_url.get_secret_value(),
+            launch_id=proof.launch_id,
+            bootstrap_token=proof.bootstrap_token.get_secret_value(),
+            node_agent_token=proof.node_agent_token.get_secret_value(),
             machine_fingerprint=registration.machine_fingerprint,
             hostname=registration.hostname,
             os=self.options.os_name,
@@ -1302,6 +1313,7 @@ class AgentDaemonService:
         )
         try:
             response = self.client.enroll_provider_node(enrollment)
+            proof_provider.acknowledge()
         except Exception:
             self._bootstrap_failure_reported = True
             with suppress(Exception):
@@ -1313,9 +1325,13 @@ class AgentDaemonService:
                         region=failed_proof.region,
                         provider_instance_id=failed_proof.provider_instance_id,
                         identity_proof_url=failed_proof.proof_url.get_secret_value(),
+                        launch_id=failed_proof.launch_id,
+                        bootstrap_token=failed_proof.bootstrap_token.get_secret_value(),
+                        node_agent_token=failed_proof.node_agent_token.get_secret_value(),
                         failure_reason=MachineBootstrapFailureReason.AgentEnrollmentFailed,
                     )
                 )
+                proof_provider.acknowledge()
             raise
         return _agent_state_from_join_response(response, gateway_url=gateway_url)
 

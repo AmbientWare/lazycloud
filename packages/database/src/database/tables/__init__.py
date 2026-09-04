@@ -86,6 +86,7 @@ from database.tables.orchestration import (
     RouteTable,
     WorkerTable,
 )
+from database.tables.provider_launches import ProviderNodeLaunchTable
 from database.tables.source_cache import (
     SourceCacheCleanupTargetTable,
     WorkerCacheGenerationTable,
@@ -142,6 +143,7 @@ __all__ = [
     "PlatformRateTable",
     "PodProcessTable",
     "PodUrlTable",
+    "ProviderNodeLaunchTable",
     "QueueMessageTable",
     "RouteTable",
     "SecretTable",

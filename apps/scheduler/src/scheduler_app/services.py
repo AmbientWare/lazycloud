@@ -7,6 +7,7 @@ from pathlib import Path
 from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.policy import WorkspaceComputePolicyService
+from compute.provider_launches import ProviderNodeLaunchService
 from compute.reclaim import ComputeReclaimPolicy
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
@@ -32,6 +33,7 @@ from execution.collections.service import CollectionService
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
+from execution.secrets.crypto import WorkspaceSecretCipher
 from execution.tasks import TaskService
 from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from gateway.settings import GatewaySettings
@@ -232,13 +234,25 @@ class SchedulerAppServices:
         # configured, and a half-configured deployment is rejected by settings.
         platform_capacity = PlatformCapacitySettings()
         connection_directory = AwsAccountConnectionDirectory(context)
+
+        def provider_node_cipher(workspace_id: str) -> WorkspaceSecretCipher:
+            with context.database.session() as session:
+                workspace = context.workspace(session, workspace_id)
+            return WorkspaceSecretCipher.from_workspace(workspace)
+
+        provider_node_launches = ProviderNodeLaunchService(
+            database=context.database,
+            cipher_for_workspace=provider_node_cipher,
+        )
         provider_resolver = (
             workspace_compute_provider_resolver(
                 capacity.aws_capacity,
                 capacity.agent_binaries,
                 connections=connection_directory.list_for_workspace,
                 capacity_workspace=connection_directory.capacity_workspace,
-                platform_providers=configured_platform_compute_providers(platform_capacity),
+                platform_providers=configured_platform_compute_providers(
+                    platform_capacity, launch_credentials=provider_node_launches
+                ),
                 platform_cost_ceilings=platform_capacity.aws_hourly_cost_ceiling_micros,
                 gateway_origin=gateway_origin,
                 presigned_origin=storage.object_store.presigned_endpoint_url or "",

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
+from agent.provider_identity import ProviderHostCredentials
 from compute.provider_nodes import (
     ProviderNodeIdentityProof,
     ProviderNodeIdentityVerifier,
@@ -21,12 +24,16 @@ from provider_aws import (
     AwsStsProofHttpResponse,
     provider_node_identity,
 )
+from provider_hetzner.client import HetznerClient
+from provider_hetzner.identity import HetznerNodeIdentityTarget, node_evidence, verify_node
 from pydantic import SecretStr
 from shared.aws_connections import AwsAccountConnection
 from shared.compute_policy import ComputeUnitRecord
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.provider_config import ProviderKind
 from shared.timestamps import utc_now
+
+from provider_clients.settings import PlatformCapacitySettings
 
 
 class ProviderNodeIdentityHttpResponse(Protocol):
@@ -65,6 +72,9 @@ class ProviderNodeIdentityEvidence:
     region: str
     provider_instance_id: str
     proof_url: SecretStr
+    launch_id: str = ""
+    bootstrap_token: SecretStr = field(default_factory=lambda: SecretStr(""), repr=False)
+    node_agent_token: SecretStr = field(default_factory=lambda: SecretStr(""), repr=False)
 
 
 class ProviderNodeIdentityEvidenceError(RuntimeError):
@@ -78,10 +88,15 @@ class ProviderNodeIdentityEvidenceProvider(Protocol):
         expected_region: str | None = None,
     ) -> ProviderNodeIdentityEvidence: ...
 
+    def acknowledge(self) -> None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class _AwsProviderNodeIdentityEvidenceProvider:
     provider: AwsEc2ProviderNodeIdentityProofProvider
+
+    def acknowledge(self) -> None:
+        pass
 
     def create(
         self,
@@ -100,13 +115,38 @@ class _AwsProviderNodeIdentityEvidenceProvider:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _HetznerProviderNodeIdentityEvidenceProvider:
+    credentials: ProviderHostCredentials
+
+    def create(self, *, expected_region: str | None = None) -> ProviderNodeIdentityEvidence:
+        token = self.credentials.node_token()
+        metadata = node_evidence()
+        if expected_region is not None and metadata.location != expected_region:
+            raise ProviderNodeIdentityEvidenceError("Hetzner node is in the wrong region")
+        return ProviderNodeIdentityEvidence(
+            provider=ProviderKind.Hetzner,
+            region=metadata.location,
+            provider_instance_id=metadata.instance_id,
+            proof_url=SecretStr("hetzner-bootstrap"),
+            launch_id=self.credentials.launch_id(),
+            bootstrap_token=self.credentials.bootstrap_token(),
+            node_agent_token=token,
+        )
+
+    def acknowledge(self) -> None:
+        self.credentials.acknowledge()
+
+
 def provider_node_identity_evidence_provider(
     provider: ProviderKind,
+    *,
+    state_dir: Path,
 ) -> ProviderNodeIdentityEvidenceProvider:
     if provider is ProviderKind.Aws:
         return _AwsProviderNodeIdentityEvidenceProvider(AwsEc2ProviderNodeIdentityProofProvider())
     if provider is ProviderKind.Hetzner:
-        raise ProviderNodeIdentityEvidenceError("Hetzner secure host enrollment is unavailable")
+        return _HetznerProviderNodeIdentityEvidenceProvider(ProviderHostCredentials(state_dir))
     raise ValueError(f"provider node identity {provider.value!r} is not supported")
 
 
@@ -219,6 +259,9 @@ class AwsProviderNodeIdentityAdapter(ProviderNodeIdentityVerifier):
 @dataclass(frozen=True, slots=True)
 class ProviderNodeIdentityRegistry:
     aws: AwsProviderNodeIdentityAdapter
+    hetzner_clients: Mapping[str, HetznerClient] = field(
+        default_factory=lambda: dict[str, HetznerClient]()
+    )
 
     def verify(
         self,
@@ -235,7 +278,44 @@ class ProviderNodeIdentityRegistry:
                 connection=connection,
                 provider_instance_ids=provider_instance_ids,
             )
-        raise UpstreamUnavailableError("Hetzner secure host enrollment is unavailable")
+        if proof.provider is not ProviderKind.Hetzner:
+            raise InvalidInputError("unsupported provider node identity")
+        client = self.hetzner_clients.get(pool.provider_ref)
+        if client is None:
+            raise UpstreamUnavailableError("Hetzner project is not configured")
+        if proof.proof_url.get_secret_value() != "hetzner-bootstrap" or proof.region != pool.region:
+            raise InvalidInputError("invalid Hetzner host identity")
+        verified = verify_node(
+            client,
+            instance_id=proof.provider_instance_id,
+            target=HetznerNodeIdentityTarget(
+                provider_ref=pool.provider_ref,
+                unit_id=pool.id,
+                launch_id=proof.launch_id,
+                region=pool.region,
+            ),
+        )
+        return VerifiedProviderNodeIdentity(
+            provider=ProviderKind.Hetzner,
+            account_id=pool.provider_ref,
+            region=verified.location,
+            provider_instance_id=verified.instance_id,
+            role_arn="",
+            instance_profile_arn="",
+            provider_resource_id=pool.id,
+            verified_at=utc_now(),
+        )
+
+
+def configured_provider_node_identity_registry(
+    *, aws: AwsProviderNodeIdentityAdapter, platform_settings: PlatformCapacitySettings
+) -> ProviderNodeIdentityRegistry:
+    return ProviderNodeIdentityRegistry(
+        aws=aws,
+        hetzner_clients={
+            binding.ref: HetznerClient(binding.api_token) for binding in platform_settings.hetzner
+        },
+    )
 
 
 __all__ = [
@@ -248,5 +328,6 @@ __all__ = [
     "ProviderNodeIdentityHttpResponse",
     "ProviderNodeIdentityReplayError",
     "ProviderNodeIdentityReplayGuard",
+    "configured_provider_node_identity_registry",
     "provider_node_identity_evidence_provider",
 ]

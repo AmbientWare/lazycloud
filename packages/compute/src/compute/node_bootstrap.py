@@ -123,6 +123,7 @@ class NodeBootstrapProfile:
 
 
 _BOOTSTRAP_SCRIPT_TEMPLATE = """#!/bin/bash
+set +x
 set -Eeuo pipefail
 
 exec > >(tee -a /var/log/lazycloud-bootstrap.log) 2>&1
@@ -164,10 +165,12 @@ report_failure() {
   payload="{\\"enrollment_request_id\\":\\"${ENROLLMENT_REQUEST_ID}\\""
   payload="${payload}$(report_identity_fields)"
   payload="${payload},\\"failure_reason\\":\\"$1\\"}"
-  curl -fsS --retry 5 --retry-all-errors --retry-delay 2 -X POST \\
+  if curl -fsS --retry 5 --retry-all-errors --retry-delay 2 -X POST \\
     -H 'Content-Type: application/json' \\
-    --data "$payload" \\
-    "${CONTROL_PLANE_URL}/gateway/provider-nodes/bootstrap-failure" >/dev/null || true
+    --data-binary @- \\
+    "${CONTROL_PLANE_URL}/gateway/provider-nodes/bootstrap-failure" <<< "$payload" >/dev/null; then
+    rm -f "$AGENT_STATE_DIR/provider-bootstrap-token"
+  fi
 }
 
 bootstrap_main() {
@@ -208,9 +211,8 @@ def node_bootstrap_script(
     """Assemble the script a node runs from user-data.
 
     The provider fragment is spliced before substitution so that it may carry
-    its own sentinels, and substitution is a plain replace of `__NAME__` tokens
-    with `shlex.quote`d values — the script contains brace expansions and shell
-    parameter expansions that any format-string mechanism would eat.
+    its own sentinels. A single pass replaces `__NAME__` tokens with quoted
+    values without interpreting their contents or the shell's brace expansions.
     """
     missing = [
         symbol for symbol in _REQUIRED_PROVIDER_SYMBOLS if symbol not in profile.identity_shell
@@ -232,13 +234,11 @@ def node_bootstrap_script(
         "__AGENT_STATE_DIR__": AGENT_STATE_DIR,
         **dict(profile.values),
     }
-    for placeholder, value in values.items():
-        script = script.replace(placeholder, shlex.quote(value))
-
-    unresolved = sorted(set(_SENTINEL_PATTERN.findall(script)))
+    unresolved = sorted(set(_SENTINEL_PATTERN.findall(script)) - values.keys())
     if unresolved:
         msg = f"node bootstrap script has unresolved placeholders: {', '.join(unresolved)}"
         raise NodeBootstrapError(msg)
+    script = _SENTINEL_PATTERN.sub(lambda match: shlex.quote(values[match.group(0)]), script)
     if script.rstrip("\n").rsplit("\n", 1)[-1] != _ENTRY_POINT:
         msg = f"node bootstrap script must end by calling {_ENTRY_POINT}"
         raise NodeBootstrapError(msg)

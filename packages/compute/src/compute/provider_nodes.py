@@ -11,6 +11,7 @@ from shared.provider_config import ProviderKind
 
 
 class ProviderNodeIdentityProof(ContractModel):
+    launch_id: str = ""
     provider: ProviderKind
     region: str
     provider_instance_id: str

@@ -2,14 +2,48 @@ from __future__ import annotations
 
 import http.client
 from dataclasses import dataclass
+from hashlib import sha256
 
 from shared.errors import InvalidInputError, UpstreamUnavailableError
+
+from provider_hetzner.client import HetznerClient
 
 
 @dataclass(frozen=True, slots=True)
 class HetznerNodeEvidence:
     instance_id: str
     location: str
+
+
+@dataclass(frozen=True, slots=True)
+class HetznerNodeIdentityTarget:
+    provider_ref: str
+    unit_id: str
+    launch_id: str
+    region: str
+
+
+def provider_label(provider_ref: str) -> str:
+    return sha256(provider_ref.encode()).hexdigest()[:63]
+
+
+def verify_node(
+    client: HetznerClient, *, instance_id: str, target: HetznerNodeIdentityTarget
+) -> HetznerNodeEvidence:
+    if not target.launch_id or not instance_id.isdecimal() or int(instance_id) <= 0:
+        raise InvalidInputError("invalid Hetzner host identity")
+    server = client.server(int(instance_id))
+    if server is None:
+        raise UpstreamUnavailableError("Hetzner host no longer exists")
+    if (
+        server.labels.get("lazycloud-managed") != "true"
+        or server.labels.get("lazycloud-unit") != target.unit_id
+        or server.labels.get("lazycloud-provider") != provider_label(target.provider_ref)
+        or server.labels.get("lazycloud-launch") != target.launch_id
+        or server.datacenter.location.name != target.region
+    ):
+        raise InvalidInputError("Hetzner host does not match the enrolled launch")
+    return HetznerNodeEvidence(str(server.id), server.datacenter.location.name)
 
 
 def node_evidence() -> HetznerNodeEvidence:

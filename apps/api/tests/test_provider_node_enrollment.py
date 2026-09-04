@@ -34,6 +34,7 @@ from database.repositories.compute import (
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
 from provider_aws import AWS_STS_PROOF_NONCE_KEY
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
+from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -250,6 +251,43 @@ def test_provider_node_enrollment_rejects_an_instance_the_pool_does_not_own(
 
     with pytest.raises(UpstreamUnavailableError, match="still refreshing"):
         enrollment.enroll(_request(pool.id, provider_instance_id="i-0fedcba987654321f"))
+
+
+def test_provider_enrollment_resume_preserves_existing_agent_authority(
+    isolated_services: ApiServices,
+) -> None:
+    pool = _seed_connection_and_pool(isolated_services)
+    service = _service(isolated_services, _PooledProvider())
+    request = _request(pool.id)
+    service.compute.record_provider_bootstrap_status(
+        pool_id=pool.id,
+        provider_instance_id=_INSTANCE_ID,
+        phase=MachineBootstrapPhase.Booting,
+        failure_reason=None,
+    )
+    joined = service.enroll(request)
+    first = service.gateway.resume_provider_agent(
+        node_agent_token=SecretStr(joined.agent_token),
+        pool=pool,
+        machine_fingerprint=request.machine_fingerprint,
+    )
+    second = service.gateway.resume_provider_agent(
+        node_agent_token=SecretStr(joined.agent_token),
+        pool=pool,
+        machine_fingerprint=request.machine_fingerprint,
+    )
+    assert first is not None and second is not None
+    assert first.machine_id == second.machine_id == joined.machine_id
+    assert (
+        first.credential_generation == second.credential_generation == joined.credential_generation
+    )
+    assert first.credential_id == second.credential_id == joined.credential_id
+    with pytest.raises(InvalidInputError):
+        service.gateway.resume_provider_agent(
+            node_agent_token=SecretStr(joined.agent_token),
+            pool=pool,
+            machine_fingerprint="another-host",
+        )
 
 
 def test_provider_node_bootstrap_failure_is_durable_after_identity_verification(

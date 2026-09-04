@@ -13,11 +13,27 @@ the pull request and shipped product. Demand remains estimated. These scenarios
 do not justify lower compute prices or establish an overall margin improvement
 from CPU backfill, so the backfill merge condition below remains unmet.
 
-Hetzner activation is blocked on secure host enrollment and live acceptance.
+An additional 48 paired paths compare CPU-only, 5% GPU, 10% GPU, and the original
+mix across 100, 500, and 1,000 accounts. Their 576 monthly records reconcile to
+annual totals. The original mix assumed about 22% GPU jobs but incurred about
+95% of host costs on GPU machines. CPU-heavy cases improve the modeled margin;
+they are controlled scenarios, not measured customer demand.
+
+Hetzner activation is blocked on live acceptance and deployment configuration.
 Source IP and metadata cannot authenticate a host against its own tenants.
-A node-scoped, short-lived, single-use bootstrap token needs an owner-approved
-exception to the prohibition on credentials in provider-readable configuration.
+A node-scoped, short-lived, single-use bootstrap token has owner approval for
+delivery in that node's user-data. The narrow exception is recorded in
+`packages/compute/AGENTS.md`. Durable launch authorization consumes the token
+and binds a node-generated credential. Retries resume the existing enrollment.
+The forward `0007` migration preserves deployed state. Host credential
+publication is atomic and root-only; API validation does not echo credentials.
 No Hetzner server has been provisioned by this implementation run.
+
+Deployment requires an explicitly selected Hetzner project and protected token
+location, reviewed supplier purchase ceilings, and the disposable host workflow
+in `deploy/hetzner/README.md`. The documented `default-test` AWS profile currently
+receives AccessDenied when assuming its operator role. Root credentials are not
+an alternative for acceptance or deployment automation.
 
 ## Outcome
 

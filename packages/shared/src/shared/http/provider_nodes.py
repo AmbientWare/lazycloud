@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from shared.compute_enrollment import (
     ComputePreflightCheck,
@@ -24,6 +24,10 @@ class ProviderNodeCapacity(HttpModel):
 
 
 class ProviderNodeIdentityRequest(HttpModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+    launch_id: str = Field(default="", exclude_if=lambda value: value == "")
+    bootstrap_token: str = Field(default="", repr=False, exclude_if=lambda value: value == "")
+    node_agent_token: str = Field(default="", repr=False, exclude_if=lambda value: value == "")
     enrollment_request_id: str = Field(
         min_length=36,
         max_length=36,
@@ -40,12 +44,22 @@ class ProviderNodeIdentityRequest(HttpModel):
             valid = re.fullmatch(
                 r"(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+", self.region
             ) and re.fullmatch(r"i-[0-9a-f]{8,17}", self.provider_instance_id)
+            valid = valid and not (self.launch_id or self.bootstrap_token or self.node_agent_token)
         else:
             valid = (
                 self.region in {"ash", "hil", "fsn1", "nbg1", "hel1", "sin"}
                 and self.provider_instance_id.isdecimal()
                 and int(self.provider_instance_id) > 0
-                and self.identity_proof_url == "hetzner-metadata"
+                and self.identity_proof_url == "hetzner-bootstrap"
+                and re.fullmatch(
+                    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+                    self.launch_id,
+                )
+                and re.fullmatch(r"[A-Za-z0-9_-]{43,128}", self.node_agent_token)
+                and (
+                    not self.bootstrap_token
+                    or re.fullmatch(r"[A-Za-z0-9_-]{43,128}", self.bootstrap_token)
+                )
             )
         if not valid:
             raise ValueError("invalid provider node identity")

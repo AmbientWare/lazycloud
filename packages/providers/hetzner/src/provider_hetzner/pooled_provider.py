@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, Decimal
+from urllib.parse import urlparse
 
 from compute.node_bootstrap import (
     NodeBootstrapProfile,
@@ -10,6 +11,7 @@ from compute.node_bootstrap import (
     node_bootstrap_script,
 )
 from compute.offers import ComputeOffer, pooled_cloud_offer
+from compute.provider_launches import ProviderNodeLaunchCredential, ProviderNodeLaunchCredentials
 from compute.providers import (
     ProviderCapacityPhase,
     ProviderMachineStatus,
@@ -19,14 +21,18 @@ from compute.providers import (
 )
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from shared.compute_policy import ComputeUnitProviderState
+from shared.timestamps import utc_now
 
 from provider_hetzner.client import HetznerClient, HetznerError, Server
+from provider_hetzner.identity import provider_label
 
 _MANAGED_LABEL = "lazycloud-managed"
 _UNIT_LABEL = "lazycloud-unit"
 _GENERATION_LABEL = "lazycloud-generation"
 _RELEASE_LABEL = "lazycloud-release"
 _SERVER_LABEL = "lazycloud-server"
+_LAUNCH_LABEL = "lazycloud-launch"
+_PROVIDER_LABEL = "lazycloud-provider"
 
 
 class HetznerNodeImage(BaseModel):
@@ -44,6 +50,7 @@ class HetznerPooledProvider:
     allowed_server_types: frozenset[str]
     usd_per_currency_unit: Decimal
     primary_ipv4_hourly_micros: int
+    launch_credentials: ProviderNodeLaunchCredentials
 
     def list_offers(self) -> Iterable[ComputeOffer]:
         if self.usd_per_currency_unit <= 0:
@@ -125,7 +132,17 @@ class HetznerPooledProvider:
             name = f"lc-{request.unit_id}-{request.generation}-{index}"
             if name in names:
                 continue
+            prior = self.launch_credentials.for_server(request, name)
+            if prior is not None and (prior.redeemed or prior.expires_at <= utc_now()):
+                if (
+                    prior.provider_instance_id is not None
+                    and self.client.server(_server_id(prior.provider_instance_id)) is not None
+                ):
+                    raise ValueError("Hetzner launch still has a live provider instance")
+                self.launch_credentials.revoke(prior.launch_id)
+            launch = self.launch_credentials.prepare(request, name)
             labels = self._labels(request)
+            labels[_LAUNCH_LABEL] = launch.launch_id
             body: dict[str, JsonValue] = {
                 "name": name,
                 "server_type": request.offer.instance_type,
@@ -135,12 +152,12 @@ class HetznerPooledProvider:
                 "public_net": {"enable_ipv4": True, "enable_ipv6": False},
                 "start_after_create": True,
                 "automount": False,
-                "user_data": bootstrap_script(request),
+                "user_data": bootstrap_script(request, launch),
             }
             try:
                 server = self.client.create_server(body)
             except HetznerError as exc:
-                if exc.code not in {"uniqueness_error", "conflict"}:
+                if exc.code not in {"uniqueness_error", "conflict", "transport_unavailable"}:
                     raise
                 # A concurrent or timed-out create is recovered through its provider name.
                 servers = self._servers(request)
@@ -149,6 +166,7 @@ class HetznerPooledProvider:
                 names = {item.name for item in servers}
                 continue
             self._validate_server(request, server)
+            self._bind_server(server)
             self._tag_ips(request, server)
             servers.append(server)
             names.add(name)
@@ -202,6 +220,7 @@ class HetznerPooledProvider:
         servers = list(self.client.servers(self._selector(request)))
         for server in servers:
             self._validate_server(request, server)
+            self._bind_server(server)
             self._tag_ips(request, server)
         return servers
 
@@ -209,6 +228,8 @@ class HetznerPooledProvider:
         if (
             server.labels.get(_MANAGED_LABEL) != "true"
             or server.labels.get(_UNIT_LABEL) != request.unit_id
+            or server.labels.get(_PROVIDER_LABEL) != provider_label(self.provider_ref)
+            or not server.labels.get(_LAUNCH_LABEL)
             or server.datacenter.location.name != request.offer.region
             or server.server_type.name != request.offer.instance_type
         ):
@@ -216,10 +237,22 @@ class HetznerPooledProvider:
         if server.volumes:
             raise ValueError("Hetzner managed nodes cannot contain externally attached volumes")
 
+    def _bind_server(self, server: Server) -> None:
+        self.launch_credentials.bind(
+            server.labels[_LAUNCH_LABEL],
+            provider_ref=self.provider_ref,
+            provider_instance_id=str(server.id),
+            unit_id=server.labels[_UNIT_LABEL],
+            server_name=server.name,
+            region=server.datacenter.location.name,
+            generation=int(server.labels[_GENERATION_LABEL]),
+        )
+
     def _tag_ips(self, request: ProviderUnitRequest, server: Server) -> None:
         labels = {
             _MANAGED_LABEL: "true",
             _UNIT_LABEL: request.unit_id,
+            _PROVIDER_LABEL: provider_label(self.provider_ref),
             _SERVER_LABEL: str(server.id),
         }
         for address in (server.public_net.ipv4, server.public_net.ipv6):
@@ -244,6 +277,7 @@ class HetznerPooledProvider:
         return {
             _MANAGED_LABEL: "true",
             _UNIT_LABEL: request.unit_id,
+            _PROVIDER_LABEL: provider_label(self.provider_ref),
             _GENERATION_LABEL: str(request.generation),
             _RELEASE_LABEL: self.images_by_location[request.offer.region].recipe_sha256[:63],
         }
@@ -304,7 +338,9 @@ def _status(status: str) -> str:
     return ProviderMachineStatus.Unknown
 
 
-def bootstrap_script(request: ProviderUnitRequest) -> str:
+def bootstrap_script(request: ProviderUnitRequest, launch: ProviderNodeLaunchCredential) -> str:
+    if urlparse(request.bootstrap.control_plane_url).scheme != "https":
+        raise ValueError("Hetzner bootstrap credentials require an HTTPS control-plane origin")
     return node_bootstrap_script(
         NodeBootstrapSettings(
             control_plane_url=request.bootstrap.control_plane_url,
@@ -315,7 +351,11 @@ def bootstrap_script(request: ProviderUnitRequest) -> str:
         NodeBootstrapProfile(
             provider="hetzner",
             identity_shell=_IDENTITY_SHELL,
-            values={"__HETZNER_LOCATION__": request.offer.region},
+            values={
+                "__HETZNER_LOCATION__": request.offer.region,
+                "__HETZNER_LAUNCH_ID__": launch.launch_id,
+                "__HETZNER_BOOTSTRAP_TOKEN__": launch.bootstrap_token.get_secret_value(),
+            },
         ),
     )
 
@@ -323,15 +363,38 @@ def bootstrap_script(request: ProviderUnitRequest) -> str:
 _IDENTITY_SHELL = r"""
 HETZNER_LOCATION=__HETZNER_LOCATION__
 resolve_node_identity() {
+  umask 077
+  if [ -f "$AGENT_STATE_DIR/provider-launch-id" ]; then
+    [ "$(< "$AGENT_STATE_DIR/provider-launch-id")" = __HETZNER_LAUNCH_ID__ ]
+  else
+    printf '%s' __HETZNER_LAUNCH_ID__ > "$AGENT_STATE_DIR/provider-launch-id"
+  fi
+  if [ ! -f "$AGENT_STATE_DIR/provider-node-token" ]; then
+    credential_tmp=$(mktemp "$AGENT_STATE_DIR/.provider-node-token.XXXXXX")
+    head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n' \
+      > "$credential_tmp"
+    sync -f "$credential_tmp"
+    printf '%s' __HETZNER_BOOTSTRAP_TOKEN__ > "$AGENT_STATE_DIR/provider-bootstrap-token"
+    if ! ln "$credential_tmp" "$AGENT_STATE_DIR/provider-node-token"; then
+      [ -f "$AGENT_STATE_DIR/provider-node-token" ]
+    fi
+    rm -f "$credential_tmp"
+    sync -f "$AGENT_STATE_DIR"
+  fi
   HETZNER_SERVER_ID=$(curl --noproxy '*' -fsS --connect-timeout 2 --max-time 5 http://169.254.169.254/hetzner/v1/metadata/instance-id)
   [[ "$HETZNER_SERVER_ID" =~ ^[0-9]+$ ]]
 }
 report_identity_fields() {
   printf ',"provider":"hetzner","region":"%s"' "$HETZNER_LOCATION"
   printf ',"provider_instance_id":"%s"' "$HETZNER_SERVER_ID"
-  printf ',"identity_proof_url":"hetzner-metadata"'
+  printf ',"identity_proof_url":"hetzner-bootstrap"'
+  printf ',"launch_id":"%s"' "$(< "$AGENT_STATE_DIR/provider-launch-id")"
+  printf ',"node_agent_token":"%s"' "$(< "$AGENT_STATE_DIR/provider-node-token")"
+  if [ -f "$AGENT_STATE_DIR/provider-bootstrap-token" ]; then
+    printf ',"bootstrap_token":"%s"' "$(< "$AGENT_STATE_DIR/provider-bootstrap-token")"
+  fi
 }
 node_fingerprint() { printf 'hetzner:%s' "$HETZNER_SERVER_ID"; }
 node_hostname() { hostname; }
-PROVIDER_INSTALL_FLAGS=(--provider hetzner --provider-instance-identity hetzner-metadata)
+PROVIDER_INSTALL_FLAGS=(--provider hetzner --provider-instance-identity hetzner-bootstrap)
 """

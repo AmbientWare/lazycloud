@@ -24,6 +24,7 @@ from execution.shells.service import ShellControlService
 from execution.signals.redis import RedisSignalService
 from execution.volumes.control import VolumeControlService
 from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from gateway.events import (
     AsyncGatewayEventSink,
@@ -228,6 +229,22 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
         workspace_resolver=_CurrentWorkspaceResolver(services_provider),
         metrics_sink=_CurrentGatewayMetricsSink(services_provider),
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(
+        _: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        issues: list[str] = []
+        for error in exc.errors():
+            location = error["loc"]
+            if error["type"] == "extra_forbidden":
+                location = location[:-1]
+            path = ".".join(str(part) for part in location) or "request"
+            issues.append(f"{path}: {error['type']}")
+        return JSONResponse(
+            ErrorResponse(detail="; ".join(issues), code="invalid_input").model_dump(),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
 
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:

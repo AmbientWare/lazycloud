@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from agent.binary import AgentBinarySettings
 from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
+from compute.provider_launches import ProviderNodeLaunchCredentials
 from compute.providers import (
     ComputeProviderResolver,
     ResolvedComputeProvider,
@@ -22,6 +23,8 @@ from provider_aws import (
     AwsManagedPoolBinaries,
     Boto3AwsManagedPoolClientProvider,
 )
+from provider_hetzner.client import HetznerClient
+from provider_hetzner.pooled_provider import HetznerPooledProvider
 from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationPhase,
@@ -36,12 +39,26 @@ AwsConnectionLoader = Callable[[str], Iterable[AwsAccountConnection]]
 
 def configured_platform_compute_providers(
     settings: PlatformCapacitySettings,
+    *,
+    launch_credentials: ProviderNodeLaunchCredentials,
 ) -> tuple[ResolvedComputeProvider, ...]:
-    if settings.hetzner:
-        raise ValueError(
-            "Hetzner secure host enrollment is unavailable; platform capacity cannot be enabled"
+    return tuple(
+        ResolvedComputeProvider(
+            ref=binding.ref,
+            capacity_mode=ComputeCapacityMode.Pooled,
+            policy=binding.policy,
+            pooled=HetznerPooledProvider(
+                provider_ref=binding.ref,
+                client=HetznerClient(binding.api_token),
+                images_by_location=binding.images_by_location,
+                allowed_server_types=binding.allowed_server_types,
+                usd_per_currency_unit=binding.usd_per_currency_unit,
+                primary_ipv4_hourly_micros=binding.primary_ipv4_hourly_micros,
+                launch_credentials=launch_credentials,
+            ),
         )
-    return ()
+        for binding in settings.hetzner
+    )
 
 
 def configured_aws_compute_catalog(

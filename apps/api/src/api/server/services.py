@@ -13,6 +13,7 @@ from agent.service import AgentService
 from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
+from compute.provider_launches import ProviderNodeLaunchService
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
@@ -54,6 +55,7 @@ from execution.endpoints.service import (
 )
 from execution.functions.service import FunctionControlService
 from execution.pods.service import PodControlService
+from execution.secrets.crypto import WorkspaceSecretCipher
 from execution.secrets.service import SecretService
 from execution.shells.service import ShellControlService
 from execution.signals.redis import RedisSignalRepository, RedisSignalService
@@ -130,7 +132,7 @@ from provider_clients import (
     configured_aws_compute_catalog,
     workspace_compute_provider_resolver,
 )
-from provider_clients.provider_nodes import ProviderNodeIdentityRegistry
+from provider_clients.provider_nodes import configured_provider_node_identity_registry
 from provider_clients.settings import (
     AwsAccountConnectionSettings,
     AwsCapacityReconciliationSettings,
@@ -500,6 +502,7 @@ class ApiServiceCore:
     secrets: SecretService
     volumes: VolumeService
     compute: ComputeService
+    provider_node_launches: ProviderNodeLaunchService
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
     scheduler_workers: RedisSchedulerWorkerRepository
@@ -833,6 +836,16 @@ class ApiServices(ApiServiceCore):
             )
         )
         aws_connection_directory = AwsAccountConnectionDirectory(context)
+
+        def provider_node_cipher(workspace_id: str) -> WorkspaceSecretCipher:
+            with context.database.session() as session:
+                workspace = context.workspace(session, workspace_id)
+            return WorkspaceSecretCipher.from_workspace(workspace)
+
+        provider_node_launches = ProviderNodeLaunchService(
+            database=context.database,
+            cipher_for_workspace=provider_node_cipher,
+        )
         # Connected AWS is an optional deployment shape. When it is unconfigured there is
         # no connection to resolve, and building the resolver would demand the remote
         # network configuration a local stack has no reason to hold. A half-configured
@@ -843,7 +856,9 @@ class ApiServices(ApiServiceCore):
                 agent_artifact_config,
                 connections=aws_connection_directory.list_for_workspace,
                 capacity_workspace=aws_connection_directory.capacity_workspace,
-                platform_providers=configured_platform_compute_providers(platform_capacity_config),
+                platform_providers=configured_platform_compute_providers(
+                    platform_capacity_config, launch_credentials=provider_node_launches
+                ),
                 platform_cost_ceilings=platform_capacity_config.aws_hourly_cost_ceiling_micros,
                 gateway_origin=gateway_config.public_http_url,
                 presigned_origin=object_store_config.presigned_endpoint_url or "",
@@ -1067,6 +1082,7 @@ class ApiServices(ApiServiceCore):
             secrets=secrets,
             volumes=volumes,
             compute=compute,
+            provider_node_launches=provider_node_launches,
             containers=containers,
             container_shutdowns=container_shutdowns,
             scheduler_workers=worker_repository,
@@ -1319,11 +1335,13 @@ def _compose_api_services(
             rate_limiter=redis,
             proof_max_inflight=public_ingress_config.provider_node_proof_max_inflight,
             client_ip_header=public_ingress_config.client_ip_header,
-            identity_verifier=ProviderNodeIdentityRegistry(
+            launches=core.provider_node_launches,
+            identity_verifier=configured_provider_node_identity_registry(
                 aws=AwsProviderNodeIdentityAdapter(
                     http_client=BoundedProviderNodeIdentityHttpClient(),
                     replay_guard=RedisProviderNodeIdentityReplayGuard(redis),
                 ),
+                platform_settings=core.platform_capacity_settings,
             ),
         )
         if core.compute.provider_resolver is not None
@@ -1414,6 +1432,7 @@ def _compose_api_services(
         secrets=core.secrets,
         volumes=core.volumes,
         compute=core.compute,
+        provider_node_launches=core.provider_node_launches,
         containers=core.containers,
         container_shutdowns=core.container_shutdowns,
         scheduler_workers=core.scheduler_workers,
