@@ -49,6 +49,7 @@ export const workspaceQueryKeys = {
       [...workspaceRoot(workspaceId), "apps", "deployment-url", deploymentId] as const,
   },
   members: (workspaceId: string) => [...workspaceRoot(workspaceId), "members"] as const,
+  invitations: (workspaceId: string) => [...workspaceRoot(workspaceId), "invitations"] as const,
   deployments: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "deployments"] as const,
     list: (
@@ -230,6 +231,7 @@ export const accountQueryKeys = {
   },
   domains: () => [...accountRoot, "custom-domains"] as const,
   tokens: () => [...accountRoot, "tokens"] as const,
+  invitations: () => [...accountRoot, "invitations"] as const,
 } as const;
 
 export type WorkspaceLiveQueryMeta = {

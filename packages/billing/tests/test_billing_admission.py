@@ -68,6 +68,31 @@ def test_the_free_plan_counts_the_owner_as_its_one_member(
         )
 
 
+def test_an_open_invitation_holds_the_seat_it_would_fill(
+    isolated_services: ApiServices,
+) -> None:
+    """The refusal belongs to the administrator inviting, not the person invited.
+
+    A seat checked only at acceptance lets an owner send more offers than the
+    plan can honour: every email goes out, the first acceptance takes the seat,
+    and everyone after it is turned away after signing in, by a message about
+    somebody else's plan.
+    """
+
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(CapacityLimitReachedError, match="1 members"),
+    ):
+        DatabaseBillingAdmission().assert_may_invite_workspace_member(
+            session,
+            workspace_id=workspace_id,
+            email="colleague@example.test",
+        )
+
+
 def test_plan_change_refuses_to_drop_a_capability_still_in_use(
     isolated_services: ApiServices,
 ) -> None:

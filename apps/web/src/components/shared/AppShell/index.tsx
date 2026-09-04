@@ -7,6 +7,7 @@ import {
   Gauge,
   LayoutGrid,
   LogOut,
+  Mail,
   Menu,
   Search,
   Settings,
@@ -245,8 +246,22 @@ function DesktopRail({
             workspaceName={workspace.name}
           />
         ))}
+        <InvitationsLink className="flex h-9 items-center gap-2.5 rounded-none border-l-2 border-transparent px-2.5 text-[13px] text-muted-foreground outline-none transition-colors hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sidebar-ring" />
       </AccountRail>
     </aside>
+  );
+}
+
+/**
+ * Invitations are addressed to the account, not to a workspace, so this leaves
+ * the workspace layout rather than taking a `$workspace` param it has no use for.
+ */
+function InvitationsLink({ className, onClick }: { className: string; onClick?: () => void }) {
+  return (
+    <Link to="/invitations" onClick={onClick} className={className}>
+      <Mail className="size-4 shrink-0" aria-hidden="true" />
+      Invitations
+    </Link>
   );
 }
 
@@ -367,6 +382,10 @@ function MobileMenu({
               </Link>
             );
           })}
+          <InvitationsLink
+            className="interactive-row mt-0.5 flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground"
+            onClick={() => setOpen(false)}
+          />
         </nav>
         <div className="mt-auto border-t border-border p-3">
           <button

@@ -44,6 +44,7 @@ locals {
     LAZYCLOUD_CLOUDFLARE_API_TOKEN  = "Cloudflare token for custom hostnames. Zone SSL and Certificates, edit."
     LAZYCLOUD_STRIPE_API_KEY        = "Stripe restricted key."
     LAZYCLOUD_STRIPE_WEBHOOK_SECRET = "Stripe webhook signing secret. Returned only at endpoint creation."
+    LAZYCLOUD_RESEND_API_KEY        = "Resend API key workspace invitations are emailed with."
   }
 
   # Which document each variable is read out of. Every workload gets these as

@@ -10,6 +10,9 @@ from shared.identity import (
     UserIdentityRecord,
     UserRecord,
     UserStatus,
+    WorkspaceInvitationRecord,
+    WorkspaceInvitationRole,
+    WorkspaceInvitationStatus,
     WorkspaceMemberRecord,
     WorkspaceRole,
 )
@@ -22,6 +25,7 @@ from database.tables.identity import (
     TokenTable,
     UserIdentityTable,
     UserTable,
+    WorkspaceInvitationTable,
     WorkspaceMemberTable,
 )
 
@@ -110,6 +114,24 @@ def workspace_member_record_from_table(row: WorkspaceMemberTable) -> WorkspaceMe
     )
 
 
+def workspace_invitation_record_from_table(
+    row: WorkspaceInvitationTable,
+) -> WorkspaceInvitationRecord:
+    return WorkspaceInvitationRecord(
+        id=str(row.id),
+        workspace_id=str(row.workspace_id),
+        email=row.email,
+        role=WorkspaceInvitationRole(row.role),
+        status=WorkspaceInvitationStatus(row.status),
+        invited_by_user_id=_optional_id(row.invited_by_user_id),
+        resolved_by_user_id=_optional_id(row.resolved_by_user_id),
+        expires_at=to_utc(row.expires_at),
+        resolved_at=to_utc_or_none(row.resolved_at),
+        created_at=to_utc(row.created_at),
+        updated_at=to_utc(row.updated_at),
+    )
+
+
 def secret_storage_record_from_table(row: SecretTable) -> SecretStorageRecord:
     """Map encrypted secret columns without consulting flexible payload state."""
     return SecretStorageRecord(
@@ -128,5 +150,6 @@ __all__ = [
     "secret_storage_record_from_table",
     "user_identity_record_from_table",
     "user_record_from_table",
+    "workspace_invitation_record_from_table",
     "workspace_member_record_from_table",
 ]

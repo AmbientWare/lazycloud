@@ -168,6 +168,69 @@ class WorkspaceMemberTable(IdPayloadTable, DatabaseBase):
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="member")
 
 
+class WorkspaceInvitationTable(IdTable, DatabaseBase):
+    """An offer of membership addressed to an email, kept after it is answered.
+
+    An answered row stays in its terminal status because the audit history points
+    at it; rows leave only with their workspace.
+    """
+
+    __tablename__ = "workspace_invitations"
+    __table_args__: tuple[SchemaItem, ...] = (
+        # One open offer per address per workspace. A second invite is refused
+        # and the existing one resent, rather than racing a second row into place.
+        Index(
+            "uq_workspace_invitations_pending_email",
+            "workspace_id",
+            "email",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+        Index("ix_workspace_invitations_workspace", "workspace_id"),
+        # The invitee's lookup: everything still open that is addressed to the
+        # email they signed in with. Partial, so the history of answered offers
+        # does not grow the index every lookup walks.
+        Index(
+            "ix_workspace_invitations_open_email",
+            "email",
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+        CheckConstraint(
+            "role IN ('administrator', 'member')",
+            name="ck_workspace_invitations_role",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'accepted', 'declined', 'revoked')",
+            name="ck_workspace_invitations_status",
+        ),
+        CheckConstraint("email = lower(email)", name="ck_workspace_invitations_email_folded"),
+    )
+
+    workspace_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="member")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    # Null once the inviter's account is gone; the offer they made still stands.
+    invited_by_user_id: Mapped[str | None] = mapped_column(
+        uuid_type,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    resolved_by_user_id: Mapped[str | None] = mapped_column(
+        uuid_type,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class WorkspaceTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "workspaces"
     __table_args__: tuple[SchemaItem, ...] = (

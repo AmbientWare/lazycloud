@@ -81,11 +81,21 @@ class WorkspaceAuditAction(StringEnum):
     AdministratorRecovered = "administrator_recovered"
     WorkspaceRenamed = "workspace_renamed"
     WorkspaceDeleted = "workspace_deleted"
+    MemberInvited = "member_invited"
+    InvitationResent = "invitation_resent"
+    InvitationRevoked = "invitation_revoked"
+    InvitationAccepted = "invitation_accepted"
+    InvitationDeclined = "invitation_declined"
+    MemberRoleChanged = "member_role_changed"
+    MemberRemoved = "member_removed"
+    MemberLeft = "member_left"
 
 
 class WorkspaceAuditTarget(StringEnum):
     Workspace = "workspace"
     Token = "token"
+    Member = "member"
+    Invitation = "invitation"
 
 
 class WorkspaceAuditEventResponse(HttpModel):

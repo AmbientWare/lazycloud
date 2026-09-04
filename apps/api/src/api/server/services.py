@@ -76,6 +76,7 @@ from gateway.service import GatewayControlService
 from gateway.settings import GatewaySettings
 from gateway.shell_proxy import connect_shell_backend
 from identity.auth import AuthService, AuthTokenCache
+from identity.invitations import WorkspaceInvitationService
 from identity.sign_in import BillingProvisioner, SignInService
 from identity.users import UserService
 from images.control import ImageControlService
@@ -136,6 +137,7 @@ from provider_clients.settings import (
 )
 from provider_cloudflare import CloudflareSettings
 from provider_github import GitHubAppSettings
+from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaler_states import AutoscalerStateService
@@ -452,6 +454,7 @@ class ApiServiceCore:
     context: ServiceContext
     auth: AuthService
     users: UserService
+    invitations: WorkspaceInvitationService
     sign_in: SignInService
     auth_token_cache: AuthTokenCache
     tcp_ingress_settings: TcpIngressSettings
@@ -570,6 +573,7 @@ class ApiServices(ApiServiceCore):
         ) = None,
         gateway_settings: GatewaySettings | None = None,
         stripe_settings: StripeSettings | None = None,
+        resend_settings: ResendSettings | None = None,
         workspace_change_stream_settings: WorkspaceChangeStreamSettings | None = None,
         agent_binary_settings: AgentBinarySettings | None = None,
         aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
@@ -762,6 +766,13 @@ class ApiServices(ApiServiceCore):
             ).create()
         )
         payment_provider = stripe_config.provider_factory()
+        # Lazy for the same reason as the two below: a deployment without the
+        # email credential still starts, and the invite route names what is missing.
+        invitations = WorkspaceInvitationService(
+            context,
+            mailer=(resend_settings or ResendSettings()).sender_factory(),
+            invitations_url=f"{gateway_config.public_http_url.rstrip('/')}/invitations",
+        )
         # Neither adapter is constructed here — both are callables that read their
         # credential when first asked — so a deployment that has not configured a
         # GitHub App or a payment credential still starts and fails at the sign-in
@@ -998,6 +1009,7 @@ class ApiServices(ApiServiceCore):
             context=context,
             auth=auth,
             users=users,
+            invitations=invitations,
             sign_in=sign_in,
             auth_token_cache=auth_token_cache,
             tcp_ingress_settings=tcp_ingress_config,
@@ -1338,6 +1350,7 @@ def _compose_api_services(
         context=core.context,
         auth=core.auth,
         users=core.users,
+        invitations=core.invitations,
         sign_in=core.sign_in,
         auth_token_cache=core.auth_token_cache,
         tcp_ingress_settings=core.tcp_ingress_settings,
