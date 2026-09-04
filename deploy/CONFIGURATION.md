@@ -25,6 +25,9 @@ validates the descriptor and environment values, and renders the exact Helm
 chart. It verifies the selected release's agent artifact and worker image before
 building control-plane images. Only after all images exist does it publish the
 configuration and release together, using a compare-and-swap branch push.
+The selected release must contain the same managed-package sources as the
+control plane. Changes to those packages require Ship to publish matching worker
+artifacts; a code-only deploy may retain the release when those sources match.
 Preflight also checks overlapping old and new database pools and refuses an old
 chart with undeclared pools. Failure before the push leaves the selected deployment unchanged. A partially
 published image set fails explicitly because commit tags are immutable.

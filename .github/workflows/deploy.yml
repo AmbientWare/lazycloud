@@ -196,10 +196,21 @@ jobs:
           set -euo pipefail
           uv run --frozen --python 3.12 --group workspace python - <<'PY'
           import os
+          import re
           import subprocess
           from pathlib import Path
           from provider_clients.release import fetch_release_manifest, materialize_agent_artifact
+          from shared.managed_runtime_integrity import MANAGED_PACKAGE_NAMES
           manifest = fetch_release_manifest(os.environ["RELEASE_MANIFEST_URL"])
+          if not re.fullmatch(r"[0-9a-f]{40}", manifest.source_revision):
+              raise SystemExit("Selected release does not identify its source commit")
+          subprocess.run(["git", "fetch", "--depth=1", "origin", manifest.source_revision], check=True)
+          packages = [f"packages/{name}" for name in MANAGED_PACKAGE_NAMES]
+          comparison = subprocess.run([
+              "git", "diff", "--exit-code", "--name-only", manifest.source_revision, "HEAD", "--", *packages,
+          ])
+          if comparison.returncode:
+              raise SystemExit("Selected worker release has different managed packages; run Ship to publish matching artifacts")
           materialize_agent_artifact(manifest, into=Path(os.environ["RUNNER_TEMP"]) / "agent-artifact")
           subprocess.run(["docker", "buildx", "imagetools", "inspect", manifest.container_worker_image], check=True)
           print(f"Verified release {manifest.release_version}")
