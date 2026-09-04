@@ -205,7 +205,6 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     headers = {"Authorization": f"Bearer {raw_token}"}

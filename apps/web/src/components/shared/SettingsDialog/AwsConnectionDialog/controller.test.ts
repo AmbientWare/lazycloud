@@ -49,14 +49,14 @@ describe("AWS connection controller", () => {
     });
     const { result } = renderController(queryClient, vi.fn(), () => popup.value);
 
-    act(() => result.current.create("123456789012"));
+    act(() => result.current.create("123456789012", null, null));
     await waitFor(() => expect(result.current.activeAction).toBeNull());
 
     expect(popup.close).toHaveBeenCalledOnce();
     expect(result.current.createError).toBe(failure);
     expect(result.current.recoveryError).toBeNull();
 
-    act(() => result.current.create("123456789012"));
+    act(() => result.current.create("123456789012", null, null));
     await waitFor(() => expect(result.current.activeAction).toBeNull());
 
     expect(createMock).toHaveBeenCalledTimes(2);

@@ -198,7 +198,10 @@ class _ConnectClient:
         account_id: str,
         role_arn: str | None = None,
         network: AwsAccountNetwork | None = None,
+        max_cpu_instances: int | None = None,
+        max_gpu_instances: int | None = None,
     ) -> AwsConnectionAuthorizationResponse:
+        del max_cpu_instances, max_gpu_instances
         self.requests.append((account_id, role_arn))
         self.networks.append(network)
         return AwsConnectionAuthorizationResponse(

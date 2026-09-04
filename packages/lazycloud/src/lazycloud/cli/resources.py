@@ -236,8 +236,16 @@ def cloud_compute_update(
         int | None,
         typer.Option("--min-cpu-workers", min=0, max=100),
     ] = None,
-    max_cpu_instances: Annotated[int | None, typer.Option("--max-cpu", min=0, max=100)] = None,
-    max_gpu_instances: Annotated[int | None, typer.Option("--max-gpu", min=0, max=100)] = None,
+    max_cpu_instances: Annotated[int | None, typer.Option("--max-cpu", min=0)] = None,
+    max_gpu_instances: Annotated[int | None, typer.Option("--max-gpu", min=0)] = None,
+    unlimited_cpu: Annotated[
+        bool,
+        typer.Option("--unlimited-cpu", help="Remove the CPU instance ceiling."),
+    ] = False,
+    unlimited_gpu: Annotated[
+        bool,
+        typer.Option("--unlimited-gpu", help="Remove the GPU instance ceiling."),
+    ] = False,
     min_free_cpu_millicores: Annotated[
         int | None,
         typer.Option("--min-free-cpu-millicores", min=0),
@@ -265,6 +273,10 @@ def cloud_compute_update(
     connection = client.current_connection()
     if connection is None:
         raise typer.BadParameter("no cloud account is connected")
+    if max_cpu_instances is not None and unlimited_cpu:
+        raise typer.BadParameter("choose --max-cpu or --unlimited-cpu, not both")
+    if max_gpu_instances is not None and unlimited_gpu:
+        raise typer.BadParameter("choose --max-gpu or --unlimited-gpu, not both")
     current = connection.compute
     # An option the caller left out keeps the value the account already carries, so
     # only the ones actually supplied are sent. Naming each field twice was a field
@@ -274,8 +286,6 @@ def cloud_compute_update(
         "default_instance_type": default_instance_type,
         "initial_cpu_workers": initial_cpu_workers,
         "min_cpu_workers": min_cpu_workers,
-        "max_cpu_instances": max_cpu_instances,
-        "max_gpu_instances": max_gpu_instances,
         "min_free_cpu_millicores": min_free_cpu_millicores,
         "min_free_memory_mib": min_free_memory_mib,
         "allowed_regions": None if allowed_regions is None else tuple(allowed_regions),
@@ -285,15 +295,20 @@ def cloud_compute_update(
         "idle_timeout_seconds": idle_timeout_seconds,
         "root_volume_gib": root_volume_gib,
     }
-    changed_keys = tuple(key for key, value in supplied.items() if value is not None)
+    updates: dict[str, str | int | tuple[str, ...] | None] = {
+        key: value for key, value in supplied.items() if value is not None
+    }
+    if max_cpu_instances is not None or unlimited_cpu:
+        updates["max_cpu_instances"] = max_cpu_instances
+    if max_gpu_instances is not None or unlimited_gpu:
+        updates["max_gpu_instances"] = max_gpu_instances
+    changed_keys = tuple(updates)
     if not changed_keys:
         raise typer.BadParameter("provide at least one compute setting to update")
     response = client.update_compute_configuration(
         AwsComputeConfigurationUpdateRequest(
             expected_revision=current.revision,
-            compute=current.model_copy(
-                update={key: value for key, value in supplied.items() if value is not None}
-            ),
+            compute=current.model_copy(update=updates),
         )
     )
     emit(
@@ -316,15 +331,24 @@ def _compute_configuration_summary(
     configuration: AwsAccountComputeConfiguration,
 ) -> dict[str, object]:
     allowed_types: object = configuration.allowed_instance_types or "any"
+    cpu_max: object = (
+        configuration.max_cpu_instances
+        if configuration.max_cpu_instances is not None
+        else "unlimited"
+    )
     return {
         "region": configuration.default_region,
         "instance_type": configuration.default_instance_type,
         "cpu_workers": (
             f"{configuration.min_cpu_workers} min, "
             f"{configuration.initial_cpu_workers} initial, "
-            f"{configuration.max_cpu_instances} max"
+            f"{cpu_max} max"
         ),
-        "max_gpu_instances": configuration.max_gpu_instances,
+        "max_gpu_instances": (
+            configuration.max_gpu_instances
+            if configuration.max_gpu_instances is not None
+            else "unlimited"
+        ),
         "free_capacity": (
             f"{configuration.min_free_cpu_millicores / 1000:g} CPU, "
             f"{configuration.min_free_memory_mib} MiB memory"
@@ -355,6 +379,8 @@ def _compute_configuration_updates(
             value = f"{configuration.root_volume_gib} GiB"
         elif key == "allowed_instance_types" and not value:
             value = "any"
+        elif key in {"max_cpu_instances", "max_gpu_instances"} and value is None:
+            value = "unlimited"
         updates[key] = value
     return updates
 
@@ -414,6 +440,14 @@ def cloud_connect_aws(
         str | None,
         typer.Option("--network-security-group-id", help="Security group nodes join."),
     ] = None,
+    max_cpu_instances: Annotated[
+        int | None,
+        typer.Option("--max-cpu", min=1, help="Optional CPU instance ceiling."),
+    ] = None,
+    max_gpu_instances: Annotated[
+        int | None,
+        typer.Option("--max-gpu", min=0, help="Optional GPU instance ceiling."),
+    ] = None,
     open_console: Annotated[
         bool,
         typer.Option("--open/--no-open", help="Open AWS authorization in a browser."),
@@ -434,6 +468,8 @@ def cloud_connect_aws(
         account_id=account_id,
         role_arn=role_arn,
         network=network,
+        max_cpu_instances=max_cpu_instances,
+        max_gpu_instances=max_gpu_instances,
     )
     if open_console and response.authorization.url is not None:
         webbrowser.open(response.authorization.url)

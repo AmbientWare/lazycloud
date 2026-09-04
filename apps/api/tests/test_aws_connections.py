@@ -285,8 +285,17 @@ def test_unfinished_setup_can_be_canceled_without_active_authorization(
     request: pytest.FixtureRequest,
 ) -> None:
     client, _aws_connections = _client(isolated_services, request)
-    created = client.post("/api/v1/aws-connection", json={"account_id": ACCOUNT_ID})
+    created = client.post(
+        "/api/v1/aws-connection",
+        json={
+            "account_id": ACCOUNT_ID,
+            "max_cpu_instances": 500,
+            "max_gpu_instances": 100,
+        },
+    )
     assert created.status_code == 201
+    assert created.json()["connection"]["compute"]["max_cpu_instances"] == 500
+    assert created.json()["connection"]["compute"]["max_gpu_instances"] == 100
 
     removed = client.delete("/api/v1/aws-connection")
 
@@ -302,6 +311,8 @@ def test_managed_connection_projects_its_nonsecret_stack_identity(
     client, _aws_connections = _client(isolated_services, request)
     created = client.post("/api/v1/aws-connection", json={"account_id": ACCOUNT_ID})
     assert created.status_code == 201
+    assert created.json()["connection"]["compute"]["max_cpu_instances"] is None
+    assert created.json()["connection"]["compute"]["max_gpu_instances"] is None
 
     validated = client.post("/api/v1/aws-connection/validate")
 

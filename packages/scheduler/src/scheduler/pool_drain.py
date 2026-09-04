@@ -430,14 +430,6 @@ class ManagedComputeWorkerPoolDrainController:
         current_version: str,
     ) -> WorkerPoolDrainResult:
         """Add the replacement before taking anything away, or report it exists."""
-        if self.state.active_machines >= self.state.max_machines:
-            # No room to surge. Nothing is cordoned, so the pool keeps serving on
-            # the old version rather than shrinking to make room.
-            return WorkerPoolDrainResult(
-                capacity_owner_id=self.capacity_owner_id,
-                pool=self.pool,
-                reason="replacement cannot surge past the pool maximum",
-            )
         target = self.state.active_machines + 1
         self.compute.scale_internal_unit(
             self.state.workspace_id,

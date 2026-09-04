@@ -78,7 +78,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from tests.service_fixtures import workspace_owner_user_id
 
@@ -333,7 +333,7 @@ class _SchedulerHooks:
         (0, 0, 1, 0, 0, [], True),
     ],
 )
-def test_internal_pool_scale_enforces_workspace_capacity_limit(
+def test_internal_pool_scale_enforces_connection_capacity_limit(
     isolated_services: ApiServices,
     initial_desired: int,
     workspace_limit: int,
@@ -359,7 +359,6 @@ def test_internal_pool_scale_enforces_workspace_capacity_limit(
         ),
         region="us-east-1",
         desired_machines=initial_desired,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -407,6 +406,26 @@ def test_internal_pool_scale_enforces_workspace_capacity_limit(
     assert provider.capacity_calls == expected_capacity_calls
 
 
+def test_internal_pool_lookup_is_workspace_scoped(isolated_services: ApiServices) -> None:
+    _seed_connection(isolated_services)
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(_PooledProvider()),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        root_volume_gib=200,
+    )
+
+    with pytest.raises(NotFoundError, match="compute unit not found"):
+        compute.get_internal_unit(str(uuid4()), pool.capacity_owner_id)
+
+
 def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
     isolated_services: ApiServices,
 ) -> None:
@@ -425,7 +444,6 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
         instance_type="m7i.xlarge",
         initial_machines=1,
         min_machines=1,
-        max_machines=10,
         min_free_cpu_millicores=1_000,
         min_free_memory_mib=1_024,
         root_volume_gib=200,
@@ -456,7 +474,6 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
         instance_type="m7i.xlarge",
         initial_machines=1,
         min_machines=1,
-        max_machines=10,
         min_free_cpu_millicores=1_000,
         min_free_memory_mib=1_024,
         root_volume_gib=200,
@@ -470,7 +487,6 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
         ),
         region="us-east-1",
         desired_machines=0,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
 
@@ -526,7 +542,6 @@ def test_scale_zero_persists_intent_and_releases_operations_before_provider_muta
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -583,7 +598,6 @@ def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -610,7 +624,7 @@ def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
         before_mutation=_allow_scale,
     )
 
-    assert provider.capacity_calls == [(0, 10), (0, 10)]
+    assert provider.capacity_calls == [(0, 1), (0, 1)]
     assert repaired.desired_machines == 0
     assert repaired.observed_machines == 0
     assert repaired.phase is ComputeUnitPhase.Ready
@@ -637,7 +651,6 @@ def test_internal_pool_scale_maps_mutation_coordinator_failure(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
 
@@ -666,7 +679,6 @@ def test_scale_zero_skips_provider_only_after_durable_convergence(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=0,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -710,7 +722,6 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=0,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -739,7 +750,7 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
     )
 
     assert len(provider.describe_calls) == 2
-    assert provider.capacity_calls == [(0, 10)]
+    assert provider.capacity_calls == [(0, 1)]
     assert repaired.generation == converged.generation + 1
     assert repaired.desired_machines == 0
     assert repaired.observed_machines == 0
@@ -762,7 +773,6 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -854,7 +864,6 @@ def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     scale_compute.reconcile_pooled_capacity()
@@ -881,7 +890,7 @@ def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
 
     reconciler.reconcile_pooled_capacity()
 
-    assert provider.capacity_calls == [(0, 10)]
+    assert provider.capacity_calls == [(0, 1)]
     assert [request.desired_machines for request in provider.ensure_calls] == [0]
     durable = reconciler.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
     assert durable.desired_machines == 0
@@ -913,7 +922,6 @@ def test_pooled_capacity_unit_comes_from_the_provider_authoritative_count(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=0,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -953,7 +961,6 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=0,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -993,13 +1000,59 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
     assert sibling.status is CapacityAcquisitionStatus.Requested
     assert released.status is CapacityAcquisitionStatus.Requested
     assert release_retry.status is CapacityAcquisitionStatus.ExistingPending
-    assert provider.capacity_calls == [(1, 10), (2, 10), (1, 10)]
+    assert provider.capacity_calls == [(1, 1), (2, 2), (1, 2)]
     assert provider.desired == 1
     with isolated_services.context.database.session() as session:
         operations = ComputeCapacityOperationRepository(session).list_for_owner(
             pool.capacity_owner_id
         )
     assert [operation.status for operation in operations] == ["released", "requested"]
+
+
+def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
+    isolated_services: ApiServices,
+) -> None:
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    first = CapacityAcquisitionRequest(
+        capacity_owner_id=pool.capacity_owner_id,
+        reservation_id=str(uuid4()),
+        operation_id=str(uuid4()),
+        shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
+    )
+    second = first.model_copy(update={"reservation_id": str(uuid4()), "operation_id": str(uuid4())})
+    concurrent_results: list[CapacityAcquisitionStatus] = []
+
+    def acquire_while_provider_is_stale(_request: ProviderUnitRequest) -> None:
+        provider.before_capacity = None
+        concurrent_results.append(compute.ensure_capacity(second).status)
+
+    provider.before_capacity = acquire_while_provider_is_stale
+
+    requested = compute.ensure_capacity(first)
+
+    assert requested.status is CapacityAcquisitionStatus.Requested
+    assert concurrent_results == [CapacityAcquisitionStatus.ExistingPending]
+    assert provider.capacity_calls == [(1, 1)]
+    with isolated_services.context.database.session() as session:
+        operations = ComputeCapacityOperationRepository(session).list_for_owner(
+            pool.capacity_owner_id
+        )
+    assert [operation.owns_capacity for operation in operations] == [True, False]
 
 
 def test_connection_drain_deletes_hidden_capacity_idempotently(
@@ -1021,7 +1074,6 @@ def test_connection_drain_deletes_hidden_capacity_idempotently(
         ),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -1069,7 +1121,6 @@ def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=0,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -1109,7 +1160,6 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     started_at = datetime.now(UTC)
@@ -1189,7 +1239,6 @@ def test_pooled_scale_down_projects_updating_during_provider_termination(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -1227,7 +1276,6 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         ),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -1368,7 +1416,6 @@ def test_internal_pool_bootstrap_phase_deadline_reclaims_only_after_it_elapses(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     started_at = datetime.now(UTC)
@@ -1420,7 +1467,6 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     moment = datetime.now(UTC)
@@ -1500,7 +1546,6 @@ def test_zero_capacity_policy_update_drives_internal_pool_desired_to_zero(
         instance_type="m7i.xlarge",
         initial_machines=1,
         min_machines=1,
-        max_machines=10,
         min_free_cpu_millicores=1_000,
         min_free_memory_mib=1_024,
         root_volume_gib=200,
@@ -1542,13 +1587,19 @@ def test_policy_owned_capacity_tracks_lowered_and_raised_bounds(
     )
 
     def reconcile(*, floor: int, ceiling: int) -> ComputeUnitRecord:
+        with isolated_services.context.database.session() as session:
+            workspace_id = isolated_services.context.default_workspace_id(session)
+        _set_cpu_limit(
+            isolated_services,
+            workspace_id=workspace_id,
+            limit=ceiling,
+        )
         return compute.reconcile_aws_default_capacity(
             workspace="default",
             region="us-east-1",
             instance_type="m7i.xlarge",
             initial_machines=floor,
             min_machines=floor,
-            max_machines=ceiling,
             min_free_cpu_millicores=1_000,
             min_free_memory_mib=1_024,
             root_volume_gib=200,
@@ -1561,7 +1612,6 @@ def test_policy_owned_capacity_tracks_lowered_and_raised_bounds(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=5,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     assert grown.desired_machines == 5
@@ -1592,7 +1642,6 @@ def test_lowered_policy_floor_does_not_terminate_a_machine_running_work(
         instance_type="m7i.xlarge",
         initial_machines=1,
         min_machines=1,
-        max_machines=10,
         min_free_cpu_millicores=1_000,
         min_free_memory_mib=1_024,
         root_volume_gib=200,
@@ -1836,7 +1885,6 @@ def test_degraded_pool_refuses_acquisition_and_placement_does_not_clear_it(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=0,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
@@ -1874,7 +1922,6 @@ def test_degraded_pool_refuses_acquisition_and_placement_does_not_clear_it(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     with isolated_services.context.database.session() as session:
@@ -1911,7 +1958,6 @@ def test_capacity_asked_for_again_revives_a_deleted_pool(
             instance_type="m7i.xlarge",
             initial_machines=1,
             min_machines=1,
-            max_machines=10,
             min_free_cpu_millicores=1_000,
             min_free_memory_mib=1_024,
             root_volume_gib=200,
@@ -1963,7 +2009,6 @@ def test_an_unbuilt_pool_is_not_deleted_by_the_account_it_has_not_been_built_in(
         instance_type="m7i.xlarge",
         initial_machines=1,
         min_machines=1,
-        max_machines=10,
         min_free_cpu_millicores=1_000,
         min_free_memory_mib=1_024,
         root_volume_gib=200,
@@ -2080,7 +2125,6 @@ def _serving_pool(
         requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
         desired_machines=1,
-        workspace_machine_limit=10,
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity(now=now)

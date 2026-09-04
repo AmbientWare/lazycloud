@@ -126,6 +126,14 @@ def test_initial_floor_and_free_headroom_request_only_one_unit_per_reconcile() -
         state=_state(),
         now=NOW,
     )
+    beyond_provider_max = plan_worker_pool_sizing(
+        _pool(initial_machines=0, min_machines=0, max_machines=2),
+        headroom=headroom,
+        registered_units=2,
+        authoritative_units=2,
+        state=_state(),
+        now=NOW,
+    )
 
     assert initial.action is WorkerPoolSizingAction.ScaleUp
     assert initial.target_units == 1
@@ -133,6 +141,8 @@ def test_initial_floor_and_free_headroom_request_only_one_unit_per_reconcile() -
     assert below_headroom.action is WorkerPoolSizingAction.ScaleUp
     assert below_headroom.target_units == 3
     assert below_headroom.reason == "effective free headroom is below the configured minimum"
+    assert beyond_provider_max.action is WorkerPoolSizingAction.ScaleUp
+    assert beyond_provider_max.target_units == 3
 
 
 def test_pending_target_and_derived_cooldown_prevent_duplicate_scale_up() -> None:

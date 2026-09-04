@@ -89,8 +89,8 @@ export const awsComputeConfigurationSchema = z
     default_instance_type: awsDefaultInstanceTypeSchema,
     initial_cpu_workers: z.number().int().min(0).max(100),
     min_cpu_workers: z.number().int().min(0).max(100),
-    max_cpu_instances: z.number().int().min(0).max(100),
-    max_gpu_instances: z.number().int().min(0).max(100),
+    max_cpu_instances: z.number().int().min(0).nullable(),
+    max_gpu_instances: z.number().int().min(0).nullable(),
     min_free_cpu_millicores: z.number().int().min(0),
     min_free_memory_mib: z.number().int().min(0),
     allowed_regions: z.array(z.string()).min(1),
@@ -107,7 +107,8 @@ export const awsComputeConfigurationSchema = z
   .superRefine((configuration, context) => {
     if (
       configuration.min_cpu_workers > configuration.initial_cpu_workers ||
-      configuration.initial_cpu_workers > configuration.max_cpu_instances
+      (configuration.max_cpu_instances !== null &&
+        configuration.initial_cpu_workers > configuration.max_cpu_instances)
     ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,

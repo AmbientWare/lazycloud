@@ -25,6 +25,8 @@ class AwsConnectionCreateRequest(HttpModel):
     account_id: str = Field(pattern=r"^[0-9]{12}$")
     role_arn: str | None = Field(default=None, pattern=_AWS_ROLE_ARN_PATTERN)
     network: AwsAccountNetwork | None = None
+    max_cpu_instances: int | None = Field(default=None, gt=0)
+    max_gpu_instances: int | None = Field(default=None, ge=0)
     # The external ID a role that already exists enforces.
     #
     # Only with a role, because the two modes differ in who the value belongs

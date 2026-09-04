@@ -25,7 +25,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from types import FrameType
 
-from scheduler.service import Scheduler, SchedulerRunResult
+from scheduler.service import (
+    DEFAULT_AUTOSCALING_RECONCILE_LIMIT,
+    Scheduler,
+    SchedulerRunResult,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -141,6 +145,7 @@ def start_scheduler_loops(
     include_cron_jobs: bool = True,
     include_containers: bool = True,
     container_limit: int = 100,
+    autoscaling_limit: int = DEFAULT_AUTOSCALING_RECONCILE_LIMIT,
     capacity_interval_seconds: float = CAPACITY_INTERVAL_SECONDS,
     housekeeping_interval_seconds: float = HOUSEKEEPING_INTERVAL_SECONDS,
     beats: dict[str, Callable[[], None]] | None = None,
@@ -181,6 +186,7 @@ def start_scheduler_loops(
         lambda: scheduler.run_placement_pass(
             include_containers=include_containers,
             container_limit=container_limit,
+            autoscaling_limit=autoscaling_limit,
         ),
     )
     spawn(

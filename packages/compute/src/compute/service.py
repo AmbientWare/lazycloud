@@ -25,6 +25,7 @@ from database.types import DatabaseSession
 from foundation.ids import optional_uuid
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue, TypeAdapter
+from shared.aws_connections import AwsAccountConnection
 from shared.capacity import (
     CapacityAcquisitionRequest,
     CapacityAcquisitionResult,
@@ -392,7 +393,7 @@ class ComputeService:
             return _plan_next_capacity_unit(
                 request,
                 current_units=snapshot.desired_machines,
-                max_units=unit.max_machines,
+                max_units=None,
             )
         return _capacity_result(
             request,
@@ -481,9 +482,10 @@ class ComputeService:
                 reason="requested unit does not match the capacity owner's fixed worker shape",
                 desired_unit=desired_unit,
             )
-        provider_request = self._provider_unit_request(current_pool, offer)
         try:
-            snapshot = provider.pooled.describe_unit(provider_request)
+            snapshot = provider.pooled.describe_unit(
+                self._provider_unit_request(current_pool, offer)
+            )
         except Exception as exc:
             return self._record_capacity_failure(
                 request,
@@ -496,6 +498,24 @@ class ComputeService:
             )
         with self.context.database.session() as session:
             pools = ComputeUnitRepository(session)
+            if current_pool.provider_connection_id is None:
+                return _capacity_result(
+                    request,
+                    CapacityAcquisitionStatus.TemporarilyUnavailable,
+                    reason="capacity owner connection is unavailable",
+                    desired_unit=desired_unit,
+                )
+            connection = AwsAccountConnectionRepository(session).get(
+                current_pool.provider_connection_id,
+                for_update=True,
+            )
+            if connection is None:
+                return _capacity_result(
+                    request,
+                    CapacityAcquisitionStatus.TemporarilyUnavailable,
+                    reason="capacity owner connection is unavailable",
+                    desired_unit=desired_unit,
+                )
             locked_pool = pools.get(current_pool.id, for_update=True)
             if locked_pool is None:
                 return _capacity_result(
@@ -504,6 +524,7 @@ class ComputeService:
                     reason="capacity owner disappeared during acquisition",
                     desired_unit=desired_unit,
                 )
+            intent_pool = locked_pool
             operations = ComputeCapacityOperationRepository(session)
             operation = operations.get(
                 request.capacity_owner_id,
@@ -524,8 +545,18 @@ class ComputeService:
                         _stored_capacity_status(operation.status),
                     )
             else:
-                current_units = snapshot.desired_machines
-                if desired_unit > locked_pool.max_machines:
+                current_units = max(snapshot.desired_machines, locked_pool.desired_machines)
+                machine_limit = _connection_machine_limit(
+                    connection,
+                    gpu=_pool_gpu_capacity(locked_pool),
+                )
+                other_desired = pools.desired_capacity_for_provider_connection(
+                    connection.id,
+                    gpu=_pool_gpu_capacity(locked_pool),
+                    excluding_unit_id=locked_pool.id,
+                )
+                available = None if machine_limit is None else max(machine_limit - other_desired, 0)
+                if available is not None and desired_unit > available:
                     operation = operations.upsert(
                         _new_capacity_operation(
                             locked_pool,
@@ -563,6 +594,27 @@ class ComputeService:
                         CapacityAcquisitionStatus.TemporarilyUnavailable,
                         reason=operation.last_error,
                     )
+                maximum = (
+                    max(locked_pool.max_machines, desired_unit, 1)
+                    if available is None
+                    else max(available, desired_unit, 1)
+                )
+                intent_pool = pools.update_capacity(
+                    locked_pool.id,
+                    expected_generation=locked_pool.generation,
+                    desired_machines=desired_unit,
+                    max_machines=maximum,
+                    observed_machines=locked_pool.observed_machines,
+                    phase=ComputeUnitPhase.Updating,
+                    provider_state=locked_pool.provider_state,
+                )
+                if intent_pool is None:
+                    return _capacity_result(
+                        request,
+                        CapacityAcquisitionStatus.TemporarilyUnavailable,
+                        reason="capacity owner intent was superseded",
+                        desired_unit=desired_unit,
+                    )
                 operation = operations.upsert(
                     _new_capacity_operation(
                         locked_pool,
@@ -573,6 +625,8 @@ class ComputeService:
                         owns_capacity=True,
                     )
                 )
+            current_pool = intent_pool if operation.owns_capacity else locked_pool
+        provider_request = self._provider_unit_request(current_pool, offer)
         if snapshot.desired_machines >= desired_unit:
             with self.context.database.session() as session:
                 repository = ComputeCapacityOperationRepository(session)
@@ -1269,7 +1323,6 @@ class ComputeService:
         requirements: ComputeResourceRequirements,
         region: str,
         desired_machines: int,
-        workspace_machine_limit: int,
         root_volume_gib: int,
         idle_timeout_seconds: int = 300,
         allowed_instance_types: tuple[str, ...] = (),
@@ -1279,7 +1332,6 @@ class ComputeService:
             requirements=requirements,
             region=region,
             desired_machines=desired_machines,
-            workspace_machine_limit=workspace_machine_limit,
             root_volume_gib=root_volume_gib,
             idle_timeout_seconds=idle_timeout_seconds,
             allowed_instance_types=allowed_instance_types,
@@ -1303,7 +1355,6 @@ class ComputeService:
         instance_type: str,
         initial_machines: int,
         min_machines: int,
-        max_machines: int,
         min_free_cpu_millicores: int,
         min_free_memory_mib: int,
         root_volume_gib: int,
@@ -1316,7 +1367,6 @@ class ComputeService:
             requirements=ComputeResourceRequirements(),
             region=region,
             desired_machines=initial_machines,
-            workspace_machine_limit=max_machines,
             root_volume_gib=root_volume_gib,
             idle_timeout_seconds=idle_timeout_seconds,
             allowed_instance_types=(instance_type,),
@@ -1427,7 +1477,6 @@ class ComputeService:
         requirements: ComputeResourceRequirements,
         region: str,
         desired_machines: int,
-        workspace_machine_limit: int,
         root_volume_gib: int,
         idle_timeout_seconds: int,
         allowed_instance_types: tuple[str, ...],
@@ -1498,7 +1547,10 @@ class ComputeService:
             # The connection owns the pool its units feed. Deriving it from the
             # unit's own name would put every AWS unit in a pool named after
             # itself, which no workload asks for.
-            connection = AwsAccountConnectionRepository(session).get(provider.connection_id)
+            connection = AwsAccountConnectionRepository(session).get(
+                provider.connection_id,
+                for_update=True,
+            )
             if connection is None:
                 raise ManagedComputeLaunchError(
                     "pooled compute provider connection is unavailable",
@@ -1515,13 +1567,16 @@ class ComputeService:
                 root_volume_gib=root_volume_gib,
                 for_update=True,
             )
-            other_desired = sum(
-                item.desired_machines
-                for item in repository.list_internal(workspace_id=workspace_id)
-                if current is None or item.id != current.id
-                if _pool_gpu_capacity(item) == (requirements.gpu_count > 0)
+            machine_limit = _connection_machine_limit(
+                connection,
+                gpu=requirements.gpu_count > 0,
             )
-            remaining = max(workspace_machine_limit - other_desired, 0)
+            other_desired = repository.desired_capacity_for_provider_connection(
+                connection.id,
+                gpu=requirements.gpu_count > 0,
+                excluding_unit_id=current.id if current is not None else None,
+            )
+            remaining = None if machine_limit is None else max(machine_limit - other_desired, 0)
             requested_machines = max(
                 desired_machines,
                 baseline.initial_machines if baseline is not None else 0,
@@ -1529,16 +1584,25 @@ class ComputeService:
             )
             if baseline is None:
                 # Demand-driven placement never shrinks a pool it did not size.
-                desired = min(
-                    max(requested_machines, current.desired_machines if current is not None else 0),
-                    remaining,
+                desired = max(
+                    requested_machines,
+                    current.desired_machines if current is not None else 0,
                 )
+                if remaining is not None:
+                    desired = min(desired, remaining)
             else:
                 desired = _policy_owned_desired_machines(
                     current_desired=current.desired_machines if current is not None else 0,
                     previous_floor=_previous_policy_floor(current),
                     floor=requested_machines,
-                    ceiling=remaining,
+                    ceiling=(
+                        remaining
+                        if remaining is not None
+                        else max(
+                            requested_machines,
+                            current.desired_machines if current is not None else 0,
+                        )
+                    ),
                 )
                 if current is not None and desired < current.desired_machines:
                     # Release only down to the machines still running work; the
@@ -1555,12 +1619,17 @@ class ComputeService:
                         ),
                     )
             if requested_machines > 0 and desired < requested_machines:
+                assert machine_limit is not None
                 raise CapacityLimitReachedError(
-                    f"workspace compute limit reached: {requested_machines} machines "
-                    f"requested, {desired} available within the workspace limit of "
-                    f"{workspace_machine_limit}"
+                    f"connected account compute limit reached: {requested_machines} machines "
+                    f"requested, {desired} available within the account limit of "
+                    f"{machine_limit}"
                 )
-            maximum = max(min(workspace_machine_limit, remaining), desired, 1)
+            maximum = (
+                max(current.max_machines if current is not None else 0, desired, 1)
+                if remaining is None
+                else max(remaining, desired, 1)
+            )
             minimum = (
                 baseline.min_machines
                 if baseline is not None
@@ -1638,7 +1707,6 @@ class ComputeService:
                 min_free_memory_mib=free_memory,
                 min_free_gpu_count=free_gpu,
                 idle_drain_timeout_seconds=idle_timeout_seconds,
-                workspace_machine_limit=workspace_machine_limit,
                 root_volume_gib=root_volume_gib,
                 observed_machines=current.observed_machines if current is not None else 0,
                 generation=current.generation if current is not None else 1,
@@ -1724,7 +1792,11 @@ class ComputeService:
 
         with self.context.database.session() as session:
             unit = ComputeUnitRepository(session).get_by_capacity_owner_id(capacity_owner_id)
-        return _require_internal_pooled_unit(unit, unit_ref=capacity_owner_id)
+        return _require_workspace_internal_pooled_unit(
+            unit,
+            workspace_id=workspace_id,
+            unit_ref=capacity_owner_id,
+        )
 
     def scale_internal_unit(
         self,
@@ -1780,8 +1852,22 @@ class ComputeService:
         verify_provider_zero = False
         with self.context.database.session() as session:
             units = ComputeUnitRepository(session)
-            unit = _require_internal_pooled_unit(
+            initial = _require_workspace_internal_pooled_unit(
+                units.get_by_capacity_owner_id(capacity_owner_id),
+                workspace_id=workspace_id,
+                unit_ref=capacity_owner_id,
+            )
+            if initial.provider_connection_id is None:
+                raise UpstreamUnavailableError("compute pool connection is unavailable")
+            connection = AwsAccountConnectionRepository(session).get(
+                initial.provider_connection_id,
+                for_update=True,
+            )
+            if connection is None:
+                raise UpstreamUnavailableError("compute pool connection is unavailable")
+            unit = _require_workspace_internal_pooled_unit(
                 units.get_by_capacity_owner_id(capacity_owner_id, for_update=True),
+                workspace_id=workspace_id,
                 unit_ref=capacity_owner_id,
             )
             before_mutation(unit)
@@ -1795,31 +1881,30 @@ class ComputeService:
                         )
                     }
                 )
-            stored_workspace_limit = unit.workspace_machine_limit or unit.max_machines
-            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
-                workspace_id
+            machine_limit = _connection_machine_limit(
+                connection,
+                gpu=_pool_gpu_capacity(unit),
             )
-            if connection is None:
-                workspace_limit = stored_workspace_limit
-            elif _pool_gpu_capacity(unit):
-                workspace_limit = connection.compute.max_gpu_instances
-            else:
-                workspace_limit = connection.compute.max_cpu_instances
-            other_desired = sum(
-                item.desired_machines
-                for item in units.list_internal(workspace_id=workspace_id)
-                if item.id != unit.id and _pool_gpu_capacity(item) == _pool_gpu_capacity(unit)
+            other_desired = units.desired_capacity_for_provider_connection(
+                connection.id,
+                gpu=_pool_gpu_capacity(unit),
+                excluding_unit_id=unit.id,
             )
-            available = max(workspace_limit - other_desired, 0)
+            available = None if machine_limit is None else max(machine_limit - other_desired, 0)
             if desired_machines < unit.min_machines:
                 raise InvalidInputError(
                     f"compute pool {unit!r} requires at least {unit.min_machines} machines"
                 )
-            if desired_machines > available:
+            if available is not None and desired_machines > available:
                 raise ConflictError(
-                    f"workspace pooled compute capacity limit is {available} machines"
+                    "connected account pooled compute capacity limit leaves "
+                    f"{available} machines available"
                 )
-            maximum = max(available, desired_machines, 1)
+            maximum = (
+                max(unit.max_machines, desired_machines, 1)
+                if available is None
+                else max(available, desired_machines, 1)
+            )
             if desired_machines == 0:
                 operations = ComputeCapacityOperationRepository(session)
                 for operation in operations.list_open_for_owner(unit.capacity_owner_id):
@@ -3017,9 +3102,9 @@ def _plan_next_capacity_unit(
     request: CapacityAcquisitionRequest,
     *,
     current_units: int,
-    max_units: int,
+    max_units: int | None,
 ) -> CapacityAcquisitionResult:
-    if current_units >= max_units:
+    if max_units is not None and current_units >= max_units:
         return _capacity_result(
             request,
             CapacityAcquisitionStatus.AtLimit,
@@ -3120,3 +3205,23 @@ def _owns_provider_pool_capacity(pool: ComputeUnitRecord) -> bool:
 
 def _pool_gpu_capacity(pool: ComputeUnitRecord) -> bool:
     return pool.worker_gpu_count > 0
+
+
+def _require_workspace_internal_pooled_unit(
+    unit: ComputeUnitRecord | None,
+    *,
+    workspace_id: str,
+    unit_ref: str,
+) -> ComputeUnitRecord:
+    pooled = _require_internal_pooled_unit(unit, unit_ref=unit_ref)
+    if pooled.workspace_id != workspace_id:
+        raise NotFoundError(f"compute unit not found: {unit_ref}")
+    return pooled
+
+
+def _connection_machine_limit(
+    connection: AwsAccountConnection,
+    *,
+    gpu: bool,
+) -> int | None:
+    return connection.compute.max_gpu_instances if gpu else connection.compute.max_cpu_instances

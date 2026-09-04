@@ -85,6 +85,7 @@ mid-sweep does not leave unfunded compute running for a minute."""
 SCHEDULER_FAILURE_RETRY_MAX_SECONDS = 30.0
 AUTOSCALING_TARGET_CLAIM_LEASE_SECONDS = 30.0
 AUTOSCALING_TARGET_RECONCILE_INTERVAL_SECONDS = 1.0
+DEFAULT_AUTOSCALING_RECONCILE_LIMIT = 500
 CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS = 1.0
 MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS = 60.0
 ORPHANED_CONTAINER_RECONCILE_INTERVAL_SECONDS = 30.0
@@ -715,6 +716,7 @@ class Scheduler:
         now: datetime | None = None,
         include_containers: bool = True,
         container_limit: int = 100,
+        autoscaling_limit: int = DEFAULT_AUTOSCALING_RECONCILE_LIMIT,
     ) -> SchedulerRunResult:
         """Decide what needs to run, and nothing else.
 
@@ -748,7 +750,7 @@ class Scheduler:
             raise RuntimeError("scheduler autoscaling target service was not injected")
         claims = targets.claim_due(
             now=current_time,
-            limit=container_limit,
+            limit=autoscaling_limit,
             lease_seconds=AUTOSCALING_TARGET_CLAIM_LEASE_SECONDS,
         )
         stubs: tuple[AutoscalingStub, ...] = ()
@@ -791,7 +793,7 @@ class Scheduler:
                     results_by_driver[id(driver)] = driver.reconcile_snapshot(
                         snapshot,
                         now=current_time,
-                        limit=container_limit,
+                        limit=autoscaling_limit,
                     )
                 except Exception:
                     failed_stub_ids.update(selected_ids)
@@ -946,6 +948,7 @@ class Scheduler:
         include_containers: bool = True,
         include_container_dispatch: bool = True,
         container_limit: int = 100,
+        autoscaling_limit: int = DEFAULT_AUTOSCALING_RECONCILE_LIMIT,
     ) -> SchedulerRunResult:
         """Every pass once, in one call, for a caller that wants a whole sweep.
 
@@ -966,6 +969,7 @@ class Scheduler:
                 now=now,
                 include_containers=include_containers,
                 container_limit=container_limit,
+                autoscaling_limit=autoscaling_limit,
             ),
             SchedulerRunResult(
                 container_dispatches=(

@@ -22,8 +22,8 @@ export type AwsComputeDraft = {
   defaultInstanceType: string;
   initialCpuWorkers: number;
   minCpuWorkers: number;
-  maxCpuInstances: number;
-  maxGpuInstances: number;
+  maxCpuInstances: number | null;
+  maxGpuInstances: number | null;
   minFreeCpuMillicores: number;
   minFreeMemoryMib: number;
   allowedRegions: string[];
@@ -39,8 +39,8 @@ export type AwsComputeDraftUpdate =
   | { field: "defaultInstanceType"; value: string }
   | { field: "initialCpuWorkers"; value: number }
   | { field: "minCpuWorkers"; value: number }
-  | { field: "maxCpuInstances"; value: number }
-  | { field: "maxGpuInstances"; value: number }
+  | { field: "maxCpuInstances"; value: number | null }
+  | { field: "maxGpuInstances"; value: number | null }
   | { field: "minFreeCpuMillicores"; value: number }
   | { field: "minFreeMemoryMib"; value: number }
   | { field: "allowedRegions"; value: string[] }

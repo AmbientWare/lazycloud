@@ -121,7 +121,7 @@ output "fleet_connection" {
   description = <<-EOT
     Registering the platform's own account as capacity, whole.
 
-    One output rather than a network and a role beside it, because the five
+    One output rather than a network, role, and limits beside it, because these
     values are the arguments of a single call and a deploy makes it on every
     release. Split across outputs they were something a person read out of a
     runbook and retyped.
@@ -136,6 +136,8 @@ output "fleet_connection" {
     vpc_id            = aws_vpc.fleet.id
     subnet_ids        = aws_subnet.fleet[*].id
     security_group_id = aws_security_group.fleet_node.id
+    max_cpu_instances = var.fleet_max_cpu_instances
+    max_gpu_instances = var.fleet_max_gpu_instances
   }
 }
 

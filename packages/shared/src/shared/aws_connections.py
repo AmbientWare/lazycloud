@@ -99,8 +99,8 @@ class AwsAccountComputeConfiguration(ContractModel):
     default_instance_type: str = Field(default="m7i.large", min_length=1, max_length=64)
     initial_cpu_workers: int = Field(default=1, ge=0, le=100)
     min_cpu_workers: int = Field(default=1, ge=0, le=100)
-    max_cpu_instances: int = Field(default=10, ge=0, le=100)
-    max_gpu_instances: int = Field(default=2, ge=0, le=100)
+    max_cpu_instances: int | None = Field(default=None, ge=0)
+    max_gpu_instances: int | None = Field(default=None, ge=0)
     min_free_cpu_millicores: int = Field(default=1_000, ge=0)
     min_free_memory_mib: int = Field(default=CONTAINER_MEMORY_BURST_FLOOR_MIB, ge=0)
     """Free memory below which the pool adds a machine.
@@ -127,7 +127,9 @@ class AwsAccountComputeConfiguration(ContractModel):
             raise ValueError("AWS compute configuration contains an invalid region")
         if self.default_region not in self.allowed_regions:
             raise ValueError("AWS default region must be allowed")
-        if not self.min_cpu_workers <= self.initial_cpu_workers <= self.max_cpu_instances:
+        if self.min_cpu_workers > self.initial_cpu_workers or (
+            self.max_cpu_instances is not None and self.initial_cpu_workers > self.max_cpu_instances
+        ):
             raise ValueError("AWS CPU worker capacity must satisfy min <= initial <= max")
         if not self.default_instance_type.strip():
             raise ValueError("AWS default instance type cannot be empty")

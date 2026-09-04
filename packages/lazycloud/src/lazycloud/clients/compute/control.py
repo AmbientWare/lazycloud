@@ -81,6 +81,8 @@ class ComputeClient:
         role_arn: str | None = None,
         network: AwsAccountNetwork | None = None,
         external_id: str | None = None,
+        max_cpu_instances: int | None = None,
+        max_gpu_instances: int | None = None,
         platform_fleet: bool = False,
     ) -> AwsConnectionAuthorizationResponse:
         request = AwsConnectionCreateRequest(
@@ -88,6 +90,8 @@ class ComputeClient:
             role_arn=role_arn,
             network=network,
             external_id=external_id,
+            max_cpu_instances=max_cpu_instances,
+            max_gpu_instances=max_gpu_instances,
         )
         # A different route rather than a field: the platform's own account is an
         # administrator's declaration, and the customer route cannot make it.

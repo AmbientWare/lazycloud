@@ -585,7 +585,6 @@ class _RecordingPooledCapacity:
         requirements: ComputeResourceRequirements,
         region: str,
         desired_machines: int,
-        workspace_machine_limit: int,
         root_volume_gib: int,
         idle_timeout_seconds: int = 300,
         allowed_instance_types: tuple[str, ...] = (),
@@ -608,7 +607,7 @@ class _RecordingPooledCapacity:
             offer_id="us-east-1:m7i.xlarge",
             capability_key="aws:us-east-1:m7i.xlarge:amd64:runsc",
             desired_machines=desired_machines,
-            max_machines=workspace_machine_limit,
+            max_machines=max(desired_machines, 1),
         )
 
 

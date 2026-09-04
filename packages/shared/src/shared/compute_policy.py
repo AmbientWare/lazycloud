@@ -180,7 +180,6 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     scale_up_cooldown_seconds: int = Field(default=5, ge=0, le=86_400)
     scale_down_cooldown_seconds: int = Field(default=60, ge=0, le=86_400)
     registration_timeout_seconds: int = Field(default=600, ge=30, le=3_600)
-    workspace_machine_limit: int = Field(default=0, ge=0)
     root_volume_gib: int = Field(default=200, ge=50, le=2048)
     transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     fallback: PrivateUnitFallback = PrivateUnitFallback.Internal

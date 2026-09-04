@@ -18,7 +18,15 @@ export type AwsConnectionDialogAction = "create" | AwsConnectionDialogRecoveryAc
 
 type AuthorizationCommand = {
   authorizationPopup: AwsAuthorizationPopup;
-} & ({ action: "create"; accountId: string } | { action: "reconnect" });
+} & (
+  | {
+      action: "create";
+      accountId: string;
+      maxCpuInstances: number | null;
+      maxGpuInstances: number | null;
+    }
+  | { action: "reconnect" }
+);
 
 type AwsConnectionCommand =
   AuthorizationCommand | { action: "validate" | "cancel_reconnect" | "retry" | "remove" };
@@ -42,7 +50,11 @@ export type AwsConnectionController = {
   removalError: Error | null;
   removeOpen: boolean;
   setRemoveOpen: (open: boolean) => void;
-  create: (accountId: string) => void;
+  create: (
+    accountId: string,
+    maxCpuInstances: number | null,
+    maxGpuInstances: number | null,
+  ) => void;
   validate: () => void;
   reconnect: () => void;
   cancelReconnect: () => void;
@@ -67,7 +79,11 @@ export function useAwsConnectionController({
     mutationFn: async (command: AwsConnectionCommand): Promise<AwsConnectionMutationOutcome> => {
       switch (command.action) {
         case "create": {
-          const result = await createAwsConnection({ accountId: command.accountId });
+          const result = await createAwsConnection({
+            accountId: command.accountId,
+            maxCpuInstances: command.maxCpuInstances,
+            maxGpuInstances: command.maxGpuInstances,
+          });
           return {
             action: command.action,
             connection: result.connection,
@@ -130,11 +146,17 @@ export function useAwsConnectionController({
     mutation.mutate(command);
   };
 
-  const runCreate = (accountId: string) => {
+  const runCreate = (
+    accountId: string,
+    maxCpuInstances: number | null,
+    maxGpuInstances: number | null,
+  ) => {
     if (activeActionRef.current !== null) return;
     run({
       action: "create",
       accountId,
+      maxCpuInstances,
+      maxGpuInstances,
       authorizationPopup: openAuthorizationPopup(),
     });
   };
@@ -157,7 +179,8 @@ export function useAwsConnectionController({
     removalError: lastAction === "remove" ? mutation.error : null,
     removeOpen,
     setRemoveOpen,
-    create: (accountId) => runCreate(accountId.trim()),
+    create: (accountId, maxCpuInstances, maxGpuInstances) =>
+      runCreate(accountId.trim(), maxCpuInstances, maxGpuInstances),
     validate: () => run({ action: "validate" }),
     reconnect: runReconnect,
     cancelReconnect: () => run({ action: "cancel_reconnect" }),

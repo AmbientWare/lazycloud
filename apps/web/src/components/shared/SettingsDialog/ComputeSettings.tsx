@@ -396,20 +396,18 @@ function AwsComputeForm({ regions }: { regions: string[] }) {
             </SelectContent>
           </Select>
         </Field>
-        <NumberField
+        <OptionalNumberField
           id="compute-max-cpu"
           label="CPU limit"
           value={draft.maxCpuInstances}
           min={draft.initialCpuWorkers}
-          max={100}
           onChange={(value) => controller.updateField({ field: "maxCpuInstances", value })}
         />
-        <NumberField
+        <OptionalNumberField
           id="compute-max-gpu"
           label="GPU limit"
           value={draft.maxGpuInstances}
           min={0}
-          max={100}
           onChange={(value) => controller.updateField({ field: "maxGpuInstances", value })}
         />
       </div>
@@ -449,7 +447,7 @@ function AwsComputeForm({ regions }: { regions: string[] }) {
             label="Initial CPU workers"
             value={draft.initialCpuWorkers}
             min={draft.minCpuWorkers}
-            max={draft.maxCpuInstances}
+            max={draft.maxCpuInstances ?? undefined}
             onChange={(value) => controller.updateField({ field: "initialCpuWorkers", value })}
           />
           <NumberField
@@ -779,6 +777,36 @@ function NumberField({
           </span>
         ) : null}
       </div>
+    </Field>
+  );
+}
+
+function OptionalNumberField({
+  id,
+  label,
+  value,
+  min,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: number | null;
+  min: number;
+  onChange: (value: number | null) => void;
+}) {
+  return (
+    <Field label={label} htmlFor={id}>
+      <Input
+        id={id}
+        type="number"
+        min={min}
+        value={value ?? ""}
+        placeholder="Unlimited"
+        onChange={(event) =>
+          onChange(event.target.value === "" ? null : Math.max(Number(event.target.value), min))
+        }
+        className="font-mono"
+      />
     </Field>
   );
 }
