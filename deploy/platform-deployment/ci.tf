@@ -41,6 +41,23 @@ data "aws_iam_policy_document" "deploy" {
   }
 
   statement {
+    sid       = "AuthenticateToReleaseRegistry"
+    actions   = ["ecr-public:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "ReleaseRegistryBearerToken"
+    actions   = ["sts:GetServiceBearerToken"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "sts:AWSServiceName"
+      values   = ["ecr-public.amazonaws.com"]
+    }
+  }
+
+  statement {
     sid = "PushDeploymentImages"
     actions = [
       "ecr:BatchCheckLayerAvailability",
@@ -56,20 +73,9 @@ data "aws_iam_policy_document" "deploy" {
   }
 
   statement {
-    sid       = "WriteTheBundle"
-    actions   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
-    resources = [aws_s3_bucket.deploy.arn, "${aws_s3_bucket.deploy.arn}/*"]
-  }
-
-  # `terraform output` reads state, this module's and the core's it refers to.
-  # The workflow never applies, so this is read and the lock, not write.
-  statement {
-    sid     = "ReadDeploymentState"
-    actions = ["s3:GetObject", "s3:ListBucket"]
-    resources = [
-      "${local.arn_prefix}:s3:::${var.state_bucket}",
-      "${local.arn_prefix}:s3:::${var.state_bucket}/*",
-    ]
+    sid       = "ReadInfrastructureDescriptor"
+    actions   = ["s3:GetObject"]
+    resources = [aws_s3_object.infrastructure.arn]
   }
 }
 

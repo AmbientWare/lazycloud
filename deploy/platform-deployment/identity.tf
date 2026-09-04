@@ -11,7 +11,7 @@
 # The one exception is `secrets_reader.tf`, which explains itself.
 
 resource "aws_eks_pod_identity_association" "control_plane" {
-  for_each = toset(var.control_plane_service_accounts)
+  for_each = toset(values(var.control_plane_service_accounts))
 
   cluster_name    = local.cluster_name
   namespace       = var.deployment

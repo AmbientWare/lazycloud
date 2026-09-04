@@ -12,6 +12,7 @@ from shared.http.aws_connections import (
     AwsConnectionCurrentResponse,
     AwsConnectionReconnectRequest,
     AwsConnectionResponse,
+    AwsFleetEnsureRequest,
 )
 from shared.http.compute import (
     MachineJoinCommandRequest,
@@ -83,7 +84,6 @@ class ComputeClient:
         external_id: str | None = None,
         max_cpu_instances: int | None = None,
         max_gpu_instances: int | None = None,
-        platform_fleet: bool = False,
     ) -> AwsConnectionAuthorizationResponse:
         request = AwsConnectionCreateRequest(
             account_id=account_id,
@@ -93,16 +93,15 @@ class ComputeClient:
             max_cpu_instances=max_cpu_instances,
             max_gpu_instances=max_gpu_instances,
         )
-        # A different route rather than a field: the platform's own account is an
-        # administrator's declaration, and the customer route cannot make it.
-        path = self._aws_path("/fleet" if platform_fleet else "")
         return AwsConnectionAuthorizationResponse.model_validate(
-            self.channel.post(path, request.model_dump(mode="json"))
+            self.channel.post(self._aws_path(""), request.model_dump(mode="json"))
         )
 
-    def adopt_fleet_account(self) -> AwsConnectionResponse:
+    def ensure_fleet_account(self, request: AwsFleetEnsureRequest) -> AwsConnectionResponse:
         return AwsConnectionResponse.model_validate(
-            self.channel.post(self._aws_path("/fleet/adopt"))
+            self.channel.request(
+                "PUT", self._aws_path("/fleet"), payload=request.model_dump(mode="json")
+            )
         )
 
     def validate_connection(self) -> AwsConnectionResponse:

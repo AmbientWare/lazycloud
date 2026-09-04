@@ -10,9 +10,10 @@ owns is in `deploy/platform-deployment`, applied once per deployment.
   Redis, buckets, secret documents, roles and namespace; it does not need a
   second cluster, a second registry or a second Argo. Anything two deployments
   would each have to own is in the other module.
-- This is greenfield and stays greenfield. An apply produces the cluster; it
-  does not adopt one. Do not add import blocks or reconciliation against
-  hand-built resources.
+- Production is persistent. Do not replace identities, networks or data to repair
+  drift. Review the plan against the live installation first.
+- The root Application preserves only the child's automated.enabled field so an
+  operator pause survives reconciliation. Other child settings remain Git-owned.
 - Argo's root Application reads `main`, not a deployment branch. What it finds
   in `deploy/argocd/apps` is the list of things this cluster runs: the
   operators every deployment shares and one Application per deployment, each

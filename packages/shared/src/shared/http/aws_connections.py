@@ -52,6 +52,23 @@ class AwsConnectionCreateRequest(HttpModel):
         return self
 
 
+class AwsFleetEnsureRequest(HttpModel):
+    account_id: str = Field(pattern=r"^[0-9]{12}$")
+    role_arn: str = Field(pattern=_AWS_ROLE_ARN_PATTERN)
+    network: AwsAccountNetwork
+    external_id: str = Field(
+        min_length=32, max_length=256, pattern=r"^[A-Za-z0-9+=,.@:_/-]+$", repr=False
+    )
+    max_cpu_instances: int = Field(gt=0)
+    max_gpu_instances: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_role_account(self) -> AwsFleetEnsureRequest:
+        if self.role_arn.split(":", maxsplit=5)[4] != self.account_id:
+            raise ValueError("AWS role ARN must belong to account_id")
+        return self
+
+
 class AwsConnectionReconnectRequest(HttpModel):
     role_arn: str | None = Field(default=None, pattern=_AWS_ROLE_ARN_PATTERN)
 
@@ -131,5 +148,6 @@ __all__ = [
     "AwsConnectionCustomerAction",
     "AwsConnectionReconnectRequest",
     "AwsConnectionResponse",
+    "AwsFleetEnsureRequest",
     "AwsManagedAuthorizationResponse",
 ]

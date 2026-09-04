@@ -32,7 +32,11 @@ from shared.aws_connections import (
 from shared.capacity import MachinePool
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, ComputeUnitPhase
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
-from shared.http.aws_connections import AwsConnectionCreateRequest, AwsConnectionReconnectRequest
+from shared.http.aws_connections import (
+    AwsConnectionCreateRequest,
+    AwsConnectionReconnectRequest,
+    AwsFleetEnsureRequest,
+)
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.timestamps import utc_now
 
@@ -177,7 +181,7 @@ class AwsAccountConnectionService:
 
     def connect(
         self,
-        request: AwsConnectionCreateRequest,
+        request: AwsConnectionCreateRequest | AwsFleetEnsureRequest,
         *,
         user_id: str,
         platform_fleet: bool = False,
@@ -266,37 +270,75 @@ class AwsAccountConnectionService:
             raise NotFoundError("AWS account connection not found")
         return connection
 
-    def adopt_as_fleet(self, *, user_id: str) -> AwsAccountConnection:
-        """Restate that this connection is the platform's own, without reconnecting.
-
-        Idempotent, and deliberately not a reconnect: minting a new authorization
-        generation would churn the credential every pool depends on, and what has
-        to change here is two facts the deployment already knows. A connection
-        made before the platform could say which it was still describes itself as
-        a customer's, and nothing else would ever correct it.
-        """
-        now = utc_now()
+    def ensure_fleet(self, request: AwsFleetEnsureRequest, *, user_id: str) -> AwsAccountConnection:
+        """Reconcile fleet policy only after its durable infrastructure matches."""
+        if self.current(user_id=user_id) is None:
+            try:
+                self.connect(request, user_id=user_id, platform_fleet=True)
+            except ConflictError:
+                # Another ensure may have created the row. Validate it under lock below.
+                if self.current(user_id=user_id) is None:
+                    raise
         with self.context.database.session() as session:
             repository = AwsAccountConnectionRepository(session)
             current = repository.get_for_user(user_id, for_update=True)
             if current is None:
-                raise NotFoundError("AWS account connection not found")
-            fleet_pool = MachinePool(LAZYCLOUD_MACHINE_POOL)
-            if current.platform_fleet and current.pool == fleet_pool:
+                raise ConflictError("Fleet connection was removed during ensure")
+            authorizations = [
+                authorization
+                for authorization in (current.active_authorization, current.pending_authorization)
+                if authorization is not None
+            ]
+            network = current.network
+            if (
+                not current.platform_fleet
+                or current.account_id != request.account_id
+                or current.pool != MachinePool(LAZYCLOUD_MACHINE_POOL)
+                or not secrets.compare_digest(current.external_id, request.external_id)
+                or not authorizations
+                or any(
+                    authorization.role_arn != request.role_arn for authorization in authorizations
+                )
+                or network is None
+                or network.vpc_id != request.network.vpc_id
+                or set(network.subnet_ids) != set(request.network.subnet_ids)
+                or network.security_group_id != request.network.security_group_id
+            ):
+                raise ConflictError(
+                    "Fleet infrastructure does not match the existing connection. "
+                    "Reconcile account, role, external ID and network before deploying."
+                )
+            if current.phase not in {
+                AwsAccountConnectionPhase.Ready,
+                AwsAccountConnectionPhase.AwaitingAuthorization,
+                AwsAccountConnectionPhase.Validating,
+                AwsAccountConnectionPhase.Degraded,
+            }:
+                raise ConflictError("Fleet authorization transition must finish before deploying")
+            if (
+                current.compute.max_cpu_instances == request.max_cpu_instances
+                and current.compute.max_gpu_instances == request.max_gpu_instances
+            ):
                 return current
+            if request.max_cpu_instances < current.compute.initial_cpu_workers:
+                raise InvalidInputError("Fleet CPU ceiling is below the configured initial workers")
+            configuration = current.compute.model_copy(
+                update={
+                    "max_cpu_instances": request.max_cpu_instances,
+                    "max_gpu_instances": request.max_gpu_instances,
+                    "revision": current.compute.revision + 1,
+                }
+            )
+            validate_aws_compute_configuration(configuration, catalog=self.available_catalog)
             updated = current.model_copy(
                 update={
-                    "platform_fleet": True,
-                    # Not an override point on this connection the way it is on a
-                    # customer's. The fleet is the capacity a request that names
-                    # no pool is answered from, so its pool is the one constant
-                    # both ends of that match already default to.
-                    "pool": fleet_pool,
+                    "compute": configuration,
                     "revision": current.revision + 1,
-                    "updated_at": now,
+                    "updated_at": utc_now(),
                 }
             )
             repository.save(updated)
+        self._apply_capacity_baseline(updated)
         self._publish(updated, WorkspaceChangeType.Updated)
         return updated
 
@@ -1532,7 +1574,7 @@ class AwsAccountConnectionService:
     @staticmethod
     def _matches_existing_draft(
         existing: AwsAccountConnection,
-        request: AwsConnectionCreateRequest,
+        request: AwsConnectionCreateRequest | AwsFleetEnsureRequest,
     ) -> bool:
         pending = existing.pending_authorization
         mode = (

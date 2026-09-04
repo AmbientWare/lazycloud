@@ -32,10 +32,12 @@ spec:
       app: cache-server
   template:
     metadata:
+      annotations:
+        lazycloud.dev/secret-revision: {{ .Values.secretRevisions.cacheServer | quote }}
       labels:
         app: cache-server
     spec:
-      serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
+      automountServiceAccountToken: false
       volumes:
         - name: cache
           persistentVolumeClaim:
@@ -44,7 +46,7 @@ spec:
         - name: cache-server
           image: {{ include "lazycloud.image" (list . "cache-server") }}
           env:
-            {{- include "lazycloud.env" . | nindent 12 }}
+            {{- include "lazycloud.env" (list . "cacheServer") | nindent 12 }}
           volumeMounts:
             - name: cache
               mountPath: /var/lib/lazycloud/cache

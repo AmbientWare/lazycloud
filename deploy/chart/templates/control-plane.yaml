@@ -15,6 +15,9 @@ spec:
       app: control-plane
   template:
     metadata:
+      annotations:
+        checksum/aws-chain: {{ include (print $.Template.BasePath "/aws-chain.yaml") . | sha256sum }}
+        lazycloud.dev/secret-revision: {{ .Values.secretRevisions.controlPlane | quote }}
       labels:
         app: control-plane
     spec:
@@ -61,7 +64,7 @@ spec:
             - --into
             - /var/lib/lazycloud/agent-binarys
           env:
-            {{- include "lazycloud.env" . | nindent 12 }}
+            {{- include "lazycloud.env" (list . "agentArtifact") | nindent 12 }}
           volumeMounts:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
@@ -99,7 +102,7 @@ spec:
             - name: http
               containerPort: 9000
           env:
-            {{- include "lazycloud.env" . | nindent 12 }}
+            {{- include "lazycloud.env" (list . "controlPlane") | nindent 12 }}
             {{- include "lazycloud.databaseEnv" .Values.controlPlane.database | nindent 12 }}
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys

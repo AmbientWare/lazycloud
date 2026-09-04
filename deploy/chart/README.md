@@ -3,13 +3,16 @@
 The control plane, the scheduler, the cache, the tunnel, and the bootstrap that
 has to run before any of them.
 
-Values come from the deployment module rather than being authored here:
-`image` from what the deploy pushed, `runtime` from `runtime_configuration`,
-`secrets.map` from `secret_environment`, and `secrets.readerRoleArn` from
-`secrets_reader_role_arn`. Deploy renders them into
-`values-deployment.yaml` on the deployment's branch, and the deployment's Argo
-Application reads that file beside `values.yaml`. Nothing in this chart decides
-a value the infrastructure already knows.
+Helm owns application defaults in `values.yaml` and environment policy in
+`environments/<environment>.yaml`. Terraform owns resource identities and publishes
+`configuration/infrastructure-v1.json` to the deployment bucket. It contains no
+credentials. Deploy snapshots that document with the environment values into
+`values-deployment.yaml`, then Helm merges it over this chart's defaults.
+
+The snapshot records images and the selected immutable release in the same Git
+commit. CI validates it before building or pushing the deployment branch. A
+code-only deploy needs no Terraform apply. Adding an application setting or a
+secret property binding needs no Terraform apply either.
 
 One chart, one namespace per deployment. The chart never names a namespace;
 Argo's Application does. It declares nothing cluster-scoped: the storage class
@@ -29,17 +32,19 @@ created against it, and the administrator must exist before anything
 authenticates. The rate card is published into that schema last, so the
 deployment can price usage from the moment it serves any.
 
-Each Job that opens a database is alone in its wave. The chart refuses to render
-when the pools it declares can exceed the server's connection ceiling, and the
-sum it checks counts one Job's pool rather than every Job's.
+Each database Job is alone in its wave. The chart budgets both API engines,
+scheduler and gateway pools, one bootstrap Job, and bounded workload rollout
+overlap against Terraform's server ceiling. Scheduler readiness covers every loop.
+The gateway standby remains Kubernetes-ready; the active-only TCP listener is
+for the load balancer, not pod readiness.
 
 The administrator credential is the one with a trap in it. `auth bootstrap`
 adopts a configured credential when it finds one and mints its own when it does
 not, recording a different bootstrap request id for each. Install without
 `administrator-token` written to Secrets Manager and the credential exists only
 inside that Job's pod, every later step has no bearer token, and supplying the
-value afterwards is refused as an already completed bootstrap. The way back is
-resetting the schema.
+value afterwards is refused as an already completed bootstrap. Do not reset a persistent installation to recover a credential. Resolve the
+bootstrap identity through the account owner.
 
 Write it before the first install.
 
@@ -62,6 +67,17 @@ them as read-only files. Agent private keys remain on their machines; Postgres
 stores public peer records, and Redis stores only the active-gateway lease.
 
 ## Secrets
+
+The chart maps named properties to the platform or operator secret document.
+Each container has an explicit list in `environment`; artifact downloads receive
+no secrets, and the cache receives only its own token. The cache also has no AWS
+Pod Identity association.
+
+A refreshed Kubernetes Secret does not update environment variables or subPath
+mounts. Refresh the ExternalSecret first, verify its status without printing secret
+values, then bump the affected `secretRevisions` entries. Jobs receive current
+values on their next run. See [configuration transition](../CONFIGURATION.md).
+
 
 The `SecretStore` presents the `secrets-reader` service account rather than the
 operator's own identity. The External Secrets operator is installed once for

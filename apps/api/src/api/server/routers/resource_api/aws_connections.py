@@ -21,6 +21,7 @@ from shared.http.aws_connections import (
     AwsConnectionCustomerAction,
     AwsConnectionReconnectRequest,
     AwsConnectionResponse,
+    AwsFleetEnsureRequest,
     AwsManagedAuthorizationResponse,
 )
 
@@ -164,46 +165,18 @@ def connect_aws_account(
     return _authorization_response(service.connect(request, user_id=user_id))
 
 
-@router.post(
+@router.put(
     "/fleet",
-    response_model=AwsConnectionAuthorizationResponse,
-    status_code=status.HTTP_201_CREATED,
-    operation_id="connect_aws_fleet_account",
-)
-def connect_aws_fleet_account(
-    request: AwsConnectionCreateRequest,
-    _auth: admin_access,
-    user_id: write_user,
-    service: AwsAccountConnectionService = Depends(aws_account_connection_service),
-) -> AwsConnectionAuthorizationResponse:
-    """Connect the platform's own account as shared capacity.
-
-    Separate from the customer route rather than a field on it. Declaring an
-    account to be the fleet makes its machines serve every customer and bill to
-    the platform, so it is an administrator's act and cannot be reached by a
-    credential that only speaks for one account.
-    """
-    return _authorization_response(service.connect(request, user_id=user_id, platform_fleet=True))
-
-
-@router.post(
-    "/fleet/adopt",
     response_model=AwsConnectionResponse,
-    operation_id="adopt_aws_fleet_account",
+    operation_id="ensure_aws_fleet_account",
 )
-def adopt_aws_fleet_account(
+def ensure_aws_fleet_account(
+    request: AwsFleetEnsureRequest,
     _auth: admin_access,
     user_id: write_user,
     service: AwsAccountConnectionService = Depends(aws_account_connection_service),
 ) -> AwsConnectionResponse:
-    """Restate that an existing connection is the platform's own.
-
-    A connection made before the platform could say which account was its own
-    still describes itself as a customer's, and nothing else corrects it.
-    Reconnecting would, but at the cost of a new authorization generation every
-    pool depends on.
-    """
-    return _response(service.adopt_as_fleet(user_id=user_id))
+    return _response(service.ensure_fleet(request, user_id=user_id))
 
 
 @router.put(

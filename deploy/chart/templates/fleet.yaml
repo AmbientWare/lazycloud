@@ -17,12 +17,8 @@ them. It registers through the public API rather than against the database, so
 the control plane has to be serving before it can say anything. The others reach
 their own stores directly and go first.
 
-Idempotent. A connection already present keeps its authorization and is restated
-as the fleet's, rather than replaced: reconnecting mints a new authorization
-generation, and doing that on every deploy would churn the credential every pool
-depends on. What the restatement corrects is which account this is and which pool
-its capacity feeds, both of which the deployment knows and neither of which the
-authorization has anything to do with.
+Ensuring compares account, role, external ID and network before applying limits.
+A mismatch fails the sync without adopting or replacing a connection.
 */}}
 {{- if .Values.fleet }}
 apiVersion: batch/v1
@@ -80,10 +76,10 @@ spec:
                 {{- end }}
                 --security-group-id {{ required "fleet.security_group_id is required" .Values.fleet.security_group_id | quote }} \
                 --max-cpu {{ required "fleet.max_cpu_instances is required" .Values.fleet.max_cpu_instances }} \
-                --max-gpu {{ required "fleet.max_gpu_instances is required" .Values.fleet.max_gpu_instances }}
+                --max-gpu {{ .Values.fleet.max_gpu_instances }}
               lazycloud-admin --json cloud validate
           env:
-            {{- include "lazycloud.env" . | nindent 12 }}
+            {{- include "lazycloud.env" (list . "fleetEnsure") | nindent 12 }}
             # The cluster-local Service rather than the public origin. This call
             # never leaves the cluster, so routing it out through the tunnel and
             # back would make the fleet depend on DNS and an edge that have

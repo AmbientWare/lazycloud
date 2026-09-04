@@ -1,22 +1,26 @@
-{{/*
-The env block every workload shares.
-
-Derived from the secret map, because a list of names beside a map of the same
-names is two statements of which variables exist and they drift apart silently.
-The Secret holds what the map names; a pod asking for a key the Secret lacks
-does not start, and nothing reports which of the two was wrong.
-*/}}
 {{- define "lazycloud.env" -}}
-{{- range $variable, $secret := $.Values.secrets.map }}
+{{- $root := index . 0 -}}
+{{- $consumer := index . 1 -}}
+{{- $binding := index $root.Values.environment $consumer -}}
+{{- range $variable := $binding.secretKeys }}
+{{- if not (hasKey $root.Values.secrets.map $variable) -}}
+{{- fail (printf "%s requires an unbound secret key %s" $consumer $variable) -}}
+{{- end }}
+{{- if hasKey $root.Values.runtime $variable -}}
+{{- fail (printf "%s must not appear in plaintext runtime values" $variable) -}}
+{{- end }}
 - name: {{ $variable }}
   valueFrom:
     secretKeyRef:
-      name: {{ $.Values.secrets.name }}
+      name: {{ $root.Values.secrets.name }}
       key: {{ $variable }}
 {{- end }}
-{{- range $key, $value := $.Values.runtime }}
-- name: {{ $key }}
-  value: {{ $value | quote }}
+{{- range $variable := $binding.runtimeKeys }}
+{{- if not (hasKey $root.Values.runtime $variable) -}}
+{{- fail (printf "%s requires runtime value %s" $consumer $variable) -}}
+{{- end }}
+- name: {{ $variable }}
+  value: {{ index $root.Values.runtime $variable | quote }}
 {{- end }}
 {{- end -}}
 
@@ -94,32 +98,23 @@ allows.
   value: {{ .maxOverflow | quote }}
 {{- end -}}
 
-{{/*
-Refuse to render a deployment that cannot connect.
-
-The ceiling is shared and nothing enforces it: exceeding it produces connection
-timeouts under load, in whichever process happens to ask last, minutes after the
-value that caused it was changed. Checked here so it is a rendering error naming
-the sum instead.
-
-One job's worth, not every job's: the three that open a database are each in a
-sync wave of their own and the fourth opens none, so they never hold connections
-at once. The worst moment is a job running while the previous release's pods
-still serve, which this counts.
-
-Each API process owns two SQLAlchemy engines: the synchronous engine retained by
-sync services and the asynchronous engine used by async request paths. Both read
-the same pool settings and may reach their maxima at once, so both count.
-*/}}
+{{/* Jobs run before workload waves. Count one terminating scheduler and gateway. */}}
 {{- define "lazycloud.databaseBudget" -}}
+{{- if le (int .Values.scheduler.minReadySeconds) (int .Values.scheduler.terminationGracePeriodSeconds) -}}
+{{- fail "scheduler.minReadySeconds must exceed terminationGracePeriodSeconds to bound rollout overlap" -}}
+{{- end -}}
 {{- $ceiling := int .Values.database.maxConnections -}}
 {{- $reserved := int .Values.database.reserved -}}
 {{- $apiEngine := add (int .Values.controlPlane.database.poolSize) (int .Values.controlPlane.database.maxOverflow) -}}
 {{- $api := mul 2 (mul (int .Values.controlPlane.replicas) $apiEngine) -}}
-{{- $scheduler := mul (int .Values.scheduler.replicas) (add (int .Values.scheduler.database.poolSize) (int .Values.scheduler.database.maxOverflow)) -}}
+{{- $schedulerEngine := add (int .Values.scheduler.database.poolSize) (int .Values.scheduler.database.maxOverflow) -}}
+{{- $scheduler := mul (int .Values.scheduler.replicas) $schedulerEngine -}}
+{{- $gatewayEngine := add (int .Values.wireguard.database.poolSize) (int .Values.wireguard.database.maxOverflow) -}}
+{{- $gateway := mul (int .Values.wireguard.replicas) $gatewayEngine -}}
 {{- $jobs := add (int .Values.bootstrap.database.poolSize) (int .Values.bootstrap.database.maxOverflow) -}}
-{{- $total := add $api $scheduler $jobs -}}
-{{- if gt (add $total $reserved) $ceiling -}}
-{{- fail (printf "database pools may open %d connections (control plane %d, scheduler %d, jobs %d) with %d reserved, and the server allows %d" $total $api $scheduler $jobs $reserved $ceiling) -}}
+{{- $overlap := max $jobs (add $schedulerEngine $gatewayEngine) -}}
+{{- $total := add $api $scheduler $gateway $overlap $reserved -}}
+{{- if gt $total $ceiling -}}
+{{- fail (printf "database budget %d exceeds server ceiling %d (API %d, scheduler %d, gateway %d, rollout/jobs %d, reserve %d)" $total $ceiling $api $scheduler $gateway $overlap $reserved) -}}
 {{- end -}}
 {{- end -}}

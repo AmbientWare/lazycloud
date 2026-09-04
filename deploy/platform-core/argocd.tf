@@ -135,6 +135,14 @@ resource "helm_release" "argocd" {
           server    = "https://kubernetes.default.svc"
           namespace = var.argocd_namespace
         }
+        # Preserve an operator's pause on the deployment, not arbitrary child drift.
+        ignoreDifferences = [{
+          group        = "argoproj.io"
+          kind         = "Application"
+          name         = "lazycloud-prod"
+          namespace    = var.argocd_namespace
+          jsonPointers = ["/spec/syncPolicy/automated/enabled"]
+        }]
         syncPolicy = {
           automated = {
             # Both, deliberately. Without prune, deleting an Application from
@@ -144,7 +152,7 @@ resource "helm_release" "argocd" {
             prune    = true
             selfHeal = true
           }
-          syncOptions = ["CreateNamespace=true"]
+          syncOptions = ["CreateNamespace=true", "RespectIgnoreDifferences=true"]
         }
       }
     }]
