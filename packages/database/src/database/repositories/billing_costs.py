@@ -381,6 +381,33 @@ class BillingLedgerCostRepository:
         ).all()
         return {BilledDimension(row[0]): int(row[1]) for row in found}
 
+    def owner_window_totals(
+        self, *, owner_user_ids: Sequence[str], start: datetime, end: datetime
+    ) -> Mapping[str, int]:
+        """What each of a page of payers spent over a window, absent where nothing.
+
+        One grouped read over `(owner_user_id, segment_started_at)` for the
+        page rather than one read per row, because the caller is a list an
+        operator scrolls and a query per account is a page that gets slower
+        with every person who signs up.
+        """
+
+        if not owner_user_ids:
+            return {}
+        found = self.session.execute(
+            select(
+                BillingLedgerSegmentTable.owner_user_id,
+                func.coalesce(func.sum(BillingLedgerSegmentTable.cost_nanos), 0),
+            )
+            .where(
+                BillingLedgerSegmentTable.owner_user_id.in_(list(owner_user_ids)),
+                BillingLedgerSegmentTable.segment_started_at >= start,
+                BillingLedgerSegmentTable.segment_started_at < end,
+            )
+            .group_by(BillingLedgerSegmentTable.owner_user_id)
+        ).all()
+        return {str(row[0]): int(row[1]) for row in found}
+
     def page(
         self,
         *,

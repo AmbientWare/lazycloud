@@ -6,6 +6,11 @@ from urllib.parse import urlencode
 
 from lazycloud.control import resolve_control_client_config
 from shared.autoscaler_state import AutoscalerTargetKind
+from shared.http.billing import (
+    BillingAccountAdminListResponse,
+    BillingAccountAdminResponse,
+    BillingComplimentaryRequest,
+)
 from shared.http.collections import MapCollectionListResponse, SimpleQueueListResponse
 from shared.http.compute import (
     ContainerDetailResponse,
@@ -81,6 +86,7 @@ from shared.http.users import (
     UserListResponse,
     UserResponse,
     UserRoleRequest,
+    UserStatusRequest,
 )
 from shared.http.workspaces import (
     WorkspaceConfigExportResponse,
@@ -200,8 +206,34 @@ class AdminApiClient:
             )
         )
 
+    def set_user_status(self, user_id: str, request: UserStatusRequest) -> UserResponse:
+        return UserResponse.model_validate(
+            self.channel.request(
+                "PUT",
+                f"/api/v1/users/{url_path_segment(user_id)}/status",
+                payload=request.model_dump(mode="json"),
+            )
+        )
+
     def list_users(self) -> UserListResponse:
         return UserListResponse.model_validate(self.channel.get("/api/v1/users"))
+
+    def list_billing_accounts(self, *, cursor: str = "") -> BillingAccountAdminListResponse:
+        path = "/api/v1/billing/accounts"
+        if cursor:
+            path = f"{path}?{urlencode({'cursor': cursor})}"
+        return BillingAccountAdminListResponse.model_validate(self.channel.get(path))
+
+    def set_billing_complimentary(
+        self, user_id: str, request: BillingComplimentaryRequest
+    ) -> BillingAccountAdminResponse:
+        return BillingAccountAdminResponse.model_validate(
+            self.channel.request(
+                "PUT",
+                f"/api/v1/billing/accounts/{url_path_segment(user_id)}/complimentary",
+                payload=request.model_dump(mode="json"),
+            )
+        )
 
     def create_token_for_user(
         self,

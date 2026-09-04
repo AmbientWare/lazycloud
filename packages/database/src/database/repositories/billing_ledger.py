@@ -407,17 +407,27 @@ class BillingLedgerRepository:
 
         An account named nowhere at the provider has nothing to meter there, so
         its ledger is complete without a row here.
+
+        An account whose bill an administrator has waived still gets its row,
+        written as waived rather than left out. Every priced record then owes
+        exactly one row whatever the account's standing was when it was priced,
+        and the row is what says afterwards that this usage was never owed.
+        The waiver on the account can be withdrawn, and once it is, nothing else
+        would tell reconciliation why this window reached no invoice.
         """
 
         if recorded.cost_nanos == 0:
             return
-        provider_customer_id = self.session.scalars(
-            select(BillingAccountTable.provider_customer_id).where(
-                BillingAccountTable.user_id == owner_user_id
-            )
+        account = self.session.execute(
+            select(
+                BillingAccountTable.provider_customer_id,
+                BillingAccountTable.complimentary_since,
+            ).where(BillingAccountTable.user_id == owner_user_id)
         ).first()
-        if not provider_customer_id:
+        if account is None or not account[0]:
             return
+        provider_customer_id = str(account[0])
+        waived = account[1] is not None
         now = utc_now()
         self.session.execute(
             _insert(self.session, BillingMeterOutboxTable)
@@ -433,7 +443,7 @@ class BillingLedgerRepository:
                 # is the provider's copy disagreeing with the segments behind it.
                 pricing_version=",".join(recorded.pricing_versions),
                 occurred_at=occurred_at,
-                status="pending",
+                status="waived" if waived else "pending",
                 attempts=0,
                 next_attempt_at=now,
             )

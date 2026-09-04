@@ -91,6 +91,22 @@ class BillingAccount(ContractModel):
     holds a card and cannot pay is `PastDue`, a different fact recorded beside
     this one.
     """
+    complimentary_since: datetime | None = None
+    """When an administrator waived this account's bill, `None` while nobody has.
+
+    A standing rather than a plan. What the account gets is the Team plan's terms
+    as if a card were on file, and what it owes is nothing. Its usage is priced
+    into the ledger like anyone else's, and the meter event that would carry it
+    to the provider is written as waived instead of sent. The subscription the
+    account holds is left alone, so withdrawing this puts it back on that
+    subscription's own terms with nothing to provision.
+
+    Held here and not on the user, and never read off the platform role. Whether
+    somebody pays is a billing fact; whether they administer the platform is an
+    authorization fact; and an administrator demoted to member must not have
+    their bill switched on by the same write. An instant rather than a flag so a
+    reviewer can place it beside the usage it waived.
+    """
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

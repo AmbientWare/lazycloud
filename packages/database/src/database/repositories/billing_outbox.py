@@ -39,11 +39,13 @@ class UndeliveredMeterTotals:
 
     Nanodollars, as the rows themselves count: `waiting_nanos` is queued or in
     flight and will be offered again, `abandoned_nanos` has been given up on and
-    will not.
+    will not, and `waived_nanos` was never owed because an administrator waived
+    the account's bill while it was priced.
     """
 
     waiting_nanos: int = 0
     abandoned_nanos: int = 0
+    waived_nanos: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,10 +211,10 @@ class BillingMeterOutboxRepository:
     ) -> Mapping[str, UndeliveredMeterTotals]:
         """What this customer's window never reached the provider with, per meter.
 
-        Split by whether it still can. Both have to be subtracted before an
-        invoice is compared against the ledger — neither is on the bill — but
-        they are different facts: one is a delivery that has not happened yet
-        and the other is one that never will, and collapsing them would let a
+        Split by whether it still can. None of it is on the bill, so all of it
+        comes off the ledger before an invoice is compared against it. They are
+        different facts even so: a delivery that has not happened yet, one that
+        never will, and one that was never owed. Collapsing them would let a
         charge nobody will ever make read as an account in perfect agreement.
         """
 
@@ -237,11 +239,13 @@ class BillingMeterOutboxRepository:
         for meter_event_name, status, value_nanos in found:
             held = totals.get(str(meter_event_name), UndeliveredMeterTotals())
             nanos = int(value_nanos)
-            totals[str(meter_event_name)] = (
-                replace(held, abandoned_nanos=held.abandoned_nanos + nanos)
-                if status == "abandoned"
-                else replace(held, waiting_nanos=held.waiting_nanos + nanos)
-            )
+            if status == "abandoned":
+                held = replace(held, abandoned_nanos=held.abandoned_nanos + nanos)
+            elif status == "waived":
+                held = replace(held, waived_nanos=held.waived_nanos + nanos)
+            else:
+                held = replace(held, waiting_nanos=held.waiting_nanos + nanos)
+            totals[str(meter_event_name)] = held
         return totals
 
     def prune(self, *, sent_before: datetime, limit: int) -> int:

@@ -17,7 +17,12 @@ from database.repositories.billing_plan_changes import (
 from shared.billing_accounts import BillingAccount
 from shared.billing_plans import BillingPlanId
 from shared.billing_rate_card import published_plan
-from shared.errors import NotFoundError, PaymentRequiredError, UpstreamUnavailableError
+from shared.errors import (
+    ConflictError,
+    NotFoundError,
+    PaymentRequiredError,
+    UpstreamUnavailableError,
+)
 from shared.events import EventLevel
 from shared.payments import PaymentProvider, ProviderSubscription, SubscriptionProration
 from shared.timestamps import to_utc, utc_now
@@ -189,6 +194,13 @@ class BillingPlanChangeService:
         somebody whose card has gone is exactly who needs that move.
         """
 
+        # Asked before the provider is even resolved, let alone provisioning,
+        # which registers a customer there: a request that is refused must not
+        # leave one behind, and must not need a provider to be refused.
+        with self.database.session() as session:
+            waived = BillingAccountRepository(session).get_by_user(user_id)
+        if waived is not None and waived.complimentary_since is not None:
+            raise ConflictError("this account's usage is complimentary; it holds no plan to change")
         payments = self.payments()
         claim_token = str(uuid4())
         with self.database.session() as session:

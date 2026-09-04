@@ -21,7 +21,7 @@ from shared.gpu import GPU_ANY, SUPPORTED_GPU_TYPES
 from shared.http.volumes import GetOrCreateVolumeRequest
 from shared.timestamps import utc_now
 from sqlalchemy import func, select
-from tests.service_fixtures import workspace_owner_user_id
+from tests.service_fixtures import unbilled_account, workspace_owner_user_id
 
 from billing import DatabaseBillingAdmission
 
@@ -424,3 +424,58 @@ def _hold_gpu_cards(
             )
         )
         session.commit()
+
+
+def test_a_complimentary_account_is_admitted_on_team_terms_without_a_subscription(
+    isolated_services: ApiServices,
+) -> None:
+    """A waived account runs on the Team plan's terms, and returns to its own when unwaived.
+
+    The account here has never signed in, so it holds no subscription and would
+    be refused every start. The waiver is what admits it, and what it is admitted
+    to is the proof the terms are Team's rather than the free plan's: a card the
+    free plan does not sell, and the two capabilities it does not include.
+    Withdrawing the waiver has to refuse it again, since the alternative is an
+    account that stays free for good the first time somebody grants and then
+    reconsiders.
+    """
+
+    user_id, workspace_id = unbilled_account(isolated_services.context)
+    admission = DatabaseBillingAdmission()
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(PaymentRequiredError, match="holds no subscription"),
+    ):
+        admission.admit_container_start(session, workspace_id=workspace_id, gpu=[], gpu_count=0)
+
+    with isolated_services.context.database.session() as session:
+        accounts = BillingAccountRepository(session)
+        accounts.lock_for_registration(user_id)
+        accounts.set_complimentary(user_id=user_id, present=True, at=utc_now())
+
+    with isolated_services.context.database.session() as session:
+        assert (
+            admission.admit_container_start(session, workspace_id=workspace_id, gpu=[], gpu_count=0)
+            == []
+        )
+        assert admission.admit_container_start(
+            session, workspace_id=workspace_id, gpu=["H100"], gpu_count=1
+        ) == ["H100"]
+        admission.assert_may_take_on_billed_work(session, workspace_id=workspace_id)
+        admission.assert_may_use_connected_cloud(session, user_id=user_id)
+        admission.assert_may_use_custom_domains(session, user_id=user_id)
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(ConflictError, match="complimentary"),
+    ):
+        admission.assert_plan_change_fits(session, user_id=user_id, target=BillingPlanId.Team)
+
+    with isolated_services.context.database.session() as session:
+        BillingAccountRepository(session).set_complimentary(
+            user_id=user_id, present=False, at=utc_now()
+        )
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(PaymentRequiredError, match="holds no subscription"),
+    ):
+        admission.admit_container_start(session, workspace_id=workspace_id, gpu=[], gpu_count=0)

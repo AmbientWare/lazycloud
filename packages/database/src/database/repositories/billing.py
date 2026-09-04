@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
@@ -164,13 +165,15 @@ class BillingAccountRepository:
         is what an account holds before it is provisioned and again once its
         subscription ends.
 
-        `payment_method_attached_at` is deliberately not among them, and
-        `set_payment_method_attached_at` writes it instead. The columns here move
-        together as one settlement of what the provider says an account is
-        subscribed to; the card arrives on an unrelated delivery, and no caller
-        of this method reads it or has any business restating it. One that had to
-        would be threading a fact it does not own through every call, and the
-        first to get it wrong would erase a customer's card.
+        `payment_method_attached_at` and `complimentary_since` are deliberately
+        not among them; `set_payment_method_present` and `set_complimentary`
+        write them instead. The columns here move together as one settlement of
+        what the provider says an account is subscribed to; the card arrives on
+        an unrelated delivery and the waiver on an administrator's decision, and
+        no caller of this method reads either or has any business restating
+        them. One that had to would be threading a fact it does not own through
+        every call, and the first to get it wrong would erase a customer's card
+        or start billing an account somebody chose not to.
         """
 
         row = self.session.scalars(
@@ -224,6 +227,39 @@ class BillingAccountRepository:
         self.session.flush()
         return True
 
+    def set_complimentary(self, *, user_id: str, present: bool, at: datetime) -> BillingAccount:
+        """Record whether an administrator has waived this account's bill.
+
+        The caller holds the row through `lock_for_registration`, which also
+        inserts it for an account that has never signed in, so a waiver can be
+        granted before the person it is for has ever reached the platform. The
+        same lock is the one admission takes on every start, which is what keeps
+        a grant or a withdrawal from landing between the read that decides a
+        container's terms and the write that admits it.
+
+        `at` is kept only where there was no waiver before, for the reason the
+        card column keeps its first instant. Re-granting is not a new decision.
+        """
+
+        row = self.session.scalars(
+            select(BillingAccountTable).where(BillingAccountTable.user_id == user_id)
+        ).one()
+        current = row.complimentary_since
+        if present != (current is not None):
+            row.complimentary_since = at if present else None
+            self.session.flush()
+        return _account(row)
+
+    def for_users(self, user_ids: Sequence[str]) -> dict[str, BillingAccount]:
+        """The accounts behind a page of users, keyed by user; absent where none exists."""
+
+        if not user_ids:
+            return {}
+        rows = self.session.scalars(
+            select(BillingAccountTable).where(BillingAccountTable.user_id.in_(list(user_ids)))
+        ).all()
+        return {row.user_id: _account(row) for row in rows}
+
 
 def _account(row: BillingAccountTable) -> BillingAccount:
     return BillingAccount(
@@ -237,6 +273,7 @@ def _account(row: BillingAccountTable) -> BillingAccount:
         payment_method_attached_at=(
             to_utc(row.payment_method_attached_at) if row.payment_method_attached_at else None
         ),
+        complimentary_since=(to_utc(row.complimentary_since) if row.complimentary_since else None),
         # The columns come back without a zone on backends that do not keep one,
         # and a naive timestamp on a payment record is a period boundary nobody
         # can place.

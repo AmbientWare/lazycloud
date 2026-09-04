@@ -160,6 +160,7 @@ function summary(overrides: Partial<BillingSummary> = {}): BillingSummary {
       connected_clouds: 0,
       custom_domains: 0,
     },
+    complimentary_since: null,
     plan_change_pending: false,
     ...overrides,
   };

@@ -112,6 +112,8 @@ class UserService:
             repository = UserRepository(session)
             if repository.get(user_id) is None:
                 raise NotFoundError(f"user not found: {user_id}")
+            if role is not PlatformRole.Administrator:
+                _assert_not_last_administrator(repository, user_id)
             return repository.set_role(user_id, role=role)
 
     def set_status(self, user_id: str, *, status: UserStatus) -> UserRecord:
@@ -120,6 +122,8 @@ class UserService:
             repository = UserRepository(session)
             if repository.get(user_id) is None:
                 raise NotFoundError(f"user not found: {user_id}")
+            if status is not UserStatus.Active:
+                _assert_not_last_administrator(repository, user_id)
             updated = repository.set_status(user_id, status=status)
             if status is UserStatus.Disabled:
                 TokenRepository(session).revoke_user_credentials(user_id, now=now)
@@ -251,6 +255,23 @@ class UserService:
         """The workspaces an account's compute and domains apply to, in creation order."""
         with self.context.database.session() as session:
             return WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
+
+
+def _assert_not_last_administrator(repository: UserRepository, user_id: str) -> None:
+    """Refuse a write that would leave the platform with nobody to administer it.
+
+    Decided from the locked set rather than from the row read a moment earlier.
+    Two writes each removing the other of the last two administrators serialize
+    on the lock, and the second sees the first's change. Disabling counts the
+    same as demoting, because `AuthService.platform_role` treats a disabled
+    administrator as a member. The offline bootstrap writes through the
+    repository directly and is deliberately outside this, since it is how an
+    installation with no administrator gets one back.
+    """
+
+    administrators = repository.lock_active_administrator_ids()
+    if administrators == [user_id]:
+        raise ConflictError("this is the last active administrator; promote another account first")
 
 
 def display_name(user: UserRecord) -> str:

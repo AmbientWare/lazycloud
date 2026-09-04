@@ -232,6 +232,15 @@ export const accountQueryKeys = {
   domains: () => [...accountRoot, "custom-domains"] as const,
   tokens: () => [...accountRoot, "tokens"] as const,
   invitations: () => [...accountRoot, "invitations"] as const,
+  /**
+   * What an administrator sees of every account on the platform. Under the
+   * account root because who may read it is decided by the signed-in person,
+   * not by the workspace in the address bar, and a switch cannot change it.
+   */
+  admin: {
+    root: () => [...accountRoot, "admin"] as const,
+    accounts: () => [...accountRoot, "admin", "accounts"] as const,
+  },
 } as const;
 
 export type WorkspaceLiveQueryMeta = {

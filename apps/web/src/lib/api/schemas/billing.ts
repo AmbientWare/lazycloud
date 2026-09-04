@@ -1,6 +1,9 @@
 import { z } from "zod";
 
 import { billingPlanIdSchema, planEntitlementsSchema } from "./pricing";
+import { userSchema } from "./users";
+
+const timestampSchema = z.string().datetime({ offset: true });
 
 /**
  * The page to send the customer to.
@@ -96,6 +99,11 @@ export const billingSummarySchema = z
     payment_method_on_file: z.boolean(),
     entitlements: planEntitlementsSchema.nullable(),
     usage: billingEntitlementUsageSchema,
+    // When an administrator waived this account's bill, null while nobody has.
+    // Usage is still priced and shown; none of it is owed. `plan` is what the
+    // account returns to when the waiver is withdrawn, and `entitlements` are
+    // the waiver's rather than the plan's.
+    complimentary_since: timestampSchema.nullable(),
     // Whether a change of plan is still waiting on an outcome. `plan` above says
     // what the account holds, which is not what somebody who has just pressed a
     // button is asking; a change nobody could settle is retried for hours, and
@@ -104,4 +112,43 @@ export const billingSummarySchema = z
   })
   .strict();
 export type BillingSummary = z.infer<typeof billingSummarySchema>;
+
+/**
+ * One account as an administrator sees it: the person, and what they owe.
+ *
+ * `status` and `plan` are null together for an account billing has never
+ * written a row for, which is one that has not signed in yet. Such an account
+ * can still be waived ahead of time, so `complimentary_since` may be set on a
+ * row with no plan.
+ */
+export const billingAccountAdminSchema = z
+  .object({
+    user: userSchema,
+    status: z.enum(billingAccountStatuses).nullable(),
+    plan: billingPlanIdSchema.nullable(),
+    payment_method_on_file: z.boolean(),
+    complimentary_since: timestampSchema.nullable(),
+    // What this account's usage cost over the trailing window, waived or not.
+    recent_cost_nanos: z.number().int().nonnegative(),
+    // Where that window starts; it ends at the moment of the request.
+    recent_cost_since: timestampSchema,
+  })
+  .strict();
+export type BillingAccountAdmin = z.infer<typeof billingAccountAdminSchema>;
+
+export const billingAccountAdminListSchema = z
+  .object({
+    data: z.array(billingAccountAdminSchema),
+    next: z.string(),
+  })
+  .strict();
+export type BillingAccountAdminList = z.infer<typeof billingAccountAdminListSchema>;
+
+export const billingComplimentaryRequestSchema = z
+  .object({
+    complimentary: z.boolean(),
+  })
+  .strict();
+export type BillingComplimentaryRequest = z.infer<typeof billingComplimentaryRequestSchema>;
+
 export type { BillingPlanId } from "./pricing";

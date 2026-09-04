@@ -85,6 +85,8 @@ export type BillingSettingsController = {
   loadError: Error | null;
   offers: readonly PlanOffer[];
   settling: boolean;
+  /** An administrator has waived this account's bill; nothing here is for sale to it. */
+  complimentary: boolean;
   planOpen: boolean;
   openPlan: () => void;
   closePlan: () => void;
@@ -132,6 +134,7 @@ export function useBillingSettingsController({
   });
 
   const settling = query.data?.plan_change_pending ?? false;
+  const complimentary = Boolean(query.data?.complimentary_since);
   const busy = change.isPending || leaving !== null;
 
   const go = (which: "card" | "portal") => {
@@ -150,7 +153,7 @@ export function useBillingSettingsController({
   };
 
   const choose = (offer: PlanOffer) => {
-    if (busy || settling || offer.action === "current") return;
+    if (busy || settling || complimentary || offer.action === "current") return;
     if (offer.action === "card") {
       go("card");
       return;
@@ -167,6 +170,7 @@ export function useBillingSettingsController({
     loadError: query.error ?? catalog.error,
     offers: planOffers(query.data, catalog.data),
     settling,
+    complimentary,
     planOpen,
     openPlan: () => onPlanOpenChange(true),
     closePlan: () => {
@@ -180,14 +184,17 @@ export function useBillingSettingsController({
     changeError: change.error,
     confirmingChangeTo,
     confirmChange: () => {
-      if (busy || settling || !confirmingChangeTo) return;
+      if (busy || settling || complimentary || !confirmingChangeTo) return;
       change.mutate(confirmingChangeTo.id);
     },
     dismissChange: () => {
       if (change.isPending) return;
       setConfirmingChangeTo(null);
     },
-    startCard: () => go("card"),
+    startCard: () => {
+      if (complimentary) return;
+      go("card");
+    },
     openPortal: () => go("portal"),
     leaving,
     busy,

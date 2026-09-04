@@ -8,6 +8,7 @@ from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
 from shared.http.base import HttpModel
 from shared.http.pricing import PlanEntitlementsResponse
+from shared.http.users import UserResponse
 
 
 class BillingHostedSessionRequest(HttpModel):
@@ -166,6 +167,15 @@ class BillingSummaryResponse(HttpModel):
     usage: BillingEntitlementUsageResponse
     """Current account-wide consumption of every measured entitlement."""
 
+    complimentary_since: datetime | None = None
+    """When an administrator waived this account's bill, `None` while nobody has.
+
+    Usage is still priced and shown, and nothing of it is owed. `plan` beside
+    it is the subscription the account still holds and returns to when the
+    waiver is withdrawn. `entitlements` are the waiver's, which are what the
+    account is held to.
+    """
+
     plan_change_pending: bool
     """Whether a change of plan is still waiting on an outcome.
 
@@ -177,8 +187,40 @@ class BillingSummaryResponse(HttpModel):
     """
 
 
+class BillingAccountAdminResponse(HttpModel):
+    """One account as an administrator sees it: the person, and what they owe.
+
+    `plan` and `status` are absent together for an account billing has never
+    written a row for, which is one that has not signed in yet. Such an account
+    can still be waived ahead of time, which is what `complimentary_since` on a
+    row with no plan means.
+    """
+
+    user: UserResponse
+    status: BillingAccountStatus | None = None
+    plan: BillingPlanId | None = None
+    payment_method_on_file: bool = False
+    complimentary_since: datetime | None = None
+    recent_cost_nanos: int = Field(ge=0)
+    """What this account's usage cost over the trailing window, waived or not."""
+    recent_cost_since: datetime
+    """Where that window starts; it ends at the moment of the request."""
+
+
+class BillingAccountAdminListResponse(HttpModel):
+    data: list[BillingAccountAdminResponse] = Field(default_factory=list)
+    next: str = ""
+
+
+class BillingComplimentaryRequest(HttpModel):
+    complimentary: bool
+
+
 __all__ = [
+    "BillingAccountAdminListResponse",
+    "BillingAccountAdminResponse",
     "BillingAllowanceResponse",
+    "BillingComplimentaryRequest",
     "BillingEntitlementUsageResponse",
     "BillingHostedSessionRequest",
     "BillingHostedSessionResponse",

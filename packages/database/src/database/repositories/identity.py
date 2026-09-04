@@ -320,6 +320,45 @@ class UserRepository:
         )
         return [user_record_from_table(row) for row in rows]
 
+    def page(self, *, after_user_id: str | None, limit: int) -> list[UserRecord]:
+        """Every account, walked by id in one total order.
+
+        A keyset walk for the same reason the billing sweeps take one: the
+        caller is a list that continues where the last page stopped, and an
+        offset would skip or repeat a row for every account created underneath
+        it. `None` starts the walk and is an absent predicate, since the column
+        is a native UUID and no string stands for "before every id".
+        """
+
+        if limit <= 0:
+            return []
+        statement = select(UserTable)
+        if after_user_id is not None:
+            statement = statement.where(UserTable.id > after_user_id)
+        rows = self.session.scalars(statement.order_by(UserTable.id).limit(limit))
+        return [user_record_from_table(row) for row in rows]
+
+    def lock_active_administrator_ids(self) -> list[str]:
+        """Every account that administers the platform, locked until commit.
+
+        The set a demotion or a disable is judged against. Locked rather than
+        counted so two writes that would each remove the other of the last two
+        administrators serialize here, and the one that waits re-reads a row
+        the first has already changed. PostgreSQL refuses `FOR UPDATE` beside
+        an aggregate, so the ids are locked and the caller counts them.
+        """
+
+        return list(
+            self.session.scalars(
+                select(UserTable.id)
+                .where(
+                    UserTable.role == PlatformRole.Administrator.value,
+                    UserTable.status == UserStatus.Active.value,
+                )
+                .with_for_update()
+            ).all()
+        )
+
     def set_profile(
         self,
         user_id: str,

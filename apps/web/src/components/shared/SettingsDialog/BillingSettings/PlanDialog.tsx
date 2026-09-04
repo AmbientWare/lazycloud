@@ -60,7 +60,11 @@ function PlanDialogBody({ controller }: { controller: BillingSettingsController 
         </DialogHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          {controller.settling ? (
+          {controller.complimentary ? (
+            <p className="mb-4 rounded-sm border-l-2 border-border bg-muted/30 px-3 py-2 text-xs">
+              Usage on this account is tracked but not billed, so there is no plan to change.
+            </p>
+          ) : controller.settling ? (
             <p className="mb-4 rounded-sm border-l-2 border-warning bg-warning/5 px-3 py-2 text-xs">
               Your plan change is processing. You can make another change when it finishes.
             </p>
@@ -147,7 +151,7 @@ function PlanCard({
             size="sm"
             variant={offer.action === "cancel" ? "outline" : "default"}
             className={cn("w-full", offer.action === "cancel" && "text-destructive")}
-            disabled={controller.busy || controller.settling}
+            disabled={controller.busy || controller.settling || controller.complimentary}
             onClick={() => controller.choose(offer)}
           >
             {pending || (offer.action === "card" && controller.leaving === "card") ? (

@@ -15,7 +15,13 @@ from database.repositories.identity import (
 from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import AccountTerms, PlanEntitlements, account_terms, published_plan
+from shared.billing_rate_card import (
+    AccountTerms,
+    PlanEntitlements,
+    account_terms,
+    complimentary_terms,
+    published_plan,
+)
 from shared.errors import CapacityLimitReachedError, ConflictError, PaymentRequiredError
 from shared.gpu import GPU_ANY, NO_GPU, normalize_gpu_type
 from shared.timestamps import utc_now
@@ -249,6 +255,8 @@ class DatabaseBillingAdmission:
         account = BillingAccountRepository(session).get_by_user(user_id, for_update=True)
         if account is None:
             raise PaymentRequiredError("this account has not been provisioned for billing")
+        if account.complimentary_since is not None:
+            raise ConflictError("this account's usage is complimentary; it holds no plan to change")
         entitlements = account_terms(
             target,
             has_payment_method=account.payment_method_attached_at is not None,
@@ -296,6 +304,13 @@ class DatabaseBillingAdmission:
             # no account to judge and nothing this can decide.
             return None
         account = BillingAccountRepository(session).get_by_user(owner.user_id, for_update=True)
+        if account is not None and account.complimentary_since is not None:
+            # Nothing this runs is owed, so whether it would reach an invoice is
+            # not a question. What is still asked is how much may run at once,
+            # which is a bound on the platform's own exposure rather than on a
+            # bill, and the Team plan's figure is the one every waived account
+            # is held to.
+            return owner.user_id, complimentary_terms()
         if account is None or not account.provider_subscription_id or account.plan is None:
             raise PaymentRequiredError(
                 "this account holds no subscription for its usage to be billed on; "
@@ -327,6 +342,8 @@ class DatabaseBillingAdmission:
 
     def _account_terms_for_user(self, session: Session, *, user_id: str) -> AccountTerms:
         account = BillingAccountRepository(session).get_by_user(user_id, for_update=True)
+        if account is not None and account.complimentary_since is not None:
+            return complimentary_terms()
         if account is None or not account.provider_subscription_id or account.plan is None:
             raise PaymentRequiredError(
                 "this account holds no subscription; sign in again to finish setting it up"

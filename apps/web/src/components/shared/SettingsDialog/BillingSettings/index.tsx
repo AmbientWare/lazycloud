@@ -29,6 +29,7 @@ export function BillingSettings({
 }) {
   const controller = useBillingSettingsController({ planOpen, onPlanOpenChange });
   const summary = controller.summary;
+  const complimentary = controller.complimentary;
 
   return (
     <>
@@ -46,7 +47,11 @@ export function BillingSettings({
             </p>
           ) : (
             <>
-              {!summary.plan ? (
+              {complimentary ? (
+                <p className="text-sm text-muted-foreground">
+                  Usage on this account is tracked but not billed.
+                </p>
+              ) : !summary.plan ? (
                 <p className="text-sm text-muted-foreground">Choose a plan to start workloads.</p>
               ) : !summary.plan.allowance ? (
                 <p className="text-sm text-muted-foreground">
@@ -55,7 +60,7 @@ export function BillingSettings({
               ) : (
                 <AllowanceMeter allowance={summary.plan.allowance} currency={summary.currency} />
               )}
-              {summary.plan ? (
+              {summary.plan || complimentary ? (
                 <div className="flex flex-col gap-1">
                   <ConcurrencyLine
                     running={summary.usage.concurrent_cpu_containers}
@@ -74,48 +79,58 @@ export function BillingSettings({
                 </div>
               ) : null}
               <EntitlementUsage summary={summary} />
-              <RetainedTermsLine summary={summary} offers={controller.offers} />
+              {complimentary ? null : (
+                <RetainedTermsLine summary={summary} offers={controller.offers} />
+              )}
               {controller.settling ? (
                 <p className="text-sm text-warning">
                   Your plan change is processing. The current plan stays active until it finishes.
                 </p>
               ) : null}
-              <p className="text-sm text-muted-foreground">
-                {summary.payment_method_on_file
-                  ? "Usage beyond the included amount is invoiced monthly and charged to the card on file."
-                  : "Add a payment method to increase included compute and bill overages instead of stopping workloads. Payment details are stored by our payment provider, not LazyCloud."}
-              </p>
+              {complimentary ? null : (
+                <p className="text-sm text-muted-foreground">
+                  {summary.payment_method_on_file
+                    ? "Usage beyond the included amount is invoiced monthly and charged to the card on file."
+                    : "Add a payment method to increase included compute and bill overages instead of stopping workloads. Payment details are stored by our payment provider, not LazyCloud."}
+                </p>
+              )}
               <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  // Not disabled while a change is settling. A declined upgrade
-                  // holds an intent for hours, and locking the button would trap
-                  // the customer on a plan they are trying to leave — the server
-                  // refuses a second change with a conflict, which is a sentence
-                  // rather than a dead control.
-                  disabled={controller.busy}
-                  onClick={controller.openPlan}
-                >
-                  <Sparkles className="size-4" />
-                  Manage subscription
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={controller.busy}
-                  onClick={controller.startCard}
-                >
-                  {controller.leaving === "card" ? (
-                    <LoaderCircle className="size-4 animate-spin" />
-                  ) : (
-                    <CreditCard className="size-4" />
-                  )}
-                  {/* The two states differ in what the button is for, not only in
+                {complimentary ? null : (
+                  <>
+                    <Button
+                      size="sm"
+                      // Not disabled while a change is settling. A declined upgrade
+                      // holds an intent for hours, and locking the button would trap
+                      // the customer on a plan they are trying to leave. The server
+                      // refuses a second change with a conflict, which is a sentence
+                      // rather than a dead control.
+                      disabled={controller.busy}
+                      onClick={controller.openPlan}
+                    >
+                      <Sparkles className="size-4" />
+                      Manage subscription
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={controller.busy}
+                      onClick={controller.startCard}
+                    >
+                      {controller.leaving === "card" ? (
+                        <LoaderCircle className="size-4 animate-spin" />
+                      ) : (
+                        <CreditCard className="size-4" />
+                      )}
+                      {/* The two states differ in what the button is for, not only in
                       wording: with no card it is the thing that lifts the cap and
                       stops work being killed, and with one saved it is a second
                       card the hosted page will make the default. */}
-                  {summary.payment_method_on_file ? "Change payment method" : "Add payment method"}
-                </Button>
+                      {summary.payment_method_on_file
+                        ? "Change payment method"
+                        : "Add payment method"}
+                    </Button>
+                  </>
+                )}
                 {summary.portal_available ? (
                   <Button
                     variant="outline"
@@ -132,7 +147,7 @@ export function BillingSettings({
                   </Button>
                 ) : null}
               </div>
-              {!summary.payment_method_on_file ? (
+              {!summary.payment_method_on_file && !complimentary ? (
                 <p className="text-xs text-muted-foreground">
                   New payment methods may take a few seconds to appear.
                 </p>
@@ -224,6 +239,9 @@ function RetainedTermsLine({
 }
 
 function StandingChip({ summary }: { summary: BillingSummary }) {
+  if (summary.complimentary_since) {
+    return <StatusChip status="Complimentary" />;
+  }
   if (summary.status === "past_due") {
     return <StatusChip status="past due" />;
   }
