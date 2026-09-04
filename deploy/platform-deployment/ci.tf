@@ -50,11 +50,6 @@ data "aws_iam_policy_document" "deploy" {
     sid       = "ReleaseRegistryBearerToken"
     actions   = ["sts:GetServiceBearerToken"]
     resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "sts:AWSServiceName"
-      values   = ["ecr-public.amazonaws.com"]
-    }
   }
 
   statement {
