@@ -63,3 +63,75 @@ export const workspaceMemberListSchema = z
     next: z.string(),
   })
   .strict();
+
+export const workspaceRoleSchema = z.enum(["owner", "administrator", "member"]);
+export type WorkspaceRole = z.infer<typeof workspaceRoleSchema>;
+
+/** The roles an invitation can carry. Owner is transferred, never offered. */
+export const invitableRoleSchema = z.enum(["administrator", "member"]);
+export type InvitableRole = z.infer<typeof invitableRoleSchema>;
+
+/**
+ * The address an invitation can be sent to, refused the way the server refuses it.
+ *
+ * The server's rule is the one that decides, so this mirrors it rather than
+ * inventing a looser one: a form that accepts what the API rejects turns a typo
+ * into an error the dialog was not written to explain.
+ */
+export const invitationEmailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(320, "Enter a single address such as name@example.com")
+  .refine((value) => {
+    const parts = value.split("@");
+    if (parts.length !== 2) return false;
+    const [local, domain] = parts;
+    if (!local || /\s/.test(value)) return false;
+    return domain.includes(".") && !domain.startsWith(".") && !domain.endsWith(".");
+  }, "Enter a single address such as name@example.com");
+
+export const workspaceInvitationSchema = z
+  .object({
+    id: z.string(),
+    workspace_id: z.string(),
+    email: z.string(),
+    role: workspaceRoleSchema,
+    status: z.enum(["pending", "accepted", "declined", "revoked"]),
+    invited_by_user_id: z.string(),
+    invited_by_name: z.string(),
+    expires_at: timestampSchema,
+    created_at: timestampSchema,
+    updated_at: timestampSchema,
+  })
+  .strict();
+export type WorkspaceInvitation = z.infer<typeof workspaceInvitationSchema>;
+
+export const workspaceInvitationListSchema = z
+  .object({
+    data: z.array(workspaceInvitationSchema),
+    next: z.string(),
+  })
+  .strict();
+
+/** An invitation as the person it was sent to sees it. */
+export const pendingInvitationSchema = z
+  .object({
+    id: z.string(),
+    workspace_id: z.string(),
+    workspace_name: z.string(),
+    email: z.string(),
+    role: workspaceRoleSchema,
+    invited_by_name: z.string(),
+    expires_at: timestampSchema,
+    created_at: timestampSchema,
+  })
+  .strict();
+export type PendingInvitation = z.infer<typeof pendingInvitationSchema>;
+
+export const pendingInvitationListSchema = z
+  .object({
+    data: z.array(pendingInvitationSchema),
+    next: z.string(),
+  })
+  .strict();

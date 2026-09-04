@@ -53,6 +53,40 @@ unique index rather than by convention. The owner is who a workspace's connected
 compute and registered domains resolve through, so a second one would make
 "whose account backs this workspace" have two answers.
 
+## Invitations
+
+An invitation is addressed to an email, because the person may have no account
+yet, and it becomes a membership only when a signed-in account whose address
+matches accepts it. That comparison is the one place an email decides anything
+about identity here, and it is deliberately narrow: the address is the one the
+provider reported at that account's last sign-in, both sides are folded through
+`fold_email`, the match happens under a row lock, and a mismatch answers "not
+found" rather than "forbidden" so an invitation id says nothing about who it is
+waiting on. There is no secret in the link, because a link that carried one
+would let a forwarded message bypass the address check.
+
+Membership rows are written only at acceptance. An invited person has no row
+until then, so nothing that reads `workspace_members` can mistake an offer for
+access. One open offer per address per workspace is held by a partial unique
+index: a second invite is refused and names the resend that is the way to send
+it again. Accepting an offer that carries more authority than a membership
+someone was meanwhile given raises the role to what was offered, because the
+offer is a live administrator decision rather than a formality to consume.
+Answered invitations stay as rows, in their terminal status, because the audit
+history points at them.
+
+An open offer holds a seat. Admission counts it alongside the members it would
+join, so a plan with one seat left refuses the second invitation rather than
+sending five emails and turning four people away at the door, where the refusal
+reaches somebody who cannot act on it.
+
+Delivery is separate from the record. The row is committed first, then the
+message is sent, and both a provider refusal and a deployment with no email
+provider configured are raised to the caller with the invitation left standing,
+because resending once the cause is fixed is the thing to do about either. An
+invitation the dashboard reports as sent and nobody receives is the failure that
+arrangement exists to prevent.
+
 ## Signing in
 
 A person signs in through an external identity provider, and `user_identities`
