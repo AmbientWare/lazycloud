@@ -6,6 +6,10 @@ The combined feature branch remains a draft. Provider-neutral capacity, warm
 and cold lifecycle, GPU CPU backfill, region contracts, and forward billing
 migrations are implemented. Regional prices are not published.
 
+The simulation is local validation material. Check it against production
+decisions and billing, but do not include its code or generated outputs in the
+pull request or shipped product.
+
 Hetzner activation is blocked on secure host enrollment and live acceptance.
 Source IP and metadata cannot authenticate a host against its own tenants.
 A node-scoped, short-lived, single-use bootstrap token needs an owner-approved
