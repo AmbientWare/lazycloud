@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import Field, JsonValue
 
 from shared.contracts import ContractModel
+from shared.deployments import StubKind
 from shared.enums import StringEnum
 from shared.timestamps import utc_now
 
@@ -41,6 +42,16 @@ class AutoscalerStateRecord(ContractModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+def autoscaler_target_kind(kind: StubKind) -> AutoscalerTargetKind | None:
+    if kind is StubKind.Function:
+        return AutoscalerTargetKind.Function
+    if kind in {StubKind.Endpoint, StubKind.Asgi}:
+        return AutoscalerTargetKind.Endpoint
+    if kind in {StubKind.Pod, StubKind.Sandbox}:
+        return AutoscalerTargetKind.Pod
+    return None
+
+
 def autoscaler_state_name(target_kind: AutoscalerTargetKind, target_id: str) -> str:
     return f"{target_kind.value}:{target_id}"
 
@@ -49,4 +60,5 @@ __all__ = [
     "AutoscalerStateRecord",
     "AutoscalerTargetKind",
     "autoscaler_state_name",
+    "autoscaler_target_kind",
 ]

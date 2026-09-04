@@ -15,7 +15,7 @@ from compute.state import RedisComputeStateRepository
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, RedisClient
 from coordination.token_lock import release_token_lock, try_acquire_token_lock
 from coordination.wake_signal import WakeSignalWaiter
-from database.records.apps import AppRecord
+from database.records.apps import AppRecord, AutoscalingStub
 from database.repositories.apps import CronJobRepository
 from database.repositories.execution import (
     CronJobRunCursor,
@@ -71,7 +71,7 @@ from scheduler.preemption import (
     SchedulerCapacityInterruptionService,
     WorkerPreemptionResult,
 )
-from scheduler.services import SchedulerServices
+from scheduler.services import SchedulerAutoscalingTargetService, SchedulerServices
 
 LOGGER = logging.getLogger(__name__)
 WORKER_POOL_DRAIN_SOURCE = "worker_pool.drain"
@@ -83,6 +83,8 @@ BILLING_ENFORCEMENT_LOCK_TTL_SECONDS = 30
 """Long enough for one bounded pass, short enough that a scheduler killed
 mid-sweep does not leave unfunded compute running for a minute."""
 SCHEDULER_FAILURE_RETRY_MAX_SECONDS = 30.0
+AUTOSCALING_TARGET_CLAIM_LEASE_SECONDS = 30.0
+AUTOSCALING_TARGET_RECONCILE_INTERVAL_SECONDS = 1.0
 CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS = 1.0
 MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS = 60.0
 ORPHANED_CONTAINER_RECONCILE_INTERVAL_SECONDS = 30.0
@@ -90,6 +92,25 @@ ORPHANED_CONTAINER_CONFIRMATION_SECONDS = 60.0
 ORPHANED_CONTAINER_FAILURE_REASON = (
     "container execution state was lost before the workload reached a recoverable runtime"
 )
+
+
+def _next_autoscaling_target_reconcile(
+    result: AutoscaleResult | None,
+    *,
+    now: datetime,
+) -> datetime | None:
+    if result is None:
+        return None
+    if (
+        not result.lock_acquired
+        or result.current_containers > 0
+        or result.pending_containers > 0
+        or result.desired_containers > 0
+        or result.signal_value > 0
+        or result.actions
+    ):
+        return now + timedelta(seconds=AUTOSCALING_TARGET_RECONCILE_INTERVAL_SECONDS)
+    return None
 
 
 def _function_cron_job_lock_key(stub_id: str) -> str:
@@ -387,6 +408,7 @@ class SchedulerWorkloadControls:
     pod_control: PodControl | None = None
     functions: ScheduledFunctionControl | None = None
     preemption_recovery: SchedulerPreemptionRecovery | None = None
+    autoscaling_targets: SchedulerAutoscalingTargetService | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -705,6 +727,7 @@ class Scheduler:
 
         if not include_containers:
             return SchedulerRunResult()
+        current_time = now or utc_now()
         function_driver = self.workloads.function_autoscaler
         endpoint_driver = self.workloads.endpoints
         pod_driver = self.workloads.pods
@@ -713,60 +736,99 @@ class Scheduler:
             for driver in (function_driver, endpoint_driver, pod_driver)
             if driver is not None
         )
+        if not drivers:
+            return SchedulerRunResult(
+                function_retries=self._best_effort_schedule_function_retries(
+                    now=current_time,
+                    limit=container_limit,
+                )
+            )
+        targets = self.workloads.autoscaling_targets
+        if targets is None:
+            raise RuntimeError("scheduler autoscaling target service was not injected")
+        claims = targets.claim_due(
+            now=current_time,
+            limit=container_limit,
+            lease_seconds=AUTOSCALING_TARGET_CLAIM_LEASE_SECONDS,
+        )
+        stubs: tuple[AutoscalingStub, ...] = ()
         snapshot = AutoscalingPlacementSnapshot(
             stubs=(),
             active_by_stub={},
             containers_by_stub={},
             scheduler_statuses={},
         )
-        if drivers:
+        snapshot_failed = False
+        if claims:
             try:
                 stubs = tuple(
-                    stub
-                    for stub in self.runtime_services.scheduler_workloads.list_autoscaling_stubs()
-                    if any(driver.workload.selects(stub) for driver in drivers)
+                    self.runtime_services.scheduler_workloads.list_autoscaling_stubs(
+                        [claim.stub_id for claim in claims]
+                    )
                 )
                 snapshot = load_autoscaling_placement_snapshot(
                     self.runtime_services,
                     drivers[0].container_states,
                     stubs,
-                    now=now,
+                    now=current_time,
                 )
             except Exception:
+                snapshot_failed = True
+                stubs = ()
                 LOGGER.exception("scheduler placement snapshot failed")
+
+        results_by_driver: dict[int, list[AutoscaleResult]] = {}
+        failed_stub_ids: set[str] = set()
+        if snapshot_failed:
+            failed_stub_ids.update(claim.stub_id for claim in claims)
+        else:
+            for driver in drivers:
+                selected_ids = {stub.id for stub in stubs if driver.selects(stub)}
+                if not selected_ids:
+                    results_by_driver[id(driver)] = []
+                    continue
+                try:
+                    results_by_driver[id(driver)] = driver.reconcile_snapshot(
+                        snapshot,
+                        now=current_time,
+                        limit=container_limit,
+                    )
+                except Exception:
+                    failed_stub_ids.update(selected_ids)
+                    results_by_driver[id(driver)] = []
+                    LOGGER.exception("%s autoscaling failed", driver.workload.identity.kind.value)
+
+        results_by_stub_id = {
+            result.stub_id: result for results in results_by_driver.values() for result in results
+        }
+        retry_at = current_time + timedelta(seconds=AUTOSCALING_TARGET_RECONCILE_INTERVAL_SECONDS)
+        targets.complete_many(
+            [
+                (
+                    claim,
+                    (
+                        retry_at
+                        if claim.stub_id in failed_stub_ids
+                        else _next_autoscaling_target_reconcile(
+                            results_by_stub_id.get(claim.stub_id),
+                            now=current_time,
+                        )
+                    ),
+                )
+                for claim in claims
+            ],
+            now=current_time,
+        )
         return SchedulerRunResult(
             function_autoscaling=(
-                self._best_effort_reconcile_snapshot(
-                    function_driver,
-                    snapshot,
-                    now=now,
-                    limit=container_limit,
-                )
-                if function_driver is not None
-                else []
+                results_by_driver.get(id(function_driver), []) if function_driver else []
             ),
             endpoint_autoscaling=(
-                self._best_effort_reconcile_snapshot(
-                    endpoint_driver,
-                    snapshot,
-                    now=now,
-                    limit=container_limit,
-                )
-                if endpoint_driver is not None
-                else []
+                results_by_driver.get(id(endpoint_driver), []) if endpoint_driver else []
             ),
-            pod_autoscaling=(
-                self._best_effort_reconcile_snapshot(
-                    pod_driver,
-                    snapshot,
-                    now=now,
-                    limit=container_limit,
-                )
-                if pod_driver is not None
-                else []
-            ),
+            pod_autoscaling=(results_by_driver.get(id(pod_driver), []) if pod_driver else []),
             function_retries=self._best_effort_schedule_function_retries(
-                now=now, limit=container_limit
+                now=current_time, limit=container_limit
             ),
         )
 
@@ -1383,20 +1445,6 @@ class Scheduler:
             return self.reconcile_agent_pools(now=now)
         except Exception:
             LOGGER.exception("scheduler agent pool reconciliation failed")
-            return []
-
-    def _best_effort_reconcile_snapshot(
-        self,
-        driver: AutoscalingDriver,
-        snapshot: AutoscalingPlacementSnapshot,
-        *,
-        now: datetime | None,
-        limit: int,
-    ) -> list[AutoscaleResult]:
-        try:
-            return driver.reconcile_snapshot(snapshot, now=now, limit=limit)
-        except Exception:
-            LOGGER.exception("scheduler %s autoscaling failed", driver.workload.identity.kind.value)
             return []
 
     def _best_effort_expire_pods(
