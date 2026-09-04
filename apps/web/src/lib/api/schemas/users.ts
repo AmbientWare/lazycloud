@@ -99,15 +99,31 @@ export const invitationEmailSchema = z
     return domain.includes(".") && !domain.startsWith(".") && !domain.endsWith(".");
   }, "Enter a single address such as name@example.com");
 
+export const emailDeliverySchema = z.enum([
+  "queued",
+  "sent",
+  "delivered",
+  "bounced",
+  "complained",
+  "failed",
+]);
+export type EmailDelivery = z.infer<typeof emailDeliverySchema>;
+
 export const workspaceInvitationSchema = z
   .object({
     id: z.string(),
     workspace_id: z.string(),
     email: z.string(),
-    role: workspaceRoleSchema,
-    status: z.enum(["pending", "accepted", "declined", "revoked"]),
+    role: invitableRoleSchema,
     invited_by_user_id: z.string(),
     invited_by_name: z.string(),
+    // The server's answer against the server's clock. Never recomputed here: a
+    // browser comparing `expires_at` to its own would label offers by how far
+    // that clock had drifted.
+    expired: z.boolean(),
+    // What the provider said became of the message. Sending and arriving are
+    // different events minutes apart, so this is what answers "they never got it".
+    delivery: emailDeliverySchema,
     expires_at: timestampSchema,
     created_at: timestampSchema,
     updated_at: timestampSchema,
@@ -122,24 +138,16 @@ export const workspaceInvitationListSchema = z
   })
   .strict();
 
-/** An invitation as the person it was sent to sees it. */
-export const pendingInvitationSchema = z
+/** What the invitation link opens onto, before it is answered. */
+export const invitationPreviewSchema = z
   .object({
-    id: z.string(),
     workspace_id: z.string(),
     workspace_name: z.string(),
     email: z.string(),
-    role: workspaceRoleSchema,
+    role: invitableRoleSchema,
     invited_by_name: z.string(),
+    expired: z.boolean(),
     expires_at: timestampSchema,
-    created_at: timestampSchema,
   })
   .strict();
-export type PendingInvitation = z.infer<typeof pendingInvitationSchema>;
-
-export const pendingInvitationListSchema = z
-  .object({
-    data: z.array(pendingInvitationSchema),
-    next: z.string(),
-  })
-  .strict();
+export type InvitationPreview = z.infer<typeof invitationPreviewSchema>;

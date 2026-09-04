@@ -207,7 +207,7 @@ class DatabaseBillingAdmission:
         members = WorkspaceMemberRepository(session)
         if members.member_user_id_for_owner_email(owner_user_id=owner_user_id, email=email):
             return
-        open_offers = WorkspaceInvitationRepository(session).distinct_open_email_count_for_owner(
+        open_offers = WorkspaceInvitationRepository(session).open_email_count_for_owner(
             owner_user_id, now=utc_now()
         )
         self._assert_seat_free(

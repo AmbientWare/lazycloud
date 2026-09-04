@@ -18,3 +18,15 @@ way forever, so it is an `InvalidInputError`. A rate limit, a rejected key and
 an unverified sending domain are not the caller's doing and are fixed by waiting
 or by an operator, so they stay `UpstreamUnavailableError` and the thing to do
 about them is send again later.
+
+Delivery reports arrive on a public URL, so the signature is what stands in for
+a credential. Without it anybody could tell the platform that a colleague's
+invitation bounced, and an administrator would withdraw a working offer on a
+stranger's say-so. A signed body replays perfectly, so the delivery's own
+timestamp is what stops one being resent forever, and the comparison uses
+`compare_digest` because one that returns early leaks the answer a byte at a
+time.
+
+An event kind this platform does not act on parses to nothing rather than to an
+error. Answering a failure would have Resend retry, and eventually disable the
+endpoint, over deliveries that were never a problem.

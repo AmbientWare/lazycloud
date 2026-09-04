@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { apiRequest } from "@/lib/api/client";
 import {
-  pendingInvitationListSchema,
+  invitationPreviewSchema,
   workspaceInvitationListSchema,
   workspaceInvitationSchema,
   workspaceMemberListSchema,
@@ -89,25 +89,27 @@ export function removeWorkspaceMember(workspaceName: string, userId: string): Pr
   );
 }
 
-/** Invitations addressed to the signed-in account's verified email. */
-export function pendingInvitationsQueryOptions() {
+/** What the invitation link opens onto. Reading it never redeems the offer. */
+export function invitationPreviewQueryOptions(token: string) {
   return queryOptions({
-    queryKey: accountQueryKeys.invitations(),
-    queryFn: () => apiRequest("/api/v1/invitations", pendingInvitationListSchema),
-    staleTime: 30_000,
+    queryKey: accountQueryKeys.invitation(token),
+    queryFn: () =>
+      apiRequest(`/api/v1/invitations/${encodeURIComponent(token)}`, invitationPreviewSchema),
+    retry: false,
+    staleTime: 0,
   });
 }
 
-export function acceptInvitation(invitationId: string): Promise<WorkspaceMember> {
+export function acceptInvitation(token: string): Promise<WorkspaceMember> {
   return apiRequest(
-    `/api/v1/invitations/${encodeURIComponent(invitationId)}/accept`,
+    `/api/v1/invitations/${encodeURIComponent(token)}/accept`,
     workspaceMemberSchema,
     { method: "POST" },
   );
 }
 
-export function declineInvitation(invitationId: string): Promise<null> {
-  return apiRequest(`/api/v1/invitations/${encodeURIComponent(invitationId)}/decline`, z.null(), {
+export function declineInvitation(token: string): Promise<null> {
+  return apiRequest(`/api/v1/invitations/${encodeURIComponent(token)}/decline`, z.null(), {
     method: "POST",
   });
 }

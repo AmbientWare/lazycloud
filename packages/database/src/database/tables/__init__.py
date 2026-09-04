@@ -39,6 +39,7 @@ from database.tables.compute import (
     WorkspaceComputePolicyTable,
 )
 from database.tables.custom_domains import CustomDomainTable
+from database.tables.email_outbox import EmailOutboxTable
 from database.tables.endpoint_dispatch import EndpointDispatchTable
 from database.tables.execution import (
     CronJobRunTable,
@@ -122,6 +123,7 @@ __all__ = [
     "CustomDomainTable",
     "DatabaseBase",
     "DeploymentTable",
+    "EmailOutboxTable",
     "EndpointDispatchTable",
     "EventTable",
     "IdPayloadTable",

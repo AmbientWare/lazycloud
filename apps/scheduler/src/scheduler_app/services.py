@@ -56,6 +56,7 @@ from provider_clients import (
 )
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
 from provider_cloudflare import CloudflareSettings
+from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
 from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.capacity_reservations import RedisCapacityReservationRepository
@@ -95,6 +96,7 @@ from billing import (
     DatabaseBillingAdmission,
 )
 from database import DatabaseClient
+from notifications import EmailOutboxDrain
 from scheduler_app.execution_adapters import SchedulerWorkloadDirectoryAdapter
 
 
@@ -146,6 +148,7 @@ class SchedulerAppServices:
     object_storage: ObjectStorage
     volume_metering: PersistentVolumeMeteringService
     meter_outbox: BillingMeterOutboxService
+    email_outbox: EmailOutboxDrain
     plan_changes: BillingPlanChangeService
     billing_reconciliation: BillingReconciliationService
     billing_enforcement: BillingEnforcementService
@@ -206,6 +209,7 @@ class SchedulerAppServices:
         object_storage = ObjectStorage.from_settings(context, storage.object_store)
         stripe_settings = StripeSettings()
         meter_outbox = _meter_outbox(context, events, stripe_settings)
+        email_outbox = _email_outbox(context)
         plan_changes = _plan_changes(context, events, stripe_settings)
         billing_reconciliation = _billing_reconciliation(context, events, stripe_settings)
         retention = scheduler_retention(
@@ -363,6 +367,7 @@ class SchedulerAppServices:
             object_storage=object_storage,
             volume_metering=volume_metering,
             meter_outbox=meter_outbox,
+            email_outbox=email_outbox,
             plan_changes=plan_changes,
             billing_reconciliation=billing_reconciliation,
             billing_enforcement=billing_enforcement,
@@ -396,6 +401,22 @@ def _meter_outbox(
         database=context.database,
         payments=settings.provider_factory(),
         events=events,
+    )
+
+
+def _email_outbox(context: ServiceContext) -> EmailOutboxDrain:
+    """The sweep that delivers what the API already committed to sending.
+
+    Composed whether or not an email credential exists, for the same reason the
+    meter outbox is: a deployment without one is misconfigured rather than in a
+    mode, and a drain that is never going to run is exactly what nobody notices.
+    The adapter is built on the first sweep instead, which names the missing
+    variable and leaves the messages queued.
+    """
+
+    return EmailOutboxDrain(
+        database=context.database,
+        sender_factory=ResendSettings().sender_factory(),
     )
 
 

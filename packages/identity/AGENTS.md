@@ -64,37 +64,45 @@ compute and registered domains resolve through, so a second one would make
 
 ## Invitations
 
-An invitation is addressed to an email, because the person may have no account
-yet, and it becomes a membership only when a signed-in account whose address
-matches accepts it. That comparison is the one place an email decides anything
-about identity here, and it is deliberately narrow: the address is the one the
-provider reported at that account's last sign-in, both sides are folded through
-`fold_email`, the match happens under a row lock, and a mismatch answers "not
-found" rather than "forbidden" so an invitation id says nothing about who it is
-waiting on. There is no secret in the link, because a link that carried one
-would let a forwarded message bypass the address check.
+An invitation is a link. Whoever opens it, signed in as any account, joins, and
+the membership binds to that account. The address the message went to decides
+nothing about who may accept, because an address can be changed on the far side
+and reassigned to somebody else, so an offer keyed on one would follow the
+address rather than the person it was written for.
 
-Membership rows are written only at acceptance. An invited person has no row
-until then, so nothing that reads `workspace_members` can mistake an offer for
-access. One open offer per address per workspace is held by a partial unique
-index: a second invite is refused and names the resend that is the way to send
-it again. Accepting an offer that carries more authority than a membership
-someone was meanwhile given raises the role to what was offered, because the
-offer is a live administrator decision rather than a formality to consume.
-Answered invitations stay as rows, in their terminal status, because the audit
-history points at them.
+What protects the offer is the secret in the link: 32 bytes, stored only as its
+SHA-256 so a database dump is a list of offers rather than a set of working keys,
+redeemed under a row lock, and replaced whenever the offer is sent again. That
+last part is why a resend is safe: the message went astray once, and leaving the
+old link live would leave whatever it went astray into holding a way in. Holding
+the link is the claim being made, so forwarding one hands somebody else a seat,
+and the message says so.
+
+Only open offers are rows. Accepting, declining and revoking each delete theirs,
+because the membership records an acceptance and the workspace audit history
+records every outcome. A table that also kept answered offers would be a second,
+slower account of the same events, with nothing keeping the two in step. Whether
+an offer has expired is decided here against one clock and published as a field,
+never recomputed by whoever renders it, or two people looking at one workspace
+would disagree about which offers are live.
+
+Membership rows are written only at acceptance, so nothing reading
+`workspace_members` can mistake an offer for access. There is one open offer per
+address per workspace, and a second invite is refused and names the resend
+instead.
+Accepting an offer carrying more authority than a membership someone was
+meanwhile given raises the role to what was offered, because the offer is a live
+administrator decision rather than a formality to consume.
 
 An open offer holds a seat. Admission counts it alongside the members it would
 join, so a plan with one seat left refuses the second invitation rather than
 sending five emails and turning four people away at the door, where the refusal
 reaches somebody who cannot act on it.
 
-Delivery is separate from the record. The row is committed first, then the
-message is sent, and both a provider refusal and a deployment with no email
-provider configured are raised to the caller with the invitation left standing,
-because resending once the cause is fixed is the thing to do about either. An
-invitation the dashboard reports as sent and nobody receives is the failure that
-arrangement exists to prevent.
+Nothing sends the message inline. The invitation row and the queued message
+commit together and `notifications` delivers it, so no request waits on an email
+provider, and there is no offer nobody was told about and no message about an
+offer that rolled back.
 
 ## Signing in
 

@@ -10,6 +10,14 @@ from shared.errors import InvalidInputError, UpstreamUnavailableError
 API_BASE_URL = "https://api.resend.com"
 
 
+class _SendResult(BaseModel):
+    """The part of an accepted send this platform keeps: the id events name."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = ""
+
+
 class _ErrorBody(BaseModel):
     """The part of a Resend refusal worth repeating to an operator.
 
@@ -34,7 +42,7 @@ class ResendEmailSender:
     client: httpx.Client
     from_address: str
 
-    def send(self, message: EmailMessage) -> None:
+    def send(self, message: EmailMessage) -> str:
         body: dict[str, str | list[str]] = {
             "from": self.from_address,
             "to": [message.to],
@@ -46,9 +54,20 @@ class ResendEmailSender:
             response = self.client.post("/emails", json=body)
         except httpx.HTTPError as exc:
             raise UpstreamUnavailableError(f"Resend could not be reached: {exc}") from exc
-        if response.is_success:
-            return
-        _raise_refusal(response)
+        if not response.is_success:
+            _raise_refusal(response)
+        # Accepted, and the id is how a delivery event is matched to this
+        # message later. An empty one has to be caught here rather than defaulted
+        # through, or the message is sent and permanently unattributable.
+        try:
+            accepted = _SendResult.model_validate_json(response.content)
+        except ValidationError as exc:
+            raise UpstreamUnavailableError(
+                "Resend accepted the message but its answer was unreadable"
+            ) from exc
+        if not accepted.id:
+            raise UpstreamUnavailableError("Resend accepted the message but named no id for it")
+        return accepted.id
 
 
 def _raise_refusal(response: httpx.Response) -> None:

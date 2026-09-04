@@ -21,6 +21,7 @@ dependencies = [
     "identity",
     "images",
     "networking",
+    "notifications",
     "observability",
     "operations",
     "provider-clients",

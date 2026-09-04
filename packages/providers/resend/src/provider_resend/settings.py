@@ -22,6 +22,12 @@ class ResendSettings(BaseSettings):
     """Must be on a domain the Resend account has verified, or every send is
     refused with a 403 naming the domain."""
 
+    webhook_secret: SecretStr = SecretStr("")
+    """The Svix secret deliveries are signed with, issued when the endpoint is
+    registered and a different secret from the key above. Without it the endpoint
+    refuses every delivery, which is the safe direction: the URL is public and
+    what arrives on it decides what an administrator is told."""
+
     timeout_seconds: float = Field(default=8.0, gt=0)
     """Lower than a background integration's, because a person is waiting on the
     request that sends this. The invitation row is already committed when the
@@ -36,6 +42,16 @@ class ResendSettings(BaseSettings):
     @property
     def configured(self) -> bool:
         return bool(self.api_key.get_secret_value())
+
+    @property
+    def webhooks_configured(self) -> bool:
+        """Separate from `configured` because the two arrive separately.
+
+        A deployment can send mail before its endpoint is registered, since the
+        secret only exists once the endpoint does, and one that sends but cannot
+        yet hear what happened is a real intermediate state.
+        """
+        return bool(self.webhook_secret.get_secret_value())
 
     def sender(self) -> ResendEmailSender:
         """Build the adapter, refusing to pretend when nothing was configured.

@@ -11,13 +11,13 @@
 import { Route as rootRouteImport } from "./routes/__root"
 import { Route as SigninRouteImport } from "./routes/signin"
 import { Route as PricingRouteImport } from "./routes/pricing"
-import { Route as InvitationsRouteImport } from "./routes/invitations"
 import { Route as DashboardRouteImport } from "./routes/dashboard"
 import { Route as CallbackRouteImport } from "./routes/callback"
 import { Route as ActivateRouteImport } from "./routes/activate"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as LegalTermsRouteImport } from "./routes/legal/terms"
 import { Route as LegalPrivacyRouteImport } from "./routes/legal/privacy"
+import { Route as InvitationsTokenRouteImport } from "./routes/invitations.$token"
 import { Route as WWorkspaceRouteRouteImport } from "./routes/w/$workspace/route"
 import { Route as WWorkspaceIndexRouteImport } from "./routes/w/$workspace/index"
 import { Route as WWorkspaceTasksRouteImport } from "./routes/w/$workspace/tasks"
@@ -42,11 +42,6 @@ const PricingRoute = PricingRouteImport.update({
   path: "/pricing",
   getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import("./routes/pricing.lazy").then((d) => d.Route))
-const InvitationsRoute = InvitationsRouteImport.update({
-  id: "/invitations",
-  path: "/invitations",
-  getParentRoute: () => rootRouteImport,
-} as any)
 const DashboardRoute = DashboardRouteImport.update({
   id: "/dashboard",
   path: "/dashboard",
@@ -77,6 +72,11 @@ const LegalPrivacyRoute = LegalPrivacyRouteImport.update({
   path: "/legal/privacy",
   getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import("./routes/legal/privacy.lazy").then((d) => d.Route))
+const InvitationsTokenRoute = InvitationsTokenRouteImport.update({
+  id: "/invitations/$token",
+  path: "/invitations/$token",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WWorkspaceRouteRoute = WWorkspaceRouteRouteImport.update({
   id: "/w/$workspace",
   path: "/w/$workspace",
@@ -153,10 +153,10 @@ export interface FileRoutesByFullPath {
   "/activate": typeof ActivateRoute
   "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
-  "/invitations": typeof InvitationsRoute
   "/pricing": typeof PricingRoute
   "/signin": typeof SigninRoute
   "/w/$workspace": typeof WWorkspaceRouteRouteWithChildren
+  "/invitations/$token": typeof InvitationsTokenRoute
   "/legal/privacy": typeof LegalPrivacyRoute
   "/legal/terms": typeof LegalTermsRoute
   "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
@@ -177,9 +177,9 @@ export interface FileRoutesByTo {
   "/activate": typeof ActivateRoute
   "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
-  "/invitations": typeof InvitationsRoute
   "/pricing": typeof PricingRoute
   "/signin": typeof SigninRoute
+  "/invitations/$token": typeof InvitationsTokenRoute
   "/legal/privacy": typeof LegalPrivacyRoute
   "/legal/terms": typeof LegalTermsRoute
   "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
@@ -201,10 +201,10 @@ export interface FileRoutesById {
   "/activate": typeof ActivateRoute
   "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
-  "/invitations": typeof InvitationsRoute
   "/pricing": typeof PricingRoute
   "/signin": typeof SigninRoute
   "/w/$workspace": typeof WWorkspaceRouteRouteWithChildren
+  "/invitations/$token": typeof InvitationsTokenRoute
   "/legal/privacy": typeof LegalPrivacyRoute
   "/legal/terms": typeof LegalTermsRoute
   "/w/$workspace/tasks": typeof WWorkspaceTasksRouteWithChildren
@@ -227,10 +227,10 @@ export interface FileRouteTypes {
     | "/activate"
     | "/callback"
     | "/dashboard"
-    | "/invitations"
     | "/pricing"
     | "/signin"
     | "/w/$workspace"
+    | "/invitations/$token"
     | "/legal/privacy"
     | "/legal/terms"
     | "/w/$workspace/tasks"
@@ -251,9 +251,9 @@ export interface FileRouteTypes {
     | "/activate"
     | "/callback"
     | "/dashboard"
-    | "/invitations"
     | "/pricing"
     | "/signin"
+    | "/invitations/$token"
     | "/legal/privacy"
     | "/legal/terms"
     | "/w/$workspace/tasks"
@@ -274,10 +274,10 @@ export interface FileRouteTypes {
     | "/activate"
     | "/callback"
     | "/dashboard"
-    | "/invitations"
     | "/pricing"
     | "/signin"
     | "/w/$workspace"
+    | "/invitations/$token"
     | "/legal/privacy"
     | "/legal/terms"
     | "/w/$workspace/tasks"
@@ -299,10 +299,10 @@ export interface RootRouteChildren {
   ActivateRoute: typeof ActivateRoute
   CallbackRoute: typeof CallbackRoute
   DashboardRoute: typeof DashboardRoute
-  InvitationsRoute: typeof InvitationsRoute
   PricingRoute: typeof PricingRoute
   SigninRoute: typeof SigninRoute
   WWorkspaceRouteRoute: typeof WWorkspaceRouteRouteWithChildren
+  InvitationsTokenRoute: typeof InvitationsTokenRoute
   LegalPrivacyRoute: typeof LegalPrivacyRoute
   LegalTermsRoute: typeof LegalTermsRoute
 }
@@ -321,13 +321,6 @@ declare module "@tanstack/react-router" {
       path: "/pricing"
       fullPath: "/pricing"
       preLoaderRoute: typeof PricingRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    "/invitations": {
-      id: "/invitations"
-      path: "/invitations"
-      fullPath: "/invitations"
-      preLoaderRoute: typeof InvitationsRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/dashboard": {
@@ -370,6 +363,13 @@ declare module "@tanstack/react-router" {
       path: "/legal/privacy"
       fullPath: "/legal/privacy"
       preLoaderRoute: typeof LegalPrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/invitations/$token": {
+      id: "/invitations/$token"
+      path: "/invitations/$token"
+      fullPath: "/invitations/$token"
+      preLoaderRoute: typeof InvitationsTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/w/$workspace": {
@@ -539,10 +539,10 @@ const rootRouteChildren: RootRouteChildren = {
   ActivateRoute: ActivateRoute,
   CallbackRoute: CallbackRoute,
   DashboardRoute: DashboardRoute,
-  InvitationsRoute: InvitationsRoute,
   PricingRoute: PricingRoute,
   SigninRoute: SigninRoute,
   WWorkspaceRouteRoute: WWorkspaceRouteRouteWithChildren,
+  InvitationsTokenRoute: InvitationsTokenRoute,
   LegalPrivacyRoute: LegalPrivacyRoute,
   LegalTermsRoute: LegalTermsRoute,
 }

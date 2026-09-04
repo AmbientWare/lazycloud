@@ -462,6 +462,7 @@ class ApiServiceCore:
     agent_disconnect_reconciliation_settings: AgentDisconnectReconciliationSettings
     gateway_settings: GatewaySettings
     stripe_settings: StripeSettings
+    resend_settings: ResendSettings
     payment_provider: Callable[[], PaymentProvider]
     workspace_change_stream_settings: WorkspaceChangeStreamSettings
     agent_binary_settings: AgentBinarySettings
@@ -632,6 +633,9 @@ class ApiServices(ApiServiceCore):
         )
         gateway_config = gateway_settings or GatewaySettings()
         stripe_config = stripe_settings or StripeSettings()
+        # Read here only so the webhook endpoint can check the signature on a
+        # delivery report. Sending belongs to the scheduler.
+        resend_config = resend_settings or ResendSettings()
         workspace_change_stream_config = (
             workspace_change_stream_settings or WorkspaceChangeStreamSettings()
         )
@@ -766,11 +770,10 @@ class ApiServices(ApiServiceCore):
             ).create()
         )
         payment_provider = stripe_config.provider_factory()
-        # Lazy for the same reason as the two below: a deployment without the
-        # email credential still starts, and the invite route names what is missing.
+        # No mailer here. Inviting queues a message and returns. The scheduler's
+        # drain holds the email credential and talks to the provider.
         invitations = WorkspaceInvitationService(
             context,
-            mailer=(resend_settings or ResendSettings()).sender_factory(),
             invitations_url=f"{gateway_config.public_http_url.rstrip('/')}/invitations",
         )
         # Neither adapter is constructed here — both are callables that read their
@@ -1017,6 +1020,7 @@ class ApiServices(ApiServiceCore):
             agent_disconnect_reconciliation_settings=agent_disconnect_reconciliation_config,
             gateway_settings=gateway_config,
             stripe_settings=stripe_config,
+            resend_settings=resend_config,
             payment_provider=payment_provider,
             workspace_change_stream_settings=workspace_change_stream_config,
             agent_binary_settings=agent_artifact_config,
@@ -1358,6 +1362,7 @@ def _compose_api_services(
         agent_disconnect_reconciliation_settings=core.agent_disconnect_reconciliation_settings,
         gateway_settings=core.gateway_settings,
         stripe_settings=core.stripe_settings,
+        resend_settings=core.resend_settings,
         payment_provider=core.payment_provider,
         workspace_change_stream_settings=core.workspace_change_stream_settings,
         agent_binary_settings=core.agent_binary_settings,

@@ -1,43 +1,54 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import timedelta
 
 import pytest
 from api.server.services import ApiServices
 from database.repositories.billing import BillingAccountRepository
+from database.repositories.email_outbox import EmailOutboxRepository
 from database.repositories.identity import UserRepository
 from identity.auth import AuthService
 from identity.invitations import WorkspaceInvitationService
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
-from shared.email import EmailMessage
 from shared.errors import ConflictError, NotFoundError
-from shared.identity import (
-    AuthTokenRecord,
-    WorkspaceInvitationRole,
-    WorkspaceInvitationStatus,
-    WorkspaceRole,
-)
+from shared.identity import AuthTokenRecord, WorkspaceInvitationRole, WorkspaceRole
+from shared.timestamps import utc_now
 from tests.service_fixtures import owned_workspace
 
 from billing import DatabaseBillingAdmission
 
-
-@dataclass(slots=True)
-class _Outbox:
-    sent: list[EmailMessage] = field(default_factory=list)
-
-    def send(self, message: EmailMessage) -> None:
-        self.sent.append(message)
+_INVITATIONS_URL = "https://lazycloud.test/invitations"
 
 
-def _service(services: ApiServices, outbox: _Outbox) -> WorkspaceInvitationService:
+def _service(services: ApiServices, *, ttl: timedelta | None = None) -> WorkspaceInvitationService:
     return WorkspaceInvitationService(
         services.context,
-        mailer=lambda: outbox,
-        invitations_url="https://lazycloud.test/invitations",
+        invitations_url=_INVITATIONS_URL,
+        **({"ttl": ttl} if ttl is not None else {}),
     )
+
+
+def _queued_links(services: ApiServices) -> list[str]:
+    """The links the outbox is holding, read the way the drain reads them.
+
+    Through the queue rather than a return value, because the link is only ever
+    in the message: nothing hands it back to the caller who sent the invitation,
+    which is what stops it being logged beside a request.
+    """
+    with services.context.database.session() as session:
+        claimed = EmailOutboxRepository(session).claim(
+            now=utc_now(),
+            limit=50,
+            claim_token="test-drain",
+        )
+    prefix = f"{_INVITATIONS_URL}/"
+    return [
+        line[len(prefix) :].strip()
+        for item in claimed
+        for line in item.message.text.splitlines()
+        if line.startswith(prefix)
+    ]
 
 
 def _account(services: ApiServices, name: str, email: str) -> tuple[str, AuthTokenRecord]:
@@ -74,141 +85,138 @@ def _signed_in(
     return user_id, token
 
 
-def test_only_the_addressed_account_can_answer_an_invitation(
-    isolated_services: ApiServices,
-) -> None:
-    """The address on the invitation is the one place an email decides identity.
+def test_the_link_is_what_joins_and_it_works_once(isolated_services: ApiServices) -> None:
+    """Holding the link is the claim, and the account redeeming it is the member.
 
-    Somebody else who learns the invitation id gets "not found", the same answer
-    as for an id that never existed, and the offer stays open for the person it
-    was made to. Answering it twice cannot seat them twice, and the address is
-    matched folded, so the case it was typed in does not decide who may accept.
+    Deliberately an account whose address is nothing like the one invited: an
+    offer keyed on the address would refuse the person it was sent to as soon as
+    they changed their email, which is the failure this design removes. The
+    second redemption finds no row, because accepting deleted it.
     """
     workspace = owned_workspace(isolated_services.control_plane_service, "team")
     _owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
-    outbox = _Outbox()
-    service = _service(isolated_services, outbox)
+    service = _service(isolated_services)
 
-    listing = service.invite(
+    service.invite(
         workspace.id,
         email="Invited@Example.test",
         role=WorkspaceInvitationRole.Administrator,
         actor=owner,
         admission=DatabaseBillingAdmission(),
     )
-    assert listing.invitation.email == "invited@example.test"
-    assert [message.to for message in outbox.sent] == ["invited@example.test"]
-    assert "https://lazycloud.test/invitations" in outbox.sent[0].text
+    token = _queued_links(isolated_services)[0]
 
-    with pytest.raises(ConflictError):
-        service.invite(
-            workspace.id,
-            email="invited@example.test",
-            role=WorkspaceInvitationRole.Member,
-            actor=owner,
-            admission=DatabaseBillingAdmission(),
-        )
+    joiner_id, joiner = _account(isolated_services, "joiner", "different@elsewhere.test")
+    preview = service.preview(token)
+    assert preview.workspace.name == "team"
+    assert preview.invitation.email == "invited@example.test"
+    assert not preview.expired
 
-    stranger_id, stranger = _account(isolated_services, "stranger", "stranger@example.test")
-    assert service.pending_for_user(stranger_id) == []
-    with pytest.raises(NotFoundError):
-        service.accept(listing.invitation.id, actor=stranger, admission=DatabaseBillingAdmission())
+    accepted = service.accept(token, actor=joiner, admission=DatabaseBillingAdmission())
 
-    invited_id, invited = _account(isolated_services, "invited", "INVITED@example.test")
-    assert [item.workspace.name for item in service.pending_for_user(invited_id)] == ["team"]
-    accepted = service.accept(
-        listing.invitation.id, actor=invited, admission=DatabaseBillingAdmission()
-    )
     assert accepted.membership.role is WorkspaceRole.Administrator
-    assert isolated_services.users.membership(workspace_id=workspace.id, user_id=invited_id)
-    with pytest.raises(ConflictError):
-        service.accept(listing.invitation.id, actor=invited, admission=DatabaseBillingAdmission())
-    assert service.pending(workspace.id) == []
-
-    # The address is now a member, so a fresh offer to it is refused outright.
-    with pytest.raises(ConflictError):
-        service.invite(
-            workspace.id,
-            email="invited@example.test",
-            role=WorkspaceInvitationRole.Member,
-            actor=owner,
-            admission=DatabaseBillingAdmission(),
-        )
+    assert accepted.user.id == joiner_id
+    assert service.open_offers(workspace.id) == []
+    with pytest.raises(NotFoundError):
+        service.accept(token, actor=joiner, admission=DatabaseBillingAdmission())
 
 
-def test_an_expired_or_revoked_invitation_cannot_be_accepted(
+def test_a_resent_offer_replaces_the_link_the_first_message_carried(
+    isolated_services: ApiServices,
+) -> None:
+    """A resend exists because the first message went astray.
+
+    Leaving its link live would leave whatever it went astray into holding a way
+    in, so the old one stops opening anything.
+    """
+    workspace = owned_workspace(isolated_services.control_plane_service, "team")
+    _owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
+    service = _service(isolated_services)
+    listing = service.invite(
+        workspace.id,
+        email="invited@example.test",
+        role=WorkspaceInvitationRole.Member,
+        actor=owner,
+        admission=DatabaseBillingAdmission(),
+    )
+    first = _queued_links(isolated_services)[0]
+
+    service.resend(workspace.id, listing.invitation.id, actor=owner)
+    second = _queued_links(isolated_services)[0]
+
+    assert first != second
+    _joiner_id, joiner = _account(isolated_services, "joiner", "joiner@example.test")
+    with pytest.raises(NotFoundError):
+        service.accept(first, actor=joiner, admission=DatabaseBillingAdmission())
+    assert service.accept(second, actor=joiner, admission=DatabaseBillingAdmission())
+
+
+def test_revoking_takes_the_offer_off_the_table(isolated_services: ApiServices) -> None:
+    workspace = owned_workspace(isolated_services.control_plane_service, "team")
+    _owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
+    service = _service(isolated_services)
+    listing = service.invite(
+        workspace.id,
+        email="invited@example.test",
+        role=WorkspaceInvitationRole.Member,
+        actor=owner,
+        admission=DatabaseBillingAdmission(),
+    )
+    token = _queued_links(isolated_services)[0]
+
+    service.revoke(workspace.id, listing.invitation.id, actor=owner)
+
+    assert service.open_offers(workspace.id) == []
+    _joiner_id, joiner = _account(isolated_services, "joiner", "joiner@example.test")
+    with pytest.raises(NotFoundError):
+        service.accept(token, actor=joiner, admission=DatabaseBillingAdmission())
+
+
+def test_expiry_is_the_servers_answer_and_an_expired_link_joins_nobody(
     isolated_services: ApiServices,
 ) -> None:
     workspace = owned_workspace(isolated_services.control_plane_service, "team")
     _owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
-    service = _service(isolated_services, _Outbox())
-    invited_id, invited = _account(isolated_services, "invited", "invited@example.test")
-
-    revoked = service.invite(
+    expiring = _service(isolated_services, ttl=timedelta(seconds=-1))
+    expiring.invite(
         workspace.id,
         email="invited@example.test",
         role=WorkspaceInvitationRole.Member,
         actor=owner,
         admission=DatabaseBillingAdmission(),
     )
-    assert (
-        service.revoke(workspace.id, revoked.invitation.id, actor=owner).status
-        is WorkspaceInvitationStatus.Revoked
-    )
-    with pytest.raises(ConflictError):
-        service.accept(revoked.invitation.id, actor=invited, admission=DatabaseBillingAdmission())
+    token = _queued_links(isolated_services)[0]
+    service = _service(isolated_services)
 
-    expiring = WorkspaceInvitationService(
-        isolated_services.context,
-        mailer=_Outbox,
-        invitations_url="https://lazycloud.test/invitations",
-        ttl=timedelta(seconds=-1),
-    ).invite(
-        workspace.id,
-        email="invited@example.test",
-        role=WorkspaceInvitationRole.Member,
-        actor=owner,
-        admission=DatabaseBillingAdmission(),
-    )
-    assert service.pending_for_user(invited_id) == []
+    assert [item.expired for item in service.open_offers(workspace.id)] == [True]
+    assert service.preview(token).expired
+    _joiner_id, joiner = _account(isolated_services, "joiner", "joiner@example.test")
     with pytest.raises(ConflictError):
-        service.accept(expiring.invitation.id, actor=invited, admission=DatabaseBillingAdmission())
-    # Resending is what brings an expired offer back.
-    service.resend(workspace.id, expiring.invitation.id, actor=owner)
-    assert [item.invitation.id for item in service.pending_for_user(invited_id)] == [
-        expiring.invitation.id
-    ]
-    assert isolated_services.users.membership(workspace_id=workspace.id, user_id=invited_id) is None
+        service.accept(token, actor=joiner, admission=DatabaseBillingAdmission())
 
 
 def test_accepting_grants_the_role_the_offer_named(isolated_services: ApiServices) -> None:
-    """An offer outstanding when somebody is added directly is still an admin's decision.
-
-    Consuming it silently would leave the person with the lesser role an
-    unrelated action gave them and no invitation left to resend.
-    """
+    """An offer outstanding when somebody is added directly is still an admin's decision."""
     workspace = owned_workspace(isolated_services.control_plane_service, "team")
     _owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
-    service = _service(isolated_services, _Outbox())
-    invited_id, invited = _account(isolated_services, "invited", "invited@example.test")
-
-    listing = service.invite(
+    service = _service(isolated_services)
+    service.invite(
         workspace.id,
         email="invited@example.test",
         role=WorkspaceInvitationRole.Administrator,
         actor=owner,
         admission=DatabaseBillingAdmission(),
     )
+    token = _queued_links(isolated_services)[0]
+    joiner_id, joiner = _account(isolated_services, "joiner", "joiner@example.test")
     isolated_services.users.add_member(
         workspace_id=workspace.id,
-        user_id=invited_id,
+        user_id=joiner_id,
         role=WorkspaceRole.Member,
         admission=DatabaseBillingAdmission(),
     )
 
-    accepted = service.accept(
-        listing.invitation.id, actor=invited, admission=DatabaseBillingAdmission()
-    )
+    accepted = service.accept(token, actor=joiner, admission=DatabaseBillingAdmission())
 
     assert accepted.membership.role is WorkspaceRole.Administrator
 
