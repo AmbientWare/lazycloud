@@ -83,6 +83,7 @@ from shared.scheduling import (
     SchedulerContainerAddressMap,
     SchedulerContainerState,
     SchedulerContainerStatus,
+    WorkerContainerState,
     gpu_count_for_capacity,
 )
 from shared.tasks import TaskStatus
@@ -1107,7 +1108,7 @@ class PodControlService:
     def _mark_container_running(
         self,
         container: ContainerRecord,
-        state: SchedulerContainerState,
+        state: WorkerContainerState,
     ) -> None:
         assigned_worker_id = state.worker_id or container.runtime_worker_id
         assigned_machine_id = container.runtime_machine_id

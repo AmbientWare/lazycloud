@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum
 from time import monotonic
-from typing import Protocol
+from typing import Literal, Protocol
 
 from shared.container_requests import (
     StopContainerReason,
@@ -19,11 +19,11 @@ from shared.gpu import concrete_gpu_type
 from shared.image_building.authoring import LinuxArchitecture
 from shared.scheduling import (
     DEFAULT_CONTAINER_STATE_TTL_SECONDS,
-    SchedulerContainerState,
     SchedulerContainerStatus,
-    SchedulerWorkerRequest,
     WorkerCapacityChange,
-    WorkerCapacityPlan,
+    WorkerCapacityResult,
+    WorkerContainerState,
+    WorkerExecutionRequest,
     gpu_count_for_capacity,
 )
 from shared.timestamps import utc_now
@@ -85,20 +85,20 @@ class WorkerSchedulerRequestStatus(StrEnum):
 
 
 class WorkerSchedulerRequestWorkerRepository(Protocol):
-    def get_next_container_request(self, worker_id: str) -> SchedulerWorkerRequest | None: ...
+    def get_next_container_request(self, worker_id: str) -> WorkerExecutionRequest | None: ...
 
     def acknowledge_worker_request(self, worker_id: str, container_id: str) -> bool: ...
 
     def update_worker_capacity(
         self,
         worker_id: str,
-        request: SchedulerWorkerRequest,
-        change: WorkerCapacityChange,
-    ) -> WorkerCapacityPlan: ...
+        request: WorkerExecutionRequest,
+        change: Literal[WorkerCapacityChange.Add],
+    ) -> WorkerCapacityResult: ...
 
 
 class WorkerSchedulerRequestContainerRepository(ContainerFinalizationRepository, Protocol):
-    def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
+    def get_container_state(self, container_id: str) -> WorkerContainerState | None: ...
 
 
 class WorkerSchedulerRequestLifecycle(Protocol):
@@ -111,13 +111,13 @@ class WorkerSchedulerRequestLifecycle(Protocol):
 
 
 class WorkerSchedulerRequestImageBuildExecutor(Protocol):
-    def execute(self, request: SchedulerWorkerRequest) -> WorkerImageBuildExecutionResult: ...
+    def execute(self, request: WorkerExecutionRequest) -> WorkerImageBuildExecutionResult: ...
 
 
 class WorkerSchedulerRequestImageBuildResultReporter(Protocol):
     def report_image_build_result(
         self,
-        request: SchedulerWorkerRequest,
+        request: WorkerExecutionRequest,
         result: WorkerImageBuildExecutionResult,
     ) -> None: ...
 
@@ -131,7 +131,7 @@ class WorkerSchedulerRequestResult(ContractModel):
     status: WorkerSchedulerRequestStatus
     action: WorkerSchedulerRequestAction
     container_id: str = ""
-    request: SchedulerWorkerRequest | None = None
+    request: WorkerExecutionRequest | None = None
     execution: ContainerExecutionResult | None = None
     image_build: WorkerImageBuildExecutionResult | None = None
     image_build_report_pending: bool = False
@@ -149,7 +149,7 @@ class WorkerSchedulerRequestResult(ContractModel):
 
 @dataclass(slots=True)
 class _BackgroundExecution:
-    request: SchedulerWorkerRequest
+    request: WorkerExecutionRequest
     thread: threading.Thread | None = None
     result: WorkerSchedulerRequestResult | None = None
     pid: int = 0
@@ -176,7 +176,7 @@ class _Delivery:
 
 @dataclass(slots=True)
 class _PendingImageBuildResult:
-    request: SchedulerWorkerRequest
+    request: WorkerExecutionRequest
     result: WorkerImageBuildExecutionResult
     attempts: int = 0
     report_after: float = 0.0
@@ -262,7 +262,7 @@ class WorkerSchedulerRequestProcessor:
         self._end_delivery(request.container_id, resolved=True)
         return result
 
-    def _process_request(self, request: SchedulerWorkerRequest) -> WorkerSchedulerRequestResult:
+    def _process_request(self, request: WorkerExecutionRequest) -> WorkerSchedulerRequestResult:
         state = self.containers.get_container_state(request.container_id)
         delivery = plan_delivered_container_request(
             state_missing=state is None,
@@ -318,7 +318,7 @@ class WorkerSchedulerRequestProcessor:
             )
         return self._release_capacity(request, result)
 
-    def _begin_delivery(self, request: SchedulerWorkerRequest) -> bool:
+    def _begin_delivery(self, request: WorkerExecutionRequest) -> bool:
         """Take this delivery, or refuse it because the worker already holds it."""
 
         with self._delivery_lock:
@@ -475,7 +475,7 @@ class WorkerSchedulerRequestProcessor:
 
     def _start_background(
         self,
-        request: SchedulerWorkerRequest,
+        request: WorkerExecutionRequest,
         context: ContainerExecutionContext,
     ) -> WorkerSchedulerRequestResult:
         # Taken here rather than on the thread: this call returns to a loop that
@@ -607,7 +607,7 @@ class WorkerSchedulerRequestProcessor:
 
     def _execute_image_build_request(
         self,
-        request: SchedulerWorkerRequest,
+        request: WorkerExecutionRequest,
     ) -> WorkerSchedulerRequestResult:
         image_builds = self.image_builds
         image_build_results = self.image_build_results
@@ -697,7 +697,7 @@ class WorkerSchedulerRequestProcessor:
 
     def _defer_image_build_result(
         self,
-        request: SchedulerWorkerRequest,
+        request: WorkerExecutionRequest,
         result: WorkerImageBuildExecutionResult,
     ) -> None:
         self._pending_image_build_results[request.container_id] = _PendingImageBuildResult(
@@ -755,7 +755,7 @@ class WorkerSchedulerRequestProcessor:
 
     def _metered_image_build(
         self,
-        request: SchedulerWorkerRequest,
+        request: WorkerExecutionRequest,
         image_builds: WorkerSchedulerRequestImageBuildExecutor,
         usage_recorder: WorkerUsageWindowRecorder,
     ) -> WorkerImageBuildExecutionResult:
@@ -805,7 +805,7 @@ class WorkerSchedulerRequestProcessor:
 
     def _drop_request(
         self,
-        request: SchedulerWorkerRequest,
+        request: WorkerExecutionRequest,
         delivery: WorkerDeliveredRequestPlan,
     ) -> WorkerSchedulerRequestResult:
         state_deleted = False
@@ -842,7 +842,7 @@ class WorkerSchedulerRequestProcessor:
 
     def _release_capacity(
         self,
-        request: SchedulerWorkerRequest,
+        request: WorkerExecutionRequest,
         result: WorkerSchedulerRequestResult,
     ) -> WorkerSchedulerRequestResult:
         try:
@@ -884,7 +884,7 @@ def _billable_gpu(*, gpu_count: int, worker_gpu_type: str) -> str:
 
 
 def image_build_request_context(
-    request: SchedulerWorkerRequest,
+    request: WorkerExecutionRequest,
     *,
     worker_gpu_type: str,
 ) -> ContainerRequestContext:
@@ -909,7 +909,7 @@ def image_build_request_context(
 
 
 def container_execution_context_from_scheduler_request(
-    request: SchedulerWorkerRequest,
+    request: WorkerExecutionRequest,
     *,
     worker_gpu_type: str,
     node_cpu_millicores: int = 0,

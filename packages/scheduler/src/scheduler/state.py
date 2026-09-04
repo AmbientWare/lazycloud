@@ -41,6 +41,8 @@ from shared.scheduling import (
     SchedulerWorkerStatus,
     WorkerCapacityChange,
     WorkerCapacityPlan,
+    WorkerCapacityResult,
+    WorkerExecutionRequest,
     WorkerRemovalResult,
     WorkerRepositoryLockKind,
     WorkerRepositoryLockRecord,
@@ -1300,6 +1302,34 @@ class RedisSchedulerWorkerRepository:
                 mapping=redis_serialization.dump_model_hash(plan.worker),
             )
             return plan
+
+        return self._with_worker_lock(worker_id, write)
+
+    def release_worker_capacity(
+        self,
+        worker_id: str,
+        request: WorkerExecutionRequest,
+    ) -> WorkerCapacityResult:
+        def write() -> WorkerCapacityResult:
+            worker = self.get_worker(worker_id)
+            if worker is None:
+                raise WorkerStateNotFoundError(worker_id)
+            restored = _restored_worker_capacity(
+                worker,
+                cpu_millicores=request.cpu_millicores,
+                memory_mib=capacity_memory_mib(request.memory_mib),
+                gpu_count=gpu_count_for_capacity(request.gpu, request.gpu_count),
+            )
+            self.redis.hash_set(
+                self.keys.worker_state(worker_id),
+                mapping=redis_serialization.dump_model_hash(restored),
+            )
+            return WorkerCapacityResult(
+                worker=restored,
+                request=request,
+                change=WorkerCapacityChange.Add,
+                accepted=True,
+            )
 
         return self._with_worker_lock(worker_id, write)
 
@@ -3413,23 +3443,11 @@ def plan_worker_capacity_change(
         else gpu_count_for_capacity(request.gpu, request.gpu_count)
     )
     if change is WorkerCapacityChange.Add:
-        updated = worker.model_copy(
-            update={
-                "free_cpu_millicores": _cap_capacity(
-                    worker.free_cpu_millicores + cpu_millicores,
-                    worker.total_cpu_millicores,
-                ),
-                "free_memory_mib": _cap_capacity(
-                    worker.free_memory_mib + memory_mib,
-                    worker.total_memory_mib,
-                ),
-                "free_gpu_count": _cap_capacity(
-                    worker.free_gpu_count + gpu_count,
-                    worker.total_gpu_count,
-                ),
-                "resource_version": worker.resource_version + 1,
-                "updated_at": utc_now(),
-            }
+        updated = _restored_worker_capacity(
+            worker,
+            cpu_millicores=cpu_millicores,
+            memory_mib=memory_mib,
+            gpu_count=gpu_count,
         )
         return WorkerCapacityPlan(
             worker=updated,
@@ -3485,6 +3503,30 @@ def plan_worker_capacity_change(
         }
     )
     return WorkerCapacityPlan(worker=updated, change=change, request=request, accepted=True)
+
+
+def _restored_worker_capacity(
+    worker: SchedulerWorkerRecord,
+    *,
+    cpu_millicores: int,
+    memory_mib: int,
+    gpu_count: int,
+) -> SchedulerWorkerRecord:
+    return worker.model_copy(
+        update={
+            "free_cpu_millicores": _cap_capacity(
+                worker.free_cpu_millicores + cpu_millicores, worker.total_cpu_millicores
+            ),
+            "free_memory_mib": _cap_capacity(
+                worker.free_memory_mib + memory_mib, worker.total_memory_mib
+            ),
+            "free_gpu_count": _cap_capacity(
+                worker.free_gpu_count + gpu_count, worker.total_gpu_count
+            ),
+            "resource_version": worker.resource_version + 1,
+            "updated_at": utc_now(),
+        }
+    )
 
 
 def _worker_capacity_changed(

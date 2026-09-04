@@ -26,7 +26,7 @@ from pydantic import Field
 from shared.contracts import ContractModel
 from shared.image_building.credentials import registry_host_for_image
 from shared.managed_runtime_integrity import managed_package_source_digest
-from shared.scheduling import SchedulerWorkerRequest
+from shared.scheduling import WorkerExecutionRequest
 from shared.timestamps import utc_now
 
 from worker.container_execution import WorkerAddressPublisher
@@ -233,7 +233,7 @@ class CacheOriginCredentialsResponseLike(Protocol):
     credentials: CacheOriginCredentials | None
 
 
-def is_image_build_scheduler_request(request: SchedulerWorkerRequest) -> bool:
+def is_image_build_scheduler_request(request: WorkerExecutionRequest) -> bool:
     return str(request.payload.get("kind") or "") == IMAGE_BUILD_REQUEST_KIND
 
 
@@ -245,7 +245,7 @@ class WorkerImageBuildExecutionService:
     publisher: WorkerImageArchivePublisher
     credential_loader: ImageBuildCredentialLoader | None = None
 
-    def execute(self, request: SchedulerWorkerRequest) -> WorkerImageBuildExecutionResult:
+    def execute(self, request: WorkerExecutionRequest) -> WorkerImageBuildExecutionResult:
         payload = WorkerImageBuildRequestPayload.model_validate(request.payload).model_copy(
             update={"workspace_id": request.workspace_id, "stub_id": request.stub_id}
         )
@@ -380,7 +380,7 @@ class WorkerImageBuildExecutionService:
 
     def _private_inputs(
         self,
-        request: SchedulerWorkerRequest,
+        request: WorkerExecutionRequest,
         payload: WorkerImageBuildRequestPayload,
     ) -> ImageBuildPrivateInputs:
         metadata = payload.credential_metadata
@@ -401,7 +401,7 @@ class WorkerImageBuildExecutionService:
 
     def _build_instance(
         self,
-        request: SchedulerWorkerRequest,
+        request: WorkerExecutionRequest,
         payload: WorkerImageBuildRequestPayload,
     ) -> WorkerContainerServiceInstance:
         return WorkerContainerServiceInstance(
@@ -473,7 +473,7 @@ def _require_matching_managed_packages(expected_digest: str) -> None:
 
 
 def _require_matching_image_architecture(
-    request: SchedulerWorkerRequest,
+    request: WorkerExecutionRequest,
     payload: WorkerImageBuildRequestPayload,
 ) -> None:
     scheduler_architecture = request.architecture
@@ -1120,7 +1120,7 @@ class RepositoryWorkerImageArchivePublisher:
 
 
 def _request_context(
-    request: SchedulerWorkerRequest,
+    request: WorkerExecutionRequest,
     payload: WorkerImageBuildRequestPayload,
 ) -> ContainerRequestContext:
     return ContainerRequestContext(

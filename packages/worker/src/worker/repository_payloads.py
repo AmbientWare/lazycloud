@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 from shared.checkpoints import CheckpointRecord
@@ -19,12 +20,12 @@ from shared.scheduling import (
     NetworkIpMutationPlan,
     SchedulerContainerAddress,
     SchedulerContainerAddressMap,
-    SchedulerContainerState,
     SchedulerContainerStatus,
-    SchedulerWorkerRecord,
-    SchedulerWorkerRequest,
     WorkerCapacityChange,
-    WorkerCapacityPlan,
+    WorkerCapacityResult,
+    WorkerContainerState,
+    WorkerExecutionRecord,
+    WorkerExecutionRequest,
     WorkerRemovalResult,
     WorkerRepositoryLockRecord,
     WorkerRepositoryLockRelease,
@@ -102,7 +103,7 @@ class GetNextContainerRequestRequest(ContractModel):
 
 
 class GetNextContainerRequestResponse(WorkerRepositoryResponse):
-    container_request: SchedulerWorkerRequest | None = None
+    container_request: WorkerExecutionRequest | None = None
 
 
 class AcknowledgeContainerRequestRequest(ContractModel):
@@ -142,7 +143,7 @@ class DisableWorkerRequest(ContractModel):
 
 
 class AddWorkerRequest(ContractModel):
-    worker: SchedulerWorkerRecord
+    worker: WorkerExecutionRecord
     cache_generation_id: str
     cache_storage_id: str
     ttl_seconds: int = 0
@@ -207,17 +208,17 @@ class WorkerContainerIndexResponse(WorkerRepositoryResponse):
 
 
 class GetWorkerByIdResponse(WorkerRepositoryResponse):
-    worker: SchedulerWorkerRecord | None = None
+    worker: WorkerExecutionRecord | None = None
 
 
 class WorkerRecordResponse(WorkerRepositoryResponse):
-    worker: SchedulerWorkerRecord | None = None
+    worker: WorkerExecutionRecord | None = None
     worker_session_token: str = ""
     cache_session: WorkerCacheSession | None = None
 
 
 class WorkerKeepAliveResponse(WorkerRepositoryResponse):
-    worker: SchedulerWorkerRecord | None = None
+    worker: WorkerExecutionRecord | None = None
     source_cache_state: WorkerCacheGenerationState
 
 
@@ -227,12 +228,12 @@ class RemoveWorkerResponse(WorkerRepositoryResponse):
 
 class UpdateWorkerCapacityRequest(ContractModel):
     worker_id: str
-    container_request: SchedulerWorkerRequest
-    change: WorkerCapacityChange
+    container_request: WorkerExecutionRequest
+    change: Literal[WorkerCapacityChange.Add]
 
 
 class UpdateWorkerCapacityResponse(WorkerRepositoryResponse):
-    plan: WorkerCapacityPlan | None = None
+    plan: WorkerCapacityResult | None = None
 
 
 class UpdateContainerStatusRequest(ContractModel):
@@ -242,7 +243,7 @@ class UpdateContainerStatusRequest(ContractModel):
 
 
 class UpdateContainerStatusResponse(WorkerRepositoryResponse):
-    state: SchedulerContainerState | None = None
+    state: WorkerContainerState | None = None
     plan: ContainerStatusUpdatePlan | None = None
 
 
@@ -268,7 +269,7 @@ class GetContainerStateRequest(ContractModel):
 
 
 class GetContainerStateResponse(WorkerRepositoryResponse):
-    state: SchedulerContainerState | None = None
+    state: WorkerContainerState | None = None
 
 
 class DeleteContainerStateRequest(ContractModel):

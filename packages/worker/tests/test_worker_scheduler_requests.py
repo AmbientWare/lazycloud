@@ -6,18 +6,18 @@ from datetime import datetime
 
 import pytest
 from pydantic import JsonValue
-from scheduler.fleet import SchedulerContainerStatus
-from scheduler.state import (
-    DEFAULT_CONTAINER_STATE_TTL_SECONDS,
-    ContainerStatusUpdatePlan,
-    SchedulerContainerState,
-    SchedulerWorkerRecord,
-    SchedulerWorkerRequest,
-    WorkerCapacityChange,
-    WorkerCapacityPlan,
-)
 from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason, WorkerStartupKind
+from shared.scheduling import (
+    DEFAULT_CONTAINER_STATE_TTL_SECONDS,
+    ContainerStatusUpdatePlan,
+    SchedulerContainerStatus,
+    WorkerCapacityChange,
+    WorkerCapacityResult,
+    WorkerContainerState,
+    WorkerExecutionRecord,
+    WorkerExecutionRequest,
+)
 from worker.container_execution import (
     ContainerExecutionContext,
     ContainerExecutionPhase,
@@ -474,8 +474,8 @@ def _request(
     payload: dict[str, JsonValue] | None = None,
     gpu_type: str = "",
     gpu_count: int = 0,
-) -> SchedulerWorkerRequest:
-    return SchedulerWorkerRequest(
+) -> WorkerExecutionRequest:
+    return WorkerExecutionRequest(
         workspace_id="workspace-1",
         stub_id="stub-1",
         container_id="ctr-1",
@@ -500,11 +500,11 @@ def _wait_for_background_result(
 
 
 def _state(
-    request: SchedulerWorkerRequest,
+    request: WorkerExecutionRequest,
     *,
     status: SchedulerContainerStatus,
-) -> SchedulerContainerState:
-    return SchedulerContainerState(
+) -> WorkerContainerState:
+    return WorkerContainerState(
         container_id=request.container_id,
         stub_id=request.stub_id,
         workspace_id=request.workspace_id,
@@ -522,13 +522,13 @@ class _WorkerRepository:
     here rather than only against Redis.
     """
 
-    requests: list[SchedulerWorkerRequest] = field(default_factory=list)
+    requests: list[WorkerExecutionRequest] = field(default_factory=list)
     capacity_changes: list[tuple[str, str, WorkerCapacityChange]] = field(default_factory=list)
     acknowledged: list[tuple[str, str]] = field(default_factory=list)
-    in_flight: list[SchedulerWorkerRequest] = field(default_factory=list)
+    in_flight: list[WorkerExecutionRequest] = field(default_factory=list)
     acknowledge_error: str = ""
 
-    def get_next_container_request(self, worker_id: str) -> SchedulerWorkerRequest | None:
+    def get_next_container_request(self, worker_id: str) -> WorkerExecutionRequest | None:
         _ = worker_id
         if self.in_flight:
             return self.in_flight[0]
@@ -550,12 +550,12 @@ class _WorkerRepository:
     def update_worker_capacity(
         self,
         worker_id: str,
-        request: SchedulerWorkerRequest,
+        request: WorkerExecutionRequest,
         change: WorkerCapacityChange,
-    ) -> WorkerCapacityPlan:
+    ) -> WorkerCapacityResult:
         self.capacity_changes.append((worker_id, request.container_id, change))
-        return WorkerCapacityPlan(
-            worker=SchedulerWorkerRecord(
+        return WorkerCapacityResult(
+            worker=WorkerExecutionRecord(
                 worker_id=worker_id,
                 pool=MachinePool("test"),
                 capacity_owner_id=_CAPACITY_OWNER_ID,
@@ -568,14 +568,14 @@ class _WorkerRepository:
 
 @dataclass(slots=True)
 class _ContainerRepository:
-    states: dict[str, SchedulerContainerState] = field(default_factory=dict)
+    states: dict[str, WorkerContainerState] = field(default_factory=dict)
     deleted: list[str] = field(default_factory=list)
     status_updates: list[tuple[str, SchedulerContainerStatus]] = field(default_factory=list)
     exit_codes: list[tuple[str, int]] = field(default_factory=list)
     ttls: list[int] = field(default_factory=list)
     state_errors: int = 0
 
-    def get_container_state(self, container_id: str) -> SchedulerContainerState | None:
+    def get_container_state(self, container_id: str) -> WorkerContainerState | None:
         if self.state_errors > 0:
             self.state_errors -= 1
             raise WorkerRepositoryClientError("control plane is unreachable")
@@ -630,9 +630,9 @@ class _ExecutionService:
 
 @dataclass(slots=True)
 class _ImageBuildExecutionService:
-    requests: list[SchedulerWorkerRequest] = field(default_factory=list)
+    requests: list[WorkerExecutionRequest] = field(default_factory=list)
 
-    def execute(self, request: SchedulerWorkerRequest) -> WorkerImageBuildExecutionResult:
+    def execute(self, request: WorkerExecutionRequest) -> WorkerImageBuildExecutionResult:
         self.requests.append(request)
         return WorkerImageBuildExecutionResult(
             ok=True,
@@ -646,7 +646,7 @@ class _ImageBuildExecutionService:
 
 @dataclass(slots=True)
 class _FailingImageBuildExecutionService:
-    def execute(self, request: SchedulerWorkerRequest) -> WorkerImageBuildExecutionResult:
+    def execute(self, request: WorkerExecutionRequest) -> WorkerImageBuildExecutionResult:
         return WorkerImageBuildExecutionResult(
             ok=False,
             container_id=request.container_id,
@@ -659,13 +659,13 @@ class _FailingImageBuildExecutionService:
 
 @dataclass(slots=True)
 class _ImageBuildResultReporter:
-    reports: list[tuple[SchedulerWorkerRequest, WorkerImageBuildExecutionResult]] = field(
+    reports: list[tuple[WorkerExecutionRequest, WorkerImageBuildExecutionResult]] = field(
         default_factory=list
     )
 
     def report_image_build_result(
         self,
-        request: SchedulerWorkerRequest,
+        request: WorkerExecutionRequest,
         result: WorkerImageBuildExecutionResult,
     ) -> None:
         self.reports.append((request, result))

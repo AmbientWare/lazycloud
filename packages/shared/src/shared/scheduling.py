@@ -60,9 +60,7 @@ class SchedulerContainerSubmitStatus(StringEnum):
     Error = "error"
 
 
-class SchedulerWorkerRequest(ContractModel):
-    backfill: bool = False
-    region: ProductRegion | None = None
+class WorkerExecutionRequest(ContractModel):
     workspace_id: str
     stub_id: str
     deployment_id: str = ""
@@ -112,6 +110,11 @@ class SchedulerWorkerRequest(ContractModel):
             raise ValueError(msg)
         return value
 
+
+class SchedulerWorkerRequest(WorkerExecutionRequest):
+    backfill: bool = False
+    region: ProductRegion | None = None
+
     def requeued(self, *, now: datetime | None = None) -> SchedulerWorkerRequest:
         return self.model_copy(
             update={"retry_count": self.retry_count + 1, "timestamp": now or utc_now()}
@@ -159,8 +162,7 @@ def worker_serves_owner(
     return bool(worker_owner_user_id) and worker_owner_user_id == request_owner_user_id
 
 
-class SchedulerWorkerRecord(ContractModel):
-    region: ProductRegion | None = None
+class WorkerExecutionRecord(ContractModel):
     worker_id: str
     pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
@@ -244,11 +246,11 @@ class SchedulerWorkerRecord(ContractModel):
         )
 
 
-class SchedulerContainerState(ContractModel):
-    backfill: bool = False
-    preemptible: bool = False
-    backfill_eviction_requested: bool = False
-    backfill_eviction_claim_until: float = Field(default=0, ge=0)
+class SchedulerWorkerRecord(WorkerExecutionRecord):
+    region: ProductRegion | None = None
+
+
+class WorkerContainerState(ContractModel):
     container_id: str
     stub_id: str
     workspace_id: str
@@ -274,6 +276,13 @@ class SchedulerContainerState(ContractModel):
         return value
 
 
+class SchedulerContainerState(WorkerContainerState):
+    backfill: bool = False
+    preemptible: bool = False
+    backfill_eviction_requested: bool = False
+    backfill_eviction_claim_until: float = Field(default=0, ge=0)
+
+
 class SchedulerContainerAddress(ContractModel):
     container_id: str
     address: str = ""
@@ -290,6 +299,14 @@ class WorkerCapacityPlan(ContractModel):
     worker: SchedulerWorkerRecord
     change: WorkerCapacityChange
     request: SchedulerWorkerRequest
+    accepted: bool
+    reason: str = ""
+
+
+class WorkerCapacityResult(ContractModel):
+    worker: WorkerExecutionRecord
+    change: WorkerCapacityChange
+    request: WorkerExecutionRequest
     accepted: bool
     reason: str = ""
 
@@ -377,7 +394,7 @@ class SchedulerContainerCancellationResult(ContractModel):
 
 @runtime_checkable
 class ContainerSchedulingDirectory(Protocol):
-    def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
+    def get_container_state(self, container_id: str) -> WorkerContainerState | None: ...
 
     def get_worker_address(self, container_id: str) -> SchedulerContainerAddress | None: ...
 

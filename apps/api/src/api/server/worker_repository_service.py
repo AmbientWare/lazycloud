@@ -76,6 +76,7 @@ from shared.scheduling import (
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
+    WorkerExecutionRecord,
     WorkerUnavailableReason,
     worker_serves_owner,
 )
@@ -844,7 +845,9 @@ class WorkerRepositoryService:
             generation_id=request.cache_generation_id,
             storage_id=request.cache_storage_id,
         )
-        initializing_worker = request.worker.model_copy(
+        initializing_worker = SchedulerWorkerRecord.model_validate(
+            request.worker.model_dump()
+        ).model_copy(
             update={
                 "status": SchedulerWorkerStatus.Pending,
                 # The token decides which tenant a worker serves. Taking the
@@ -937,7 +940,7 @@ class WorkerRepositoryService:
         return billing_owner_for_unit(unit)
 
     def _feeding_unit(
-        self, worker: SchedulerWorkerRecord, principal: WorkerRepositoryPrincipal
+        self, worker: WorkerExecutionRecord, principal: WorkerRepositoryPrincipal
     ) -> ComputeUnitRecord:
         """The unit a registering worker belongs to.
 
@@ -970,7 +973,7 @@ class WorkerRepositoryService:
 
     def _validate_runtime_worker_registration(
         self,
-        worker: SchedulerWorkerRecord,
+        worker: WorkerExecutionRecord,
         principal: WorkerRepositoryPrincipal,
     ) -> None:
         if self.services is None:
@@ -1117,10 +1120,9 @@ class WorkerRepositoryService:
     ) -> UpdateWorkerCapacityResponse:
         try:
             return UpdateWorkerCapacityResponse(
-                plan=self.workers.update_worker_capacity(
+                plan=self.workers.release_worker_capacity(
                     request.worker_id,
                     request.container_request,
-                    request.change,
                 )
             )
         except SchedulerRepositoryError as exc:

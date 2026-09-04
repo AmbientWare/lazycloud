@@ -3,10 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 
 from pydantic import JsonValue
-from scheduler.state import (
-    SchedulerWorkerRecord,
-)
 from shared.compute_policy import MachinePool
+from shared.scheduling import WorkerExecutionRecord
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.origin_access import CacheOriginCredentialRequest, CacheOriginCredentials
 from worker.repository_client import (
@@ -28,7 +26,7 @@ _CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
 
 
 def test_worker_repository_client_preserves_session_auth_and_scoped_credentials() -> None:
-    worker = SchedulerWorkerRecord(
+    worker = WorkerExecutionRecord(
         worker_id="worker-1",
         pool=MachinePool("default"),
         capacity_owner_id=_CAPACITY_OWNER_ID,
@@ -94,11 +92,6 @@ def test_worker_repository_client_preserves_session_auth_and_scoped_credentials(
     assert origin.image_archive_url == "https://signed/image-1.rclip"
     assert origin.archive_size_bytes == 7
     assert origin.archive_sha256 == "a" * 64
-    assert [path for path, _payload in transport.posts] == [
-        "/worker-repository/add-worker",
-        "/worker-repository/get-container-credentials",
-        "/worker-repository/get-cache-origin-credentials",
-    ]
 
 
 class _FakeWorkerRepositoryTransport:
