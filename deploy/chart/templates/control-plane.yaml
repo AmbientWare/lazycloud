@@ -19,6 +19,7 @@ spec:
         app: control-plane
     spec:
       serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
+      terminationGracePeriodSeconds: {{ .Values.controlPlane.terminationGracePeriodSeconds }}
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname

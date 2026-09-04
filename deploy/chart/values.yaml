@@ -79,6 +79,13 @@ database:
 
 controlPlane:
   replicas: 2
+  # An image build runs inside the request that submitted it, and the SDK gives
+  # one 600s before it gives up. A pod told to stop must outlast that or a deploy
+  # kills builds midway: the orchestration lives in the process, so SIGKILL
+  # leaves a container no scheduler holds and the orphan sweep fails it. Uvicorn
+  # stops accepting when it is signalled, so this is only ever spent on work
+  # already running, and a replica with none exits immediately.
+  terminationGracePeriodSeconds: 660
   # 126m sustained on the replica taking traffic, 143m at its peak. The request
   # is several times that because the spike this has to absorb is not a request
   # rate: it is the fleet reconnecting at once, which arrives as a step rather
