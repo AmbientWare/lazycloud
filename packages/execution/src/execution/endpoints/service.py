@@ -841,10 +841,10 @@ class EndpointControlService:
     ) -> tuple[EndpointDispatchTarget, EndpointDispatchRecord]:
         while True:
             await self._raise_if_cancelled(task.id)
-            if wait.remaining() <= 0:
-                raise EndpointDispatchTimedOut("Timed out waiting for a backend container")
             if wait.warmup_attempted:
                 await self._raise_if_capacity_is_dead(dispatcher, stub)
+            if wait.remaining() <= 0:
+                raise EndpointDispatchTimedOut("Timed out waiting for a backend container")
 
             record = await repository.transition(task, EndpointDispatchStatus.WaitingCapacity)
             await self._emit_dispatch_lifecycle(stub, record, emit_event=False)
