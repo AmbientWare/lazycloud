@@ -546,6 +546,26 @@ class ComputeUnitRepository:
             ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
         ]
 
+    def desired_capacity_for_provider_connection(
+        self,
+        connection_id: str,
+        *,
+        gpu: bool,
+        excluding_unit_id: str | None = None,
+    ) -> int:
+        statement = select(func.coalesce(func.sum(ComputeUnitTable.desired_machines), 0)).where(
+            ComputeUnitTable.provider_connection_id == connection_id,
+            ComputeUnitTable.desired_machines > 0,
+            (
+                ComputeUnitTable.worker_gpu_count > 0
+                if gpu
+                else ComputeUnitTable.worker_gpu_count == 0
+            ),
+        )
+        if excluding_unit_id is not None:
+            statement = statement.where(ComputeUnitTable.id != excluding_unit_id)
+        return int(self.session.scalar(statement) or 0)
+
     def update_capacity(
         self,
         pool_id: str,
@@ -637,7 +657,6 @@ class ComputeUnitRepository:
         row.scale_up_cooldown_seconds = record.scale_up_cooldown_seconds
         row.scale_down_cooldown_seconds = record.scale_down_cooldown_seconds
         row.registration_timeout_seconds = record.registration_timeout_seconds
-        row.workspace_machine_limit = record.workspace_machine_limit
         row.root_volume_gib = record.root_volume_gib
         row.transport = record.transport.value
         row.fallback = record.fallback.value

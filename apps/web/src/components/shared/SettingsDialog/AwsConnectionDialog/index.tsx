@@ -70,6 +70,8 @@ function AwsConnectionFlow({
   onClose: () => void;
 }) {
   const [accountId, setAccountId] = useState("");
+  const [maxCpuInstances, setMaxCpuInstances] = useState("");
+  const [maxGpuInstances, setMaxGpuInstances] = useState("");
   const controller = useAwsConnectionController({ onClose });
 
   const pendingAction: AwsConnectionDialogRecoveryAction | null =
@@ -77,6 +79,9 @@ function AwsConnectionFlow({
       ? controller.activeAction
       : null;
   const accountValid = /^\d{12}$/.test(accountId);
+  const capacityLimitsValid =
+    (maxCpuInstances === "" || /^[1-9]\d*$/.test(maxCpuInstances)) &&
+    (maxGpuInstances === "" || /^\d+$/.test(maxGpuInstances));
 
   return (
     <>
@@ -109,9 +114,19 @@ function AwsConnectionFlow({
           ) : (
             <ConnectForm
               accountId={accountId}
+              maxCpuInstances={maxCpuInstances}
+              maxGpuInstances={maxGpuInstances}
               error={controller.createError}
               onAccountIdChange={setAccountId}
-              onSubmit={() => controller.create(accountId)}
+              onMaxCpuInstancesChange={setMaxCpuInstances}
+              onMaxGpuInstancesChange={setMaxGpuInstances}
+              onSubmit={() =>
+                controller.create(
+                  accountId,
+                  maxCpuInstances === "" ? null : Number(maxCpuInstances),
+                  maxGpuInstances === "" ? null : Number(maxGpuInstances),
+                )
+              }
             />
           )}
         </div>
@@ -124,7 +139,7 @@ function AwsConnectionFlow({
             <Button
               type="submit"
               form={AWS_CONNECT_FORM_ID}
-              disabled={!accountValid || controller.activeAction !== null}
+              disabled={!accountValid || !capacityLimitsValid || controller.activeAction !== null}
             >
               {controller.activeAction === "create" ? (
                 <Loader2 className="animate-spin" />
@@ -153,13 +168,21 @@ function AwsConnectionFlow({
 
 function ConnectForm({
   accountId,
+  maxCpuInstances,
+  maxGpuInstances,
   error,
   onAccountIdChange,
+  onMaxCpuInstancesChange,
+  onMaxGpuInstancesChange,
   onSubmit,
 }: {
   accountId: string;
+  maxCpuInstances: string;
+  maxGpuInstances: string;
   error: Error | null;
   onAccountIdChange: (accountId: string) => void;
+  onMaxCpuInstancesChange: (value: string) => void;
+  onMaxGpuInstancesChange: (value: string) => void;
   onSubmit: () => void;
 }) {
   return (
@@ -189,6 +212,40 @@ function ConnectForm({
         />
         <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
           Resources stay in your AWS account, and AWS bills you directly.
+        </p>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label htmlFor="aws-max-cpu" className="micro-label">
+            CPU instance ceiling
+          </label>
+          <Input
+            id="aws-max-cpu"
+            type="number"
+            min={1}
+            value={maxCpuInstances}
+            onChange={(event) => onMaxCpuInstancesChange(event.target.value)}
+            placeholder="Unlimited"
+            className="mt-1.5 font-mono"
+          />
+        </div>
+        <div>
+          <label htmlFor="aws-max-gpu" className="micro-label">
+            GPU instance ceiling
+          </label>
+          <Input
+            id="aws-max-gpu"
+            type="number"
+            min={0}
+            value={maxGpuInstances}
+            onChange={(event) => onMaxGpuInstancesChange(event.target.value)}
+            placeholder="Unlimited"
+            className="mt-1.5 font-mono"
+          />
+        </div>
+        <p className="text-xs leading-5 text-muted-foreground sm:col-span-2">
+          Optional. Leave blank for no LazyCloud ceiling; AWS service quotas still apply.
         </p>
       </div>
 

@@ -443,7 +443,7 @@ def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputeUnitRecord:
         selector=name,
         status=ComputeUnitPhase.Ready.value,
         source="workspace_policy",
-        config={"root_volume_gib": 200, "workspace_machine_limit": 10},
+        config={"root_volume_gib": 200},
         provider_ref=f"aws:{_CONNECTION_ID}",
         provider_connection_id=_CONNECTION_ID,
         capacity_mode=ComputeCapacityMode.Pooled,

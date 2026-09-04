@@ -20,6 +20,7 @@ from observability.settings import (
 )
 from observability.telemetry import setup_telemetry
 from provider_clients.release import resolve_deployment_release
+from scheduler.service import DEFAULT_AUTOSCALING_RECONCILE_LIMIT
 from shared.app_identity import SCHEDULER_PROCESS_NAME
 from shared.process_liveness import HeartbeatFile, heartbeat_path
 from storage.image_archive import ImageArchiveSettings
@@ -47,6 +48,7 @@ from scheduler_app.settings import SchedulerProcessSettings
 class SchedulerCommandArgs(argparse.Namespace):
     capacity_interval_seconds: float
     container_limit: int
+    autoscaling_limit: int
     once: bool
     include_cron_jobs: bool
     include_containers: bool
@@ -154,6 +156,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=CAPACITY_INTERVAL_SECONDS,
     )
     parser.add_argument("--container-limit", type=int, default=100)
+    parser.add_argument(
+        "--autoscaling-limit",
+        type=int,
+        default=DEFAULT_AUTOSCALING_RECONCILE_LIMIT,
+    )
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--cron-jobs", dest="include_cron_jobs", action="store_true", default=True)
     parser.add_argument("--no-cron-jobs", dest="include_cron_jobs", action="store_false")
@@ -179,6 +186,7 @@ def run_scheduler(
     runtime: SchedulerRuntime,
     capacity_interval_seconds: float = CAPACITY_INTERVAL_SECONDS,
     container_limit: int = 100,
+    autoscaling_limit: int = DEFAULT_AUTOSCALING_RECONCILE_LIMIT,
     once: bool = False,
     include_cron_jobs: bool = True,
     include_containers: bool = True,
@@ -190,6 +198,7 @@ def run_scheduler(
                 include_cron_jobs=include_cron_jobs,
                 include_containers=include_containers,
                 container_limit=container_limit,
+                autoscaling_limit=autoscaling_limit,
             )
             return SchedulerProcessResult(
                 cron_job_run_count=len(result.cron_job_runs),
@@ -257,6 +266,7 @@ def run_scheduler(
                 include_cron_jobs=include_cron_jobs,
                 include_containers=include_containers,
                 container_limit=container_limit,
+                autoscaling_limit=autoscaling_limit,
                 capacity_interval_seconds=capacity_interval_seconds,
                 beats=beats,
                 stop=stop,
@@ -347,6 +357,7 @@ def main(argv: list[str] | None = None) -> None:
             ),
             capacity_interval_seconds=args.capacity_interval_seconds,
             container_limit=args.container_limit,
+            autoscaling_limit=args.autoscaling_limit,
             once=args.once,
             include_cron_jobs=args.include_cron_jobs,
             include_containers=args.include_containers,

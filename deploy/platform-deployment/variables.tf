@@ -167,6 +167,28 @@ variable "fleet_cidr" {
   default     = "10.84.0.0/16"
 }
 
+variable "fleet_max_cpu_instances" {
+  description = "Maximum CPU instances the shared fleet may run across all CPU pools."
+  type        = number
+  default     = 500
+
+  validation {
+    condition     = var.fleet_max_cpu_instances >= 1 && floor(var.fleet_max_cpu_instances) == var.fleet_max_cpu_instances
+    error_message = "fleet_max_cpu_instances must be a positive integer."
+  }
+}
+
+variable "fleet_max_gpu_instances" {
+  description = "Maximum GPU instances the shared fleet may run across all GPU pools."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.fleet_max_gpu_instances >= 1 && floor(var.fleet_max_gpu_instances) == var.fleet_max_gpu_instances
+    error_message = "fleet_max_gpu_instances must be a positive integer."
+  }
+}
+
 variable "instance_hourly_micros" {
   description = <<-EOT
     Hourly price per instance type, in millionths of a dollar.

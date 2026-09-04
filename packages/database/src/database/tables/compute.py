@@ -29,6 +29,14 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
         UniqueConstraint("capacity_owner_id", name="uq_compute_units_capacity_owner_id"),
         Index("ix_compute_units_workspace_pool", "workspace_id", "pool"),
         Index(
+            "ix_compute_units_active_connection_gpu",
+            "provider_connection_id",
+            "worker_gpu_count",
+            "desired_machines",
+            postgresql_where=text("provider_connection_id IS NOT NULL AND desired_machines > 0"),
+            sqlite_where=text("provider_connection_id IS NOT NULL AND desired_machines > 0"),
+        ),
+        Index(
             "uq_compute_units_internal_placement",
             "workspace_id",
             "provider_ref",
@@ -120,7 +128,6 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
     scale_up_cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     scale_down_cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     registration_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
-    workspace_machine_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     root_volume_gib: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
     transport: Mapped[str] = mapped_column(String(32), nullable=False, default="private_network")
     fallback: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
