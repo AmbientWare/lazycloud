@@ -492,6 +492,20 @@ def account_terms(plan: BillingPlanId, *, has_payment_method: bool) -> AccountTe
     )
 
 
+def complimentary_terms() -> AccountTerms:
+    """What an account whose bill an administrator waived may run.
+
+    The Team plan's own terms, as if a card were on file. Not a plan of its own,
+    because a plan is something the provider prices and this card publishes, and
+    a waiver is neither. The included figure is stated for completeness and
+    decides nothing. Nothing such an account spends is owed, so there is no
+    allowance to run out of. The concurrency ceiling still holds, since it bounds
+    what the platform is exposed to rather than what anyone is billed.
+    """
+
+    return account_terms(BillingPlanId.Team, has_payment_method=True)
+
+
 _PLATFORM_FLEET_SHAPE = PublishedShapeRate(
     UsageBillingOwner.PlatformFleet,
     0,
@@ -687,5 +701,6 @@ __all__ = [
     "PublishedPlatformRate",
     "PublishedShapeRate",
     "account_terms",
+    "complimentary_terms",
     "published_plan",
 ]

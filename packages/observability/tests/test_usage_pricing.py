@@ -7,15 +7,18 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
+from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_ledger import (
     BillingLedgerRepository,
     ContainerBillingShapeRepository,
 )
+from database.repositories.billing_outbox import BillingMeterOutboxRepository
 from database.repositories.billing_rates import ComputeRateRepository, PlatformRateRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import ContainerRepository
 from database.tables.billing_ledger import BillingLedgerSegmentTable
+from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.observability import UsageRecordTable
 from observability.usage_pricing import REPRICE_REFUSED_ACTION, UNPRICED_SPAN_ACTION
 from shared.billing_quotes import ContainerShape, LedgerBasis, LedgerComponent
@@ -33,7 +36,7 @@ from shared.usage import (
     UsageUnit,
 )
 from sqlalchemy import select
-from tests.service_fixtures import unbilled_account
+from tests.service_fixtures import unbilled_account, workspace_owner_user_id
 
 # Rates only ever take effect in the future, so the usage they price is later
 # still. The offsets are the smallest that keep both facts true for a run.
@@ -689,3 +692,61 @@ def test_cost_priced_in_the_renewal_gap_lands_on_the_period_that_opens_over_it(
         )
     assert opened is not None
     assert opened.spent_nanos == 4_096
+
+
+def test_usage_of_a_complimentary_account_is_priced_and_its_meter_event_waived(
+    isolated_services: ApiServices,
+) -> None:
+    """A waived account's usage reaches the ledger and never reaches the provider.
+
+    Both halves matter. The segment is what the account and an administrator
+    read as what the usage cost, so it is priced like anyone else's. The outbox
+    row is written rather than skipped, and written as waived, because it is the
+    only record afterwards that this cost was never owed: the waiver on the
+    account can be withdrawn, and reconciliation reading the ledger against an
+    invoice with nothing on it would otherwise report money that never left.
+    """
+
+    now = utc_now()
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        PlatformRateRepository(session).publish(
+            pricing_version="test.a",
+            effective_at=now + _RATE_ONE_AT,
+            nanos_per_egress_byte=Decimal(1),
+            nanos_per_volume_byte_second=Decimal(0),
+        )
+    owner_user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+    with isolated_services.context.database.session() as session:
+        accounts = BillingAccountRepository(session)
+        accounts.lock_for_registration(owner_user_id)
+        accounts.set_complimentary(user_id=owner_user_id, present=True, at=now)
+    started_at = now + _WINDOW_AT
+    record = _usage(
+        workspace_id=workspace_id,
+        resource_id=str(uuid4()),
+        metric=UsageMetric.NetworkEgressBytes,
+        unit=UsageUnit.Bytes,
+        quantity=4_096,
+        started_at=started_at,
+        ended_at=started_at + _WINDOW,
+    )
+
+    saved = isolated_services.usage.append(record)
+
+    segments = _segments(isolated_services, saved.id)
+    assert len(segments) == 1
+    assert segments[0].cost_nanos == 4_096
+    with isolated_services.context.database.session() as session:
+        owed = session.scalars(
+            select(BillingMeterOutboxTable).where(BillingMeterOutboxTable.identifier == saved.id)
+        ).one()
+        assert owed.status == "waived"
+        assert owed.value_nanos == 4_096
+        undelivered = BillingMeterOutboxRepository(session).undelivered_totals(
+            provider_customer_id=owed.provider_customer_id,
+            started_at=started_at,
+            ended_at=started_at + _WINDOW,
+        )
+    assert undelivered[owed.meter_event_name].waived_nanos == 4_096
+    assert undelivered[owed.meter_event_name].waiting_nanos == 0

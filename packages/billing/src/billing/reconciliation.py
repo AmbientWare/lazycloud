@@ -248,7 +248,9 @@ class BillingReconciliationService:
         difference rather than disagreeing about it, and one holding an
         abandoned charge is short by it for good; each is said as a divergence
         of its own, which is what keeps three different failures from arriving
-        as one number that does not add up.
+        as one number that does not add up. Usage waived while the account's
+        bill was complimentary is subtracted the same way and is no divergence
+        at all: it was priced so the account can see it, and never owed.
         """
 
         invoice = self._closed_invoice(payments, account, now=now)
@@ -287,13 +289,17 @@ class BillingReconciliationService:
                 "ledger_nanos": ledger_nanos,
                 "undelivered_nanos": outstanding.waiting_nanos,
                 "abandoned_nanos": outstanding.abandoned_nanos,
+                "waived_nanos": outstanding.waived_nanos,
                 "invoiced_nanos": invoiced_nanos,
             }
             meters[event_name] = figures
             if outstanding.abandoned_nanos:
                 kinds.add(BillingDivergence.UsageAbandoned)
             if (
-                ledger_nanos - outstanding.waiting_nanos - outstanding.abandoned_nanos
+                ledger_nanos
+                - outstanding.waiting_nanos
+                - outstanding.abandoned_nanos
+                - outstanding.waived_nanos
                 != invoiced_nanos
             ):
                 kinds.add(

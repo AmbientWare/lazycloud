@@ -15,7 +15,10 @@ from fastapi import APIRouter, Depends, Query, status
 from shared.billing_rate_card import published_plan
 from shared.errors import InvalidInputError
 from shared.http.billing import (
+    BillingAccountAdminListResponse,
+    BillingAccountAdminResponse,
     BillingAllowanceResponse,
+    BillingComplimentaryRequest,
     BillingEntitlementUsageResponse,
     BillingHostedSessionRequest,
     BillingHostedSessionResponse,
@@ -32,14 +35,25 @@ from shared.http.usage import (
     UsageCostListResponse,
     UsageCostSeriesResponse,
 )
+from shared.identity import UserIdentityRecord
 from shared.payments import BILLING_CURRENCY
 from shared.timestamps import utc_now
 
-from api.server.auth import read_user, write_user
+from api.server.auth import admin_access, read_user, write_user
 from api.server.dependencies import current_services
+from api.server.routers.control_plane.users import user_response
 from api.server.routers.resource_api.common import usage_cost_list_response
 from api.server.services import ApiServices
-from billing import BillingAccountService, BillingPlanChangeService, owned_workspace_id
+from billing import (
+    MAX_ACCOUNT_PAGE,
+    RECENT_COST_WINDOW,
+    AdministeredAccount,
+    BillingAccountAdminService,
+    BillingAccountService,
+    BillingPlanChangeService,
+    decode_account_cursor,
+    owned_workspace_id,
+)
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
 
@@ -360,7 +374,88 @@ def _summary(standing: BillingStanding) -> BillingSummaryResponse:
             connected_clouds=standing.usage.connected_clouds,
             custom_domains=standing.usage.custom_domains,
         ),
+        complimentary_since=standing.complimentary_since,
         plan_change_pending=standing.plan_change_pending,
+    )
+
+
+@router.get(
+    "/accounts",
+    response_model=BillingAccountAdminListResponse,
+    operation_id="list_billing_accounts",
+)
+def list_billing_accounts(
+    _auth: admin_access,
+    limit: int = Query(50, ge=1, le=MAX_ACCOUNT_PAGE),
+    cursor: str | None = None,
+    services: ApiServices = Depends(current_services),
+) -> BillingAccountAdminListResponse:
+    """Every account on the platform with its standing and recent spend.
+
+    Walked by user rather than by billing row, so an account that has not
+    signed in yet is listed beside the ones that have.
+    """
+
+    with services.context.database.session() as session:
+        page = BillingAccountAdminService(session).list(
+            after_user_id=decode_account_cursor(cursor),
+            limit=limit,
+            at=utc_now(),
+        )
+    identities = services.users.identities([row.user.id for row in page.rows])
+    return BillingAccountAdminListResponse(
+        data=[
+            _administered_account(row, identities.get(row.user.id), since=page.recent_cost_since)
+            for row in page.rows
+        ],
+        next=page.next,
+    )
+
+
+@router.put(
+    "/accounts/{user_id}/complimentary",
+    response_model=BillingAccountAdminResponse,
+    operation_id="set_billing_complimentary",
+)
+def set_billing_complimentary(
+    user_id: str,
+    request: BillingComplimentaryRequest,
+    _auth: admin_access,
+    services: ApiServices = Depends(current_services),
+) -> BillingAccountAdminResponse:
+    """Waive an account's bill, or stop waiving it. An administrator's decision alone."""
+
+    now = utc_now()
+    with services.context.database.session() as session:
+        row = BillingAccountAdminService(session).set_complimentary(
+            services.events,
+            user_id=user_id,
+            present=request.complimentary,
+            at=now,
+        )
+        session.commit()
+    return _administered_account(
+        row, services.users.identity(user_id), since=now - RECENT_COST_WINDOW
+    )
+
+
+def _administered_account(
+    row: AdministeredAccount,
+    identity: UserIdentityRecord | None,
+    *,
+    since: datetime,
+) -> BillingAccountAdminResponse:
+    account = row.account
+    return BillingAccountAdminResponse(
+        user=user_response(row.user, identity),
+        status=account.status if account is not None else None,
+        plan=account.plan if account is not None else None,
+        payment_method_on_file=(
+            account is not None and account.payment_method_attached_at is not None
+        ),
+        complimentary_since=account.complimentary_since if account is not None else None,
+        recent_cost_nanos=row.recent_cost_nanos,
+        recent_cost_since=since,
     )
 
 

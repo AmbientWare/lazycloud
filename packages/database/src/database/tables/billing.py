@@ -107,3 +107,14 @@ class BillingAccountTable(IdTable, DatabaseBase):
 
     Cleared when the last card is removed. Left set, an account could attach a
     card, spend against the larger allowance that buys, detach, and keep it."""
+    complimentary_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    """When an administrator waived this account's bill, null while nobody has.
+
+    Its own column beside the plan rather than a third plan value. A plan is
+    something the provider prices and the rate card publishes, and this is a
+    decision made here about who is not charged. Cleared when the waiver is
+    withdrawn, at which point the subscription the row still names is what
+    the account is on."""

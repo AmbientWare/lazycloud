@@ -25,7 +25,7 @@ from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
 from shared.billing_quotes import BilledDimension
-from shared.billing_rate_card import PlanEntitlements, account_terms
+from shared.billing_rate_card import PlanEntitlements, account_terms, complimentary_terms
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
 from shared.http.usage import UsageCostBucket, UsageCostGroupKey
@@ -104,6 +104,15 @@ class BillingStanding:
 
     usage: BillingEntitlementUsage
     """What the account currently consumes across every workspace it owns."""
+
+    complimentary_since: datetime | None
+    """When an administrator waived this account's bill, `None` while nobody has.
+
+    Reported beside `plan` rather than in place of it. The subscription is
+    still what the account holds and what it returns to when the waiver is
+    withdrawn; the entitlements beside it are the waiver's, since those are
+    what admission is actually holding the account to.
+    """
 
     plan_change_pending: bool
     """Whether a change of plan for this account is still being settled.
@@ -206,17 +215,20 @@ class BillingStandingService:
                 payment_method_on_file=False,
                 entitlements=None,
                 usage=usage,
+                complimentary_since=None,
                 plan_change_pending=False,
             )
         has_card = account.payment_method_attached_at is not None
         # An account on no plan is shown no ceiling rather than a default one:
         # it may run nothing at all until it is provisioned, and a number here
-        # would read as headroom it does not have.
-        terms = (
-            account_terms(account.plan, has_payment_method=has_card)
-            if account.plan is not None
-            else None
-        )
+        # would read as headroom it does not have. A waived account is the
+        # exception, and is shown the ceiling admission holds it to.
+        if account.complimentary_since is not None:
+            terms = complimentary_terms()
+        elif account.plan is not None:
+            terms = account_terms(account.plan, has_payment_method=has_card)
+        else:
+            terms = None
         return BillingStanding(
             status=account.status,
             plan=account.plan,
@@ -228,6 +240,7 @@ class BillingStandingService:
             payment_method_on_file=has_card,
             entitlements=terms.entitlements if terms else None,
             usage=usage,
+            complimentary_since=account.complimentary_since,
             plan_change_pending=BillingPlanChangeIntentRepository(self.session).has_open(
                 user_id=user_id
             ),
