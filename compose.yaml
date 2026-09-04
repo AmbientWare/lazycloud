@@ -297,7 +297,7 @@ services:
       dockerfile: docker/Dockerfile.control-plane
       target: database-bootstrap
       args: *lazycloud-build-args
-    command: ["lazycloud-admin", "database", "initialize"]
+    command: ["lazycloud-admin", "database", "migrate"]
     environment: *database-bootstrap-env
     depends_on:
       postgres:

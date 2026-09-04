@@ -467,6 +467,23 @@ after each deployment. Placement reads must stay proportional to current stubs
 and live containers, never to the number of tasks or containers retained in the
 database.
 
+### Schema changes
+
+The schema moves by migration. A change to any table adds a revision under
+`packages/database/src/database/alembic/versions/` chained onto the one before,
+and `0001_initial` is frozen. A pull request that changes a model without adding
+a revision fails on
+`test_a_model_changed_without_a_revision_is_caught_here`, which builds a
+database by running every revision and compares it to the metadata.
+
+Argo runs `lazycloud-admin database migrate` as a PreSync hook, so migrations
+finish before any workload that reads the schema is updated. A failed migration
+stops the sync with the running deployment untouched.
+
+A rollback to an image older than the schema is refused rather than migrated
+from, because there is no path to compute from a revision that build does not
+carry. Roll forward, or restore the database.
+
 ### Secrets
 
 The External Secrets Operator reads them from Secrets Manager as the

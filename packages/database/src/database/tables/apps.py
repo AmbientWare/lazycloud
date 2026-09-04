@@ -82,7 +82,11 @@ class AppTable(IdPayloadTable, DatabaseBase):
     )
     stub_id: Mapped[str | None] = mapped_column(
         uuid_type,
-        ForeignKey("stubs.id", ondelete="SET NULL"),
+        # `use_alter` because apps and stubs point at each other, and a schema
+        # with a cycle in it has no order that creates both tables with their
+        # keys inline. This edge is the one broken out because it is a nullable
+        # pointer at the current stub rather than the stub's own ownership.
+        ForeignKey("stubs.id", ondelete="SET NULL", use_alter=True),
         nullable=True,
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)

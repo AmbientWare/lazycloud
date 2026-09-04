@@ -7,15 +7,32 @@ wherever the schema can hold it: a rule enforced only in Python is enforced only
 where someone remembered to call it. Repositories map and query; services decide.
 Redis hot state stays out unless the history itself has to be durable.
 
-While predeployment, schema authority is the SQLAlchemy metadata plus one
-reviewed baseline migration. Update that baseline and recreate local development
-databases freely rather than accumulating historical revisions or upgrade paths.
-Never reset external, deployed, or production data.
+There is a deployed installation holding data nobody can reconstruct, so the
+schema moves by migration. Every change to a table adds a revision chained onto
+the one before it, and `0001_initial` is frozen: a deployed database records the
+revision it reached, and editing the file it points at makes that record a lie.
+Local databases are still disposable and recreating one is ordinary work. Never
+reset external, deployed, or production data.
 
-A PostgreSQL extension the schema needs is declared with the metadata, in
-`tables/base.py`, not in the migration. Every path that builds the schema needs
-it, both the baseline and a test that calls `create_all`, and an extension named
-in only one of them is a schema that cannot be created by the other.
+The revisions are explicit DDL, never `create_all`. A migration generated from
+the live metadata always agrees with it, which sounds like safety and is the
+opposite: nothing could detect a model that changed without a revision to carry
+a live database across. Explicit DDL is the fixed thing the metadata is compared
+against, and
+`test_a_model_changed_without_a_revision_is_caught_here` is that comparison. It
+fails in a pull request rather than in a bootstrap job against production.
+
+A PostgreSQL extension the schema needs is declared twice, with the metadata in
+`tables/base.py` and again in the initial revision. The metadata installs them
+through a `before_create` listener that fires for `create_all` and never for a
+migration, so a schema built by migration would reach the first exclusion
+constraint without the operator class it needs.
+
+Two foreign keys carry `use_alter`, `apps.stub_id` and `containers.task_id`,
+because apps and stubs point at each other and so do containers and tasks. A
+schema with a cycle has no order that creates both tables with their keys
+inline. The nullable pointer is the edge broken out in each case, and the
+migration adds it once every table exists.
 
 A ledger segment states one component's quantity, and whether that quantity is
 capacity held or capacity measured. The component is what decides which unit the

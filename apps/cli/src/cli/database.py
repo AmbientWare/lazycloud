@@ -18,7 +18,7 @@ from database import (
     wait_for_database_head,
 )
 
-database_app = typer.Typer(help="Inspect and initialize the current database schema.")
+database_app = typer.Typer(help="Inspect and migrate the database schema.")
 
 
 @database_app.command("check")
@@ -49,10 +49,17 @@ def database_status(ctx: typer.Context) -> None:
     _show_schema(ctx, inspection, title="Database schema")
 
 
-@database_app.command("initialize")
-def database_initialize(ctx: typer.Context) -> None:
+@database_app.command("migrate")
+def database_migrate(ctx: typer.Context) -> None:
+    """Bring the database to the revision this build expects.
+
+    Creates the schema where there is none and runs the outstanding revisions
+    where there is one. Refuses a revision this build does not carry, which is
+    what a rollback to an older image looks like, rather than migrating forward
+    from a point it cannot reason about.
+    """
     inspection = bootstrap_database()
-    _show_schema(ctx, inspection, title="Database initialized")
+    _show_schema(ctx, inspection, title="Database migrated")
 
 
 @database_app.command("wait")

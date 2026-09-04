@@ -176,6 +176,11 @@ target-version = "py312"
 "packages/shared/**/*.py" = "py310"
 "**/test_*_python_compatibility.py" = "py310"
 
+[tool.ruff.lint.per-file-ignores]
+# A migration states constraints in the database's own words, and a CHECK
+# reformatted to fit a line limit is no longer the text the database holds.
+"packages/database/src/database/alembic/versions/*.py" = ["E501"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 ignore = ["B008"]

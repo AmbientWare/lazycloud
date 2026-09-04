@@ -224,14 +224,14 @@ the current run.
 
 ## Product phase and destructive work
 
-The repository is predeployment until the owner declares the first persistent
-production installation. SQLAlchemy metadata plus one reviewed Alembic baseline
-define the schema. Update that baseline and use fresh PostgreSQL bootstrap; do
-not build historical revisions, upgrade/downgrade paths, previous-binary
-compatibility, or transition smokes. Local development state is the Compose
-databases, volumes, and stacks. Resetting, recreating, and re-bootstrapping it
-is ordinary development work; do it whenever a schema or baseline change calls
-for it. Never reset external, deployed, or production data.
+The repository is deployed. A persistent installation holds data nobody can
+reconstruct, so a schema change adds an Alembic revision chained onto the one
+before it and `0001_initial` is never edited or renamed again. Do not rewrite
+the baseline: a deployed database records the revision it reached, and changing
+the file it points at makes that record a lie and refuses the next deploy.
+Local development state is the Compose databases, volumes, and stacks;
+resetting and re-bootstrapping those is ordinary development work. Never reset
+external, deployed, or production data.
 
 Resolve destructive targets exactly before acting. List what a delete would
 remove and confirm every item belongs to the current task; a stack, a bucket,

@@ -164,7 +164,10 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
     )
     task_id: Mapped[str | None] = mapped_column(
         uuid_type,
-        ForeignKey("tasks.id", ondelete="SET NULL"),
+        # `use_alter` for the same reason as `apps.stub_id`: containers and
+        # tasks point at each other, and this is the nullable pointer at
+        # whatever the container is running rather than the task's attribution.
+        ForeignKey("tasks.id", ondelete="SET NULL", use_alter=True),
         nullable=True,
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)

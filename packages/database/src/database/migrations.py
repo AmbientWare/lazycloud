@@ -14,13 +14,16 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from database.client import DatabaseClient
 from database.settings import DatabaseApplicationName, DatabaseSettings
-from database.tables import DatabaseBase
 
 
 class DatabaseSchemaState(StrEnum):
     Empty = "empty"
     Current = "current"
+    Behind = "behind"
+    """Holds a revision this build knows, with later ones still to run."""
+
     Incompatible = "incompatible"
+    """Holds something this build cannot account for, so nothing is attempted."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,14 +35,21 @@ class DatabaseSchemaInspection:
 
 
 class DatabaseSchemaMismatchError(RuntimeError):
+    """The database holds a revision no migration in this build leads on from.
+
+    Raised rather than guessed at. It means the database was written by a build
+    that is not an ancestor of this one, usually a rollback to an image older
+    than the schema, and running migrations forward from an unknown point is how
+    a partial schema gets written over a working one.
+    """
+
     def __init__(self, inspection: DatabaseSchemaInspection) -> None:
         self.inspection = inspection
         observed = ", ".join(inspection.observed_revisions) or "none"
         super().__init__(
-            "database is not empty and does not match the current predeployment "
-            f"schema baseline {inspection.target_revision!r}; observed revisions: {observed}. "
-            "This repository does not upgrade historical schemas. Recreate the database "
-            "only after confirming it is local and disposable."
+            f"database holds revision {observed}, which is not one this build knows how to "
+            f"migrate from; it expects to reach {inspection.target_revision!r}. Deploy a build "
+            "whose migrations include that revision, or restore the database."
         )
 
 
@@ -129,7 +139,6 @@ def inspect_database_schema_connection(connection: Connection) -> DatabaseSchema
     target_revision = repository_database_head()
     tables = set(inspect(connection).get_table_names())
     application_tables = tables.difference({"alembic_version"})
-    expected_tables = set(DatabaseBase.metadata.tables)
     observed_revisions = (
         tuple(connection.scalars(text("SELECT version_num FROM alembic_version")))
         if "alembic_version" in tables
@@ -139,8 +148,11 @@ def inspect_database_schema_connection(connection: Connection) -> DatabaseSchema
 
     if not application_tables and not observed_revisions:
         state = DatabaseSchemaState.Empty
-    elif application_tables == expected_tables and observed_revisions == (target_revision,):
+    elif observed_revisions == (target_revision,):
         state = DatabaseSchemaState.Current
+    elif len(observed_revisions) == 1 and observed_revisions[0] in _known_revisions():
+        # An earlier revision this build carries, so there is a path from it.
+        state = DatabaseSchemaState.Behind
     else:
         state = DatabaseSchemaState.Incompatible
     return DatabaseSchemaInspection(
@@ -169,6 +181,17 @@ def bootstrap_database(database_url: str | None = None) -> DatabaseSchemaInspect
 
 
 def bootstrap_database_connection(connection: Connection) -> DatabaseSchemaInspection:
+    """Bring the database to the revision this build expects.
+
+    Runs migrations forward from wherever it is, whether that is nothing or an
+    earlier revision this build carries. One transaction, so a migration that
+    fails part way leaves the database on the revision it started from rather
+    than half a schema and a version number that disagrees with it.
+
+    A revision this build has never heard of is refused instead. There is no
+    path to compute from an unknown starting point, and inventing one writes
+    over a schema somebody else's build is still serving.
+    """
     with connection.begin():
         inspection = inspect_database_schema_connection(connection)
         if inspection.state is DatabaseSchemaState.Current:
@@ -181,8 +204,17 @@ def bootstrap_database_connection(connection: Connection) -> DatabaseSchemaInspe
         command.upgrade(config, "head")
         completed = inspect_database_schema_connection(connection)
         if completed.state is not DatabaseSchemaState.Current:
-            raise RuntimeError("fresh database bootstrap did not reach the current schema baseline")
+            raise RuntimeError(
+                "migrations ran but the database did not reach "
+                f"{completed.target_revision!r}; it is at {completed.observed_revisions}"
+            )
         return completed
+
+
+def _known_revisions() -> frozenset[str]:
+    """Every revision this build can migrate from, which is its whole history."""
+    directory = ScriptDirectory.from_config(alembic_config())
+    return frozenset(script.revision for script in directory.walk_revisions())
 
 
 def wait_for_database_head(
