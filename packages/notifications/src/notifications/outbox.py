@@ -27,8 +27,12 @@ malformed recipient, and none of those is fixed by waiting.
 
 CLAIM_TTL = timedelta(minutes=5)
 SENT_RETENTION = timedelta(days=2)
-"""How long a delivered message is kept. Short, because the row holds the
-rendered body and an invitation's body holds a working link."""
+"""How long a sent message keeps its body.
+
+Short, because the body holds a working invitation link and the mail carrying it
+has already gone. The row itself stays: it is the record of what became of the
+message, which somebody reads long after the contents stop mattering.
+"""
 
 _RETRY_BASE = timedelta(seconds=10)
 _RETRY_CAP = timedelta(seconds=600)
@@ -132,11 +136,16 @@ class EmailOutboxDrain:
                     len(claimed) - index,
                 )
                 break
-            verdict, error = self._deliver(sender, item)
+            verdict, error, provider_message_id = self._deliver(sender, item)
             with self.database.session() as session:
                 repository = EmailOutboxRepository(session)
                 if verdict is _Verdict.Sent:
-                    repository.mark_sent(message_id=item.id, claim_token=claim_token, now=current)
+                    repository.mark_sent(
+                        message_id=item.id,
+                        claim_token=claim_token,
+                        now=current,
+                        provider_message_id=provider_message_id,
+                    )
                     sent += 1
                 elif verdict is _Verdict.Abandon:
                     repository.abandon(
@@ -174,26 +183,28 @@ class EmailOutboxDrain:
         with self.database.session() as session:
             return EmailOutboxRepository(session).abandoned_total()
 
-    def prune(self, *, now: datetime | None = None, limit: int = 1_000) -> int:
+    def redact(self, *, now: datetime | None = None, limit: int = 1_000) -> int:
+        """Empty the bodies of messages already sent, keeping their delivery record."""
         current = now or utc_now()
         with self.database.session() as session:
-            return EmailOutboxRepository(session).prune(
+            return EmailOutboxRepository(session).redact(
                 sent_before=current - SENT_RETENTION,
                 limit=limit,
+                now=current,
             )
 
-    def _deliver(self, sender: EmailSender, item: ClaimedEmail) -> tuple[_Verdict, str]:
+    def _deliver(self, sender: EmailSender, item: ClaimedEmail) -> tuple[_Verdict, str, str]:
         try:
-            sender.send(item.message)
+            provider_message_id = sender.send(item.message)
         except InvalidInputError as exc:
             # The provider named something about this message it will refuse
             # identically forever, so retrying spends attempts to learn nothing.
-            return _Verdict.Abandon, str(exc)
+            return _Verdict.Abandon, str(exc), ""
         except Exception as exc:
             if item.attempts >= MAX_ATTEMPTS:
-                return _Verdict.Abandon, str(exc)
-            return _Verdict.Retry, str(exc)
-        return _Verdict.Sent, ""
+                return _Verdict.Abandon, str(exc), ""
+            return _Verdict.Retry, str(exc), ""
+        return _Verdict.Sent, "", provider_message_id
 
     def _release(
         self,

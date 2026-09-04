@@ -137,6 +137,7 @@ from provider_clients.settings import (
 )
 from provider_cloudflare import CloudflareSettings
 from provider_github import GitHubAppSettings
+from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaler_states import AutoscalerStateService
@@ -461,6 +462,7 @@ class ApiServiceCore:
     agent_disconnect_reconciliation_settings: AgentDisconnectReconciliationSettings
     gateway_settings: GatewaySettings
     stripe_settings: StripeSettings
+    resend_settings: ResendSettings
     payment_provider: Callable[[], PaymentProvider]
     workspace_change_stream_settings: WorkspaceChangeStreamSettings
     agent_binary_settings: AgentBinarySettings
@@ -572,6 +574,7 @@ class ApiServices(ApiServiceCore):
         ) = None,
         gateway_settings: GatewaySettings | None = None,
         stripe_settings: StripeSettings | None = None,
+        resend_settings: ResendSettings | None = None,
         workspace_change_stream_settings: WorkspaceChangeStreamSettings | None = None,
         agent_binary_settings: AgentBinarySettings | None = None,
         aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
@@ -630,6 +633,9 @@ class ApiServices(ApiServiceCore):
         )
         gateway_config = gateway_settings or GatewaySettings()
         stripe_config = stripe_settings or StripeSettings()
+        # Read here only so the webhook endpoint can check the signature on a
+        # delivery report. Sending belongs to the scheduler.
+        resend_config = resend_settings or ResendSettings()
         workspace_change_stream_config = (
             workspace_change_stream_settings or WorkspaceChangeStreamSettings()
         )
@@ -1014,6 +1020,7 @@ class ApiServices(ApiServiceCore):
             agent_disconnect_reconciliation_settings=agent_disconnect_reconciliation_config,
             gateway_settings=gateway_config,
             stripe_settings=stripe_config,
+            resend_settings=resend_config,
             payment_provider=payment_provider,
             workspace_change_stream_settings=workspace_change_stream_config,
             agent_binary_settings=agent_artifact_config,
@@ -1355,6 +1362,7 @@ def _compose_api_services(
         agent_disconnect_reconciliation_settings=core.agent_disconnect_reconciliation_settings,
         gateway_settings=core.gateway_settings,
         stripe_settings=core.stripe_settings,
+        resend_settings=core.resend_settings,
         payment_provider=core.payment_provider,
         workspace_change_stream_settings=core.workspace_change_stream_settings,
         agent_binary_settings=core.agent_binary_settings,

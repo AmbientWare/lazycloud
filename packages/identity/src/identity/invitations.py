@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
+from database.repositories.email_outbox import EmailOutboxRepository
 from database.repositories.identity import (
     UserRepository,
     WorkspaceAuditRepository,
@@ -15,7 +16,7 @@ from database.repositories.identity import (
     WorkspaceRepository,
 )
 from shared.app_identity import DISPLAY_NAME
-from shared.email import EmailMessage
+from shared.email import EmailDeliveryState, EmailMessage
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
 from shared.identity import (
@@ -70,6 +71,13 @@ class InvitationListing:
     invitation: WorkspaceInvitationRecord
     invited_by_name: str = ""
     expired: bool = False
+    delivery: EmailDeliveryState = EmailDeliveryState.Queued
+    """What became of the message carrying this offer's link.
+
+    Read from the outbox rather than assumed, because a message the platform
+    sent successfully and a message somebody received are different facts, and
+    an administrator wondering why nobody answered needs the second one.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,21 +152,30 @@ class WorkspaceInvitationService:
                 workspace_id=workspace.id,
                 email=address,
             )
+            inviter = _name_of(session, actor.user_id)
+            expires_at = now + self.ttl
+            # Queued first so the offer can name the message that carries it,
+            # which is how the dashboard shows whether it was delivered.
+            message_id = enqueue_email(
+                session,
+                invitation_email(
+                    email=address,
+                    role=role,
+                    expires_at=expires_at,
+                    workspace_name=workspace.name,
+                    inviter=inviter,
+                    link=self._link(token),
+                ),
+                now=now,
+            )
             invitation = WorkspaceInvitationRepository(session).create(
                 workspace_id=workspace.id,
                 email=address,
                 role=role,
                 invited_by_user_id=actor.user_id,
                 token_hash=_hash_token(token),
-                expires_at=now + self.ttl,
-            )
-            inviter = _name_of(session, actor.user_id)
-            enqueue_email(
-                session,
-                self._message(
-                    invitation, workspace_name=workspace.name, inviter=inviter, token=token
-                ),
-                now=now,
+                expires_at=expires_at,
+                message_id=message_id,
             )
             WorkspaceAuditRepository(session).append(
                 workspace_id=workspace.id,
@@ -197,18 +214,25 @@ class WorkspaceInvitationService:
             workspace = _writable_workspace(session, workspace_id)
             invitations = WorkspaceInvitationRepository(session)
             invitation = _in_workspace(invitations.lock(invitation_id), workspace.id)
+            inviter = _name_of(session, invitation.invited_by_user_id)
+            expires_at = now + self.ttl
+            message_id = enqueue_email(
+                session,
+                invitation_email(
+                    email=invitation.email,
+                    role=invitation.role,
+                    expires_at=expires_at,
+                    workspace_name=workspace.name,
+                    inviter=inviter,
+                    link=self._link(token),
+                ),
+                now=now,
+            )
             invitation = invitations.reissue(
                 invitation.id,
                 token_hash=_hash_token(token),
-                expires_at=now + self.ttl,
-            )
-            inviter = _name_of(session, invitation.invited_by_user_id)
-            enqueue_email(
-                session,
-                self._message(
-                    invitation, workspace_name=workspace.name, inviter=inviter, token=token
-                ),
-                now=now,
+                expires_at=expires_at,
+                message_id=message_id,
             )
             WorkspaceAuditRepository(session).append(
                 workspace_id=workspace.id,
@@ -253,11 +277,15 @@ class WorkspaceInvitationService:
         with self.context.database.session() as session:
             records = WorkspaceInvitationRepository(session).for_workspace(workspace_id)
             names = _names(session, [record.invited_by_user_id for record in records])
+            delivery = EmailOutboxRepository(session).delivery_states(
+                [record.message_id for record in records if record.message_id]
+            )
             return [
                 InvitationListing(
                     invitation=record,
                     invited_by_name=names.get(record.invited_by_user_id, ""),
                     expired=record.expired_at(now),
+                    delivery=delivery.get(record.message_id, EmailDeliveryState.Queued),
                 )
                 for record in records
             ]
@@ -348,25 +376,15 @@ class WorkspaceInvitationService:
                 summary=f"Declined an invitation sent to {invitation.email}",
             )
 
-    def _message(
-        self,
-        invitation: WorkspaceInvitationRecord,
-        *,
-        workspace_name: str,
-        inviter: str,
-        token: str,
-    ) -> EmailMessage:
-        return invitation_email(
-            invitation,
-            workspace_name=workspace_name,
-            inviter=inviter,
-            link=f"{self.invitations_url}/{token}",
-        )
+    def _link(self, token: str) -> str:
+        return f"{self.invitations_url}/{token}"
 
 
 def invitation_email(
-    invitation: WorkspaceInvitationRecord,
     *,
+    email: str,
+    role: WorkspaceInvitationRole,
+    expires_at: datetime,
     workspace_name: str,
     inviter: str,
     link: str,
@@ -378,16 +396,14 @@ def invitation_email(
     in as, which is what makes forwarding it a way to hand somebody else a seat.
     """
     who = inviter or f"A {DISPLAY_NAME} administrator"
-    role = (
-        "an administrator"
-        if invitation.role is WorkspaceInvitationRole.Administrator
-        else "a member"
+    described_role = (
+        "an administrator" if role is WorkspaceInvitationRole.Administrator else "a member"
     )
-    expires = invitation.expires_at.strftime("%B %d, %Y")
+    expires = expires_at.strftime("%B %d, %Y")
     subject = f"{who} invited you to {workspace_name} on {DISPLAY_NAME}"
     text = (
         f"{who} invited you to join the workspace {workspace_name} on {DISPLAY_NAME} "
-        f"as {role}.\n\n"
+        f"as {described_role}.\n\n"
         f"Open this link to accept. You will be asked to sign in first if you are not "
         f"already:\n{link}\n\n"
         f"The link joins as whichever account you are signed in as, so keep it to "
@@ -402,7 +418,7 @@ def invitation_email(
         '<h1 style="font-size:20px;margin:0 0 16px">'
         f"You have been invited to {h(workspace_name)}</h1>"
         f"<p><strong>{h(who)}</strong> invited you to join the workspace "
-        f"<strong>{h(workspace_name)}</strong> on {h(DISPLAY_NAME)} as {role}.</p>"
+        f"<strong>{h(workspace_name)}</strong> on {h(DISPLAY_NAME)} as {described_role}.</p>"
         f'<p style="margin:24px 0"><a href="{h(link)}" style="display:inline-block;'
         "background:#1a1a1a;color:#ffffff;padding:12px 20px;border-radius:6px;"
         'text-decoration:none;font-weight:600">Accept invitation</a></p>'
@@ -412,7 +428,7 @@ def invitation_email(
         '<p style="color:#888;font-size:13px">If you were not expecting this, you can ignore '
         "this message.</p></div>"
     )
-    return EmailMessage(to=invitation.email, subject=subject, html=body, text=text)
+    return EmailMessage(to=email, subject=subject, html=body, text=text)
 
 
 def _new_token() -> str:

@@ -99,6 +99,16 @@ export const invitationEmailSchema = z
     return domain.includes(".") && !domain.startsWith(".") && !domain.endsWith(".");
   }, "Enter a single address such as name@example.com");
 
+export const emailDeliverySchema = z.enum([
+  "queued",
+  "sent",
+  "delivered",
+  "bounced",
+  "complained",
+  "failed",
+]);
+export type EmailDelivery = z.infer<typeof emailDeliverySchema>;
+
 export const workspaceInvitationSchema = z
   .object({
     id: z.string(),
@@ -111,6 +121,9 @@ export const workspaceInvitationSchema = z
     // browser comparing `expires_at` to its own would label offers by how far
     // that clock had drifted.
     expired: z.boolean(),
+    // What the provider said became of the message. Sending and arriving are
+    // different events minutes apart, so this is what answers "they never got it".
+    delivery: emailDeliverySchema,
     expires_at: timestampSchema,
     created_at: timestampSchema,
     updated_at: timestampSchema,

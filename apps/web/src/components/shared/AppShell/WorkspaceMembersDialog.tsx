@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import type {
+  EmailDelivery,
   InvitableRole,
   Workspace,
   WorkspaceInvitation,
@@ -42,6 +43,19 @@ import {
 } from "@/lib/queries/members";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { useWorkspaceSelection } from "@/lib/workspace-selection";
+
+/**
+ * What the server says became of the invitation email.
+ *
+ * Only outcomes worth acting on get a line. Queued and sent both mean the
+ * platform did its part and nobody has reported back, which is the ordinary
+ * state and not worth putting in front of anyone.
+ */
+const DELIVERY_NOTES: Partial<Record<EmailDelivery, string>> = {
+  bounced: "Email bounced",
+  complained: "Marked as spam",
+  failed: "Email could not be sent",
+};
 
 const ROLE_LABELS: Record<WorkspaceMember["role"], string> = {
   owner: "Owner",
@@ -341,9 +355,15 @@ function InvitationRow({
   return (
     <li className="flex items-center justify-between gap-3 py-3">
       <span className="min-w-0">
-        <span className="block truncate text-sm font-medium">{invitation.email}</span>
+        <span className="block truncate text-sm font-medium">
+          {invitation.email}
+          {DELIVERY_NOTES[invitation.delivery] ? (
+            <span className="ml-2 text-xs font-normal text-destructive">needs attention</span>
+          ) : null}
+        </span>
         <span className="block truncate text-xs text-muted-foreground">
-          {invitation.expired ? "Invitation expired" : "Invited"}
+          {DELIVERY_NOTES[invitation.delivery] ??
+            (invitation.expired ? "Invitation expired" : "Invited")}
           {invitation.invited_by_name ? ` by ${invitation.invited_by_name}` : ""}
           {" · "}
           {ROLE_LABELS[invitation.role]}

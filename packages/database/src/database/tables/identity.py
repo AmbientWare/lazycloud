@@ -216,6 +216,18 @@ class WorkspaceInvitationTable(IdTable, DatabaseBase):
         nullable=True,
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    message_id: Mapped[str | None] = mapped_column(
+        uuid_type,
+        ForeignKey("email_outbox.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    """The message that last carried this offer's link.
+
+    What an administrator is shown about delivery is read through here, so the
+    dashboard reports what the provider said rather than what the platform
+    hoped. Repointed on every resend, because the old message carries a link
+    that no longer opens anything and its fate stops being the answer.
+    """
 
 
 class WorkspaceTable(IdPayloadTable, DatabaseBase):

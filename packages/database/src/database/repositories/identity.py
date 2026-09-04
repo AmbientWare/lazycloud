@@ -777,6 +777,7 @@ class WorkspaceInvitationRepository:
         invited_by_user_id: str,
         token_hash: str,
         expires_at: datetime,
+        message_id: str,
     ) -> WorkspaceInvitationRecord:
         """Write one open offer. The unique constraint is what refuses a second."""
         row = WorkspaceInvitationTable(
@@ -786,6 +787,7 @@ class WorkspaceInvitationRepository:
             token_hash=token_hash,
             invited_by_user_id=invited_by_user_id or None,
             expires_at=expires_at,
+            message_id=message_id or None,
         )
         self.session.add(row)
         try:
@@ -828,6 +830,7 @@ class WorkspaceInvitationRepository:
         *,
         token_hash: str,
         expires_at: datetime,
+        message_id: str,
     ) -> WorkspaceInvitationRecord:
         """Give the offer a new secret and a fresh expiry.
 
@@ -838,6 +841,7 @@ class WorkspaceInvitationRepository:
         row = self._row(invitation_id)
         row.token_hash = token_hash
         row.expires_at = expires_at
+        row.message_id = message_id or None
         row.updated_at = utc_now()
         self.session.flush()
         return workspace_invitation_record_from_table(row)

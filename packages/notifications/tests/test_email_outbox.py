@@ -7,12 +7,18 @@ from itertools import chain, repeat
 from api.server.services import ApiServices
 from database.repositories.email_outbox import EmailOutboxRepository
 from database.tables.email_outbox import EmailOutboxTable
-from shared.email import EmailMessage
+from shared.email import EmailDeliveryState, EmailMessage
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.timestamps import utc_now
 from sqlalchemy import select
 
-from notifications import MAX_ATTEMPTS, EmailOutboxDrain, enqueue_email
+from notifications import (
+    MAX_ATTEMPTS,
+    DeliveryReport,
+    EmailOutboxDrain,
+    enqueue_email,
+    record_delivery,
+)
 
 
 @dataclass(slots=True)
@@ -22,10 +28,11 @@ class _Sender:
     error: Exception | None = None
     sent: list[EmailMessage] = field(default_factory=list)
 
-    def send(self, message: EmailMessage) -> None:
+    def send(self, message: EmailMessage) -> str:
         if self.error is not None:
             raise self.error
         self.sent.append(message)
+        return f"provider-{len(self.sent)}"
 
 
 def _message(to: str = "someone@example.test") -> EmailMessage:
@@ -45,6 +52,11 @@ def _queued_ids(services: ApiServices) -> list[str]:
         return [str(row) for row in rows]
 
 
+def _delivery(services: ApiServices, message_id: str) -> EmailDeliveryState:
+    with services.context.database.session() as session:
+        return EmailOutboxRepository(session).delivery_states([message_id])[message_id]
+
+
 def _status(services: ApiServices, message_id: str) -> str:
     with services.context.database.session() as session:
         state = EmailOutboxRepository(session).get_status(message_id)
@@ -57,8 +69,9 @@ def test_a_queued_message_is_delivered_once_and_then_pruned(
 ) -> None:
     """The queue is the durable half; the drain is the part that talks to anyone.
 
-    Pruning matters as much as sending here: a delivered row still holds the
-    rendered body, and an invitation's body holds a working link.
+    Redaction matters as much as sending here. A sent row still holds the
+    rendered body, and an invitation's body holds a working link, so the body is
+    emptied while the row that says what happened is kept.
     """
     sender = _Sender()
     message_id = _queue(isolated_services, _message())
@@ -73,8 +86,10 @@ def test_a_queued_message_is_delivered_once_and_then_pruned(
     assert _status(isolated_services, message_id) == "sent"
     assert drain.drain().sent_count == 0
 
-    pruned = drain.prune(now=utc_now().replace(year=utc_now().year + 1))
-    assert pruned == 1
+    # The body goes once the mail carrying it has gone; the row stays, because
+    # it is the record of what became of the message.
+    assert drain.redact(now=utc_now() + timedelta(days=30)) == 1
+    assert _status(isolated_services, message_id) == "sent"
 
 
 def test_a_refusal_that_a_later_attempt_could_fix_is_retried(
@@ -187,3 +202,62 @@ def test_a_deployment_with_no_email_provider_keeps_its_messages(
 
     assert (result.sent_count, result.abandoned_count) == (0, 0)
     assert _status(isolated_services, message_id) == "pending"
+
+
+def test_a_delivery_report_lands_on_the_message_it_names(
+    isolated_services: ApiServices,
+) -> None:
+    """Accepting a message and delivering it are different events minutes apart.
+
+    Without this the platform can only say it handed the message over, and an
+    administrator asking why nobody answered has nothing to go on. Reports are
+    ordered on the event's own timestamp, because they are not promised in order
+    and a late `sent` must not erase a bounce that already landed.
+    """
+    _queue(isolated_services, _message())
+    sender = _Sender()
+    drain = EmailOutboxDrain(
+        database=isolated_services.context.database, sender_factory=lambda: sender
+    )
+    drain.drain()
+    message_id = _queued_ids(isolated_services)[0]
+    assert _delivery(isolated_services, message_id) is EmailDeliveryState.Sent
+
+    bounced_at = utc_now()
+    with isolated_services.context.database.session() as session:
+        assert record_delivery(
+            session,
+            DeliveryReport(
+                provider_message_id="provider-1",
+                state=EmailDeliveryState.Bounced,
+                occurred_at=bounced_at,
+                detail="mailbox does not exist",
+            ),
+        )
+    assert _delivery(isolated_services, message_id) is EmailDeliveryState.Bounced
+
+    with isolated_services.context.database.session() as session:
+        record_delivery(
+            session,
+            DeliveryReport(
+                provider_message_id="provider-1",
+                state=EmailDeliveryState.Sent,
+                occurred_at=bounced_at - timedelta(minutes=5),
+            ),
+        )
+    assert _delivery(isolated_services, message_id) is EmailDeliveryState.Bounced
+
+
+def test_a_report_for_a_message_we_no_longer_hold_is_not_an_error(
+    isolated_services: ApiServices,
+) -> None:
+    """A provider keeps its history longer than this platform keeps rows."""
+    with isolated_services.context.database.session() as session:
+        assert not record_delivery(
+            session,
+            DeliveryReport(
+                provider_message_id="nothing-here",
+                state=EmailDeliveryState.Delivered,
+                occurred_at=utc_now(),
+            ),
+        )

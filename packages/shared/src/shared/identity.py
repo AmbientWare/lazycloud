@@ -313,6 +313,7 @@ class WorkspaceInvitationRecord(ContractModel):
     email: str
     role: WorkspaceInvitationRole = WorkspaceInvitationRole.Member
     invited_by_user_id: str = ""
+    message_id: str = ""
     expires_at: datetime
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

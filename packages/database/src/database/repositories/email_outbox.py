@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 
 from database.tables.email_outbox import EmailOutboxTable
-from shared.email import EmailMessage
-from shared.timestamps import to_utc
-from sqlalchemy import delete, func, select, update
+from shared.email import EmailDeliveryState, EmailMessage
+from shared.timestamps import to_utc, utc_now
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -97,11 +98,26 @@ class EmailOutboxRepository:
             for row in claimed
         )
 
-    def mark_sent(self, *, message_id: str, claim_token: str, now: datetime) -> bool:
+    def mark_sent(
+        self,
+        *,
+        message_id: str,
+        claim_token: str,
+        now: datetime,
+        provider_message_id: str,
+    ) -> bool:
+        """Record that the provider took it, and under which id it will report back."""
         return self._settle(
             message_id=message_id,
             claim_token=claim_token,
-            values={"status": "sent", "sent_at": now, "claim_token": None, "claimed_at": None},
+            values={
+                "status": "sent",
+                "sent_at": now,
+                "claim_token": None,
+                "claimed_at": None,
+                "provider_message_id": provider_message_id,
+                "delivery_state": EmailDeliveryState.Sent.value,
+            },
             now=now,
         )
 
@@ -137,6 +153,7 @@ class EmailOutboxRepository:
                 "claim_token": None,
                 "claimed_at": None,
                 "last_error": error[:500],
+                "delivery_state": EmailDeliveryState.Failed.value,
             },
             now=now,
         )
@@ -175,24 +192,74 @@ class EmailOutboxRepository:
             or 0
         )
 
-    def prune(self, *, sent_before: datetime, limit: int) -> int:
-        """Drop delivered messages once they are old enough.
+    def redact(self, *, sent_before: datetime, limit: int, now: datetime) -> int:
+        """Empty the bodies of messages already handed over, keeping the row.
 
-        Delivered rows hold the rendered message, and an invitation's message
-        holds a working link, so keeping them forever would keep those links
-        readable long after the mail itself was the only place they lived.
+        The body holds a working invitation link and the row is the delivery
+        record somebody reads afterwards, so the two are cleared separately: the
+        secret goes once the mail carrying it has gone, and what became of the
+        message stays.
         """
         doomed = (
             select(EmailOutboxTable.id)
-            .where(EmailOutboxTable.status == "sent", EmailOutboxTable.sent_at < sent_before)
+            .where(
+                EmailOutboxTable.status == "sent",
+                EmailOutboxTable.sent_at < sent_before,
+                EmailOutboxTable.redacted_at.is_(None),
+            )
             .limit(limit)
         )
         result = self.session.execute(
-            delete(EmailOutboxTable)
+            update(EmailOutboxTable)
             .where(EmailOutboxTable.id.in_(doomed.scalar_subquery()))
+            .values(html_body="", text_body="", redacted_at=now, updated_at=now)
             .execution_options(synchronize_session=False)
         )
         return _rowcount(result)
+
+    def record_delivery(
+        self,
+        *,
+        provider_message_id: str,
+        state: EmailDeliveryState,
+        occurred_at: datetime,
+        detail: str = "",
+    ) -> bool:
+        """Write what a provider says became of a message it already accepted.
+
+        Ordered on the event's own timestamp rather than on arrival, because
+        delivery events are not promised in order and a late `sent` landing
+        after a `bounced` would otherwise erase the outcome that mattered.
+        """
+        result = self.session.execute(
+            update(EmailOutboxTable)
+            .where(
+                EmailOutboxTable.provider_message_id == provider_message_id,
+                or_(
+                    EmailOutboxTable.delivery_event_at.is_(None),
+                    EmailOutboxTable.delivery_event_at <= occurred_at,
+                ),
+            )
+            .values(
+                delivery_state=state.value,
+                delivery_event_at=occurred_at,
+                delivery_detail=detail[:500],
+                updated_at=utc_now(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return _rowcount(result) > 0
+
+    def delivery_states(self, message_ids: Collection[str]) -> dict[str, EmailDeliveryState]:
+        """What became of each of these messages, for a listing that shows it."""
+        if not message_ids:
+            return {}
+        rows = self.session.execute(
+            select(EmailOutboxTable.id, EmailOutboxTable.delivery_state).where(
+                EmailOutboxTable.id.in_(list(message_ids))
+            )
+        ).all()
+        return {str(row.id): EmailDeliveryState(row.delivery_state) for row in rows}
 
     def get_status(self, message_id: str) -> tuple[str, int, datetime | None] | None:
         row = self.session.get(EmailOutboxTable, message_id)

@@ -127,6 +127,7 @@ def workspace_invitation_record_from_table(
         email=row.email,
         role=WorkspaceInvitationRole(row.role),
         invited_by_user_id=_optional_id(row.invited_by_user_id),
+        message_id=_optional_id(row.message_id),
         expires_at=to_utc(row.expires_at),
         created_at=to_utc(row.created_at),
         updated_at=to_utc(row.updated_at),

@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import Field, field_validator
 
+from shared.email import EmailDeliveryState
 from shared.http.base import HttpModel
 from shared.http.workspaces import WorkspaceResponse
 from shared.identity import (
@@ -132,6 +133,13 @@ class WorkspaceInvitationResponse(HttpModel):
     invited_by_user_id: str = ""
     invited_by_name: str = ""
     expired: bool = False
+    delivery: EmailDeliveryState = EmailDeliveryState.Queued
+    """What became of the message carrying the link, as the provider reported it.
+
+    Sending and arriving are different events minutes apart, so this is what
+    answers "they say they never got it" without anybody guessing.
+    """
+
     expires_at: datetime
     created_at: datetime
     updated_at: datetime

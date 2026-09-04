@@ -177,7 +177,7 @@ class SchedulerEmailOutboxService(Protocol):
 
     def abandoned_backlog(self) -> int: ...
 
-    def prune(self, *, now: datetime | None = None, limit: int = 1_000) -> int: ...
+    def redact(self, *, now: datetime | None = None, limit: int = 1_000) -> int: ...
 
 
 class SchedulerMeterOutboxService(Protocol):
@@ -1159,9 +1159,9 @@ class Scheduler:
         ):
             return
         try:
-            email_outbox.prune(now=current)
+            email_outbox.redact(now=current)
         except Exception:
-            LOGGER.exception("scheduler email pruning failed")
+            LOGGER.exception("scheduler email redaction failed")
             return
         self.last_email_prune_at = current
 

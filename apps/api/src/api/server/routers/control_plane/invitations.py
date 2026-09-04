@@ -35,6 +35,7 @@ def _invitation_response(listing: InvitationListing) -> WorkspaceInvitationRespo
         invited_by_user_id=invitation.invited_by_user_id,
         invited_by_name=listing.invited_by_name,
         expired=listing.expired,
+        delivery=listing.delivery,
         expires_at=invitation.expires_at,
         created_at=invitation.created_at,
         updated_at=invitation.updated_at,
