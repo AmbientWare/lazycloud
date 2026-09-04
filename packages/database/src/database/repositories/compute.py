@@ -112,7 +112,7 @@ class ComputeCapacityOperationSizingRecord:
 class PlatformCpuArrival:
     created_at: datetime
     cpu_millicores: int
-    memory_mib: int
+    reserved_memory_mib: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -576,7 +576,11 @@ class ComputeUnitRepository:
             .order_by(ContainerBillingShapeTable.created_at)
         )
         return [
-            PlatformCpuArrival(row.created_at, row.cpu_millicores, row.memory_mib)
+            PlatformCpuArrival(
+                created_at=row.created_at,
+                cpu_millicores=row.cpu_millicores,
+                reserved_memory_mib=row.memory_mib,
+            )
             for row in self.session.scalars(statement)
         ]
 

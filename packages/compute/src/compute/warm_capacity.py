@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from math import ceil
 
 from database.repositories.compute import ComputeProviderInstanceRecord, PlatformCpuArrival
-from shared.container_requests import capacity_with_overhead, schedulable_capacity
+from shared.container_requests import schedulable_capacity
 from shared.timestamps import to_utc
 
 from compute.offers import ComputeOffer
@@ -46,7 +46,7 @@ def warm_capacity_target(
             continue
         index = min(int(age // horizon), buckets - 1)
         cpu[index] += arrival.cpu_millicores
-        memory[index] += capacity_with_overhead(arrival.memory_mib)
+        memory[index] += arrival.reserved_memory_mib
     loads = sorted(
         max(
             ceil(cpu_value / schedulable_capacity(offer.cpu_millicores)),

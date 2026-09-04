@@ -75,3 +75,32 @@ def test_warm_capacity_absorbs_launch_window_demand_and_shrinks_gradually() -> N
         now=now + timedelta(seconds=policy.warm_decrease_after_seconds),
     )
     assert reduced.machines == 1
+
+
+def test_warm_capacity_does_not_add_overhead_to_billed_memory_again() -> None:
+    now = datetime(2026, 9, 1, 1, tzinfo=UTC)
+    target = warm_capacity_target(
+        ResolvedProviderPolicy(
+            workspace_id="11111111-1111-4111-8111-111111111111",
+            pool=MachinePool("lazycloud"),
+            platform_fleet=True,
+            default_region="ash",
+            allowed_regions=("ash",),
+            warm_cpu_min=1,
+            warm_cpu_max=4,
+        ),
+        ComputeOffer(
+            id="memory-bound-node",
+            provider="hetzner:platform",
+            instance_type="memory-bound-node",
+            region="ash",
+            cpu_millicores=4000,
+            memory_mb=4096,
+        ),
+        [PlatformCpuArrival(now, cpu_millicores=500, reserved_memory_mib=3500)],
+        (),
+        current=1,
+        lower_since=None,
+        now=now,
+    )
+    assert target.machines == 1

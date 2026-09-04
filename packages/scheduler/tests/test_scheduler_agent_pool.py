@@ -14,6 +14,7 @@ from scheduler.state import SchedulerWorkerRecord
 from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
 from shared.compute_policy import MachinePool
 from shared.container_requests import schedulable_capacity
+from shared.placement import ProductRegion
 from shared.scheduling import WorkerUnavailableReason
 
 
@@ -284,6 +285,7 @@ class _WorkerRepo:
         workspace_id: str,
         owner_user_id: str,
         priority: int,
+        region: ProductRegion | None = None,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord:
         worker = self.workers[worker_id]
@@ -292,6 +294,7 @@ class _WorkerRepo:
                 "workspace_id": workspace_id,
                 "owner_user_id": owner_user_id,
                 "priority": priority,
+                "region": region,
                 "updated_at": now or worker.updated_at,
             }
         )

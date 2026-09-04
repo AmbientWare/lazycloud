@@ -21,6 +21,7 @@ from compute.providers import (
     ProviderUnitRequest,
     ProviderUnitSnapshot,
     ResolvedComputeProvider,
+    ResolvedProviderPolicy,
 )
 from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
@@ -182,6 +183,10 @@ class _PooledProvider:
 @dataclass(frozen=True, slots=True)
 class _Resolver(ComputeProviderResolver):
     provider: _PooledProvider
+    policy: ResolvedProviderPolicy
+
+    def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
+        return ()
 
     def list_providers(self, workspace_id: str) -> Iterable[ResolvedComputeProvider]:
         del workspace_id
@@ -199,6 +204,7 @@ class _Resolver(ComputeProviderResolver):
             capacity_mode=ComputeCapacityMode.Pooled,
             connection_id=_CONNECTION_ID,
             pooled=self.provider,
+            policy=self.policy,
         )
 
 
@@ -348,9 +354,24 @@ def _service(
 
 
 def _compute(isolated_services: ApiServices, provider: _PooledProvider) -> ComputeService:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        connection = AwsAccountConnectionRepository(session).get(_CONNECTION_ID)
+    assert connection is not None
     return ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(
+            provider,
+            ResolvedProviderPolicy(
+                workspace_id=workspace_id,
+                pool=connection.pool,
+                platform_fleet=connection.platform_fleet,
+                default_region=connection.compute.default_region,
+                allowed_regions=connection.compute.allowed_regions,
+                max_cpu_instances=connection.compute.max_cpu_instances,
+                max_gpu_instances=connection.compute.max_gpu_instances,
+            ),
+        ),
         pool_bootstrap_factory=_bootstrap,
     )
 
