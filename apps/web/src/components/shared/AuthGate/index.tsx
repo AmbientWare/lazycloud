@@ -13,7 +13,14 @@ import { SignInScreen } from "@/components/shared/AuthGate/SignInScreen";
 // session to gate on. Gating `/callback` would drop the code it arrived to
 // redeem, and gating `/signin` would hide the reason a sign-in failed behind the
 // screen that failed to explain it.
-const UNAUTHENTICATED_PATHS = new Set(["/", "/pricing", "/callback", "/signin"]);
+const UNAUTHENTICATED_PATHS = new Set([
+  "/",
+  "/pricing",
+  "/legal/privacy",
+  "/legal/terms",
+  "/callback",
+  "/signin",
+]);
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const unauthenticatedRoute = useRouterState({

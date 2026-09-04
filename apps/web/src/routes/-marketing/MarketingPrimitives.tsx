@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { githubSignInHref } from "@/lib/queries/auth";
 import { cn } from "@/lib/utils";
 
-export type MarketingRoute = "/" | "/pricing" | "/dashboard";
+export type MarketingRoute = "/" | "/pricing" | "/legal/privacy" | "/legal/terms" | "/dashboard";
 
 /* Shared page rhythm: compact phone gutters that open up with the viewport. */
 export const shell =
@@ -126,20 +126,6 @@ export function GetStartedButton({
         <Glyph>↗</Glyph>
       </a>
     </Button>
-  );
-}
-
-/* Destinations that are not built yet: visible, honest, and inert. */
-export function PendingLink({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <button
-      className={cn("cursor-not-allowed text-muted-foreground/55", className)}
-      type="button"
-      disabled
-      title="Coming soon"
-    >
-      {children}
-    </button>
   );
 }
 
