@@ -7,7 +7,7 @@ dependencies = [
     "cloudpickle>=3,<4",
     "lazycloud-shared==0.1.0",
     "foundation",
-    "pydantic>=2.8,<3",
+    "pydantic>=2.12,<3",
     "uvicorn>=0.30,<1",
     # Floor held below 17 on purpose: this package supports Python 3.10 and
     # websockets 17 does not. A dependency that cannot install on a Python the

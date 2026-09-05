@@ -15,6 +15,11 @@ coordination package.
 - A credential never travels in machine configuration that provisioning can read
   back. Prefer a single-use credential vended at the moment of use over a
   reusable one embedded where every instance from that configuration can read it.
+  Hetzner enrollment has one owner-approved exception: a unique, short-lived
+  bootstrap token may travel in one node's user-data. Bind it to that launch,
+  consume it atomically before tenant work starts, and reject reuse or expiry.
+  Keep tokens out of source, images, logs, and shared launch templates. This does
+  not permit a provider API key or reusable join credential on a node.
 - A bootstrap script owns provider identity and nothing else. Everything it
   installs belongs to the artifact it downloads, so a version or a policy is
   pinned in one place instead of drifting between two.
@@ -23,11 +28,14 @@ coordination package.
   authenticates goes through the workspace secret cipher. Know what that cipher
   actually protects against before relying on it, and say so where it is used.
 
-Provider breadth, a fleet operator CLI, and packaged workload types such as LLM
-serving, databases, and MCP hosting are deliberately not planned. Machine join
-plus the AWS connection covers the compute story this product sells, and each of
-those three answers a problem a self-hosted engine has and a hosted platform
-does not. Absence here is the shape of the product, not a backlog.
+Platform capacity spans providers behind the pooled-capacity protocol. A stable
+`provider_ref` resolves ownership, pool, limits, allowed offers, and lifecycle
+policy. The AWS connection pointer belongs only to capacity backed by an actual
+AWS connection. Platform bindings need no customer connection row or separate
+purchase ceiling. Existing AWS connection limits sum across that connection's
+units; account admission owns plan concurrency and billing limits.
+Desired-capacity changes lock the
+binding's capacity workspace before reading the sum or updating a unit.
 
 An authenticated machine enrollment owns its worker runtime. The worker's
 identity and resource allocation derive from that enrollment, not from a

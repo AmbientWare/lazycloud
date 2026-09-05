@@ -7,6 +7,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from typing import TypeAlias
 
 from shared.enums import StringEnum
+from shared.placement import AUTO_RATE_CLASS, PlacementRateClass
 from shared.usage import UsageBillingOwner, UsageMetric
 
 NANOS_PER_USD = 1_000_000_000
@@ -191,6 +192,7 @@ class ContainerShape:
     cpu_millicores: int
     memory_mib: int
     gpu_count: int
+    rate_class: PlacementRateClass = AUTO_RATE_CLASS
 
 
 def reserved_quantity(

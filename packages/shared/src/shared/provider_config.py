@@ -11,6 +11,7 @@ from shared.timestamps import utc_now
 
 class ProviderKind(StringEnum):
     Aws = "aws"
+    Hetzner = "hetzner"
 
 
 class ProviderConfig(ContractModel):

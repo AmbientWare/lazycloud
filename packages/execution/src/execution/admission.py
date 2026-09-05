@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from database.types import DatabaseSession
+from shared.placement import ProductRegion
 
 
 class PaymentAdmission(Protocol):
@@ -35,6 +36,7 @@ class PaymentAdmission(Protocol):
         workspace_id: str,
         gpu: Sequence[str],
         gpu_count: int,
+        region: ProductRegion | None = None,
     ) -> list[str]:
         """Refuse a start the account may not make, and say which cards to ask for.
 

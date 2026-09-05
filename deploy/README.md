@@ -15,17 +15,23 @@ or ambiguous artifacts fail the deployment rather than retaining stale code.
 Root `compose.yaml` is the canonical local stack. This file is the operator
 runbook for it; the subdirectory READMEs cover individual services and assets.
 
+For cloud capacity, start with [Provider provisioning](PROVIDERS.md). It names
+the shared AWS/Hetzner deployment flow, ownership boundaries, required inputs,
+and the contract another provider must implement.
+
 ## Connected-AWS acceptance environment
 
 ### Profiles
 
-`default-test` is the only AWS profile for acceptance work: a role profile
+`default-test` is the AWS profile for customer BYO-cloud acceptance: a role profile
 chaining through `default-test-source` into the `lazycloud-default-test-operator`
 role.
 
-The `default` profile is root bootstrap authority. Never use it for tests,
-Compose, or stack automation; its only accepted use is one-time provisioning
-explicitly directed by the owner.
+Use `default` for owner-authorized deployments of our platform. The selected
+account currently exposes root authority through this profile, so confirm the
+account and exact resources before mutation. Do not copy its credentials into
+workloads or CI. GitHub deployments use their configured OIDC role.
+The test role is not a prerequisite for platform deployment.
 
 The operator role deliberately cannot create or delete CloudFormation stacks
 directly. Customer `compute-connection-*-g*` stacks require the execution role

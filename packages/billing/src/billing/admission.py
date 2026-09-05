@@ -20,10 +20,17 @@ from shared.billing_rate_card import (
     PlanEntitlements,
     account_terms,
     complimentary_terms,
+    published_placement_rate,
     published_plan,
 )
-from shared.errors import CapacityLimitReachedError, ConflictError, PaymentRequiredError
+from shared.errors import (
+    CapacityLimitReachedError,
+    ConflictError,
+    InvalidInputError,
+    PaymentRequiredError,
+)
 from shared.gpu import GPU_ANY, NO_GPU, normalize_gpu_type
+from shared.placement import ProductRegion
 from shared.timestamps import utc_now
 from sqlalchemy.orm import Session
 
@@ -106,6 +113,7 @@ class DatabaseBillingAdmission:
         workspace_id: str,
         gpu: Sequence[str],
         gpu_count: int,
+        region: ProductRegion | None = None,
     ) -> list[str]:
         """The question above, plus what a container's own shape is bounded by.
 
@@ -116,6 +124,11 @@ class DatabaseBillingAdmission:
         """
 
         resolved = self._billable_account(session, workspace_id=workspace_id)
+        if region is not None:
+            if resolved is not None and not resolved[1].entitlements.region_selection:
+                raise PaymentRequiredError("region selection requires the Team plan")
+            if published_placement_rate(region) is None:
+                raise InvalidInputError(f"region {region.value} is not available for placement")
         if resolved is None:
             # No account to judge, so nothing to narrow either: what was asked
             # for is what gets scheduled.

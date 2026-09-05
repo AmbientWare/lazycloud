@@ -224,6 +224,11 @@ the current run.
 
 ## Product phase and destructive work
 
+For owner-authorized deployments of our platform, use the AWS `default` profile.
+`default-test` is for customer BYO-cloud acceptance deployments, not a prerequisite
+for deploying our platform. GitHub deployments use their configured OIDC role.
+Never copy local AWS credentials into workloads, images, or GitHub secrets.
+
 The repository is deployed. A persistent installation holds data nobody can
 reconstruct, so a schema change adds an Alembic revision chained onto the one
 before it and `0001_initial` is never edited or renamed again. Do not rewrite

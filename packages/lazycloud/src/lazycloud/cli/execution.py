@@ -74,6 +74,9 @@ def deploy(
     ports: Annotated[list[str] | None, typer.Option("--port")] = None,
     keep_warm: Annotated[int | None, typer.Option("--keep-warm", min=-1)] = None,
     tcp: Annotated[bool | None, typer.Option("--tcp/--no-tcp")] = None,
+    region: Annotated[
+        str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
+    ] = None,
     pool: Annotated[str | None, typer.Option("--pool")] = None,
     preemptible: Annotated[
         bool | None,
@@ -95,6 +98,7 @@ def deploy(
         ports=ports,
         keep_warm=keep_warm,
         tcp=tcp,
+        region=region,
         pool=MachinePool(pool) if pool else None,
         preemptible=preemptible,
         entrypoint=entrypoint,
@@ -120,6 +124,7 @@ def deploy(
                 gpu_count=overrides.gpu_count,
                 env=overrides.env,
                 secrets=overrides.secrets,
+                region=overrides.region,
                 pool=overrides.pool,
                 preemptible=overrides.preemptible,
             )
@@ -142,6 +147,7 @@ def deploy(
                 ports=overrides.ports,
                 keep_warm=overrides.keep_warm,
                 tcp=overrides.tcp,
+                region=overrides.region,
                 pool=overrides.pool,
                 preemptible=overrides.preemptible,
                 entrypoint=overrides.entrypoint,
@@ -194,6 +200,9 @@ def run(
     ports: Annotated[list[str] | None, typer.Option("--port")] = None,
     keep_warm: Annotated[int | None, typer.Option("--keep-warm", min=-1)] = None,
     tcp: Annotated[bool | None, typer.Option("--tcp/--no-tcp")] = None,
+    region: Annotated[
+        str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
+    ] = None,
     pool: Annotated[str | None, typer.Option("--pool")] = None,
     preemptible: Annotated[
         bool | None,
@@ -218,6 +227,7 @@ def run(
         ports=ports,
         keep_warm=keep_warm,
         tcp=tcp,
+        region=region,
         pool=MachinePool(pool) if pool else None,
         preemptible=preemptible,
         entrypoint=entrypoint,
@@ -244,6 +254,7 @@ def run(
                 gpu_count=overrides.gpu_count,
                 env=overrides.env,
                 secrets=overrides.secrets,
+                region=overrides.region,
                 pool=overrides.pool,
                 preemptible=overrides.preemptible,
             )
@@ -284,6 +295,9 @@ def shell(
     ports: Annotated[list[str] | None, typer.Option("--port")] = None,
     keep_warm: Annotated[int | None, typer.Option("--keep-warm", min=-1)] = None,
     tcp: Annotated[bool | None, typer.Option("--tcp/--no-tcp")] = None,
+    region: Annotated[
+        str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
+    ] = None,
     pool: Annotated[str | None, typer.Option("--pool")] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
@@ -312,6 +326,7 @@ def shell(
         ports=ports,
         keep_warm=keep_warm,
         tcp=tcp,
+        region=region,
         pool=MachinePool(pool) if pool else None,
         entrypoint=entrypoint,
         sync_dir=sync_dir,
@@ -547,6 +562,7 @@ def _configure_pod(pod: Pod, overrides: DeploymentOverrides) -> None:
         keep_warm=overrides.keep_warm,
         secrets=overrides.secrets,
         tcp=overrides.tcp,
+        region=overrides.region,
         pool=overrides.pool,
         preemptible=overrides.preemptible,
     )

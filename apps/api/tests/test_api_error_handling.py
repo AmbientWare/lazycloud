@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import logging
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pytest
 from api.fastapi_app import create_app
+from api.server.provider_compute import (
+    BoundedProviderNodeIdentityHttpClient,
+    RedisProviderNodeIdentityReplayGuard,
+)
 from api.server.services import ApiServices
 from control.service import WorkspaceStorageError
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
+from gateway.provider_enrollment import ProviderNodeEnrollmentService
+from provider_clients import AwsProviderNodeIdentityAdapter
 from shared.external_identity import ExternalIdentityProfile
 from shared.http.errors import ErrorResponse
 from shared.identity import IdentityProvider, WorkspaceRecord
@@ -77,6 +83,40 @@ def test_invalid_stub_type_returns_typed_invalid_input(
     assert ErrorResponse.model_validate_json(response.content).detail == (
         "invalid stub type: bogus-kind"
     )
+
+
+def test_provider_validation_does_not_echo_identity_credentials(
+    isolated_services: ApiServices,
+    client_stack: ExitStack,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    enrollment = ProviderNodeEnrollmentService(
+        gateway=isolated_services.gateway_service,
+        compute=isolated_services.compute,
+        identity_verifier=AwsProviderNodeIdentityAdapter(
+            http_client=BoundedProviderNodeIdentityHttpClient(),
+            replay_guard=RedisProviderNodeIdentityReplayGuard(isolated_services.redis()),
+        ),
+    )
+    _, client, _ = _client(
+        replace(isolated_services, provider_node_enrollment_service=enrollment), client_stack
+    )
+    proof = "https://identity.invalid/?credential=validation-proof-sentinel"
+    response = client.post(
+        "/gateway/provider-nodes/bootstrap-phase",
+        json={
+            "enrollment_request_id": "11111111-1111-4111-8111-111111111111",
+            "provider": "aws",
+            "region": "invalid-region",
+            "provider_instance_id": "i-0123456789abcdef0",
+            "identity_proof_url": proof,
+            "phase": "booting",
+        },
+    )
+    assert response.status_code == 422
+    assert ErrorResponse.model_validate_json(response.content).code == "invalid_input"
+    assert "validation-proof-sentinel" not in response.text
+    assert "validation-proof-sentinel" not in caplog.text
 
 
 def test_unexpected_exception_returns_opaque_500(

@@ -110,10 +110,9 @@ class ComputeUnitProviderState(ContractModel):
 class ComputeUnitRecord(CapacityOwnerIdentity):
     """One provisioning unit: a single source of machines a workspace draws on.
 
-    An AWS unit owns exactly one Auto Scaling group and one launch template, so
-    its identity is `(workspace_id, provider_connection_id, region,
-    capability_key, root_volume_gib)` — a launch template pins one AMI and one
-    instance type, and an ASG pins one template and one region's subnets. The
+    A provider unit has identity `(workspace_id, provider_ref, region,
+    capability_key, root_volume_gib)`. An AWS unit owns one Auto Scaling group
+    and launch template; a Hetzner unit owns a labeled group of servers. The
     `agent` and `local` units own no provider resources but still carry a worker
     shape and a scaling policy, because worker admission, sizing and drain all
     key on the owning unit.
@@ -137,7 +136,7 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     platform_fleet: bool = False
     """Whether this unit is the platform's own capacity rather than a customer's.
 
-    Copied from the connection beside the pool, in the same statement and from
+    Copied from the resolved provider policy beside the pool, in the same statement and from
     the same source, so a consumer reads one record to know both what this
     capacity is called and whom it serves."""
     capacity_mode: ComputeCapacityMode = ComputeCapacityMode.Direct
@@ -145,6 +144,7 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     region: str = Field(default="", max_length=64)
     offer_id: str = Field(default="", max_length=255)
     capability_key: str = Field(default="", max_length=255)
+    offer_hourly_cost_micros: int | None = Field(default=None, gt=0)
     desired_machines: int = Field(default=0, ge=0)
     initial_machines: int = Field(default=0, ge=0)
     min_machines: int = Field(default=0, ge=0)
@@ -205,7 +205,6 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
         internal = self.visibility is ComputeUnitVisibility.Internal
         if internal and (
             not self.provider_ref
-            or self.provider_connection_id is None
             or not self.region
             or not self.offer_id
             or not self.capability_key
@@ -216,6 +215,8 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
             raise ValueError("internal provider pools require pooled-provider capacity ownership")
         if internal and self.capacity_owner_id != self.id:
             raise ValueError("internal provider pool ID must own its capacity")
+        if internal and self.provider_connection_id is None and not self.platform_fleet:
+            raise ValueError("customer provider pools require a connected account")
         if not internal and self.provider_connection_id is not None:
             raise ValueError("public pools cannot own a provider connection")
         return self

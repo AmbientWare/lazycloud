@@ -8,6 +8,7 @@ from compute.offers import (
     DEFAULT_POOLED_NODE_RUNTIME,
     ComputeOffer,
     pooled_cloud_offer,
+    recorded_unit_offer,
 )
 from compute.providers import (
     PooledCapacityProvider,
@@ -20,6 +21,7 @@ from compute.providers import (
 from pydantic import ValidationError
 from shared.compute_policy import (
     ComputeUnitProviderState,
+    ComputeUnitRecord,
 )
 
 from .account_connection import AwsAccountConnectionTarget
@@ -54,6 +56,17 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     instance_hourly_micros: Mapping[str, int]
     allowed_instance_types: frozenset[str]
     client_provider: AwsManagedPoolClientProvider
+
+    def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
+        region, separator, instance_type = unit.offer_id.partition(":")
+        if (
+            unit.provider_ref != self.provider_ref
+            or region != unit.region
+            or not separator
+            or not instance_type
+        ):
+            raise ValueError("AWS unit has invalid provider offer identity")
+        return recorded_unit_offer(unit, cloud="aws", instance_type=instance_type)
 
     def list_offers(self) -> Iterable[ComputeOffer]:
         offers: list[ComputeOffer] = []

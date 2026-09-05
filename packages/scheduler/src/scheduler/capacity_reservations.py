@@ -29,6 +29,7 @@ from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.gpu import GPU_ANY, gpu_preference_accepts
+from shared.placement import ProductRegion, product_region
 from shared.scheduling import (
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
@@ -121,6 +122,7 @@ class CapacityAcquisitionStatus(StrEnum):
 
 
 class CapacityRequestShape(ContractModel):
+    region: ProductRegion | None = None
     cpu_millicores: int = Field(ge=0)
     memory_mib: int = Field(ge=0)
     gpu_type: str = ""
@@ -137,6 +139,8 @@ class CapacityRequestShape(ContractModel):
         return self
 
     def can_host(self, request: SchedulerWorkerRequest) -> bool:
+        if request.region is not None and self.region != request.region:
+            return False
         requested_gpu = gpu_count_for_capacity(request.gpu, request.gpu_count)
         if self.cpu_millicores < request.cpu_millicores:
             return False
@@ -156,7 +160,8 @@ class CapacityRequestShape(ContractModel):
 
     def worker_capabilities_match(self, worker: SchedulerWorkerRecord) -> bool:
         return (
-            worker.total_gpu_count >= self.gpu_count
+            (self.region is None or worker.region == self.region)
+            and worker.total_gpu_count >= self.gpu_count
             and (self.gpu_count == 0 or worker.gpu_type == self.gpu_type)
             and all(runtime in worker.runtime_classes for runtime in self.runtime_classes)
             and worker.preemptible is self.preemptible
@@ -266,6 +271,9 @@ class CapacityAcquisitionController(Protocol):
     @property
     def priority(self) -> int: ...
 
+    @property
+    def hourly_cost_micros(self) -> int | None: ...
+
     def accepts(self, request: SchedulerWorkerRequest) -> bool: ...
 
     def operational_health(
@@ -364,12 +372,22 @@ class ComputeUnitCapacityController:
     def priority(self) -> int:
         return self.unit.priority
 
+    @property
+    def hourly_cost_micros(self) -> int | None:
+        return self.unit.offer_hourly_cost_micros
+
     def operational_health(
         self,
         *,
         now: datetime,
     ) -> CapacityPoolOperationalHealth:
         _ = now
+        if (
+            self.unit.desired_machines == 0
+            and self.unit.observed_machines == 0
+            and self.unit.provider_state.degraded_reason is None
+        ):
+            return CapacityPoolOperationalHealth.Healthy
         return capacity_pool_operational_health(
             self.capacity_owner_id,
             self.workers.list_workers(),
@@ -398,6 +416,7 @@ class ComputeUnitCapacityController:
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
         return CapacityRequestShape(
+            region=product_region(self.unit.region),
             cpu_millicores=self.unit.worker_cpu_millicores,
             memory_mib=self.unit.worker_memory_mib,
             gpu_type=self.unit.worker_gpu_type,
@@ -1646,6 +1665,7 @@ class CapacityReservationService:
             key=lambda controller: capacity_pool_selection_key(
                 health=controller.operational_health(now=current_time),
                 priority=controller.priority,
+                hourly_cost_micros=controller.hourly_cost_micros,
                 capacity_owner_id=controller.capacity_owner_id,
             )
         )
@@ -1727,6 +1747,7 @@ def _schedulable_shape(
 ) -> CapacityRequestShape:
     return reservation.acquisition_shape.model_copy(
         update={
+            "region": worker.region,
             "cpu_millicores": worker.total_cpu_millicores,
             "memory_mib": worker.total_memory_mib,
             "gpu_type": worker.gpu_type if worker.total_gpu_count > 0 else "",

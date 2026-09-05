@@ -23,6 +23,7 @@ resource "aws_s3_object" "infrastructure" {
     control_principal_arn      = aws_iam_role.control_principal.arn
     public_origin              = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}"
     redis_host                 = aws_elasticache_replication_group.redis.primary_endpoint_address
+    hetzner_node_images        = var.hetzner_node_images
     fleet = {
       account_id        = data.aws_caller_identity.current.account_id
       role_arn          = aws_iam_role.fleet_connection.arn

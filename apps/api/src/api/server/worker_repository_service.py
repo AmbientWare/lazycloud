@@ -68,6 +68,7 @@ from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeT
 from shared.identity import AuthScope, TokenStatus
 from shared.image_building.records import BuildStatus
 from shared.objects import ObjectRecord
+from shared.placement import product_region
 from shared.realtime.contracts import EventRecordType
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
@@ -75,6 +76,7 @@ from shared.scheduling import (
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
+    WorkerExecutionRecord,
     WorkerUnavailableReason,
     worker_serves_owner,
 )
@@ -845,7 +847,9 @@ class WorkerRepositoryService:
             generation_id=request.cache_generation_id,
             storage_id=request.cache_storage_id,
         )
-        initializing_worker = request.worker.model_copy(
+        initializing_worker = SchedulerWorkerRecord.model_validate(
+            request.worker.model_dump()
+        ).model_copy(
             update={
                 "status": SchedulerWorkerStatus.Pending,
                 # The token decides which tenant a worker serves. Taking the
@@ -878,6 +882,7 @@ class WorkerRepositoryService:
                 # a pool no workload asks for, and the machine has to be replaced
                 # for a name to change. Told, not asserted.
                 "pool": unit.pool,
+                "region": product_region(unit.region),
                 # Whose pool this is decides who may land on it, so the unit
                 # answers rather than the machine. A worker is launched by an
                 # agent holding a config that cannot see the unit, so left to the
@@ -937,7 +942,7 @@ class WorkerRepositoryService:
         return billing_owner_for_unit(unit)
 
     def _feeding_unit(
-        self, worker: SchedulerWorkerRecord, principal: WorkerRepositoryPrincipal
+        self, worker: WorkerExecutionRecord, principal: WorkerRepositoryPrincipal
     ) -> ComputeUnitRecord:
         """The unit a registering worker belongs to.
 
@@ -970,7 +975,7 @@ class WorkerRepositoryService:
 
     def _validate_runtime_worker_registration(
         self,
-        worker: SchedulerWorkerRecord,
+        worker: WorkerExecutionRecord,
         principal: WorkerRepositoryPrincipal,
     ) -> None:
         if self.services is None:
@@ -1117,10 +1122,9 @@ class WorkerRepositoryService:
     ) -> UpdateWorkerCapacityResponse:
         try:
             return UpdateWorkerCapacityResponse(
-                plan=self.workers.update_worker_capacity(
+                plan=self.workers.release_worker_capacity(
                     request.worker_id,
                     request.container_request,
-                    request.change,
                 )
             )
         except SchedulerRepositoryError as exc:

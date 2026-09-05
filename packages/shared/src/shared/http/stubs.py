@@ -7,6 +7,7 @@ from pydantic import ConfigDict, Field, JsonValue, field_serializer
 from shared.contracts import ContractModel
 from shared.deployments import StubKind
 from shared.http.base import HttpModel
+from shared.placement import ProductRegion
 from shared.serialization import to_json_value
 from shared.workload_config import StubTaskPolicy, StubVolumeConfig
 
@@ -33,6 +34,7 @@ class StubRuntimeConfigResponse(HttpModel):
     """Lenient view over the runtime section of a stored stub config."""
 
     model_config = ConfigDict(extra="ignore")
+    region: ProductRegion | None = None
 
     cpu: int | float | None = None
     memory: int | str | None = None
@@ -111,7 +113,10 @@ class StubConfigUpdateRequest(HttpModel):
     def fields(self) -> dict[str, JsonValue]:
         values: dict[str, JsonValue] = {}
         if self.runtime is not None:
-            values["runtime"] = _model_json_object(self.runtime, exclude_none=True)
+            runtime = _model_json_object(self.runtime, exclude_none=True)
+            if "region" in self.runtime.model_fields_set:
+                runtime["region"] = self.runtime.region.value if self.runtime.region else None
+            values["runtime"] = runtime
         if self.inputs is not None:
             values["inputs"] = self.inputs
         if self.outputs is not None:

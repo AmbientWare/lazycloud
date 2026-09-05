@@ -40,6 +40,7 @@ from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.events import EventLevel
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.image_building.records import BuildStatus
+from shared.placement import ProductRegion
 from shared.scheduling import (
     SchedulerContainerCancellationResult,
     SchedulerContainerSubmitResult,
@@ -109,6 +110,7 @@ class ContainerCursorPayload(ContractModel):
 
 
 class PendingContainerReservation(ContractModel):
+    region: ProductRegion | None = Field(default=None, exclude=True)
     id: str | None = None
     name: str
     image: str
@@ -148,6 +150,7 @@ class ContainerService:
         workspace_id: str,
         gpu: Sequence[str],
         gpu_count: int,
+        region: ProductRegion | None = None,
     ) -> list[str]:
         """Refuse a start the account may not make, before anything exists.
 
@@ -166,6 +169,7 @@ class ContainerService:
             workspace_id=workspace_id,
             gpu=gpu,
             gpu_count=gpu_count_for_capacity(gpu, gpu_count),
+            region=region,
         )
 
     def reserve_pending(
@@ -182,6 +186,7 @@ class ContainerService:
             workspace_id=reservation.workspace_id,
             gpu=reservation.gpu,
             gpu_count=reservation.gpu_count,
+            region=reservation.region,
         )
         app_id = optional_uuid(reservation.app_id, field="app_id")
         if app_id is not None:
@@ -275,6 +280,7 @@ class ContainerService:
         gpu: Sequence[str] = (),
         gpu_count: int = 0,
         pool_selector: str = "",
+        region: ProductRegion | None = None,
         runtime: OciRuntimeName | str = OciRuntimeName.Runsc,
         runtime_class: str = "",
         docker_enabled: bool = False,
@@ -305,6 +311,7 @@ class ContainerService:
                 session,
                 PendingContainerReservation(
                     name=name,
+                    region=region,
                     image=image,
                     command=argv,
                     workspace_id=workspace.id,
@@ -342,6 +349,7 @@ class ContainerService:
                 gpu=list(record.gpu),
                 gpu_count=record.gpu_count,
                 pool_selector=pool_selector,
+                region=region,
                 runtime=runtime,
                 runtime_class=runtime_class,
                 docker_enabled=docker_enabled,
@@ -467,6 +475,7 @@ class ContainerService:
             gpu=list(options.gpu),
             gpu_count=options.gpu_count,
             pool_selector=options.pool_selector,
+            region=options.region,
             runtime_class=runtime_constraint,
             docker_enabled=options.docker_enabled,
             preemptible=options.preemptible,

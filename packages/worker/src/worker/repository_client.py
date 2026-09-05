@@ -4,7 +4,7 @@ import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -22,12 +22,12 @@ from shared.scheduling import (
     NetworkIpMutationPlan,
     SchedulerContainerAddress,
     SchedulerContainerAddressMap,
-    SchedulerContainerState,
     SchedulerContainerStatus,
-    SchedulerWorkerRecord,
-    SchedulerWorkerRequest,
     WorkerCapacityChange,
-    WorkerCapacityPlan,
+    WorkerCapacityResult,
+    WorkerContainerState,
+    WorkerExecutionRecord,
+    WorkerExecutionRequest,
     WorkerRemovalResult,
     WorkerRepositoryLockRecord,
     WorkerRepositoryLockRelease,
@@ -820,15 +820,15 @@ class WorkerRepositoryHttpClient:
 @dataclass(slots=True)
 class RemoteWorkerRepositoryState:
     worker_id: str
-    container_states: dict[str, SchedulerContainerState] = field(default_factory=dict)
+    container_states: dict[str, WorkerContainerState] = field(default_factory=dict)
     deleted_container_ids: set[str] = field(default_factory=set)
     cache_session: WorkerCacheSession | None = None
 
-    def remember_request(self, request: SchedulerWorkerRequest) -> None:
+    def remember_request(self, request: WorkerExecutionRequest) -> None:
         self.deleted_container_ids.discard(request.container_id)
         self.container_states.setdefault(
             request.container_id,
-            SchedulerContainerState(
+            WorkerContainerState(
                 container_id=request.container_id,
                 stub_id=request.stub_id,
                 workspace_id=request.workspace_id,
@@ -842,7 +842,7 @@ class RemoteWorkerRepositoryState:
             ),
         )
 
-    def update_container_state(self, state: SchedulerContainerState) -> SchedulerContainerState:
+    def update_container_state(self, state: WorkerContainerState) -> WorkerContainerState:
         self.deleted_container_ids.discard(state.container_id)
         self.container_states[state.container_id] = state
         return state
@@ -855,7 +855,7 @@ class RemoteSchedulerWorkerRepository:
     source_cache_identity: WorkerSourceCacheIdentity
     source_cache_materializer: SourceCodePackageMaterializer
     _source_cache_reconciler: WorkerSourceCacheReconciler = field(init=False)
-    _available_worker: SchedulerWorkerRecord | None = field(default=None, init=False)
+    _available_worker: WorkerExecutionRecord | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self._source_cache_reconciler = WorkerSourceCacheReconciler(
@@ -866,7 +866,7 @@ class RemoteSchedulerWorkerRepository:
     def prepare_shutdown(self, *, timeout_seconds: float) -> None:
         self.client.prepare_shutdown(timeout_seconds=timeout_seconds)
 
-    def get_next_container_request(self, worker_id: str) -> SchedulerWorkerRequest | None:
+    def get_next_container_request(self, worker_id: str) -> WorkerExecutionRequest | None:
         session = self._cache_session()
         response = self.client.get_next_container_request(
             GetNextContainerRequestRequest(
@@ -890,7 +890,7 @@ class RemoteSchedulerWorkerRepository:
 
     def report_image_build_result(
         self,
-        request: SchedulerWorkerRequest,
+        request: WorkerExecutionRequest,
         result: WorkerImageBuildExecutionResult,
     ) -> None:
         for after in range(0, len(result.logs), 256):
@@ -918,7 +918,7 @@ class RemoteSchedulerWorkerRepository:
             )
 
     def report_image_build_progress(
-        self, request: SchedulerWorkerRequest, *, after: int, logs: list[str]
+        self, request: WorkerExecutionRequest, *, after: int, logs: list[str]
     ) -> int:
         return self.client.report_image_build_progress(
             ReportImageBuildProgressRequest(
@@ -931,16 +931,16 @@ class RemoteSchedulerWorkerRepository:
             )
         ).sequence
 
-    def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None:
+    def get_worker(self, worker_id: str) -> WorkerExecutionRecord | None:
         return self.client.get_worker_by_id(WorkerIdRequest(worker_id=worker_id)).worker
 
     def add_worker(
         self,
-        worker: SchedulerWorkerRecord,
+        worker: WorkerExecutionRecord,
         *,
         ttl_seconds: int = 0,
         now: datetime | None = None,
-    ) -> SchedulerWorkerRecord:
+    ) -> WorkerExecutionRecord:
         _ = now
         response = self.client.add_worker(
             AddWorkerRequest(
@@ -982,7 +982,7 @@ class RemoteSchedulerWorkerRepository:
         worker_id: str,
         *,
         ttl_seconds: int = 0,
-    ) -> SchedulerWorkerRecord:
+    ) -> WorkerExecutionRecord:
         _ = ttl_seconds
         worker = self._available_worker
         if worker is None:
@@ -995,7 +995,7 @@ class RemoteSchedulerWorkerRepository:
         worker_id: str,
         *,
         ttl_seconds: int = 0,
-    ) -> SchedulerWorkerRecord:
+    ) -> WorkerExecutionRecord:
         _ = ttl_seconds
         response = self.client.set_worker_keep_alive(self._session_request())
         if response.source_cache_state in {
@@ -1084,7 +1084,7 @@ class RemoteSchedulerWorkerRepository:
             raise WorkerRepositoryClientError("worker source cache session is not registered")
         return self.state.cache_session
 
-    def reconcile_worker_capacity(self, worker_id: str) -> SchedulerWorkerRecord:
+    def reconcile_worker_capacity(self, worker_id: str) -> WorkerExecutionRecord:
         return self.set_keep_alive(worker_id)
 
     def disable_worker(
@@ -1094,7 +1094,7 @@ class RemoteSchedulerWorkerRepository:
         reason: WorkerUnavailableReason,
         detail: str = "",
         ttl_seconds: int = 0,
-    ) -> SchedulerWorkerRecord:
+    ) -> WorkerExecutionRecord:
         _ = ttl_seconds
         worker = self.client.disable_worker(
             DisableWorkerRequest(worker_id=worker_id, reason=reason, detail=detail)
@@ -1114,9 +1114,9 @@ class RemoteSchedulerWorkerRepository:
     def update_worker_capacity(
         self,
         worker_id: str,
-        request: SchedulerWorkerRequest,
-        change: WorkerCapacityChange,
-    ) -> WorkerCapacityPlan:
+        request: WorkerExecutionRequest,
+        change: Literal[WorkerCapacityChange.Add],
+    ) -> WorkerCapacityResult:
         response = self.client.update_worker_capacity(
             UpdateWorkerCapacityRequest(
                 worker_id=worker_id,
@@ -1135,7 +1135,7 @@ class RemoteSchedulerContainerRepository:
     client: WorkerRepositoryHttpClient
     state: RemoteWorkerRepositoryState
 
-    def get_container_state(self, container_id: str) -> SchedulerContainerState | None:
+    def get_container_state(self, container_id: str) -> WorkerContainerState | None:
         response = self.client.get_container_state(
             GetContainerStateRequest(container_id=container_id)
         )

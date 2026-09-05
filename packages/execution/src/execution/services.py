@@ -12,6 +12,7 @@ from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import Deployment
 from shared.http.workspace_changes import WorkspaceChangeType
+from shared.placement import ProductRegion
 from shared.scheduling import SchedulerContainerSubmitStatus
 from storage.service import ObjectStorage
 
@@ -50,6 +51,7 @@ class ExecutionContainerService(Protocol):
         workspace_id: str,
         gpu: Sequence[str],
         gpu_count: int,
+        region: ProductRegion | None = None,
     ) -> list[str]: ...
 
     def get(self, container_id: str) -> ContainerRecord: ...

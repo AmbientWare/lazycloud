@@ -4,8 +4,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import typer
+from billing.rate_publication import publish_metered_rate_history
 from database.repositories.billing_ledger import BillingLedgerRepository
-from database.repositories.billing_rates import ComputeRateRepository, PlatformRateRepository
 from lazycloud.cli.components.cards import result_card
 from lazycloud.cli.components.output import emit, table
 from lazycloud.cli.components.results import emit_result
@@ -13,7 +13,6 @@ from provider_stripe import METER_EVENT_BACKFILL_DAYS, PublishedCatalog, StripeS
 from rich.console import Group
 from shared.billing_rate_card import (
     METERED_RATE_VERSION,
-    PUBLISHED_COMPUTE_RATES,
     PUBLISHED_PLANS,
     PUBLISHED_PLATFORM_RATE,
 )
@@ -49,10 +48,9 @@ def publish_rates(
 ) -> None:
     """Write the published rate card into the tables pricing reads.
 
-    `--effective-at` has no default. A rate boundary is the one input nobody
-    should infer: every millisecond either side of it is billed at a different
-    number, and a boundary chosen by whenever somebody happened to run a command
-    is one nobody can explain to a customer afterwards.
+    `--effective-at` must match the latest reviewed card's effective date. All
+    reviewed historical cards are published too, so a fresh installation prices
+    usage before a scheduled change at the original rate.
 
     The rates themselves are refused if they would reach back over usage the
     ledger has already frozen, so the operator cannot reprice a figure a customer
@@ -103,36 +101,24 @@ def publish_rates(
         # not carry out and exit zero doing so. The operator running this before
         # a cutover is asking exactly that question.
         with client.session() as session:
-            compute = ComputeRateRepository(session)
-            for rate in PUBLISHED_COMPUTE_RATES:
-                publication = compute.publish(
-                    billing_owner=rate.billing_owner,
-                    gpu_type=rate.gpu_type,
-                    pricing_version=METERED_RATE_VERSION,
-                    effective_at=moment,
-                    nanos_per_container_second=rate.nanos_per_container_second,
-                    nanos_per_cpu_core_second=rate.nanos_per_cpu_core_second,
-                    nanos_per_memory_gib_second=rate.nanos_per_memory_gib_second,
-                    nanos_per_gpu_card_second=rate.nanos_per_gpu_card_second,
-                )
+            history = publish_metered_rate_history(session, effective_at=moment)
+            latest = history[-1]
+            for publication in latest.compute:
+                rate = publication.rate
                 compute_rates.append(
                     {
                         "billing_owner": rate.billing_owner.value,
+                        "rate_class": rate.rate_class,
                         "gpu_type": rate.gpu_type or "-",
                         "nanos_per_container_hour": rate.nanos_per_container_hour,
                         "nanos_per_cpu_core_hour": rate.nanos_per_cpu_core_hour,
                         "nanos_per_memory_gib_hour": rate.nanos_per_memory_gib_hour,
                         "nanos_per_gpu_card_hour": rate.nanos_per_gpu_card_hour,
-                        "state": publication.value,
+                        "state": publication.state.value,
                     }
                 )
-            platform = PlatformRateRepository(session).publish(
-                pricing_version=METERED_RATE_VERSION,
-                effective_at=moment,
-                nanos_per_egress_byte=PUBLISHED_PLATFORM_RATE.nanos_per_egress_byte,
-                nanos_per_volume_byte_second=(PUBLISHED_PLATFORM_RATE.nanos_per_volume_byte_second),
-            )
-            payload["platform_rate_state"] = platform.value
+            payload["platform_rate_state"] = latest.platform.value
+            payload["history_boundaries"] = [card.effective_at.isoformat() for card in history]
             if confirm:
                 session.commit()
             else:
@@ -156,10 +142,20 @@ def publish_rates(
             ),
             table(
                 "Compute rates",
-                ["owner", "gpu", "container/hour", "cpu/hour", "memory/hour", "gpu/hour", "state"],
+                [
+                    "owner",
+                    "rate class",
+                    "gpu",
+                    "container/hour",
+                    "vCPU/hour",
+                    "memory/hour",
+                    "gpu/hour",
+                    "state",
+                ],
                 [
                     [
                         rate["billing_owner"],
+                        rate["rate_class"],
                         rate["gpu_type"],
                         rate["nanos_per_container_hour"],
                         rate["nanos_per_cpu_core_hour"],

@@ -74,6 +74,12 @@ one.
 
 ### 3. The deployment
 
+Prepare the provider inputs in [Provider provisioning](../PROVIDERS.md).
+The default deployment requires the verified `hetzner-images.tfvars.json`
+artifact from Hetzner Node Images. Keep it outside source control and pass it
+to plan and apply. Add the provider token map to the existing operator secret
+before deploying the updated secret mapping. Preserve all existing credentials.
+
 ```sh
 DEPLOYMENT=lazycloud-prod
 terraform -chdir=deploy/platform-deployment init \
@@ -81,6 +87,7 @@ terraform -chdir=deploy/platform-deployment init \
   -backend-config="key=platform-deployment/$DEPLOYMENT.tfstate" \
   -backend-config="region=us-east-1"
 terraform -chdir=deploy/platform-deployment apply \
+  -var-file=/absolute/path/to/hetzner-images.tfvars.json \
   -var="deployment=$DEPLOYMENT" \
   -var="github_environment=prod" \
   -var="planetscale_organization=<org>" \

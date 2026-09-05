@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { cpuRequestSchema, memoryRequestSchema } from "./resources";
+import { productRegionSchema } from "./placement";
 
 // Synced to packages/shared/src/shared/http/stubs.py (StubResponse, StubListResponse);
 // scoped to the fields the dashboard renders.
@@ -27,6 +28,7 @@ export const workloadKinds = ["function", "endpoint", "asgi", "pod", "sandbox"] 
 export type WorkloadKind = (typeof workloadKinds)[number];
 
 const stubRuntimeConfigSchema = z.object({
+  region: productRegionSchema.nullish(),
   cpu: z.union([cpuRequestSchema, z.string()]).nullish(),
   memory: memoryRequestSchema.nullish(),
   gpu: z.array(z.string()).default([]),

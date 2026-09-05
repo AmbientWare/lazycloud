@@ -17,6 +17,7 @@ from compute.providers import (
     ProviderUnitRequest,
     ProviderUnitSnapshot,
     ResolvedComputeProvider,
+    ResolvedProviderPolicy,
 )
 from compute.service import ComputeService
 from control.service import ControlPlaneService
@@ -83,6 +84,9 @@ class _PooledProvider:
     desired_machines: int = 1
     capacity_calls: list[tuple[int, int]] = field(default_factory=list)
 
+    def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
+        return next(iter(self.list_offers()))
+
     def list_offers(self) -> Iterable[ComputeOffer]:
         return (
             ComputeOffer(
@@ -94,6 +98,7 @@ class _PooledProvider:
                 cpu_millicores=2_000,
                 memory_mb=8 * 1_024,
                 storage_mb=200 * 1_024,
+                hourly_cost_micros=170_000,
                 available=10,
                 capacity_mode=ComputeCapacityMode.Pooled,
                 capability_key="aws:us-east-1:m7i.large:amd64:runsc",
@@ -151,6 +156,10 @@ class _PooledProvider:
 @dataclass(frozen=True, slots=True)
 class _Resolver(ComputeProviderResolver):
     provider: _PooledProvider
+    policy: ResolvedProviderPolicy
+
+    def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
+        return ()
 
     def list_providers(self, workspace_id: str) -> Iterable[ResolvedComputeProvider]:
         del workspace_id
@@ -168,6 +177,7 @@ class _Resolver(ComputeProviderResolver):
             capacity_mode=ComputeCapacityMode.Pooled,
             connection_id=_CONNECTION_ID,
             pooled=self.provider,
+            policy=self.policy,
         )
 
 
@@ -177,13 +187,27 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
 ) -> None:
     provider = _PooledProvider()
     mutations = _CapacityOwnerMutations()
+    workspace_id = _seed_connection(isolated_services)
+    with isolated_services.context.database.session() as session:
+        connection = AwsAccountConnectionRepository(session).get(_CONNECTION_ID)
+    assert connection is not None
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(
+            provider,
+            ResolvedProviderPolicy(
+                workspace_id=workspace_id,
+                pool=connection.pool,
+                platform_fleet=connection.platform_fleet,
+                default_region=connection.compute.default_region,
+                allowed_regions=connection.compute.allowed_regions,
+                max_cpu_instances=connection.compute.max_cpu_instances,
+                max_gpu_instances=connection.compute.max_gpu_instances,
+            ),
+        ),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=mutations,
     )
-    workspace_id = _seed_connection(isolated_services)
     services_with_compute = replace(isolated_services, compute=compute)
     # The graph's warm-baseline owner has to reach the same capacity service the
     # request path uses, or control-plane startup reconciles through a different one.

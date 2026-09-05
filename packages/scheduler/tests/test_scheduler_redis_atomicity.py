@@ -20,6 +20,7 @@ from scheduler.state import (
     SchedulerWorkerStatus,
 )
 from shared.compute_policy import MachinePool
+from shared.placement import ProductRegion
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 
@@ -82,6 +83,31 @@ def test_script_transport_failure_propagates_without_non_atomic_fallback() -> No
 
     with pytest.raises(OSError, match="Redis transport unavailable"):
         repository.enqueue_container_request(request)
+
+
+def test_region_change_before_dispatch_preserves_claim_and_capacity(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    now = datetime(2026, 9, 4, tzinfo=UTC)
+    repository = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    worker = _available_worker("regional-worker", now=now).model_copy(
+        update={"region": ProductRegion.UsEast}
+    )
+    repository.add_worker(worker, now=now)
+    request = _request("regional-request", now=now).model_copy(
+        update={"region": ProductRegion.EuCentral}
+    )
+    repository.enqueue_container_request(request, ready_at=now)
+    [claim] = repository.claim_ready_container_requests(now=now)
+
+    with pytest.raises(SchedulerRepositoryError, match="outside the selected region"):
+        repository.dispatch_claimed_container_request(worker.worker_id, claim, now=now)
+
+    stored = repository.get_worker(worker.worker_id)
+    assert stored is not None
+    assert stored.free_cpu_millicores == worker.free_cpu_millicores
+    assert stored.free_memory_mib == worker.free_memory_mib
+    assert repository.acknowledge_container_request(claim)
 
 
 def test_real_redis_claims_are_unique_and_expired_leases_recover(

@@ -34,6 +34,7 @@ from scheduler.pool_sizing import (
     WorkerPoolSizingPlan,
     WorkerPoolSizingReservation,
 )
+from scheduler.preemption import SchedulerGpuBackfillPreemptionService
 from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
@@ -52,8 +53,11 @@ from shared.compute_policy import (
     MachinePool,
     UnitName,
 )
+from shared.container_requests import StopContainerReason
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
+    SchedulerContainerState,
+    SchedulerContainerStatus,
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
@@ -127,6 +131,7 @@ class _Controller:
     failures_remaining: int = 0
     delay_seconds: float = 0
     priority: int = 0
+    hourly_cost_micros: int | None = None
     health: CapacityPoolOperationalHealth = CapacityPoolOperationalHealth.Healthy
     target_machine_id: str = ""
     default_eligible: bool = True
@@ -605,6 +610,88 @@ def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
     updated = workers.get_worker(worker.worker_id)
     assert updated is not None
     assert updated.free_cpu_millicores == 3_000
+
+
+def test_registered_gpu_reservation_recovers_cpu_backfill_before_dispatch(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    workers = RedisSchedulerWorkerRepository(redis)
+    containers = RedisSchedulerContainerRepository(redis)
+    repository = RedisCapacityReservationRepository(redis)
+    capacity = CapacityReservationService(repository, tuple)
+    now = datetime.now(UTC)
+    worker = workers.add_worker(
+        _worker(OWNER_ID, created_at=now).model_copy(
+            update={
+                "status": SchedulerWorkerStatus.Available,
+                "gpu_type": "L4",
+                "total_gpu_count": 1,
+                "free_gpu_count": 1,
+                "free_cpu_millicores": 0,
+            }
+        ),
+        now=now,
+    )
+    containers.set_container_state(
+        SchedulerContainerState(
+            container_id="cpu-backfill",
+            stub_id="stub-1",
+            workspace_id="workspace-1",
+            worker_id=worker.worker_id,
+            status=SchedulerContainerStatus.Running,
+            backfill=True,
+            preemptible=True,
+            cpu_millicores=worker.total_cpu_millicores,
+            memory_mib=512,
+        )
+    )
+
+    class Stopper:
+        def stop(self, container_id: str, *, reason: StopContainerReason) -> None:
+            assert reason is StopContainerReason.Preempted
+            containers.cancel_container_request(container_id)
+
+    requests = SchedulerContainerRequestService(
+        workers=workers,
+        containers=containers,
+        placement=_IdentityPlacement(),
+        failure_handler=_FailureHandler(),
+        assignments=_Assignments(),
+        dispatch_wake=_Wake(),
+        lifecycle_events=_Events(),
+        workspace_owners=_UnownedWorkspaces(),
+        capacity_reservations=capacity,
+        backfill_preemption=SchedulerGpuBackfillPreemptionService(workers, containers, Stopper()),
+    )
+    request = _request("reserved-gpu").model_copy(update={"gpu": ["L4"], "gpu_count": 1})
+    assert requests.submit(request, ready_at=now).accepted
+    with repository.mutation_lock(OWNER_ID):
+        repository.reserve(
+            capacity_owner_id=OWNER_ID,
+            pool=worker.pool,
+            owner_kind=CapacityOwnerKind.PooledProvider,
+            request=request,
+            shape=_shape().model_copy(update={"gpu_type": "L4", "gpu_count": 1}),
+            registration_timeout=timedelta(minutes=10),
+            now=now,
+        )
+        capacity.prepare_dispatch(request.container_id, worker, now=now)
+
+    [waiting] = requests.dispatch_ready(now=now)
+    assert waiting.status is SchedulerContainerDispatchStatus.Waiting
+    backfill = containers.get_container_state("cpu-backfill")
+    assert backfill is not None and backfill.backfill_eviction_requested
+    assert backfill.status is SchedulerContainerStatus.Stopping
+    assert capacity.registered_worker_id(request.container_id) == worker.worker_id
+    assert workers.has_recoverable_container_request(request.container_id)
+
+    containers.update_container_status("cpu-backfill", SchedulerContainerStatus.Complete)
+    workers.toggle_worker_available(worker.worker_id, now=now + timedelta(seconds=1))
+    [dispatched] = requests.dispatch_ready(now=now + timedelta(seconds=2))
+    assert dispatched.status is SchedulerContainerDispatchStatus.Dispatched
+    assert dispatched.worker_id == worker.worker_id
+    assert repository.allocation_for_request(request.container_id) is None
 
 
 def test_provider_reconciliation_does_not_block_final_dispatch(

@@ -2,24 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from decimal import ROUND_DOWN, Decimal
 from typing import Literal, TypeAlias
 
 from shared.billing_plans import BillingPlanId
 from shared.billing_quotes import BYTES_PER_GIB, NANOS_PER_USD
 from shared.gpu import NO_GPU, SUPPORTED_GPU_TYPES, GpuType
+from shared.placement import AUTO_RATE_CLASS, PlacementRateClass, ProductRegion
 from shared.usage import UsageBillingOwner
 
-PRICING_VERSION = "2026-09-03.a"
+PRICING_VERSION = "2026-09-04.a"
 """The version of the plans, entitlements, and rates exposed to customers."""
-
-METERED_RATE_VERSION = "2026-08-18.a"
-"""The label frozen onto ledger segments priced by the metered rates below.
-
-This changes only when a metered compute, storage, or egress rate changes. Plan
-prices and entitlements use ``PRICING_VERSION`` without rewriting published rate
-boundaries.
-"""
 
 FREE_PLAN_MONTHLY_NANOS = 0
 """What the free plan charges, published as a price rather than as no price.
@@ -248,6 +242,7 @@ class PublishedComputeRate:
     nanos_per_cpu_core_hour: int
     nanos_per_memory_gib_hour: int
     nanos_per_gpu_card_hour: int
+    rate_class: PlacementRateClass = AUTO_RATE_CLASS
 
     def __post_init__(self) -> None:
         """Derive every figure once, so an unpublishable one raises on construction.
@@ -342,10 +337,8 @@ class PublishedPlatformRate:
     what a person is quoted, so it is the figure this card states rather than one
     reconstructed from a rate row.
 
-    Egress is a stated zero rather than an absent one. The metering runs, the
-    ledger records the segments, the meter events leave for the provider, and the
-    invoice carries a line reading $0.00 — so turning it on later is one
-    published rate row and no change to any of that.
+    Egress is global. Selecting a compute region does not change the customer
+    transfer rate.
     """
 
     nanos_per_egress_gib: int
@@ -420,6 +413,7 @@ class PlanEntitlements:
     connected_cloud: bool
     custom_domains: bool
     self_hosted: bool
+    region_selection: bool = False
 
     def __post_init__(self) -> None:
         if self.max_concurrent_cpu_containers <= 0:
@@ -514,7 +508,7 @@ _PLATFORM_FLEET_SHAPE = PublishedShapeRate(
 )
 """The one compute price this platform sets. Every other capacity derives from it."""
 
-PUBLISHED_SHAPE_RATES: tuple[PublishedShapeRate, ...] = (
+_INITIAL_SHAPE_RATES: tuple[PublishedShapeRate, ...] = (
     _PLATFORM_FLEET_SHAPE,
     # Capacity in a customer's own cloud account: their provider bills them for
     # the machine, so what this platform charges is the fee for managing what
@@ -531,7 +525,7 @@ PUBLISHED_SHAPE_RATES: tuple[PublishedShapeRate, ...] = (
     PublishedShapeRate(UsageBillingOwner.SelfHosted, 0, 0, 0),
 )
 
-PUBLISHED_GPU_RATES: tuple[PublishedGpuRate, ...] = (
+_INITIAL_GPU_RATES: tuple[PublishedGpuRate, ...] = (
     PublishedGpuRate(GpuType.T4, 560_880_000),
     PublishedGpuRate(GpuType.A10G, 1_201_201_200),
     PublishedGpuRate(GpuType.L4, 899_398_800),
@@ -548,7 +542,7 @@ no row here is compute nothing can price, and a row for a model nobody can rent
 is a quote nobody can take.
 """
 
-PUBLISHED_PLATFORM_RATE = PublishedPlatformRate(
+_INITIAL_PLATFORM_RATE = PublishedPlatformRate(
     nanos_per_egress_gib=0,
     # Volumes are object storage, so this is priced against object storage rather
     # than against a block device: roughly twice what the bucket behind it lists
@@ -593,6 +587,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             max_workspaces="unlimited",
             max_members="unlimited",
             connected_cloud=True,
+            region_selection=True,
             custom_domains=True,
             self_hosted=True,
         ),
@@ -622,7 +617,9 @@ def published_plan(plan: BillingPlanId) -> PublishedPlan:
     return _PLANS_BY_ID[plan]
 
 
-def _published_compute_rates() -> tuple[PublishedComputeRate, ...]:
+def _published_compute_rates(
+    shapes: tuple[PublishedShapeRate, ...], gpus: tuple[PublishedGpuRate, ...]
+) -> tuple[PublishedComputeRate, ...]:
     """One row per shape class the pricer can be asked for.
 
     CPU-only work is a shape class of its own rather than a missing GPU, so every
@@ -631,7 +628,7 @@ def _published_compute_rates() -> tuple[PublishedComputeRate, ...]:
     """
 
     rows: list[PublishedComputeRate] = []
-    for shape in PUBLISHED_SHAPE_RATES:
+    for shape in shapes:
         rows.append(
             PublishedComputeRate(
                 billing_owner=shape.billing_owner,
@@ -651,13 +648,91 @@ def _published_compute_rates() -> tuple[PublishedComputeRate, ...]:
                 nanos_per_memory_gib_hour=shape.nanos_per_memory_gib_hour,
                 nanos_per_gpu_card_hour=gpu.nanos_per_card_hour(shape.billing_owner),
             )
-            for gpu in PUBLISHED_GPU_RATES
+            for gpu in gpus
         )
     return tuple(rows)
 
 
-PUBLISHED_COMPUTE_RATES: tuple[PublishedComputeRate, ...] = _published_compute_rates()
-"""The whole compute rate card, expanded to the rows the database holds."""
+@dataclass(frozen=True, slots=True)
+class PublishedMeteredRateCard:
+    pricing_version: str
+    effective_at: datetime
+    compute_rates: tuple[PublishedComputeRate, ...]
+    platform_rate: PublishedPlatformRate
+
+
+PUBLISHED_METERED_RATE_HISTORY: tuple[PublishedMeteredRateCard, ...] = (
+    PublishedMeteredRateCard(
+        pricing_version="2026-08-18.a",
+        effective_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        compute_rates=_published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES),
+        platform_rate=_INITIAL_PLATFORM_RATE,
+    ),
+    PublishedMeteredRateCard(
+        pricing_version="2026-09-04.a",
+        effective_at=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        compute_rates=_published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES),
+        platform_rate=PublishedPlatformRate(
+            nanos_per_egress_gib=130_000_000,
+            nanos_per_volume_gib_month=50_000_000,
+        ),
+    ),
+)
+"""Reviewed price history. Existing cards retain their original figures and dates."""
+
+_CURRENT_METERED_CARD = PUBLISHED_METERED_RATE_HISTORY[-1]
+METERED_RATE_VERSION = _CURRENT_METERED_CARD.pricing_version
+METERED_RATES_EFFECTIVE_AT = _CURRENT_METERED_CARD.effective_at
+PUBLISHED_COMPUTE_RATES = _CURRENT_METERED_CARD.compute_rates
+PUBLISHED_PLATFORM_RATE = _CURRENT_METERED_CARD.platform_rate
+PUBLISHED_SHAPE_RATES = tuple(
+    PublishedShapeRate(
+        billing_owner=rate.billing_owner,
+        nanos_per_container_hour=rate.nanos_per_container_hour,
+        nanos_per_cpu_core_hour=rate.nanos_per_cpu_core_hour,
+        nanos_per_memory_gib_hour=rate.nanos_per_memory_gib_hour,
+    )
+    for rate in PUBLISHED_COMPUTE_RATES
+    if rate.rate_class == AUTO_RATE_CLASS and rate.gpu_type == NO_GPU
+)
+PUBLISHED_GPU_RATES = tuple(
+    PublishedGpuRate(GpuType(rate.gpu_type), rate.nanos_per_gpu_card_hour)
+    for rate in PUBLISHED_COMPUTE_RATES
+    if rate.rate_class == AUTO_RATE_CLASS
+    and rate.billing_owner is UsageBillingOwner.PlatformFleet
+    and rate.gpu_type != NO_GPU
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedPlacementRate:
+    rate_class: PlacementRateClass
+    region: ProductRegion | None
+    name: str
+    multiplier: Decimal
+    compute_rates: tuple[PublishedComputeRate, ...]
+
+    def __post_init__(self) -> None:
+        if self.multiplier <= 0 or not self.compute_rates:
+            raise ValueError("a placement class requires a positive multiplier and compute rates")
+        if any(rate.rate_class != self.rate_class for rate in self.compute_rates):
+            raise ValueError("placement compute rates must belong to their published class")
+
+
+PUBLISHED_PLACEMENT_RATES: tuple[PublishedPlacementRate, ...] = (
+    PublishedPlacementRate(
+        rate_class=AUTO_RATE_CLASS,
+        region=None,
+        name="Automatic",
+        multiplier=Decimal(1),
+        compute_rates=PUBLISHED_COMPUTE_RATES,
+    ),
+)
+
+
+def published_placement_rate(region: ProductRegion | None) -> PublishedPlacementRate | None:
+    return next((rate for rate in PUBLISHED_PLACEMENT_RATES if rate.region == region), None)
+
 
 if tuple(rate.gpu_type for rate in PUBLISHED_GPU_RATES) != SUPPORTED_GPU_TYPES:
     raise RuntimeError(
@@ -674,6 +749,7 @@ __all__ = [
     "FREE_PLAN_MAX_MEMBERS",
     "FREE_PLAN_MAX_WORKSPACES",
     "FREE_PLAN_MONTHLY_NANOS",
+    "METERED_RATES_EFFECTIVE_AT",
     "METERED_RATE_VERSION",
     "NO_CARD_INCLUDED_NANOS",
     "NO_CARD_MAX_CPU_CONTAINERS",
@@ -681,6 +757,8 @@ __all__ = [
     "PRICING_VERSION",
     "PUBLISHED_COMPUTE_RATES",
     "PUBLISHED_GPU_RATES",
+    "PUBLISHED_METERED_RATE_HISTORY",
+    "PUBLISHED_PLACEMENT_RATES",
     "PUBLISHED_PLANS",
     "PUBLISHED_PLATFORM_RATE",
     "PUBLISHED_SHAPE_RATES",
@@ -697,10 +775,13 @@ __all__ = [
     "PlanEntitlements",
     "PublishedComputeRate",
     "PublishedGpuRate",
+    "PublishedMeteredRateCard",
+    "PublishedPlacementRate",
     "PublishedPlan",
     "PublishedPlatformRate",
     "PublishedShapeRate",
     "account_terms",
     "complimentary_terms",
+    "published_placement_rate",
     "published_plan",
 ]

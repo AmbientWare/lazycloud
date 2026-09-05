@@ -21,6 +21,7 @@ from shared.deployment_records import (
 from shared.enums import StringEnum
 from shared.image_building.authoring import PythonVersion
 from shared.mounts import MountAuthMode, validate_mount_auth
+from shared.placement import ProductRegion
 from shared.resources import parse_memory_mib
 from shared.workload_config import (
     cpu_limit_at_or_above_request,
@@ -154,6 +155,7 @@ class ContainerResourceConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="ignore", strict=True)
+    region: ProductRegion | None = Field(default=None, strict=False)
 
     cpu: CpuRequest | None = Field(default=None)
     """Cores to reserve, or a `(reserve, throttle at)` pair.

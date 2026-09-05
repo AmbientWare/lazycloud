@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+from datetime import datetime
+from decimal import Decimal
+
 from pydantic import Field
 
 from shared.billing_plans import BillingPlanId
 from shared.billing_rate_card import (
     CONNECTED_CLOUD_MANAGEMENT_FEE,
+    METERED_RATES_EFFECTIVE_AT,
     NO_CARD_INCLUDED_NANOS,
     NO_CARD_MAX_CPU_CONTAINERS,
     NO_CARD_MAX_GPUS,
     PRICING_VERSION,
     PUBLISHED_GPU_RATES,
+    PUBLISHED_PLACEMENT_RATES,
     PUBLISHED_PLANS,
     PUBLISHED_PLATFORM_RATE,
     PUBLISHED_SHAPE_RATES,
@@ -21,6 +26,7 @@ from shared.billing_rate_card import (
 from shared.gpu import GpuType
 from shared.http.base import HttpModel
 from shared.payments import BILLING_CURRENCY
+from shared.placement import PlacementRateClass, ProductRegion
 from shared.usage import UsageBillingOwner
 
 
@@ -35,6 +41,7 @@ class PlanEntitlementsResponse(HttpModel):
     connected_cloud: bool
     custom_domains: bool
     self_hosted: bool
+    region_selection: bool
 
 
 class PublishedPlanResponse(HttpModel):
@@ -71,8 +78,26 @@ class PublishedPlatformRateResponse(HttpModel):
     storage_month_seconds: int = Field(gt=0)
 
 
+class PlacementComputeRateResponse(HttpModel):
+    billing_owner: UsageBillingOwner
+    gpu_type: str
+    nanos_per_container_hour: int = Field(ge=0)
+    nanos_per_cpu_core_hour: int = Field(ge=0)
+    nanos_per_memory_gib_hour: int = Field(ge=0)
+    nanos_per_gpu_card_hour: int = Field(ge=0)
+
+
+class PublishedPlacementRateResponse(HttpModel):
+    rate_class: PlacementRateClass
+    region: ProductRegion | None
+    name: str
+    multiplier: Decimal = Field(gt=0)
+    compute_rates: list[PlacementComputeRateResponse]
+
+
 class PricingCatalogResponse(HttpModel):
     pricing_version: str
+    metered_rates_effective_at: datetime
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     connected_cloud_management_fee_percent: int = Field(ge=0, le=100)
     no_payment_method: NoPaymentMethodTermsResponse
@@ -80,6 +105,7 @@ class PricingCatalogResponse(HttpModel):
     shape_rates: list[PublishedShapeRateResponse]
     gpu_rates: list[PublishedGpuRateResponse]
     platform_rate: PublishedPlatformRateResponse
+    placement_rates: list[PublishedPlacementRateResponse]
 
 
 def _entitlements_response(entitlements: PlanEntitlements) -> PlanEntitlementsResponse:
@@ -94,6 +120,7 @@ def _entitlements_response(entitlements: PlanEntitlements) -> PlanEntitlementsRe
         connected_cloud=entitlements.connected_cloud,
         custom_domains=entitlements.custom_domains,
         self_hosted=entitlements.self_hosted,
+        region_selection=entitlements.region_selection,
     )
 
 
@@ -103,7 +130,28 @@ def pricing_catalog_response() -> PricingCatalogResponse:
         raise ValueError("the connected-cloud fee is not a whole percentage")
     return PricingCatalogResponse(
         pricing_version=PRICING_VERSION,
+        metered_rates_effective_at=METERED_RATES_EFFECTIVE_AT,
         currency=BILLING_CURRENCY,
+        placement_rates=[
+            PublishedPlacementRateResponse(
+                rate_class=placement.rate_class,
+                region=placement.region,
+                name=placement.name,
+                multiplier=placement.multiplier,
+                compute_rates=[
+                    PlacementComputeRateResponse(
+                        billing_owner=rate.billing_owner,
+                        gpu_type=rate.gpu_type,
+                        nanos_per_container_hour=rate.nanos_per_container_hour,
+                        nanos_per_cpu_core_hour=rate.nanos_per_cpu_core_hour,
+                        nanos_per_memory_gib_hour=rate.nanos_per_memory_gib_hour,
+                        nanos_per_gpu_card_hour=rate.nanos_per_gpu_card_hour,
+                    )
+                    for rate in placement.compute_rates
+                ],
+            )
+            for placement in PUBLISHED_PLACEMENT_RATES
+        ],
         connected_cloud_management_fee_percent=int(fee_percent),
         no_payment_method=NoPaymentMethodTermsResponse(
             included_nanos=NO_CARD_INCLUDED_NANOS,
@@ -150,9 +198,11 @@ def pricing_catalog_response() -> PricingCatalogResponse:
 
 __all__ = [
     "NoPaymentMethodTermsResponse",
+    "PlacementComputeRateResponse",
     "PlanEntitlementsResponse",
     "PricingCatalogResponse",
     "PublishedGpuRateResponse",
+    "PublishedPlacementRateResponse",
     "PublishedPlanResponse",
     "PublishedPlatformRateResponse",
     "PublishedShapeRateResponse",

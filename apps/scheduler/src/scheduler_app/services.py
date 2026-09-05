@@ -7,6 +7,7 @@ from pathlib import Path
 from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.policy import WorkspaceComputePolicyService
+from compute.provider_launches import ProviderNodeLaunchService
 from compute.reclaim import ComputeReclaimPolicy
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
@@ -32,6 +33,7 @@ from execution.collections.service import CollectionService
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
+from execution.secrets.crypto import WorkspaceSecretCipher
 from execution.tasks import TaskService
 from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from gateway.settings import GatewaySettings
@@ -54,7 +56,12 @@ from provider_aws import AwsEcrImageRegistry
 from provider_clients import (
     workspace_compute_provider_resolver,
 )
-from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
+from provider_clients.settings import (
+    AwsAccountConnectionSettings,
+    AwsCapacitySettings,
+    PlatformCapacitySettings,
+)
+from provider_clients.workspace_compute import configured_platform_compute_providers
 from provider_cloudflare import CloudflareSettings
 from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
@@ -66,6 +73,7 @@ from scheduler.containers import (
     CONTAINER_DISPATCH_WAKE_SCOPE,
     SchedulerContainerRequestService,
 )
+from scheduler.preemption import SchedulerGpuBackfillPreemptionService
 from scheduler.services import SchedulerWorkloadDirectory
 from scheduler.state import (
     RedisSchedulerContainerRepository,
@@ -224,16 +232,38 @@ class SchedulerAppServices:
         container_repository = RedisSchedulerContainerRepository(redis)
         # See the API composition: the resolver exists only where connected AWS is
         # configured, and a half-configured deployment is rejected by settings.
+        platform_capacity = PlatformCapacitySettings()
+        connection_directory = AwsAccountConnectionDirectory(context)
+
+        def platform_capacity_workspace(workspace: str) -> str:
+            with context.database.session() as session:
+                return context.workspace(session, workspace).id
+
+        def provider_node_cipher(workspace_id: str) -> WorkspaceSecretCipher:
+            with context.database.session() as session:
+                workspace = context.workspace(session, workspace_id)
+            return WorkspaceSecretCipher.from_workspace(workspace)
+
+        provider_node_launches = ProviderNodeLaunchService(
+            database=context.database,
+            cipher_for_workspace=provider_node_cipher,
+        )
         provider_resolver = (
             workspace_compute_provider_resolver(
                 capacity.aws_capacity,
                 capacity.agent_binaries,
-                connections=AwsAccountConnectionDirectory(context).list_for_workspace,
+                connections=connection_directory.list_for_workspace,
+                capacity_workspace=connection_directory.capacity_workspace,
+                platform_providers=configured_platform_compute_providers(
+                    platform_capacity,
+                    launch_credentials=provider_node_launches,
+                    capacity_workspace=platform_capacity_workspace,
+                ),
                 gateway_origin=gateway_origin,
                 presigned_origin=storage.object_store.presigned_endpoint_url or "",
                 backend_route=network.backend_routes,
             )
-            if capacity.aws_connections.configured
+            if capacity.aws_connections.configured or platform_capacity.hetzner
             else None
         )
         agent_version, agent_sha256 = (
@@ -301,6 +331,9 @@ class SchedulerAppServices:
             event_bus=RedisEventBus(redis),
             workspace_changes=workspace_changes,
             runtime_state=container_runtime_state,
+        )
+        container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
+            worker_repository, container_repository, containers
         )
         # After the container service, because stopping containers is the whole
         # of what this sweep does.

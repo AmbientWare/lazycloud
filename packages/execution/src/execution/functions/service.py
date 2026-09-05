@@ -58,6 +58,7 @@ from shared.http.functions import (
     FunctionSetResultResponse,
 )
 from shared.http.workspace_changes import WorkspaceChangeType
+from shared.placement import ProductRegion
 from shared.tasks import Task, TaskDependency, TaskStatus, is_terminal_task_status
 from shared.timestamps import utc_now
 
@@ -119,6 +120,7 @@ class FunctionControlService:
                     workspace_id=stub.workspace_id,
                     gpu=config.runtime.gpu,
                     gpu_count=config.runtime.gpu_count,
+                    region=config.runtime.region,
                 )
             self._assert_within_pending_limit(stub.id, config)
             retry_policy = config.effective_retry_policy
@@ -494,6 +496,7 @@ class FunctionControlService:
             stub_name=stub.name,
             stub_workspace_id=stub.workspace_id,
             stub_app_id=stub.app_id,
+            region=config.runtime.region,
             eligible_at=eligible_at,
             authority=authority,
             max_containers=function_container_ceiling(stub.config.autoscaler.max_containers),
@@ -548,6 +551,7 @@ class FunctionControlService:
                 gpu=list(container.gpu),
                 gpu_count=container.gpu_count,
                 pool_selector=config.runtime.pool_selector or "",
+                region=config.runtime.region,
                 runtime=config.runtime.runtime,
                 runtime_class=config.runtime.runtime_class or "",
                 docker_enabled=config.runtime.docker_enabled,
@@ -796,6 +800,7 @@ class FunctionControlService:
         stub_name: str,
         stub_workspace_id: str,
         stub_app_id: str | None,
+        region: ProductRegion | None,
         eligible_at: datetime | None,
         authority: FunctionContainerStartAuthority,
         max_containers: int,
@@ -853,6 +858,7 @@ class FunctionControlService:
                         env=env_sequence_mapping(container_plan.env),
                         gpu=list(container_plan.gpu),
                         gpu_count=container_plan.gpu_count,
+                        region=region,
                     ),
                 )
             except ConflictError:

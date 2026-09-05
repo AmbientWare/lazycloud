@@ -57,6 +57,9 @@ class ContainerBillingShapeTable(TimestampMixin, DatabaseBase):
         nullable=False,
     )
     billing_owner: Mapped[str] = mapped_column(String(40), nullable=False)
+    rate_class: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default=text("'auto'")
+    )
     gpu_type: Mapped[str] = mapped_column(String(64), nullable=False)
     cpu_millicores: Mapped[int] = mapped_column(Integer, nullable=False)
     memory_mib: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -170,6 +173,9 @@ class BillingLedgerSegmentTable(TimestampMixin, DatabaseBase):
     task_id: Mapped[str] = mapped_column(String(160), default="", nullable=False)
     worker_id: Mapped[str] = mapped_column(String(160), default="", nullable=False)
     billing_owner: Mapped[str] = mapped_column(String(40), default="", nullable=False)
+    rate_class: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default=text("'auto'")
+    )
     gpu_type: Mapped[str] = mapped_column(String(64), default="", nullable=False)
 
     span_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -31,6 +31,7 @@ members = [
     "provider-clients",
     "provider-cloudflare",
     "provider-github",
+    "provider-hetzner",
     "provider-resend",
     "provider-stripe",
     "runner",
@@ -1140,7 +1141,7 @@ dependencies = [
 requires-dist = [
     { name = "cloudpickle", specifier = ">=3,<4" },
     { name = "lazycloud-shared", editable = "packages/shared" },
-    { name = "pydantic", specifier = ">=2.8,<3" },
+    { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "rich", specifier = ">=15,<16" },
@@ -1163,7 +1164,7 @@ dependencies = [
 requires-dist = [
     { name = "certifi", specifier = ">=2025.1.31" },
     { name = "croniter", specifier = ">=6.2.4" },
-    { name = "pydantic", specifier = ">=2.8,<3" },
+    { name = "pydantic", specifier = ">=2.12,<3" },
 ]
 
 [[package]]
@@ -1617,6 +1618,7 @@ dependencies = [
     { name = "lazycloud-shared" },
     { name = "networking" },
     { name = "provider-aws" },
+    { name = "provider-hetzner" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
 ]
@@ -1629,6 +1631,7 @@ requires-dist = [
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "networking", editable = "packages/networking" },
     { name = "provider-aws", editable = "packages/providers/aws" },
+    { name = "provider-hetzner", editable = "packages/providers/hetzner" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
 ]
@@ -1665,6 +1668,23 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "pydantic-settings", specifier = ">=2.5,<3" },
+]
+
+[[package]]
+name = "provider-hetzner"
+version = "0.1.0"
+source = { editable = "packages/providers/hetzner" }
+dependencies = [
+    { name = "compute" },
+    { name = "httpx" },
+    { name = "lazycloud-shared" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "compute", editable = "packages/compute" },
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "lazycloud-shared", editable = "packages/shared" },
 ]
 
 [[package]]
@@ -2046,7 +2066,7 @@ requires-dist = [
     { name = "foundation", editable = "packages/foundation" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "packaging", specifier = ">=24,<27" },
-    { name = "pydantic", specifier = ">=2.8,<3" },
+    { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "uvicorn", specifier = ">=0.30,<1" },
     { name = "websockets", specifier = ">=15,<18" },
 ]
@@ -2588,6 +2608,7 @@ dev = [
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
     { name = "provider-github" },
+    { name = "provider-hetzner" },
     { name = "provider-resend" },
     { name = "provider-stripe" },
     { name = "pytest" },
@@ -2630,6 +2651,7 @@ workspace = [
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
     { name = "provider-github" },
+    { name = "provider-hetzner" },
     { name = "provider-resend" },
     { name = "provider-stripe" },
     { name = "runner" },
@@ -2679,6 +2701,7 @@ dev = [
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
     { name = "provider-github", editable = "packages/providers/github" },
+    { name = "provider-hetzner", editable = "packages/providers/hetzner" },
     { name = "provider-resend", editable = "packages/providers/resend" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "pytest", specifier = ">=9,<10" },
@@ -2721,6 +2744,7 @@ workspace = [
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
     { name = "provider-github", editable = "packages/providers/github" },
+    { name = "provider-hetzner", editable = "packages/providers/hetzner" },
     { name = "provider-resend", editable = "packages/providers/resend" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "runner", editable = "packages/runner" },

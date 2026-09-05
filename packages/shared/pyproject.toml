@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "certifi>=2025.1.31",
     "croniter>=6.2.4",
-    "pydantic>=2.8,<3",
+    "pydantic>=2.12,<3",
 ]
 
 [build-system]

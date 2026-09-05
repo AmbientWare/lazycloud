@@ -15,6 +15,7 @@ from shared.enums import StringEnum
 from shared.http.base import HttpModel
 from shared.http.client_manifests import ClientContract
 from shared.lifecycle import LifecycleHooks
+from shared.placement import ProductRegion, validate_region_pool
 from shared.tasks import RetryPolicy
 
 
@@ -213,12 +214,14 @@ class GetOrCreateStubRequest(HttpModel):
     preemptible: bool = False
     pool: MachinePool = MachinePool(Field(default="", max_length=240))
     """Pool this workload lands in, empty to take the default."""
+    region: ProductRegion | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     client_contract: ClientContract | None = None
     workspace: str = "default"
 
     @model_validator(mode="after")
     def workload_configuration_is_canonical(self) -> GetOrCreateStubRequest:
+        validate_region_pool(self.region, self.pool)
         # Both rules the deployment record states, checked here too because this
         # is the other owner that builds a runtime-ready stub config.
         if self.cron and self.stub_type != DeploymentKind.Function.value:

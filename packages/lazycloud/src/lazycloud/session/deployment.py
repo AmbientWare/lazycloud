@@ -761,6 +761,7 @@ def _stub_request_from_spec(
         docker_enabled=_metadata_bool(metadata, "docker_enabled"),
         preemptible=spec.resources.preemptible,
         pool=MachinePool(_metadata_pool_name(metadata)),
+        region=spec.resources.region,
         workspace=workspace,
     )
 

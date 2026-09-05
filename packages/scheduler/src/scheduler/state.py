@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
@@ -22,6 +23,8 @@ from coordination.token_lock import (
 from pydantic import Field, field_validator
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
+from shared.gpu import gpu_preference_accepts
+from shared.placement import ProductRegion
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
     DEFAULT_CONTAINER_STATE_TTL_SECONDS,
@@ -38,6 +41,8 @@ from shared.scheduling import (
     SchedulerWorkerStatus,
     WorkerCapacityChange,
     WorkerCapacityPlan,
+    WorkerCapacityResult,
+    WorkerExecutionRequest,
     WorkerRemovalResult,
     WorkerRepositoryLockKind,
     WorkerRepositoryLockRecord,
@@ -195,7 +200,37 @@ end
 if ARGV[5] == "1" and redis.call("GET", KEYS[9]) ~= ARGV[6] then
     return -4
 end
-redis.call("HSET", KEYS[1], unpack(ARGV, 7, #ARGV))
+local request = cjson.decode(ARGV[3])
+if request.backfill == true then
+    local function worker_field(name, absent)
+        local raw = redis.call("HGET", KEYS[1], name)
+        if raw then return cjson.decode(raw) end
+        return absent
+    end
+    local total_gpu = worker_field("total_gpu_count", 0)
+    if request.preemptible ~= true or request.gpu_count ~= 0 or #request.gpu ~= 0
+        or total_gpu <= 0 or worker_field("free_gpu_count", 0) >= total_gpu then
+        return -5
+    end
+    local recovery = redis.call("GET", KEYS[13])
+    if recovery and redis.call("HEXISTS", KEYS[6], recovery) == 1 then return -5 end
+    if recovery then redis.call("DEL", KEYS[13]) end
+    local gpu_matches = cjson.decode(ARGV[7])
+    for _, payload in ipairs(redis.call("HVALS", KEYS[6])) do
+        local queued = cjson.decode(payload)
+        local requested_gpu = math.max(queued.gpu_count, #queued.gpu > 0 and 1 or 0)
+        if requested_gpu > 0 and requested_gpu <= total_gpu
+            and (queued.pool_selector == "" or queued.pool_selector == worker_field("pool", ""))
+            and (queued.region == cjson.null or queued.region == nil
+                or queued.region == worker_field("region", cjson.null)) then
+            for _, gpu in ipairs(queued.gpu) do
+                if gpu_matches[gpu] ~= false then return -5 end
+            end
+        end
+    end
+    redis.call("HSET", KEYS[14], "backfill", "true", "preemptible", "true")
+end
+redis.call("HSET", KEYS[1], unpack(ARGV, 8, #ARGV))
 redis.call("LREM", KEYS[2], 0, ARGV[1])
 redis.call("LREM", KEYS[12], 0, ARGV[1])
 redis.call("HSET", KEYS[3], ARGV[1], ARGV[3])
@@ -204,12 +239,44 @@ redis.call("ZREM", KEYS[5], ARGV[1])
 redis.call("HDEL", KEYS[6], ARGV[1])
 redis.call("ZREM", KEYS[7], ARGV[1])
 redis.call("HDEL", KEYS[8], ARGV[1])
+if redis.call("GET", KEYS[13]) == ARGV[1] then redis.call("DEL", KEYS[13]) end
 if ARGV[5] == "1" then
     redis.call("DEL", KEYS[9])
     redis.call("DEL", KEYS[10])
     redis.call("SREM", KEYS[11], ARGV[1])
 end
 return 1
+"""
+
+PREEMPT_GPU_BACKFILL_SCRIPT = """
+if redis.call("HGET", KEYS[1], "resource_version") ~= ARGV[1] then return {"stale"} end
+local payload = redis.call("HGET", KEYS[3], ARGV[2])
+if not payload then return {"gone"} end
+local request = cjson.decode(payload)
+if request.gpu_count <= 0 and #request.gpu == 0 then return {"invalid"} end
+local existing = redis.call("GET", KEYS[2])
+if existing and existing ~= ARGV[2] and redis.call("HEXISTS", KEYS[3], existing) == 1 then
+    return {"busy"}
+end
+local selected = {}
+for index = 4, #KEYS do
+    if redis.call("HGET", KEYS[index], "backfill") == "true"
+        and redis.call("HGET", KEYS[index], "preemptible") == "true"
+        and redis.call("HGET", KEYS[index], "gpu_count") == "0"
+        and redis.call("HGET", KEYS[index], "worker_id") == ARGV[3] then
+        local status = redis.call("HGET", KEYS[index], "status")
+        local lease = redis.call("HGET", KEYS[index], "backfill_eviction_claim_until")
+        local until_time = tonumber(lease or "0")
+        if (status == '"pending"' or status == '"running"') and until_time <= tonumber(ARGV[4]) then
+            redis.call("HSET", KEYS[index], "backfill_eviction_requested", "true",
+                "backfill_eviction_claim_until", tostring(tonumber(ARGV[4]) + 60))
+            table.insert(selected, cjson.decode(redis.call("HGET", KEYS[index], "container_id")))
+        end
+    end
+end
+if #selected > 0 then redis.call("SET", KEYS[2], ARGV[2]) end
+table.insert(selected, 1, "ok")
+return selected
 """
 
 TAKE_WORKER_REQUEST_SCRIPT = """
@@ -607,6 +674,9 @@ class SchedulerStateKeys:
     def worker_lock(self, worker_id: str) -> str:
         return self.redis.key(self.namespace, "workers", worker_id, "lock")
 
+    def worker_backfill_recovery(self, worker_id: str) -> str:
+        return self.redis.key(self.namespace, "workers", worker_id, "backfill-recovery")
+
     def worker_requests(self, worker_id: str) -> str:
         return self.redis.key(self.namespace, "workers", worker_id, "requests")
 
@@ -961,6 +1031,7 @@ class RedisSchedulerWorkerRepository:
         workspace_id: str,
         owner_user_id: str,
         priority: int,
+        region: ProductRegion | None = None,
         ttl_seconds: int = DEFAULT_WORKER_STATE_TTL_SECONDS,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord:
@@ -981,6 +1052,7 @@ class RedisSchedulerWorkerRepository:
                     "workspace_id": workspace_id,
                     "owner_user_id": owner_user_id,
                     "priority": priority,
+                    "region": region,
                     "resource_version": worker.resource_version + 1,
                     "updated_at": now or utc_now(),
                 }
@@ -1263,6 +1335,34 @@ class RedisSchedulerWorkerRepository:
 
         return self._with_worker_lock(worker_id, write)
 
+    def release_worker_capacity(
+        self,
+        worker_id: str,
+        request: WorkerExecutionRequest,
+    ) -> WorkerCapacityResult:
+        def write() -> WorkerCapacityResult:
+            worker = self.get_worker(worker_id)
+            if worker is None:
+                raise WorkerStateNotFoundError(worker_id)
+            restored = _restored_worker_capacity(
+                worker,
+                cpu_millicores=request.cpu_millicores,
+                memory_mib=capacity_memory_mib(request.memory_mib),
+                gpu_count=gpu_count_for_capacity(request.gpu, request.gpu_count),
+            )
+            self.redis.hash_set(
+                self.keys.worker_state(worker_id),
+                mapping=redis_serialization.dump_model_hash(restored),
+            )
+            return WorkerCapacityResult(
+                worker=restored,
+                request=request,
+                change=WorkerCapacityChange.Add,
+                accepted=True,
+            )
+
+        return self._with_worker_lock(worker_id, write)
+
     def schedule_container_request(
         self,
         worker_id: str,
@@ -1271,6 +1371,9 @@ class RedisSchedulerWorkerRepository:
         reserved_capacity: WorkerReservedCapacity | None = None,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord:
+        if request.backfill:
+            raise SchedulerRepositoryError("backfill requires an atomic claimed dispatch")
+
         def write() -> SchedulerWorkerRecord:
             if self.is_container_cancelled(request.container_id):
                 msg = f"container request {request.container_id} was cancelled"
@@ -1396,9 +1499,20 @@ class RedisSchedulerWorkerRepository:
             if capacity_allocation is not None
             else worker_state_key
         )
+        # Unknown labels introduced after this snapshot block backfill, so the
+        # atomic guard cannot miss a GPU arrival or disagree about an alias.
+        gpu_matches = (
+            {
+                gpu: gpu_preference_accepts([gpu], current_worker.gpu_type)
+                for request in self.pending_gpu_requests()
+                for gpu in request.gpu
+            }
+            if queued_request.backfill
+            else {}
+        )
         result = self.redis.eval_int(
             DISPATCH_CLAIMED_WORKER_REQUEST_SCRIPT,
-            12,
+            14,
             worker_state_key,
             worker_queue_key,
             worker_payloads_key,
@@ -1411,12 +1525,15 @@ class RedisSchedulerWorkerRepository:
             allocation_key,
             allocation_index_key,
             worker_inflight_key,
+            self.keys.worker_backfill_recovery(worker_id),
+            self.keys.container_state(request_id),
             request_id,
             claim.token,
             queued_request.model_dump_json(),
             current_worker_fields["resource_version"],
             "1" if capacity_allocation is not None else "0",
             capacity_allocation.reservation_id if capacity_allocation is not None else "",
+            json.dumps(gpu_matches),
             *worker_field_args,
         )
         if result == -2:
@@ -1431,10 +1548,50 @@ class RedisSchedulerWorkerRepository:
             raise SchedulerRepositoryError(
                 f"capacity reservation allocation changed during dispatch: {request_id}"
             )
+        if result == -5:
+            raise SchedulerRepositoryError("GPU demand or recovery prevents CPU backfill")
         if result != 1:
             raise SchedulerRepositoryError(
                 f"scheduler request dispatch returned unexpected status {result}: {request_id}"
             )
+
+    def pending_gpu_requests(self) -> list[SchedulerWorkerRequest]:
+        return [
+            request
+            for payload in self.redis.hash_get_all(self.keys.container_request_payloads()).values()
+            if (
+                request := SchedulerWorkerRequest.model_validate_json(
+                    redis_serialization.redis_text(payload)
+                )
+            ).gpu
+        ]
+
+    def mark_gpu_backfill_evictions(
+        self,
+        worker: SchedulerWorkerRecord,
+        gpu_request_id: str,
+        container_ids: list[str],
+        *,
+        now: datetime | None = None,
+    ) -> list[str]:
+        fields = redis_serialization.dump_model_hash(worker)
+        result = _redis_script_text_items(
+            self.redis.eval_scalars(
+                PREEMPT_GPU_BACKFILL_SCRIPT,
+                3 + len(container_ids),
+                self.keys.worker_state(worker.worker_id),
+                self.keys.worker_backfill_recovery(worker.worker_id),
+                self.keys.container_request_payloads(),
+                *(self.keys.container_state(container_id) for container_id in container_ids),
+                fields["resource_version"],
+                gpu_request_id,
+                fields["worker_id"],
+                (now or utc_now()).timestamp(),
+            )
+        )
+        if not result or result[0] != "ok":
+            return []
+        return result[1:]
 
     async def enqueue_worker_request(
         self,
@@ -1890,7 +2047,7 @@ class RedisSchedulerWorkerRepository:
                 raise
 
             self.redis.set_remove(self.keys.worker_index(), state_key)
-            self.redis.delete(state_key)
+            self.redis.delete(state_key, self.keys.worker_backfill_recovery(worker_id))
             return WorkerRemovalResult(
                 worker_id=worker_id,
                 removed=True,
@@ -3324,29 +3481,42 @@ def plan_worker_capacity_change(
         else gpu_count_for_capacity(request.gpu, request.gpu_count)
     )
     if change is WorkerCapacityChange.Add:
-        updated = worker.model_copy(
-            update={
-                "free_cpu_millicores": _cap_capacity(
-                    worker.free_cpu_millicores + cpu_millicores,
-                    worker.total_cpu_millicores,
-                ),
-                "free_memory_mib": _cap_capacity(
-                    worker.free_memory_mib + memory_mib,
-                    worker.total_memory_mib,
-                ),
-                "free_gpu_count": _cap_capacity(
-                    worker.free_gpu_count + gpu_count,
-                    worker.total_gpu_count,
-                ),
-                "resource_version": worker.resource_version + 1,
-                "updated_at": utc_now(),
-            }
+        updated = _restored_worker_capacity(
+            worker,
+            cpu_millicores=cpu_millicores,
+            memory_mib=memory_mib,
+            gpu_count=gpu_count,
         )
         return WorkerCapacityPlan(
             worker=updated,
             change=change,
             request=request,
             accepted=True,
+        )
+
+    if request.region is not None and worker.region != request.region:
+        return WorkerCapacityPlan(
+            worker=worker,
+            change=change,
+            request=request,
+            accepted=False,
+            reason="worker is outside the selected region",
+        )
+    if (
+        gpu_count == 0
+        and worker.total_gpu_count > 0
+        and (
+            not request.backfill
+            or not request.preemptible
+            or worker.free_gpu_count >= worker.total_gpu_count
+        )
+    ):
+        return WorkerCapacityPlan(
+            worker=worker,
+            change=change,
+            request=request,
+            accepted=False,
+            reason="CPU work requires eligible GPU backfill placement",
         )
 
     if (
@@ -3371,6 +3541,30 @@ def plan_worker_capacity_change(
         }
     )
     return WorkerCapacityPlan(worker=updated, change=change, request=request, accepted=True)
+
+
+def _restored_worker_capacity(
+    worker: SchedulerWorkerRecord,
+    *,
+    cpu_millicores: int,
+    memory_mib: int,
+    gpu_count: int,
+) -> SchedulerWorkerRecord:
+    return worker.model_copy(
+        update={
+            "free_cpu_millicores": _cap_capacity(
+                worker.free_cpu_millicores + cpu_millicores, worker.total_cpu_millicores
+            ),
+            "free_memory_mib": _cap_capacity(
+                worker.free_memory_mib + memory_mib, worker.total_memory_mib
+            ),
+            "free_gpu_count": _cap_capacity(
+                worker.free_gpu_count + gpu_count, worker.total_gpu_count
+            ),
+            "resource_version": worker.resource_version + 1,
+            "updated_at": utc_now(),
+        }
+    )
 
 
 def _worker_capacity_changed(

@@ -2,7 +2,7 @@ import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createLazyFileRoute } from "@tanstack/react-router";
 
-import type { PricingCatalog } from "@/lib/api/schemas";
+import type { PricingCatalog, PublishedPlacementRate } from "@/lib/api/schemas";
 import { gpuModelsLabel, limitFigure, memberLimitFigure } from "@/lib/entitlements";
 import { countLabel } from "@/lib/format";
 import { exactDollars } from "@/lib/money";
@@ -71,20 +71,20 @@ function perLabel(meter: Meter): string {
    fixed by the catalog. */
 /* What a container costs on one kind of capacity: the figures that change with
    where it runs, in the order somebody sizing one asks in. */
-function computeGroups(catalog: PricingCatalog, meter: Meter): readonly RateGroup[] {
-  const shape = catalog.shape_rates.find((rate) => rate.billing_owner === "platform_fleet");
+function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonly RateGroup[] {
+  const rates = placement.compute_rates.filter((rate) => rate.billing_owner === "platform_fleet");
+  const shape = rates.find((rate) => rate.gpu_type === "");
   if (!shape) throw new Error("the pricing catalog has no platform fleet rate");
-  const fleetGpuRates = [...catalog.gpu_rates].sort(
-    (left, right) =>
-      right.nanos_per_card_hour.platform_fleet - left.nanos_per_card_hour.platform_fleet,
-  );
+  const fleetGpuRates = rates
+    .filter((rate) => rate.gpu_type !== "")
+    .sort((left, right) => right.nanos_per_gpu_card_hour - left.nanos_per_gpu_card_hour);
   const per = perLabel(meter);
   return [
     {
       heading: "GPU",
       lines: fleetGpuRates.map((rate) => ({
         label: rate.gpu_type,
-        figure: metered(rate.nanos_per_card_hour.platform_fleet, meter),
+        figure: metered(rate.nanos_per_gpu_card_hour, meter),
         unit: `/ ${per}`,
       })),
     },
@@ -94,7 +94,7 @@ function computeGroups(catalog: PricingCatalog, meter: Meter): readonly RateGrou
         {
           label: "Reserved or used CPU, whichever is greater",
           figure: metered(shape.nanos_per_cpu_core_hour, meter),
-          unit: `/ core / ${per}`,
+          unit: `/ vCPU / ${per}`,
         },
       ],
     },
@@ -148,7 +148,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
           /* The compute rates, not every rate above it: volumes and egress are this
            platform's own infrastructure and are charged whole wherever a container
            ran. Saying "the rates above" would quietly include them. */
-          label: "Added to the compute rates above. Your provider bills the machine.",
+          label: "Management fee on Automatic compute rates. Your provider bills the machine.",
           figure: `${catalog.connected_cloud_management_fee_percent}%`,
           unit: "",
         },
@@ -171,7 +171,9 @@ const sectionTitle =
    twice rather than two units a reader has to hold at once. */
 function MarketingPricing() {
   const [meter, setMeter] = useState<Meter>("hour");
+  const [rateClass, setRateClass] = useState("auto");
   const fleetRatesId = useId();
+  const regionId = useId();
   const pricing = useQuery(pricingCatalogQueryOptions());
   const catalog = pricing.data;
 
@@ -186,6 +188,10 @@ function MarketingPricing() {
       </MarketingLayout>
     );
   }
+
+  const placement = catalog.placement_rates.find((rate) => rate.rate_class === rateClass);
+  if (!placement) throw new Error("the selected placement has no published compute rates");
+  const hasRegions = catalog.placement_rates.some((rate) => rate.region !== null);
 
   return (
     <MarketingLayout>
@@ -227,11 +233,51 @@ function MarketingPricing() {
                 <MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />
               </div>
               <p className="mt-3.5 text-[12.5px] leading-snug text-muted-foreground">
-                Rates for machines managed by LazyCloud.
+                Rates for machines managed by LazyCloud, effective{" "}
+                <time dateTime={catalog.metered_rates_effective_at}>
+                  {new Date(catalog.metered_rates_effective_at).toLocaleString(undefined, {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                    timeZone: "UTC",
+                  })}{" "}
+                  UTC
+                </time>
+                .
               </p>
+              <div className="mt-5 space-y-2">
+                <label className="block text-[13px] font-medium" htmlFor={regionId}>
+                  Compute region
+                </label>
+                <select
+                  id={regionId}
+                  aria-describedby={`${regionId}-help`}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
+                  value={rateClass}
+                  onChange={(event) => setRateClass(event.target.value)}
+                  disabled={!hasRegions}
+                >
+                  {catalog.placement_rates.map((rate) => (
+                    <option key={rate.rate_class} value={rate.rate_class}>
+                      {rate.name} · {rate.multiplier}x base compute rate
+                    </option>
+                  ))}
+                </select>
+                <p
+                  id={`${regionId}-help`}
+                  className="text-xs leading-relaxed text-muted-foreground"
+                >
+                  {hasRegions
+                    ? `Automatic lets LazyCloud choose where your code runs. Region selection is available on ${catalog.plans
+                        .filter((plan) => plan.entitlements.region_selection)
+                        .map((plan) => plan.name)
+                        .join(" and ")}. Prices below include the selected region's adjustment.`
+                    : "Automatic lets LazyCloud choose where your code runs. Region selection is not available yet. These are the current base rates."}{" "}
+                  Storage and egress rates do not change with this selection.
+                </p>
+              </div>
 
               <RateList
-                groups={[...computeGroups(catalog, meter), ...platformGroups(catalog)]}
+                groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
                 id={fleetRatesId}
               />
             </MarketingCard>
@@ -298,6 +344,16 @@ function MarketingPricing() {
                         included={plan.entitlements.custom_domains}
                       />
                       <PlanFeature label="Self-hosted" included={plan.entitlements.self_hosted} />
+                      <PlanLimit
+                        label="Region selection"
+                        value={
+                          plan.entitlements.region_selection
+                            ? hasRegions
+                              ? "Available"
+                              : "Not available yet"
+                            : "Automatic only"
+                        }
+                      />
                     </dl>
                     <ul className="mt-4 mb-6 grid list-none gap-2 p-0">
                       {plan.terms.map((term) => (

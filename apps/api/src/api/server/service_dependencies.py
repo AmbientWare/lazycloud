@@ -83,7 +83,7 @@ def provider_node_enrollment_service(
     services: Annotated[ApiServices, Depends(api_services)],
 ) -> ProviderNodeEnrollmentService:
     if services.provider_node_enrollment_service is None:
-        raise UpstreamUnavailableError("AWS workspace compute is not enabled")
+        raise UpstreamUnavailableError("Provider-backed compute is not enabled")
     return services.provider_node_enrollment_service
 
 

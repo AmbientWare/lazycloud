@@ -35,6 +35,7 @@ class SchedulerComputePlacement:
                 workspace_id=request.workspace_id,
                 deployment_id=request.deployment_id,
                 requested_pool=request.pool_selector,
+                region=request.region,
                 requirements=ComputeResourceRequirements(
                     cpu_millicores=request.cpu_millicores,
                     memory_mb=request.memory_mib,

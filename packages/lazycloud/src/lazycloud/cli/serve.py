@@ -36,6 +36,9 @@ def serve(
     ] = None,
     keep_warm: Annotated[int | None, typer.Option("--keep-warm", min=0)] = None,
     tcp: Annotated[bool | None, typer.Option("--tcp/--no-tcp")] = None,
+    region: Annotated[
+        str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
+    ] = None,
     pool: Annotated[str | None, typer.Option("--pool")] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
     sync_dir: Annotated[str | None, typer.Option("--sync-dir", "--sync")] = None,
@@ -57,6 +60,7 @@ def serve(
         ports=container_ports,
         keep_warm=keep_warm,
         tcp=tcp,
+        region=region,
         pool=MachinePool(pool) if pool else None,
         entrypoint=entrypoint,
         sync_dir=sync_dir,

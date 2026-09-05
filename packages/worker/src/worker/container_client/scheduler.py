@@ -8,7 +8,7 @@ from shared.scheduling import (
     ContainerSchedulingDirectory,
     SchedulerContainerAddress,
     SchedulerContainerAddressMap,
-    SchedulerContainerState,
+    WorkerContainerState,
 )
 
 from worker.container_client.control import (
@@ -29,7 +29,7 @@ class ContainerServiceTransportFactory(Protocol):
 @dataclass(frozen=True, slots=True)
 class SchedulerContainerClient:
     client: ContainerServiceClient
-    state: SchedulerContainerState
+    state: WorkerContainerState
     worker_address: SchedulerContainerAddress
     options: ContainerClientConnectionOptions
 
@@ -71,7 +71,7 @@ class SchedulerContainerClientFactory:
             options=options,
         )
 
-    def state_for(self, container: ContainerRecord) -> SchedulerContainerState | None:
+    def state_for(self, container: ContainerRecord) -> WorkerContainerState | None:
         repository = self.scheduler_containers
         if repository is None:
             return None

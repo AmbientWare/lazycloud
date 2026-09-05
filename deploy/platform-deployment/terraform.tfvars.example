@@ -2,6 +2,10 @@
 deployment = "lazycloud-prod"
 region     = "us-east-1"
 
+# Also pass the verified Hetzner Node Images artifact with
+# -var-file=/absolute/path/to/hetzner-images.tfvars.json. Tokens stay in the
+# operator secret; deploy/PROVIDERS.md describes the common provisioning flow.
+
 # The GitHub environment whose jobs may assume this deployment's deploy role.
 github_environment = "prod"
 

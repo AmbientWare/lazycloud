@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from gateway.http import (
     AgentTelemetryRequest,
     AgentTelemetryResponse,
@@ -30,6 +30,7 @@ from shared.http.provider_nodes import (
     ProviderNodeEnrollmentRequest,
 )
 
+from api.server.client_address import client_address
 from api.server.service_dependencies import gateway_service, provider_node_enrollment_service
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
@@ -42,9 +43,16 @@ router = APIRouter(prefix="/gateway", tags=["gateway"])
 )
 def enroll_provider_node(
     request: ProviderNodeEnrollmentRequest,
+    http_request: Request,
     service: ProviderNodeEnrollmentService = Depends(provider_node_enrollment_service),
 ) -> JoinAgentResponse:
-    return service.enroll(request)
+    return service.enroll(
+        request,
+        peer_address=client_address(
+            http_request.scope,
+            header_name=service.client_ip_header,
+        ),
+    )
 
 
 @router.post(
@@ -54,9 +62,16 @@ def enroll_provider_node(
 )
 def record_provider_node_bootstrap_failure(
     request: ProviderNodeBootstrapFailureRequest,
+    http_request: Request,
     service: ProviderNodeEnrollmentService = Depends(provider_node_enrollment_service),
 ) -> ProviderNodeBootstrapFailureResponse:
-    return service.report_failure(request)
+    return service.report_failure(
+        request,
+        peer_address=client_address(
+            http_request.scope,
+            header_name=service.client_ip_header,
+        ),
+    )
 
 
 @router.post(
@@ -66,9 +81,16 @@ def record_provider_node_bootstrap_failure(
 )
 def record_provider_node_bootstrap_phase(
     request: ProviderNodeBootstrapPhaseRequest,
+    http_request: Request,
     service: ProviderNodeEnrollmentService = Depends(provider_node_enrollment_service),
 ) -> ProviderNodeBootstrapFailureResponse:
-    return service.record_phase(request)
+    return service.record_phase(
+        request,
+        peer_address=client_address(
+            http_request.scope,
+            header_name=service.client_ip_header,
+        ),
+    )
 
 
 @router.post("/agents/join", response_model=JoinAgentResponse)

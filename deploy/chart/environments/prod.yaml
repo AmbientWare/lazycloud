@@ -1,5 +1,18 @@
 # Application policy for prod. Infrastructure identities are supplied by Terraform.
 runtime:
+  LAZYCLOUD_PLATFORM_CAPACITY_HETZNER: |-
+    [{
+      "ref": "hetzner:platform",
+      "workspace": "default",
+      "policy": {
+        "default_region": "ash",
+        "allowed_regions": ["ash"],
+        "allowed_instance_types": ["ccx33", "ccx43", "ccx53", "ccx63"],
+        "warm_cpu_min": 1
+      },
+      "usd_per_currency_unit": "1",
+      "primary_ipv4_hourly_micros": 1000
+    }]
   LAZYCLOUD_STRIPE_ACCOUNT_ID: acct_1U3MzaLpRGtVfZdq
   LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: wg.lazycloud.dev:51820
   # Existing us-east-1 on-demand rates. Update deliberately because these rank offers.

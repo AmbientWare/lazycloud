@@ -75,13 +75,38 @@ from compute.providers import (
     ProviderCapacityPhase,
     ProviderMachineStatus,
     ProviderUnitBootstrap,
+    ProviderUnitInstance,
     ProviderUnitRequest,
     ProviderUnitSnapshot,
+    next_billing_renewal,
 )
 from compute.reclaim import ComputeReclaimPolicy
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
 
 _LAUNCH_STATE_INTENT = "intent"
+
+
+def provider_billing_renewal(
+    instance: ProviderUnitInstance,
+    existing: ComputeProviderInstanceRecord | None,
+    offer: ComputeOffer,
+    now: datetime,
+) -> datetime | None:
+    started = instance.billing_started_at or (existing.billing_started_at if existing else None)
+    quantum = instance.billing_quantum_seconds or (
+        existing.billing_quantum_seconds if existing else offer.billing_quantum_seconds
+    )
+    minimum = instance.billing_minimum_seconds or (
+        existing.billing_minimum_seconds if existing else offer.billing_minimum_seconds
+    )
+    if started is None or quantum == 0:
+        return existing.billing_renewal_at if existing else None
+    return next_billing_renewal(
+        started_at=started,
+        minimum_seconds=minimum,
+        quantum_seconds=quantum,
+        now=now,
+    )
 
 
 def _reservation_status_from_provider(status: str) -> ReservationStatus:
@@ -183,7 +208,7 @@ def provider_unit_request(
     pool: ComputeUnitRecord,
     offer: ComputeOffer,
 ) -> ProviderUnitRequest:
-    if pool_bootstrap_factory is None or pool.provider_connection_id is None:
+    if pool_bootstrap_factory is None:
         raise RuntimeError("provider pool bootstrap is not configured")
     desired_machines, max_machines = provider_unit_operational_capacity(pool)
     return ProviderUnitRequest(
@@ -293,6 +318,7 @@ class ProviderMachineReconciler:
                     "status_message",
                     "last_error",
                     "provider_storage_destroyed_at",
+                    "capacity_release_target",
                 ):
                     metadata.pop(stale_key, None)
             settled_existing = existing if existing is not None and not relaunched else None
@@ -342,7 +368,23 @@ class ProviderMachineReconciler:
                 "hourly_cost_micros": offer.hourly_cost_micros,
                 "committed_micros": 0,
                 "expires_at": None,
-                "billing_renewal_at": None,
+                "billing_started_at": instance.billing_started_at
+                or (settled_existing.billing_started_at if settled_existing is not None else None),
+                "billing_minimum_seconds": instance.billing_minimum_seconds
+                or (
+                    settled_existing.billing_minimum_seconds
+                    if settled_existing is not None
+                    else offer.billing_minimum_seconds
+                ),
+                "billing_quantum_seconds": instance.billing_quantum_seconds
+                or (
+                    settled_existing.billing_quantum_seconds
+                    if settled_existing is not None
+                    else offer.billing_quantum_seconds
+                ),
+                "billing_renewal_at": provider_billing_renewal(
+                    instance, settled_existing, offer, now
+                ),
                 "bootstrap_phase": bootstrap_phase,
                 "bootstrap_failure_reason": bootstrap_failure_reason,
                 "bootstrap_observed_at": bootstrap_observed_at,
@@ -539,6 +581,12 @@ class ProviderMachineReconciler:
                 if current is None:
                     raise RuntimeError(f"compute pool disappeared during reconciliation: {pool.id}")
                 return current
+            if updated.offer_hourly_cost_micros != offer.hourly_cost_micros:
+                updated = repository.upsert(
+                    updated.model_copy(
+                        update={"offer_hourly_cost_micros": offer.hourly_cost_micros}
+                    )
+                )
             missing_machine_ids = self._sync_pooled_instances(
                 session,
                 pool=updated,
