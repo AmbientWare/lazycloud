@@ -847,7 +847,9 @@ class WorkerSchedulerRequestProcessor:
                     after = reporter.report_image_build_progress(request, after=after, logs=logs)
                 except Exception:
                     LOGGER.warning(
-                        "image build progress delivery failed for %s", request.container_id
+                        "image build progress delivery failed for %s",
+                        request.container_id,
+                        exc_info=True,
                     )
                     stop_progress.wait(1)
                     continue
