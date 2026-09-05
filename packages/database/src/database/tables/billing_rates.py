@@ -11,6 +11,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     literal_column,
+    text,
 )
 from sqlalchemy.dialects.postgresql import TSTZRANGE, ExcludeConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -30,6 +31,7 @@ verbatim; a bind parameter cannot appear in a constraint definition.
 # exclusion, so there it holds only the unique start; PostgreSQL is production.
 _COMPUTE_RATE_WINDOW = ExcludeConstraint(
     ("billing_owner", "="),
+    ("rate_class", "="),
     ("gpu_type", "="),
     (_VALIDITY_WINDOW, "&&"),
     name="ex_billing_compute_rates_window",
@@ -59,6 +61,7 @@ class ComputeRateTable(IdTable, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint(
             "billing_owner",
+            "rate_class",
             "gpu_type",
             "effective_at",
             name="uq_billing_compute_rates_start",
@@ -80,12 +83,16 @@ class ComputeRateTable(IdTable, DatabaseBase):
         Index(
             "ix_billing_compute_rates_lookup",
             "billing_owner",
+            "rate_class",
             "gpu_type",
             "effective_at",
         ),
     )
 
     billing_owner: Mapped[str] = mapped_column(String(40), nullable=False)
+    rate_class: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default=text("'auto'")
+    )
     gpu_type: Mapped[str] = mapped_column(String(64), nullable=False)
     """Normalized GPU model; empty is CPU-only work and is a real shape class,
     not an unset field."""

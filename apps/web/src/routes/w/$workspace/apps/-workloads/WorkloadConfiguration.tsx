@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import type { Deployment } from "@/lib/api/schemas";
 import { formatDuration, resourceAllocation } from "@/lib/format";
+import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 
 /**
  * What the current version was provisioned with: the container it gets, and
@@ -21,6 +23,10 @@ export function WorkloadConfiguration({
   kind: string;
 }) {
   const resources = deployment.spec.resources;
+  const pricing = useQuery(pricingCatalogQueryOptions());
+  const placement = pricing.data?.placement_rates.find(
+    (rate) => rate.region === (resources.region ?? null),
+  );
   // A Pod holds connections rather than executing tasks, so per-task
   // concurrency and timeout describe nothing it does.
   const executesTasks = kind !== "pod";
@@ -28,7 +34,7 @@ export function WorkloadConfiguration({
   return (
     <div className="grid min-w-0 gap-x-8 gap-y-6 p-4 lg:grid-cols-2">
       <ConfigurationGroup title="Runtime">
-        <Fact label="CPU" value={resourceAllocation(resources.cpu, "cores")} />
+        <Fact label="CPU" value={resourceAllocation(resources.cpu, "vCPUs")} />
         <Fact label="Memory" value={resourceAllocation(resources.memory)} />
         {resources.gpu.length > 0 ? (
           <Fact
@@ -37,7 +43,20 @@ export function WorkloadConfiguration({
           />
         ) : null}
         <Fact label="Pool" value={deployment.spec.pool || "Not reported"} />
+        <Fact label="Region" value={placement?.name ?? resources.region ?? "Automatic"} />
+        <Fact
+          label="Current region multiplier"
+          value={
+            placement ? `${placement.multiplier}x` : pricing.isPending ? "Loading" : "Unavailable"
+          }
+        />
       </ConfigurationGroup>
+      <p className="text-xs leading-relaxed text-muted-foreground lg:col-span-2">
+        {resources.region
+          ? "This workload is restricted to its selected region. New starts require region selection on the account's plan."
+          : "Automatic region selection follows your compute pool policy at its base rate."}{" "}
+        Set the region in your SDK deployment configuration before deploying a new version.
+      </p>
 
       <ConfigurationGroup title="Execution">
         {executesTasks ? (

@@ -181,6 +181,9 @@ class _BootstrapGateway(_Gateway):
 
 
 class _ProviderIdentity:
+    def acknowledge(self) -> None:
+        pass
+
     def create(self, *, expected_region: str | None = None) -> ProviderNodeIdentityEvidence:
         del expected_region
         return ProviderNodeIdentityEvidence(

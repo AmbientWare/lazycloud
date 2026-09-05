@@ -21,6 +21,7 @@ from compute.providers import (
     ProviderUnitRequest,
     ProviderUnitSnapshot,
     ResolvedComputeProvider,
+    ResolvedProviderPolicy,
 )
 from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
@@ -33,6 +34,7 @@ from database.repositories.compute import (
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
 from provider_aws import AWS_STS_PROOF_NONCE_KEY
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
+from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -123,6 +125,9 @@ class _ReplayGuard:
 class _PooledProvider:
     resource_id: str = _ASG_NAME
 
+    def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
+        return _offer()
+
     def list_offers(self) -> Iterable[ComputeOffer]:
         return (_offer(),)
 
@@ -182,6 +187,10 @@ class _PooledProvider:
 @dataclass(frozen=True, slots=True)
 class _Resolver(ComputeProviderResolver):
     provider: _PooledProvider
+    policy: ResolvedProviderPolicy
+
+    def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
+        return ()
 
     def list_providers(self, workspace_id: str) -> Iterable[ResolvedComputeProvider]:
         del workspace_id
@@ -199,6 +208,7 @@ class _Resolver(ComputeProviderResolver):
             capacity_mode=ComputeCapacityMode.Pooled,
             connection_id=_CONNECTION_ID,
             pooled=self.provider,
+            policy=self.policy,
         )
 
 
@@ -244,6 +254,43 @@ def test_provider_node_enrollment_rejects_an_instance_the_pool_does_not_own(
 
     with pytest.raises(UpstreamUnavailableError, match="still refreshing"):
         enrollment.enroll(_request(pool.id, provider_instance_id="i-0fedcba987654321f"))
+
+
+def test_provider_enrollment_resume_preserves_existing_agent_authority(
+    isolated_services: ApiServices,
+) -> None:
+    pool = _seed_connection_and_pool(isolated_services)
+    service = _service(isolated_services, _PooledProvider())
+    request = _request(pool.id)
+    service.compute.record_provider_bootstrap_status(
+        pool_id=pool.id,
+        provider_instance_id=_INSTANCE_ID,
+        phase=MachineBootstrapPhase.Booting,
+        failure_reason=None,
+    )
+    joined = service.enroll(request)
+    first = service.gateway.resume_provider_agent(
+        node_agent_token=SecretStr(joined.agent_token),
+        pool=pool,
+        machine_fingerprint=request.machine_fingerprint,
+    )
+    second = service.gateway.resume_provider_agent(
+        node_agent_token=SecretStr(joined.agent_token),
+        pool=pool,
+        machine_fingerprint=request.machine_fingerprint,
+    )
+    assert first is not None and second is not None
+    assert first.machine_id == second.machine_id == joined.machine_id
+    assert (
+        first.credential_generation == second.credential_generation == joined.credential_generation
+    )
+    assert first.credential_id == second.credential_id == joined.credential_id
+    with pytest.raises(InvalidInputError):
+        service.gateway.resume_provider_agent(
+            node_agent_token=SecretStr(joined.agent_token),
+            pool=pool,
+            machine_fingerprint="another-host",
+        )
 
 
 def test_provider_node_bootstrap_failure_is_durable_after_identity_verification(
@@ -348,9 +395,24 @@ def _service(
 
 
 def _compute(isolated_services: ApiServices, provider: _PooledProvider) -> ComputeService:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        connection = AwsAccountConnectionRepository(session).get(_CONNECTION_ID)
+    assert connection is not None
     return ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider),
+        provider_resolver=_Resolver(
+            provider,
+            ResolvedProviderPolicy(
+                workspace_id=workspace_id,
+                pool=connection.pool,
+                platform_fleet=connection.platform_fleet,
+                default_region=connection.compute.default_region,
+                allowed_regions=connection.compute.allowed_regions,
+                max_cpu_instances=connection.compute.max_cpu_instances,
+                max_gpu_instances=connection.compute.max_gpu_instances,
+            ),
+        ),
         pool_bootstrap_factory=_bootstrap,
     )
 

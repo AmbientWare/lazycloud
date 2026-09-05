@@ -44,6 +44,7 @@ from shared.http.functions import (
     FunctionInvokeResponse,
 )
 from shared.http.gateway import DeployStubResponse
+from shared.placement import ProductRegion
 from shared.task_context import current_root_task_id, current_task_id
 from shared.tasks import RetryPolicy, TaskPolicy
 
@@ -150,6 +151,7 @@ class FunctionOptions(TypedDict, total=False):
     outputs: SchemaInput
     docker_enabled: bool
     preemptible: bool
+    region: str | None
     pool: PoolInput
     provider: str | None
     metadata: dict[str, Any] | None
@@ -195,6 +197,7 @@ class Function(Generic[P, R]):
     outputs: SchemaInput = None
     docker_enabled: bool = False
     preemptible: bool = False
+    region: str | None = None
     pool: PoolInput = None
     provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -247,6 +250,7 @@ class Function(Generic[P, R]):
         gpu_count: int | None = None,
         env: Mapping[str, str] | None = None,
         secrets: Iterable[str] | None = None,
+        region: str | None = None,
         pool: PoolInput = None,
         preemptible: bool | None = None,
     ) -> Function[P, R]:
@@ -267,6 +271,8 @@ class Function(Generic[P, R]):
             self.secrets.extend(secret for secret in secrets if secret not in self.secrets)
         if pool is not None:
             self.pool = pool
+        if region is not None:
+            self.region = region
         if preemptible is not None:
             self.preemptible = preemptible
         return self
@@ -286,6 +292,7 @@ class Function(Generic[P, R]):
             cron=self.cron,
             image=self.image.spec(),
             resources=Resources(
+                region=ProductRegion(self.region) if self.region is not None else None,
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,
@@ -777,6 +784,7 @@ def _function(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
+    region: str | None = None,
     pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -824,6 +832,7 @@ def _function(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
+    region: str | None = None,
     pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -870,6 +879,7 @@ def _function(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
+    region: str | None = None,
     pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -914,6 +924,7 @@ def _function(
             outputs=outputs,
             docker_enabled=docker_enabled,
             preemptible=preemptible,
+            region=region,
             pool=pool,
             provider=provider,
             metadata=metadata or {},

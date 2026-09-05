@@ -90,13 +90,20 @@ def capacity_pool_selection_key(
     health: CapacityPoolOperationalHealth,
     priority: int,
     capacity_owner_id: str,
-) -> tuple[int, int, str]:
+    hourly_cost_micros: int | None = None,
+) -> tuple[int, int, bool, int, str]:
     health_order = {
         CapacityPoolOperationalHealth.Healthy: 0,
         CapacityPoolOperationalHealth.Degraded: 1,
         CapacityPoolOperationalHealth.Unavailable: 2,
     }
-    return health_order[health], -priority, capacity_owner_id
+    return (
+        health_order[health],
+        -priority,
+        hourly_cost_micros is None,
+        hourly_cost_micros or 0,
+        capacity_owner_id,
+    )
 
 
 def effective_pool_headroom(

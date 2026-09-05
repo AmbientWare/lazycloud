@@ -51,6 +51,23 @@ def test_invoking_a_function_past_due_refuses_and_queues_nothing(
     assert _row_counts(isolated_services, stub.workspace_id) == before
 
 
+def test_free_function_region_selection_refuses_before_creating_work(
+    isolated_services: ApiServices,
+) -> None:
+    stub = ControlPlaneService(isolated_services.context).create_stub(
+        "regional-function",
+        kind=StubKind.Function,
+        handler="pkg.workloads:handler",
+        config={"runtime": {"region": "eu-central"}},
+    )
+    before = _row_counts(isolated_services, stub.workspace_id)
+    with pytest.raises(PaymentRequiredError, match="region selection requires the Team plan"):
+        FunctionControlService(isolated_services).function_invoke(
+            FunctionInvokeBody(stub_id=stub.id, invocation=FunctionJsonInvocation(args=[]))
+        )
+    assert _row_counts(isolated_services, stub.workspace_id) == before
+
+
 def _past_due(services: ApiServices, workspace_id: str) -> None:
     """A fully provisioned account whose card the provider says was refused.
 

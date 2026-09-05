@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -7,6 +8,7 @@ from dataclasses import dataclass
 from secrets import token_urlsafe
 
 from compute.agent_control import ComputePrincipal, plan_join_token_creation
+from compute.provider_launches import ProviderNodeLaunchService
 from compute.provider_nodes import ProviderNodeIdentityProof, ProviderNodeIdentityVerifier
 from compute.service import ComputeService
 from coordination.rate_limit import release_slot, try_acquire_slot, try_consume
@@ -75,12 +77,31 @@ class ProviderNodeEnrollmentService:
     gateway: GatewayControlService
     compute: ComputeService
     identity_verifier: ProviderNodeIdentityVerifier
+    launches: ProviderNodeLaunchService | None = None
     events: GatewayEventSink | None = None
     rate_limiter: RedisClient | None = None
     proof_max_inflight: int = 8
+    client_ip_header: str = ""
 
-    def enroll(self, request: ProviderNodeEnrollmentRequest) -> JoinAgentResponse:
+    def enroll(
+        self,
+        request: ProviderNodeEnrollmentRequest,
+        *,
+        peer_address: str = "",
+    ) -> JoinAgentResponse:
+        if request.provider is ProviderKind.Hetzner:
+            with self._require_launches().enrollment_capacity():
+                return self._enroll(request, peer_address=peer_address)
+        return self._enroll(request, peer_address=peer_address)
+
+    def _enroll(
+        self,
+        request: ProviderNodeEnrollmentRequest,
+        *,
+        peer_address: str,
+    ) -> JoinAgentResponse:
         pool, connection = self._enrollment_target(request)
+        self._authorize_launch(request, pool)
         self._verify_active_node(
             pool=pool,
             connection=connection,
@@ -88,32 +109,73 @@ class ProviderNodeEnrollmentService:
             region=request.region,
             provider_instance_id=request.provider_instance_id,
             identity_proof_url=request.identity_proof_url,
+            peer_address=peer_address,
+            launch_id=request.launch_id,
         )
+        if request.provider is ProviderKind.Hetzner:
+            launches = self._require_launches()
+            with launches.enrollment(
+                request, pool, machine_fingerprint=request.machine_fingerprint
+            ) as lease:
+                resumed = self.gateway.resume_provider_agent(
+                    node_agent_token=SecretStr(request.node_agent_token),
+                    pool=pool,
+                    machine_fingerprint=request.machine_fingerprint,
+                )
+                if resumed is not None:
+                    if not lease.enrolled:
+                        self._finish_enrollment(request, pool, resumed)
+                        lease.complete()
+                    return resumed
+                if lease.enrolled:
+                    raise InvalidInputError("provider node enrollment is no longer active")
+                joined = self._join_verified_node(request, pool)
+                lease.complete()
+                return joined
+        return self._join_verified_node(request, pool)
+
+    def _join_verified_node(
+        self, request: ProviderNodeEnrollmentRequest, pool: ComputeUnitRecord
+    ) -> JoinAgentResponse:
         join_token = self._issue_join_token(
             pool.id,
             pool.workspace_id,
             pool.pool,
             pool.capacity_owner_id,
-            owner_user_id=connection.user_id,
+            owner_user_id=self._pool_owner(pool),
         )
-        joined = self.gateway.join_agent(
-            JoinAgentRequest(
-                join_token=join_token.get_secret_value(),
-                machine_fingerprint=request.machine_fingerprint,
-                hostname=request.hostname,
-                os=request.os,
-                arch=request.arch,
-                cpu_count=request.capacity.cpu_count,
-                cpu_millicores=request.capacity.cpu_millicores,
-                memory_mb=request.capacity.memory_mb,
-                gpu=request.capacity.gpu,
-                gpu_ids=request.capacity.gpu_ids,
-                gpu_count=request.capacity.gpu_count,
-                preflight=request.preflight,
-                schedulable=request.requested_schedulable,
-                executor=request.executor,
+        join_request = JoinAgentRequest(
+            join_token=join_token.get_secret_value(),
+            machine_fingerprint=request.machine_fingerprint,
+            hostname=request.hostname,
+            os=request.os,
+            arch=request.arch,
+            cpu_count=request.capacity.cpu_count,
+            cpu_millicores=request.capacity.cpu_millicores,
+            memory_mb=request.capacity.memory_mb,
+            gpu=request.capacity.gpu,
+            gpu_ids=request.capacity.gpu_ids,
+            gpu_count=request.capacity.gpu_count,
+            preflight=request.preflight,
+            schedulable=request.requested_schedulable,
+            executor=request.executor,
+        )
+        joined = (
+            self.gateway.join_agent(
+                join_request, node_agent_token=SecretStr(request.node_agent_token)
             )
+            if request.provider is ProviderKind.Hetzner
+            else self.gateway.join_agent(join_request)
         )
+        self._finish_enrollment(request, pool, joined)
+        return joined
+
+    def _finish_enrollment(
+        self,
+        request: ProviderNodeEnrollmentRequest,
+        pool: ComputeUnitRecord,
+        joined: JoinAgentResponse,
+    ) -> None:
         try:
             if joined.workspace_id != pool.workspace_id or joined.pool != pool.pool:
                 raise ConflictError("provider node joined a different compute pool")
@@ -163,7 +225,6 @@ class ProviderNodeEnrollmentService:
                         workspace_id=pool.workspace_id,
                     )
             raise
-        return joined
 
     def _release_machine_binding(
         self,
@@ -181,8 +242,11 @@ class ProviderNodeEnrollmentService:
     def report_failure(
         self,
         request: ProviderNodeBootstrapFailureRequest,
+        *,
+        peer_address: str = "",
     ) -> ProviderNodeBootstrapFailureResponse:
         pool, connection = self._enrollment_target(request)
+        self._authorize_launch(request, pool)
         self._verify_active_node(
             pool=pool,
             connection=connection,
@@ -190,8 +254,19 @@ class ProviderNodeEnrollmentService:
             region=request.region,
             provider_instance_id=request.provider_instance_id,
             identity_proof_url=request.identity_proof_url,
+            peer_address=peer_address,
+            launch_id=request.launch_id,
         )
         excerpt = _sanitized_excerpt(request.diagnostic_excerpt)
+        if request.provider is ProviderKind.Hetzner:
+            for credential in (request.bootstrap_token, request.node_agent_token):
+                if credential:
+                    excerpt = excerpt.replace(credential, "[redacted]")
+            excerpt = re.sub(
+                r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43,128}(?![A-Za-z0-9_-])",
+                "[redacted]",
+                excerpt,
+            )
         observed = self.compute.record_provider_bootstrap_status(
             pool_id=pool.id,
             provider_instance_id=request.provider_instance_id,
@@ -226,8 +301,11 @@ class ProviderNodeEnrollmentService:
     def record_phase(
         self,
         request: ProviderNodeBootstrapPhaseRequest,
+        *,
+        peer_address: str = "",
     ) -> ProviderNodeBootstrapFailureResponse:
         pool, connection = self._enrollment_target(request)
+        self._authorize_launch(request, pool)
         self._verify_active_node(
             pool=pool,
             connection=connection,
@@ -235,6 +313,8 @@ class ProviderNodeEnrollmentService:
             region=request.region,
             provider_instance_id=request.provider_instance_id,
             identity_proof_url=request.identity_proof_url,
+            peer_address=peer_address,
+            launch_id=request.launch_id,
         )
         observed = self.compute.record_provider_bootstrap_status(
             pool_id=pool.id,
@@ -253,11 +333,13 @@ class ProviderNodeEnrollmentService:
         self,
         *,
         pool: ComputeUnitRecord,
-        connection: AwsAccountConnection,
+        connection: AwsAccountConnection | None,
         provider: ProviderKind,
         region: str,
         provider_instance_id: str,
         identity_proof_url: str,
+        peer_address: str,
+        launch_id: str = "",
     ) -> None:
         if not pool.provider_state.resource_id:
             raise UpstreamUnavailableError("provider pool identity is not established")
@@ -276,15 +358,34 @@ class ProviderNodeEnrollmentService:
         with self._proof_capacity():
             self.identity_verifier.verify(
                 ProviderNodeIdentityProof(
+                    launch_id=launch_id,
                     provider=provider,
                     region=region,
                     provider_instance_id=provider_instance_id,
                     proof_url=SecretStr(identity_proof_url),
+                    peer_address=peer_address,
                 ),
                 pool=pool,
                 connection=connection,
                 provider_instance_ids=known,
             )
+
+    def _require_launches(self) -> ProviderNodeLaunchService:
+        if self.launches is None:
+            raise UpstreamUnavailableError("provider launch authorization is not configured")
+        return self.launches
+
+    def _authorize_launch(
+        self,
+        request: (
+            ProviderNodeEnrollmentRequest
+            | ProviderNodeBootstrapFailureRequest
+            | ProviderNodeBootstrapPhaseRequest
+        ),
+        pool: ComputeUnitRecord,
+    ) -> None:
+        if request.provider is ProviderKind.Hetzner:
+            self._require_launches().authorize(request, pool)
 
     @contextmanager
     def _proof_capacity(self) -> Iterator[None]:
@@ -341,9 +442,7 @@ class ProviderNodeEnrollmentService:
             | ProviderNodeBootstrapFailureRequest
             | ProviderNodeBootstrapPhaseRequest
         ),
-    ) -> tuple[ComputeUnitRecord, AwsAccountConnection]:
-        if request.provider is not ProviderKind.Aws:
-            raise InvalidInputError(f"unsupported provider node: {request.provider.value}")
+    ) -> tuple[ComputeUnitRecord, AwsAccountConnection | None]:
         with self.gateway.services.context.database.session() as session:
             pool = ComputeUnitRepository(session).get(request.enrollment_request_id)
             if pool is None:
@@ -352,11 +451,16 @@ class ProviderNodeEnrollmentService:
                 pool.visibility is not ComputeUnitVisibility.Internal
                 or pool.capacity_mode is not ComputeCapacityMode.Pooled
                 or pool.phase not in _ENROLLABLE_UNIT_PHASES
-                or not pool.provider_ref.startswith("aws:")
-                or pool.provider_connection_id is None
+                or not pool.provider_ref.startswith(f"{request.provider.value}:")
                 or pool.region != request.region
             ):
                 raise InvalidInputError("provider node enrollment request is not active")
+            if request.provider is ProviderKind.Hetzner:
+                if not pool.platform_fleet or pool.provider_connection_id is not None:
+                    raise InvalidInputError("Hetzner provider binding is not platform capacity")
+                return pool, None
+            if pool.provider_connection_id is None:
+                raise InvalidInputError("AWS provider connection is unavailable")
             connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id)
             # The account behind the unit's workspace, not the workspace itself: one
             # connection backs every workspace its owner holds, so the tenancy check
@@ -373,6 +477,13 @@ class ProviderNodeEnrollmentService:
         ):
             raise InvalidInputError("provider node connection is not active")
         return pool, connection
+
+    def _pool_owner(self, pool: ComputeUnitRecord) -> str:
+        with self.gateway.services.context.database.session() as session:
+            owner = WorkspaceMemberRepository(session).owner(pool.workspace_id)
+        if owner is None:
+            raise InvalidInputError("provider capacity workspace has no owner")
+        return owner.user_id
 
     def _issue_join_token(
         self,

@@ -142,6 +142,7 @@ class ShellControlService:
                 workspace_id=stub.workspace_id,
                 gpu=plan.gpu,
                 gpu_count=plan.gpu_count,
+                region=stub.config.runtime.region,
             )
             record = ContainerRecord(
                 id=plan.container_id,
@@ -172,6 +173,7 @@ class ShellControlService:
         submitted = self.services.containers.submit_scheduler_request(
             record,
             ContainerSchedulingOptions(
+                region=stub.config.runtime.region,
                 workspace_name=workspace.name,
                 stub_type="shell",
                 startup_kind=WorkerStartupKind.Pod,

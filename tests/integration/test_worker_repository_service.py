@@ -95,6 +95,7 @@ from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus, ImageBuildRecord, ImageRecord
 from shared.objects import ObjectRecord
 from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
+from shared.scheduling import WorkerExecutionRecord
 from shared.source_cache_cleanup import (
     WorkerCacheGenerationRecord,
     WorkerCacheGenerationState,
@@ -1464,18 +1465,16 @@ def test_worker_repository_rotates_worker_session_on_reregistration(
         provider="local",
         capacity_owner_id=capacity_owner_id,
     )
-    payload = _JSON_OBJECT_ADAPTER.validate_python(
-        {
-            "worker": SchedulerWorkerRecord(
-                worker_id="worker-1",
-                pool=MachinePool("pool"),
-                capacity_owner_id=capacity_owner_id,
-                status=SchedulerWorkerStatus.Available,
-            ).model_dump(mode="json"),
-            "cache_generation_id": _test_cache_generation_id("worker-1"),
-            "cache_storage_id": "node:worker-1",
-        }
-    )
+    payload = AddWorkerRequest(
+        worker=SchedulerWorkerRecord(
+            worker_id="worker-1",
+            pool=MachinePool("pool"),
+            capacity_owner_id=capacity_owner_id,
+            status=SchedulerWorkerStatus.Available,
+        ),
+        cache_generation_id=_test_cache_generation_id("worker-1"),
+        cache_storage_id="node:worker-1",
+    ).model_dump(mode="json")
     headers = {"Authorization": f"Bearer {bootstrap}"}
 
     first = client.post("/worker-repository/add-worker", json=payload, headers=headers)
@@ -1550,7 +1549,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
         "/worker-repository/add-worker",
         json={
             **base_payload,
-            "worker": SchedulerWorkerRecord(
+            "worker": WorkerExecutionRecord(
                 worker_id="capacity-worker",
                 pool=MachinePool("capacity-pool"),
                 capacity_owner_id=owner_id,
@@ -1568,7 +1567,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
         "/worker-repository/add-worker",
         json={
             **base_payload,
-            "worker": SchedulerWorkerRecord(
+            "worker": WorkerExecutionRecord(
                 worker_id="capacity-worker",
                 pool=MachinePool("capacity-pool"),
                 capacity_owner_id=other_owner_id,
@@ -1580,7 +1579,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
         "/worker-repository/add-worker",
         json={
             **base_payload,
-            "worker": SchedulerWorkerRecord(
+            "worker": WorkerExecutionRecord(
                 worker_id="capacity-worker",
                 pool=MachinePool("capacity-pool"),
                 capacity_owner_id=owner_id,
@@ -2567,6 +2566,7 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
     assert stored.private_worker is True
     assert stored.owner_user_id == workspace_owner_user_id(isolated_services.context, workspace_id)
     assert stored.priority == joined_unit.priority
+    assert stored.region is None
 
 
 def _join_gateway_agent(
@@ -2685,11 +2685,11 @@ def _register_worker_session(
     generation_id = _test_cache_generation_id(worker.worker_id)
     response = client.post(
         "/worker-repository/add-worker",
-        json={
-            "worker": registered_worker.model_dump(mode="json"),
-            "cache_generation_id": generation_id,
-            "cache_storage_id": f"node:{worker.worker_id}",
-        },
+        json=AddWorkerRequest(
+            worker=registered_worker,
+            cache_generation_id=generation_id,
+            cache_storage_id=f"node:{worker.worker_id}",
+        ).model_dump(mode="json"),
         headers={"Authorization": f"Bearer {bootstrap_token}"},
     )
     assert response.status_code == 200

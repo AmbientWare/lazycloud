@@ -13,6 +13,7 @@ from shared.container_requests import (
 from shared.contracts import ContractModel
 from shared.deployment_records import DEFAULT_DISK
 from shared.errors import InvalidInputError
+from shared.placement import ProductRegion
 from shared.resources import parse_memory_mib
 from shared.workload_config import StubRuntimeConfig
 
@@ -22,6 +23,7 @@ DEFAULT_CONTAINER_DISK_MIB = parse_memory_mib(DEFAULT_DISK) or 0
 
 
 class ContainerSchedulingOptions(ContractModel):
+    region: ProductRegion | None = None
     workspace_name: str = "default"
     stub_type: str = "container"
     startup_kind: WorkerStartupKind = WorkerStartupKind.Pod

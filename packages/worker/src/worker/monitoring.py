@@ -12,8 +12,8 @@ from pydantic import field_validator
 from shared.contracts import ContractModel
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsData
 from shared.scheduling import (
-    SchedulerContainerState,
     SchedulerContainerStatus,
+    WorkerContainerState,
 )
 from shared.timestamps import utc_now
 
@@ -78,7 +78,7 @@ class ContainerStateHeartbeatRepository(ContainerStatusUpdater, Protocol):
     a state the platform has dropped must not be recreated.
     """
 
-    def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
+    def get_container_state(self, container_id: str) -> WorkerContainerState | None: ...
 
 
 class ContainerRuntimeMonitor(Protocol):

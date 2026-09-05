@@ -14,6 +14,7 @@ from anyio import from_thread
 from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
+from compute.provider_launches import ProviderNodeLaunchService
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
@@ -55,6 +56,7 @@ from execution.endpoints.service import (
 )
 from execution.functions.service import FunctionControlService
 from execution.pods.service import PodControlService
+from execution.secrets.crypto import WorkspaceSecretCipher
 from execution.secrets.service import SecretService
 from execution.shells.service import ShellControlService
 from execution.signals.redis import RedisSignalRepository, RedisSignalService
@@ -127,11 +129,14 @@ from provider_clients import (
     configured_aws_compute_catalog,
     workspace_compute_provider_resolver,
 )
+from provider_clients.provider_nodes import configured_provider_node_identity_registry
 from provider_clients.settings import (
     AwsAccountConnectionSettings,
     AwsCapacityReconciliationSettings,
     AwsCapacitySettings,
+    PlatformCapacitySettings,
 )
+from provider_clients.workspace_compute import configured_platform_compute_providers
 from provider_cloudflare import CloudflareSettings
 from provider_github import GitHubAppSettings
 from provider_resend import ResendSettings
@@ -159,6 +164,7 @@ from scheduler.preemption import (
     CapacityInterruption,
     SchedulerCapacityInterruption,
     SchedulerCapacityInterruptionService,
+    SchedulerGpuBackfillPreemptionService,
     SchedulerWorkerMaintenanceService,
     SchedulerWorkerPreemptionService,
 )
@@ -462,6 +468,7 @@ class ApiServiceCore:
     agent_binary_settings: AgentBinarySettings
     aws_account_connection_settings: AwsAccountConnectionSettings
     aws_capacity_settings: AwsCapacitySettings
+    platform_capacity_settings: PlatformCapacitySettings
     aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings
     backend_route_settings: BackendRouteSettings
     object_store_settings: S3ObjectStoreSettings
@@ -485,6 +492,7 @@ class ApiServiceCore:
     secrets: SecretService
     volumes: VolumeService
     compute: ComputeService
+    provider_node_launches: ProviderNodeLaunchService
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
     scheduler_workers: RedisSchedulerWorkerRepository
@@ -573,6 +581,7 @@ class ApiServices(ApiServiceCore):
         agent_binary_settings: AgentBinarySettings | None = None,
         aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
         aws_capacity_settings: AwsCapacitySettings | None = None,
+        platform_capacity_settings: PlatformCapacitySettings | None = None,
         aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings | None = None,
         backend_route_settings: BackendRouteSettings | None = None,
         object_store_settings: S3ObjectStoreSettings | None = None,
@@ -636,6 +645,7 @@ class ApiServices(ApiServiceCore):
             aws_account_connection_settings or AwsAccountConnectionSettings()
         )
         aws_capacity_config = aws_capacity_settings or AwsCapacitySettings()
+        platform_capacity_config = platform_capacity_settings or PlatformCapacitySettings()
         aws_capacity_reconciliation_config = (
             aws_capacity_reconciliation_settings or AwsCapacityReconciliationSettings()
         )
@@ -804,6 +814,20 @@ class ApiServices(ApiServiceCore):
             )
         )
         aws_connection_directory = AwsAccountConnectionDirectory(context)
+
+        def platform_capacity_workspace(workspace: str) -> str:
+            with context.database.session() as session:
+                return context.workspace(session, workspace).id
+
+        def provider_node_cipher(workspace_id: str) -> WorkspaceSecretCipher:
+            with context.database.session() as session:
+                workspace = context.workspace(session, workspace_id)
+            return WorkspaceSecretCipher.from_workspace(workspace)
+
+        provider_node_launches = ProviderNodeLaunchService(
+            database=context.database,
+            cipher_for_workspace=provider_node_cipher,
+        )
         # Connected AWS is an optional deployment shape. When it is unconfigured there is
         # no connection to resolve, and building the resolver would demand the remote
         # network configuration a local stack has no reason to hold. A half-configured
@@ -813,11 +837,17 @@ class ApiServices(ApiServiceCore):
                 aws_capacity_config,
                 agent_artifact_config,
                 connections=aws_connection_directory.list_for_workspace,
+                capacity_workspace=aws_connection_directory.capacity_workspace,
+                platform_providers=configured_platform_compute_providers(
+                    platform_capacity_config,
+                    launch_credentials=provider_node_launches,
+                    capacity_workspace=platform_capacity_workspace,
+                ),
                 gateway_origin=gateway_config.public_http_url,
                 presigned_origin=object_store_config.presigned_endpoint_url or "",
                 backend_route=resolved_backend_route_settings,
             )
-            if aws_account_connection_config.configured
+            if aws_account_connection_config.configured or platform_capacity_config.hetzner
             else None
         )
 
@@ -897,6 +927,9 @@ class ApiServices(ApiServiceCore):
             event_bus=RedisEventBus(redis),
             workspace_changes=workspace_changes,
             runtime_state=container_runtime_state,
+        )
+        container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
+            worker_repository, container_repository, containers
         )
         container_shutdowns = ContainerShutdownService(
             container_repository,
@@ -1001,6 +1034,7 @@ class ApiServices(ApiServiceCore):
             agent_binary_settings=agent_artifact_config,
             aws_account_connection_settings=aws_account_connection_config,
             aws_capacity_settings=aws_capacity_config,
+            platform_capacity_settings=platform_capacity_config,
             aws_capacity_reconciliation_settings=aws_capacity_reconciliation_config,
             backend_route_settings=resolved_backend_route_settings,
             object_store_settings=object_store_config,
@@ -1024,6 +1058,7 @@ class ApiServices(ApiServiceCore):
             secrets=secrets,
             volumes=volumes,
             compute=compute,
+            provider_node_launches=provider_node_launches,
             containers=containers,
             container_shutdowns=container_shutdowns,
             scheduler_workers=worker_repository,
@@ -1269,9 +1304,14 @@ def _compose_api_services(
             events=core.events,
             rate_limiter=redis,
             proof_max_inflight=public_ingress_config.provider_node_proof_max_inflight,
-            identity_verifier=AwsProviderNodeIdentityAdapter(
-                http_client=BoundedProviderNodeIdentityHttpClient(),
-                replay_guard=RedisProviderNodeIdentityReplayGuard(redis),
+            client_ip_header=public_ingress_config.client_ip_header,
+            launches=core.provider_node_launches,
+            identity_verifier=configured_provider_node_identity_registry(
+                aws=AwsProviderNodeIdentityAdapter(
+                    http_client=BoundedProviderNodeIdentityHttpClient(),
+                    replay_guard=RedisProviderNodeIdentityReplayGuard(redis),
+                ),
+                platform_settings=core.platform_capacity_settings,
             ),
         )
         if core.compute.provider_resolver is not None
@@ -1338,6 +1378,7 @@ def _compose_api_services(
         agent_binary_settings=core.agent_binary_settings,
         aws_account_connection_settings=core.aws_account_connection_settings,
         aws_capacity_settings=core.aws_capacity_settings,
+        platform_capacity_settings=core.platform_capacity_settings,
         aws_capacity_reconciliation_settings=core.aws_capacity_reconciliation_settings,
         backend_route_settings=core.backend_route_settings,
         object_store_settings=core.object_store_settings,
@@ -1361,6 +1402,7 @@ def _compose_api_services(
         secrets=core.secrets,
         volumes=core.volumes,
         compute=core.compute,
+        provider_node_launches=core.provider_node_launches,
         containers=core.containers,
         container_shutdowns=core.container_shutdowns,
         scheduler_workers=core.scheduler_workers,

@@ -176,12 +176,14 @@ function entitlements() {
     connected_cloud: false,
     custom_domains: false,
     self_hosted: true,
+    region_selection: false,
   };
 }
 
 function pricingCatalog(): PricingCatalog {
   return {
     pricing_version: "test",
+    metered_rates_effective_at: "2026-09-11T00:00:00Z",
     currency: "USD",
     connected_cloud_management_fee_percent: 8,
     no_payment_method: {
@@ -213,6 +215,7 @@ function pricingCatalog(): PricingCatalog {
           max_workspaces: "unlimited",
           max_members: "unlimited",
           connected_cloud: true,
+          region_selection: true,
           custom_domains: true,
         },
         terms: [],
@@ -220,6 +223,7 @@ function pricingCatalog(): PricingCatalog {
     ],
     shape_rates: [],
     gpu_rates: [],
+    placement_rates: [],
     platform_rate: {
       nanos_per_egress_gib: 0,
       nanos_per_volume_gib_month: 50_000_000,

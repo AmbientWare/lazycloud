@@ -12,8 +12,8 @@ from pydantic import Field
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.scheduling import (
-    SchedulerWorkerRecord,
     SchedulerWorkerStatus,
+    WorkerExecutionRecord,
     WorkerRemovalResult,
     WorkerUnavailableReason,
 )
@@ -59,25 +59,25 @@ class WorkerLifecycleStatus(StrEnum):
 class WorkerLifecycleRepository(Protocol):
     def add_worker(
         self,
-        worker: SchedulerWorkerRecord,
+        worker: WorkerExecutionRecord,
         *,
         ttl_seconds: int = 0,
         now: datetime | None = None,
-    ) -> SchedulerWorkerRecord: ...
+    ) -> WorkerExecutionRecord: ...
 
     def toggle_worker_available(
         self,
         worker_id: str,
         *,
         ttl_seconds: int,
-    ) -> SchedulerWorkerRecord | None: ...
+    ) -> WorkerExecutionRecord | None: ...
 
     def set_keep_alive(
         self,
         worker_id: str,
         *,
         ttl_seconds: int,
-    ) -> SchedulerWorkerRecord | None: ...
+    ) -> WorkerExecutionRecord | None: ...
 
     def prepare_source_cache(self) -> None: ...
 
@@ -88,7 +88,7 @@ class WorkerLifecycleRepository(Protocol):
         reason: WorkerUnavailableReason,
         detail: str = "",
         ttl_seconds: int,
-    ) -> SchedulerWorkerRecord | None: ...
+    ) -> WorkerExecutionRecord | None: ...
 
     def remove_worker(self, worker_id: str) -> WorkerRemovalResult: ...
 
@@ -162,7 +162,7 @@ class WorkerLifecycleOrchestrator:
     worker_id: str
     repository: WorkerLifecycleRepository | None = None
     stopper: WorkerLifecycleContainerStopper | None = None
-    registration: SchedulerWorkerRecord | None = None
+    registration: WorkerExecutionRecord | None = None
     readiness_validator: Callable[[], None] | None = None
     cleanup_actions: list[WorkerCleanupAction] = field(default_factory=list)
     startup_concurrency_limit: int = 1
@@ -558,7 +558,7 @@ class WorkerLifecycleOrchestrator:
     def _run_repository_step(
         self,
         action: WorkerLifecycleAction,
-        callback: Callable[[], SchedulerWorkerRecord | WorkerRemovalResult | None],
+        callback: Callable[[], WorkerExecutionRecord | WorkerRemovalResult | None],
     ) -> WorkerLifecycleStepResult:
         try:
             result = callback()

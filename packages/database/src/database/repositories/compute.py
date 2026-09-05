@@ -13,6 +13,7 @@ from database.repositories.common import (
 )
 from database.repositories.identity import WorkspaceRepository
 from database.tables.base import IdPayloadTable
+from database.tables.billing_ledger import ContainerBillingShapeTable
 from database.tables.compute import (
     AwsAccountConnectionTable,
     AwsAuthorizationCleanupTombstoneTable,
@@ -25,7 +26,7 @@ from database.tables.compute import (
     WireGuardPeerTable,
     WorkspaceComputePolicyTable,
 )
-from database.tables.identity import WorkspaceMemberTable
+from database.tables.identity import WorkspaceMemberTable, WorkspaceTable
 from pydantic import BaseModel, Field, JsonValue, TypeAdapter
 from shared.aws_connections import (
     AwsAccountConnection,
@@ -108,6 +109,13 @@ class ComputeCapacityOperationSizingRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class PlatformCpuArrival:
+    created_at: datetime
+    cpu_millicores: int
+    reserved_memory_mib: int
+
+
+@dataclass(frozen=True, slots=True)
 class ComputeCapacityOperationHistorySummary:
     peak_desired_unit: int
     last_requested_at: datetime | None
@@ -131,6 +139,9 @@ class ComputeProviderInstanceRecord(ContractModel):
     committed_micros: int = 0
     expires_at: datetime | None = None
     billing_renewal_at: datetime | None = None
+    billing_started_at: datetime | None = None
+    billing_minimum_seconds: int = Field(default=0, ge=0)
+    billing_quantum_seconds: int = Field(default=0, ge=0)
     bootstrap_phase: MachineBootstrapPhase = MachineBootstrapPhase.Requested
     bootstrap_failure_reason: MachineBootstrapFailureReason | None = None
     bootstrap_failure_detail: str = ""
@@ -542,15 +553,42 @@ class ComputeUnitRepository:
         )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
-    def desired_capacity_for_provider_connection(
+    def lock_capacity_workspace(self, workspace_id: str) -> None:
+        workspace = self.session.scalar(
+            select(WorkspaceTable).where(WorkspaceTable.id == workspace_id).with_for_update()
+        )
+        if workspace is None:
+            raise LookupError("provider capacity workspace no longer exists")
+
+    def recent_platform_cpu_arrivals(self, since: datetime) -> list[PlatformCpuArrival]:
+        statement = (
+            select(ContainerBillingShapeTable)
+            .where(
+                ContainerBillingShapeTable.billing_owner == "platform_fleet",
+                ContainerBillingShapeTable.rate_class == "auto",
+                ContainerBillingShapeTable.gpu_count == 0,
+                ContainerBillingShapeTable.created_at >= since,
+            )
+            .order_by(ContainerBillingShapeTable.created_at)
+        )
+        return [
+            PlatformCpuArrival(
+                created_at=row.created_at,
+                cpu_millicores=row.cpu_millicores,
+                reserved_memory_mib=row.memory_mib,
+            )
+            for row in self.session.scalars(statement)
+        ]
+
+    def desired_capacity_for_provider(
         self,
-        connection_id: str,
+        provider_ref: str,
         *,
         gpu: bool,
         excluding_unit_id: str | None = None,
     ) -> int:
         statement = select(func.coalesce(func.sum(ComputeUnitTable.desired_machines), 0)).where(
-            ComputeUnitTable.provider_connection_id == connection_id,
+            ComputeUnitTable.provider_ref == provider_ref,
             ComputeUnitTable.desired_machines > 0,
             (
                 ComputeUnitTable.worker_gpu_count > 0

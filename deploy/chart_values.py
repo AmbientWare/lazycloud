@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
+from provider_clients.settings import HetznerCapacityBinding
+from provider_hetzner import HetznerNodeImage
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -73,6 +75,7 @@ class Infrastructure(Contract):
     control_principal_arn: Name
     public_origin: Annotated[str, Field(pattern=r"^https://[a-zA-Z0-9.-]+$")]
     redis_host: Name
+    hetzner_node_images: Annotated[dict[Name, HetznerNodeImage], Field(min_length=1)]
     fleet: FleetInfrastructure
     secret_documents: SecretDocuments
     secrets_reader_role_arn: Name
@@ -211,6 +214,23 @@ def render(
     )
     if not rates:
         raise ValueError("Managed fleet requires nonempty instance prices")
+    bindings = TypeAdapter(list[dict[str, JsonValue]]).validate_json(
+        authored_runtime.get("LAZYCLOUD_PLATFORM_CAPACITY_HETZNER", "")
+    )
+    if not bindings:
+        raise ValueError("Platform capacity requires a configured Hetzner binding")
+    resolved_bindings: list[HetznerCapacityBinding] = []
+    for binding in bindings:
+        if "images_by_location" in binding:
+            raise ValueError("Environment capacity overrides infrastructure-owned images")
+        resolved_bindings.append(
+            HetznerCapacityBinding.model_validate(
+                {**binding, "images_by_location": infrastructure.hetzner_node_images}
+            )
+        )
+    authored_runtime["LAZYCLOUD_PLATFORM_CAPACITY_HETZNER"] = (
+        TypeAdapter(list[HetznerCapacityBinding]).dump_json(resolved_bindings).decode()
+    )
     values = dict(environment)
     values["runtime"] = {**runtime, **authored_runtime}
     generated: dict[str, dict[str, JsonValue]] = {

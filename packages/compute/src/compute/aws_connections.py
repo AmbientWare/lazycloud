@@ -1608,10 +1608,22 @@ class AwsAccountConnectionDirectory:
         now comes from the account behind it rather than the workspace itself.
         """
         with self.context.database.session() as session:
-            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
-                workspace_id
+            repository = AwsAccountConnectionRepository(session)
+            connection = repository.get_for_workspace_owner(workspace_id)
+            fleet = [item for item in repository.list_all() if item.platform_fleet]
+        by_id = {item.id: item for item in fleet}
+        if connection is not None:
+            by_id[connection.id] = connection
+        return tuple(by_id[key] for key in sorted(by_id))
+
+    def capacity_workspace(self, connection: AwsAccountConnection) -> str:
+        with self.context.database.session() as session:
+            workspace_ids = WorkspaceMemberRepository(session).owned_workspace_ids(
+                connection.user_id
             )
-        return (connection,) if connection is not None else ()
+        if not workspace_ids:
+            raise RuntimeError(f"AWS provider {connection.id} has no capacity workspace")
+        return min(workspace_ids)
 
 
 __all__ = [

@@ -9,6 +9,7 @@ dependencies = [
     "networking",
     "lazycloud-shared==0.1.0",
     "provider-aws",
+    "provider-hetzner",
     "images",
     "pydantic>=2.8,<3",
     "pydantic-settings>=2.4,<3",

@@ -49,6 +49,9 @@ def dev(
     env: Annotated[list[str] | None, typer.Option("--env")] = None,
     secrets: Annotated[list[str] | None, typer.Option("--secret")] = None,
     ports: Annotated[list[str] | None, typer.Option("--port")] = None,
+    region: Annotated[
+        str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
+    ] = None,
     pool: Annotated[str | None, typer.Option("--pool")] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
@@ -65,6 +68,7 @@ def dev(
         env=env,
         secrets=secrets,
         ports=ports,
+        region=region,
         pool=MachinePool(pool) if pool else None,
         entrypoint=entrypoint,
         sync_dir=sync_dir,
@@ -119,6 +123,7 @@ def _default_dev_pod(overrides: DeploymentOverrides) -> Pod:
         gpu=list(overrides.gpu or ()),
         gpu_count=overrides.gpu_count or 0,
         secrets=list(overrides.secrets),
+        region=overrides.region,
         pool=overrides.pool,
     )
 

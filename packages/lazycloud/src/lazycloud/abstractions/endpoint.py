@@ -38,6 +38,7 @@ from shared.gpu import GpuInput, gpu_preference
 from shared.http.endpoints import StartEndpointServeResponse
 from shared.http.errors import HttpTransportError
 from shared.http.gateway import DeployStubResponse
+from shared.placement import ProductRegion
 from shared.serialization import to_json_value
 from shared.tasks import RetryPolicy, TaskPolicy
 
@@ -147,6 +148,7 @@ class EndpointOptions(TypedDict, total=False):
     outputs: SchemaInput
     docker_enabled: bool
     preemptible: bool
+    region: str | None
     pool: PoolInput
     provider: str | None
     metadata: dict[str, Any] | None
@@ -176,6 +178,7 @@ class ASGIOptions(TypedDict, total=False):
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None
     task_policy: TaskPolicy | Mapping[str, Any] | None
     checkpoint_enabled: bool
+    region: str | None
     pool: PoolInput
     provider: str | None
 
@@ -230,6 +233,7 @@ class Endpoint(Generic[P, R]):
     outputs: SchemaInput = None
     docker_enabled: bool = False
     preemptible: bool = False
+    region: str | None = None
     pool: PoolInput = None
     provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -276,6 +280,7 @@ class Endpoint(Generic[P, R]):
             handler=self._handler_reference(),
             image=self.image.spec(),
             resources=Resources(
+                region=ProductRegion(self.region) if self.region is not None else None,
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,
@@ -459,6 +464,7 @@ def _endpoint(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
+    region: str | None = None,
     pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -501,6 +507,7 @@ def _endpoint(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
+    region: str | None = None,
     pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -542,6 +549,7 @@ def _endpoint(
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
     preemptible: bool = False,
+    region: str | None = None,
     pool: PoolInput = None,
     provider: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -578,6 +586,7 @@ def _endpoint(
             outputs=outputs,
             docker_enabled=docker_enabled,
             preemptible=preemptible,
+            region=region,
             pool=pool,
             provider=provider,
             metadata=metadata or {},
@@ -618,6 +627,7 @@ class ASGI:
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None
     task_policy: TaskPolicy | Mapping[str, Any] | None = None
     checkpoint_enabled: bool = False
+    region: str | None = None
     pool: PoolInput = None
     provider: str | None = None
     deployment_client: DeploymentControlClient | None = field(
@@ -661,6 +671,7 @@ class ASGI:
             handler=self._handler_reference(),
             image=self.image.spec(),
             resources=Resources(
+                region=ProductRegion(self.region) if self.region is not None else None,
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,
@@ -816,6 +827,7 @@ def _asgi(
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
+    region: str | None = None,
     pool: PoolInput = None,
     provider: str | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]] | Callable[..., Any]], ASGI]:
@@ -846,6 +858,7 @@ def _asgi(
             autoscaler=autoscaler,
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
+            region=region,
             pool=pool,
             provider=provider,
         )
@@ -879,6 +892,7 @@ def _realtime(
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
+    region: str | None = None,
     pool: PoolInput = None,
     provider: str | None = None,
 ) -> Callable[[Callable[..., Any]], RealtimeASGI]:
@@ -909,6 +923,7 @@ def _realtime(
             autoscaler=autoscaler,
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
+            region=region,
             pool=pool,
             provider=provider,
         )

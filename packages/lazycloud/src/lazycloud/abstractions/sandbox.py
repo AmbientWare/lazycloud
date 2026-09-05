@@ -69,6 +69,7 @@ from shared.http.pods import (
     SandboxTimeline,
     SandboxTimelineRequest,
 )
+from shared.placement import ProductRegion
 from shared.transport_retry import call_with_transient_retry
 from typing_extensions import Never, Self
 
@@ -234,6 +235,7 @@ class SandboxOptions(TypedDict, total=False):
     docker_enabled: bool
     preemptible: bool
     ports: Iterable[int] | None
+    region: str | None
     pool: PoolInput
     provider: str | None
     metadata: Mapping[str, Any] | None
@@ -1539,6 +1541,7 @@ class Sandbox(ControlClientConfigMixin):
     allow_list: list[str] | None = None
     docker_enabled: bool = False
     preemptible: bool = False
+    region: str | None = None
     pool: PoolInput = None
     provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -1575,6 +1578,7 @@ class Sandbox(ControlClientConfigMixin):
         docker_enabled: bool = False,
         preemptible: bool = False,
         ports: Iterable[int] | None = None,
+        region: str | None = None,
         pool: PoolInput = None,
         provider: str | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -1603,6 +1607,7 @@ class Sandbox(ControlClientConfigMixin):
         self.docker_enabled = docker_enabled
         self.preemptible = preemptible
         self.pool = pool
+        self.region = region
         self.provider = provider
         self.metadata = dict(metadata or {})
         self.stub_id = ""
@@ -1631,6 +1636,7 @@ class Sandbox(ControlClientConfigMixin):
             kind=DeploymentKind.Sandbox,
             image=self.image.spec(),
             resources=Resources(
+                region=ProductRegion(self.region) if self.region is not None else None,
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,

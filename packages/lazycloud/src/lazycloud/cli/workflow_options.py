@@ -36,6 +36,7 @@ class DeploymentOverrides:
     keep_warm: int | None = None
     tcp: bool | None = None
     pool: MachinePool | None = None
+    region: str | None = None
     preemptible: bool | None = None
     entrypoint: list[str] = field(default_factory=list)
     sync_dir: str | None = None
@@ -57,6 +58,7 @@ class DeploymentOverrides:
                 self.keep_warm is not None,
                 self.tcp is not None,
                 self.pool,
+                self.region,
                 self.preemptible is not None,
                 self.entrypoint,
                 self.sync_dir,
@@ -81,6 +83,7 @@ def build_deployment_overrides(
     keep_warm: int | None = None,
     tcp: bool | None = None,
     pool: MachinePool | None = None,
+    region: str | None = None,
     preemptible: bool | None = None,
     entrypoint: list[str] | None = None,
     sync_dir: str | None = None,
@@ -101,6 +104,7 @@ def build_deployment_overrides(
         keep_warm=keep_warm,
         tcp=tcp,
         pool=pool,
+        region=region,
         preemptible=preemptible,
         entrypoint=list(entrypoint or []),
         sync_dir=sync_dir,
@@ -126,6 +130,7 @@ def workflow_kwargs(
         "keep_warm": overrides.keep_warm,
         "tcp": overrides.tcp,
         "pool": overrides.pool,
+        "region": overrides.region,
         "preemptible": overrides.preemptible,
         "entrypoint": list(overrides.entrypoint),
         "sync_dir": overrides.sync_dir,

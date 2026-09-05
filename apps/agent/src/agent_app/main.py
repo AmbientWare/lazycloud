@@ -221,7 +221,7 @@ def _add_daemon_options(
     parser.add_argument("--provider-enrollment-request", default="")
     parser.add_argument(
         "--provider",
-        choices=[ProviderKind.Aws.value],
+        choices=[provider.value for provider in ProviderKind],
         default=None,
     )
     parser.add_argument(

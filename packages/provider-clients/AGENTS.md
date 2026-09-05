@@ -7,6 +7,10 @@ This package owns construction and nothing else: not provider workflows, billing
 capacity reconciliation, API or CLI behavior, persistence tables, or process
 entrypoints.
 
+Deployment settings carry non-secret capacity policy and image catalogs; separate
+secret settings carry credentials. Resolve bootstrap-created workspace identities
+when capacity is used, not while constructing the services bootstrap itself needs.
+
 Where that configuration comes from is part of the mapping, so this package also
 owns the published release manifest contract and the resolution of a deployment's
 settings from it. A deployment explicitly pins three manifests. The control-plane
