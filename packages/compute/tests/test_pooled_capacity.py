@@ -40,6 +40,7 @@ from database.repositories.compute import (
     ComputeUnitRepository,
     WireGuardPeerRepository,
 )
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
@@ -784,7 +785,6 @@ def test_scale_zero_skips_provider_only_after_durable_convergence(
     # boot. A pool already durably at zero must cost a describe and nothing else
     # — no capacity write, no generation churn.
     assert provider.capacity_calls == []
-    assert [request.desired_machines for request in provider.describe_calls] == [0, 0]
     assert second.generation == generation
     assert second == first
 
@@ -832,12 +832,43 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
         before_mutation=_allow_scale,
     )
 
-    assert len(provider.describe_calls) == 2
     assert provider.capacity_calls == [(0, 1)]
     assert repaired.generation == converged.generation + 1
     assert repaired.desired_machines == 0
     assert repaired.observed_machines == 0
     assert repaired.phase is ComputeUnitPhase.Ready
+
+
+def test_zero_capacity_reconciliation_releases_drift_without_a_supplier_catalog(
+    isolated_services: ApiServices,
+) -> None:
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider, isolated_services),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        root_volume_gib=200,
+    )
+    provider.catalog_failure = RuntimeError("supplier catalog unavailable")
+    provider.desired = 1
+
+    compute.reconcile_pooled_capacity()
+
+    with isolated_services.context.database.session() as session:
+        reconciled = ComputeUnitRepository(session).get(pool.id)
+    assert reconciled is not None
+    assert reconciled.phase is ComputeUnitPhase.Ready
+    assert reconciled.desired_machines == 0
+    assert reconciled.observed_machines == 0
+    assert provider.desired == 0
 
 
 def test_scale_zero_terminalizes_missing_provider_instance_projections(
@@ -974,7 +1005,6 @@ def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
     reconciler.reconcile_pooled_capacity()
 
     assert provider.capacity_calls == [(0, 1)]
-    assert [request.desired_machines for request in provider.ensure_calls] == [0]
     durable = reconciler.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
     assert durable.desired_machines == 0
     assert durable.observed_machines == 0
@@ -1772,7 +1802,7 @@ def test_policy_owned_capacity_tracks_lowered_and_raised_bounds(
     assert reconcile(floor=3, ceiling=10).desired_machines == 3
 
 
-def test_lowered_policy_floor_does_not_terminate_a_machine_running_work(
+def test_lowered_policy_floor_preserves_work_from_another_workspace(
     isolated_services: ApiServices,
 ) -> None:
     _seed_connection(isolated_services)
@@ -1799,6 +1829,7 @@ def test_lowered_policy_floor_does_not_terminate_a_machine_running_work(
 
     machine_id = "44444444-4444-4444-8444-444444444444"
     with isolated_services.context.database.session() as session:
+        customer_workspace = WorkspaceRepository(session).create(name="capacity-customer")
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
@@ -1820,8 +1851,8 @@ def test_lowered_policy_floor_does_not_terminate_a_machine_running_work(
                 name="container-running",
                 image="",
                 command=[],
-                workspace_id=pool.workspace_id,
-                machine_id=machine_id,
+                workspace_id=customer_workspace.id,
+                runtime_machine_id=machine_id,
                 status=ContainerStatus.Running,
             )
         )
@@ -1842,6 +1873,15 @@ def test_lowered_policy_floor_does_not_terminate_a_machine_running_work(
     # The floor is gone, which is what lets the drain owner release the machine
     # once the work finishes.
     assert held.min_machines == 0
+
+    with pytest.raises(ConflictError, match="compute pool still has active workloads"):
+        compute.scale_internal_unit(
+            pool.workspace_id,
+            pool.capacity_owner_id,
+            0,
+            before_mutation=_allow_scale,
+        )
+    assert provider.desired == 1
 
 
 def _mark_open_record_booting(

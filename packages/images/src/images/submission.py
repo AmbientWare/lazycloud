@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
 from database.repositories.images import ImageBuildRepository
+from shared.errors import PaymentRequiredError
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus, ImageBuildPhase, ImageBuildRecord
 from shared.timestamps import utc_now
@@ -144,6 +145,14 @@ class ImageBuildSubmissionService:
                     )
                     continue
                 self.executor.dispatch(claim.build_id, claim.workspace_id, claim.payload)
+            except PaymentRequiredError as exc:
+                if self._fail(
+                    claim.build_id,
+                    claim.workspace_id,
+                    exc.message,
+                    claim_id=claim.claim_id,
+                ):
+                    self.cleanup(build_id=claim.build_id, limit=1)
             except Exception as exc:
                 LOGGER.warning(
                     "image build dispatch failed for %s (%s)", claim.build_id, type(exc).__name__
@@ -190,7 +199,7 @@ class ImageBuildSubmissionService:
                 build_id,
                 workspace_id=workspace_id,
                 stale_before=now if claim_id else now - timedelta(seconds=120),
-                pending_created_before=now - timedelta(minutes=5),
+                pending_created_before=now if claim_id else now - timedelta(minutes=5),
                 claim_id=claim_id,
             )
             if record is None:

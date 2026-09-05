@@ -164,6 +164,12 @@ class ProviderInstanceIdentityMode(StrEnum):
     HetznerBootstrap = "hetzner-bootstrap"
 
 
+_PROVIDER_IDENTITY_MODES = {
+    ProviderKind.Aws: ProviderInstanceIdentityMode.ImdsV2,
+    ProviderKind.Hetzner: ProviderInstanceIdentityMode.HetznerBootstrap,
+}
+
+
 class AgentCapacityInterruptionDetectionError(RuntimeError):
     pass
 
@@ -235,17 +241,15 @@ class AgentDaemonOptions(ContractModel):
             )
         if all(provider_values) and (self.join_token or self.join_token_file):
             raise ValueError("join credentials and provider enrollment cannot be combined")
-        if all(provider_values):
+        if self.provider is not None:
             if (
                 self.provider is ProviderKind.Hetzner
                 and urlparse(self.gateway_url).scheme != "https"
             ):
                 raise ValueError("Hetzner host enrollment requires an HTTPS gateway")
-            expected = (
-                ProviderInstanceIdentityMode.ImdsV2
-                if self.provider is ProviderKind.Aws
-                else ProviderInstanceIdentityMode.HetznerBootstrap
-            )
+            expected = _PROVIDER_IDENTITY_MODES.get(self.provider)
+            if expected is None:
+                raise ValueError(f"provider node identity {self.provider.value!r} is not supported")
             if self.provider_instance_identity is not expected:
                 raise ValueError("provider instance identity mode does not match provider")
         return self
