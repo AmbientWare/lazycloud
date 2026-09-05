@@ -54,6 +54,10 @@ spec:
               containerPort: 8080
               protocol: TCP
           env:
+            - name: LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_HOST
+              value: control-plane
+            - name: LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_PORT
+              value: "9000"
             {{- include "lazycloud.databaseEnv" .Values.wireguard.database | nindent 12 }}
             - name: LAZYCLOUD_DATABASE_URL
               valueFrom:

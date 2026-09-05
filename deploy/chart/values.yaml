@@ -1,11 +1,10 @@
-# One tag, naming the commit that produced these images, and it is safe to pin by
-# tag here for a reason worth stating: every repository is created
-# `image_tag_mutability = "IMMUTABLE"`, so a tag cannot be repointed once pushed.
-# The rule against tags is about names that can move; this one cannot.
+# Commit tags are immutable. The network image uses its executable manifest
+# digest so unchanged network code does not restart the WireGuard gateway.
 image:
   registry: ""
   repositoryPrefix: ""
   tag: ""
+  networkDigest: ""
 
 # Non-secret application settings. Resource facts are added by chart_values.py.
 runtime:
