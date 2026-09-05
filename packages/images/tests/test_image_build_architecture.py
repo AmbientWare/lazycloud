@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from images.building import build_image_plan, plan_image_build_session
 from images.execution import ImageBuildExecutionRequest
 from images.scheduling import plan_image_build_container_request
@@ -10,6 +11,7 @@ from shared.image_building.authoring import ImageSpec, LinuxArchitecture
 
 def test_image_architecture_changes_cache_identity_and_scheduler_contract(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     amd64_plan = build_image_plan(
         ImageSpec(architecture=LinuxArchitecture.Amd64, ignore_python=True)
@@ -20,6 +22,10 @@ def test_image_architecture_changes_cache_identity_and_scheduler_contract(
     assert amd64_plan.cache_key != arm64_plan.cache_key
     assert amd64_plan.image_id != arm64_plan.image_id
 
+    monkeypatch.setattr(
+        "images.scheduling.managed_package_source_digest",
+        lambda: "a" * 64,
+    )
     build_dir = tmp_path / "build"
     build_dir.mkdir()
     request = ImageBuildExecutionRequest(

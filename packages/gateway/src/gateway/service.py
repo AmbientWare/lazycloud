@@ -116,7 +116,6 @@ from scheduler.state import (
     RedisWorkerPoolStateRepository,
     SchedulerRepositoryError,
 )
-from scheduler.worker_rollout import WorkerWorkloadRolloutService
 from scheduler.workers import (
     SchedulerWorkerAdminRepository,
     SchedulerWorkerAdminService,
@@ -137,7 +136,6 @@ from shared.compute_enrollment import (
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
     ComputeUnitRecord,
-    ComputeUnitVisibility,
     MachinePool,
 )
 from shared.container_requests import StopContainerReason
@@ -400,7 +398,6 @@ class GatewayControlService:
     # actually reachable, and a value captured at construction would outlive a
     # device rename that every agent picks up on its next poll.
     runtime_origin: Callable[[], str]
-    endpoint_rollout_readiness: Callable[[str, list[str]], set[str]]
     private_network_connector: BackendConnector = field(default_factory=SocketBackendConnector)
     capacity_interruption_sink: AgentCapacityInterruptionSink | None = None
     scheduler_maintenance: SchedulerWorkerMaintenance | None = None
@@ -2329,19 +2326,12 @@ class GatewayControlService:
                 image_revision,
             )
         if worker is not None and active_image and active_image != target_image:
-            self._ensure_worker_rollout_capacity(worker, fleet_size=rollout_fleet_size)
             worker, claimed = self._claim_worker_image_rollout(
                 worker,
                 image_revision=image_revision,
                 fleet_size=rollout_fleet_size,
             )
             if claimed and worker.status is SchedulerWorkerStatus.Draining:
-                WorkerWorkloadRolloutService(
-                    self.services.context.database,
-                    self.scheduler_container_lookup,
-                    self.services.containers,
-                    self.endpoint_rollout_readiness,
-                ).reconcile(worker.worker_id, workers=self.scheduler_worker_lookup.list_workers())
                 slot_status = (
                     AgentWorkerSlotStatus.Draining
                     if self._worker_has_started_containers(worker.worker_id)
@@ -2378,13 +2368,7 @@ class GatewayControlService:
             raise ValueError(slot_plan.err_msg or "agent worker slot could not be created")
 
         slot = slot_plan.slot.model_copy(
-            update={
-                "metadata": {
-                    **slot_plan.slot.metadata,
-                    "worker_token": slot_plan.worker_token,
-                    "observed_worker_image": active_image,
-                }
-            }
+            update={"metadata": {**slot_plan.slot.metadata, "worker_token": slot_plan.worker_token}}
         )
         try:
             saved = self.compute_states.save_agent_worker_slot_state(slot)
@@ -2408,84 +2392,7 @@ class GatewayControlService:
                 },
                 workspace_id=agent_state.workspace_id,
             )
-        if worker is not None and active_image == target_image:
-            self._settle_worker_rollout_capacity(worker, target_image=target_image)
         return [saved]
-
-    def _ensure_worker_rollout_capacity(
-        self, worker: SchedulerWorkerRecord, *, fleet_size: int
-    ) -> None:
-        max_unavailable = max(1, ceil(max(fleet_size, 1) * 0.1))
-        minimum_available = max(fleet_size - max_unavailable, 1)
-        provision_unit_id: str | None = None
-        with self.capacity_reservations.mutation_lock(worker.capacity_owner_id):
-            remaining = [
-                item
-                for item in self.scheduler_worker_lookup.list_workers()
-                if item.capacity_owner_id == worker.capacity_owner_id
-                and item.worker_id != worker.worker_id
-                and item.status is SchedulerWorkerStatus.Available
-            ]
-            has_replacement_room = (
-                sum(item.free_cpu_millicores for item in remaining)
-                >= worker.total_cpu_millicores - worker.free_cpu_millicores
-                and sum(item.free_memory_mib for item in remaining)
-                >= worker.total_memory_mib - worker.free_memory_mib
-                and sum(item.free_gpu_count for item in remaining)
-                >= worker.total_gpu_count - worker.free_gpu_count
-            )
-            if len(remaining) >= minimum_available and has_replacement_room:
-                return
-            with self.services.context.database.session() as session:
-                repository = ComputeUnitRepository(session)
-                unit = repository.get_by_capacity_owner_id(
-                    worker.capacity_owner_id, for_update=True
-                )
-                if unit is None or unit.provider == "agent" or unit.worker_rollout_surge:
-                    return
-                if unit.visibility is not ComputeUnitVisibility.Internal:
-                    return
-                updated = repository.set_worker_rollout_surge(
-                    unit.id, expected_generation=unit.generation, enabled=True
-                )
-                if updated is not None:
-                    provision_unit_id = updated.id
-        if provision_unit_id is not None:
-            self.services.compute.reconcile_unit_capacity(provision_unit_id)
-
-    def _settle_worker_rollout_capacity(
-        self, worker: SchedulerWorkerRecord, *, target_image: str
-    ) -> None:
-        with (
-            self.capacity_reservations.mutation_lock(worker.capacity_owner_id),
-            self.services.context.database.session() as session,
-        ):
-            repository = ComputeUnitRepository(session)
-            unit = repository.get_by_capacity_owner_id(worker.capacity_owner_id, for_update=True)
-            if unit is None or not unit.worker_rollout_surge:
-                return
-            workers = [
-                item
-                for item in self.scheduler_worker_lookup.list_workers()
-                if item.capacity_owner_id == worker.capacity_owner_id
-            ]
-            if len(workers) < max(unit.desired_machines, 1):
-                return
-            for item in workers:
-                if item.status is not SchedulerWorkerStatus.Available:
-                    return
-                slots = self.compute_states.list_agent_worker_slot_states(
-                    unit.workspace_id, unit.capacity_owner_id, item.machine_id
-                )
-                if not any(
-                    slot.worker_id == item.worker_id
-                    and slot.metadata.get("observed_worker_image") == target_image
-                    for slot in slots
-                ):
-                    return
-            repository.set_worker_rollout_surge(
-                unit.id, expected_generation=unit.generation, enabled=False
-            )
 
     def _claim_worker_image_rollout(
         self,
