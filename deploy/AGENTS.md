@@ -41,6 +41,9 @@ substitutes, and gives every service an explicit owner and health check.
 - Control-plane, worker-image and host releases have independent manifest pins.
   Routine Ship advances the first two and retains the host pin. Updating the host
   agent executable or AMIs requires an explicit host manifest selection.
+  Managed pools replace hosts on the resulting launch template through the
+  existing surge, drain, and retirement controller. Manual binary upgrades belong
+  to self-hosted machines, not hosts that controller is replacing.
 - The network image records its executable linux/amd64 manifest digest, not its
   commit tag or attestation index. Deploy selects it from the same published
   commit automatically. Its Docker build copies only the installed network
