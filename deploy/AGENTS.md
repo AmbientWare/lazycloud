@@ -11,6 +11,10 @@ substitutes, and gives every service an explicit owner and health check.
 - Never commit secrets, generated credentials, or local state. A value that
   identifies a resource may live here; a value that authenticates to one may
   not, and belongs in a file the deployment points at.
+- Owner-authorized platform infrastructure and deployment work uses AWS profile
+  `default`. Customer BYO-cloud acceptance uses `default-test`. A failure to assume
+  the test operator role does not block a platform deployment or authorize IAM
+  repairs. GitHub deployment jobs retain their configured OIDC identity.
 - Deployed databases are persistent. Append Alembic revisions; never rewrite
   the baseline or reset production data during an upgrade.
 - A deployment value is usually read on several independent paths, so correcting

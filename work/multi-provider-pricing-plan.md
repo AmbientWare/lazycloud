@@ -5,8 +5,8 @@
 The combined feature branch is undergoing release review. Provider-neutral capacity, warm
 and cold lifecycle, GPU CPU backfill, region contracts, and forward billing
 migrations are implemented. Regional prices are not published. The owner released
-the merge/deploy hold. Merge requires passing checks; deployment also requires
-restored operator access and credential publication.
+the merge/deploy hold. Merge requires passing checks; deployment requires
+reviewed infrastructure changes and credential publication.
 
 The simulation is checked local validation material. Its 192 main paths and
 48 sensitivity paths reconcile monthly and annual accounting against the final
@@ -44,9 +44,8 @@ This proves image preparation, not secure enrollment or a customer workload.
 The selected project's token is stored outside the repository with owner-only
 permissions. Deployment still requires the protected operator configuration and
 the disposable workload acceptance in `deploy/hetzner/README.md`.
-The documented `default-test` AWS profile currently
-receives AccessDenied when assuming its operator role. Root credentials are not
-an alternative for acceptance or deployment automation.
+Platform deployment uses the owner-authorized AWS `default` profile.
+`default-test` remains the separate customer BYO-cloud acceptance profile.
 
 ## Outcome
 
