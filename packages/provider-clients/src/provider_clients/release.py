@@ -1,12 +1,4 @@
-"""Resolution of a deployment's configuration from the release it points at.
-
-A release publishes the agent artifact, its digest, the URL that serves it, the
-container-worker image, the customer authorization template, and exact host AMI
-IDs. Those are facts of one release, and a deployment that copies them into six
-independent variables can hold five from one release and one from another with
-nothing able to notice. Pointing at the manifest instead makes them arrive
-together or not at all.
-"""
+"""Resolve independently pinned control-plane, worker, and host release artifacts."""
 
 from __future__ import annotations
 
@@ -21,7 +13,7 @@ from urllib.parse import urlparse
 
 from agent.binary import AgentBinaryEnvironmentSettings, AgentBinarySettings
 from provider_aws import aws_account_connection_template_identity
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 from shared.transport_retry import TransientRetryPolicy, call_with_transient_retry
@@ -44,6 +36,8 @@ class ReleaseManifestError(RuntimeError):
 
 class ReleaseManifestSettings(BaseSettings):
     manifest_url: str = ""
+    worker_manifest_url: str = ""
+    host_manifest_url: str = ""
     fetch_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
 
     model_config = SettingsConfigDict(
@@ -51,7 +45,7 @@ class ReleaseManifestSettings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("manifest_url")
+    @field_validator("manifest_url", "worker_manifest_url", "host_manifest_url")
     @classmethod
     def validate_manifest_url(cls, value: str) -> str:
         url = value.strip()
@@ -67,6 +61,15 @@ class ReleaseManifestSettings(BaseSettings):
         ):
             raise ValueError("release manifest URL must be an HTTPS URL without credentials")
         return url
+
+    @model_validator(mode="after")
+    def validate_release_pins(self) -> ReleaseManifestSettings:
+        pins = (self.manifest_url, self.worker_manifest_url, self.host_manifest_url)
+        if any(pins) and not all(pins):
+            raise ValueError(
+                "managed capacity requires control-plane, worker, and host release pins"
+            )
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,20 +92,21 @@ def resolve_deployment_release(
     settings: ReleaseManifestSettings | None = None,
 ) -> DeploymentRelease:
     manifest_settings = settings or ReleaseManifestSettings()
-    # A deployment with no manifest has no release facts to hold, which is the
-    # shape of every deployment that runs no managed capacity and serves no
-    # published agent artifact. It reaches the same construction below with an
-    # absent release rather than a second way of being configured.
-    manifest = (
-        fetch_release_manifest(
-            manifest_settings.manifest_url,
-            timeout_seconds=manifest_settings.fetch_timeout_seconds,
+    manifests = {
+        url: fetch_release_manifest(url, timeout_seconds=manifest_settings.fetch_timeout_seconds)
+        for url in dict.fromkeys(
+            (
+                manifest_settings.manifest_url,
+                manifest_settings.worker_manifest_url,
+                manifest_settings.host_manifest_url,
+            )
         )
-        if manifest_settings.manifest_url
-        else None
-    )
+        if url
+    }
     return deployment_release(
-        manifest,
+        manifests.get(manifest_settings.manifest_url),
+        worker_manifest=manifests.get(manifest_settings.worker_manifest_url),
+        host_manifest=manifests.get(manifest_settings.host_manifest_url),
         agent_binaries=AgentBinaryEnvironmentSettings(),
         aws_capacity=AwsCapacityEnvironmentSettings(),
         aws_connections=AwsAccountConnectionEnvironmentSettings(),
@@ -112,25 +116,35 @@ def resolve_deployment_release(
 def deployment_release(
     manifest: AwsReleaseManifest | None,
     *,
+    worker_manifest: AwsReleaseManifest | None,
+    host_manifest: AwsReleaseManifest | None,
     agent_binaries: AgentBinaryEnvironmentSettings,
     aws_capacity: AwsCapacityEnvironmentSettings,
     aws_connections: AwsAccountConnectionEnvironmentSettings,
 ) -> DeploymentRelease:
+    if any(item is not None for item in (manifest, worker_manifest, host_manifest)):
+        if manifest is None or worker_manifest is None or host_manifest is None:
+            raise ReleaseManifestError("managed capacity requires all three release pins")
+        validate_connection_template(manifest)
     return DeploymentRelease(
         version="" if manifest is None else manifest.release_version,
         agent_binaries=AgentBinarySettings(
             binary_dir=agent_binaries.binary_dir,
             binary_name=agent_binaries.binary_name,
-            binary_version="" if manifest is None else manifest.agent_artifact_version,
+            binary_version="" if host_manifest is None else host_manifest.agent_artifact_version,
             binary_sha256_by_arch=(
-                {} if manifest is None else manifest.agent_artifact_sha256_by_arch
+                {} if host_manifest is None else host_manifest.agent_artifact_sha256_by_arch
             ),
         ),
         aws_capacity=AwsCapacitySettings(
-            worker_image_digest="" if manifest is None else manifest.container_worker_image,
-            agent_binary_url="" if manifest is None else manifest.agent_artifact_object.public_url,
-            cpu_ami_ids={} if manifest is None else manifest.capacity_cpu_ami_ids,
-            gpu_ami_ids={} if manifest is None else manifest.capacity_gpu_ami_ids,
+            worker_image_digest=""
+            if worker_manifest is None
+            else worker_manifest.container_worker_image,
+            agent_binary_url=""
+            if host_manifest is None
+            else host_manifest.agent_artifact_object.public_url,
+            cpu_ami_ids={} if host_manifest is None else host_manifest.capacity_cpu_ami_ids,
+            gpu_ami_ids={} if host_manifest is None else host_manifest.capacity_gpu_ami_ids,
             instance_hourly_micros=aws_capacity.instance_hourly_micros,
         ),
         aws_connections=AwsAccountConnectionSettings(
@@ -156,9 +170,10 @@ def fetch_release_manifest(url: str, *, timeout_seconds: float = 15.0) -> AwsRel
         raise ReleaseManifestError(
             f"release manifest at {url} publishes itself as {manifest.manifest_public_url}"
         )
-    # The customer authorization template is validated against the copy this
-    # build bundles, so a release whose template differs is a release this
-    # binary cannot serve, however well formed the manifest is.
+    return manifest
+
+
+def validate_connection_template(manifest: AwsReleaseManifest) -> None:
     identity = aws_account_connection_template_identity()
     if (
         manifest.connection_template_version != identity.version
@@ -168,7 +183,6 @@ def fetch_release_manifest(url: str, *, timeout_seconds: float = 15.0) -> AwsRel
             f"release {manifest.release_version} carries connection template "
             f"{manifest.connection_template_version} but this build bundles {identity.version}"
         )
-    return manifest
 
 
 def materialize_agent_artifact(
@@ -331,4 +345,5 @@ __all__ = [
     "fetch_release_manifest",
     "materialize_agent_artifact",
     "resolve_deployment_release",
+    "validate_connection_template",
 ]

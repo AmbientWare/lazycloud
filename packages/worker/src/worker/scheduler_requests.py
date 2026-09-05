@@ -113,8 +113,14 @@ class WorkerSchedulerRequestLifecycle(Protocol):
 class WorkerSchedulerRequestImageBuildExecutor(Protocol):
     def execute(self, request: SchedulerWorkerRequest) -> WorkerImageBuildExecutionResult: ...
 
+    def read_logs(self, container_id: str, *, after: int, limit: int = 256) -> list[str]: ...
+
 
 class WorkerSchedulerRequestImageBuildResultReporter(Protocol):
+    def report_image_build_progress(
+        self, request: SchedulerWorkerRequest, *, after: int, logs: list[str]
+    ) -> int: ...
+
     def report_image_build_result(
         self,
         request: SchedulerWorkerRequest,
@@ -219,6 +225,7 @@ class WorkerSchedulerRequestProcessor:
         init=False,
     )
     _delivery_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _image_build_result_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def run_once(self) -> WorkerSchedulerRequestResult:
         self._retry_acknowledgements()
@@ -272,10 +279,7 @@ class WorkerSchedulerRequestProcessor:
             return self._drop_request(request, delivery)
 
         if is_image_build_scheduler_request(request):
-            result = self._execute_image_build_request(request)
-            if result.image_build_report_pending:
-                return result
-            return self._release_capacity(request, result)
+            return self._start_background_image_build(request)
 
         try:
             context = container_execution_context_from_scheduler_request(
@@ -532,7 +536,8 @@ class WorkerSchedulerRequestProcessor:
                 container_id=container_id,
                 cgroup_path=absolute_container_cgroup_path(container_id),
             )
-            for container_id in self._background
+            for container_id, active in self._background.items()
+            if not is_image_build_scheduler_request(active.request)
         ]
 
     def _run_background(
@@ -628,14 +633,6 @@ class WorkerSchedulerRequestProcessor:
                 ),
             )
         try:
-            self.containers.update_container_status(
-                request.container_id,
-                SchedulerContainerStatus.Running,
-                ttl_seconds=DEFAULT_CONTAINER_STATE_TTL_SECONDS,
-            )
-            # A build has no container to register, so the status it just wrote is
-            # the record that this worker holds it.
-            self._commit_delivery(request.container_id)
             image_build = self._metered_image_build(
                 request,
                 image_builds,
@@ -695,31 +692,81 @@ class WorkerSchedulerRequestProcessor:
             error_message=image_build.error_message,
         )
 
+    def _start_background_image_build(
+        self, request: SchedulerWorkerRequest
+    ) -> WorkerSchedulerRequestResult:
+        # A native build has no OCI registration. Publish ownership before
+        # acknowledging the request so a failed write can still be redelivered.
+        self.containers.update_container_status(
+            request.container_id,
+            SchedulerContainerStatus.Running,
+            ttl_seconds=DEFAULT_CONTAINER_STATE_TTL_SECONDS,
+        )
+        if self.lifecycle is not None:
+            self.lifecycle.register_container(
+                image_build_request_context(request, worker_gpu_type=self.worker_gpu_type)
+            )
+        self._commit_delivery(request.container_id)
+        active = _BackgroundExecution(request=request)
+
+        def execute() -> None:
+            result = self._execute_image_build_request(request).model_copy(
+                update={"background": True}
+            )
+            active.result = (
+                result
+                if result.image_build_report_pending
+                else self._release_capacity(request, result)
+            )
+            if not result.image_build_report_pending:
+                self._release_container(request.container_id)
+
+        active.thread = threading.Thread(
+            target=execute, name=f"image-build-{request.container_id}", daemon=True
+        )
+        self._background[request.container_id] = active
+        try:
+            active.thread.start()
+        except Exception:
+            self._background.pop(request.container_id, None)
+            self._release_container(request.container_id)
+            raise
+        return WorkerSchedulerRequestResult(
+            worker_id=self.worker_id,
+            status=WorkerSchedulerRequestStatus.Executed,
+            action=WorkerSchedulerRequestAction.Execute,
+            container_id=request.container_id,
+            request=request,
+            background=True,
+        )
+
     def _defer_image_build_result(
         self,
         request: SchedulerWorkerRequest,
         result: WorkerImageBuildExecutionResult,
     ) -> None:
-        self._pending_image_build_results[request.container_id] = _PendingImageBuildResult(
-            request=request,
-            result=result,
-            attempts=1,
-            report_after=monotonic() + WORKER_REQUEST_ACKNOWLEDGEMENT_BACKOFF_SECONDS,
-        )
+        with self._image_build_result_lock:
+            self._pending_image_build_results[request.container_id] = _PendingImageBuildResult(
+                request=request,
+                result=result,
+                attempts=1,
+                report_after=monotonic() + WORKER_REQUEST_ACKNOWLEDGEMENT_BACKOFF_SECONDS,
+            )
 
     def _retry_image_build_result(self) -> WorkerSchedulerRequestResult | None:
         reporter = self.image_build_results
         if reporter is None:
             return None
         now = monotonic()
-        pending = next(
-            (
-                item
-                for container_id, item in sorted(self._pending_image_build_results.items())
-                if item.report_after <= now
-            ),
-            None,
-        )
+        with self._image_build_result_lock:
+            pending = next(
+                (
+                    item
+                    for container_id, item in sorted(self._pending_image_build_results.items())
+                    if item.report_after <= now and container_id not in self._background
+                ),
+                None,
+            )
         if pending is None:
             return None
         try:
@@ -735,9 +782,11 @@ class WorkerSchedulerRequestProcessor:
                 request=pending.request,
                 image_build=pending.result,
                 image_build_report_pending=True,
+                background=True,
                 error_message=f"image build result report failed: {type(exc).__name__}: {exc}",
             )
-        del self._pending_image_build_results[pending.request.container_id]
+        with self._image_build_result_lock:
+            del self._pending_image_build_results[pending.request.container_id]
         result = WorkerSchedulerRequestResult(
             worker_id=self.worker_id,
             status=(
@@ -749,9 +798,12 @@ class WorkerSchedulerRequestProcessor:
             container_id=pending.request.container_id,
             request=pending.request,
             image_build=pending.result,
+            background=True,
             error_message=pending.result.error_message,
         )
-        return self._release_capacity(pending.request, result)
+        released = self._release_capacity(pending.request, result)
+        self._release_container(pending.request.container_id)
+        return released
 
     def _metered_image_build(
         self,
@@ -774,9 +826,35 @@ class WorkerSchedulerRequestProcessor:
 
         started_at = monotonic()
         started_at_utc = utc_now()
+        stop_progress = threading.Event()
+        reporter = self.image_build_results
+        if reporter is None:
+            raise RuntimeError("image build progress reporter is required")
+
+        def report_progress() -> None:
+            after = 0
+            while not stop_progress.is_set():
+                try:
+                    logs = image_builds.read_logs(request.container_id, after=after)
+                    after = reporter.report_image_build_progress(request, after=after, logs=logs)
+                except Exception:
+                    LOGGER.warning(
+                        "image build progress delivery failed for %s", request.container_id
+                    )
+                    stop_progress.wait(1)
+                    continue
+                if len(logs) < 256:
+                    stop_progress.wait(1)
+
+        progress = threading.Thread(
+            target=report_progress, name=f"build-progress-{request.container_id}", daemon=True
+        )
+        progress.start()
         try:
             return image_builds.execute(request)
         finally:
+            stop_progress.set()
+            progress.join()
             duration_ms = max(int((monotonic() - started_at) * 1000), 1)
             try:
                 usage_recorder.record_usage_window(

@@ -160,11 +160,14 @@ def render(
     deployment: str,
     tag: str,
     release_manifest_url: str,
+    worker_manifest_url: str,
+    host_manifest_url: str,
 ) -> dict[str, JsonValue]:
     if infrastructure.deployment != deployment:
         raise ValueError("Infrastructure descriptor belongs to a different deployment")
     _TAG.validate_python(tag)
-    _RELEASE.validate_python(release_manifest_url)
+    for url in (release_manifest_url, worker_manifest_url, host_manifest_url):
+        _RELEASE.validate_python(url)
     # Environment overlays cannot replace resource identities.
     owned: dict[str, set[str] | None] = {
         "image": None,
@@ -196,6 +199,8 @@ def render(
         "LAZYCLOUD_GITHUB_REDIRECT_URI": f"{infrastructure.public_origin}/auth/github/callback",
         "LAZYCLOUD_REDIS_URL": f"rediss://{infrastructure.redis_host}:6379/0",
         "LAZYCLOUD_RELEASE_MANIFEST_URL": release_manifest_url,
+        "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL": worker_manifest_url,
+        "LAZYCLOUD_RELEASE_HOST_MANIFEST_URL": host_manifest_url,
     }
     authored_runtime = _STRINGS.validate_python(environment.get("runtime", {}), strict=True)
     if runtime.keys() & authored_runtime.keys():
@@ -247,6 +252,8 @@ def main() -> None:
     parser.add_argument("--deployment", required=True)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--release-manifest-url", default="")
+    parser.add_argument("--worker-manifest-url", default="")
+    parser.add_argument("--host-manifest-url", default="")
     parser.add_argument("--previous-values", type=Path)
     parser.add_argument("--previous-chart-values", type=Path)
     parser.add_argument("--output", type=Path, required=True)
@@ -255,17 +262,25 @@ def main() -> None:
         infrastructure = Infrastructure.model_validate_json(args.infrastructure.read_bytes())
         environment = _VALUES.validate_python(yaml.safe_load(args.environment.read_text()))
         release_url = args.release_manifest_url
+        worker_url = args.worker_manifest_url or release_url
+        host_url = args.host_manifest_url
         previous: dict[str, JsonValue] | None = None
         if args.previous_values is not None:
             previous = _VALUES.validate_python(yaml.safe_load(args.previous_values.read_text()))
             previous_runtime = _STRINGS.validate_python(previous.get("runtime", {}), strict=True)
             release_url = release_url or previous_runtime.get("LAZYCLOUD_RELEASE_MANIFEST_URL", "")
+            worker_url = worker_url or previous_runtime.get(
+                "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL", ""
+            )
+            host_url = host_url or previous_runtime.get("LAZYCLOUD_RELEASE_HOST_MANIFEST_URL", "")
         values = render(
             infrastructure,
             environment,
             deployment=args.deployment,
             tag=args.tag,
             release_manifest_url=release_url,
+            worker_manifest_url=worker_url,
+            host_manifest_url=host_url,
         )
         if previous is not None:
             if args.previous_chart_values is None:

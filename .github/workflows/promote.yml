@@ -28,6 +28,7 @@ jobs:
     outputs:
       commit: ${{ steps.read.outputs.commit }}
       release_manifest_url: ${{ steps.read.outputs.release_manifest_url }}
+      worker_manifest_url: ${{ steps.read.outputs.worker_manifest_url }}
     steps:
       - name: Checkout the staging branch
         uses: actions/checkout@v6
@@ -58,6 +59,7 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"commit={commit}\n")
               out.write(f"release_manifest_url={manifest}\n")
+              out.write(f"worker_manifest_url={values['runtime']['LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL']}\n")
           summary = f"Promoting {commit}"
           summary += f" on release {manifest}" if manifest else " with prod's recorded release unchanged"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
@@ -74,3 +76,4 @@ jobs:
       deployment: prod
       commit: ${{ needs.staging.outputs.commit }}
       release_manifest_url: ${{ needs.staging.outputs.release_manifest_url }}
+      worker_manifest_url: ${{ needs.staging.outputs.worker_manifest_url }}

@@ -15,6 +15,10 @@ name: Release Artifacts
 on:
   workflow_call:
     inputs:
+      commit:
+        description: Merged source commit selected and tagged by Ship.
+        type: string
+        required: true
       version:
         description: The version this release is published under, as cut by ship.yml.
         type: string
@@ -40,6 +44,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.commit }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -131,7 +137,7 @@ jobs:
           uv run --group workspace python deploy/aws-release-assets/plan.py \
             "${manifest_arg[@]}" \
             --base "${{ steps.previous.outputs.base }}" \
-            --head "${GITHUB_SHA}" \
+            --head "${{ inputs.commit }}" \
             --output plan.json \
             --summary "${GITHUB_STEP_SUMMARY}" \
             --github-output "${GITHUB_OUTPUT}"
@@ -218,7 +224,7 @@ jobs:
           --region "${AWS_RELEASE_REGION}"
           --cpu-ami-ids '${{ steps.images.outputs.cpu_ami_ids }}'
           --gpu-ami-ids '${{ steps.images.outputs.gpu_ami_ids }}'
-          --source-revision "${GITHUB_SHA}"
+          --source-revision "${{ inputs.commit }}"
           --reused-from '${{ steps.plan.outputs.reused_from }}'
           --output dist/connected-aws
 

@@ -81,16 +81,15 @@ artifact root is written to the published manifest. `validate-local` checks the
 retained executable and derives its absolute `agent-binarys` root from the local
 manifest path.
 
-## What A Deployment Configures
+## What a deployment configures
 
-`LAZYCLOUD_RELEASE_MANIFEST_URL` — the published `manifest_public_url`, and
-the only value a deployment takes from a release. The control plane fetches that
-manifest at startup and resolves the agent artifact version and digest, the URL
-that serves it, the container-worker image, the customer authorization
-template, and both host AMI catalogs from the release itself. None of the six
-are environment-readable, so no deployment can hold five of them from one
-release and one from another. `deploy/release.py` writes the URL into `.env`;
-see `deploy/RUNBOOK.md`.
+The deployment records three immutable manifest URLs. `LAZYCLOUD_RELEASE_MANIFEST_URL`
+names the control-plane release and authorization template;
+`LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL` names the worker image;
+`LAZYCLOUD_RELEASE_HOST_MANIFEST_URL` names the host agent executable and AMIs.
+Processes must agree on all three. Routine Ship updates control and worker pins
+without changing the host pin. `deploy/release.py` writes all three into `.env`
+and requires an explicit `--host-manifest-url`; see `deploy/RUNBOOK.md`.
 
 The manifest's `deployment_environment` object is a self-check the release
 carries, not settings to transcribe: the schema validates it against the
@@ -101,7 +100,7 @@ What no release can know stays authored beside the deployment: the local
 agent-binary mount (`LAZYCLOUD_COMPOSE_AGENT_BINARY_DIR`), instance price estimates
 (`LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS`), and the connected-AWS
 control principal (`LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN`). Managed
-capacity is those plus the three the release publishes or none of them, and a
+capacity requires those settings and all three release pins, and a
 deployment missing either half fails at startup naming which half it is.
 
 `capacity_cpu_ami_ids` and `capacity_gpu_ami_ids` come from the current host-image

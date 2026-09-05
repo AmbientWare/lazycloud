@@ -212,12 +212,22 @@
       },
       "required": [
         "LAZYCLOUD_RELEASE_MANIFEST_URL",
+        "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL",
+        "LAZYCLOUD_RELEASE_HOST_MANIFEST_URL",
         "LAZYCLOUD_STRIPE_ACCOUNT_ID",
         "LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT",
         "LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS"
       ],
       "properties": {
         "LAZYCLOUD_RELEASE_MANIFEST_URL": {
+          "type": "string",
+          "pattern": "^https://[^\\s]+/manifest\\.json$"
+        },
+        "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL": {
+          "type": "string",
+          "pattern": "^https://[^\\s]+/manifest\\.json$"
+        },
+        "LAZYCLOUD_RELEASE_HOST_MANIFEST_URL": {
           "type": "string",
           "pattern": "^https://[^\\s]+/manifest\\.json$"
         },

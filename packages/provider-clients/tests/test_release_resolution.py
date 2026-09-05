@@ -85,11 +85,18 @@ def _release_manifest() -> AwsReleaseManifest:
     )
 
 
-def test_release_supplies_every_artifact_value_a_deployment_would_copy() -> None:
-    """One pointer resolves to the six values, so they cannot come from two releases."""
-
+def test_worker_release_does_not_change_host_launch_identity() -> None:
+    host = _release_manifest()
+    worker = _release_manifest().model_copy(
+        update={
+            "container_worker_image": "registry.example.com/container-worker@sha256:" + "c" * 64,
+            "capacity_cpu_ami_ids": {"us-east-1": "ami-11111111111111111"},
+        }
+    )
     release = deployment_release(
         _release_manifest(),
+        worker_manifest=worker,
+        host_manifest=host,
         agent_binaries=AgentBinaryEnvironmentSettings(binary_dir=Path("/var/lib/lazycloud/agent")),
         aws_capacity=AwsCapacityEnvironmentSettings(
             instance_hourly_micros={"m7i.xlarge": 340_000},
@@ -102,7 +109,7 @@ def test_release_supplies_every_artifact_value_a_deployment_would_copy() -> None
     assert release.version == _VERSION
     assert release.agent_binaries.binary_version == _VERSION
     assert release.agent_binaries.binary_sha256_by_arch == {"amd64": _AGENT_SHA256}
-    assert release.aws_capacity.worker_image_digest == _WORKER_IMAGE
+    assert release.aws_capacity.worker_image_digest == worker.container_worker_image
     assert release.aws_capacity.cpu_ami_ids == _CPU_AMI_IDS
     # The release captures the exact independently published host-image catalog.
     assert release.aws_capacity.gpu_ami_ids == _GPU_AMI_IDS
@@ -119,6 +126,8 @@ def test_release_supplies_every_artifact_value_a_deployment_would_copy() -> None
 def test_deployment_without_a_release_keeps_the_unmanaged_shape() -> None:
     release = deployment_release(
         None,
+        worker_manifest=None,
+        host_manifest=None,
         agent_binaries=AgentBinaryEnvironmentSettings(),
         aws_capacity=AwsCapacityEnvironmentSettings(),
         aws_connections=AwsAccountConnectionEnvironmentSettings(),

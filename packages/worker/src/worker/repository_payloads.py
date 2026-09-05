@@ -397,6 +397,26 @@ class PrepareImageBuildContextDownloadResponse(WorkerRepositoryResponse):
     expires_at: datetime | None = None
 
 
+class ReportImageBuildProgressRequest(ContractModel):
+    worker_id: str
+    workspace_id: str
+    container_id: str
+    build_id: str
+    after: int = Field(default=0, ge=0)
+    logs: list[str] = Field(default_factory=list, max_length=256)
+
+    @field_validator("logs")
+    @classmethod
+    def log_lines_must_fit_ingestion_boundary(cls, values: list[str]) -> list[str]:
+        if any(len(value.encode("utf-8")) > 8 * 1024 for value in values):
+            raise ValueError("image build progress log line exceeds 8192 bytes")
+        return values
+
+
+class ReportImageBuildProgressResponse(WorkerRepositoryResponse):
+    sequence: int = Field(ge=0)
+
+
 class ReportImageBuildResultRequest(ContractModel):
     worker_id: str
     workspace_id: str
