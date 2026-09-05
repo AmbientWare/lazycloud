@@ -19,9 +19,7 @@ resource "planetscale_postgres_branch" "control_plane" {
       max_connections = tostring(var.database_max_connections)
     }
     pgbouncer = {
-      default_pool_size       = tostring(var.database_pooler_max_connections)
-      max_db_connections      = tostring(var.database_pooler_max_connections)
-      max_prepared_statements = "200"
+      max_db_connections = tostring(var.database_pooler_max_connections)
     }
   }
 }

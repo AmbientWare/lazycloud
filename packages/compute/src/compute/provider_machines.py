@@ -534,8 +534,12 @@ class ProviderMachineReconciler:
         for instance in prior_instances:
             if instance.instance_id is not None and instance.instance_id in observed_instance_ids:
                 continue
+            metadata = _provider_instance_metadata(instance)
+            if _metadata_time(metadata, "provider_storage_destroyed_at") is not None:
+                destroyed_record_ids.add(instance.id)
+                continue
             missing_since = _metadata_time(
-                _provider_instance_metadata(instance),
+                metadata,
                 "missing_since",
             )
             settled = (
