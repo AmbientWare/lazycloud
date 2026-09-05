@@ -62,6 +62,12 @@ long sequence. Every stage has to be explicit about what it acquired and what
 releases it: image handling, credential scope, retries, event emission, terminal
 state, and cleanup.
 
+Writable layers share a quota-enabled XFS backing image sized to the host's
+available disk, capped at the worker's configured backing size. The host keeps
+a free-space reserve outside that image. Container disk limits are ceilings,
+not reservations; admission checks both the writable filesystem and the host
+space backing its sparse image. Provider adapters do not choose this layout.
+
 A metering window is claimed once and, if its write fails, offered again exactly
 as it was claimed, with the same bounds and the same evidence. The platform
 derives a usage record's identity from those bounds and prices the window against

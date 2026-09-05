@@ -2633,7 +2633,15 @@ class WorkerRepositoryService:
                 container.started_at,
                 container.finished_at,
                 container.preemption_settled_at,
+                container.startup_error,
             )
+            if exit_code != 0 and failed_phase is not None:
+                container.startup_error = _container_exit_error(
+                    container.id,
+                    exit_code,
+                    failed_phase=failed_phase,
+                    failure_detail=failure_detail,
+                )
             # Never back to Unknown. Several worker paths report it as a
             # placeholder, and the row may already hold the reason the stop was
             # asked for — which is the one the customer is owed.
@@ -2708,6 +2716,7 @@ class WorkerRepositoryService:
                 container.started_at,
                 container.finished_at,
                 container.preemption_settled_at,
+                container.startup_error,
             )
             if changed:
                 container = ContainerRepository(session).upsert(container)

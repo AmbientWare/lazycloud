@@ -11,6 +11,8 @@ from compute.providers import (
     ResolvedComputeProvider,
     ResolvedProviderPolicy,
 )
+from coordination.redis_client import RedisClient
+from coordination.request_cooldown import RedisRequestCooldown
 from networking.settings import (
     BackendRouteSettings,
     validate_remote_provider_network_configuration,
@@ -43,11 +45,15 @@ def configured_platform_compute_providers(
     *,
     launch_credentials: ProviderNodeLaunchCredentials,
     capacity_workspace: Callable[[str], str],
+    redis: RedisClient,
 ) -> PlatformProviderLoader:
     adapters = {
         binding.ref: HetznerPooledProvider(
             provider_ref=binding.ref,
-            client=HetznerClient(settings.hetzner_tokens[binding.ref]),
+            client=HetznerClient(
+                settings.hetzner_tokens[binding.ref],
+                cooldown=RedisRequestCooldown(redis, binding.ref),
+            ),
             images_by_location=binding.images_by_location,
             allowed_server_types=frozenset(binding.policy.allowed_instance_types),
             usd_per_currency_unit=binding.usd_per_currency_unit,

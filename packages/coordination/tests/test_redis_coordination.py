@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from coordination.event_bus import EventBusEvent, EventBusEventType, RedisEventBus
@@ -9,6 +10,7 @@ from coordination.redis_client import (
     RedisSettings,
     sanitize_redis_client_name,
 )
+from coordination.request_cooldown import RedisRequestCooldown
 from coordination.token_lock import (
     TokenLockReleaseStatus,
     release_token_lock,
@@ -17,6 +19,26 @@ from coordination.token_lock import (
 from coordination.wake_signal import RedisWakeSignal
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
+
+
+def test_request_cooldown_keeps_longest_cross_replica_deadline(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    first = RedisRequestCooldown(real_redis_actors.client(), "provider-project")
+    second = RedisRequestCooldown(real_redis_actors.client(), "provider-project")
+    later = datetime.now(UTC).replace(microsecond=0) + timedelta(minutes=5)
+    earlier = later - timedelta(minutes=1)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        updates = [
+            executor.submit(first.defer_until, later),
+            executor.submit(second.defer_until, earlier),
+        ]
+        for update in updates:
+            update.result()
+    assert first.blocked_until() == second.blocked_until() == later
+    assert second.defer_until(earlier) == later
+    assert first.redis.ttl(first.key) > 0
+    assert RedisRequestCooldown(first.redis, "other-project").blocked_until() is None
 
 
 def test_redis_client_name_sanitization_removes_protocol_unsafe_characters() -> None:
