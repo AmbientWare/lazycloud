@@ -30,35 +30,52 @@ from shared.aws_connections import (
     AwsAccountAuthorizationPhase,
     AwsAccountConnection,
 )
-from shared.compute_policy import ComputeCapacityMode
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, ComputeCapacityMode, MachinePool
 
 from provider_clients.settings import AwsCapacitySettings, PlatformCapacitySettings
 
 AwsConnectionLoader = Callable[[str], Iterable[AwsAccountConnection]]
+PlatformProviderLoader = Callable[[], tuple[ResolvedComputeProvider, ...]]
 
 
 def configured_platform_compute_providers(
     settings: PlatformCapacitySettings,
     *,
     launch_credentials: ProviderNodeLaunchCredentials,
-) -> tuple[ResolvedComputeProvider, ...]:
-    return tuple(
-        ResolvedComputeProvider(
-            ref=binding.ref,
-            capacity_mode=ComputeCapacityMode.Pooled,
-            policy=binding.policy,
-            pooled=HetznerPooledProvider(
-                provider_ref=binding.ref,
-                client=HetznerClient(binding.api_token),
-                images_by_location=binding.images_by_location,
-                allowed_server_types=binding.allowed_server_types,
-                usd_per_currency_unit=binding.usd_per_currency_unit,
-                primary_ipv4_hourly_micros=binding.primary_ipv4_hourly_micros,
-                launch_credentials=launch_credentials,
-            ),
+    capacity_workspace: Callable[[str], str],
+) -> PlatformProviderLoader:
+    adapters = {
+        binding.ref: HetznerPooledProvider(
+            provider_ref=binding.ref,
+            client=HetznerClient(settings.hetzner_tokens[binding.ref]),
+            images_by_location=binding.images_by_location,
+            allowed_server_types=frozenset(binding.policy.allowed_instance_types),
+            usd_per_currency_unit=binding.usd_per_currency_unit,
+            primary_ipv4_hourly_micros=binding.primary_ipv4_hourly_micros,
+            launch_credentials=launch_credentials,
         )
         for binding in settings.hetzner
-    )
+    }
+
+    def providers() -> tuple[ResolvedComputeProvider, ...]:
+        # Administrator bootstrap creates the capacity workspace after composing
+        # services. Resolve its identity when capacity is used, never at startup.
+        return tuple(
+            ResolvedComputeProvider(
+                ref=binding.ref,
+                capacity_mode=ComputeCapacityMode.Pooled,
+                policy=ResolvedProviderPolicy(
+                    **binding.policy.model_dump(),
+                    workspace_id=capacity_workspace(binding.workspace),
+                    pool=MachinePool(LAZYCLOUD_MACHINE_POOL),
+                    platform_fleet=True,
+                ),
+                pooled=adapters[binding.ref],
+            )
+            for binding in settings.hetzner
+        )
+
+    return providers
 
 
 def configured_aws_compute_catalog(
@@ -110,24 +127,22 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
     allowed_instance_types: frozenset[str]
     client_provider: Boto3AwsManagedPoolClientProvider
     capacity_workspace: Callable[[AwsAccountConnection], str]
-    platform_providers: tuple[ResolvedComputeProvider, ...] = ()
+    platform_providers: PlatformProviderLoader = tuple
 
     def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
-        return self.platform_providers
-
-    def __post_init__(self) -> None:
-        refs = [provider.ref for provider in self.platform_providers]
+        providers = self.platform_providers()
+        refs = [provider.ref for provider in providers]
         if len(refs) != len(set(refs)):
             raise ValueError("platform compute provider refs must be unique")
         if any(
-            provider.policy is None or not provider.policy.platform_fleet
-            for provider in self.platform_providers
+            provider.policy is None or not provider.policy.platform_fleet for provider in providers
         ):
             raise ValueError("platform compute providers require platform-owned policies")
+        return providers
 
     def list_providers(self, workspace_id: str) -> Iterable[ResolvedComputeProvider]:
         return [
-            *self.platform_providers,
+            *self.list_platform_providers(),
             *[
                 self._resolved(connection)
                 for connection in self.connections(workspace_id)
@@ -136,7 +151,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
         ]
 
     def resolve(self, workspace_id: str, provider_ref: str) -> ResolvedComputeProvider:
-        for provider in self.platform_providers:
+        for provider in self.list_platform_providers():
             if provider.ref == provider_ref:
                 return provider
         for connection in self.connections(workspace_id):
@@ -200,7 +215,7 @@ def workspace_compute_provider_resolver(
     gateway_origin: str,
     presigned_origin: str = "",
     backend_route: BackendRouteSettings,
-    platform_providers: tuple[ResolvedComputeProvider, ...] = (),
+    platform_providers: PlatformProviderLoader = tuple,
 ) -> WorkspaceComputeProviderResolver:
     validate_remote_provider_network_configuration(
         gateway_origin=gateway_origin,

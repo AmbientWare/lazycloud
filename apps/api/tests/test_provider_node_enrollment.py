@@ -125,6 +125,9 @@ class _ReplayGuard:
 class _PooledProvider:
     resource_id: str = _ASG_NAME
 
+    def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
+        return _offer()
+
     def list_offers(self) -> Iterable[ComputeOffer]:
         return (_offer(),)
 

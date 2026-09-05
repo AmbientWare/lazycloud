@@ -13,6 +13,12 @@ See `LIFECYCLE.md` for creation and teardown. The Helm workloads live in
 deployment, from the branch named for it, and the values file Deploy writes
 there.
 
+[Provider provisioning](../PROVIDERS.md) covers worker capacity. `capacity.tf`
+declares the Ashburn warm default and supported node sizes. Supply the
+`hetzner-images.tfvars.json` image-workflow artifact to Terraform and add
+`LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS` to the existing operator secret.
+Only credentials are operator-owned; capacity policy is deployment-owned.
+
 ## Two deployments, one cluster
 
 Each deployment is a namespace, `lazycloud-prod` or `lazycloud-staging`, and

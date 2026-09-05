@@ -20,7 +20,12 @@ annual totals. The original mix assumed about 22% GPU jobs but incurred about
 95% of host costs on GPU machines. CPU-heavy cases improve the modeled margin;
 they are controlled scenarios, not measured customer demand.
 
-Hetzner live acceptance and deployment configuration are outstanding. The owner
+Hetzner live acceptance and credential publication are outstanding. Terraform
+owns the default Ashburn policy and image catalog, and the image workflow exports
+verified non-secret Terraform input. Provider credentials remain separate.
+The scheduler uses one pooled-capacity interface for AWS and Hetzner. Cleanup
+uses recorded unit identity rather than depending on the current offer catalog.
+The common operator and extension contract is in `deploy/PROVIDERS.md`. The owner
 approved acceptance on production with Ashburn warm from startup, other pools
 cold, and multiple node sizes. The merge/deploy hold above still applies.
 Source IP and metadata cannot authenticate a host against its own tenants.

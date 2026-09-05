@@ -837,6 +837,10 @@ class ApiServices(ApiServiceCore):
         )
         aws_connection_directory = AwsAccountConnectionDirectory(context)
 
+        def platform_capacity_workspace(workspace: str) -> str:
+            with context.database.session() as session:
+                return context.workspace(session, workspace).id
+
         def provider_node_cipher(workspace_id: str) -> WorkspaceSecretCipher:
             with context.database.session() as session:
                 workspace = context.workspace(session, workspace_id)
@@ -857,7 +861,9 @@ class ApiServices(ApiServiceCore):
                 connections=aws_connection_directory.list_for_workspace,
                 capacity_workspace=aws_connection_directory.capacity_workspace,
                 platform_providers=configured_platform_compute_providers(
-                    platform_capacity_config, launch_credentials=provider_node_launches
+                    platform_capacity_config,
+                    launch_credentials=provider_node_launches,
+                    capacity_workspace=platform_capacity_workspace,
                 ),
                 gateway_origin=gateway_config.public_http_url,
                 presigned_origin=object_store_config.presigned_endpoint_url or "",

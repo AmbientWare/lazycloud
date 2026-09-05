@@ -114,10 +114,7 @@ class ProviderUnitInstance(ContractModel):
     billing_quantum_seconds: int = Field(default=0, ge=0)
 
 
-class ResolvedProviderPolicy(ContractModel):
-    workspace_id: str
-    pool: MachinePool
-    platform_fleet: bool
+class ProviderCapacityPolicy(ContractModel):
     default_region: str
     allowed_regions: tuple[str, ...]
     max_cpu_instances: int | None = Field(default=None, ge=0)
@@ -129,9 +126,7 @@ class ResolvedProviderPolicy(ContractModel):
     warm_decrease_after_seconds: int = Field(default=600, ge=60, le=86_400)
 
     @model_validator(mode="after")
-    def validate_policy(self) -> ResolvedProviderPolicy:
-        if not self.workspace_id or not self.pool:
-            raise ValueError("provider policy requires a capacity workspace and pool")
+    def validate_policy(self) -> ProviderCapacityPolicy:
         if self.default_region not in self.allowed_regions:
             raise ValueError("provider default region must be allowed")
         if self.max_cpu_instances is not None and self.warm_cpu_min > self.max_cpu_instances:
@@ -145,6 +140,12 @@ class ResolvedProviderPolicy(ContractModel):
         return offer.region in self.allowed_regions and (
             not self.allowed_instance_types or offer.instance_type in self.allowed_instance_types
         )
+
+
+class ResolvedProviderPolicy(ProviderCapacityPolicy):
+    workspace_id: str = Field(min_length=1)
+    pool: MachinePool = Field(min_length=1)
+    platform_fleet: bool
 
 
 class ProviderUnitSnapshot(ContractModel):
@@ -195,6 +196,10 @@ class DirectMachineProviderRegistry(Protocol):
 
 class PooledCapacityProvider(Protocol):
     def list_offers(self) -> Iterable[ComputeOffer]: ...
+
+    def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
+        """Resolve owned capacity even when its shape is no longer sold."""
+        ...
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot: ...
 

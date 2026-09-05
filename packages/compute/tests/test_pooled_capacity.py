@@ -102,8 +102,14 @@ class _PooledProvider:
     before_capacity: Callable[[ProviderUnitRequest], None] | None = None
     capacity_failure: Exception | None = None
     delete_failure: Exception | None = None
+    catalog_failure: Exception | None = None
+
+    def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
+        return self.offer
 
     def list_offers(self) -> Iterable[ComputeOffer]:
+        if self.catalog_failure is not None:
+            raise self.catalog_failure
         return (self.offer,)
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
@@ -454,7 +460,7 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
         instance_hourly_micros={},
         allowed_instance_types=frozenset(),
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
-        platform_providers=(resolved,),
+        platform_providers=lambda: (resolved,),
     )
     compute = ComputeService(
         isolated_services.context,
@@ -1201,6 +1207,7 @@ def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
+    provider.catalog_failure = RuntimeError("supplier catalog unavailable")
     provider.delete_failure = RuntimeError("provider pool deletion failed")
 
     with pytest.raises(UpstreamUnavailableError, match="provider pool deletion failed"):

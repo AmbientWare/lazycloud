@@ -458,7 +458,8 @@ class ComputeService:
                 pool.workspace_id,
                 pool.capacity_owner_id,
             )
-        except (KeyError, RuntimeError, ValueError) as exc:
+            offer = self._available_unit_offer(provider, current_pool)
+        except (KeyError, RuntimeError, ValueError, UpstreamUnavailableError) as exc:
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.TemporarilyUnavailable,
@@ -802,6 +803,9 @@ class ComputeService:
                     )
             return _operation_result(current, CapacityAcquisitionStatus.Requested)
         try:
+            if snapshot.observed_machines < release_target:
+                offer = self._available_unit_offer(provider, current_pool)
+                provider_request = self._provider_unit_request(current_pool, offer)
             updated_snapshot = provider.pooled.set_unit_capacity(
                 provider_request,
                 desired_machines=release_target,
@@ -1894,7 +1898,7 @@ class ComputeService:
             )
             before_mutation(unit)
             if desired_machines > unit.desired_machines:
-                _, offer = self._resolved_internal_unit_provider(unit)
+                offer = self._available_unit_offer(provider, unit)
                 if not provider.policy.accepts(offer):
                     raise ConflictError(
                         "provider offer is outside its allowed regions or machine types"
@@ -1990,9 +1994,10 @@ class ComputeService:
                     observed=observed,
                 )
             provider_request = self._provider_unit_request(intent, offer)
+            if provider_request.desired_machines > 0:
+                offer = self._available_unit_offer(provider, intent)
+                provider_request = self._provider_unit_request(intent, offer)
             snapshot = provider.pooled.set_unit_capacity(
-                # Creates the autoscaling group, and its launch template with
-                # it, when the pool has none yet.
                 provider_request,
                 desired_machines=provider_request.desired_machines,
                 max_machines=provider_request.max_machines,
@@ -2452,8 +2457,8 @@ class ComputeService:
         if current.phase is ComputeUnitPhase.Deleted:
             self._retire_proven_provider_pool_machines(current, now=now)
             return None
-        current = self._unit_matching_its_provider(current, now=now)
         try:
+            current = self._unit_matching_its_provider(current, now=now)
             provider, offer = self._resolved_internal_unit_provider(current)
             pooled = provider.pooled
             if pooled is None:
@@ -2478,9 +2483,10 @@ class ComputeService:
                 now=now,
             )
             current = self._relaunch_degraded_pool_after_interval(current, now=now)
-            cost_policy_allows = provider.policy is not None and provider.policy.accepts(offer)
-            degraded = current.provider_state.degraded_reason is not None or not cost_policy_allows
-            if not cost_policy_allows:
+            offer = self._available_unit_offer(provider, current)
+            placement_allows = provider.policy is not None and provider.policy.accepts(offer)
+            degraded = current.provider_state.degraded_reason is not None or not placement_allows
+            if not placement_allows:
                 LOGGER.warning("provider placement policy prevents restoring pool %s", current.id)
             request = self._provider_unit_request(current, offer)
             snapshot = (
@@ -3005,6 +3011,15 @@ class ComputeService:
         pooled = provider.pooled
         if pooled is None:
             raise InvalidInputError(f"compute pool {pool.name!r} provider is not pooled")
+        return provider, pooled.unit_offer(pool)
+
+    @staticmethod
+    def _available_unit_offer(
+        provider: ResolvedComputeProvider, pool: ComputeUnitRecord
+    ) -> ComputeOffer:
+        pooled = provider.pooled
+        if pooled is None:
+            raise InvalidInputError(f"compute pool {pool.name!r} provider is not pooled")
         offer = next(
             (
                 item
@@ -3017,7 +3032,7 @@ class ComputeService:
             raise UpstreamUnavailableError(
                 f"compute pool {pool.name!r} offer is no longer available"
             )
-        return provider, offer
+        return offer
 
     def clear_capacity_degradation(
         self,

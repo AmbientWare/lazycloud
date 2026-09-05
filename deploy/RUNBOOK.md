@@ -529,6 +529,10 @@ kubectl -n lazycloud-prod rollout restart statefulset/control-plane
 
 ### Connecting the platform account to its own fleet
 
+See [Provider provisioning](PROVIDERS.md) for the common AWS/Hetzner flow and
+capacity lifecycle. The AWS-specific account registration below remains part
+of normal deployment; it is not a separate scheduler path.
+
 Shared capacity is a connected-AWS pool in the platform's own account, using the
 same managed flow a customer uses, which is what the control stack anticipates
 when it says a customer account can be this account. `deploy/platform-deployment`

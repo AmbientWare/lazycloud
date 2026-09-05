@@ -235,6 +235,10 @@ class SchedulerAppServices:
         platform_capacity = PlatformCapacitySettings()
         connection_directory = AwsAccountConnectionDirectory(context)
 
+        def platform_capacity_workspace(workspace: str) -> str:
+            with context.database.session() as session:
+                return context.workspace(session, workspace).id
+
         def provider_node_cipher(workspace_id: str) -> WorkspaceSecretCipher:
             with context.database.session() as session:
                 workspace = context.workspace(session, workspace_id)
@@ -251,7 +255,9 @@ class SchedulerAppServices:
                 connections=connection_directory.list_for_workspace,
                 capacity_workspace=connection_directory.capacity_workspace,
                 platform_providers=configured_platform_compute_providers(
-                    platform_capacity, launch_credentials=provider_node_launches
+                    platform_capacity,
+                    launch_credentials=provider_node_launches,
+                    capacity_workspace=platform_capacity_workspace,
                 ),
                 gateway_origin=gateway_origin,
                 presigned_origin=storage.object_store.presigned_endpoint_url or "",

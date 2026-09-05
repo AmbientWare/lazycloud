@@ -72,6 +72,7 @@ output "runtime_configuration" {
     # strings. Empty advertises no instance types, which is a control plane with
     # no managed capacity rather than a failure.
     LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS = jsonencode(var.instance_hourly_micros)
+    LAZYCLOUD_PLATFORM_CAPACITY_HETZNER           = jsonencode(local.hetzner_capacity)
     # What a customer's account is told to trust. Published here rather than
     # left to an operator, because a value carried by hand is a step that has to
     # be remembered on every stand-up and reports its absence as a refused

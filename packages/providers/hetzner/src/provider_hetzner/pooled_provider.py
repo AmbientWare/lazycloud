@@ -10,7 +10,7 @@ from compute.node_bootstrap import (
     NodeBootstrapSettings,
     node_bootstrap_script,
 )
-from compute.offers import ComputeOffer, pooled_cloud_offer
+from compute.offers import ComputeOffer, pooled_cloud_offer, recorded_unit_offer
 from compute.provider_launches import ProviderNodeLaunchCredential, ProviderNodeLaunchCredentials
 from compute.providers import (
     ProviderCapacityPhase,
@@ -20,7 +20,7 @@ from compute.providers import (
     ProviderUnitSnapshot,
 )
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
-from shared.compute_policy import ComputeUnitProviderState
+from shared.compute_policy import ComputeUnitProviderState, ComputeUnitRecord
 from shared.timestamps import utc_now
 
 from provider_hetzner.client import HetznerClient, HetznerError, Server
@@ -52,6 +52,17 @@ class HetznerPooledProvider:
     primary_ipv4_hourly_micros: int
     launch_credentials: ProviderNodeLaunchCredentials
 
+    def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
+        location, separator, instance_type = unit.offer_id.partition(":")
+        if (
+            unit.provider_ref != self.provider_ref
+            or location != unit.region
+            or not separator
+            or not instance_type
+        ):
+            raise ValueError("Hetzner unit has invalid provider offer identity")
+        return recorded_unit_offer(unit, cloud="hetzner", instance_type=instance_type)
+
     def list_offers(self) -> Iterable[ComputeOffer]:
         if self.usd_per_currency_unit <= 0:
             raise ValueError("Hetzner supplier currency conversion must be positive")
@@ -62,6 +73,15 @@ class HetznerPooledProvider:
                 continue
             for price in shape.prices:
                 if price.location not in self.images_by_location:
+                    continue
+                location = next(
+                    (item for item in shape.locations if item.name == price.location), None
+                )
+                if (
+                    location is not None
+                    and location.deprecation is not None
+                    and location.deprecation.unavailable_after <= utc_now()
+                ):
                     continue
                 micros = (
                     int(

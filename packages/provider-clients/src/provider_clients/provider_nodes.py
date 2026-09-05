@@ -313,7 +313,8 @@ def configured_provider_node_identity_registry(
     return ProviderNodeIdentityRegistry(
         aws=aws,
         hetzner_clients={
-            binding.ref: HetznerClient(binding.api_token) for binding in platform_settings.hetzner
+            binding.ref: HetznerClient(platform_settings.hetzner_tokens[binding.ref])
+            for binding in platform_settings.hetzner
         },
     )
 

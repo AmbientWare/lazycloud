@@ -57,10 +57,14 @@ jobs:
             --base-image-id "${BASE_IMAGE_ID}" \
             --location "${LOCATION}" \
             --manifest hetzner-node-image.json
+          uv run --group workspace python -m deploy.hetzner.catalog \
+            --manifest hetzner-node-image.json --output hetzner-images.tfvars.json
 
       - name: Upload image manifest
         uses: actions/upload-artifact@v7
         with:
           name: hetzner-node-image-${{ github.run_id }}
-          path: hetzner-node-image.json
+          path: |
+            hetzner-node-image.json
+            hetzner-images.tfvars.json
           if-no-files-found: error

@@ -3,6 +3,10 @@
 Root `compose.yaml` is the canonical local stack. This file is the operator
 runbook for it; the subdirectory READMEs cover individual services and assets.
 
+For cloud capacity, start with [Provider provisioning](PROVIDERS.md). It names
+the shared AWS/Hetzner deployment flow, ownership boundaries, required inputs,
+and the contract another provider must implement.
+
 ## Connected-AWS acceptance environment
 
 ### Profiles

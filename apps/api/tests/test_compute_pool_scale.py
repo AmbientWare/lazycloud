@@ -84,6 +84,9 @@ class _PooledProvider:
     desired_machines: int = 1
     capacity_calls: list[tuple[int, int]] = field(default_factory=list)
 
+    def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
+        return next(iter(self.list_offers()))
+
     def list_offers(self) -> Iterable[ComputeOffer]:
         return (
             ComputeOffer(

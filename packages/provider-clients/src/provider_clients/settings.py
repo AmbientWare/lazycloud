@@ -6,7 +6,7 @@ from decimal import Decimal
 from urllib.parse import urlparse
 
 from agent.binary import AgentBinarySettings
-from compute.providers import ResolvedProviderPolicy
+from compute.providers import ProviderCapacityPolicy
 from provider_aws import AwsManagedPoolBinaries
 from provider_hetzner import HetznerNodeImage
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
@@ -283,20 +283,15 @@ class HetznerCapacityBinding(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     ref: str = Field(pattern=r"^hetzner:[a-z0-9][a-z0-9-]{0,119}$")
-    api_token: SecretStr = Field(repr=False)
-    policy: ResolvedProviderPolicy
+    workspace: str = Field(default="default", min_length=1)
+    policy: ProviderCapacityPolicy
     images_by_location: dict[str, HetznerNodeImage]
-    allowed_server_types: frozenset[str]
     usd_per_currency_unit: Decimal = Field(gt=0)
     primary_ipv4_hourly_micros: int = Field(ge=0)
 
     @model_validator(mode="after")
     def validate_binding(self) -> HetznerCapacityBinding:
-        if not self.api_token.get_secret_value():
-            raise ValueError(f"{self.ref} API token is missing")
-        if not self.policy.platform_fleet:
-            raise ValueError(f"{self.ref} must belong to the platform fleet")
-        if not self.allowed_server_types:
+        if not self.policy.allowed_instance_types:
             raise ValueError(f"{self.ref} requires allowed server types")
         if not set(self.policy.allowed_regions) <= self.images_by_location.keys():
             raise ValueError(f"{self.ref} requires a release image for every allowed location")
@@ -305,6 +300,7 @@ class HetznerCapacityBinding(BaseModel):
 
 class PlatformCapacitySettings(BaseSettings):
     hetzner: tuple[HetznerCapacityBinding, ...] = ()
+    hetzner_tokens: dict[str, SecretStr] = Field(default_factory=dict, repr=False)
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_PLATFORM_CAPACITY_",
@@ -316,8 +312,12 @@ class PlatformCapacitySettings(BaseSettings):
     def validate_bindings(self) -> PlatformCapacitySettings:
         if len({binding.ref for binding in self.hetzner}) != len(self.hetzner):
             raise ValueError("platform provider refs must be unique")
-        if len({binding.policy.workspace_id for binding in self.hetzner}) > 1:
+        if len({binding.workspace for binding in self.hetzner}) > 1:
             raise ValueError("platform providers require one capacity workspace")
+        for binding in self.hetzner:
+            token = self.hetzner_tokens.get(binding.ref)
+            if token is None or not token.get_secret_value().strip():
+                raise ValueError(f"{binding.ref} requires a provider token")
         if sum(binding.policy.warm_cpu_min > 0 for binding in self.hetzner) > 1:
             raise ValueError("only one platform provider may own the automatic warm floor")
         return self

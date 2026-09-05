@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 from pydantic import Field
-from shared.compute_policy import ComputeCapacityMode
+from shared.compute_policy import ComputeCapacityMode, ComputeUnitRecord
 from shared.container_requests import OciRuntimeName, capacity_with_overhead
 from shared.contracts import ContractModel
 from shared.gpu import gpu_preference_accepts, gpu_preference_rank
@@ -120,6 +120,30 @@ class OfferRequest(ContractModel):
     nodes: int = 0
     min_reliability: float = 0.0
     max_hourly_cost_micros: int = 0
+
+
+def recorded_unit_offer(
+    unit: ComputeUnitRecord, *, cloud: str, instance_type: str, architecture: str = "amd64"
+) -> ComputeOffer:
+    """Describe owned capacity without depending on the supplier's sale catalog."""
+    if unit.offer_hourly_cost_micros is None or len(unit.worker_runtimes) != 1:
+        raise ValueError("provider unit has incomplete recorded offer data")
+    return pooled_cloud_offer(
+        offer_id=unit.offer_id,
+        provider=unit.provider_ref,
+        cloud=cloud,
+        instance_type=instance_type,
+        region=unit.region,
+        cpu_millicores=unit.worker_cpu_millicores,
+        memory_mb=unit.worker_memory_mib,
+        storage_mb=unit.root_volume_gib * 1024,
+        gpu=unit.worker_gpu_type or None,
+        gpu_count=unit.worker_gpu_count,
+        hourly_cost_micros=unit.offer_hourly_cost_micros,
+        capability_key=unit.capability_key,
+        architecture=architecture,
+        runtime=unit.worker_runtimes[0],
+    )
 
 
 def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[ComputeOffer]:
