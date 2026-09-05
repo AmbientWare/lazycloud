@@ -23,6 +23,7 @@ class DatabaseSettings(BaseSettings):
     # Blank marks "nobody said", not a database. Which database a process reads
     # and writes is a deployment fact, so there is nothing to fall back to.
     url: str = ""
+    direct_url: str = ""
     echo: bool = False
     pool_size: int = 5
     max_overflow: int = 10
@@ -57,6 +58,7 @@ class DatabaseSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_DATABASE_",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     @model_validator(mode="after")
@@ -67,3 +69,11 @@ class DatabaseSettings(BaseSettings):
                 purpose="the control-plane PostgreSQL database this process reads and writes",
             )
         return self
+
+    def direct(self) -> DatabaseSettings:
+        if not self.direct_url.strip():
+            raise MissingDeploymentSettingError(
+                f"{ENV_PREFIX}_DATABASE_DIRECT_URL",
+                purpose="direct PostgreSQL connections for administration and session locks",
+            )
+        return self.model_copy(update={"url": self.direct_url})

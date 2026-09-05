@@ -125,7 +125,7 @@ def inspect_database_schema(database_url: str | None = None) -> DatabaseSchemaIn
             application_name=DatabaseApplicationName.Bootstrap,
         )
         if database_url is not None
-        else DatabaseSettings(application_name=DatabaseApplicationName.Bootstrap)
+        else DatabaseSettings(application_name=DatabaseApplicationName.Bootstrap).direct()
     )
     client = DatabaseClient.from_settings(settings)
     try:
@@ -170,7 +170,7 @@ def bootstrap_database(database_url: str | None = None) -> DatabaseSchemaInspect
             application_name=DatabaseApplicationName.Bootstrap,
         )
         if database_url is not None
-        else DatabaseSettings(application_name=DatabaseApplicationName.Bootstrap)
+        else DatabaseSettings(application_name=DatabaseApplicationName.Bootstrap).direct()
     )
     client = DatabaseClient.from_settings(settings)
     try:

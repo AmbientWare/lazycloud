@@ -22,7 +22,7 @@ def _database_url() -> str:
     configured = config.get_main_option("sqlalchemy.url")
     if configured:
         return configured
-    return DatabaseSettings(application_name=DatabaseApplicationName.Bootstrap).url
+    return DatabaseSettings(application_name=DatabaseApplicationName.Bootstrap).direct().url
 
 
 def run_migrations_offline() -> None:

@@ -103,23 +103,18 @@ allows.
   value: {{ .maxOverflow | quote }}
 {{- end -}}
 
-{{/* Jobs run before workload waves. Count one terminating scheduler and gateway. */}}
+{{/* Transaction clients share the Terraform-bounded pooler. Session locks are direct. */}}
 {{- define "lazycloud.databaseBudget" -}}
 {{- if le (int .Values.scheduler.minReadySeconds) (int .Values.scheduler.terminationGracePeriodSeconds) -}}
 {{- fail "scheduler.minReadySeconds must exceed terminationGracePeriodSeconds to bound rollout overlap" -}}
 {{- end -}}
 {{- $ceiling := int .Values.database.maxConnections -}}
 {{- $reserved := int .Values.database.reserved -}}
-{{- $apiEngine := add (int .Values.controlPlane.database.poolSize) (int .Values.controlPlane.database.maxOverflow) -}}
-{{- $api := mul 2 (mul (int .Values.controlPlane.replicas) $apiEngine) -}}
-{{- $schedulerEngine := add (int .Values.scheduler.database.poolSize) (int .Values.scheduler.database.maxOverflow) -}}
-{{- $scheduler := mul (int .Values.scheduler.replicas) $schedulerEngine -}}
-{{- $gatewayEngine := add (int .Values.wireguard.database.poolSize) (int .Values.wireguard.database.maxOverflow) -}}
-{{- $gateway := mul (int .Values.wireguard.replicas) $gatewayEngine -}}
+{{- $pooler := int .Values.database.poolerMaxConnections -}}
+{{- $direct := mul 2 (int .Values.controlPlane.replicas) -}}
 {{- $jobs := add (int .Values.bootstrap.database.poolSize) (int .Values.bootstrap.database.maxOverflow) -}}
-{{- $overlap := max $jobs (add $schedulerEngine $gatewayEngine) -}}
-{{- $total := add $api $scheduler $gateway $overlap $reserved -}}
+{{- $total := add $pooler $direct $jobs $reserved -}}
 {{- if gt $total $ceiling -}}
-{{- fail (printf "database budget %d exceeds server ceiling %d (API %d, scheduler %d, gateway %d, rollout/jobs %d, reserve %d)" $total $ceiling $api $scheduler $gateway $overlap $reserved) -}}
+{{- fail (printf "database budget %d exceeds server ceiling %d (pooler %d, session locks %d, jobs %d, reserve %d)" $total $ceiling $pooler $direct $jobs $reserved) -}}
 {{- end -}}
 {{- end -}}

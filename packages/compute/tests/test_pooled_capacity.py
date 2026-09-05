@@ -1624,6 +1624,59 @@ def test_internal_pool_bootstrap_phase_deadline_reclaims_only_after_it_elapses(
     assert provider.desired == 1
 
 
+def test_repeated_bootstrap_failures_do_not_extend_the_reclaim_deadline(
+    isolated_services: ApiServices,
+) -> None:
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    started_at = datetime.now(UTC)
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider, isolated_services),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+        scheduler_hooks=_SchedulerHooks(intake_observing_since=started_at - timedelta(hours=1)),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=1,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity(now=started_at)
+    first_failure = compute.record_provider_bootstrap_status(
+        pool_id=pool.id,
+        provider_instance_id="i-00000000000000000",
+        phase=MachineBootstrapPhase.Failed,
+        failure_reason=MachineBootstrapFailureReason.WorkerReadinessFailed,
+        now=started_at + timedelta(seconds=10),
+    )
+    with isolated_services.context.database.session() as session:
+        ComputeProviderInstanceRepository(session).upsert(
+            first_failure.model_copy(update={"bootstrap_phase_started_at": None})
+        )
+    for elapsed in (299, 310):
+        observed = compute.record_provider_bootstrap_status(
+            pool_id=pool.id,
+            provider_instance_id="i-00000000000000000",
+            phase=MachineBootstrapPhase.Failed,
+            failure_reason=MachineBootstrapFailureReason.WorkerReadinessFailed,
+            now=started_at + timedelta(seconds=elapsed),
+        )
+        assert observed.bootstrap_observed_at == started_at + timedelta(seconds=elapsed)
+        assert observed.bootstrap_phase_started_at == started_at + timedelta(seconds=10)
+
+    compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=311))
+
+    assert first_failure.instance_id in provider.release_calls
+    with isolated_services.context.database.session() as session:
+        [replacement] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+    assert replacement.launch_attempt == 2
+    assert replacement.bootstrap_phase is MachineBootstrapPhase.Provisioning
+    assert replacement.bootstrap_phase_started_at == started_at + timedelta(seconds=311)
+
+
 def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutation(
     isolated_services: ApiServices,
 ) -> None:
@@ -1902,6 +1955,7 @@ def _mark_open_record_booting(
                 update={
                     "bootstrap_phase": MachineBootstrapPhase.Booting,
                     "bootstrap_observed_at": at,
+                    "bootstrap_phase_started_at": at,
                 }
             )
         )

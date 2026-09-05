@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "deployment": "lazycloud-prod",
   "region": "us-east-1",
   "registry": "000000000000.dkr.ecr.us-east-1.amazonaws.com",
@@ -41,5 +41,6 @@
   },
   "secrets_reader_role_arn": "arn:aws:iam::000000000000:role/reader",
   "cloudflare_tunnel_id": "00000000-0000-0000-0000-000000000000",
-  "database_max_connections": 40
+  "database_max_connections": 40,
+  "database_pooler_max_connections": 20
 }

@@ -60,6 +60,7 @@ def _postgres_test_context(
         database = DatabaseClient.from_settings(
             DatabaseSettings(
                 url=isolated_url,
+                direct_url=isolated_url,
                 pool_size=12,
                 max_overflow=0,
                 statement_timeout_ms=0,
@@ -212,13 +213,15 @@ def test_postgresql_offline_recovery_requires_stopped_control_plane_and_replays(
         auth.bootstrap_administrator(
             request_id="bootstrap:postgres-recovery-owner",
         )
-        serving_fence = ControlPlaneRecoveryFence(database)
+        serving_database = DatabaseClient.from_settings(database.settings)
+        serving_fence = ControlPlaneRecoveryFence(serving_database)
         serving_fence.start_serving()
         try:
             with ControlPlaneRecoveryFence(database).offline_recovery() as acquired:
                 assert not acquired
         finally:
             serving_fence.stop_serving()
+            serving_database.dispose()
 
         publication = CredentialFilePublication(
             tmp_path / "postgres-recovery-token",

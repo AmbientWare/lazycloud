@@ -19,6 +19,29 @@ For cloud capacity, start with [Provider provisioning](PROVIDERS.md). It names
 the shared AWS/Hetzner deployment flow, ownership boundaries, required inputs,
 and the contract another provider must implement.
 
+## Local database connections
+
+`docker compose up` builds PgBouncer and starts it after PostgreSQL is healthy.
+Applications connect to `pgbouncer:6432`; migrations and session-scoped advisory
+locks use `LAZYCLOUD_DATABASE_DIRECT_URL` at `postgres:5432`. The host-shell URLs
+in `.env.example` use the corresponding localhost ports. Change
+`LAZYCLOUD_COMPOSE_PGBOUNCER_PORT` and the host application URL together if 6432
+is occupied.
+
+The pooler runs in transaction mode with 200 client slots and at most 20 backend
+connections for the local database user. It tracks 200 protocol-level prepared
+statements per backend, so psycopg's automatic preparation stays enabled.
+The image pins the Alpine digest and verifies the upstream PgBouncer 1.25.2
+source checksum. See the [PgBouncer configuration](https://www.pgbouncer.org/config.html)
+and [release notes](https://www.pgbouncer.org/changelog.html).
+
+PgBouncer uses the same `POSTGRES_PASSWORD` as PostgreSQL. Its entrypoint writes
+the authentication file into a private tmpfs, not the image or a persistent
+volume. Its health check authenticates and executes `SELECT 1` through the pool.
+After changing an existing database role's password, update both host URLs and
+`POSTGRES_PASSWORD`, then recreate PgBouncer and the application services.
+Do not reset the PostgreSQL volume to rotate a password.
+
 ## Connected-AWS acceptance environment
 
 ### Profiles

@@ -81,7 +81,7 @@ def bootstrap_admin(
         else "bootstrap:configured-administrator"
     )
     database = DatabaseClient.from_settings(
-        DatabaseSettings(application_name=DatabaseApplicationName.Admin)
+        DatabaseSettings(application_name=DatabaseApplicationName.Admin).direct()
     )
     storage_client = S3ObjectStoreClient.from_settings(S3ObjectStoreSettings())
     try:
@@ -203,7 +203,7 @@ def recover_admin(
     That matters when there is no second credential left to undo a mistake with.
     """
     database = DatabaseClient.from_settings(
-        DatabaseSettings(application_name=DatabaseApplicationName.Admin)
+        DatabaseSettings(application_name=DatabaseApplicationName.Admin).direct()
     )
     try:
         fence = ControlPlaneRecoveryFence(database)

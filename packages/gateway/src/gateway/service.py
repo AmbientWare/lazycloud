@@ -78,12 +78,13 @@ from database.repositories.compute import (
     WireGuardPeerRepository,
 )
 from database.repositories.execution import LogRepository
-from database.repositories.identity import WorkspaceMemberRepository
+from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
     WorkerRepository,
 )
+from database.types import DatabaseSession
 from execution.containers.service import ContainerService
 from execution.functions.service import FunctionControlService
 from execution.tasks import TaskService
@@ -229,6 +230,7 @@ from worker.container_client import models
 from worker.container_client.scheduler import SchedulerContainerClientFactory
 
 from database import AsyncDatabaseClient
+from gateway.agent_enrollment import AgentJoinResult, private_unit_for_enrollment
 from gateway.http import (
     AgentMetricSnapshot as HttpAgentMetricSnapshot,
 )
@@ -1600,6 +1602,14 @@ class GatewayControlService:
         current_time = utc_now()
         join_token_hash = ""
         with self.services.context.database.session() as session:
+            workspaces = WorkspaceRepository(session)
+            if deleting_workspace:
+                workspaces.lock_for_deletion(enrollment.workspace_id)
+            else:
+                workspaces.lock_active_owner(enrollment.workspace_id)
+            ComputeJoinCredentialRepository(session).lock_unit(
+                enrollment.workspace_id, enrollment.capacity_owner_id
+            )
             enrollments = ComputeMachineEnrollmentRepository(session)
             current = enrollments.by_machine(
                 enrollment.workspace_id,
@@ -1684,11 +1694,30 @@ class GatewayControlService:
         pool: ComputeUnitRecord,
         machine_fingerprint: str,
     ) -> JoinAgentResponse | None:
-        raw_token = node_agent_token.get_secret_value()
         with self.services.context.database.session() as session:
-            enrollment = ComputeMachineEnrollmentRepository(session).by_credential_hash(
-                hash_compute_token(raw_token)
+            result = self.resume_provider_agent_in_transaction(
+                session,
+                node_agent_token=node_agent_token,
+                pool=pool,
+                machine_fingerprint=machine_fingerprint,
             )
+        if result is None:
+            return None
+        self.publish_agent_join(result)
+        return result.response
+
+    def resume_provider_agent_in_transaction(
+        self,
+        session: DatabaseSession,
+        *,
+        node_agent_token: SecretStr,
+        pool: ComputeUnitRecord,
+        machine_fingerprint: str,
+    ) -> AgentJoinResult | None:
+        raw_token = node_agent_token.get_secret_value()
+        enrollment = ComputeMachineEnrollmentRepository(session).by_credential_hash(
+            hash_compute_token(raw_token), for_update=True
+        )
         if enrollment is None:
             return None
         if (
@@ -1698,11 +1727,11 @@ class GatewayControlService:
             or enrollment.machine_fingerprint_hash != hash_machine_fingerprint(machine_fingerprint)
         ):
             raise InvalidInputError("provider node enrollment does not match this launch")
-        state = self._require_agent_state(raw_token)
-        bootstrap_pool = self.unit_state_coordinator.private_unit_state(
-            pool, workspace_id=pool.workspace_id
-        )
-        return JoinAgentResponse(
+        state = _agent_state_from_enrollment(enrollment)
+        if state is None:
+            raise InvalidInputError("provider node enrollment is unavailable")
+        bootstrap_pool = private_unit_for_enrollment(pool)
+        response = JoinAgentResponse(
             workspace_id=state.workspace_id,
             pool=state.pool,
             machine_id=state.machine_id,
@@ -1719,12 +1748,31 @@ class GatewayControlService:
                 executor=state.executor,
             ),
         )
+        return AgentJoinResult(
+            response=response,
+            agent_state=state,
+            unit=pool,
+            pool_state=bootstrap_pool,
+        )
 
     def join_agent(
         self, request: JoinAgentRequest, *, node_agent_token: SecretStr | None = None
     ) -> JoinAgentResponse:
+        with self.services.context.database.session() as session:
+            result = self.join_agent_in_transaction(
+                session, request, node_agent_token=node_agent_token
+            )
+        self.publish_agent_join(result)
+        return result.response
+
+    def join_agent_in_transaction(
+        self,
+        session: DatabaseSession,
+        request: JoinAgentRequest,
+        *,
+        node_agent_token: SecretStr | None = None,
+    ) -> AgentJoinResult:
         try:
-            repository = self.compute_states
             join_request = AgentJoinRequest(
                 machine_fingerprint=request.machine_fingerprint,
                 hostname=request.hostname,
@@ -1744,233 +1792,277 @@ class GatewayControlService:
             token_hash = hash_compute_token(request.join_token)
             current_time = utc_now()
             previous_token_hash = ""
-            with self.services.context.database.session() as session:
-                credentials = ComputeJoinCredentialRepository(session)
-                enrollments = ComputeMachineEnrollmentRepository(session)
-                credential = credentials.get_by_hash(token_hash, for_update=True)
-                token_state = _join_token_state(credential)
-                pool_state = self.unit_state_coordinator.private_unit_for_join_token(token_state)
-                existing = (
-                    enrollments.by_fingerprint(
-                        token_state.owner_user_id,
-                        fingerprint_hash,
-                        for_update=True,
+            credentials = ComputeJoinCredentialRepository(session)
+            enrollments = ComputeMachineEnrollmentRepository(session)
+            credential = credentials.get_by_hash(token_hash)
+            token_state = _join_token_state(credential)
+            if token_state is None:
+                raise InvalidInputError("join token is invalid or expired")
+            WorkspaceRepository(session).lock_active_owner(token_state.workspace_id)
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(
+                token_state.capacity_owner_id, for_update=True
+            )
+            if unit is None or unit.workspace_id != token_state.workspace_id:
+                raise NotFoundError("join credential capacity owner not found")
+            credential = credentials.get_by_hash(token_hash, for_update=True)
+            token_state = _join_token_state(credential)
+            if (
+                token_state is None
+                or unit.workspace_id != token_state.workspace_id
+                or unit.capacity_owner_id != token_state.capacity_owner_id
+            ):
+                raise InvalidInputError("join token is invalid or expired")
+            pool_state = private_unit_for_enrollment(
+                unit, created_by_token_id=token_state.created_by_token_id or "gateway"
+            )
+            existing = (
+                enrollments.by_fingerprint(
+                    token_state.owner_user_id,
+                    fingerprint_hash,
+                    for_update=True,
+                )
+                if token_state is not None and token_state.owner_user_id
+                else None
+            )
+            if (
+                node_agent_token is not None
+                and existing is not None
+                and (
+                    existing.status is not ComputeMachineEnrollmentStatus.Active
+                    or existing.credential_hash
+                    != hash_compute_token(node_agent_token.get_secret_value())
+                )
+            ):
+                raise InvalidInputError("provider node credential was revoked or replaced")
+            if (
+                existing is not None
+                and existing.status is not ComputeMachineEnrollmentStatus.Active
+            ):
+                existing = None
+            if (
+                existing is not None
+                and token_state is not None
+                and existing.workspace_id != token_state.workspace_id
+            ):
+                # One host is one machine per account, so re-joining it under a
+                # second workspace would have to move its unit, its durable
+                # machine row, and whatever is running on it. Say which
+                # workspace holds it instead of silently re-homing the host.
+                raise ConflictError(
+                    "this host is already joined to your account under another "
+                    "workspace; run 'lazycloud-agent leave' on it first"
+                )
+            existing_agent = _agent_state_from_enrollment(existing)
+            existing_agents = (
+                [
+                    _agent_state_from_enrollment(item)
+                    for item in enrollments.list_for_unit(
+                        token_state.workspace_id,
+                        token_state.capacity_owner_id,
                     )
-                    if token_state is not None and token_state.owner_user_id
-                    else None
-                )
-                if (
-                    node_agent_token is not None
-                    and existing is not None
-                    and (
-                        existing.status is not ComputeMachineEnrollmentStatus.Active
-                        or existing.credential_hash
-                        != hash_compute_token(node_agent_token.get_secret_value())
-                    )
-                ):
-                    raise InvalidInputError("provider node credential was revoked or replaced")
-                if (
-                    existing is not None
-                    and existing.status is not ComputeMachineEnrollmentStatus.Active
-                ):
-                    existing = None
-                if (
-                    existing is not None
-                    and token_state is not None
-                    and existing.workspace_id != token_state.workspace_id
-                ):
-                    # One host is one machine per account, so re-joining it under a
-                    # second workspace would have to move its unit, its durable
-                    # machine row, and whatever is running on it. Say which
-                    # workspace holds it instead of silently re-homing the host.
-                    raise ConflictError(
-                        "this host is already joined to your account under another "
-                        "workspace; run 'lazycloud-agent leave' on it first"
-                    )
-                existing_agent = _agent_state_from_enrollment(existing)
-                existing_agents = (
-                    [
-                        _agent_state_from_enrollment(item)
-                        for item in enrollments.list_for_unit(
-                            token_state.workspace_id,
-                            token_state.capacity_owner_id,
-                        )
-                        if item.status is ComputeMachineEnrollmentStatus.Active
-                    ]
-                    if token_state is not None
-                    else []
-                )
-                plan = plan_agent_join(
-                    token_state,
-                    pool_state,
-                    join_request,
-                    existing_machine_gpus=[agent.gpus for agent in existing_agents if agent],
-                    existing_agent=existing_agent,
-                    credential_id=existing.id if existing is not None else "",
-                    agent_token=(
-                        node_agent_token.get_secret_value() if node_agent_token is not None else ""
-                    ),
-                )
-                if (
-                    not plan.accepted
-                    or plan.agent_state is None
-                    or credential is None
-                    or token_state is None
-                ):
-                    raise InvalidInputError(plan.err_msg or "agent join rejected")
-                agent_state = plan.agent_state
-                bootstrap_pool = (
-                    pool_state.model_copy(update={"config": plan.pool_config_update})
-                    if pool_state is not None and plan.pool_config_update is not None
-                    else pool_state
-                )
-                if bootstrap_pool is None:
-                    raise NotFoundError("pool not found")
-                bootstrap = build_agent_bootstrap_config(
-                    agent_state.workspace_id,
-                    bootstrap_pool,
-                    self.gateway_endpoint,
-                    self.agent_image,
-                    gateway_runtime_http_url=self.runtime_origin(),
-                    executor=agent_state.executor,
-                )
-                consumes_use = existing is None
-                if consumes_use and credential.use_count >= credential.max_uses:
-                    raise ConflictError("join token machine limit has been reached")
-                readiness_phase = (
-                    MachineReadinessPhase.Joining
-                    if agent_state.preflight_passed
-                    else MachineReadinessPhase.Blocked
-                )
-                machine_repository = MachineRepository(session)
-                durable_machine = machine_repository.get(
-                    agent_state.machine_id,
-                    workspace_id=agent_state.workspace_id,
-                )
-                machine_repository.upsert(
-                    Machine(
-                        id=agent_state.machine_id,
-                        pool=agent_state.pool,
-                        capacity_owner_id=agent_state.capacity_owner_id,
-                        provider="agent",
-                        status=(
-                            ResourceStatus.Created
-                            if readiness_phase is MachineReadinessPhase.Joining
-                            else ResourceStatus.Failed
-                        ),
-                        cpu=agent_state.cpu_millicores / 1000,
-                        memory=f"{agent_state.memory_mb}Mi",
-                        gpu=agent_state.gpus[0] if agent_state.gpus else None,
-                        labels={
-                            "hostname": agent_state.hostname,
-                            "os": agent_state.os,
-                            "arch": agent_state.arch,
-                            "gpu_count": str(agent_state.gpu_count),
-                            "source": "attached",
-                        },
-                        created_at=(
-                            durable_machine.created_at
-                            if durable_machine is not None
-                            else current_time
-                        ),
-                        updated_at=current_time,
-                    ),
-                    workspace_id=agent_state.workspace_id,
-                )
-                worker_id = agent_machine_worker_id(agent_state.machine_id)
-                worker_repository = WorkerRepository(session)
-                durable_worker = worker_repository.get(
-                    worker_id,
-                    workspace_id=agent_state.workspace_id,
-                )
-                worker_repository.upsert(
-                    Worker(
-                        id=worker_id,
-                        machine_id=agent_state.machine_id,
-                        pool=agent_state.pool,
-                        status=(
-                            durable_worker.status
-                            if durable_worker is not None
-                            else ResourceStatus.Created
-                        ),
-                        labels={
-                            **(durable_worker.labels if durable_worker is not None else {}),
-                            "hostname": agent_state.hostname,
-                            "source": "attached",
-                        },
-                        last_seen_at=current_time,
-                        created_at=(
-                            durable_worker.created_at
-                            if durable_worker is not None
-                            else current_time
-                        ),
-                    ),
-                    workspace_id=agent_state.workspace_id,
-                )
-                previous_token_hash = existing.credential_hash if existing is not None else ""
-                saved_enrollment = _save_machine_enrollment(
-                    enrollments,
-                    agent_state,
-                    fingerprint_hash=fingerprint_hash,
-                    join_credential_id=credential.id,
-                    readiness_phase=readiness_phase,
-                    existing=existing,
-                )
-                agent_state = agent_state.model_copy(
-                    update={
-                        "credential_id": saved_enrollment.id,
-                        "credential_generation": saved_enrollment.credential_generation,
-                    }
-                )
-                updated_credential = credential.with_use_count(
-                    credential.use_count + int(consumes_use),
-                    now=current_time,
-                )
-                credentials.save(updated_credential)
-            if plan.should_save_pool and plan.pool_config_update is not None:
-                self.unit_state_coordinator.save_compute_pool_config_update(
-                    agent_state.workspace_id,
-                    bootstrap_pool,
-                    plan.pool_config_update,
-                )
-            if plan.should_save_join_token and plan.binding and plan.binding.state:
-                repository.save_join_token_state(
-                    plan.binding.state,
-                    ttl_seconds=plan.binding.ttl_seconds or DEFAULT_PRIVATE_JOIN_TTL_SECONDS,
-                )
-            if previous_token_hash and previous_token_hash != agent_state.token_hash:
-                repository.delete_agent_token_state(previous_token_hash)
-            repository.save_join_token_state(
-                token_state.model_copy(update={"use_count": updated_credential.use_count}),
-                ttl_seconds=max(
-                    int((updated_credential.expires_at - current_time).total_seconds()),
-                    1,
+                    if item.status is ComputeMachineEnrollmentStatus.Active
+                ]
+                if token_state is not None
+                else []
+            )
+            plan = plan_agent_join(
+                token_state,
+                pool_state,
+                join_request,
+                existing_machine_gpus=[agent.gpus for agent in existing_agents if agent],
+                existing_agent=existing_agent,
+                credential_id=existing.id if existing is not None else "",
+                agent_token=(
+                    node_agent_token.get_secret_value() if node_agent_token is not None else ""
                 ),
             )
-            repository.save_agent_token_state(agent_state)
-            self.services.events.emit(
-                "agent.join",
-                resource_type="agent",
-                resource_id=agent_state.machine_id,
-                message=f"agent joined pool {agent_state.pool}",
-                data={
-                    "pool": agent_state.pool,
-                    "machine_id": agent_state.machine_id,
-                },
+            if (
+                not plan.accepted
+                or plan.agent_state is None
+                or credential is None
+                or token_state is None
+                or unit is None
+            ):
+                raise InvalidInputError(plan.err_msg or "agent join rejected")
+            agent_state = plan.agent_state
+            bootstrap_pool = (
+                pool_state.model_copy(update={"config": plan.pool_config_update})
+                if pool_state is not None and plan.pool_config_update is not None
+                else pool_state
+            )
+            if bootstrap_pool is None:
+                raise NotFoundError("pool not found")
+            bootstrap = build_agent_bootstrap_config(
+                agent_state.workspace_id,
+                bootstrap_pool,
+                self.gateway_endpoint,
+                self.agent_image,
+                gateway_runtime_http_url=self.runtime_origin(),
+                executor=agent_state.executor,
+            )
+            consumes_use = existing is None
+            if consumes_use and credential.use_count >= credential.max_uses:
+                raise ConflictError("join token machine limit has been reached")
+            readiness_phase = (
+                MachineReadinessPhase.Joining
+                if agent_state.preflight_passed
+                else MachineReadinessPhase.Blocked
+            )
+            machine_repository = MachineRepository(session)
+            durable_machine = machine_repository.get(
+                agent_state.machine_id,
                 workspace_id=agent_state.workspace_id,
+            )
+            machine_repository.upsert(
+                Machine(
+                    id=agent_state.machine_id,
+                    pool=agent_state.pool,
+                    capacity_owner_id=agent_state.capacity_owner_id,
+                    provider="agent",
+                    status=(
+                        ResourceStatus.Created
+                        if readiness_phase is MachineReadinessPhase.Joining
+                        else ResourceStatus.Failed
+                    ),
+                    cpu=agent_state.cpu_millicores / 1000,
+                    memory=f"{agent_state.memory_mb}Mi",
+                    gpu=agent_state.gpus[0] if agent_state.gpus else None,
+                    labels={
+                        "hostname": agent_state.hostname,
+                        "os": agent_state.os,
+                        "arch": agent_state.arch,
+                        "gpu_count": str(agent_state.gpu_count),
+                        "source": "attached",
+                    },
+                    created_at=(
+                        durable_machine.created_at if durable_machine is not None else current_time
+                    ),
+                    updated_at=current_time,
+                ),
+                workspace_id=agent_state.workspace_id,
+            )
+            worker_id = agent_machine_worker_id(agent_state.machine_id)
+            worker_repository = WorkerRepository(session)
+            durable_worker = worker_repository.get(
+                worker_id,
+                workspace_id=agent_state.workspace_id,
+            )
+            worker_repository.upsert(
+                Worker(
+                    id=worker_id,
+                    machine_id=agent_state.machine_id,
+                    pool=agent_state.pool,
+                    status=(
+                        durable_worker.status
+                        if durable_worker is not None
+                        else ResourceStatus.Created
+                    ),
+                    labels={
+                        **(durable_worker.labels if durable_worker is not None else {}),
+                        "hostname": agent_state.hostname,
+                        "source": "attached",
+                    },
+                    last_seen_at=current_time,
+                    created_at=(
+                        durable_worker.created_at if durable_worker is not None else current_time
+                    ),
+                ),
+                workspace_id=agent_state.workspace_id,
+            )
+            previous_token_hash = existing.credential_hash if existing is not None else ""
+            saved_enrollment = _save_machine_enrollment(
+                enrollments,
+                agent_state,
+                fingerprint_hash=fingerprint_hash,
+                join_credential_id=credential.id,
+                readiness_phase=readiness_phase,
+                existing=existing,
+            )
+            agent_state = agent_state.model_copy(
+                update={
+                    "credential_id": saved_enrollment.id,
+                    "credential_generation": saved_enrollment.credential_generation,
+                }
+            )
+            updated_credential = credential.with_use_count(
+                credential.use_count + int(consumes_use),
+                now=current_time,
+            )
+            credentials.save(updated_credential)
+            token_updates: list[tuple[ComputeJoinTokenState, int]] = []
+            if plan.should_save_join_token and plan.binding and plan.binding.state:
+                token_updates.append(
+                    (
+                        plan.binding.state,
+                        plan.binding.ttl_seconds or DEFAULT_PRIVATE_JOIN_TTL_SECONDS,
+                    )
+                )
+            token_updates.append(
+                (
+                    token_state.model_copy(update={"use_count": updated_credential.use_count}),
+                    max(int((updated_credential.expires_at - current_time).total_seconds()), 1),
+                )
+            )
+            response = JoinAgentResponse(
+                workspace_id=agent_state.workspace_id,
+                pool=agent_state.pool,
+                machine_id=plan.machine_id,
+                agent_token=plan.agent_token,
+                credential_id=agent_state.credential_id,
+                credential_generation=agent_state.credential_generation,
+                capacity_state=agent_state.capacity_state,
+                bootstrap=bootstrap,
+            )
+            return AgentJoinResult(
+                response=response,
+                agent_state=agent_state,
+                unit=unit,
+                pool_state=bootstrap_pool,
+                pool_config_update=plan.pool_config_update if plan.should_save_pool else None,
+                join_token_updates=tuple(token_updates),
+                previous_token_hash=previous_token_hash,
+                emit_join_event=True,
             )
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
-        return JoinAgentResponse(
-            workspace_id=agent_state.workspace_id,
-            pool=agent_state.pool,
-            machine_id=plan.machine_id,
-            agent_token=plan.agent_token,
-            credential_id=agent_state.credential_id,
-            credential_generation=agent_state.credential_generation,
-            capacity_state=agent_state.capacity_state,
-            bootstrap=bootstrap,
-        )
+
+    def publish_agent_join(self, result: AgentJoinResult) -> None:
+        """Publish enrollment projections after its owning transaction commits."""
+        repository = self.compute_states
+        state = self._agent_state_for_token(result.response.agent_token)
+        if (
+            state is None
+            or state.credential_id != result.agent_state.credential_id
+            or state.credential_generation != result.agent_state.credential_generation
+        ):
+            raise InvalidInputError("agent credential was revoked or replaced before publication")
+        if result.agent_state.metadata:
+            state = state.model_copy(update={"metadata": result.agent_state.metadata})
+        if repository.get_unit_state(state.workspace_id, state.capacity_owner_id) is None:
+            self.unit_state_coordinator.ensure_compute_pool_state(
+                result.unit,
+                workspace_id=state.workspace_id,
+                config=result.pool_state.config,
+                owner_token_id=result.pool_state.created_by_token_id,
+            )
+        elif result.pool_config_update is not None:
+            self.unit_state_coordinator.save_compute_pool_config_update(
+                state.workspace_id, result.pool_state, result.pool_config_update
+            )
+        for token_state, ttl_seconds in result.join_token_updates:
+            repository.save_join_token_state(token_state, ttl_seconds=ttl_seconds)
+        if result.previous_token_hash and result.previous_token_hash != state.token_hash:
+            repository.delete_agent_token_state(result.previous_token_hash)
+        repository.save_agent_token_state(state)
+        if result.emit_join_event:
+            self.services.events.emit(
+                "agent.join",
+                resource_type="agent",
+                resource_id=state.machine_id,
+                message=f"agent joined pool {state.pool}",
+                data={"pool": state.pool, "machine_id": state.machine_id},
+                workspace_id=state.workspace_id,
+            )
 
     def leave_agent(self, request: LeaveAgentRequest) -> LeaveAgentResponse:
         state = self._require_agent_state(request.agent_token)

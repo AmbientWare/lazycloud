@@ -24,7 +24,7 @@ database_app = typer.Typer(help="Inspect and migrate the database schema.")
 @database_app.command("check")
 def database_check(ctx: typer.Context) -> None:
     client = DatabaseClient.from_settings(
-        DatabaseSettings(application_name=DatabaseApplicationName.Admin)
+        DatabaseSettings(application_name=DatabaseApplicationName.Admin).direct()
     )
     try:
         payload: dict[str, str | bool] = {
@@ -75,7 +75,7 @@ def database_wait(
     ] = 1.0,
 ) -> None:
     client = DatabaseClient.from_settings(
-        DatabaseSettings(application_name=DatabaseApplicationName.Wait)
+        DatabaseSettings(application_name=DatabaseApplicationName.Wait).direct()
     )
     try:
         readiness = wait_for_database_head(
