@@ -172,14 +172,14 @@ current catalog. Ship refuses a missing or incompatible catalog before it builds
 anything.
 
 Run the Ship workflow from `main` and choose `patch`. It cuts the version,
-publishes the Python package and release, then deploys onto that release. Agent
-and container-worker changes reuse the current host images. Nodes download the
-agent and pull the exact worker digest before reporting ready.
+publishes the Python package and release, then advances the control-plane and
+worker pins. The host pin remains unchanged unless `host_manifest_url` is
+explicitly supplied. The first deployment requires a host manifest selection.
 
 `deploy.yml` on its own is the ordinary case afterwards, and runs many times
 against one release: it builds the commit's images once, into the shared
 repositories, and records them for the deployment it was given, carrying
-forward whichever release that deployment already names. Ship deploys to prod
+forward all three release pins that deployment already names. Ship deploys to prod
 directly until staging runs; then a release lands on staging and
 `promote.yml` carries the commit staging runs to prod with no build.
 

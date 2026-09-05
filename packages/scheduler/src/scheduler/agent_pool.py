@@ -25,6 +25,8 @@ from shared.scheduling import (
 )
 from shared.timestamps import utc_now
 
+from scheduler.preemption import WorkerPlannedDrainOperation, WorkerPreemptionQueueResult
+
 DEFAULT_AGENT_WORKER_BUILD_VERSION = "local"
 
 
@@ -76,6 +78,13 @@ class AgentMachineRepository(Protocol):
 
 class AgentWorkerRepository(Protocol):
     def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None: ...
+
+    def drain_worker_for_maintenance(
+        self,
+        operation: WorkerPlannedDrainOperation,
+        *,
+        now: datetime,
+    ) -> WorkerPreemptionQueueResult: ...
 
     def add_worker(
         self,
@@ -143,6 +152,34 @@ class AgentWorkerPoolController:
         current_time = now or utc_now()
         worker_id = agent_machine_worker_id(machine.machine_id)
         worker = self.workers.get_worker(worker_id)
+        if (
+            machine.workspace_id == self.config.workspace_id
+            and _machine_owned_by(machine, self.config)
+            and machine.capacity_state is AgentCapacityState.Draining
+            and worker is not None
+        ):
+            if worker.status not in {
+                SchedulerWorkerStatus.Draining,
+                SchedulerWorkerStatus.Unavailable,
+            }:
+                self.workers.drain_worker_for_maintenance(
+                    WorkerPlannedDrainOperation(
+                        operation_id=f"machine-drain-{machine.machine_id}-{worker.resource_version}",
+                        worker_id=worker.worker_id,
+                        capacity_owner_id=worker.capacity_owner_id,
+                        machine_id=machine.machine_id,
+                        expected_resource_version=worker.resource_version,
+                        reason=machine.capacity_reason or "planned machine drain",
+                        observed_at=machine.capacity_observed_at or current_time,
+                    ),
+                    now=current_time,
+                )
+            return AgentPoolWorkerResult(
+                action=AgentPoolWorkerAction.Existing,
+                machine_id=machine.machine_id,
+                worker_id=worker.worker_id,
+                reason="machine is draining existing workloads",
+            )
         if not self.machine_schedulable(machine, now=current_time):
             if worker is None:
                 return AgentPoolWorkerResult(

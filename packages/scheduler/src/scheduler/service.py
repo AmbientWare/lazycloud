@@ -399,8 +399,15 @@ def _decode_cron_job_run_cursor(value: str | None) -> CronJobRunCursor | None:
     return CronJobRunCursor(created_at=payload.created_at, id=payload.id)
 
 
+class SchedulerBuildSubmissions(Protocol):
+    def drain(self, *, limit: int = 16) -> int: ...
+
+    def recover(self, *, limit: int = 100) -> int: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SchedulerWorkloadControls:
+    image_builds: SchedulerBuildSubmissions | None = None
     containers: SchedulerContainerRequestService | None = None
     dispatch_wake: WakeSignalWaiter | None = None
     function_autoscaler: AutoscalingDriver | None = None
@@ -729,6 +736,8 @@ class Scheduler:
 
         if not include_containers:
             return SchedulerRunResult()
+        if self.workloads.image_builds is not None:
+            self.workloads.image_builds.drain(limit=container_limit)
         current_time = now or utc_now()
         function_driver = self.workloads.function_autoscaler
         endpoint_driver = self.workloads.endpoints
@@ -855,6 +864,8 @@ class Scheduler:
         """
 
         billing_enforcement = self._best_effort_enforce_billing(now=now)
+        if include_containers and self.workloads.image_builds is not None:
+            self.workloads.image_builds.recover(limit=container_limit)
         cron_job_runs = self.tick(now=now, limit=container_limit) if include_cron_jobs else []
         if not include_containers:
             return SchedulerRunResult(

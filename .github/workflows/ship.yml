@@ -23,6 +23,18 @@ name: Ship
 on:
   workflow_dispatch:
     inputs:
+      commit:
+        description: Source commit already merged into main. Empty uses this workflow's commit.
+        type: string
+        default: ""
+      worker_manifest_url:
+        description: Worker release to retain during an ordered control-plane upgrade. Empty uses the new release.
+        type: string
+        default: ""
+      host_manifest_url:
+        description: Host agent and AMI release. Empty preserves the deployed host pin.
+        type: string
+        default: ""
       bump:
         description: Which part of the version this release changes
         type: choice
@@ -50,6 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.next.outputs.version }}
+      commit: ${{ steps.source.outputs.commit }}
     steps:
       # Only main. A release tags the commit it runs from, and a tag on a branch
       # commit is a version customers can install that main never contained.
@@ -63,6 +76,19 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Resolve the merged source commit
+        id: source
+        env:
+          REQUESTED_COMMIT: ${{ inputs.commit || github.sha }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse --verify "${REQUESTED_COMMIT}^{commit}")"
+          git merge-base --is-ancestor "$commit" origin/main || {
+            echo "::error::Release source must already be merged into main."
+            exit 1
+          }
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
       - name: Compute the next version
         id: next
@@ -91,7 +117,7 @@ jobs:
           set -euo pipefail
           git config user.name "lazycloud-deploy"
           git config user.email "deploy@lazycloud.dev"
-          git tag -a "v${{ steps.next.outputs.version }}" -m "Release ${{ steps.next.outputs.version }}" "${GITHUB_SHA}"
+          git tag -a "v${{ steps.next.outputs.version }}" -m "Release ${{ steps.next.outputs.version }}" "${{ steps.source.outputs.commit }}"
           git push origin "v${{ steps.next.outputs.version }}"
 
   # The customer-facing Python package. `lazycloud-client` is the SDK and the
@@ -115,6 +141,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.version.outputs.commit }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -192,6 +220,7 @@ jobs:
     secrets: inherit
     with:
       version: ${{ needs.version.outputs.version }}
+      commit: ${{ needs.version.outputs.commit }}
 
   # Straight to prod, until staging runs. Then a release lands on staging here
   # and `promote.yml` carries it to prod once it has been looked at.
@@ -202,4 +231,7 @@ jobs:
     secrets: inherit
     with:
       deployment: prod
+      commit: ${{ needs.version.outputs.commit }}
       release_manifest_url: ${{ needs.release.outputs.manifest_url }}
+      worker_manifest_url: ${{ inputs.worker_manifest_url }}
+      host_manifest_url: ${{ inputs.host_manifest_url }}

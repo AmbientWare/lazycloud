@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID, uuid4
+
 from pydantic import Field
 
 from shared.http.base import HttpModel
@@ -41,6 +43,7 @@ class VerifyImageBuildResponse(HttpModel):
 
 
 class BuildImageRequest(HttpModel):
+    request_id: UUID = Field(default_factory=uuid4)
     architecture: LinuxArchitecture = LinuxArchitecture.Amd64
     python_version: str = "3.12"
     python_packages: list[str] = Field(default_factory=list)
@@ -70,7 +73,13 @@ class BuildImageResponse(HttpModel):
     error: str = ""
 
 
+class BuildImageEvent(HttpModel):
+    sequence: int = Field(ge=0)
+    response: BuildImageResponse
+
+
 __all__ = [
+    "BuildImageEvent",
     "BuildImageRequest",
     "BuildImageResponse",
     "BuildStep",

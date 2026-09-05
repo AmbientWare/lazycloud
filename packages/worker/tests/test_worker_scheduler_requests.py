@@ -8,7 +8,6 @@ import pytest
 from pydantic import JsonValue
 from scheduler.fleet import SchedulerContainerStatus
 from scheduler.state import (
-    DEFAULT_CONTAINER_STATE_TTL_SECONDS,
     ContainerStatusUpdatePlan,
     SchedulerContainerState,
     SchedulerWorkerRecord,
@@ -87,7 +86,7 @@ def test_worker_scheduler_request_processor_executes_and_releases_capacity() -> 
     assert execution.contexts[0].run_delayed_cleanup
 
 
-def test_worker_scheduler_request_processor_executes_image_build_branch() -> None:
+def test_worker_scheduler_request_processor_serves_work_while_an_image_build_runs() -> None:
     request = _request(
         payload={
             "kind": "image-build",
@@ -96,37 +95,53 @@ def test_worker_scheduler_request_processor_executes_image_build_branch() -> Non
             "build_options": {"dockerfile": "FROM python:3.12-slim\n"},
         }
     )
-    workers = _WorkerRepository(requests=[request])
-    execution = _ExecutionService()
-    image_builds = _ImageBuildExecutionService()
-    image_build_results = _ImageBuildResultReporter()
+    other = _request(payload={"image_id": "other", "startup_kind": "function"}).model_copy(
+        update={"container_id": "ctr-2"}
+    )
+    workers = _WorkerRepository(requests=[request, other])
+    finish_build = threading.Event()
+    usage = _UsageWindowRecorder()
+    lifecycle = WorkerLifecycleOrchestrator(worker_id="worker-1")
     containers = _ContainerRepository(
-        states={"ctr-1": _state(request, status=SchedulerContainerStatus.Pending)}
+        states={
+            item.container_id: _state(item, status=SchedulerContainerStatus.Pending)
+            for item in (request, other)
+        }
     )
     processor = WorkerSchedulerRequestProcessor(
         worker_id="worker-1",
         workers=workers,
         containers=containers,
-        execution=execution,
+        execution=_ExecutionService(),
         worker_gpu_type="",
-        image_builds=image_builds,
-        image_build_results=image_build_results,
-        usage_recorder=_UsageWindowRecorder(),
+        image_builds=_ImageBuildExecutionService(finish_build=finish_build),
+        image_build_results=_ImageBuildResultReporter(),
+        usage_recorder=usage,
+        lifecycle=lifecycle,
     )
 
-    result = processor.run_once()
+    try:
+        started = processor.run_once()
+        assert started.background
+        assert not started.capacity_released
+        unrelated = processor.run_once()
+        assert unrelated.container_id == other.container_id
+        result = _wait_for_background_result(processor, other.container_id)
+        assert result.status is WorkerSchedulerRequestStatus.Executed
+        assert result.capacity_released
+        assert usage.windows == []
+        assert not lifecycle.spindown_plan(seconds_since_last_request=1_000).should_shutdown
+    finally:
+        finish_build.set()
+        build = _wait_for_background_result(processor, request.container_id)
 
-    assert result.status is WorkerSchedulerRequestStatus.Executed
-    assert result.action is WorkerSchedulerRequestAction.Execute
-    assert result.capacity_released
-    assert result.image_build is not None
-    assert result.image_build.object_key == "image-1.rclip"
-    assert image_builds.requests == [request]
-    assert image_build_results.reports == [(request, result.image_build)]
-    assert execution.contexts == []
-    assert containers.status_updates == [("ctr-1", SchedulerContainerStatus.Running)]
-    assert containers.exit_codes == []
-    assert containers.ttls == [DEFAULT_CONTAINER_STATE_TTL_SECONDS]
+    assert build.status is WorkerSchedulerRequestStatus.Executed
+    assert build.capacity_released
+    assert build.image_build is not None and build.image_build.ok
+    assert lifecycle.active_container_ids() == []
+    [window] = usage.windows
+    assert window.container_id == request.container_id
+    assert window.duration_ms > 0
 
 
 def test_worker_scheduler_request_processor_bills_an_image_build_that_failed() -> None:
@@ -162,7 +177,9 @@ def test_worker_scheduler_request_processor_bills_an_image_build_that_failed() -
         usage_recorder=usage,
     )
 
-    result = processor.run_once()
+    started = processor.run_once()
+    assert started.background
+    result = _wait_for_background_result(processor, "ctr-1")
 
     assert result.status is WorkerSchedulerRequestStatus.Error
     assert containers.exit_codes == []
@@ -630,10 +647,15 @@ class _ExecutionService:
 
 @dataclass(slots=True)
 class _ImageBuildExecutionService:
-    requests: list[SchedulerWorkerRequest] = field(default_factory=list)
+    finish_build: threading.Event
+
+    def read_logs(self, container_id: str, *, after: int, limit: int = 256) -> list[str]:
+        del container_id, after, limit
+        return []
 
     def execute(self, request: SchedulerWorkerRequest) -> WorkerImageBuildExecutionResult:
-        self.requests.append(request)
+        if not self.finish_build.wait(timeout=2):
+            raise TimeoutError("image build did not release the worker request consumer")
         return WorkerImageBuildExecutionResult(
             ok=True,
             container_id=request.container_id,
@@ -646,6 +668,10 @@ class _ImageBuildExecutionService:
 
 @dataclass(slots=True)
 class _FailingImageBuildExecutionService:
+    def read_logs(self, container_id: str, *, after: int, limit: int = 256) -> list[str]:
+        del container_id, after, limit
+        return []
+
     def execute(self, request: SchedulerWorkerRequest) -> WorkerImageBuildExecutionResult:
         return WorkerImageBuildExecutionResult(
             ok=False,
@@ -662,6 +688,12 @@ class _ImageBuildResultReporter:
     reports: list[tuple[SchedulerWorkerRequest, WorkerImageBuildExecutionResult]] = field(
         default_factory=list
     )
+
+    def report_image_build_progress(
+        self, request: SchedulerWorkerRequest, *, after: int, logs: list[str]
+    ) -> int:
+        del request
+        return after + len(logs)
 
     def report_image_build_result(
         self,

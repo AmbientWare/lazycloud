@@ -2085,9 +2085,11 @@ def test_workspace_cleanup_discovers_ephemeral_container_after_state_deletion(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("started", [False, True])
 async def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
     real_redis_actors: RealRedisActors,
     async_redis: AsyncRedisClient,
+    started: bool,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -2125,20 +2127,43 @@ async def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
     dispatched = service.dispatch_ready(now=now, limit=1)
     assert dispatched[0].status is SchedulerContainerDispatchStatus.Dispatched
 
+    if started:
+        assert (
+            await workers.wait_for_next_container_request(
+                async_redis, "worker-1", timeout_seconds=0.01
+            )
+            is not None
+        )
+        containers.update_container_status(request.container_id, SchedulerContainerStatus.Running)
+
     result = service.cancel(request.container_id)
 
-    assert result.pending_request_removed
-    assert not result.worker_stop_required
-    assert containers.get_container_state(request.container_id) is None
+    assert result.pending_request_removed is not started
+    assert result.worker_stop_required is started
+    state = containers.get_container_state(request.container_id)
+    if started:
+        assert state is not None and state.status is SchedulerContainerStatus.Stopping
+        assert state.worker_id == "worker-1"
+    else:
+        assert state is None
     assert await _worker_delivery_empty(async_redis, workers, "worker-1")
     worker = workers.get_worker("worker-1")
     assert worker is not None
     assert worker.free_cpu_millicores == 1000
     assert worker.free_memory_mib == 1024
     state_key = containers.keys.container_state(request.container_id)
-    assert not redis.set_contains(containers.keys.container_stub_index("stub-1"), state_key)
-    assert not redis.set_contains(containers.keys.container_workspace_index("ws-1"), state_key)
-    assert not redis.set_contains(containers.keys.container_worker_index("worker-1"), state_key)
+    assert (
+        bool(redis.set_contains(containers.keys.container_stub_index("stub-1"), state_key))
+        is started
+    )
+    assert (
+        bool(redis.set_contains(containers.keys.container_workspace_index("ws-1"), state_key))
+        is started
+    )
+    assert (
+        bool(redis.set_contains(containers.keys.container_worker_index("worker-1"), state_key))
+        is started
+    )
 
 
 def test_scheduler_stopping_transition_is_atomic_with_dispatch_state_replacement(

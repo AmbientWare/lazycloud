@@ -152,11 +152,17 @@ class WorkerStreamEventHandler:
                 reason=decision.reason,
             )
         try:
-            self.container_stopper.stop_container(
-                plan.container_id,
-                force=plan.force,
-                reason=plan.reason,
+            cancelled = (
+                self.build_cancels.cancel(plan.container_id)
+                if self.build_cancels is not None
+                else None
             )
+            if cancelled is None or not cancelled.invoked:
+                self.container_stopper.stop_container(
+                    plan.container_id,
+                    force=plan.force,
+                    reason=plan.reason,
+                )
             if self.acknowledger is None or not self.worker_id:
                 raise RuntimeError("worker event acknowledger is not configured")
             self.acknowledger.acknowledge_worker_event(decision.event_id, self.worker_id)

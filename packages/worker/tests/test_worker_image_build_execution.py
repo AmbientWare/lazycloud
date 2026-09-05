@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 from base64 import b64encode
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -17,7 +18,7 @@ from worker.container_checkpoints import ContainerImageArchiveResult
 from worker.container_client.models import ContainerStatusRequest
 from worker.container_service.service import WorkerContainerService
 from worker.container_service.state import LocalWorkerContainerInstanceStore
-from worker.events import ContainerRequestContext
+from worker.events import ContainerRequestContext, WorkerBuildCancelRegistry
 from worker.image_build_architecture import ImageBuildArchitectureRuntime
 from worker.image_build_execution import (
     BuildahWorkerImageBuilder,
@@ -55,56 +56,9 @@ def _buildah_path(binary: str) -> str | None:
     return "/usr/bin/buildah" if binary == "buildah" else None
 
 
-def test_image_build_worker_rejects_managed_package_version_mismatch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    expected_digest = "a" * 64
-    worker_digest = "b" * 64
-    builder = _RecordingImageBuilder()
-    publisher = _RecordingImagePublisher()
-    instances = LocalWorkerContainerInstanceStore()
-    service = image_build_execution.WorkerImageBuildExecutionService(
-        address_publisher=_RecordingAddressPublisher(),
-        instances=instances,
-        builder=builder,
-        publisher=publisher,
-    )
-    request = SchedulerWorkerRequest(
-        workspace_id="workspace-1",
-        stub_id="image-build",
-        container_id="build-container-1",
-        payload={
-            "kind": "image-build",
-            "workspace_id": "spoofed-workspace",
-            "build_id": "build-1",
-            "image_id": "image-1",
-            "build_options": {"managed_package_digest": expected_digest},
-        },
-    )
-    monkeypatch.setattr(
-        image_build_execution, "managed_package_source_digest", lambda: worker_digest
-    )
-
-    result = service.execute(request)
-
-    assert not result.ok
-    assert result.error_message == (
-        "RuntimeError: managed package digest mismatch: "
-        f"control plane expected {expected_digest}, image worker resolved {worker_digest}"
-    )
-    assert builder.requests == []
-    assert publisher.image_ids == []
-    assert instances.instances[request.container_id].status == "failed"
-    status = WorkerContainerService(instances=instances).container_status(
-        ContainerStatusRequest(container_id=request.container_id)
-    )
-    assert status.error_msg == result.error_message
-
-
 def test_image_build_worker_consumes_bound_source_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    package_digest = "a" * 64
     registry_auth = ImageBuildRegistryAuth(
         registry="registry.example.com",
         auth=b64encode(b"builder:private-secret").decode("ascii"),
@@ -113,6 +67,7 @@ def test_image_build_worker_consumes_bound_source_credentials(
     loader = _RecordingCredentialLoader(registry_auth)
     service = image_build_execution.WorkerImageBuildExecutionService(
         address_publisher=_RecordingAddressPublisher(),
+        cancellations=WorkerBuildCancelRegistry(),
         instances=LocalWorkerContainerInstanceStore(),
         builder=builder,
         publisher=_RecordingImagePublisher(),
@@ -128,7 +83,6 @@ def test_image_build_worker_consumes_bound_source_credentials(
             "build_id": "build-1",
             "image_id": "image-1",
             "build_options": {
-                "managed_package_digest": package_digest,
                 "source_image": "registry.example.com/team/base:latest",
             },
             "credential_metadata": {
@@ -137,9 +91,6 @@ def test_image_build_worker_consumes_bound_source_credentials(
                 "cache_key": "credential-cache-key",
             },
         },
-    )
-    monkeypatch.setattr(
-        image_build_execution, "managed_package_source_digest", lambda: package_digest
     )
 
     result = service.execute(request)
@@ -183,12 +134,12 @@ def test_worker_registry_authfile_is_private_and_contains_docker_auth(tmp_path: 
 def test_worker_private_build_args_are_redacted_from_results_and_instance_logs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    package_digest = "a" * 64
     private_value = "private-build-argument"
     builder = _RecordingImageBuilder(log_private_values=True)
     instances = LocalWorkerContainerInstanceStore()
     service = image_build_execution.WorkerImageBuildExecutionService(
         address_publisher=_RecordingAddressPublisher(),
+        cancellations=WorkerBuildCancelRegistry(),
         instances=instances,
         builder=builder,
         publisher=_RecordingImagePublisher(),
@@ -204,15 +155,12 @@ def test_worker_private_build_args_are_redacted_from_results_and_instance_logs(
             "kind": "image-build",
             "build_id": "build-1",
             "image_id": "image-1",
-            "build_options": {"managed_package_digest": package_digest},
+            "build_options": {},
             "credential_metadata": {
                 "source": "ephemeral-private-inputs",
                 "cache_key": "private-input-cache-key",
             },
         },
-    )
-    monkeypatch.setattr(
-        image_build_execution, "managed_package_source_digest", lambda: package_digest
     )
 
     result = service.execute(request)
@@ -233,11 +181,11 @@ def test_worker_private_build_args_are_redacted_from_results_and_instance_logs(
 def test_worker_publication_failure_redacts_private_logs_and_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    package_digest = "a" * 64
     private_value = "private-publication-argument"
     instances = LocalWorkerContainerInstanceStore()
     service = image_build_execution.WorkerImageBuildExecutionService(
         address_publisher=_RecordingAddressPublisher(),
+        cancellations=WorkerBuildCancelRegistry(),
         instances=instances,
         builder=_RecordingImageBuilder(log_private_values=True),
         publisher=_RecordingImagePublisher(error=f"upload rejected: {private_value}"),
@@ -253,15 +201,12 @@ def test_worker_publication_failure_redacts_private_logs_and_error(
             "kind": "image-build",
             "build_id": "build-1",
             "image_id": "image-1",
-            "build_options": {"managed_package_digest": package_digest},
+            "build_options": {},
             "credential_metadata": {
                 "source": "ephemeral-private-inputs",
                 "cache_key": "private-input-cache-key",
             },
         },
-    )
-    monkeypatch.setattr(
-        image_build_execution, "managed_package_source_digest", lambda: package_digest
     )
 
     result = service.execute(request)
@@ -361,10 +306,10 @@ def test_buildah_failure_cleans_every_resource_in_its_isolated_store(
         env: dict[str, str],
         cwd: Path,
         log: ImageBuildLog,
-        capture_stdout: bool = False,
+        cancellation: threading.Event,
         scratch: ImageBuildScratchLease | None = None,
     ) -> str:
-        del directories, driver, env, cwd, log, capture_stdout, scratch
+        del directories, driver, env, cwd, log, cancellation, scratch
         assert args[0] == "bud"
         raise RuntimeError("deliberate build failure")
 
@@ -400,7 +345,6 @@ def test_buildah_failure_cleans_every_resource_in_its_isolated_store(
             "image_id": "image-1",
             "build_options": {
                 "dockerfile": "FROM scratch\nRUN false\n",
-                "managed_package_digest": "a" * 64,
             },
         }
     )
@@ -409,6 +353,7 @@ def test_buildah_failure_cleans_every_resource_in_its_isolated_store(
         payload,
         container_id="container-1",
         log=lambda _message: None,
+        cancellation=threading.Event(),
     )
 
     assert not result.ok
@@ -428,10 +373,10 @@ def test_buildah_cleanup_failure_still_releases_isolated_scratch(
         env: dict[str, str],
         cwd: Path,
         log: ImageBuildLog,
-        capture_stdout: bool = False,
+        cancellation: threading.Event,
         scratch: ImageBuildScratchLease | None = None,
     ) -> str:
-        del directories, driver, env, cwd, log, capture_stdout, scratch
+        del directories, driver, env, cwd, log, cancellation, scratch
         raise RuntimeError("deliberate build failure")
 
     def fail_cleanup(
@@ -476,7 +421,6 @@ def test_buildah_cleanup_failure_still_releases_isolated_scratch(
             "image_id": "image-1",
             "build_options": {
                 "dockerfile": "FROM scratch\nRUN false\n",
-                "managed_package_digest": "a" * 64,
             },
         }
     )
@@ -485,6 +429,7 @@ def test_buildah_cleanup_failure_still_releases_isolated_scratch(
         payload,
         container_id="container-1",
         log=lambda _message: None,
+        cancellation=threading.Event(),
     )
 
     assert not result.ok
@@ -642,6 +587,7 @@ class _RecordingImageBuilder:
         registry_auth: ImageBuildRegistryAuth | None,
         build_args: dict[str, str],
         log: ImageBuildLog,
+        cancellation: threading.Event,
     ) -> WorkerImageArchiveBuildResult:
         self.requests.append(payload)
         self.registry_auths.append(registry_auth)

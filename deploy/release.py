@@ -1,29 +1,8 @@
-"""Publish a connected-AWS release from the working tree, in one source state.
+"""Publish local release artifacts and select independent worker and host pins.
 
-Every artifact a managed node consumes embeds this repository's source: the
-container images, the agent executable, and the worker image the node pulls.
-The managed runtime compares what the control plane expects against what the
-worker resolves, so a release assembled from two source states is rejected at
-container start as a package-digest mismatch — an error that names a digest and
-not the stale artifact behind it.
-
-`deploy/RUNBOOK.md` has said to build them together since the first live run,
-and they were still assembled apart, because a sequence written down is a
-sequence someone performs from memory at the point they are least able to. This
-command performs it instead, and refuses the states where "one source state" is
-not a fact: a dirty tree has no single revision to name, and a subset rebuild
-has no way to prove the rest came from the same place.
-
-It orchestrates the existing owners rather than reimplementing them —
-`deploy/agent-binary/build.py` builds the executable and
-`deploy/aws-release-assets/release.py` stages, publishes, and verifies.
-
-Publishing is not arriving. A managed pool rolls its launch template forward and
-leaves every running node on the version it booted with, so a release that
-reached nothing used to exit exactly like one that reached everything, and the
-divergence surfaced an hour later as that same digest mismatch. The command now
-ends by naming, per node, which release is actually running there, and fails
-when that is not this one.
+Control-plane images and the worker image are built from this source revision.
+The deployment keeps the explicitly selected host agent and AMI release.
+Host template inventory is reported separately from worker rollout acceptance.
 """
 
 from __future__ import annotations
@@ -37,6 +16,7 @@ import time
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -49,9 +29,9 @@ _BOOTSTRAP_PROCESSES = ("control-plane", "scheduler")
 # Authored by the deployment rather than published by a release, and the one
 # bootstrap input both processes read that a release therefore cannot align.
 _GATEWAY_ORIGIN_VARIABLE = "LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL"
-# The whole of what a deployment copies out of a release. Every other release
-# fact is read from the manifest this names.
 _MANIFEST_URL_VARIABLE = "LAZYCLOUD_RELEASE_MANIFEST_URL"
+_WORKER_MANIFEST_URL_VARIABLE = "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL"
+_HOST_MANIFEST_URL_VARIABLE = "LAZYCLOUD_RELEASE_HOST_MANIFEST_URL"
 # The pooled reconcile runs on a 60s timer
 # (`scheduler.service.MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS`), so a reading
 # taken sooner than that after a restart is the previous process's snapshot.
@@ -221,23 +201,45 @@ def publish_release(
     return published_url
 
 
-def repoint_deployment(manifest_url: str) -> None:
-    """Point the deployment at the release, which is the whole of what it copies.
+def _https_manifest_url(value: str) -> str:
+    url = value.strip()
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise ReleaseError("host manifest must be a valid HTTPS URL") from exc
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+        or any(character.isspace() for character in url)
+    ):
+        raise ReleaseError("host manifest must be an HTTPS URL without credentials or a fragment")
+    return url
 
-    The release's facts are read from the manifest at runtime, so the only thing
-    written here is which manifest. Six values used to be transcribed instead,
-    and a deployment could then hold five from one release and one from another
-    with nothing able to notice.
-    """
+
+def repoint_deployment(manifest_url: str, *, host_manifest_url: str) -> None:
+    """Update release pins in the local .env without changing other settings."""
     path = _REPOSITORY_ROOT / ".env"
-    lines = path.read_text().splitlines(keepends=True)
-    entry = f"{_MANIFEST_URL_VARIABLE}='{manifest_url}'\n"
-    for index, line in enumerate(lines):
-        if line.split("=", 1)[0].strip() == _MANIFEST_URL_VARIABLE:
-            lines[index] = entry
-            break
-    else:
-        lines.append(entry)
+    lines = path.read_text().splitlines(keepends=True) if path.exists() else []
+    pins = {
+        _MANIFEST_URL_VARIABLE: manifest_url,
+        _WORKER_MANIFEST_URL_VARIABLE: manifest_url,
+        _HOST_MANIFEST_URL_VARIABLE: host_manifest_url,
+    }
+    for name, value in pins.items():
+        entry = f"{name}={json.dumps(value)}\n"
+        matches = [
+            index for index, line in enumerate(lines) if line.split("=", 1)[0].strip() == name
+        ]
+        if matches:
+            for index in matches:
+                lines[index] = entry
+        else:
+            if lines and not lines[-1].endswith("\n"):
+                lines[-1] += "\n"
+            lines.append(entry)
     path.write_text("".join(lines))
 
 
@@ -251,24 +253,12 @@ def process_environment(service: str) -> dict[str, str]:
     return dict(entry.split("=", 1) for entry in entries if "=" in entry)
 
 
-def guard_bootstrap_agreement(manifest_url: str) -> None:
-    """Prove both bootstrap composers read this release, and read the same one.
-
-    `apps/api` and `apps/scheduler` each build a pool's launch-template bootstrap
-    from their own process settings, and `gateway.pool_bootstrap` says what a
-    disagreement costs: the template alternates between two versions on every
-    reconcile and no node is ever stable. A staleness number taken then measures
-    nothing, so this is a precondition rather than another line of the report.
-
-    A release's facts now reach both processes through one pointer, so agreement
-    is a comparison of that pointer and the origin the two call sites both warn
-    about. A container keeps the environment it was created with, so a process
-    left on the previous release shows up here rather than an hour later as a
-    digest mismatch. What this cannot see: any configuration layer beneath the
-    environment, and whether the two images carry the same code.
-    """
+def guard_bootstrap_agreement(manifest_url: str, *, host_manifest_url: str) -> None:
+    """Verify both bootstrap composers loaded the selected release pins."""
     expected: dict[str, str | None] = {
         _MANIFEST_URL_VARIABLE: manifest_url,
+        _WORKER_MANIFEST_URL_VARIABLE: manifest_url,
+        _HOST_MANIFEST_URL_VARIABLE: host_manifest_url,
         # No release publishes this, so it is checked for agreement only.
         _GATEWAY_ORIGIN_VARIABLE: None,
     }
@@ -287,10 +277,10 @@ def guard_bootstrap_agreement(manifest_url: str) -> None:
             continue
         value = held[0] or "(unset)"
         if published is not None and held[0] != published:
-            unloaded.append(f"{name}: both hold {value}, this release published {published}")
-            print(f"  {name}: both hold {value}, NOT this release", flush=True)
+            unloaded.append(f"{name}: both hold {value}, selected pin is {published}")
+            print(f"  {name}: both hold {value}, NOT the selected pin", flush=True)
             continue
-        origin = "this release" if published is not None else "the deployment"
+        origin = "selected pin" if published is not None else "the deployment"
         print(f"  {name}: both hold {value} ({origin})", flush=True)
     if divergent:
         raise ReleaseError(
@@ -300,8 +290,7 @@ def guard_bootstrap_agreement(manifest_url: str) -> None:
         )
     if unloaded:
         raise ReleaseError(
-            "both processes agree, on a release that is not this one, so no node could "
-            "have received it: " + "; ".join(unloaded)
+            "processes have not loaded the selected release pins: " + "; ".join(unloaded)
         )
 
 
@@ -464,28 +453,15 @@ def _read_age(observed_at: datetime, clock: datetime, since: datetime) -> str:
 
 
 def report_release_reach(*, since: datetime) -> int:
-    """Say, per node, whether the release reached it, and refuse to guess.
-
-    Publishing a release does not replace a running instance: an Auto Scaling
-    group rolls its launch template forward and leaves every node on the version
-    it started with, so a release that reached nothing succeeds exactly like one
-    that reached everything. Every node's booted version is printed whether or
-    not it is stale, because a report that prints only problems cannot be told
-    apart from one that failed to look.
-
-    The reading must be newer than the restart. The record is refreshed on the
-    pooled reconcile's own timer, so the poll prints each cycle rather than
-    waiting: a control plane that never reconciles shows as an unchanging read
-    age within seconds instead of at the deadline.
-    """
+    """Report host launch-template inventory; this does not inspect worker images."""
     deadline = time.monotonic() + _REACH_BUDGET_SECONDS
     cycle = 0
     while True:
         cycle += 1
         reading = read_reach()
-        print(f"release reach, cycle {cycle}:", flush=True)
+        print(f"host template inventory, cycle {cycle}:", flush=True)
         if not reading.pools:
-            print("  no provisioning unit holds machines, so this release has none to reach")
+            print("  no managed host instances recorded; worker rollout is not evaluated")
             return 0
         _print_reach(reading, since=since)
         if _reach_settled(reading, since=since) or time.monotonic() >= deadline:
@@ -495,7 +471,9 @@ def report_release_reach(*, since: datetime) -> int:
     nodes = sum(len(pool.instances) for pool in reading.pools)
     print(f"read {len(reading.pools)} pool(s), {nodes} node(s), {len(faults)} fault(s)", flush=True)
     if faults:
-        raise ReleaseError("the release did not reach every running node: " + "; ".join(faults))
+        raise ReleaseError(
+            "host template inventory has unresolved differences: " + "; ".join(faults)
+        )
     return nodes
 
 
@@ -503,6 +481,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--worker-repository", required=True)
+    parser.add_argument(
+        "--host-manifest-url",
+        required=True,
+        help="HTTPS release manifest selecting the host agent and AMIs",
+    )
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--aws-cli", default="aws")
     parser.add_argument("--arch", action="append", dest="architectures")
@@ -518,11 +501,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="append",
         dest="cpu_amis",
         metavar="REGION=AMI",
-        help=(
-            "the base image managed CPU nodes boot, per region. The release carries and "
-            "verifies it, so every deployment reading this release boots the same one; a "
-            "release naming none cannot run managed capacity"
-        ),
+        help="CPU host AMI advertised by this manifest; this stack uses --host-manifest-url",
     )
     parser.add_argument(
         "--allow-dirty",
@@ -532,15 +511,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--skip-restart",
         action="store_true",
-        help=(
-            "publish without loading the release into this stack, which also skips the "
-            "report: nodes measured against a control plane that has not adopted the "
-            "release read as stale when nothing is wrong"
-        ),
+        help="publish and write pins without restarting or checking the running stack",
     )
     args = parser.parse_args(argv)
 
     try:
+        host_manifest_url = _https_manifest_url(args.host_manifest_url)
         cpu_ami_ids = _parse_region_amis(args.cpu_amis or [], flag="--cpu-ami")
         gpu_ami_ids = _parse_region_amis(args.gpu_amis or [], flag="--gpu-ami")
         version = source_revision(allow_dirty=args.allow_dirty)
@@ -567,8 +543,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print("published and verified the release", flush=True)
 
-        repoint_deployment(manifest_url)
-        print(f"repointed the deployment at {manifest_url}", flush=True)
+        repoint_deployment(manifest_url, host_manifest_url=host_manifest_url)
+        print(
+            f"selected worker release {manifest_url}; host release {host_manifest_url}",
+            flush=True,
+        )
 
         if args.skip_restart:
             print(
@@ -584,14 +563,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         # disagree the launch template alternates and every version a node
         # reports is meaningless.
         print("pool bootstrap inputs:", flush=True)
-        guard_bootstrap_agreement(manifest_url)
+        guard_bootstrap_agreement(manifest_url, host_manifest_url=host_manifest_url)
 
         nodes = report_release_reach(since=read_reach().clock)
     except ReleaseError as error:
         print(f"release failed: {error}", file=sys.stderr)
         return 1
 
-    print(f"release {version} is live; {nodes} managed node(s) are running it")
+    print(
+        f"release {version} published; stack pins loaded and {nodes} host(s) inventoried. "
+        "Worker rollout has not been verified."
+    )
     return 0
 
 

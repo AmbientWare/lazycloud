@@ -128,6 +128,7 @@ class WorkerTable(IdPayloadTable, DatabaseBase):
 
 class ContainerTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "containers"
+    workload_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_containers_workspace_created", "workspace_id", "created_at"),
         # Concurrency is counted on the path that starts every container, so the

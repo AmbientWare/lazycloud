@@ -235,14 +235,15 @@ def assemble_worker_process_services(
         finalization_dependencies.source_workspaces.prune_abandoned_temporary_paths(
             {instance.container_id for instance in instance_store.list_container_instances()}
         )
+    build_cancels = image_build_dependencies.build_cancels or WorkerBuildCancelRegistry()
     runtime_stopper = WorkerRuntimeContainerStopper(
         dependencies.runtime_controller,
+        build_cancels=build_cancels,
         instances=instance_store,
         sandbox_docker=container_service_dependencies.sandbox_docker,
         worker_id=identity.worker_id,
     )
     address_publisher = SchedulerWorkerAddressPublisher(identity, container_repository)
-    build_cancels = image_build_dependencies.build_cancels or WorkerBuildCancelRegistry()
     usage_supervisor = WorkerSupervisionService(
         worker_id=identity.worker_id,
         event_sink=event_sink,
@@ -347,6 +348,7 @@ def assemble_worker_process_services(
             instances=instance_store,
             builder=image_build_dependencies.image_builder,
             publisher=image_build_dependencies.image_archive_publisher,
+            cancellations=build_cancels,
             credential_loader=image_build_dependencies.image_build_credential_loader,
         )
         if image_build_dependencies.image_builder is not None

@@ -36,7 +36,7 @@ from worker.container_service.protocols import (
     WorkerContainerRuntimeController,
     WorkerSandboxDockerLifecycle,
 )
-from worker.events import ContainerEventPayload, ContainerRequestContext
+from worker.events import ContainerEventPayload, ContainerRequestContext, WorkerBuildCancelRegistry
 from worker.execution import (
     ContainerNetworkIdentity,
     NetworkAddressMode,
@@ -558,6 +558,7 @@ class WorkerFinalizationCleanup:
 @dataclass(slots=True)
 class WorkerRuntimeContainerStopper:
     runtime: WorkerContainerRuntimeController
+    build_cancels: WorkerBuildCancelRegistry | None = None
     instances: WorkerContainerInstanceStore | None = None
     sandbox_docker: WorkerSandboxDockerLifecycle | None = None
     worker_id: str = ""
@@ -571,6 +572,8 @@ class WorkerRuntimeContainerStopper:
         force: bool,
         reason: StopContainerReason = StopContainerReason.Unknown,
     ) -> None:
+        if self.build_cancels is not None and self.build_cancels.cancel(container_id).invoked:
+            return
         if self.instances is not None:
             instance = self.instances.get_container_instance(container_id)
             if instance is None:
