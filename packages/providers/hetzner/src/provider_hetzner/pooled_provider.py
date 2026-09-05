@@ -132,6 +132,7 @@ class HetznerPooledProvider:
             }
         )
         servers = self._servers(request)
+        self._reconcile_servers(request, servers)
         if len(servers) > desired_machines:
             # Only release_machine can identify the worker the drain owner fenced.
             return self._snapshot(request, servers)
@@ -181,13 +182,14 @@ class HetznerPooledProvider:
                     raise
                 # A concurrent or timed-out create is recovered through its provider name.
                 servers = self._servers(request)
+                self._reconcile_servers(request, servers)
                 if name not in {item.name for item in servers}:
                     raise
                 names = {item.name for item in servers}
                 continue
             self._validate_server(request, server)
             self._bind_server(server)
-            self._tag_ips(request, server)
+            self._tag_ips(request, (server,))
             servers.append(server)
             names.add(name)
         return self._snapshot(request, servers)
@@ -200,14 +202,15 @@ class HetznerPooledProvider:
         server = self.client.server(_server_id(provider_instance_id))
         if server is not None:
             self._validate_server(request, server)
-            self._tag_ips(request, server)
+            self._tag_ips(request, (server,))
             self.client.delete_server(server.id)
         self._cleanup_ips(request, provider_instance_id)
         return self.describe_unit(request)
 
     def delete_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
-        for server in self._servers(request):
-            self._tag_ips(request, server)
+        servers = self._servers(request)
+        self._reconcile_servers(request, servers)
+        for server in servers:
             self.client.delete_server(server.id)
         self._cleanup_ips(request)
         request = request.model_copy(update={"desired_machines": 0})
@@ -240,9 +243,13 @@ class HetznerPooledProvider:
         servers = list(self.client.servers(self._selector(request)))
         for server in servers:
             self._validate_server(request, server)
-            self._bind_server(server)
-            self._tag_ips(request, server)
         return servers
+
+    def _reconcile_servers(self, request: ProviderUnitRequest, servers: Iterable[Server]) -> None:
+        observed = tuple(servers)
+        for server in observed:
+            self._bind_server(server)
+        self._tag_ips(request, observed)
 
     def _validate_server(self, request: ProviderUnitRequest, server: Server) -> None:
         if (
@@ -268,16 +275,26 @@ class HetznerPooledProvider:
             generation=int(server.labels[_GENERATION_LABEL]),
         )
 
-    def _tag_ips(self, request: ProviderUnitRequest, server: Server) -> None:
-        labels = {
-            _MANAGED_LABEL: "true",
-            _UNIT_LABEL: request.unit_id,
-            _PROVIDER_LABEL: provider_label(self.provider_ref),
-            _SERVER_LABEL: str(server.id),
+    def _tag_ips(self, request: ProviderUnitRequest, servers: Iterable[Server]) -> None:
+        observed = tuple(servers)
+        if not observed:
+            return
+        addresses = {
+            address.id: address for address in self.client.primary_ips(self._selector(request))
         }
-        for address in (server.public_net.ipv4, server.public_net.ipv6):
-            if address is not None:
-                self.client.tag_primary_ip(address.id, labels)
+        for server in observed:
+            labels = {
+                _MANAGED_LABEL: "true",
+                _UNIT_LABEL: request.unit_id,
+                _PROVIDER_LABEL: provider_label(self.provider_ref),
+                _SERVER_LABEL: str(server.id),
+            }
+            for address in (server.public_net.ipv4, server.public_net.ipv6):
+                if address is not None:
+                    primary_ip = addresses.get(address.id)
+                    if primary_ip is None:
+                        primary_ip = self.client.primary_ip(address.id)
+                    self.client.tag_primary_ip(primary_ip, labels)
 
     def _cleanup_ips(self, request: ProviderUnitRequest, server_id: str = "") -> None:
         selector = self._selector(request)

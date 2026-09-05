@@ -90,9 +90,6 @@ def _manager(
     return ContainerRootfsOverlayManager(
         image_mount_root=tmp_path / "images",
         scratch_root=tmp_path / "container-rootfs",
-        # The smallest store xfs accepts. The default reserves 100GiB of address
-        # space, which the production free-space check rightly refuses on a host
-        # that does not have it, and the admission floor scales down with it.
         backing_image_bytes=max(MINIMUM_CONTAINER_ROOTFS_BACKING_BYTES, reserve_bytes * 2),
         minimum_free_bytes=reserve_bytes,
         system=ContainerRootfsSystem(

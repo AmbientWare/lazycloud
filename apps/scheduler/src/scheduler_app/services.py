@@ -258,6 +258,7 @@ class SchedulerAppServices:
                     platform_capacity,
                     launch_credentials=provider_node_launches,
                     capacity_workspace=platform_capacity_workspace,
+                    redis=redis,
                 ),
                 gateway_origin=gateway_origin,
                 presigned_origin=storage.object_store.presigned_endpoint_url or "",
