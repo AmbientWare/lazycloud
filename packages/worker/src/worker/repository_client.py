@@ -893,6 +893,10 @@ class RemoteSchedulerWorkerRepository:
         request: SchedulerWorkerRequest,
         result: WorkerImageBuildExecutionResult,
     ) -> None:
+        for after in range(0, len(result.logs), 256):
+            self.report_image_build_progress(
+                request, after=after, logs=result.logs[after : after + 256]
+            )
         response = self.client.report_image_build_result(
             ReportImageBuildResultRequest(
                 worker_id=self.state.worker_id,
@@ -904,7 +908,7 @@ class RemoteSchedulerWorkerRepository:
                 object_key=result.object_key,
                 archive_size_bytes=result.archive_size_bytes,
                 archive_sha256=result.archive_sha256,
-                logs=[_bounded_image_build_log(line) for line in result.logs[-256:]],
+                logs=[],
                 error_message=result.error_message[:65_536],
             )
         )

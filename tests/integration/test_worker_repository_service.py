@@ -43,6 +43,7 @@ from database.repositories.execution import TaskRepository
 from database.repositories.images import (
     CheckpointRepository,
     ImageArchiveRepository,
+    ImageBuildRepository,
     ImageRepository,
 )
 from database.repositories.orchestration import (
@@ -59,8 +60,7 @@ from gateway.http import (
 )
 from gateway.service import GatewayControlService
 from identity.auth import AuthorizationDeniedError, AuthService
-from images.execution import ManifestImageBuildExecutor
-from images.service import ImageBuildService
+from images.building import build_image_plan
 from operations.container_shutdown import ContainerShutdownService
 from pydantic import JsonValue, TypeAdapter
 from scheduler.containers import SchedulerContainerDispatchStatus
@@ -92,7 +92,7 @@ from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.http.errors import ErrorResponse
 from shared.identity import AuthScope, TokenKind, WorkspaceStorageConfig
 from shared.image_building.authoring import ImageSpec
-from shared.image_building.records import BuildStatus, ImageRecord
+from shared.image_building.records import BuildStatus, ImageBuildRecord, ImageRecord
 from shared.objects import ObjectRecord
 from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
 from shared.source_cache_cleanup import (
@@ -223,27 +223,21 @@ def test_worker_result_durably_finishes_a_build_and_is_idempotent(
     real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
-    images = ImageBuildService(
-        isolated_services.context,
-        executor=ManifestImageBuildExecutor(),
-    )
+    images = isolated_services.images
     service = _worker_repository_service(isolated_services, redis)
     assert service.dependencies is not None
     service.dependencies = replace(service.dependencies, images=images)
     workspace_id = ControlPlaneService(isolated_services.context).get_workspace().id
-    execution = images.start(
-        ImageSpec(commands=["python -V"]),
-        workspace_id=workspace_id,
-    )
-    container_id = execution.session.container_id
+    build = _pending_image_build(isolated_services, ImageSpec(commands=["python -V"]))
+    container_id = build.id
     service.containers.set_container_state(
         SchedulerContainerState(
             container_id=container_id,
             stub_id="image-build",
             workspace_id=workspace_id,
             worker_id="worker-1",
-            image_build_id=execution.record.id,
-            image_id=execution.record.image_id or "",
+            image_build_id=build.id,
+            image_id=build.image_id or "",
             status=SchedulerContainerStatus.Running,
         )
     )
@@ -251,13 +245,14 @@ def test_worker_result_durably_finishes_a_build_and_is_idempotent(
         worker_id="worker-1",
         workspace_id=workspace_id,
         container_id=container_id,
-        build_id=execution.record.id,
-        image_id=execution.record.image_id or "",
-        status=BuildStatus.Complete,
-        object_key=f"images/{execution.record.image_id}.rclip",
+        build_id=build.id,
+        image_id=build.image_id or "",
+        status=BuildStatus.Failed,
+        object_key=f"images/{build.image_id}.rclip",
         archive_size_bytes=1024,
         archive_sha256="a" * 64,
-        logs=["image archive published"],
+        logs=["build command failed"],
+        error_message="build command failed",
     )
     principal = WorkerRepositoryPrincipal(
         workspace_id=workspace_id,
@@ -273,11 +268,11 @@ def test_worker_result_durably_finishes_a_build_and_is_idempotent(
     repeated = service.report_image_build_result(request, principal=principal)
 
     assert first.accepted and repeated.accepted
-    assert first.status is BuildStatus.Complete
-    assert images.get(execution.record.id, workspace_id=workspace_id).status is BuildStatus.Complete
+    assert first.status is BuildStatus.Failed
+    assert images.get(build.id, workspace_id=workspace_id).status is BuildStatus.Failed
     state = service.containers.get_container_state(container_id)
     assert state is not None
-    assert state.status is SchedulerContainerStatus.Complete
+    assert state.status is SchedulerContainerStatus.Failed
 
 
 def test_automatic_checkpoint_lease_is_bound_to_assigned_container_and_worker(
@@ -347,6 +342,7 @@ def test_managed_image_build_credentials_use_assigned_workspace(
             stub_id="image-build",
             workspace_id=workspace_id,
             worker_id="worker-1",
+            image_build_id="build-tenant",
         )
     )
     request = GetImageBuildCredentialsRequest(
@@ -478,11 +474,12 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
     )
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-    execution = isolated_services.images.start(ImageSpec(ignore_python=True, commands=["true"]))
-    build = execution.record
+    build = _pending_image_build(
+        isolated_services, ImageSpec(ignore_python=True, commands=["true"])
+    )
     assert build.image_id
     capability = "a" * 32
-    container_id = execution.session.container_id
+    container_id = build.id
     service.containers.set_container_state(
         SchedulerContainerState(
             container_id=container_id,
@@ -568,15 +565,14 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
     with pytest.raises(AuthorizationDeniedError, match="already consumed"):
         service.get_image_archive_upload_credentials(request, principal=principal)
 
-    stale_execution = isolated_services.images.start(
-        ImageSpec(ignore_python=True, commands=["echo stale"])
+    stale_build = _pending_image_build(
+        isolated_services, ImageSpec(ignore_python=True, commands=["echo stale"])
     )
-    stale_build = stale_execution.record
     assert stale_build.image_id
     stale_capability = "c" * 32
     service.containers.set_container_state(
         SchedulerContainerState(
-            container_id=stale_execution.session.container_id,
+            container_id=stale_build.id,
             stub_id="image-build",
             workspace_id=workspace_id,
             worker_id="worker-1",
@@ -591,7 +587,7 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
             ImageArchiveUploadCredentialRequest(
                 workspace_id=workspace_id,
                 build_id=stale_build.id,
-                container_id=stale_execution.session.container_id,
+                container_id=stale_build.id,
                 image_id=stale_build.image_id,
                 upload_capability=stale_capability,
                 archive_size_bytes=1024,
@@ -619,19 +615,18 @@ def test_image_build_context_download_is_bound_to_active_assignment_and_object(
         data=b"remote-v2-build-context",
         content_type="application/zip",
     )
-    execution = isolated_services.images.start(
+    build = _pending_image_build(
+        isolated_services,
         ImageSpec(
             ignore_python=True,
             context_object_id=context.id,
             context_digest=context.sha256,
         ),
-        workspace_id=workspace_id,
     )
-    build = execution.record
     assert build.image_id
     service.containers.set_container_state(
         SchedulerContainerState(
-            container_id=execution.session.container_id,
+            container_id=build.id,
             stub_id="image-build",
             workspace_id=workspace_id,
             worker_id="worker-1",
@@ -642,7 +637,7 @@ def test_image_build_context_download_is_bound_to_active_assignment_and_object(
     request = PrepareImageBuildContextDownloadRequest(
         workspace_id=workspace_id,
         build_id=build.id,
-        container_id=execution.session.container_id,
+        container_id=build.id,
         object_id=context.id,
     )
     principal = WorkerRepositoryPrincipal(
@@ -3359,3 +3354,21 @@ def test_worker_repository_exit_charges_an_attempt_for_what_a_pooled_container_l
         "invocation that kills every container it touches is started again forever"
     )
     assert settled.attempt_number == 2
+
+
+def _pending_image_build(services: ApiServices, image: ImageSpec) -> ImageBuildRecord:
+    plan = build_image_plan(image)
+    build_id = str(uuid4())
+    with services.context.database.session() as session:
+        workspace_id = services.context.default_workspace_id(session)
+        return ImageBuildRepository(session).upsert(
+            ImageBuildRecord(
+                id=build_id,
+                image=plan.spec,
+                image_id=plan.image_id,
+                fingerprint=plan.cache_key,
+                cache_key=plan.cache_key,
+                cache_metadata={"build_container_required": "true", "build_container_id": build_id},
+            ),
+            workspace_id=workspace_id,
+        )

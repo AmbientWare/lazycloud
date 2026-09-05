@@ -84,6 +84,8 @@ from worker.repository_payloads import (
     RemoveNetworkLockRequest,
     RemoveNetworkLockResponse,
     RemoveWorkerResponse,
+    ReportImageBuildProgressRequest,
+    ReportImageBuildProgressResponse,
     ReportImageBuildResultRequest,
     ReportImageBuildResultResponse,
     ResolveSourceCacheCleanupRequest,
@@ -610,6 +612,19 @@ def report_image_build_result(
 ) -> ReportImageBuildResultResponse:
     _require_worker_subject(principal, request.worker_id, action="image build result")
     return service.report_image_build_result(request, principal=principal)
+
+
+@router.post(
+    "/worker-repository/report-image-build-progress",
+    response_model=ReportImageBuildProgressResponse,
+)
+def report_image_build_progress(
+    request: ReportImageBuildProgressRequest,
+    service: WorkerRepo,
+    principal: WorkerPrincipal,
+) -> ReportImageBuildProgressResponse:
+    _require_worker_subject(principal, request.worker_id, action="image build progress")
+    return service.report_image_build_progress(request, principal=principal)
 
 
 @router.post(

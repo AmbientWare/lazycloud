@@ -20,6 +20,26 @@ from sqlalchemy.sql.schema import SchemaItem
 from database.tables.base import DatabaseBase, IdPayloadTable, uuid_type
 
 
+class ImageBuildLogTable(DatabaseBase):
+    __tablename__ = "image_build_logs"
+    build_id: Mapped[str] = mapped_column(
+        uuid_type, ForeignKey("image_builds.id", ondelete="CASCADE"), primary_key=True
+    )
+    sequence: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ImageBuildRequestTable(DatabaseBase):
+    __tablename__ = "image_build_requests"
+    workspace_id: Mapped[str] = mapped_column(
+        uuid_type, ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    request_id: Mapped[str] = mapped_column(uuid_type, primary_key=True)
+    build_id: Mapped[str] = mapped_column(
+        uuid_type, ForeignKey("image_builds.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+
 class ImageArchiveTable(IdPayloadTable, DatabaseBase):
     """The one archive for an image, owned by the system rather than a workspace.
 
@@ -93,6 +113,16 @@ class ImageTable(IdPayloadTable, DatabaseBase):
 class ImageBuildTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "image_builds"
     __table_args__: tuple[SchemaItem, ...] = (
+        Index(
+            "ix_image_builds_cleanup_due",
+            "execution_cleanup_after",
+            postgresql_where=text("execution_cleanup_after IS NOT NULL"),
+        ),
+        Index(
+            "ix_image_builds_active_updated",
+            "updated_at",
+            postgresql_where=text("status IN ('pending', 'running')"),
+        ),
         Index("ix_image_builds_workspace_created", "workspace_id", "created_at"),
         Index("ix_image_builds_status_created", "status", "created_at"),
         Index("ix_image_builds_image_id", "image_id"),
@@ -116,6 +146,11 @@ class ImageBuildTable(IdPayloadTable, DatabaseBase):
         Index("ix_image_builds_cache_manifest_path_digest", "cache_manifest_path_digest"),
         Index("ix_image_builds_cache_publish_key", "cache_publish_key"),
         Index("ix_image_builds_cleanup_claimed_at", "cleanup_claimed_at"),
+        Index(
+            "ix_image_builds_dispatch_due",
+            "dispatch_after",
+            postgresql_where=text("dispatch_payload IS NOT NULL AND dispatched_at IS NULL"),
+        ),
         Index(
             "uq_image_builds_active_workspace_fingerprint",
             "workspace_id",
@@ -154,6 +189,13 @@ class ImageBuildTable(IdPayloadTable, DatabaseBase):
     publication_claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    execution_cleanup_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    dispatch_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dispatch_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatch_claim_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class CheckpointTable(IdPayloadTable, DatabaseBase):

@@ -27,7 +27,6 @@ from execution.collections.redis import (
 )
 from identity.auth import TokenIssuer
 from identity.users import UserService
-from images.execution import ManifestImageBuildExecutor
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
@@ -161,11 +160,6 @@ def service_graph(
         # endpoint, so a unit test that touches object storage reaches out over
         # the network instead of failing on its own terms.
         object_store_client=FakeObjectClient(),
-        # Named rather than defaulted. Production builds in a scheduled
-        # container, and composing that here would make every service fixture
-        # wait on capacity no unit test has; a test that wants a real build
-        # executor asks for one.
-        image_build_executor=ManifestImageBuildExecutor(),
         # The passthrough issuer, because these services hold a fake object client
         # and no store to mint against. Which issuer a deployment uses is
         # composition, proven where a real store is.

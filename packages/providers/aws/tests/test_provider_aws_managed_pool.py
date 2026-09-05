@@ -192,6 +192,7 @@ class _AutoScaling:
         self.name = ""
         self.desired = 0
         self.minimum = 0
+        self.protect_new_instances = False
         self.maximum = 0
         self.tags: list[Mapping[str, object]] = []
         self.vpc_zone_identifier = ""
@@ -208,6 +209,7 @@ class _AutoScaling:
                     "AutoScalingGroupName": self.name,
                     "DesiredCapacity": self.desired,
                     "MinSize": self.minimum,
+                    "NewInstancesProtectedFromScaleIn": self.protect_new_instances,
                     "MaxSize": self.maximum,
                     "VPCZoneIdentifier": self.vpc_zone_identifier,
                     "LaunchTemplate": self.launch_template,
@@ -225,6 +227,7 @@ class _AutoScaling:
         self.name = str(kwargs["AutoScalingGroupName"])
         self.desired = int(str(kwargs["DesiredCapacity"]))
         self.minimum = int(str(kwargs["MinSize"]))
+        self.protect_new_instances = bool(kwargs["NewInstancesProtectedFromScaleIn"])
         self.maximum = int(str(kwargs["MaxSize"]))
         self.vpc_zone_identifier = str(kwargs["VPCZoneIdentifier"])
         tags = kwargs["Tags"]
@@ -237,6 +240,7 @@ class _AutoScaling:
         return {}
 
     def update_auto_scaling_group(self, **kwargs: object) -> Mapping[str, object]:
+        self.protect_new_instances = bool(kwargs["NewInstancesProtectedFromScaleIn"])
         self.desired = int(str(kwargs["DesiredCapacity"]))
         self.minimum = int(str(kwargs["MinSize"]))
         self.maximum = int(str(kwargs["MaxSize"]))
@@ -245,6 +249,17 @@ class _AutoScaling:
         assert isinstance(launch_template, Mapping)
         self.launch_template = launch_template
         self.update_count += 1
+        return {}
+
+    def set_instance_protection(
+        self, *, AutoScalingGroupName: str, InstanceIds: list[str], ProtectedFromScaleIn: bool
+    ) -> Mapping[str, object]:
+        self.instances = [
+            {**instance, "ProtectedFromScaleIn": ProtectedFromScaleIn}
+            if instance["InstanceId"] in InstanceIds
+            else instance
+            for instance in self.instances
+        ]
         return {}
 
     def delete_auto_scaling_group(self, **kwargs: object) -> Mapping[str, object]:

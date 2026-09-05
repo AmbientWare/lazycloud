@@ -32,12 +32,6 @@ class ImageRegistryCredentialKind(StrEnum):
 
 class ImageBuildContainerBuildOptions(ContractModel):
     architecture: LinuxArchitecture = LinuxArchitecture.Amd64
-    managed_package_digest: str | None = Field(
-        default=None,
-        min_length=64,
-        max_length=64,
-        pattern=r"^[0-9a-f]{64}$",
-    )
     source_image: str = ""
     dockerfile: str = ""
     build_context_object: str = ""
