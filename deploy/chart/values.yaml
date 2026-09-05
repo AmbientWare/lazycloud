@@ -1,49 +1,104 @@
-# One tag, naming the commit that produced these images, and it is safe to pin by
-# tag here for a reason worth stating: every repository is created
-# `image_tag_mutability = "IMMUTABLE"`, so a tag cannot be repointed once pushed.
-# The rule against tags is about names that can move; this one cannot.
+# Commit tags are immutable. The network image uses its executable manifest
+# digest so unchanged network code does not restart the WireGuard gateway.
 image:
   registry: ""
   repositoryPrefix: ""
   tag: ""
+  networkDigest: ""
 
-# Non-secret deployment values, rendered from the deployment module's
-# `runtime_configuration`. The list is not decoration: a control plane missing
-# one of these starts, reports healthy, and is wrong.
-runtime: {}
+# Non-secret application settings. Resource facts are added by chart_values.py.
+runtime:
+  # An explicit empty endpoint selects native S3 and its regional endpoint resolver.
+  LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: ""
+  LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: "false"
 
 secrets:
-  # The Secret the External Secrets Operator materialises. One Secret, keyed by
-  # variable name, so a workload's env is a list of names rather than a list of
-  # mappings.
   name: lazycloud-secrets
-  # Which Secrets Manager entry each variable is read from, rendered from the
-  # deployment module's `secret_environment`. Every workload gets all of these
-  # as environment.
-  map: {}
-  # Entries materialised into the same Secret but mounted as files by the one
-  # workload that reads them, from `secret_files`. Kept apart from `map` so a
-  # credential one pod needs is not in the environment of every pod.
-  files: {}
+  documents: {}
+  map:
+    LAZYCLOUD_DATABASE_URL: platform
+    LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY: platform
+    LAZYCLOUD_CACHE_SERVICE_TOKEN: platform
+    LAZYCLOUD_FLEET_EXTERNAL_ID: platform
+    LAZYCLOUD_TOKEN: operator
+    LAZYCLOUD_GITHUB_CLIENT_ID: operator
+    LAZYCLOUD_GITHUB_CLIENT_SECRET: operator
+    LAZYCLOUD_CLOUDFLARE_API_TOKEN: operator
+    LAZYCLOUD_STRIPE_API_KEY: operator
+    LAZYCLOUD_STRIPE_WEBHOOK_SECRET: operator
+    LAZYCLOUD_RESEND_API_KEY: operator
+    LAZYCLOUD_RESEND_WEBHOOK_SECRET: operator
+    LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID: operator
+    LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS: operator
+  files:
+    LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS: platform
   refreshInterval: 1h
-  # The role the SecretStore assumes, from the deployment module's
-  # `secrets_reader_role_arn`. The one role ARN in this chart: every other
-  # identity is a Pod Identity association that names the service account from
-  # the cluster's side, but a SecretStore is reconciled by an operator shared
-  # across namespaces, and the only identity it can present per store is a
-  # service account token exchanged for this role.
   readerRoleArn: ""
 
-# Named here and in the identity associations the deployment module declares.
-# A rename needs both.
-serviceAccounts:
-  controlPlane: control-plane
-  scheduler: scheduler
-  secretsReader: secrets-reader
-  wireguardBootstrap: wireguard-bootstrap
+# Terraform exports names matching the Pod Identity and IRSA associations.
+serviceAccounts: {}
+
+# Each process receives only the credentials it consumes.
+environment:
+  controlPlane:
+    secretKeys: [LAZYCLOUD_DATABASE_URL, LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY, LAZYCLOUD_CACHE_SERVICE_TOKEN, LAZYCLOUD_GITHUB_CLIENT_ID, LAZYCLOUD_GITHUB_CLIENT_SECRET, LAZYCLOUD_CLOUDFLARE_API_TOKEN, LAZYCLOUD_STRIPE_API_KEY, LAZYCLOUD_STRIPE_WEBHOOK_SECRET, LAZYCLOUD_RESEND_WEBHOOK_SECRET, LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS]
+    runtimeKeys: &applicationRuntime
+      - LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL
+      - LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE
+      - LAZYCLOUD_OBJECT_STORE_BUCKET
+      - LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX
+      - LAZYCLOUD_OBJECT_STORE_REGION_NAME
+      - LAZYCLOUD_WORKSPACE_STORAGE_ISSUER
+      - LAZYCLOUD_WORKSPACE_STORAGE_ROLE_ARN
+      - LAZYCLOUD_WORKSPACE_STORAGE_REGION_NAME
+      - LAZYCLOUD_WORKLOAD_IMAGE_REGISTRY_REPOSITORY
+      - LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN
+      - LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL
+      - LAZYCLOUD_GITHUB_REDIRECT_URI
+      - LAZYCLOUD_REDIS_URL
+      - LAZYCLOUD_RELEASE_MANIFEST_URL
+      - LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL
+      - LAZYCLOUD_RELEASE_HOST_MANIFEST_URL
+      - LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS
+      - LAZYCLOUD_PLATFORM_CAPACITY_HETZNER
+  scheduler:
+    secretKeys: [LAZYCLOUD_DATABASE_URL, LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY, LAZYCLOUD_CACHE_SERVICE_TOKEN, LAZYCLOUD_CLOUDFLARE_API_TOKEN, LAZYCLOUD_STRIPE_API_KEY, LAZYCLOUD_RESEND_API_KEY, LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS]
+    runtimeKeys: *applicationRuntime
+  agentArtifact:
+    secretKeys: []
+    runtimeKeys: [LAZYCLOUD_RELEASE_MANIFEST_URL, LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL, LAZYCLOUD_RELEASE_HOST_MANIFEST_URL]
+  cacheServer:
+    secretKeys: [LAZYCLOUD_CACHE_SERVICE_TOKEN]
+    runtimeKeys: []
+  databaseBootstrap:
+    secretKeys: [LAZYCLOUD_DATABASE_URL]
+    runtimeKeys: []
+  administratorBootstrap:
+    secretKeys: [LAZYCLOUD_DATABASE_URL, LAZYCLOUD_TOKEN, LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID]
+    runtimeKeys: [LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL, LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE, LAZYCLOUD_OBJECT_STORE_BUCKET, LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX, LAZYCLOUD_OBJECT_STORE_REGION_NAME]
+  billingCatalog:
+    secretKeys: [LAZYCLOUD_STRIPE_API_KEY]
+    runtimeKeys: [LAZYCLOUD_STRIPE_ACCOUNT_ID]
+  billingRates:
+    secretKeys: [LAZYCLOUD_DATABASE_URL]
+    runtimeKeys: []
+  fleetEnsure:
+    secretKeys: [LAZYCLOUD_TOKEN, LAZYCLOUD_FLEET_EXTERNAL_ID]
+    runtimeKeys: []
+
+# Bump only affected consumers after External Secrets has refreshed rotated values.
+secretRevisions:
+  controlPlane: "1"
+  scheduler: "1"
+  cacheServer: "1"
+  cloudflared: "1"
+  wireguard: "1"
 
 wireguard:
   replicas: 2
+  database:
+    poolSize: 1
+    maxOverflow: 0
   platformPeers: 2
   secretName: lazycloud-wireguard
   secretId: ""
@@ -51,15 +106,9 @@ wireguard:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 256Mi }
 
-# The server's ceiling, divided below. Every process holds its own pool, so the
-# sum of what they may open is the number that has to fit, and nothing reports
-# the overrun except requests failing to connect once it is exceeded. Declared
-# here and read by `deploy/platform-deployment/database.tf`, which sets the branch's
-# `max_connections` to it. Two control-plane and two scheduler replicas need 31
-# with the reserve; 40 leaves a third control-plane replica fitting without a
-# database change.
+# Server ceiling comes from the infrastructure descriptor.
 database:
-  maxConnections: 40
+  maxConnections: 0
   # Kept back for an operator's psql and the database's own sessions.
   reserved: 3
 
@@ -105,6 +154,8 @@ controlPlane:
 
 scheduler:
   replicas: 2
+  minReadySeconds: 35
+  terminationGracePeriodSeconds: 30
   # The largest consumer in the deployment by a wide margin: 678m sustained,
   # 899m at its peak, 497Mi resident. Whatever this process does not request it
   # takes anyway, out of whatever on the node has no request of its own, so an
@@ -167,10 +218,9 @@ bootstrap:
 billing:
   ratesEffectiveAt: "2026-09-11T00:00:00Z"
 
-# The class every claim in this chart names. Cluster-scoped, so it is created
-# once by `deploy/platform-core` rather than by each deployment's chart.
+# Exported by platform-core through the infrastructure descriptor.
 storage:
-  className: lazycloud-ebs
+  className: ""
 
 cacheServer:
   replicas: 1
@@ -211,7 +261,6 @@ tunnel:
   # The tunnel credentials arrive in the same Secret as everything else.
   credentialsKey: LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS
 
-# The platform's own AWS account as capacity, from the module's
-# `fleet_connection` output. Registering it is one call with its network,
-# authorization, and deployment-owned capacity ceilings.
-fleet: {}
+fleet:
+  max_cpu_instances: 500
+  max_gpu_instances: 100

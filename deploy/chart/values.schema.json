@@ -1,0 +1,489 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "image",
+    "runtime",
+    "fleet",
+    "database",
+    "serviceAccounts",
+    "secrets"
+  ],
+  "properties": {
+    "controlPlane": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "poolSize",
+            "maxOverflow"
+          ],
+          "properties": {
+            "poolSize": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxOverflow": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "scheduler": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "poolSize",
+            "maxOverflow"
+          ],
+          "properties": {
+            "poolSize": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxOverflow": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "minReadySeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "bootstrap": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "poolSize",
+            "maxOverflow"
+          ],
+          "properties": {
+            "poolSize": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxOverflow": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "wireguard": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "poolSize",
+            "maxOverflow"
+          ],
+          "properties": {
+            "poolSize": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxOverflow": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "cloudflared": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "poolSize",
+            "maxOverflow"
+          ],
+          "properties": {
+            "poolSize": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxOverflow": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "cacheServer": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1
+        },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "poolSize",
+            "maxOverflow"
+          ],
+          "properties": {
+            "poolSize": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxOverflow": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registry",
+        "repositoryPrefix",
+        "tag",
+        "networkDigest"
+      ],
+      "properties": {
+        "registry": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repositoryPrefix": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "networkDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "required": [
+        "LAZYCLOUD_RELEASE_MANIFEST_URL",
+        "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL",
+        "LAZYCLOUD_RELEASE_HOST_MANIFEST_URL",
+        "LAZYCLOUD_STRIPE_ACCOUNT_ID",
+        "LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT",
+        "LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS"
+      ],
+      "properties": {
+        "LAZYCLOUD_RELEASE_MANIFEST_URL": {
+          "type": "string",
+          "pattern": "^https://[^\\s]+/manifest\\.json$"
+        },
+        "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL": {
+          "type": "string",
+          "pattern": "^https://[^\\s]+/manifest\\.json$"
+        },
+        "LAZYCLOUD_RELEASE_HOST_MANIFEST_URL": {
+          "type": "string",
+          "pattern": "^https://[^\\s]+/manifest\\.json$"
+        },
+        "LAZYCLOUD_STRIPE_ACCOUNT_ID": {
+          "type": "string",
+          "pattern": "^acct_[A-Za-z0-9]+$"
+        },
+        "LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT": {
+          "type": "string",
+          "pattern": "^[^:\\s]+:[0-9]{1,5}$"
+        }
+      }
+    },
+    "fleet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "account_id",
+        "role_arn",
+        "vpc_id",
+        "subnet_ids",
+        "security_group_id",
+        "max_cpu_instances",
+        "max_gpu_instances"
+      ],
+      "properties": {
+        "account_id": {
+          "type": "string",
+          "pattern": "^[0-9]{12}$"
+        },
+        "role_arn": {
+          "type": "string",
+          "minLength": 1
+        },
+        "vpc_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subnet_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "security_group_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "max_cpu_instances": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_gpu_instances": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxConnections",
+        "reserved"
+      ],
+      "properties": {
+        "maxConnections": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reserved": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "serviceAccounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "controlPlane",
+        "scheduler",
+        "secretsReader",
+        "wireguardBootstrap"
+      ],
+      "properties": {
+        "controlPlane": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scheduler": {
+          "type": "string",
+          "minLength": 1
+        },
+        "secretsReader": {
+          "type": "string",
+          "minLength": 1
+        },
+        "wireguardBootstrap": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "map",
+        "files",
+        "documents",
+        "readerRoleArn",
+        "refreshInterval"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "refreshInterval": {
+          "type": "string",
+          "minLength": 1
+        },
+        "readerRoleArn": {
+          "type": "string",
+          "minLength": 1
+        },
+        "documents": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "platform",
+            "operator",
+            "wireguard"
+          ],
+          "properties": {
+            "platform": {
+              "type": "string",
+              "minLength": 1
+            },
+            "operator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "wireguard": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "map": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": [
+              "platform",
+              "operator"
+            ]
+          }
+        },
+        "files": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": [
+              "platform",
+              "operator"
+            ]
+          }
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "secretKeys",
+          "runtimeKeys"
+        ],
+        "properties": {
+          "secretKeys": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "runtimeKeys": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "secretRevisions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "className"
+      ],
+      "properties": {
+        "className": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "billing": {
+      "type": "object",
+      "properties": {
+        "ratesEffectiveAt": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "tunnel": {
+      "type": "object",
+      "properties": {
+        "credentialsKey": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "deploymentRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "infrastructureSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

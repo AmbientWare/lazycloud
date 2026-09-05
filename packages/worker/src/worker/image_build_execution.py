@@ -6,6 +6,7 @@ import os
 import posixpath
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
@@ -15,6 +16,7 @@ import zipfile
 from base64 import b64encode
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -25,14 +27,13 @@ from networking.internal_http import InternalHttpClient
 from pydantic import Field
 from shared.contracts import ContractModel
 from shared.image_building.credentials import registry_host_for_image
-from shared.managed_runtime_integrity import managed_package_source_digest
 from shared.scheduling import WorkerExecutionRequest
 from shared.timestamps import utc_now
 
 from worker.container_execution import WorkerAddressPublisher
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_service.protocols import WorkerContainerInstanceStore
-from worker.events import ContainerRequestContext
+from worker.events import ContainerRequestContext, WorkerBuildCancelRegistry
 from worker.image_archive_transfer import (
     image_archive_file_identity,
     upload_image_archive,
@@ -169,6 +170,7 @@ class WorkerImageBuilder(Protocol):
         registry_auth: ImageBuildRegistryAuth | None,
         build_args: dict[str, str],
         log: ImageBuildLog,
+        cancellation: threading.Event,
     ) -> WorkerImageArchiveBuildResult: ...
 
 
@@ -243,7 +245,12 @@ class WorkerImageBuildExecutionService:
     instances: WorkerContainerInstanceStore
     builder: WorkerImageBuilder
     publisher: WorkerImageArchivePublisher
+    cancellations: WorkerBuildCancelRegistry
     credential_loader: ImageBuildCredentialLoader | None = None
+
+    def read_logs(self, container_id: str, *, after: int, limit: int = 256) -> list[str]:
+        instance = self.instances.get_container_instance(container_id)
+        return [] if instance is None else instance.log_messages[after : after + limit]
 
     def execute(self, request: WorkerExecutionRequest) -> WorkerImageBuildExecutionResult:
         payload = WorkerImageBuildRequestPayload.model_validate(request.payload).model_copy(
@@ -252,6 +259,9 @@ class WorkerImageBuildExecutionService:
         instance = self._build_instance(request, payload)
         logs: list[str] = []
         sensitive_values: tuple[str, ...] = ()
+        log_lock = threading.Lock()
+        cancellation = threading.Event()
+        self.cancellations.register(request.container_id, cancellation.set)
 
         def log(message: str) -> None:
             clean = _redact_image_build_text(
@@ -260,21 +270,17 @@ class WorkerImageBuildExecutionService:
             ).rstrip()
             if not clean:
                 return
-            if logs and logs[-1] == clean:
-                return
-            logs.append(clean)
-            stored = self.instances.get_container_instance(request.container_id) or instance
-            if stored.log_messages and stored.log_messages[-1] == clean:
-                return
-            stored.log_messages = [*stored.log_messages, clean]
-            self.instances.save_container_instance(stored)
+            with log_lock:
+                logs.append(clean)
+                stored = self.instances.get_container_instance(request.container_id) or instance
+                stored.log_messages.append(clean)
+                self.instances.save_container_instance(stored)
 
         try:
             self.address_publisher.publish_worker_address(_request_context(request, payload))
             self.instances.save_container_instance(instance)
             log("image build worker request accepted")
             _require_matching_image_architecture(request, payload)
-            _require_matching_managed_packages(payload.build_options.managed_package_digest)
             private_inputs = self._private_inputs(request, payload)
             sensitive_values = _image_build_private_values(private_inputs)
             build = self.builder.build_image_archive(
@@ -283,6 +289,7 @@ class WorkerImageBuildExecutionService:
                 registry_auth=private_inputs.registry_auth,
                 build_args=private_inputs.build_args,
                 log=log,
+                cancellation=cancellation,
             )
             if not build.ok:
                 return self._finish(
@@ -378,6 +385,9 @@ class WorkerImageBuildExecutionService:
                 ),
             )
 
+        finally:
+            self.cancellations.unregister(request.container_id)
+
     def _private_inputs(
         self,
         request: WorkerExecutionRequest,
@@ -439,12 +449,11 @@ class WorkerImageBuildExecutionService:
         stored.build_archive_size_bytes = archive_size_bytes
         stored.build_archive_sha256 = archive_sha256
         stored.build_error_message = error_message
-        if error_message:
-            stored.log_messages = _append_unique_log(stored.log_messages, error_message)
-        self.instances.save_container_instance(stored)
         result_logs = list(logs or [])
         if error_message:
             result_logs = _append_unique_log(result_logs, error_message)
+        stored.log_messages = result_logs
+        self.instances.save_container_instance(stored)
         return WorkerImageBuildExecutionResult(
             ok=status is WorkerImageBuildStatus.Complete,
             container_id=instance.container_id,
@@ -458,18 +467,6 @@ class WorkerImageBuildExecutionService:
             logs=result_logs,
             error_message=error_message,
         )
-
-
-def _require_matching_managed_packages(expected_digest: str) -> None:
-    worker_digest = managed_package_source_digest()
-    if worker_digest == expected_digest:
-        return
-    resolved_digest = worker_digest or "unavailable"
-    msg = (
-        "managed package digest mismatch: "
-        f"control plane expected {expected_digest}, image worker resolved {resolved_digest}"
-    )
-    raise RuntimeError(msg)
 
 
 def _require_matching_image_architecture(
@@ -633,6 +630,7 @@ class BuildahWorkerImageBuilder:
         registry_auth: ImageBuildRegistryAuth | None = None,
         build_args: dict[str, str] | None = None,
         log: ImageBuildLog,
+        cancellation: threading.Event,
     ) -> WorkerImageArchiveBuildResult:
         if not payload.image_id:
             return WorkerImageArchiveBuildResult(
@@ -663,13 +661,14 @@ class BuildahWorkerImageBuilder:
                     payload,
                     container_id=container_id,
                     driver=driver,
+                    cancellation=cancellation,
                     registry_auth=registry_auth,
                     build_args=build_args or {},
                     log=log,
                 )
             except Exception as exc:
                 log(f"buildah {driver.value} build failed: {type(exc).__name__}: {exc}")
-                if driver is self._storage_drivers()[-1]:
+                if cancellation.is_set() or driver is self._storage_drivers()[-1]:
                     return WorkerImageArchiveBuildResult(
                         ok=False,
                         image_id=payload.image_id,
@@ -694,6 +693,7 @@ class BuildahWorkerImageBuilder:
         registry_auth: ImageBuildRegistryAuth | None,
         build_args: dict[str, str],
         log: ImageBuildLog,
+        cancellation: threading.Event,
     ) -> WorkerImageArchiveBuildResult:
         lease = self.scratch.acquire(build_id=payload.build_id, container_id=container_id)
         directories = plan_buildah_directories(str(lease.root))
@@ -759,6 +759,7 @@ class BuildahWorkerImageBuilder:
                     cwd=context_dir,
                     log=log,
                     scratch=lease,
+                    cancellation=cancellation,
                 )
                 self._run_buildah(
                     [
@@ -775,6 +776,7 @@ class BuildahWorkerImageBuilder:
                     cwd=context_dir,
                     log=log,
                     scratch=lease,
+                    cancellation=cancellation,
                 )
             elif payload.build_options.source_image:
                 source_image = payload.build_options.source_image
@@ -795,6 +797,7 @@ class BuildahWorkerImageBuilder:
                     cwd=context_dir,
                     log=log,
                     scratch=lease,
+                    cancellation=cancellation,
                 )
             else:
                 msg = "image build request requires a Dockerfile or source image"
@@ -808,6 +811,7 @@ class BuildahWorkerImageBuilder:
                 cwd=context_dir,
                 log=log,
                 scratch=lease,
+                cancellation=cancellation,
             )
             layout_path = root / "oci-layout"
             self._run_buildah(
@@ -818,6 +822,7 @@ class BuildahWorkerImageBuilder:
                 cwd=context_dir,
                 log=log,
                 scratch=lease,
+                cancellation=cancellation,
             )
             manifest_digest = _oci_layout_manifest_digest(layout_path)
             origin = self._workload_registry_credentials(
@@ -962,9 +967,9 @@ class BuildahWorkerImageBuilder:
         env: dict[str, str],
         cwd: Path,
         log: ImageBuildLog,
-        capture_stdout: bool = False,
         scratch: ImageBuildScratchLease | None = None,
-    ) -> str:
+        cancellation: threading.Event,
+    ) -> None:
         command = _buildah_command(
             self.buildah_binary,
             args,
@@ -972,37 +977,20 @@ class BuildahWorkerImageBuilder:
             runroot=directories.runroot,
             driver=driver,
         )
-        if not capture_stdout:
-            if scratch is not None:
-                scratch.check_capacity()
-            output = _run_logged_process(
-                command,
-                cwd=cwd,
-                env=env,
-                log=log,
-                capacity_check=scratch.check_capacity if scratch is not None else None,
-            )
-            if scratch is not None:
-                scratch.check_capacity()
-            return output
+        if cancellation.is_set():
+            raise RuntimeError("image build was cancelled")
         if scratch is not None:
             scratch.check_capacity()
-        process = subprocess.run(
+        _run_logged_process(
             command,
             cwd=cwd,
             env=env,
-            text=True,
-            capture_output=True,
-            check=False,
+            log=log,
+            capacity_check=scratch.check_capacity if scratch is not None else None,
+            cancellation=cancellation,
         )
         if scratch is not None:
             scratch.check_capacity()
-        for line in _output_lines(process.stdout, process.stderr):
-            log(line)
-        if process.returncode != 0:
-            msg = _process_error_message(command, process)
-            raise RuntimeError(msg)
-        return process.stdout if capture_stdout else ""
 
 
 @dataclass(slots=True)
@@ -1383,6 +1371,7 @@ def _run_logged_process(
     log: ImageBuildLog,
     heartbeat_seconds: float = 15.0,
     capacity_check: Callable[[], None] | None = None,
+    cancellation: threading.Event,
 ) -> str:
     lines: list[str] = []
     started = time.monotonic()
@@ -1407,6 +1396,7 @@ def _run_logged_process(
             stdout=write_fd,
             stderr=write_fd,
             close_fds=True,
+            start_new_session=True,
         )
     except BaseException:
         os.close(read_fd)
@@ -1415,14 +1405,22 @@ def _run_logged_process(
     os.close(write_fd)
 
     def monitor_capacity() -> None:
-        if capacity_check is None:
-            return
-        while not stop_heartbeat.wait(IMAGE_BUILD_SCRATCH_MONITOR_SECONDS):
+        last_capacity_check = time.monotonic()
+        while not stop_heartbeat.wait(0.25):
             try:
-                capacity_check()
+                if cancellation.is_set():
+                    raise RuntimeError("image build was cancelled")
+                if (
+                    capacity_check is not None
+                    and time.monotonic() - last_capacity_check
+                    >= IMAGE_BUILD_SCRATCH_MONITOR_SECONDS
+                ):
+                    capacity_check()
+                    last_capacity_check = time.monotonic()
             except Exception as exc:
                 capacity_failures.append(exc)
-                process.terminate()
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
                 return
 
     heartbeat_thread = threading.Thread(
@@ -1446,6 +1444,10 @@ def _run_logged_process(
                     log(line)
         return_code = process.wait()
     finally:
+        if process.poll() is None:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
         stop_heartbeat.set()
         heartbeat_thread.join(timeout=1.0)
         capacity_thread.join(timeout=1.0)

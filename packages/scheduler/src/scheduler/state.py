@@ -84,6 +84,13 @@ ENQUEUE_CONTAINER_REQUEST_SCRIPT = """
 if redis.call("EXISTS", KEYS[3]) == 1 then
     return 0
 end
+local worker = redis.call("HGET", KEYS[4], "worker_id")
+local status = redis.call("HGET", KEYS[4], "status")
+if (worker and cjson.decode(worker) ~= "")
+    or (status and cjson.decode(status) ~= "pending")
+    or redis.call("HEXISTS", KEYS[2], ARGV[1]) == 1 then
+    return 0
+end
 redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
 return redis.call("ZADD", KEYS[1], ARGV[3], ARGV[1])
 """
@@ -119,6 +126,29 @@ end
 redis.call("ZREM", KEYS[1], ARGV[1])
 redis.call("HDEL", KEYS[2], ARGV[1])
 redis.call("HDEL", KEYS[3], ARGV[1])
+return 1
+"""
+
+REQUEUE_DRAINED_WORKER_REQUEST_SCRIPT = """
+if redis.call("EXISTS", KEYS[3]) == 1 then
+    return 0
+end
+local status = redis.call("HGET", KEYS[4], "status")
+if status and cjson.decode(status) ~= "pending" then
+    return 0
+end
+local worker = redis.call("HGET", KEYS[4], "worker_id")
+if worker and cjson.decode(worker) ~= "" and cjson.decode(worker) ~= ARGV[4] then
+    return 0
+end
+if status then
+    redis.call("HSET", KEYS[4], "worker_id", cjson.encode(""))
+end
+redis.call("SREM", KEYS[5], KEYS[4])
+if redis.call("HEXISTS", KEYS[2], ARGV[1]) == 0 then
+    redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
+    redis.call("ZADD", KEYS[1], ARGV[3], ARGV[1])
+end
 return 1
 """
 
@@ -580,8 +610,8 @@ class WorkerReservedCapacity:
 class WorkerRequestDrain:
     """Everything one worker held, split by whether it had been handed out.
 
-    The two halves are requeued under different rules, so a drain that flattened
-    them would have to guess which was which.
+    Delivery does not prove execution. Recovery checks the container's current
+    assignment and status before returning either kind to the queue.
     """
 
     queued: list[str] = field(default_factory=list)
@@ -904,7 +934,7 @@ class RedisSchedulerWorkerRepository:
             return None
         drain = self.drain_worker_requests(worker_id)
         try:
-            request_ids = self._requeue_drained_worker_requests(drain, now=now)
+            request_ids = self._requeue_drained_worker_requests(worker_id, drain, now=now)
         except Exception:
             self.restore_worker_requests(worker_id, drain)
             self.redis.set_add(self.keys.worker_index(), state_key)
@@ -1642,10 +1672,11 @@ class RedisSchedulerWorkerRepository:
         payload = request.model_dump_json()
         return self.redis.eval_int(
             ENQUEUE_CONTAINER_REQUEST_SCRIPT,
-            3,
+            4,
             requests_key,
             payloads_key,
             cancellation_key,
+            self.keys.container_state(request.container_id),
             request.container_id,
             payload,
             scheduled_at.timestamp(),
@@ -1958,47 +1989,38 @@ class RedisSchedulerWorkerRepository:
 
     def _requeue_drained_worker_requests(
         self,
+        worker_id: str,
         drain: WorkerRequestDrain,
         *,
         now: datetime,
     ) -> list[str]:
         """Return a gone worker's requests to the ready queue.
 
-        A queued request was never handed out, so it is requeued outright. A
-        delivered one may already have become a container: a dispatch resets the
-        state to `pending` before the request is queued, and only a worker moves
-        it off that, so a delivered request whose container has left `pending`
-        was acted on. Requeueing that would start a second container for one
-        durable row, and the row is already the orphan reconciler's.
+        Only still-pending assignments owned by this worker are cleared. A
+        redelivered request may name work already running, finished, or assigned
+        elsewhere. The assignment fence and requeue are one Redis operation.
         """
 
         request_ids: list[str] = []
-        for raw_requests, delivered in ((drain.queued, False), (drain.delivered, True)):
+        for raw_requests in (drain.queued, drain.delivered):
             for raw in raw_requests:
                 request = SchedulerWorkerRequest.model_validate_json(raw).requeued(now=now)
-                if self.is_container_cancelled(request.container_id):
-                    continue
-                if delivered and self._container_started(request.container_id):
-                    continue
-                request_ids.append(request.container_id)
-                self.enqueue_container_request(request, ready_at=now)
+                requeued = self.redis.eval_int(
+                    REQUEUE_DRAINED_WORKER_REQUEST_SCRIPT,
+                    5,
+                    self.keys.container_requests(),
+                    self.keys.container_request_payloads(),
+                    self.keys.container_cancellation(request.container_id),
+                    self.keys.container_state(request.container_id),
+                    self.keys.container_worker_index(worker_id),
+                    request.container_id,
+                    request.model_dump_json(),
+                    now.timestamp(),
+                    worker_id,
+                )
+                if requeued:
+                    request_ids.append(request.container_id)
         return request_ids
-
-    def _container_started(self, container_id: str) -> bool:
-        """Whether a worker has acted on this request.
-
-        Every status but `pending` counts, terminal ones included. A worker whose
-        acknowledgements failed long enough to be abandoned leaves a container
-        that ran to completion behind a request still recorded in flight, and
-        reading only `running` as started requeues that one and runs its work
-        again. A container state that has expired or was never written is a
-        request nothing acted on.
-        """
-
-        raw = self.redis.hash_get(self.keys.container_state(container_id), "status")
-        if raw is None:
-            return False
-        return redis_serialization.loads_field(raw) != SchedulerContainerStatus.Pending.value
 
     def is_container_cancelled(self, container_id: str) -> bool:
         return bool(self.redis.exists(self.keys.container_cancellation(container_id)))
@@ -2017,7 +2039,9 @@ class RedisSchedulerWorkerRepository:
             requeue_time = now or utc_now()
             drain = self.drain_worker_requests(worker_id)
             try:
-                request_ids = self._requeue_drained_worker_requests(drain, now=requeue_time)
+                request_ids = self._requeue_drained_worker_requests(
+                    worker_id, drain, now=requeue_time
+                )
             except Exception:
                 self.restore_worker_requests(worker_id, drain)
                 raise
@@ -2230,6 +2254,16 @@ class RedisSchedulerContainerRepository:
         *,
         ttl_seconds: int = DEFAULT_CONTAINER_STATE_TTL_SECONDS,
     ) -> SchedulerContainerState:
+        return self._store_container_state(state, ttl_seconds=ttl_seconds, initialize=False)
+
+    def initialize_container_state(self, state: SchedulerContainerState) -> SchedulerContainerState:
+        return self._store_container_state(
+            state, ttl_seconds=DEFAULT_CONTAINER_STATE_TTL_SECONDS, initialize=True
+        )
+
+    def _store_container_state(
+        self, state: SchedulerContainerState, *, ttl_seconds: int, initialize: bool
+    ) -> SchedulerContainerState:
         def write() -> SchedulerContainerState:
             if self.is_container_cancelled(state.container_id):
                 current = self.get_container_state(state.container_id)
@@ -2238,6 +2272,10 @@ class RedisSchedulerContainerRepository:
                 )
             state_key = self.keys.container_state(state.container_id)
             current = self.get_container_state(state.container_id)
+            if initialize and current is not None:
+                if current.workspace_id != state.workspace_id or current.stub_id != state.stub_id:
+                    raise SchedulerRepositoryError("container submission identity does not match")
+                return current
             if current is not None:
                 self._remove_container_indexes(current, state_key=state_key)
             self.redis.hash_set(

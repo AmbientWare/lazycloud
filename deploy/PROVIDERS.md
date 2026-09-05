@@ -6,8 +6,9 @@ their own scheduler loops, worker agent, billing flow, or application release.
 
 ## Ownership
 
-Terraform owns persistent deployment infrastructure and non-secret capacity
-configuration. Packer owns prepared host images. The normal deployment supplies
+Terraform owns persistent infrastructure and image identities. Helm owns capacity
+policy, prices, and secret property bindings. Packer owns prepared host images.
+The normal deployment supplies
 configuration and credentials to the application. The compute service owns
 durable units, desired capacity, mutation fencing, retries, and drain decisions.
 Adapters own cloud resource operations and provider identity verification.
@@ -30,10 +31,11 @@ its capacity implements the same provider interface as platform capacity.
 4. Verify the real workload path, billing, scaling, and cleanup. An image build
    or healthy control plane alone is not provider acceptance.
 
-AWS infrastructure and its fleet settings already come from Terraform.
+AWS infrastructure comes from Terraform and fleet policy comes from Helm.
 `fleet-ensure` registers and validates the cloud account through the API.
-Hetzner's settings come from the same Terraform runtime output; composition
-resolves them automatically through the provider registry. It needs no separate
+Hetzner follows the same path. The values renderer combines its Terraform image
+catalog with Helm policy, and composition resolves the provider registry.
+It needs no separate
 capacity-configuration command or manually copied workspace UUID. The bootstrap
 workspace reference resolves only when capacity is used, after administrator
 bootstrap has created it. Keep that configured workspace identity stable.
@@ -45,8 +47,13 @@ credentials is still an operator prerequisite, just as it is for other services.
 
 For an existing deployment, add the token-map field to its operator secret
 before applying the new secret mapping. Preserve all other fields and check for
-concurrent operator changes before publication. Ship reads Terraform outputs;
+concurrent operator changes before publication. Ship reads the non-secret
+infrastructure descriptor published by Terraform;
 it does not apply infrastructure changes for you.
+
+For the first Hetzner activation, explicitly advance the host release pin to a
+release containing provider-token enrollment. Routine Ship retains the existing
+host pin. Reusing a pre-Hetzner agent would leave a valid image unable to enroll.
 
 ## Scheduler and adapter boundary
 
@@ -107,8 +114,7 @@ expired credentials, and exact cleanup. GCP and Azure are not supported today.
 
 ## Current rollout and verification
 
-Merge and deployment are on hold while the owner completes another feature.
-The owner approved subsequent acceptance on production, with one adaptive
+The owner approved merge and deployment after release checks, with one adaptive
 Ashburn warm CPU baseline and all other platform pools cold from startup.
 
 After rollout, submit small and larger CPU/memory jobs to prove reuse and
@@ -118,8 +124,8 @@ Verify results and usage charges. Confirm cold nodes and their IPs disappear
 after drain, while the intended warm baseline remains. Do not reset production
 data or delete unrelated resources during acceptance.
 
-Host-image preparation has passed. Full live workload acceptance and latest
-release CI are still outstanding. Local owner checks do not establish either.
+Host-image preparation has passed. Full live workload acceptance is outstanding.
+Check CI for the exact release commit. Local owner checks do not establish either.
 
 For teardown, stop new workload admission, lower warm floors, and drain through
 the compute service before removing credentials or persistent infrastructure.

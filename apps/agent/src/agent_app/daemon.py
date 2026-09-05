@@ -328,6 +328,8 @@ class AgentPrivateNetworkRuntime(Protocol):
 
     def latest_handshake_at(self, server_public_key: str) -> datetime | None: ...
 
+    def reconcile_connection(self, configuration: WireGuardPeerConfiguration) -> bool: ...
+
     def close(self) -> None: ...
 
 
@@ -937,6 +939,11 @@ class AgentDaemonService:
             while True:
                 next_iteration = iterations + 1
                 try:
+                    if (
+                        private_network_runtime is not None
+                        and private_network_configuration is not None
+                    ):
+                        private_network_runtime.reconcile_connection(private_network_configuration)
                     notice = self._poll_capacity_interruption()
                     if notice is not None:
                         last_result = self._begin_capacity_interruption(
@@ -971,12 +978,6 @@ class AgentDaemonService:
                         raise
                     if self.options.once or not _recoverable_stream_error(exc):
                         raise
-                    if (
-                        isinstance(exc, AgentStreamRetryableError)
-                        and private_network_runtime is not None
-                        and private_network_configuration is not None
-                    ):
-                        private_network_runtime.configure(private_network_configuration)
                     iterations = next_iteration
                     self.telemetry.enqueue_event(
                         event_type=AgentTelemetryEventType.Agent,

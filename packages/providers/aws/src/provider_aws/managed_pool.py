@@ -105,8 +105,8 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
     region: str = Field(pattern=_REGION_PATTERN.pattern)
     instance_type: str
     ami_id: str = Field(pattern=_AMI_PATTERN.pattern)
-    desired_nodes: int = Field(ge=0, le=100)
-    max_nodes: int = Field(ge=1, le=100)
+    desired_nodes: int = Field(ge=0)
+    max_nodes: int = Field(ge=1)
     root_volume_gib: int = Field(ge=50, le=2048)
     node_instance_profile_arn: str
     vpc_id: str = Field(min_length=1)
@@ -305,6 +305,7 @@ class AwsManagedPoolAutoScalingClient(Protocol):
         MaxSize: int,
         DesiredCapacity: int,
         HealthCheckType: str,
+        NewInstancesProtectedFromScaleIn: bool,
         HealthCheckGracePeriod: int,
         VPCZoneIdentifier: str,
         LaunchTemplate: _LaunchTemplateRef,
@@ -318,7 +319,11 @@ class AwsManagedPoolAutoScalingClient(Protocol):
         MaxSize: int,
         DesiredCapacity: int,
         VPCZoneIdentifier: str,
+        NewInstancesProtectedFromScaleIn: bool,
         LaunchTemplate: _LaunchTemplateRef,
+    ) -> Mapping[str, object]: ...
+    def set_instance_protection(
+        self, *, AutoScalingGroupName: str, InstanceIds: list[str], ProtectedFromScaleIn: bool
     ) -> Mapping[str, object]: ...
     def terminate_instance_in_auto_scaling_group(
         self, *, InstanceId: str, ShouldDecrementDesiredCapacity: bool
@@ -551,6 +556,7 @@ class _GroupLaunchTemplate(_Response):
 class _GroupInstance(_Response):
     instance_id: str = Field(alias="InstanceId")
     lifecycle_state: str = Field(default="", alias="LifecycleState")
+    protected_from_scale_in: bool = Field(default=False, alias="ProtectedFromScaleIn")
     health_status: str = Field(default="", alias="HealthStatus")
     availability_zone: str = Field(default="", alias="AvailabilityZone")
     launch_template: _GroupLaunchTemplate | None = Field(default=None, alias="LaunchTemplate")
@@ -560,6 +566,7 @@ class _Group(_Response):
     name: str = Field(alias="AutoScalingGroupName")
     desired: int = Field(alias="DesiredCapacity")
     minimum: int = Field(alias="MinSize")
+    protect_new_instances: bool = Field(default=False, alias="NewInstancesProtectedFromScaleIn")
     maximum: int = Field(alias="MaxSize")
     vpc_zone_identifier: str = Field(alias="VPCZoneIdentifier")
     launch_template: _GroupLaunchTemplate | None = Field(default=None, alias="LaunchTemplate")
@@ -670,6 +677,7 @@ class AwsManagedPoolProvisioner:
         ):
             raise ValueError("invalid managed pool capacity")
         group = self._require_group(spec)
+        self._protect_instances(group, desired_nodes=desired_nodes)
         resources = self.discover(spec)
         if resources.launch_template_id is None or resources.launch_template_latest_version is None:
             raise AwsProviderControlError(
@@ -684,6 +692,7 @@ class AwsManagedPoolProvisioner:
             MinSize=0,
             MaxSize=max_nodes,
             DesiredCapacity=desired_nodes,
+            NewInstancesProtectedFromScaleIn=True,
             VPCZoneIdentifier=",".join(spec.subnet_ids),
             LaunchTemplate={
                 "LaunchTemplateId": resources.launch_template_id,
@@ -691,20 +700,19 @@ class AwsManagedPoolProvisioner:
             },
         )
 
-    def release_instance(
-        self, spec: AwsManagedPoolSpec, instance_id: str, *, decrement_desired: bool
-    ) -> bool:
+    def release_instance(self, spec: AwsManagedPoolSpec, instance_id: str) -> bool:
         normalized = instance_id.strip().lower()
         if not _INSTANCE_ID_PATTERN.fullmatch(normalized):
             raise ValueError("invalid EC2 instance ID")
         group = self._require_group(spec)
-        if normalized not in {instance.instance_id for instance in group.instances}:
+        instance = next((item for item in group.instances if item.instance_id == normalized), None)
+        if instance is None or instance.lifecycle_state.startswith("Terminating"):
             return False
         self._asg(
             "release managed pool instance",
             self._clients.autoscaling.terminate_instance_in_auto_scaling_group,
             InstanceId=normalized,
-            ShouldDecrementDesiredCapacity=decrement_desired,
+            ShouldDecrementDesiredCapacity=False,
         )
         return True
 
@@ -852,6 +860,7 @@ class AwsManagedPoolProvisioner:
                 MinSize=0,
                 MaxSize=spec.max_nodes,
                 DesiredCapacity=spec.desired_nodes,
+                NewInstancesProtectedFromScaleIn=True,
                 HealthCheckType="EC2",
                 HealthCheckGracePeriod=300,
                 VPCZoneIdentifier=",".join(subnets),
@@ -860,12 +869,14 @@ class AwsManagedPoolProvisioner:
             )
         else:
             _validate_group_tags(found, spec)
+            self._protect_instances(found, desired_nodes=spec.desired_nodes)
             expected_subnets = frozenset(subnets)
             actual_subnets = frozenset(
                 subnet for subnet in found.vpc_zone_identifier.split(",") if subnet
             )
             if (
                 found.minimum != 0
+                or not found.protect_new_instances
                 or found.maximum != spec.max_nodes
                 or found.desired != spec.desired_nodes
                 or actual_subnets != expected_subnets
@@ -880,6 +891,7 @@ class AwsManagedPoolProvisioner:
                     MinSize=0,
                     MaxSize=spec.max_nodes,
                     DesiredCapacity=spec.desired_nodes,
+                    NewInstancesProtectedFromScaleIn=True,
                     VPCZoneIdentifier=",".join(subnets),
                     LaunchTemplate=template,
                 )
@@ -889,6 +901,33 @@ class AwsManagedPoolProvisioner:
                 "ensure Auto Scaling Group", "AWS did not return the managed Auto Scaling Group"
             )
         return refreshed
+
+    def _protect_instances(self, group: _Group, *, desired_nodes: int) -> None:
+        if desired_nodes < group.desired and any(
+            not instance.protected_from_scale_in
+            and instance.lifecycle_state not in {"InService", "Standby"}
+            and not instance.lifecycle_state.startswith("Terminating")
+            for instance in group.instances
+        ):
+            raise AwsProviderControlError(
+                AwsProviderControlErrorCode.UpstreamUnavailable,
+                operation="scale managed pool",
+                detail="unprotected instances must finish launching before capacity can decrease",
+            )
+        instance_ids = [
+            instance.instance_id
+            for instance in group.instances
+            if not instance.protected_from_scale_in
+            and instance.lifecycle_state in {"InService", "Standby"}
+        ]
+        for offset in range(0, len(instance_ids), 50):
+            self._asg(
+                "protect managed pool instances from unscoped scale-in",
+                self._clients.autoscaling.set_instance_protection,
+                AutoScalingGroupName=group.name,
+                InstanceIds=instance_ids[offset : offset + 50],
+                ProtectedFromScaleIn=True,
+            )
 
     def _describe_group(self, name: str) -> _Group | None:
         payload = _validate(

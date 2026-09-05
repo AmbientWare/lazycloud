@@ -38,7 +38,7 @@ def release_fetch_agent(
     """
 
     settings = ReleaseManifestSettings()
-    if not settings.manifest_url:
+    if not settings.host_manifest_url:
         payload: dict[str, JsonValue] = {
             "fetched": False,
             "reason": "this deployment names no release",

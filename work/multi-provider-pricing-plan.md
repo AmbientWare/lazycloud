@@ -2,10 +2,11 @@
 
 ## Implementation status
 
-The combined feature branch remains a draft. Provider-neutral capacity, warm
+The combined feature branch is undergoing release review. Provider-neutral capacity, warm
 and cold lifecycle, GPU CPU backfill, region contracts, and forward billing
-migrations are implemented. Regional prices are not published. Merge and deploy
-are on hold until the owner finishes the other feature and releases the hold.
+migrations are implemented. Regional prices are not published. The owner released
+the merge/deploy hold. Merge requires passing checks; deployment also requires
+restored operator access and credential publication.
 
 The simulation is checked local validation material. Its 192 main paths and
 48 sensitivity paths reconcile monthly and annual accounting against the final
@@ -21,19 +22,19 @@ annual totals. The original mix assumed about 22% GPU jobs but incurred about
 they are controlled scenarios, not measured customer demand.
 
 Hetzner live acceptance and credential publication are outstanding. Terraform
-owns the default Ashburn policy and image catalog, and the image workflow exports
+owns the image catalog, Helm owns Ashburn policy, and the image workflow exports
 verified non-secret Terraform input. Provider credentials remain separate.
 The scheduler uses one pooled-capacity interface for AWS and Hetzner. Cleanup
 uses recorded unit identity rather than depending on the current offer catalog.
 The common operator and extension contract is in `deploy/PROVIDERS.md`. The owner
 approved acceptance on production with Ashburn warm from startup, other pools
-cold, and multiple node sizes. The merge/deploy hold above still applies.
+cold, and multiple node sizes.
 Source IP and metadata cannot authenticate a host against its own tenants.
 A node-scoped, short-lived, single-use bootstrap token has owner approval for
 delivery in that node's user-data. The narrow exception is recorded in
 `packages/compute/AGENTS.md`. Durable launch authorization consumes the token
 and binds a node-generated credential. Retries resume the existing enrollment.
-The forward `0007` migration preserves deployed state. Host credential
+The forward `0009` migration preserves deployed state. Host credential
 publication is atomic and root-only; API validation does not echo credentials.
 A host image was baked in Ashburn, `ash`, using temporary Hetzner servers.
 Snapshot `428154317` is retained. The exact build servers, primary IPs, and
@@ -180,7 +181,7 @@ Own:
 - `packages/compute/src/compute/provider_machines.py`
 - `packages/database/src/database/tables/compute.py`
 - `packages/database/src/database/repositories/compute.py`
-- New `packages/database/src/database/alembic/versions/0005_provider_neutral_capacity.py`
+- New `packages/database/src/database/alembic/versions/0007_provider_neutral_capacity.py`
 - `packages/compute/AGENTS.md`
 
 Work:
@@ -193,8 +194,8 @@ Work:
   acquisition, scaling, reconciliation, and cleanup.
 - Update the compute architecture decision that currently says provider breadth
   is not planned.
-- Update SQLAlchemy metadata and add the forward `0005` Alembic revision chained
-  to `0004_machine_draining`. Preserve every existing compute unit and AWS
+- Update SQLAlchemy metadata and add the forward `0007` Alembic revision chained
+  to `0006_worker_rollout_drains`. Preserve every existing compute unit and AWS
   connection while relaxing the AWS-only relationship for platform capacity.
 
 Proof:
@@ -305,7 +306,7 @@ Own:
 - `packages/database/src/database/tables/billing_ledger.py`
 - `packages/database/src/database/repositories/billing_rates.py`
 - `packages/database/src/database/repositories/billing_ledger.py`
-- New `packages/database/src/database/alembic/versions/0006_placement_rate_classes.py`
+- New `packages/database/src/database/alembic/versions/0008_placement_rate_classes.py`
 - `packages/billing/src/billing/admission.py`
 - `packages/billing/src/billing/costs.py`
 - `apps/cli/src/cli/billing.py`
@@ -324,7 +325,7 @@ Work:
 
 Proof:
 
-- Upgrade a PostgreSQL database at `0005` with existing rates, billing shapes,
+- Upgrade a PostgreSQL database at `0007` with existing rates, billing shapes,
   and ledger rows. Every old row becomes the Automatic class without changing
   its charge.
 - A clean PostgreSQL bootstrap creates the intended constraints.
@@ -579,8 +580,9 @@ The report defines the money terms beside the numbers:
 ## Merge rules
 
 - Merge both Wave 1 foundations before rebasing dependent branches.
-- Merge `0005_provider_neutral_capacity` before the billing branch creates and
-  tests `0006_placement_rate_classes`. Never create competing Alembic heads.
+- Chain `0007_provider_neutral_capacity` after deployed `0006_worker_rollout_drains`,
+  then `0008_placement_rate_classes` and `0009_provider_node_launches`.
+  Never create competing Alembic heads.
 - An agent edits only its assigned files. The manager resolves shared exports,
   manifests, dependency locks, and composition.
 - Do not combine the provider adapter with public pricing. A live supplier can

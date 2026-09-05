@@ -28,6 +28,7 @@ dependencies = [
     "scheduler",
     "storage",
     "storage-client",
+    "worker-repository",
 ]
 
 [project.scripts]

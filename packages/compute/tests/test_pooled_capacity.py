@@ -989,7 +989,7 @@ def test_pooled_reconcile_fails_closed_without_capacity_owner_lease(
         compute.reconcile_pooled_capacity()
 
 
-def test_pooled_capacity_unit_comes_from_the_provider_authoritative_count(
+def test_pooled_capacity_does_not_import_provider_surplus_into_logical_intent(
     isolated_services: ApiServices,
 ) -> None:
     _seed_connection(isolated_services)
@@ -1008,7 +1008,6 @@ def test_pooled_capacity_unit_comes_from_the_provider_authoritative_count(
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
-    # The pool was reconciled at 0; the provider is the authority that says 3.
     provider.desired = 3
 
     planned = compute.ensure_capacity(
@@ -1023,13 +1022,17 @@ def test_pooled_capacity_unit_comes_from_the_provider_authoritative_count(
         )
     )
 
-    assert planned.status is CapacityAcquisitionStatus.Requested
-    assert planned.desired_unit == 4
-    assert provider.desired == 4
+    assert planned.status is CapacityAcquisitionStatus.ExistingPending
+    assert planned.desired_unit == 1
+    assert provider.desired == 3
+    durable = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
+    assert durable.desired_machines == 1
 
 
+@pytest.mark.parametrize("replacement", [False, True])
 def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
     isolated_services: ApiServices,
+    replacement: bool,
 ) -> None:
     _seed_connection(isolated_services)
     provider = _PooledProvider()
@@ -1062,6 +1065,13 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
 
     requested = compute.ensure_capacity(first)
     retried = compute.ensure_capacity(first)
+    if replacement:
+        with isolated_services.context.database.session() as session:
+            units = ComputeUnitRepository(session)
+            current = units.get(pool.id)
+            assert current is not None
+            units.upsert(current.model_copy(update={"replacement_machine_id": str(uuid4())}))
+        provider.desired += 1
     sibling = compute.ensure_capacity(second)
     released = compute.release_acquired_capacity(
         CapacityReleaseRequest(
@@ -1083,13 +1093,66 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
     assert sibling.status is CapacityAcquisitionStatus.Requested
     assert released.status is CapacityAcquisitionStatus.Requested
     assert release_retry.status is CapacityAcquisitionStatus.ExistingPending
-    assert provider.capacity_calls == [(1, 1), (2, 2), (1, 2)]
-    assert provider.desired == 1
+    assert provider.desired == 1 + int(replacement)
+    durable = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
+    assert durable.desired_machines == 1
+    assert durable.max_machines == 2
     with isolated_services.context.database.session() as session:
         operations = ComputeCapacityOperationRepository(session).list_for_owner(
             pool.capacity_owner_id
         )
     assert [operation.status for operation in operations] == ["released", "requested"]
+
+
+def test_named_retirement_keeps_its_intent_across_provider_failure_and_stale_observation(
+    isolated_services: ApiServices,
+) -> None:
+    class UnavailableRetirement(_PooledProvider):
+        def release_machine(
+            self, request: ProviderUnitRequest, provider_instance_id: str
+        ) -> ProviderUnitSnapshot:
+            raise RuntimeError("provider unavailable")
+
+    _seed_connection(isolated_services)
+    provider = UnavailableRetirement()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider, isolated_services),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=2,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    machine_id = str(uuid4())
+    with isolated_services.context.database.session() as session:
+        MachineRepository(session).upsert(
+            Machine(id=machine_id, capacity_owner_id=pool.capacity_owner_id),
+            workspace_id=pool.workspace_id,
+        )
+        instances = ComputeProviderInstanceRepository(session)
+        record = instances.list_for_pool(pool.id)[0]
+        instances.upsert(record.model_copy(update={"machine_id": machine_id}))
+
+    for _attempt in range(2):
+        with pytest.raises(RuntimeError, match="provider unavailable"):
+            compute.release_internal_unit_machine(
+                pool.workspace_id, pool.capacity_owner_id, machine_id
+            )
+        durable, _snapshot = compute.describe_internal_unit(
+            pool.workspace_id, pool.capacity_owner_id
+        )
+        assert durable.desired_machines == 1
+        with isolated_services.context.database.session() as session:
+            retired = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+        assert retired is not None
+        assert retired.status == "terminating"
+        assert retired.metadata["terminating_reason"] == "idle_pool_scale_down"
 
 
 def test_pooled_capacity_does_not_sell_one_pending_unit_twice(

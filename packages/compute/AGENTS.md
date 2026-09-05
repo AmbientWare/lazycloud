@@ -37,6 +37,13 @@ units; account admission owns plan concurrency and billing limits.
 Desired-capacity changes lock the
 binding's capacity workspace before reading the sum or updating a unit.
 
+An authenticated machine enrollment owns its worker runtime. The worker's
+identity and resource allocation derive from that enrollment, not from a
+scheduler registration that can expire or stop accepting placement. Planned
+draining preserves the runtime while its existing work finishes. Revoking a
+machine or removing a slot is a lifecycle operation, not a consequence of a
+placement status.
+
 A connected cloud account belongs to a user, not a workspace, and backs every
 workspace that user owns. Runtime lookups therefore resolve
 `workspace -> owner -> connection` through `get_for_workspace_owner`, and anything

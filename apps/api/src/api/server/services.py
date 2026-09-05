@@ -10,6 +10,7 @@ from typing import Protocol, runtime_checkable
 
 from agent.binary import AgentBinarySettings
 from agent.service import AgentService
+from anyio import from_thread
 from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
@@ -82,10 +83,6 @@ from identity.invitations import WorkspaceInvitationService
 from identity.sign_in import BillingProvisioner, SignInService
 from identity.users import UserService
 from images.control import ImageControlService
-from images.execution import (
-    ImageBuildExecutor,
-    ImageBuildExecutorKind,
-)
 from images.publication import (
     ArchiveImageBuildPublicationPublisher,
     CacheImageBuildPublicationPublisher,
@@ -93,13 +90,13 @@ from images.publication import (
     ImageBuildArchiveObjectStore,
     ImageBuildPublicationPublisher,
 )
-from images.scheduler_lifecycle import SchedulerImageBuildContainerStateStore
 from images.service import ImageBuildService
 from images.settings import (
     ImageBuildContainerSettings,
     ImageBuildExecutionSettings,
     ImageBuildRegistrySettings,
 )
+from images.submission import ImageBuildSubmissionService
 from networking.async_http import AsyncBackendHttpClient
 from networking.dialer import (
     BackendRouteDialer,
@@ -226,14 +223,7 @@ from worker.origin_access import ImageRegistryCredentials
 from worker.settings import ContainerServiceSettings
 from worker_repository.checkpoint_records import CheckpointService
 from worker_repository.credentials import WorkerCredentialService
-from worker_repository.image_build_container_execution import (
-    ContainerServiceImageBuildExecutorFactory,
-    ContainerServiceTransportFactory,
-    SchedulerImageBuildContainerAddressResolver,
-    StaticImageBuildContainerServiceTokenProvider,
-)
-from worker_repository.image_build_credentials import RedisImageBuildCredentialCache
-from worker_repository.image_build_scheduler_execution import SchedulerImageBuildExecutor
+from worker_repository.image_build_dispatch import DurableImageBuildDispatch
 from worker_repository.origin_credentials import (
     CacheOriginCredentialConfig,
     PresignedPutClient,
@@ -612,8 +602,6 @@ class ApiServices(ApiServiceCore):
         volume_filesystem: VolumeFilesystem | None = None,
         root: Path | None = None,
         create_schema: bool = True,
-        image_build_executor: ImageBuildExecutor | None = None,
-        image_build_container_transport_factory: ContainerServiceTransportFactory | None = None,
         redis_client: RedisClient,
         binary_redis_client: RedisClient,
         async_io: ApiAsyncIo | None = None,
@@ -812,16 +800,6 @@ class ApiServices(ApiServiceCore):
         container_repository = RedisSchedulerContainerRepository(redis)
         pool_state_repository = RedisWorkerPoolStateRepository(redis)
         capacity_reservation_repository = RedisCapacityReservationRepository(redis)
-        container_transport_factory = (
-            image_build_container_transport_factory
-            or HttpContainerServiceTransportFactory(
-                route_resolver=SchedulerBackendRouteResolver(
-                    routes,
-                    container_repository,
-                ),
-                route_dialer_config=resolved_backend_route_settings.to_dialer_config(),
-            )
-        )
         usage = UsageService(
             context,
             workspace_changes=workspace_changes,
@@ -991,16 +969,6 @@ class ApiServices(ApiServiceCore):
             workspace_changes=workspace_changes,
             placement_resources=placement_resources,
         )
-        resolved_image_build_executor = image_build_executor or _image_build_executor(
-            image_build_execution_config,
-            image_build_container_config,
-            container_service_config,
-            scheduler=container_scheduler,
-            container_repository=container_repository,
-            redis_client=redis,
-            image_build_container_transport_factory=container_transport_factory,
-            containers=containers,
-        )
         resolved_image_archive_store = image_archive_store
         if resolved_image_archive_store is None and isinstance(
             resolved_image_archive_presigner,
@@ -1014,16 +982,19 @@ class ApiServices(ApiServiceCore):
             image_build_registry_config,
             context=context,
             archive_store=resolved_image_archive_store,
-            archive_promotion_required=(resolved_image_build_executor.requires_archive_publication),
         )
         if publication_composition.owned_archive_store is not None:
             owned_runtime_resources.append(publication_composition.owned_archive_store)
         images = ImageBuildService(
             context,
+            ImageBuildSubmissionService(
+                context.database,
+                DurableImageBuildDispatch(
+                    context.database, container_scheduler, containers, image_build_container_config
+                ),
+            ),
             events,
-            resolved_image_build_executor,
             publication_composition.publisher,
-            container_control=containers,
             archive_settings=image_archive_config,
             archive_store=resolved_image_archive_store,
         )
@@ -1189,18 +1160,11 @@ class ApiServices(ApiServiceCore):
         except Exception as exc:
             failures.append(exc)
             route_prewarm_quiesced = False
-        image_dependencies_quiesced = True
-        try:
-            self.images.close()
-            image_dependencies_quiesced = self.images.active_background_execution_count == 0
-        except Exception as exc:
-            failures.append(exc)
-            image_dependencies_quiesced = self.images.active_background_execution_count == 0
         try:
             self.auth_token_cache.close()
         except Exception as exc:
             failures.append(exc)
-        if route_prewarm_quiesced and image_dependencies_quiesced:
+        if route_prewarm_quiesced:
             for resource in reversed(self.owned_resources):
                 try:
                     resource.close()
@@ -1297,6 +1261,7 @@ def _compose_api_services(
         scheduler_pool_states=scheduler_pool_states,
         container_clients=container_clients,
         async_http=async_http,
+        endpoint_dispatcher=async_dispatcher,
     )
     image = image_service or ImageControlService(
         core,
@@ -1508,7 +1473,13 @@ def _gateway_control_service(
     scheduler_pool_states: RedisWorkerPoolStateRepository,
     container_clients: SchedulerContainerClientFactory,
     async_http: AsyncBackendHttpClient | None,
+    endpoint_dispatcher: AsyncEndpointInstanceDispatcher | None,
 ) -> GatewayControlService:
+    def endpoint_rollout_readiness(stub_id: str, container_ids: list[str]) -> set[str]:
+        if endpoint_dispatcher is None:
+            raise RuntimeError("endpoint rollout readiness requires asynchronous API I/O")
+        return from_thread.run(endpoint_dispatcher.ready_container_ids, stub_id, container_ids)
+
     compute_states = RedisComputeStateRepository(core.redis())
     route_dialer = BackendRouteDialer(
         config=core.backend_route_settings.to_dialer_config(),
@@ -1531,6 +1502,7 @@ def _gateway_control_service(
         route_prewarmer=RoutePrewarmService(route_dialer, core.events),
         container_stopper=SchedulerContainerServiceStopper(container_clients),
         container_client_factory=container_clients,
+        endpoint_rollout_readiness=endpoint_rollout_readiness,
         route_authenticator=core.backend_route_settings.to_authenticator(),
         gateway_endpoint=GatewayEndpointConfig(http_url=core.gateway_settings.public_http_url),
         agent_artifact_version=core.agent_binary_settings.binary_version,
@@ -1714,27 +1686,23 @@ def _image_build_publication_publisher(
     *,
     context: ServiceContext,
     archive_store: ImageBuildArchiveObjectStore | None,
-    archive_promotion_required: bool,
 ) -> _ImageBuildPublicationComposition:
     publishers: list[ImageBuildPublicationPublisher] = []
     owned_archive_store: ApiOwnedResource | None = None
-    if archive_promotion_required:
-        resolved_archive_store = archive_store
-        if resolved_archive_store is None:
-            created_archive_store = S3ObjectStoreClient.from_settings(
-                image_archive_settings.storage
-            )
-            resolved_archive_store = created_archive_store
-            owned_archive_store = created_archive_store
-        if not isinstance(resolved_archive_store, ImageBuildArchiveObjectStore):
-            raise RuntimeError("image archive object store cannot verify immutable candidates")
-        publishers.append(
-            ArchiveImageBuildPublicationPublisher(
-                resolved_archive_store,
-                settings=image_archive_settings,
-                context=context,
-            )
+    resolved_archive_store = archive_store
+    if resolved_archive_store is None:
+        created_archive_store = S3ObjectStoreClient.from_settings(image_archive_settings.storage)
+        resolved_archive_store = created_archive_store
+        owned_archive_store = created_archive_store
+    if not isinstance(resolved_archive_store, ImageBuildArchiveObjectStore):
+        raise RuntimeError("image archive object store cannot verify immutable candidates")
+    publishers.append(
+        ArchiveImageBuildPublicationPublisher(
+            resolved_archive_store,
+            settings=image_archive_settings,
+            context=context,
         )
+    )
     publishers.append(CacheImageBuildPublicationPublisher(cache_storage))
     registry_publisher = registry_settings.create_publication_publisher(
         default_docker_binary=execution_settings.docker_binary,
@@ -1748,42 +1716,4 @@ def _image_build_publication_publisher(
     return _ImageBuildPublicationComposition(
         publisher=publisher,
         owned_archive_store=owned_archive_store,
-    )
-
-
-def _image_build_executor(
-    execution_settings: ImageBuildExecutionSettings,
-    container_settings: ImageBuildContainerSettings,
-    container_service_settings: ContainerServiceSettings,
-    *,
-    scheduler: SchedulerContainerRequestService,
-    container_repository: RedisSchedulerContainerRepository,
-    redis_client: RedisClient,
-    image_build_container_transport_factory: ContainerServiceTransportFactory | None,
-    containers: ContainerService,
-) -> ImageBuildExecutor:
-    if execution_settings.executor is not ImageBuildExecutorKind.BuildContainer:
-        return execution_settings.create_executor()
-    if image_build_container_transport_factory is None:
-        msg = "build-container image executor requires a container service transport factory"
-        raise RuntimeError(msg)
-
-    return SchedulerImageBuildExecutor(
-        scheduler=scheduler,
-        executor_factory=ContainerServiceImageBuildExecutorFactory(
-            SchedulerImageBuildContainerAddressResolver(container_repository),
-            image_build_container_transport_factory,
-            StaticImageBuildContainerServiceTokenProvider(
-                container_service_settings.token.get_secret_value()
-            ),
-            poll_interval_seconds=container_settings.address_poll_interval_seconds,
-        ),
-        pending_container_state=SchedulerImageBuildContainerStateStore(container_repository),
-        pool_selector=container_settings.pool_selector,
-        cpu_millicores=container_settings.cpu_millicores,
-        memory_mib=container_settings.memory_mib,
-        address_wait_timeout_seconds=container_settings.address_wait_timeout_seconds,
-        address_poll_interval_seconds=container_settings.address_poll_interval_seconds,
-        credential_cache=RedisImageBuildCredentialCache(redis_client),
-        containers=containers,
     )

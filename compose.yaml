@@ -28,7 +28,7 @@ x-telemetry-env: &telemetry-env
   LAZYCLOUD_TELEMETRY_ENDPOINT: "${LAZYCLOUD_TELEMETRY_ENDPOINT:-http://otel-collector:4318}"
 x-gateway-env: &gateway-env
   LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL: "${LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL:-http://lazycloud.localhost:${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}}"
-  LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL: "${LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL:-http://100.96.0.2:9000}"
+  LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL: "${LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL:-http://100.96.0.1:9000}"
 
 # Credentials for the edge that terminates TLS on customer-owned hostnames. Empty
 # by default: a deployment without them serves every platform hostname exactly as
@@ -100,12 +100,12 @@ x-image-build-env: &image-build-env
   # so a deployment whose capacity is a connected provider queues each build for
   # local capacity that does not exist until it hits the retry limit.
 
-# The release a deployment points at publishes the agent artifact version and
-# digest, the URL serving it, the container-worker image, the customer
-# authorization template, and the baked CPU AMIs. Every process that composes a
-# pool bootstrap needs the same one.
+# Both bootstrap composers need the same three pins. Worker image releases can
+# advance while the host agent and AMIs remain on their selected release.
 x-release-env: &release-env
   LAZYCLOUD_RELEASE_MANIFEST_URL: "${LAZYCLOUD_RELEASE_MANIFEST_URL:-}"
+  LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL: "${LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL:-}"
+  LAZYCLOUD_RELEASE_HOST_MANIFEST_URL: "${LAZYCLOUD_RELEASE_HOST_MANIFEST_URL:-}"
 
 x-agent-binary-env: &agent-binary-env
   LAZYCLOUD_AGENT_BINARY_DIR: "${LAZYCLOUD_AGENT_BINARY_DIR:-/var/lib/lazycloud/agent-binarys}"
@@ -438,6 +438,8 @@ services:
       LAZYCLOUD_WIREGUARD_PLATFORM_KEY_DIRECTORY: /var/lib/lazycloud/wireguard
       LAZYCLOUD_WIREGUARD_PLATFORM_PEER_COUNT: "1"
       LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT:-tunnel-gateway:51820}"
+      LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_HOST: control-plane
+      LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_PORT: "9000"
     cap_add:
       - NET_ADMIN
     sysctls:

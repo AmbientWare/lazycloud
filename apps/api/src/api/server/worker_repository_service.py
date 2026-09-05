@@ -172,6 +172,8 @@ from worker.repository_payloads import (
     RemoveNetworkLockRequest,
     RemoveNetworkLockResponse,
     RemoveWorkerResponse,
+    ReportImageBuildProgressRequest,
+    ReportImageBuildProgressResponse,
     ReportImageBuildResultRequest,
     ReportImageBuildResultResponse,
     ResolveSourceCacheCleanupRequest,
@@ -217,9 +219,9 @@ from worker_repository.credentials import (
     WorkerCredentialService,
 )
 from worker_repository.image_build_credentials import (
-    RedisImageBuildCredentialCache,
     RedisImageBuildUploadCapabilityGuard,
 )
+from worker_repository.image_build_dispatch import image_build_private_inputs
 from worker_repository.origin_credentials import WorkerCacheOriginCredentialService
 from worker_repository.source_cache import (
     WorkerSourceCacheService,
@@ -1680,10 +1682,13 @@ class WorkerRepositoryService:
             raise AuthorizationDeniedError(
                 "image build credentials are bound to the assigned worker"
             )
-        if self.redis is None:
-            raise UpstreamUnavailableError("Redis is required for image build credentials")
-        private_inputs = RedisImageBuildCredentialCache(self.redis).consume(
-            request.cache_key,
+        if state.image_build_id != request.build_id:
+            raise AuthorizationDeniedError("image build credentials do not match assigned build")
+        if self.dependencies is None:
+            raise UpstreamUnavailableError("image build service is required for credentials")
+        private_inputs = image_build_private_inputs(
+            self.dependencies.context.database,
+            cache_key=request.cache_key,
             workspace_id=request.workspace_id,
             build_id=request.build_id,
             container_id=request.container_id,
@@ -1752,6 +1757,34 @@ class WorkerRepositoryService:
             sha256=record.sha256,
             expires_at=utc_now() + timedelta(seconds=IMAGE_BUILD_CONTEXT_DOWNLOAD_SECONDS),
         )
+
+    def report_image_build_progress(
+        self,
+        request: ReportImageBuildProgressRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> ReportImageBuildProgressResponse:
+        self._authorize_worker_tenancy(
+            principal, request.workspace_id, operation="image build progress"
+        )
+        state = self.containers.get_container_state(request.container_id)
+        if (
+            state is None
+            or not principal.worker_id
+            or state.workspace_id != request.workspace_id
+            or state.worker_id != principal.worker_id
+            or state.image_build_id != request.build_id
+        ):
+            raise AuthorizationDeniedError("image build progress is not bound to this worker")
+        if self.dependencies is None:
+            raise UpstreamUnavailableError("image build service is required for progress")
+        sequence = self.dependencies.images.record_worker_progress(
+            request.build_id,
+            workspace_id=request.workspace_id,
+            after=request.after,
+            messages=request.logs,
+        )
+        return ReportImageBuildProgressResponse(sequence=sequence)
 
     def report_image_build_result(
         self,

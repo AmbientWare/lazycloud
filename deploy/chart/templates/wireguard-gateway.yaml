@@ -4,14 +4,23 @@ metadata:
   name: tunnel-gateway
 spec:
   replicas: {{ .Values.wireguard.replicas }}
+  minReadySeconds: 35
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: tunnel-gateway
   template:
     metadata:
+      annotations:
+        lazycloud.dev/secret-revision: {{ .Values.secretRevisions.wireguard | quote }}
       labels:
         app: tunnel-gateway
     spec:
+      terminationGracePeriodSeconds: 30
       topologySpreadConstraints:
         {{- include "lazycloud.spreadAcrossNodes" "tunnel-gateway" | nindent 8 }}
       volumes:
@@ -45,6 +54,11 @@ spec:
               containerPort: 8080
               protocol: TCP
           env:
+            - name: LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_HOST
+              value: control-plane
+            - name: LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_PORT
+              value: "9000"
+            {{- include "lazycloud.databaseEnv" .Values.wireguard.database | nindent 12 }}
             - name: LAZYCLOUD_DATABASE_URL
               valueFrom:
                 secretKeyRef:

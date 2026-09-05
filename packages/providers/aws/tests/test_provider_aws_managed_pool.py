@@ -27,7 +27,7 @@ from provider_aws import (
     AwsProviderControlError,
     AwsProviderControlErrorCode,
 )
-from pydantic import SecretStr, TypeAdapter
+from pydantic import SecretStr, TypeAdapter, ValidationError
 from shared.aws_connections import AwsAccountNetwork
 from shared.compute_policy import (
     ComputeCapacityMode,
@@ -192,6 +192,7 @@ class _AutoScaling:
         self.name = ""
         self.desired = 0
         self.minimum = 0
+        self.protect_new_instances = False
         self.maximum = 0
         self.tags: list[Mapping[str, object]] = []
         self.vpc_zone_identifier = ""
@@ -208,6 +209,7 @@ class _AutoScaling:
                     "AutoScalingGroupName": self.name,
                     "DesiredCapacity": self.desired,
                     "MinSize": self.minimum,
+                    "NewInstancesProtectedFromScaleIn": self.protect_new_instances,
                     "MaxSize": self.maximum,
                     "VPCZoneIdentifier": self.vpc_zone_identifier,
                     "LaunchTemplate": self.launch_template,
@@ -225,6 +227,7 @@ class _AutoScaling:
         self.name = str(kwargs["AutoScalingGroupName"])
         self.desired = int(str(kwargs["DesiredCapacity"]))
         self.minimum = int(str(kwargs["MinSize"]))
+        self.protect_new_instances = bool(kwargs["NewInstancesProtectedFromScaleIn"])
         self.maximum = int(str(kwargs["MaxSize"]))
         self.vpc_zone_identifier = str(kwargs["VPCZoneIdentifier"])
         tags = kwargs["Tags"]
@@ -237,6 +240,7 @@ class _AutoScaling:
         return {}
 
     def update_auto_scaling_group(self, **kwargs: object) -> Mapping[str, object]:
+        self.protect_new_instances = bool(kwargs["NewInstancesProtectedFromScaleIn"])
         self.desired = int(str(kwargs["DesiredCapacity"]))
         self.minimum = int(str(kwargs["MinSize"]))
         self.maximum = int(str(kwargs["MaxSize"]))
@@ -245,6 +249,17 @@ class _AutoScaling:
         assert isinstance(launch_template, Mapping)
         self.launch_template = launch_template
         self.update_count += 1
+        return {}
+
+    def set_instance_protection(
+        self, *, AutoScalingGroupName: str, InstanceIds: list[str], ProtectedFromScaleIn: bool
+    ) -> Mapping[str, object]:
+        self.instances = [
+            {**instance, "ProtectedFromScaleIn": ProtectedFromScaleIn}
+            if instance["InstanceId"] in InstanceIds
+            else instance
+            for instance in self.instances
+        ]
         return {}
 
     def delete_auto_scaling_group(self, **kwargs: object) -> Mapping[str, object]:
@@ -265,15 +280,15 @@ class _ClientProvider:
         return self.clients
 
 
-def _spec() -> AwsManagedPoolSpec:
+def _spec(*, desired_nodes: int = 1, max_nodes: int = 2) -> AwsManagedPoolSpec:
     return AwsManagedPoolSpec(
         workspace_id="12345678-1234-4123-8123-123456789abc",
         unit_name=UnitName("acceptance"),
         region="us-east-1",
         instance_type="m7i.xlarge",
         ami_id="ami-0123456789abcdef0",
-        desired_nodes=1,
-        max_nodes=2,
+        desired_nodes=desired_nodes,
+        max_nodes=max_nodes,
         root_volume_gib=50,
         node_instance_profile_arn=("arn:aws:iam::123456789012:instance-profile/compute-node"),
         vpc_id=_VPC_ID,
@@ -290,6 +305,14 @@ def _spec() -> AwsManagedPoolSpec:
             ),
         ),
     )
+
+
+def test_managed_pool_accepts_fleet_capacity_and_enforces_its_ceiling() -> None:
+    spec = _spec(desired_nodes=101, max_nodes=500)
+    assert spec.desired_nodes == 101
+    assert spec.max_nodes == 500
+    with pytest.raises(ValidationError, match="desired_nodes cannot exceed max_nodes"):
+        _spec(desired_nodes=501, max_nodes=500)
 
 
 def _connection_target(

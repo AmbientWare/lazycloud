@@ -162,7 +162,8 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     ) -> ProviderUnitSnapshot:
         provisioner = self._provisioner(request.offer.region)
         spec = self._spec(request)
-        provisioner.release_instance(spec, provider_instance_id, decrement_desired=True)
+        provisioner.scale(spec, desired_nodes=spec.desired_nodes, max_nodes=spec.max_nodes)
+        provisioner.release_instance(spec, provider_instance_id)
         return self._snapshot(provisioner, provisioner.describe(spec, self._resource_ids(request)))
 
     def delete_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:

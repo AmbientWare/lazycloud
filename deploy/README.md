@@ -1,5 +1,17 @@
 # Deployment
 
+Deploy builds all control-plane images for the selected commit. Helm records the
+network image's executable manifest digest in `image.networkDigest`; the other
+images use immutable commit tags. An unchanged network image keeps the WireGuard
+Deployment unchanged during an API release. Changes to its source, dependencies,
+or system packages select a new digest automatically. Ship and Promote use the
+same selection, with no separate network release input or Terraform apply.
+
+CI validates infrastructure, release pins, and database pool budgets before the
+build. After the image exists, it resolves the single linux/amd64 runtime manifest
+and validates the completed Helm values before recording the deployment. Missing
+or ambiguous artifacts fail the deployment rather than retaining stale code.
+
 Root `compose.yaml` is the canonical local stack. This file is the operator
 runbook for it; the subdirectory READMEs cover individual services and assets.
 
@@ -62,9 +74,33 @@ with the control plane so it does not remain attached to a replaced namespace.
 The separate `tunnel-gateway` service keeps its network namespace and continues
 serving enrolled agents.
 
+Workers send runtime callbacks to `100.96.0.1:9000`, the private gateway address.
+The gateway forwards them to `control-plane:9000`, whose Kubernetes Service
+selects a ready API replica. Helm supplies that Service host and port; Compose
+supplies its control-plane service name. The gateway refreshes Service DNS rather
+than retaining a replaced API container's address.
+
+Agents and platform sidecars probe the gateway through WireGuard. When it is
+unreachable, they refresh the configured endpoint's DNS without removing the
+interface or replacing peer keys. This recovery is provider-neutral. Existing
+hosts need an updated host agent binary to receive it; shipping a new worker
+container image alone does not update that binary.
+
+For managed AWS pools, selecting a new host release changes the launch template.
+The pool controller adds a replacement, checks that it enrolled, drains the
+superseded host, and retires it after its work finishes. It then removes the
+temporary capacity. Let that controller complete; do not also run installer
+updates on hosts it is replacing.
+
+Self-hosted machines do not use that replacement path. Upgrade them one at a
+time through the installer's `--install-only` mode and the agent restart command,
+preserving their service arguments and enrollment state. Cordon each worker and
+finish its active work before restarting its host agent, then verify private
+connectivity before uncordoning it.
+
 The stack is usable when all three services are healthy. The platform sidecar's
-readiness proves it configured the replica's stable key and completed a
-WireGuard handshake with the gateway.
+readiness proves it can reach the active gateway's health listener through
+WireGuard.
 
 ### Shared fleet and one customer machine
 

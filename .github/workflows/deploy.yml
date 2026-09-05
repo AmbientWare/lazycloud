@@ -43,6 +43,14 @@ on:
           built, which is a values commit and no build.
         type: string
         default: ""
+      worker_manifest_url:
+        description: Worker release to run. Empty follows a named release, otherwise retains the recorded worker.
+        type: string
+        default: ""
+      host_manifest_url:
+        description: Host agent and AMI release. Empty retains the recorded host pin; required for the first deployment.
+        type: string
+        default: ""
       release_manifest_url:
         description: |
           Release this deployment should run. Empty keeps whichever release it
@@ -60,6 +68,14 @@ on:
         required: true
       commit:
         description: Commit to record. Empty records the caller's commit.
+        type: string
+        default: ""
+      worker_manifest_url:
+        description: Worker release to run. Empty follows a named release, otherwise retains the recorded worker.
+        type: string
+        default: ""
+      host_manifest_url:
+        description: Host agent and AMI release. Empty retains the recorded host pin; required for the first deployment.
         type: string
         default: ""
       release_manifest_url:
@@ -97,10 +113,11 @@ jobs:
       BRANCH: ${{ inputs.deployment }}
       # The path every image repository shares. The cluster's, not the
       # deployment's: `deploy/platform-core` creates them once under its name.
-      IMAGE_PREFIX: lazycloud
       COMMIT: ${{ inputs.commit || github.sha }}
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       RELEASE_MANIFEST_URL: ${{ inputs.release_manifest_url }}
+      WORKER_MANIFEST_URL: ${{ inputs.worker_manifest_url }}
+      HOST_MANIFEST_URL: ${{ inputs.host_manifest_url }}
     steps:
       # A `workflow_call` input is a string, so the choice above does not
       # constrain a caller. The two names are the two GitHub environments and
@@ -108,7 +125,7 @@ jobs:
       - name: Refuse an unknown deployment
         if: inputs.deployment != 'prod' && inputs.deployment != 'staging'
         run: |
-          echo "::error::deployment is prod or staging, not '${{ inputs.deployment }}'."
+          echo "::error::deployment must be prod or staging; received $BRANCH"
           exit 1
 
       - name: Checkout
@@ -125,6 +142,101 @@ jobs:
       - name: Login to ECR
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Snapshot and validate the target configuration
+        env:
+          INFRASTRUCTURE_CONFIG_URI: ${{ vars.INFRASTRUCTURE_CONFIG_URI }}
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          test -n "$INFRASTRUCTURE_CONFIG_URI"
+          COMMIT="$(git rev-parse HEAD)"
+          echo "COMMIT=$COMMIT" >>"$GITHUB_ENV"
+          aws s3 cp "$INFRASTRUCTURE_CONFIG_URI" "$RUNNER_TEMP/infrastructure.json"
+          # Capture the compare-and-swap target before validation or builds.
+          git ls-remote --heads origin "refs/heads/$BRANCH" >"$RUNNER_TEMP/deployment-ref"
+          previous="$(cut -f1 "$RUNNER_TEMP/deployment-ref")"
+          echo "PREVIOUS_DEPLOYMENT=$previous" >>"$GITHUB_ENV"
+          previous_args=()
+          if [ -n "$previous" ]; then
+            git fetch --depth=1 origin "$previous"
+            git show "$previous:deploy/chart/values-deployment.yaml" >"$RUNNER_TEMP/previous-values.yaml"
+            git show "$previous:deploy/chart/values.yaml" >"$RUNNER_TEMP/previous-chart-values.yaml"
+            previous_args=(--previous-values "$RUNNER_TEMP/previous-values.yaml" --previous-chart-values "$RUNNER_TEMP/previous-chart-values.yaml")
+          fi
+          uv run --frozen --python 3.12 --group workspace python deploy/chart_values.py \
+            --infrastructure "$RUNNER_TEMP/infrastructure.json" \
+            --environment "deploy/chart/environments/$BRANCH.yaml" \
+            --deployment "$DEPLOYMENT" --tag "$COMMIT" \
+            --release-manifest-url "$RELEASE_MANIFEST_URL" \
+            --worker-manifest-url "$WORKER_MANIFEST_URL" \
+            --host-manifest-url "$HOST_MANIFEST_URL" \
+            "${previous_args[@]}" --preflight --output "$RUNNER_TEMP/deployment-preflight.yaml"
+          uv run --frozen --python 3.12 --group workspace python - <<'PY'
+          import os
+          from pathlib import Path
+          import yaml
+          values = yaml.safe_load((Path(os.environ["RUNNER_TEMP"]) / "deployment-preflight.yaml").read_text())
+          if values["image"]["registry"] != os.environ["ECR_REGISTRY"]:
+              raise SystemExit("Infrastructure registry does not match the deployment AWS account")
+          with open(os.environ["GITHUB_ENV"], "a") as out:
+              out.write(f"IMAGE_PREFIX={values['image']['repositoryPrefix']}\n")
+              out.write(f"RELEASE_MANIFEST_URL={values['runtime']['LAZYCLOUD_RELEASE_MANIFEST_URL']}\n")
+              out.write(f"WORKER_MANIFEST_URL={values['runtime']['LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL']}\n")
+              out.write(f"HOST_MANIFEST_URL={values['runtime']['LAZYCLOUD_RELEASE_HOST_MANIFEST_URL']}\n")
+          PY
+
+      - name: Authenticate to the public release registry
+        uses: aws-actions/amazon-ecr-login@v2
+        env:
+          AWS_REGION: us-east-1
+          AWS_DEFAULT_REGION: us-east-1
+        with:
+          registry-type: public
+
+      - name: Verify the selected release artifacts
+        run: |
+          set -euo pipefail
+          uv run --frozen --python 3.12 --group workspace python - <<'PY'
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+          from provider_clients.release import fetch_release_manifest, materialize_agent_artifact, validate_connection_template
+          from shared.managed_runtime_integrity import MANAGED_PACKAGE_NAMES
+          manifest = fetch_release_manifest(os.environ["RELEASE_MANIFEST_URL"])
+          validate_connection_template(manifest)
+          worker = fetch_release_manifest(os.environ["WORKER_MANIFEST_URL"])
+          host = fetch_release_manifest(os.environ["HOST_MANIFEST_URL"])
+          if not re.fullmatch(r"[0-9a-f]{40}", manifest.source_revision):
+              raise SystemExit("Selected release does not identify its source commit")
+          subprocess.run(["git", "fetch", "--depth=1", "origin", manifest.source_revision], check=True)
+          packages = [f"packages/{name}" for name in MANAGED_PACKAGE_NAMES]
+          comparison = subprocess.run([
+              "git", "diff", "--exit-code", "--name-only", manifest.source_revision, "HEAD", "--", *packages,
+          ])
+          if comparison.returncode:
+              raise SystemExit("Selected control-plane release has different managed packages; run Ship to publish matching artifacts")
+          materialize_agent_artifact(host, into=Path(os.environ["RUNNER_TEMP"]) / "agent-artifact")
+          subprocess.run(["docker", "buildx", "imagetools", "inspect", worker.container_worker_image], check=True)
+          print(f"Verified release {manifest.release_version}")
+          PY
 
       # An ECR tag is immutable, so a deploy re-run for a commit whose images
       # are already published cannot push them again. Recording the values is
@@ -146,11 +258,14 @@ jobs:
           for repository in api scheduler tunnel-gateway cache-server worker-bootstrap cli database-bootstrap; do
             if aws ecr describe-images \
               --repository-name "$IMAGE_PREFIX/$repository" \
-              --image-ids "imageTag=$COMMIT" >/dev/null 2>&1; then
+              --image-ids "imageTag=$COMMIT" >"$RUNNER_TEMP/image.json" 2>"$RUNNER_TEMP/ecr-error"; then
               present=$((present + 1))
-            else
+            elif grep -q 'ImageNotFoundException' "$RUNNER_TEMP/ecr-error"; then
               missing=$((missing + 1))
               echo "not published: $IMAGE_PREFIX/$repository:$COMMIT"
+            else
+              cat "$RUNNER_TEMP/ecr-error" >&2
+              exit 1
             fi
           done
           if [ "$present" -gt 0 ] && [ "$missing" -gt 0 ]; then
@@ -164,10 +279,6 @@ jobs:
             echo "every image is already published at $COMMIT; recording values only"
           fi
 
-      - name: Set up Docker Buildx
-        if: steps.published.outputs.build == 'true'
-        uses: docker/setup-buildx-action@v4
-
       - name: Build and push every control-plane image
         if: steps.published.outputs.build == 'true'
         uses: docker/bake-action@v7
@@ -177,8 +288,20 @@ jobs:
           targets: control-plane
           push: true
           set: |
-            *.cache-from=type=gha,scope=deploy-control-plane
-            *.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            api.cache-from=type=gha,scope=deploy-control-plane
+            api.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            scheduler.cache-from=type=gha,scope=deploy-control-plane
+            scheduler.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            cache-server.cache-from=type=gha,scope=deploy-control-plane
+            cache-server.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            worker-bootstrap.cache-from=type=gha,scope=deploy-control-plane
+            worker-bootstrap.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            cli.cache-from=type=gha,scope=deploy-control-plane
+            cli.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            database-bootstrap.cache-from=type=gha,scope=deploy-control-plane
+            database-bootstrap.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            tunnel-gateway.cache-from=type=gha,scope=deploy-network
+            tunnel-gateway.cache-to=type=gha,mode=max,scope=deploy-network
             api.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/api:${{ env.COMMIT }}
             scheduler.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/scheduler:${{ env.COMMIT }}
             tunnel-gateway.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/tunnel-gateway:${{ env.COMMIT }}
@@ -187,78 +310,51 @@ jobs:
             cli.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/cli:${{ env.COMMIT }}
             database-bootstrap.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/database-bootstrap:${{ env.COMMIT }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      # Not present on the runner image, and the failure is `command not found`
-      # rather than anything that names Terraform.
-      - name: Install Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.10.5"
-          terraform_wrapper: false
-
-      - name: Render the values the branch will carry
+      - name: Verify all control-plane images before publication
         run: |
           set -euo pipefail
-          terraform -chdir=deploy/platform-deployment init -input=false \
-            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=platform-deployment/$DEPLOYMENT.tfstate" \
-            -backend-config="region=$AWS_REGION"
-          terraform -chdir=deploy/platform-deployment output -json runtime_configuration >runtime.json
-          terraform -chdir=deploy/platform-deployment output -json secret_files >secret-files.json
-          terraform -chdir=deploy/platform-deployment output -json fleet_connection >fleet.json
-          terraform -chdir=deploy/platform-deployment output -json secret_environment >secret-map.json
-          tunnel_id="$(terraform -chdir=deploy/platform-deployment output -raw cloudflare_tunnel_id)"
-          wireguard_secret="$(terraform -chdir=deploy/platform-deployment output -raw wireguard_secret)"
-          secrets_reader_role_arn="$(terraform -chdir=deploy/platform-deployment output -raw secrets_reader_role_arn)"
+          for repository in api scheduler tunnel-gateway cache-server worker-bootstrap cli database-bootstrap; do
+            aws ecr describe-images --repository-name "$IMAGE_PREFIX/$repository" \
+              --image-ids "imageTag=$COMMIT" --query 'imageDetails[0].imageDigest' --output text
+          done
 
-          # Which release this deployment runs is a fact about the deployment,
-          # not about its infrastructure, so it is not a Terraform output. It
-          # lives beside the bundle, in the bucket Terraform does own, and is
-          # therefore destroyed with the stack rather than outliving it.
-          bucket="$(terraform -chdir=deploy/platform-deployment output -raw deploy_bucket)"
-          pointer="s3://${bucket}/current/release-manifest-url"
-          if [ -z "${RELEASE_MANIFEST_URL}" ]; then
-            RELEASE_MANIFEST_URL="$(aws s3 cp "${pointer}" - 2>/dev/null || true)"
-          else
-            printf '%s' "${RELEASE_MANIFEST_URL}" | aws s3 cp - "${pointer}"
+      - name: Resolve the network artifact and validate the deployment
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          network_image="$ECR_REGISTRY/$IMAGE_PREFIX/tunnel-gateway"
+          docker buildx imagetools inspect --raw "$network_image:$COMMIT" >"$RUNNER_TEMP/network-index.json"
+          network_digest="$(jq -er '
+            [.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")]
+            | if length == 1 then .[0].digest else error("Expected one executable linux/amd64 network manifest") end
+          ' "$RUNNER_TEMP/network-index.json")"
+          docker buildx imagetools inspect "$network_image@$network_digest" >/dev/null
+          previous_args=()
+          if [ -n "$PREVIOUS_DEPLOYMENT" ]; then
+            previous_args=(--previous-values "$RUNNER_TEMP/previous-values.yaml" --previous-chart-values "$RUNNER_TEMP/previous-chart-values.yaml")
           fi
-          if [ -z "${RELEASE_MANIFEST_URL}" ]; then
-            echo "::warning::No release named; this control plane will run without managed capacity."
-          fi
-
-          uv run --group workspace python deploy/chart_values.py \
-            --registry "${{ steps.ecr.outputs.registry }}" \
-            --repository-prefix "$IMAGE_PREFIX" \
-            --tag "$COMMIT" \
-            --tunnel-id "${tunnel_id}" \
-            --wireguard-secret "${wireguard_secret}" \
-            --secrets-reader-role-arn "${secrets_reader_role_arn}" \
-            --runtime runtime.json \
-            --secret-map secret-map.json \
-            --secret-files secret-files.json \
-            --fleet fleet.json \
-            --release-manifest-url "${RELEASE_MANIFEST_URL}" \
-            --output values-deployment.yaml
+          uv run --frozen --python 3.12 --group workspace python deploy/chart_values.py \
+            --infrastructure "$RUNNER_TEMP/infrastructure.json" \
+            --environment "deploy/chart/environments/$BRANCH.yaml" \
+            --deployment "$DEPLOYMENT" --tag "$COMMIT" --network-digest "$network_digest" \
+            --release-manifest-url "$RELEASE_MANIFEST_URL" \
+            --worker-manifest-url "$WORKER_MANIFEST_URL" \
+            --host-manifest-url "$HOST_MANIFEST_URL" \
+            "${previous_args[@]}" --output "$RUNNER_TEMP/values-deployment.yaml"
+          helm lint deploy/chart --strict -f "$RUNNER_TEMP/values-deployment.yaml"
+          helm template "$DEPLOYMENT" deploy/chart --namespace "$DEPLOYMENT" \
+            -f "$RUNNER_TEMP/values-deployment.yaml" >"$RUNNER_TEMP/rendered.yaml"
 
       - name: Record it on the deployment branch
         run: |
           set -euo pipefail
           git config user.name "lazycloud-deploy"
           git config user.email "deploy@lazycloud.dev"
-          git remote set-url origin \
-            "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git"
 
           # Branched from this commit rather than merged into: the deployment
           # branch is the source that produced the images plus the file naming
           # them, so it can never describe a tree the tag was not built from.
-          git fetch origin "${BRANCH}" || true
           git checkout -B "${BRANCH}" "${COMMIT}"
           # Argo reads `deploy/chart` from this branch and nothing else, so the
           # workflows are carried here for no reader. They are not free to
@@ -267,8 +363,8 @@ jobs:
           # after every image is built, and with no way to grant it, because
           # `workflows` is not a permission a job can ask for.
           git rm -r --quiet --cached .github
-          mv values-deployment.yaml deploy/chart/values-deployment.yaml
+          cp "$RUNNER_TEMP/values-deployment.yaml" deploy/chart/values-deployment.yaml
           git add deploy/chart/values-deployment.yaml
           git commit -m "Run ${COMMIT}"
-          git push --force-with-lease origin "${BRANCH}"
+          git push --force-with-lease="refs/heads/$BRANCH:$PREVIOUS_DEPLOYMENT" origin "HEAD:refs/heads/$BRANCH"
           echo "${DEPLOYMENT} now records ${COMMIT}" >> "${GITHUB_STEP_SUMMARY}"

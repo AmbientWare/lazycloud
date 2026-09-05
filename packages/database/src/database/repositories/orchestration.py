@@ -16,6 +16,7 @@ from database.repositories.common import (
 )
 from database.repositories.identity import WorkspaceRepository
 from database.tables.apps import StubTable
+from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.identity import WorkspaceMemberTable
 from database.tables.orchestration import (
     AgentLeaseTable,
@@ -403,6 +404,12 @@ class ContainerPage:
 class ContainerRepository:
     session: Session
 
+    def lock_reservation(self, container_id: str) -> None:
+        self.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": f"container-reservation:{container_id}"},
+        )
+
     @property
     def records(self) -> WorkspaceTableRepository[ContainerRecord]:
         return WorkspaceTableRepository(
@@ -657,6 +664,9 @@ class ContainerRepository:
                 select(func.count(ContainerTable.id)).where(
                     ContainerTable.stub_id == stub_id,
                     ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+                    ~select(ContainerRolloutDrainTable.container_id)
+                    .where(ContainerRolloutDrainTable.container_id == ContainerTable.id)
+                    .exists(),
                 )
             )
             or 0

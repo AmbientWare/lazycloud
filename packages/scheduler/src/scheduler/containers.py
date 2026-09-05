@@ -94,6 +94,10 @@ class SchedulerContainerDispatchResult(ContractModel):
 class SchedulerContainerStateRepository(Protocol):
     def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
 
+    def initialize_container_state(
+        self, state: SchedulerContainerState
+    ) -> SchedulerContainerState: ...
+
     def set_container_state(
         self,
         state: SchedulerContainerState,
@@ -359,7 +363,7 @@ class SchedulerContainerRequestService:
                     reason=quota_error,
                 )
             quota_reserved = _request_uses_quota(request)
-            self.containers.set_container_state(
+            self.containers.initialize_container_state(
                 _container_state(request, scheduled_at=current_time)
             )
             self.workers.enqueue_container_request(request, ready_at=current_time)
@@ -411,10 +415,11 @@ class SchedulerContainerRequestService:
         }
         pending_request_removed = False
         if state.worker_id and not terminal:
-            pending_request_removed = self.workers.cancel_worker_request(
+            request_removed = self.workers.cancel_worker_request(
                 state.worker_id,
                 container_id,
             )
+            pending_request_removed = request_removed and state.started_at is None
             if pending_request_removed:
                 self.containers.delete_container_state(container_id)
         self._release_capacity_reservation(container_id)

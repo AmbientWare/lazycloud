@@ -19,12 +19,13 @@ state. `README.md` is the operator runbook.
   address, and a deployment can be applied from anywhere. Keep it that way:
   the day this module declares a Kubernetes object it inherits the core's
   allowlist and the core's providers.
-- This is greenfield and stays greenfield. An apply produces the deployment; it
-  does not adopt one. Do not add import blocks or reconciliation against
-  hand-built resources.
+- Production is persistent. Review every resource replacement against the live
+  installation. Resolve provider/state discrepancies before applying.
+- Export resource identities through configuration.tf. Application policy, prices,
+  limits and secret property bindings belong to Helm, not Terraform variables.
+  The deploy role reads only this descriptor and has no state-bucket access.
 - A deployment's credentials are two JSON documents, split by who can produce
-  the value. `<deployment>/platform` is written here and rewritten on every
-  apply; `<deployment>/operator` is declared here and written by a person.
+  the value. `<deployment>/platform` is written here when its inputs change; `<deployment>/operator` is declared here and written by a person.
   Secrets Manager bills per entry, and one entry cannot hold both: a document is
   written atomically, so a single one would have this configuration dropping
   every field an operator added. `ignore_changes` does not rescue it, because

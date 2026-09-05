@@ -5,8 +5,7 @@ scaling, verification, and cleanup. This file covers Hetzner's inputs and image
 build. It is not a separate application deployment procedure.
 
 Live workload acceptance is outstanding. The owner approved performing it on
-production with the intended warm/cold configuration. Merge and deployment
-remain on hold until the owner releases the hold for the other feature.
+production with the intended warm/cold configuration after release checks pass.
 
 ## Project credentials
 
@@ -40,7 +39,7 @@ terraform -chdir=deploy/platform-deployment plan \
 ```
 
 Use the deployment's existing backend and variable files. Review and apply
-that plan before Ship, which reads the resulting Terraform outputs.
+that plan before Ship, which reads Terraform's published infrastructure descriptor.
 
 A local build uses the same Packer recipe. Supply `HCLOUD_TOKEN` through the
 environment, then run:
@@ -76,7 +75,7 @@ not prove that a node can enroll or run a workload.
 
 ## Deployment defaults and differences
 
-`deploy/platform-deployment/capacity.tf` declares Ashburn, `ash`, with CCX33,
+`deploy/chart/environments/prod.yaml` declares Ashburn, `ash`, with CCX33,
 CCX43, CCX53, and CCX63. The cheapest compatible CPU shape holds an adaptive
 warm floor starting at one node. Larger shapes are acquired on demand. Other
 platform pools remain cold. Users request container CPU, memory, and GPUs;
@@ -87,7 +86,7 @@ The adapter supports dedicated x86 Cloud servers, not shared CPU, Robot,
 attached volumes, or GPUs. AWS supplies GPU capacity. Additional locations
 need their images and deployment policy before they can supply capacity.
 
-Server prices come from the provider API. Terraform declares the USD conversion
+Server prices come from the provider API. Helm declares the USD conversion
 and IPv4 cost added to those prices. The defaults match the selected USD-billed
 project; review them for another billing currency or changed supplier charges.
 There are no added supplier purchase ceilings or Hetzner node caps.

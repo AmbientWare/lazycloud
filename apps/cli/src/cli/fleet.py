@@ -25,7 +25,7 @@ from lazycloud.cli.control import compute_client, workspace_client
 from lazycloud.json_contracts import validate_json_object
 from shared.aws_connections import AwsAccountConnectionPhase, AwsAccountNetwork
 from shared.contracts import ContractModel
-from shared.http.aws_connections import AwsComputeConfigurationUpdateRequest
+from shared.http.aws_connections import AwsFleetEnsureRequest
 from shared.http.compute import UnitResponse
 from shared.http.errors import HttpApiError
 
@@ -61,98 +61,36 @@ def fleet_ensure(
     ],
     max_gpu_instances: Annotated[
         int,
-        typer.Option("--max-gpu", min=1, help="Shared-fleet GPU instance ceiling."),
+        typer.Option("--max-gpu", min=0, help="Shared-fleet GPU instance ceiling."),
     ],
 ) -> None:
-    """Connect the platform's own account, or report the connection already there.
-
-    Idempotent because a deploy runs it on every release. A connection already
-    present is left alone rather than replaced: reconnecting mints a new
-    authorization generation, and doing that on every deploy would churn the
-    credential every pool depends on.
-
-    This is the ordinary existing-role connection, not a private path: the role
-    exists before the connection does, so its external ID is supplied rather
-    than minted. A customer bringing their own role is in exactly that position.
-    """
+    """Ensure the fleet's infrastructure matches and apply its capacity ceilings."""
     if len(subnet_id) != 2:
-        raise typer.BadParameter(
-            f"exactly two --subnet-id are required, in different availability zones; "
-            f"got {len(subnet_id)}"
-        )
-
-    client = compute_client()
-
-    existing = client.current_connection()
-    if existing is not None:
-        # Restated on every deploy. A connection made before the platform could
-        # say which account was its own still describes itself
-        # as a customer's, and its machines would serve nobody but us.
-        adopted = client.adopt_fleet_account()
-        if (
-            adopted.compute.max_cpu_instances != max_cpu_instances
-            or adopted.compute.max_gpu_instances != max_gpu_instances
-        ):
-            adopted = client.update_compute_configuration(
-                AwsComputeConfigurationUpdateRequest(
-                    expected_revision=adopted.compute.revision,
-                    compute=adopted.compute.model_copy(
-                        update={
-                            "max_cpu_instances": max_cpu_instances,
-                            "max_gpu_instances": max_gpu_instances,
-                        }
-                    ),
-                )
-            )
-        emit_result(
-            ctx,
-            payload=adopted.model_dump(mode="json"),
-            title="Fleet account connected",
-            fields={
-                "account": adopted.account_id,
-                "phase": adopted.phase.value,
-                "detail": adopted.detail,
-            },
-            tone="success" if adopted.phase is AwsAccountConnectionPhase.Ready else "info",
-            message=(
-                "Run `cloud validate` to advance the connection."
-                if adopted.phase is not AwsAccountConnectionPhase.Ready
-                else ""
+        raise typer.BadParameter("exactly two --subnet-id are required")
+    connection = compute_client().ensure_fleet_account(
+        AwsFleetEnsureRequest(
+            account_id=account_id,
+            role_arn=role_arn,
+            external_id=external_id,
+            network=AwsAccountNetwork(
+                vpc_id=vpc_id,
+                subnet_ids=(subnet_id[0], subnet_id[1]),
+                security_group_id=security_group_id,
             ),
+            max_cpu_instances=max_cpu_instances,
+            max_gpu_instances=max_gpu_instances,
         )
-        return
-
-    response = client.connect_account(
-        account_id=account_id,
-        role_arn=role_arn,
-        # The role is declared beside this deployment and its trust already
-        # enforces this, so the platform is told rather than choosing. A minted
-        # one would have to be written into a trust policy Terraform owns, by
-        # something other than Terraform.
-        external_id=external_id,
-        network=AwsAccountNetwork(
-            vpc_id=vpc_id,
-            subnet_ids=(subnet_id[0], subnet_id[1]),
-            security_group_id=security_group_id,
-        ),
-        max_cpu_instances=max_cpu_instances,
-        max_gpu_instances=max_gpu_instances,
-        # This account is the platform's, so its machines are shared capacity that
-        # serves every customer and bills to the fleet.
-        platform_fleet=True,
     )
-    connection = response.connection
     emit_result(
         ctx,
-        payload=response.model_dump(mode="json"),
-        title="Fleet account connected",
+        payload=connection.model_dump(mode="json"),
+        title="Fleet account configured",
         fields={
             "account": connection.account_id,
             "phase": connection.phase.value,
             "detail": connection.detail,
         },
-        tone="success",
-        message="Run `cloud validate` to activate the connection.",
+        tone="success" if connection.phase is AwsAccountConnectionPhase.Ready else "info",
     )
 
 

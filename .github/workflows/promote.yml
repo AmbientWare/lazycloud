@@ -6,7 +6,7 @@ name: Promote
 # already published and writes the values file.
 #
 # What promotes is the image tag and the release manifest URL and nothing
-# else. Prod's values are rendered from prod's own Terraform outputs -- its
+# else. Prod's values are rendered from prod's own infrastructure descriptor -- its
 # tunnel, its secrets, its database -- so a staging credential never crosses.
 #
 # Required reviewers on the `prod` environment, if configured, pause exactly at
@@ -21,10 +21,6 @@ permissions:
   contents: write
   id-token: write
 
-concurrency:
-  group: deploy-prod
-  cancel-in-progress: false
-
 jobs:
   staging:
     name: Read what staging runs
@@ -32,6 +28,7 @@ jobs:
     outputs:
       commit: ${{ steps.read.outputs.commit }}
       release_manifest_url: ${{ steps.read.outputs.release_manifest_url }}
+      worker_manifest_url: ${{ steps.read.outputs.worker_manifest_url }}
     steps:
       - name: Checkout the staging branch
         uses: actions/checkout@v6
@@ -62,8 +59,9 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"commit={commit}\n")
               out.write(f"release_manifest_url={manifest}\n")
+              out.write(f"worker_manifest_url={values['runtime']['LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL']}\n")
           summary = f"Promoting {commit}"
-          summary += f" on release {manifest}" if manifest else " with prod's own release pointer unchanged"
+          summary += f" on release {manifest}" if manifest else " with prod's recorded release unchanged"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
               out.write(summary + "\n")
           print(summary)
@@ -78,3 +76,4 @@ jobs:
       deployment: prod
       commit: ${{ needs.staging.outputs.commit }}
       release_manifest_url: ${{ needs.staging.outputs.release_manifest_url }}
+      worker_manifest_url: ${{ needs.staging.outputs.worker_manifest_url }}

@@ -1,211 +1,341 @@
-"""Render the chart's values from what the infrastructure already knows.
-
-Nothing here is authored. Image references come from what the deploy pushed,
-and runtime values and secret paths from the deployment module's outputs. The
-chart then decides nothing about a value the infrastructure has already decided,
-which is what makes a variable impossible to supply in one place and forget in
-another.
-
-One role ARN, the secret reader's. Every workload's AWS identity is a Pod
-Identity association declared beside the cluster and never travels through here;
-the SecretStore's cannot be, because it is a token exchange the shared operator
-performs on the store's behalf, and the role it exchanges for is the one the
-chart names.
-
-One image tag, naming the commit that produced the images, and it is safe to pin
-by tag for a reason worth stating: every repository is created
-`image_tag_mutability = "IMMUTABLE"`, so a tag cannot be repointed once pushed.
-The rule against tags is about names that can move; this one cannot, and it says
-which commit is running in a way a digest does not.
-"""
+"""Snapshot infrastructure facts and Helm environment values for one deployment."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
+from typing import Annotated, Literal
 
 import yaml
-from pydantic import TypeAdapter, ValidationError
+from provider_clients.settings import HetznerCapacityBinding
+from provider_hetzner import HetznerNodeImage
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
-_STRING_MAP = TypeAdapter(dict[str, str])
-
-# Runtime values whose absence produces a control plane that starts, reports
-# healthy, and is wrong. Each of these has done exactly that: the deployment
-# converged, the workflow reported success, and the defect surfaced steps later
-# as a symptom naming something else. Checked here because this is the last point
-# that holds the whole set at once -- the cluster receives them already
-# assembled, and the API cannot tell a value it was never given from one a
-# deployment legitimately does not have.
-#
-# Deliberately not everything. A value with a meaningful empty -- the object
-# store endpoint, which is blank to select S3 itself -- cannot be told from an
-# omission by this check and does not belong in it.
-REQUIRED_RUNTIME_VARIABLES = {
-    "LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN": (
-        "the principal a customer's account authorizes; without it every "
-        "connection request is refused and no managed capacity is ever registered"
-    ),
-    "LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL": (
-        "the origin this deployment is reached on; it defaults to localhost, so "
-        "absence is silent and reaches customers in authorization templates and "
-        "OAuth redirects"
-    ),
-    "LAZYCLOUD_GITHUB_REDIRECT_URI": (
-        "where GitHub returns a person after sign-in; without it the deployment "
-        "refuses every sign-in as provider_unavailable and nobody can reach the "
-        "dashboard"
-    ),
-    "LAZYCLOUD_OBJECT_STORE_BUCKET": "the bucket every artifact, package and log is written to",
-    "LAZYCLOUD_OBJECT_STORE_REGION_NAME": (
-        "the region the secret store and the object store are read from"
-    ),
-    "LAZYCLOUD_STRIPE_ACCOUNT_ID": (
-        "the payment-provider account the catalog is published into; the "
-        "publisher checks the credential against it, and without it no plan or "
-        "price exists for a sign-in to put anyone on"
-    ),
-    "LAZYCLOUD_WORKSPACE_STORAGE_ISSUER": (
-        "which object store cuts a workspace's storage credential; without it "
-        "the control plane refuses to start rather than guessing, because the "
-        "two stores are reached in different ways"
-    ),
-    "LAZYCLOUD_WORKSPACE_STORAGE_ROLE_ARN": (
-        "the role a workspace's bucket-scoped credential is cut from; without it "
-        "no container can mount its workspace storage"
-    ),
-    "LAZYCLOUD_REDIS_URL": (
-        "the coordination Redis; without it the scheduler holds no lease and the "
-        "control plane publishes no origin for a worker to dial"
-    ),
-    "LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT": (
-        "the stable UDP host and port agents use to reach the WireGuard gateway"
-    ),
-}
+Name = Annotated[str, Field(min_length=1, pattern=r"^\S+$")]
 
 
-class ValuesError(RuntimeError):
-    """The values could not be rendered."""
+class Contract(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
 
 
-def _string_map(source: Path, label: str) -> dict[str, str]:
-    try:
-        return _STRING_MAP.validate_json(source.read_bytes())
-    except ValidationError as error:
-        raise ValuesError(f"{label} file must be a JSON object of strings: {error}") from error
+class FleetInfrastructure(Contract):
+    account_id: Annotated[str, Field(pattern=r"^\d{12}$")]
+    role_arn: Annotated[
+        str, Field(pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::\d{12}:role/[A-Za-z0-9+=,.@_/-]+$")
+    ]
+    vpc_id: Annotated[str, Field(pattern=r"^vpc-[a-f0-9]+$")]
+    subnet_ids: Annotated[list[Name], Field(min_length=2, max_length=2)]
+    security_group_id: Annotated[str, Field(pattern=r"^sg-[a-f0-9]+$")]
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> FleetInfrastructure:
+        if self.role_arn.split(":", maxsplit=5)[4] != self.account_id:
+            raise ValueError("Fleet role must belong to its account")
+        if len(set(self.subnet_ids)) != 2:
+            raise ValueError("Fleet subnets must be distinct")
+        return self
 
 
-def _json_value(source: Path, label: str) -> dict[str, object]:
-    try:
-        return json.loads(source.read_bytes())
-    except (OSError, ValueError) as error:
-        raise ValuesError(f"{label} file could not be read: {error}") from error
+class SecretDocuments(Contract):
+    platform: Name
+    operator: Name
+    wireguard: Name
 
 
-def _checked_runtime(runtime: dict[str, str]) -> dict[str, str]:
-    missing = sorted(
-        variable for variable in REQUIRED_RUNTIME_VARIABLES if not runtime.get(variable, "").strip()
-    )
-    if missing:
-        raise ValuesError(
-            "the deployment is missing runtime values a control plane cannot work "
-            "without:\n"
-            + "\n".join(f"  {name}: {REQUIRED_RUNTIME_VARIABLES[name]}" for name in missing)
+class ServiceAccounts(Contract):
+    controlPlane: Name
+    scheduler: Name
+    secretsReader: Name
+    wireguardBootstrap: Name
+
+
+class Infrastructure(Contract):
+    schema_version: Literal[1]
+    deployment: Name
+    region: Name
+    registry: Name
+    repository_prefix: Name
+    storage_class: Name
+    service_accounts: ServiceAccounts
+    object_bucket: Name
+    workspace_bucket_prefix: Name
+    workspace_storage_role_arn: Name
+    workload_image_repository: Name
+    control_principal_arn: Name
+    public_origin: Annotated[str, Field(pattern=r"^https://[a-zA-Z0-9.-]+$")]
+    redis_host: Name
+    hetzner_node_images: Annotated[dict[Name, HetznerNodeImage], Field(min_length=1)]
+    fleet: FleetInfrastructure
+    secret_documents: SecretDocuments
+    secrets_reader_role_arn: Name
+    cloudflare_tunnel_id: Name
+    database_max_connections: Annotated[int, Field(gt=0)]
+
+
+_VALUES = TypeAdapter(dict[str, JsonValue])
+_STRINGS = TypeAdapter(dict[str, str])
+_TAG = TypeAdapter[str](Annotated[str, Field(pattern=r"^[a-f0-9]{40}$")])
+_DIGEST = TypeAdapter[str](Annotated[str, Field(pattern=r"^sha256:[a-f0-9]{64}$")])
+_RELEASE = TypeAdapter[str](
+    Annotated[str, Field(pattern=r"^https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+/manifest\.json$")]
+)
+
+
+class DatabasePool(Contract):
+    poolSize: Annotated[int, Field(gt=0)]
+    maxOverflow: Annotated[int, Field(ge=0)]
+
+    @property
+    def maximum(self) -> int:
+        return self.poolSize + self.maxOverflow
+
+
+def _mapping(values: dict[str, JsonValue], name: str) -> dict[str, JsonValue]:
+    return _VALUES.validate_python(values.get(name, {}))
+
+
+def check_transition_budget(
+    previous_defaults: dict[str, JsonValue],
+    previous: dict[str, JsonValue],
+    defaults: dict[str, JsonValue],
+    proposed: dict[str, JsonValue],
+    *,
+    ceiling: int,
+) -> None:
+    steady = 0
+    overlap: dict[str, int] = {}
+    for name, engines in (("controlPlane", 2), ("scheduler", 1), ("wireguard", 1)):
+        totals: list[int] = []
+        pools: list[int] = []
+        for common, override in ((previous_defaults, previous), (defaults, proposed)):
+            base = _mapping(common, name)
+            selected = _mapping(override, name)
+            pool_values = {**_mapping(base, "database"), **_mapping(selected, "database")}
+            if not pool_values:
+                raise ValueError(
+                    f"Existing {name} database pool is undeclared; configure its running "
+                    "deployment explicitly before the release transition"
+                )
+            pool = DatabasePool.model_validate(pool_values)
+            replicas = TypeAdapter[int](Annotated[int, Field(ge=2)]).validate_python(
+                selected.get("replicas", base.get("replicas")), strict=True
+            )
+            totals.append(replicas * engines * pool.maximum)
+            pools.append(engines * pool.maximum)
+        steady += max(totals)
+        overlap[name] = max(pools)
+    bootstrap = _mapping(defaults, "bootstrap")
+    configured_bootstrap = _mapping(proposed, "bootstrap")
+    jobs = DatabasePool.model_validate(
+        {**_mapping(bootstrap, "database"), **_mapping(configured_bootstrap, "database")}
+    ).maximum
+    reserved = max(
+        TypeAdapter[int](Annotated[int, Field(gt=0)]).validate_python(
+            _mapping(override, "database").get(
+                "reserved", _mapping(common, "database").get("reserved")
+            ),
+            strict=True,
         )
-    return runtime
+        for common, override in ((previous_defaults, previous), (defaults, proposed))
+    )
+    total = steady + max(jobs, overlap["scheduler"] + overlap["wireguard"]) + reserved
+    if total > ceiling:
+        raise ValueError(
+            f"Old/new database pools can allocate {total} connections, exceeding server "
+            f"ceiling {ceiling}; stage a pool or replica reduction before deploying"
+        )
 
 
-def render(args: argparse.Namespace) -> None:
-    runtime = _checked_runtime(_string_map(Path(args.runtime), "runtime"))
-    if args.release_manifest_url:
-        # Added only when there is one. Writing the variable empty is not the
-        # same as leaving it out: the pods would then carry a blank URL, and a
-        # release that cannot be fetched is a different failure from a deployment
-        # that names no release.
-        runtime["LAZYCLOUD_RELEASE_MANIFEST_URL"] = args.release_manifest_url
-
-    values: dict[str, object] = {
+def render(
+    infrastructure: Infrastructure,
+    environment: dict[str, JsonValue],
+    *,
+    deployment: str,
+    tag: str,
+    release_manifest_url: str,
+    worker_manifest_url: str,
+    host_manifest_url: str,
+) -> dict[str, JsonValue]:
+    if infrastructure.deployment != deployment:
+        raise ValueError("Infrastructure descriptor belongs to a different deployment")
+    _TAG.validate_python(tag)
+    for url in (release_manifest_url, worker_manifest_url, host_manifest_url):
+        _RELEASE.validate_python(url)
+    # Environment overlays cannot replace resource identities.
+    owned: dict[str, set[str] | None] = {
+        "image": None,
+        "serviceAccounts": None,
+        "storage": {"className"},
+        "database": {"maxConnections"},
+        "secrets": {"documents", "readerRoleArn"},
+        "cloudflared": {"apex", "tunnelId"},
+        "wireguard": {"secretId"},
+        "fleet": set(FleetInfrastructure.model_fields),
+        "deploymentRecord": None,
+    }
+    for key, fields in owned.items():
+        if key not in environment:
+            continue
+        value = environment[key]
+        if fields is None or not isinstance(value, dict) or fields.intersection(value):
+            raise ValueError(f"Environment values cannot override infrastructure-owned {key}")
+    runtime: dict[str, JsonValue] = {
+        "LAZYCLOUD_OBJECT_STORE_BUCKET": infrastructure.object_bucket,
+        "LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX": infrastructure.workspace_bucket_prefix,
+        "LAZYCLOUD_OBJECT_STORE_REGION_NAME": infrastructure.region,
+        "LAZYCLOUD_WORKSPACE_STORAGE_ISSUER": "aws",
+        "LAZYCLOUD_WORKSPACE_STORAGE_ROLE_ARN": infrastructure.workspace_storage_role_arn,
+        "LAZYCLOUD_WORKSPACE_STORAGE_REGION_NAME": infrastructure.region,
+        "LAZYCLOUD_WORKLOAD_IMAGE_REGISTRY_REPOSITORY": infrastructure.workload_image_repository,
+        "LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN": infrastructure.control_principal_arn,
+        "LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL": infrastructure.public_origin,
+        "LAZYCLOUD_GITHUB_REDIRECT_URI": f"{infrastructure.public_origin}/auth/github/callback",
+        "LAZYCLOUD_REDIS_URL": f"rediss://{infrastructure.redis_host}:6379/0",
+        "LAZYCLOUD_RELEASE_MANIFEST_URL": release_manifest_url,
+        "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL": worker_manifest_url,
+        "LAZYCLOUD_RELEASE_HOST_MANIFEST_URL": host_manifest_url,
+    }
+    authored_runtime = _STRINGS.validate_python(environment.get("runtime", {}), strict=True)
+    if runtime.keys() & authored_runtime.keys():
+        raise ValueError("Environment runtime overrides an infrastructure or release value")
+    rates = TypeAdapter(dict[str, Annotated[int, Field(gt=0)]]).validate_json(
+        authored_runtime.get("LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS", "")
+    )
+    if not rates:
+        raise ValueError("Managed fleet requires nonempty instance prices")
+    bindings = TypeAdapter(list[dict[str, JsonValue]]).validate_json(
+        authored_runtime.get("LAZYCLOUD_PLATFORM_CAPACITY_HETZNER", "")
+    )
+    if not bindings:
+        raise ValueError("Platform capacity requires a configured Hetzner binding")
+    resolved_bindings: list[HetznerCapacityBinding] = []
+    for binding in bindings:
+        if "images_by_location" in binding:
+            raise ValueError("Environment capacity overrides infrastructure-owned images")
+        resolved_bindings.append(
+            HetznerCapacityBinding.model_validate(
+                {**binding, "images_by_location": infrastructure.hetzner_node_images}
+            )
+        )
+    authored_runtime["LAZYCLOUD_PLATFORM_CAPACITY_HETZNER"] = (
+        TypeAdapter(list[HetznerCapacityBinding]).dump_json(resolved_bindings).decode()
+    )
+    values = dict(environment)
+    values["runtime"] = {**runtime, **authored_runtime}
+    generated: dict[str, dict[str, JsonValue]] = {
         "image": {
-            "registry": args.registry,
-            "repositoryPrefix": args.repository_prefix,
-            "tag": args.tag,
+            "registry": infrastructure.registry,
+            "repositoryPrefix": infrastructure.repository_prefix,
+            "tag": tag,
         },
-        "runtime": runtime,
-        "fleet": _json_value(Path(args.fleet), "fleet connection"),
+        "serviceAccounts": infrastructure.service_accounts.model_dump(mode="json"),
+        "storage": {"className": infrastructure.storage_class},
+        "database": {"maxConnections": infrastructure.database_max_connections},
         "secrets": {
-            "map": _string_map(Path(args.secret_map), "secret map"),
-            "files": _string_map(Path(args.secret_files), "secret files"),
-            "readerRoleArn": args.secrets_reader_role_arn,
+            "documents": infrastructure.secret_documents.model_dump(mode="json"),
+            "readerRoleArn": infrastructure.secrets_reader_role_arn,
         },
         "cloudflared": {
-            # The zone the tunnel answers for, taken from the origin rather than
-            # named twice: an ingress rule written against a different host than
-            # the one the deployment publishes routes nothing.
-            "apex": runtime["LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL"].removeprefix("https://"),
-            "tunnelId": args.tunnel_id,
+            "apex": infrastructure.public_origin.removeprefix("https://"),
+            "tunnelId": infrastructure.cloudflare_tunnel_id,
         },
-        "wireguard": {
-            "secretId": args.wireguard_secret,
-        },
+        "wireguard": {"secretId": infrastructure.secret_documents.wireguard},
+        "fleet": infrastructure.fleet.model_dump(mode="json"),
     }
-    Path(args.output).write_text(yaml.safe_dump(values, sort_keys=True))
-    print(json.dumps({"output": args.output, "tag": args.tag}, indent=2))
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--registry", required=True, help="ECR registry host.")
-    parser.add_argument(
-        "--repository-prefix",
-        required=True,
-        help="Path under the registry every image repository shares: the cluster's name.",
-    )
-    parser.add_argument(
-        "--tag",
-        required=True,
-        help="Tag every image carries, which is the commit that produced them.",
-    )
-    parser.add_argument(
-        "--runtime",
-        required=True,
-        help="JSON file of non-secret runtime values. Required: a chart without them "
-        "produces a control plane that starts and is wrong.",
-    )
-    parser.add_argument("--secret-map", required=True, help="JSON file of variable to secret name.")
-    parser.add_argument(
-        "--fleet",
-        required=True,
-        help="JSON file of the platform's own account, network and connection role.",
-    )
-    parser.add_argument(
-        "--secret-files",
-        required=True,
-        help="JSON file of variable to secret name, for entries mounted rather than exported.",
-    )
-    parser.add_argument("--tunnel-id", default="", help="Cloudflare tunnel the ingress runs.")
-    parser.add_argument(
-        "--wireguard-secret",
-        required=True,
-        help="Secrets Manager document holding gateway and platform peer keys.",
-    )
-    parser.add_argument("--release-manifest-url", default="", help="Release this deployment runs.")
-    parser.add_argument(
-        "--secrets-reader-role-arn",
-        required=True,
-        help="Role the deployment's SecretStore assumes: output secrets_reader_role_arn.",
-    )
-    parser.add_argument("--output", required=True, help="Where to write the rendered values.")
-    return parser
+    for key, facts in generated.items():
+        configured = values.get(key, {})
+        if not isinstance(configured, dict):
+            raise ValueError(f"{key} must be a mapping")
+        values[key] = {**configured, **facts}
+    values["deploymentRecord"] = {
+        "infrastructureSha256": hashlib.sha256(
+            infrastructure.model_dump_json().encode()
+        ).hexdigest(),
+    }
+    return values
 
 
 def main() -> None:
-    args = _parser().parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--infrastructure", type=Path, required=True)
+    parser.add_argument("--environment", type=Path, required=True)
+    parser.add_argument("--deployment", required=True)
+    parser.add_argument("--tag", required=True)
+    artifact = parser.add_mutually_exclusive_group(required=True)
+    artifact.add_argument("--preflight", action="store_true")
+    artifact.add_argument("--network-digest")
+    parser.add_argument("--release-manifest-url", default="")
+    parser.add_argument("--worker-manifest-url", default="")
+    parser.add_argument("--host-manifest-url", default="")
+    parser.add_argument("--previous-values", type=Path)
+    parser.add_argument("--previous-chart-values", type=Path)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
     try:
-        render(args)
-    except ValuesError as error:
-        print(f"error: {error}", file=sys.stderr)
-        raise SystemExit(1) from error
+        infrastructure = Infrastructure.model_validate_json(args.infrastructure.read_bytes())
+        environment = _VALUES.validate_python(yaml.safe_load(args.environment.read_text()))
+        release_url = args.release_manifest_url
+        worker_url = args.worker_manifest_url or release_url
+        host_url = args.host_manifest_url
+        previous: dict[str, JsonValue] | None = None
+        if args.previous_values is not None:
+            previous = _VALUES.validate_python(yaml.safe_load(args.previous_values.read_text()))
+            previous_runtime = _STRINGS.validate_python(previous.get("runtime", {}), strict=True)
+            release_url = release_url or previous_runtime.get("LAZYCLOUD_RELEASE_MANIFEST_URL", "")
+            worker_url = worker_url or previous_runtime.get(
+                "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL", ""
+            )
+            host_url = host_url or previous_runtime.get("LAZYCLOUD_RELEASE_HOST_MANIFEST_URL", "")
+        values = render(
+            infrastructure,
+            environment,
+            deployment=args.deployment,
+            tag=args.tag,
+            release_manifest_url=release_url,
+            worker_manifest_url=worker_url,
+            host_manifest_url=host_url,
+        )
+        if previous is not None:
+            if args.previous_chart_values is None:
+                raise ValueError(
+                    "Previous deployment requires its chart defaults for pool budgeting"
+                )
+            check_transition_budget(
+                _VALUES.validate_python(yaml.safe_load(args.previous_chart_values.read_text())),
+                previous,
+                _VALUES.validate_python(
+                    yaml.safe_load((Path(__file__).parent / "chart/values.yaml").read_text())
+                ),
+                values,
+                ceiling=infrastructure.database_max_connections,
+            )
+        if not args.preflight:
+            image = _mapping(values, "image")
+            image["networkDigest"] = _DIGEST.validate_python(args.network_digest)
+            values["image"] = image
+        args.output.write_text(yaml.safe_dump(values, sort_keys=True))
+    except ValidationError as error:
+        locations = [".".join(map(str, item["loc"])) for item in error.errors(include_input=False)]
+        print(f"Invalid deployment configuration at: {', '.join(locations)}", file=sys.stderr)
+        raise SystemExit(1) from None
+    except yaml.YAMLError:
+        print("Invalid environment YAML", file=sys.stderr)
+        raise SystemExit(1) from None
+    except (ValueError, OSError) as error:
+        print(f"Invalid deployment configuration: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
+    print(json.dumps({"output": str(args.output), "tag": args.tag}))
 
 
 if __name__ == "__main__":

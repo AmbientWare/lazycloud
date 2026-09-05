@@ -14,7 +14,8 @@ deployment, from the branch named for it, and the values file Deploy writes
 there.
 
 [Provider provisioning](../PROVIDERS.md) covers worker capacity. `capacity.tf`
-declares the Ashburn warm default and supported node sizes. Supply the
+declares the verified image input; Helm owns the Ashburn warm default and node
+sizes. Supply the
 `hetzner-images.tfvars.json` image-workflow artifact to Terraform and add
 `LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS` to the existing operator secret.
 Only credentials are operator-owned; capacity policy is deployment-owned.
@@ -28,7 +29,7 @@ role's trust admits that environment only.
 
 What a second deployment needs distinct: its own `deployment`, a Stripe test
 account and key, a `fleet_cidr` that overlaps neither the other's nor the
-cluster's, a `wireguard_public_endpoint`, a `deploy/cloudflare` apply of its own
+cluster's, a Helm `runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT`, a `deploy/cloudflare` apply of its own
 with `cloudflare_state_key` naming it, and its own `github_environment`. What it
 shares: the cluster, the images, the storage class, the External Secrets
 operator, and Argo.
@@ -36,7 +37,7 @@ operator, and Argo.
 ## Private network
 
 The chart runs a two-replica WireGuard gateway behind a UDP `LoadBalancer`
-Service, one per deployment. Set `wireguard_public_endpoint` to the stable
+Service, one per deployment. Set Helm `runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT` to the stable
 `<host>:<port>` agents can reach. The host can use Route 53, Cloudflare DNS, or
 another DNS provider. It must resolve to a service that carries UDP to the
 gateway; a Cloudflare HTTP tunnel does not carry WireGuard traffic.
@@ -102,3 +103,15 @@ active and standby because one server identity owns the endpoint. If one gateway
 reaches its measured packet or peer limit, the next scaling boundary is another
 gateway endpoint and peer shard, not more active replicas sharing the same
 endpoint. Sharding is not implemented by this module yet.
+
+## Application handoff
+
+Terraform writes `configuration/infrastructure-v1.json` into the deployment
+bucket. Set its `infrastructure_config_uri` output as the GitHub environment
+variable `INFRASTRUCTURE_CONFIG_URI`. Deploy reads only this non-secret document.
+It cannot read Terraform state or write a release pointer.
+
+Prices, Stripe account selection, fleet limits and credential property bindings
+live in Helm. Change them in Git and deploy without applying Terraform.
+The database server ceiling remains `database_max_connections` here and is
+exported to Helm for pool budgeting. See [the transition checklist](../CONFIGURATION.md).

@@ -13,7 +13,6 @@ from uuid import NAMESPACE_URL, uuid5
 from foundation.network import worker_network_prefix
 from foundation.shell import shell_quote
 from pydantic import Field, field_validator
-from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import (
     AgentCapacityState,
     AgentWorkerSlotStatus,
@@ -27,6 +26,7 @@ from shared.compute_policy import (
 
 if TYPE_CHECKING:
     from database.repositories.compute import ComputeMachineEnrollmentRecord
+from shared.container_requests import schedulable_capacity
 from shared.contracts import ContractModel
 from shared.gpu import GPU_ANY, normalize_gpu_type
 from shared.routing import (
@@ -90,7 +90,6 @@ class AgentStreamDecision(StrEnum):
 
 class WorkerSlotDecision(StrEnum):
     Ensure = "ensure"
-    PruneOnly = "prune-only"
     TokenRequired = "token-required"
 
 
@@ -103,13 +102,6 @@ _WORKER_SLOT_TOKEN_KINDS = frozenset({WorkerTokenKind.WorkerPrivate, WorkerToken
 """Kinds a worker slot may hold. Which one it is decides whom the worker serves,
 and that is settled where the token is minted, from the connection the machine
 was provisioned through."""
-
-
-class WorkerStatus(StrEnum):
-    Pending = "pending"
-    Available = "available"
-    Draining = "draining"
-    Disabled = "disabled"
 
 
 class ComputePrincipal(ContractModel):
@@ -293,18 +285,6 @@ class AgentStreamSnapshotPlan(ContractModel):
     routes: list[AgentBackendRoute] = Field(default_factory=list)
     slots: list[ComputeAgentWorkerSlotState] = Field(default_factory=list)
     timing: AgentStreamTimingPlan | None = None
-
-
-class WorkerRecord(ContractModel):
-    id: str
-    machine_id: str
-    pool: MachinePool
-    capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
-    status: WorkerStatus = WorkerStatus.Pending
-    total_cpu: int = 0
-    total_memory: int = 0
-    gpu: str = ""
-    total_gpu_count: int = 0
 
 
 class WorkerTokenRecord(ContractModel):
@@ -1274,27 +1254,16 @@ def plan_agent_worker_token(
 
 def plan_agent_worker_slot(
     agent_state: ComputeAgentTokenState,
-    worker: WorkerRecord | None,
     existing_slots: list[ComputeAgentWorkerSlotState],
     token_plan: AgentWorkerTokenPlan | None,
     *,
     billing_owner: UsageBillingOwner,
     cluster_name: str,
     worker_image: str,
-    status: AgentWorkerSlotStatus | None = None,
+    status: AgentWorkerSlotStatus = AgentWorkerSlotStatus.Active,
 ) -> AgentWorkerSlotControlPlan:
-    if (
-        worker is None
-        or worker.machine_id != agent_state.machine_id
-        or worker.pool != agent_state.pool
-        or worker.status is WorkerStatus.Disabled
-    ):
-        return AgentWorkerSlotControlPlan(
-            decision=WorkerSlotDecision.PruneOnly,
-            accepted=True,
-            pruned_worker_ids=[slot.worker_id for slot in existing_slots if slot.worker_id],
-        )
-    existing = next((slot for slot in existing_slots if slot.worker_id == worker.id), None)
+    worker_id = agent_machine_worker_id(agent_state.machine_id)
+    existing = next((slot for slot in existing_slots if slot.worker_id == worker_id), None)
     if token_plan is None or not token_plan.accepted:
         return AgentWorkerSlotControlPlan(
             decision=WorkerSlotDecision.TokenRequired,
@@ -1303,18 +1272,17 @@ def plan_agent_worker_slot(
             pruned_worker_ids=[
                 slot.worker_id
                 for slot in existing_slots
-                if slot.worker_id and slot.worker_id != worker.id
+                if slot.worker_id and slot.worker_id != worker_id
             ],
         )
     slot = agent_worker_slot_state(
         agent_state,
-        worker,
         token_plan.worker_token_id,
         token_plan.worker_token_hash,
         billing_owner=billing_owner,
         cluster_name=cluster_name,
         worker_image=worker_image,
-        status=status or _agent_worker_slot_status(worker.status),
+        status=status,
         existing=existing,
     )
     return AgentWorkerSlotControlPlan(
@@ -1325,7 +1293,7 @@ def plan_agent_worker_slot(
         pruned_worker_ids=[
             existing_slot.worker_id
             for existing_slot in existing_slots
-            if existing_slot.worker_id and existing_slot.worker_id != worker.id
+            if existing_slot.worker_id and existing_slot.worker_id != worker_id
         ],
         created_slot=existing is None,
     )
@@ -1333,7 +1301,6 @@ def plan_agent_worker_slot(
 
 def agent_worker_slot_state(
     agent_state: ComputeAgentTokenState,
-    worker: WorkerRecord,
     token_id: str,
     token_hash: str,
     *,
@@ -1344,17 +1311,17 @@ def agent_worker_slot_state(
     existing: ComputeAgentWorkerSlotState | None = None,
 ) -> ComputeAgentWorkerSlotState:
     return ComputeAgentWorkerSlotState(
-        worker_id=worker.id,
+        worker_id=agent_machine_worker_id(agent_state.machine_id),
         worker_token_id=token_id,
         worker_token_hash=token_hash,
         workspace_id=agent_state.workspace_id,
         pool=agent_state.pool,
-        capacity_owner_id=worker.capacity_owner_id,
+        capacity_owner_id=agent_state.capacity_owner_id,
         machine_id=agent_state.machine_id,
-        cpu=worker.total_cpu,
-        memory=worker.total_memory,
-        gpu=worker.gpu,
-        gpu_count=worker.total_gpu_count,
+        cpu=schedulable_capacity(agent_state.cpu_millicores or agent_state.cpu_count * 1000),
+        memory=schedulable_capacity(agent_state.memory_mb),
+        gpu=agent_state.gpus[0] if agent_state.gpus else "",
+        gpu_count=agent_state.gpu_count,
         gpu_assignment=",".join(agent_state.gpu_ids),
         billing_owner=billing_owner,
         network_prefix=worker_network_prefix(cluster_name, agent_state.machine_id),
@@ -1362,14 +1329,6 @@ def agent_worker_slot_state(
         status=status,
         created_at=existing.created_at if existing else utc_now(),
     )
-
-
-def _agent_worker_slot_status(status: WorkerStatus) -> AgentWorkerSlotStatus:
-    if status is WorkerStatus.Pending:
-        return AgentWorkerSlotStatus.Pending
-    if status is WorkerStatus.Draining:
-        return AgentWorkerSlotStatus.Draining
-    return AgentWorkerSlotStatus.Active
 
 
 def agent_worker_image(registry: str, name: str, tag: str = "") -> str:

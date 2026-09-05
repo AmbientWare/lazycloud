@@ -2139,6 +2139,7 @@ dependencies = [
     { name = "scheduler" },
     { name = "storage" },
     { name = "storage-client" },
+    { name = "worker-repository" },
 ]
 
 [package.metadata]
@@ -2167,6 +2168,7 @@ requires-dist = [
     { name = "scheduler", editable = "packages/scheduler" },
     { name = "storage", editable = "packages/storage" },
     { name = "storage-client", editable = "packages/storage-client" },
+    { name = "worker-repository", editable = "packages/worker-repository" },
 ]
 
 [[package]]

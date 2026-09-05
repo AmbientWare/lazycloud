@@ -7,8 +7,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0005_provider_neutral_capacity"
-down_revision: str | None = "0004_machine_draining"
+revision: str = "0007_provider_neutral_capacity"
+down_revision: str | None = "0006_worker_rollout_drains"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import ipaddress
+import logging
 import os
+import socket
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -20,10 +22,13 @@ WIREGUARD_AGENT_NETWORK = WIREGUARD_OVERLAY
 WIREGUARD_GATEWAY_ADDRESS = ipaddress.IPv4Address("100.96.0.1")
 WIREGUARD_KEEPALIVE_SECONDS = 25
 WIREGUARD_DEFAULT_PORT = 51820
+WIREGUARD_GATEWAY_HEALTH_PORT = 8080
+WIREGUARD_RUNTIME_SERVICE_PORT = 9000
 WIREGUARD_AGENT_ROUTE_PROXY_PORT = 29443
 WIREGUARD_PLATFORM_PEER_LIMIT = 32
 _AGENT_FIRST_ADDRESS = int(ipaddress.IPv4Address("100.96.1.1"))
 _AGENT_LAST_ADDRESS = int(WIREGUARD_OVERLAY.broadcast_address) - 1
+LOGGER = logging.getLogger(__name__)
 
 
 class WireGuardError(RuntimeError):
@@ -242,6 +247,35 @@ class WireGuardClientRuntime:
                 return datetime.fromtimestamp(timestamp, UTC) if timestamp > 0 else None
         return None
 
+    def reconcile_connection(self, configuration: WireGuardPeerConfiguration) -> bool:
+        try:
+            with socket.create_connection(
+                (str(WIREGUARD_GATEWAY_ADDRESS), WIREGUARD_GATEWAY_HEALTH_PORT), timeout=1.0
+            ):
+                return True
+        except OSError:
+            LOGGER.warning("WireGuard gateway is unreachable; refreshing peer endpoint DNS")
+        try:
+            _required_stdout(
+                self.runner.run(
+                    [
+                        "wg",
+                        "set",
+                        self.interface,
+                        "peer",
+                        configuration.server_public_key,
+                        "endpoint",
+                        configuration.endpoint,
+                    ],
+                    timeout_seconds=2.0,
+                ),
+                "refresh WireGuard peer endpoint",
+                allow_empty=True,
+            )
+        except WireGuardError:
+            LOGGER.exception("WireGuard endpoint refresh failed; retaining configured peer")
+        return False
+
     def close(self) -> None:
         self.runner.run(["ip", "link", "delete", "dev", self.interface])
 
@@ -331,11 +365,13 @@ __all__ = [
     "WIREGUARD_AGENT_NETWORK",
     "WIREGUARD_DEFAULT_PORT",
     "WIREGUARD_GATEWAY_ADDRESS",
+    "WIREGUARD_GATEWAY_HEALTH_PORT",
     "WIREGUARD_INTERFACE",
     "WIREGUARD_KEEPALIVE_SECONDS",
     "WIREGUARD_OVERLAY",
     "WIREGUARD_PLATFORM_NETWORK",
     "WIREGUARD_PLATFORM_PEER_LIMIT",
+    "WIREGUARD_RUNTIME_SERVICE_PORT",
     "SubprocessWireGuardCommandRunner",
     "WireGuardClientRuntime",
     "WireGuardCommandResult",

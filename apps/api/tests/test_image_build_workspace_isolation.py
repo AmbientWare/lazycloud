@@ -6,11 +6,18 @@ import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from images.control import ImageControlService
-from shared.http.images import VerifyImageBuildResponse
-from shared.http.operations import ImageBuildListResponse, ImageBuildResponse
+from shared.http.images import (
+    BuildImageEvent,
+    BuildImageRequest,
+    BuildImageResponse,
+    VerifyImageBuildResponse,
+)
+from shared.http.operations import ImageBuildListResponse
+from shared.http.operations import ImageBuildResponse as ImageBuildRecordResponse
 from shared.identity import TokenKind
 from storage.service import ObjectStorage
 from tests.fakes import FakeObjectClient
@@ -58,9 +65,16 @@ def test_image_build_http_records_events_and_context_are_workspace_owned(
 
     assert first.status_code == 201, first.text
     assert second.status_code == 201, second.text
-    first_build_id = ImageBuildResponse.model_validate_json(first.content).id
-    second_build_id = ImageBuildResponse.model_validate_json(second.content).id
+    first_build_id = ImageBuildRecordResponse.model_validate_json(first.content).id
+    second_build_id = ImageBuildRecordResponse.model_validate_json(second.content).id
     assert first_build_id != second_build_id
+
+    isolated_services.images.fail(
+        first_build_id, "first workspace build failed", workspace_id=first_workspace.id
+    )
+    isolated_services.images.fail(
+        second_build_id, "second workspace build failed", workspace_id=second_workspace.id
+    )
 
     first_list = client.get("/api/v1/image-builds", headers=_headers(first_token))
     second_list = client.get("/api/v1/image-builds", headers=_headers(second_token))
@@ -108,6 +122,39 @@ def test_image_build_http_records_events_and_context_are_workspace_owned(
     verification = VerifyImageBuildResponse.model_validate_json(foreign_context.content)
     assert verification.valid is False
     assert "not found" in verification.reason
+
+    build_request = BuildImageRequest(ignore_python=True)
+    with isolated_services.context.database.session() as session:
+        ImageBuildDispatchRepository(session).bind_request(
+            str(build_request.request_id),
+            workspace_id=first_workspace.id,
+            build_id=first_build_id,
+        )
+    legacy_stream = client.post(
+        "/api/v1/images/build",
+        headers=_headers(first_token),
+        json=build_request.model_dump(mode="json"),
+    )
+    assert legacy_stream.status_code == 200, legacy_stream.text
+    legacy_responses = [
+        BuildImageResponse.model_validate_json(line) for line in legacy_stream.iter_lines()
+    ]
+    assert legacy_responses[-1].done and not legacy_responses[-1].success
+    assert {response.build_id for response in legacy_responses} == {first_build_id}
+
+    event_stream = client.get(
+        f"/api/v1/image-builds/{first_build_id}/events?after=0",
+        headers=_headers(first_token),
+    )
+    assert event_stream.status_code == 200, event_stream.text
+    events = [BuildImageEvent.model_validate_json(line) for line in event_stream.iter_lines()]
+    assert [event.response for event in events] == legacy_responses
+    assert all(event.sequence > 0 for event in events)
+    foreign_stream = client.get(
+        f"/api/v1/image-builds/{first_build_id}/events?after=0",
+        headers=_headers(second_token),
+    )
+    assert foreign_stream.status_code == 404
 
 
 def _workspace_token(isolated_services: ApiServices, workspace_id: str, name: str) -> str:

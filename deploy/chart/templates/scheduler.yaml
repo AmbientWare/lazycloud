@@ -23,14 +23,24 @@ metadata:
   name: scheduler
 spec:
   replicas: {{ .Values.scheduler.replicas }}
+  minReadySeconds: {{ .Values.scheduler.minReadySeconds }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: scheduler
   template:
     metadata:
+      annotations:
+        checksum/aws-chain: {{ include (print $.Template.BasePath "/aws-chain.yaml") . | sha256sum }}
+        lazycloud.dev/secret-revision: {{ .Values.secretRevisions.scheduler | quote }}
       labels:
         app: scheduler
     spec:
+      terminationGracePeriodSeconds: {{ .Values.scheduler.terminationGracePeriodSeconds }}
       serviceAccountName: {{ .Values.serviceAccounts.scheduler }}
       topologySpreadConstraints:
         - maxSkew: 1
@@ -57,7 +67,7 @@ spec:
             - --into
             - /var/lib/lazycloud/agent-binarys
           env:
-            {{- include "lazycloud.env" . | nindent 12 }}
+            {{- include "lazycloud.env" (list . "agentArtifact") | nindent 12 }}
           volumeMounts:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
@@ -67,7 +77,7 @@ spec:
         - name: scheduler
           image: {{ include "lazycloud.image" (list . "scheduler") }}
           env:
-            {{- include "lazycloud.env" . | nindent 12 }}
+            {{- include "lazycloud.env" (list . "scheduler") | nindent 12 }}
             {{- include "lazycloud.databaseEnv" .Values.scheduler.database | nindent 12 }}
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
@@ -88,10 +98,25 @@ spec:
           # catch, so the oldest file decides and a missing one fails outright.
           # The threshold is sized against the slowest loop: housekeeping waits
           # on Stripe and S3, so it beats far less often than placement does.
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -m
+                - shared.process_liveness
+                - --max-age-seconds
+                - {{ .Values.scheduler.livenessMaxAgeSeconds | quote }}
+                {{- range .Values.scheduler.loopNames }}
+                - /tmp/lazycloud-scheduler.heartbeat.{{ . }}
+                {{- end }}
+            periodSeconds: 5
+            timeoutSeconds: 5
           livenessProbe:
             exec:
               command:
-                - process-liveness
+                - python
+                - -m
+                - shared.process_liveness
                 - --max-age-seconds
                 - {{ .Values.scheduler.livenessMaxAgeSeconds | quote }}
                 {{- range .Values.scheduler.loopNames }}
