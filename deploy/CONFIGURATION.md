@@ -66,12 +66,14 @@ Each API replica has one bounded direct connection for workspace deletion and
 one for its recovery fence. Direct connections use autocommit and close their
 physical backend on exit, even if unlocking fails. Application transactions set
 their statement timeout with `SET LOCAL`, not startup options. Protocol prepared
-statements remain enabled; clients require libpq 17 or newer and the configured
-pooler tracks up to 200 statements. See the
+statements remain enabled; clients require libpq 17 or newer. PlanetScale's
+default `max_prepared_statements` is 200. See the
 [PlanetScale connection guidance](https://planetscale.com/docs/postgres/connecting/pgbouncer)
 and [psycopg requirements](https://www.psycopg.org/psycopg3/docs/advanced/prepare.html).
 
-Terraform bounds the local pooler at 20 backend connections per database.
+Terraform sets `max_db_connections` to bound the local pooler at 20 backend
+connections per database, across all user pools. Other pooler settings retain
+PlanetScale's defaults; its API omits overrides equal to those defaults.
 The schema-2 infrastructure descriptor exports that bound to Helm. With two API
 replicas, two bootstrap connections and three reserved connections, the normal
 backend budget is 29 against a server ceiling of 40. Application client pools

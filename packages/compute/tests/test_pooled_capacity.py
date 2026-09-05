@@ -104,6 +104,7 @@ class _PooledProvider:
     capacity_failure: Exception | None = None
     delete_failure: Exception | None = None
     catalog_failure: Exception | None = None
+    storage_failure: Exception | None = None
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
         return self.offer
@@ -168,6 +169,8 @@ class _PooledProvider:
     ) -> bool:
         del request
         del storage_volume_ids
+        if self.storage_failure is not None:
+            raise self.storage_failure
         return provider_instance_id not in self.lingering_storage
 
     def _snapshot(
@@ -1398,6 +1401,22 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
     assert retired_generation.state is WorkerCacheGenerationState.Retired
     assert ready_pool is not None
     assert ready_pool.phase is ComputeUnitPhase.Ready
+
+    provider.storage_failure = RuntimeError("provider storage API unavailable")
+    settled = compute.scale_internal_unit(
+        pool.workspace_id,
+        pool.capacity_owner_id,
+        0,
+        before_mutation=_allow_scale,
+    )
+    assert settled.phase is ComputeUnitPhase.Ready
+    with isolated_services.context.database.session() as session:
+        [preserved] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+        preserved_generation = SourceCacheCleanupRepository(session).get_generation(generation_id)
+    assert preserved.updated_at == destroyed.updated_at
+    assert preserved.metadata == destroyed.metadata
+    assert preserved_generation is not None
+    assert preserved_generation.state is WorkerCacheGenerationState.Retired
 
 
 def test_pooled_scale_down_projects_updating_during_provider_termination(
