@@ -300,10 +300,15 @@
       "additionalProperties": false,
       "required": [
         "maxConnections",
+        "poolerMaxConnections",
         "reserved"
       ],
       "properties": {
         "maxConnections": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "poolerMaxConnections": {
           "type": "integer",
           "minimum": 1
         },

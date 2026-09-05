@@ -61,7 +61,7 @@ class ServiceAccounts(Contract):
 
 
 class Infrastructure(Contract):
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     deployment: Name
     region: Name
     registry: Name
@@ -81,6 +81,7 @@ class Infrastructure(Contract):
     secrets_reader_role_arn: Name
     cloudflare_tunnel_id: Name
     database_max_connections: Annotated[int, Field(gt=0)]
+    database_pooler_max_connections: Annotated[int, Field(gt=0)]
 
 
 _VALUES = TypeAdapter(dict[str, JsonValue])
@@ -113,47 +114,55 @@ def check_transition_budget(
     *,
     ceiling: int,
 ) -> None:
-    steady = 0
-    overlap: dict[str, int] = {}
-    for name, engines in (("controlPlane", 2), ("scheduler", 1), ("wireguard", 1)):
-        totals: list[int] = []
-        pools: list[int] = []
-        for common, override in ((previous_defaults, previous), (defaults, proposed)):
-            base = _mapping(common, name)
-            selected = _mapping(override, name)
+    positive_integer = TypeAdapter[int](Annotated[int, Field(gt=0)])
+    previous_database = {
+        **_mapping(previous_defaults, "database"),
+        **_mapping(previous, "database"),
+    }
+    database = {**_mapping(defaults, "database"), **_mapping(proposed, "database")}
+    pooler = positive_integer.validate_python(database.get("poolerMaxConnections"), strict=True)
+    previous_pooler = previous_database.get("poolerMaxConnections")
+    old_direct = 0
+    if previous_pooler is None:
+        # The recorded pre-pooler deployment still has direct application pools.
+        for name, engines in (("controlPlane", 2), ("scheduler", 1), ("wireguard", 1)):
+            base = _mapping(previous_defaults, name)
+            selected = _mapping(previous, name)
             pool_values = {**_mapping(base, "database"), **_mapping(selected, "database")}
             if not pool_values:
-                raise ValueError(
-                    f"Existing {name} database pool is undeclared; configure its running "
-                    "deployment explicitly before the release transition"
-                )
-            pool = DatabasePool.model_validate(pool_values)
-            replicas = TypeAdapter[int](Annotated[int, Field(ge=2)]).validate_python(
+                raise ValueError(f"Existing {name} database pool is undeclared")
+            replicas = positive_integer.validate_python(
                 selected.get("replicas", base.get("replicas")), strict=True
             )
-            totals.append(replicas * engines * pool.maximum)
-            pools.append(engines * pool.maximum)
-        steady += max(totals)
-        overlap[name] = max(pools)
+            old_direct += replicas * engines * DatabasePool.model_validate(pool_values).maximum
+    else:
+        pooler = max(pooler, positive_integer.validate_python(previous_pooler, strict=True))
+    api_replicas = max(
+        positive_integer.validate_python(
+            _mapping(override, "controlPlane").get(
+                "replicas", _mapping(common, "controlPlane").get("replicas")
+            ),
+            strict=True,
+        )
+        for common, override in ((previous_defaults, previous), (defaults, proposed))
+    )
+    direct = 2 * api_replicas
     bootstrap = _mapping(defaults, "bootstrap")
     configured_bootstrap = _mapping(proposed, "bootstrap")
     jobs = DatabasePool.model_validate(
         {**_mapping(bootstrap, "database"), **_mapping(configured_bootstrap, "database")}
     ).maximum
     reserved = max(
-        TypeAdapter[int](Annotated[int, Field(gt=0)]).validate_python(
-            _mapping(override, "database").get(
-                "reserved", _mapping(common, "database").get("reserved")
-            ),
-            strict=True,
-        )
-        for common, override in ((previous_defaults, previous), (defaults, proposed))
+        positive_integer.validate_python(values.get("reserved"), strict=True)
+        for values in (previous_database, database)
     )
-    total = steady + max(jobs, overlap["scheduler"] + overlap["wireguard"]) + reserved
+    total = old_direct + pooler + direct + jobs + reserved
     if total > ceiling:
         raise ValueError(
-            f"Old/new database pools can allocate {total} connections, exceeding server "
-            f"ceiling {ceiling}; stage a pool or replica reduction before deploying"
+            f"Database transition requires {total} backend connections, exceeding server "
+            f"ceiling {ceiling}: old direct {old_direct}, pooler {pooler}, session locks "
+            f"{direct}, jobs {jobs}, reserve {reserved}. Stage the owned PgBouncer bound "
+            "before migrating direct application connections."
         )
 
 
@@ -177,7 +186,7 @@ def render(
         "image": None,
         "serviceAccounts": None,
         "storage": {"className"},
-        "database": {"maxConnections"},
+        "database": {"maxConnections", "poolerMaxConnections"},
         "secrets": {"documents", "readerRoleArn"},
         "cloudflared": {"apex", "tunnelId"},
         "wireguard": {"secretId"},
@@ -241,7 +250,10 @@ def render(
         },
         "serviceAccounts": infrastructure.service_accounts.model_dump(mode="json"),
         "storage": {"className": infrastructure.storage_class},
-        "database": {"maxConnections": infrastructure.database_max_connections},
+        "database": {
+            "maxConnections": infrastructure.database_max_connections,
+            "poolerMaxConnections": infrastructure.database_pooler_max_connections,
+        },
         "secrets": {
             "documents": infrastructure.secret_documents.model_dump(mode="json"),
             "readerRoleArn": infrastructure.secrets_reader_role_arn,

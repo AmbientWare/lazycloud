@@ -4,7 +4,7 @@ resource "aws_s3_object" "infrastructure" {
   key          = "configuration/infrastructure-v1.json"
   content_type = "application/json"
   content = jsonencode({
-    schema_version    = 1
+    schema_version    = 2
     deployment        = var.deployment
     region            = var.region
     registry          = local.ecr_registry
@@ -36,9 +36,10 @@ resource "aws_s3_object" "infrastructure" {
       operator  = aws_secretsmanager_secret.operator.name
       wireguard = aws_secretsmanager_secret.wireguard.name
     }
-    secrets_reader_role_arn  = aws_iam_role.secrets_reader.arn
-    cloudflare_tunnel_id     = data.terraform_remote_state.cloudflare.outputs.tunnel_id
-    database_max_connections = var.database_max_connections
+    secrets_reader_role_arn         = aws_iam_role.secrets_reader.arn
+    cloudflare_tunnel_id            = data.terraform_remote_state.cloudflare.outputs.tunnel_id
+    database_max_connections        = var.database_max_connections
+    database_pooler_max_connections = var.database_pooler_max_connections
   })
 }
 

@@ -7,10 +7,12 @@ from dataclasses import dataclass, field
 from threading import RLock
 from uuid import uuid4
 
+from psycopg import Capabilities
 from shared.errors import UpstreamUnavailableError
-from sqlalchemy import Engine, create_engine, event, literal, select, text
+from sqlalchemy import Connection, Engine, create_engine, event, literal, select, text
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
@@ -46,6 +48,7 @@ class DatabaseClient:
     engine: Engine
     sessions: sessionmaker[Session]
     session_lock: AbstractContextManager[object] | None = None
+    _direct_engine: Engine | None = field(default=None, repr=False)
     _pool_exhaustions: int = field(default=0, init=False, repr=False)
 
     @classmethod
@@ -53,11 +56,17 @@ class DatabaseClient:
         config = settings
         engine = create_engine(config.url, **_engine_kwargs(config))
         _install_sqlite_uuid_function(engine, config.url)
+        _install_transaction_settings(engine, config)
         return cls(
             settings=config,
             engine=engine,
             sessions=sessionmaker(bind=engine, expire_on_commit=False),
             session_lock=RLock() if config.url.startswith("sqlite") else None,
+            _direct_engine=(
+                create_engine(config.direct_url, **_direct_engine_kwargs(config))
+                if config.direct_url
+                else None
+            ),
         )
 
     @contextmanager
@@ -80,6 +89,9 @@ class DatabaseClient:
         except PoolTimeout as exc:
             session.close()
             raise self._pool_exhausted(exc) from exc
+        except BaseException:
+            session.close()
+            raise
         return session
 
     def _pool_exhausted(self, exc: BaseException) -> UpstreamUnavailableError:
@@ -102,7 +114,28 @@ class DatabaseClient:
             raise self._pool_exhausted(exc) from exc
 
     def dispose(self) -> None:
-        self.engine.dispose()
+        try:
+            self.engine.dispose()
+        finally:
+            if self._direct_engine is not None:
+                self._direct_engine.dispose()
+
+    @contextmanager
+    def direct_connection(self) -> Iterator[Connection]:
+        self.settings.direct()
+        if self._direct_engine is None:
+            raise RuntimeError("direct database engine is not configured")
+        try:
+            connection = self._direct_engine.connect()
+        except PoolTimeout as exc:
+            raise UpstreamUnavailableError("direct database session capacity is busy") from exc
+        try:
+            yield connection
+        finally:
+            try:
+                connection.invalidate()
+            finally:
+                connection.close()
 
     def pool_status(self) -> DatabasePoolStatus | None:
         return _pool_status(self.engine.pool, self.settings, self._pool_exhaustions)
@@ -114,16 +147,23 @@ class AsyncDatabaseClient:
     engine: AsyncEngine
     sessions: async_sessionmaker[AsyncSession]
     _pool_exhaustions: int = field(default=0, init=False, repr=False)
+    _direct_engine: AsyncEngine | None = field(default=None, repr=False)
 
     @classmethod
     def from_settings(cls, settings: DatabaseSettings) -> AsyncDatabaseClient:
         config = settings
         engine = create_async_engine(config.url, **_engine_kwargs(config))
         _install_sqlite_uuid_function(engine.sync_engine, config.url)
+        _install_transaction_settings(engine.sync_engine, config)
         return cls(
             settings=config,
             engine=engine,
             sessions=async_sessionmaker(bind=engine, expire_on_commit=False),
+            _direct_engine=(
+                create_async_engine(config.direct_url, **_direct_engine_kwargs(config))
+                if config.direct_url
+                else None
+            ),
         )
 
     @asynccontextmanager
@@ -152,6 +192,9 @@ class AsyncDatabaseClient:
         except PoolTimeout as exc:
             await session.close()
             raise self._pool_exhausted(exc) from exc
+        except BaseException:
+            await session.close()
+            raise
         return session
 
     def _pool_exhausted(self, exc: BaseException) -> UpstreamUnavailableError:
@@ -172,7 +215,28 @@ class AsyncDatabaseClient:
             raise self._pool_exhausted(exc) from exc
 
     async def dispose(self) -> None:
-        await self.engine.dispose()
+        try:
+            await self.engine.dispose()
+        finally:
+            if self._direct_engine is not None:
+                await self._direct_engine.dispose()
+
+    @asynccontextmanager
+    async def direct_connection(self) -> AsyncIterator[AsyncConnection]:
+        self.settings.direct()
+        if self._direct_engine is None:
+            raise RuntimeError("direct database engine is not configured")
+        try:
+            connection = await self._direct_engine.connect()
+        except PoolTimeout as exc:
+            raise UpstreamUnavailableError("direct database session capacity is busy") from exc
+        try:
+            yield connection
+        finally:
+            try:
+                await connection.invalidate()
+            finally:
+                await connection.close()
 
     def pool_status(self) -> DatabasePoolStatus | None:
         return _pool_status(self.engine.sync_engine.pool, self.settings, self._pool_exhaustions)
@@ -227,19 +291,8 @@ def _engine_kwargs(settings: DatabaseSettings) -> dict[str, object]:
             kwargs["poolclass"] = StaticPool
         return kwargs
 
-    options: list[str] = []
-    if settings.statement_timeout_ms > 0:
-        options.extend(("-c", f"statement_timeout={settings.statement_timeout_ms}"))
-    if settings.application_name is DatabaseApplicationName.Wait:
-        options.extend(("-c", "default_transaction_read_only=on"))
-    connect_args: dict[str, object] = {
-        "application_name": settings.application_name.value,
-        "connect_timeout": settings.connect_timeout_seconds,
-    }
-    if options:
-        connect_args["options"] = " ".join(options)
     return {
-        "connect_args": connect_args,
+        "connect_args": _connection_args(settings),
         "echo": settings.echo,
         "pool_size": settings.pool_size,
         "max_overflow": settings.max_overflow,
@@ -248,6 +301,43 @@ def _engine_kwargs(settings: DatabaseSettings) -> dict[str, object]:
         "pool_use_lifo": settings.pool_use_lifo,
         "pool_pre_ping": True,
     }
+
+
+def _connection_args(settings: DatabaseSettings) -> dict[str, object]:
+    if not Capabilities().has_send_close_prepared():
+        raise RuntimeError("PostgreSQL clients require libpq 17 or newer for PgBouncer preparation")
+    return {
+        "application_name": settings.application_name.value,
+        "connect_timeout": settings.connect_timeout_seconds,
+    }
+
+
+def _direct_engine_kwargs(settings: DatabaseSettings) -> dict[str, object]:
+    connect_args = _connection_args(settings)
+    if settings.statement_timeout_ms > 0:
+        connect_args["options"] = f"-c statement_timeout={settings.statement_timeout_ms}"
+    return {
+        "connect_args": connect_args,
+        "pool_size": 1,
+        "max_overflow": 0,
+        "pool_timeout": settings.pool_timeout_seconds,
+        "pool_pre_ping": True,
+        "isolation_level": "AUTOCOMMIT",
+    }
+
+
+def _install_transaction_settings(engine: Engine, settings: DatabaseSettings) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+
+    @event.listens_for(engine, "begin")
+    def begin(connection: Connection) -> None:
+        if settings.statement_timeout_ms > 0:
+            connection.exec_driver_sql(
+                f"SET LOCAL statement_timeout = {settings.statement_timeout_ms}"
+            )
+        if settings.application_name is DatabaseApplicationName.Wait:
+            connection.exec_driver_sql("SET TRANSACTION READ ONLY")
 
 
 def _optional_lock(

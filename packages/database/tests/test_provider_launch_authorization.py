@@ -227,7 +227,7 @@ def test_expired_unredeemed_launch_cannot_be_reused_or_silently_rotated(
     assert replacement.launch_id != launch.launch_id
 
 
-def test_enrollment_admission_and_launch_contention_do_not_park_database_connections(
+def test_enrollment_launch_contention_fails_without_waiting_for_the_owner(
     launch_owner: LaunchOwner,
 ) -> None:
     owner = launch_owner
@@ -252,20 +252,10 @@ def test_enrollment_admission_and_launch_contention_do_not_park_database_connect
         node_agent_token=token_urlsafe(32),
     )
     owner.service.authorize(request, owner.unit)
-    with (
-        owner.service.enrollment_capacity(),
-        owner.service.enrollment(request, owner.unit, machine_fingerprint="host"),
-    ):
-        with (
-            pytest.raises(UpstreamUnavailableError, match="database capacity"),
-            owner.service.enrollment_capacity(),
-        ):
-            pytest.fail("a second enrollment exceeded the four-connection pool budget")
+    with owner.database.session() as session:
+        owner.service.lock_enrollment(session, request, owner.unit, machine_fingerprint="host")
         with ThreadPoolExecutor(max_workers=1) as executor:
             blocked = executor.submit(owner.service.authorize, request, owner.unit)
             with pytest.raises(UpstreamUnavailableError, match="in progress"):
                 blocked.result(timeout=1)
-        with owner.database.session(), owner.database.session(), owner.database.session():
-            pass
-    with owner.service.enrollment_capacity():
-        owner.service.authorize(request, owner.unit)
+    owner.service.authorize(request, owner.unit)

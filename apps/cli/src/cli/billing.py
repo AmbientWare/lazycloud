@@ -68,7 +68,7 @@ def publish_rates(
 
     moment = _instant(effective_at)
     client = DatabaseClient.from_settings(
-        DatabaseSettings(application_name=DatabaseApplicationName.Admin)
+        DatabaseSettings(application_name=DatabaseApplicationName.Admin).direct()
     )
     compute_rates: list[dict[str, str | int]] = []
     payload: dict[str, object] = {
@@ -335,7 +335,7 @@ def price_unpriced(
             f"{oldest.isoformat()}"
         )
     client = DatabaseClient.from_settings(
-        DatabaseSettings(application_name=DatabaseApplicationName.Admin)
+        DatabaseSettings(application_name=DatabaseApplicationName.Admin).direct()
     )
     payload: dict[str, object] = {
         "from": started_at.isoformat(),

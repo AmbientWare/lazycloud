@@ -17,6 +17,7 @@ secrets:
   documents: {}
   map:
     LAZYCLOUD_DATABASE_URL: platform
+    LAZYCLOUD_DATABASE_DIRECT_URL: platform
     LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY: platform
     LAZYCLOUD_CACHE_SERVICE_TOKEN: platform
     LAZYCLOUD_FLEET_EXTERNAL_ID: platform
@@ -41,7 +42,7 @@ serviceAccounts: {}
 # Each process receives only the credentials it consumes.
 environment:
   controlPlane:
-    secretKeys: [LAZYCLOUD_DATABASE_URL, LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY, LAZYCLOUD_CACHE_SERVICE_TOKEN, LAZYCLOUD_GITHUB_CLIENT_ID, LAZYCLOUD_GITHUB_CLIENT_SECRET, LAZYCLOUD_CLOUDFLARE_API_TOKEN, LAZYCLOUD_STRIPE_API_KEY, LAZYCLOUD_STRIPE_WEBHOOK_SECRET, LAZYCLOUD_RESEND_WEBHOOK_SECRET, LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS]
+    secretKeys: [LAZYCLOUD_DATABASE_URL, LAZYCLOUD_DATABASE_DIRECT_URL, LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY, LAZYCLOUD_CACHE_SERVICE_TOKEN, LAZYCLOUD_GITHUB_CLIENT_ID, LAZYCLOUD_GITHUB_CLIENT_SECRET, LAZYCLOUD_CLOUDFLARE_API_TOKEN, LAZYCLOUD_STRIPE_API_KEY, LAZYCLOUD_STRIPE_WEBHOOK_SECRET, LAZYCLOUD_RESEND_WEBHOOK_SECRET, LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS]
     runtimeKeys: &applicationRuntime
       - LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL
       - LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE
@@ -71,16 +72,16 @@ environment:
     secretKeys: [LAZYCLOUD_CACHE_SERVICE_TOKEN]
     runtimeKeys: []
   databaseBootstrap:
-    secretKeys: [LAZYCLOUD_DATABASE_URL]
+    secretKeys: [LAZYCLOUD_DATABASE_URL, LAZYCLOUD_DATABASE_DIRECT_URL]
     runtimeKeys: []
   administratorBootstrap:
-    secretKeys: [LAZYCLOUD_DATABASE_URL, LAZYCLOUD_TOKEN, LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID]
+    secretKeys: [LAZYCLOUD_DATABASE_URL, LAZYCLOUD_DATABASE_DIRECT_URL, LAZYCLOUD_TOKEN, LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID]
     runtimeKeys: [LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL, LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE, LAZYCLOUD_OBJECT_STORE_BUCKET, LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX, LAZYCLOUD_OBJECT_STORE_REGION_NAME]
   billingCatalog:
     secretKeys: [LAZYCLOUD_STRIPE_API_KEY]
     runtimeKeys: [LAZYCLOUD_STRIPE_ACCOUNT_ID]
   billingRates:
-    secretKeys: [LAZYCLOUD_DATABASE_URL]
+    secretKeys: [LAZYCLOUD_DATABASE_URL, LAZYCLOUD_DATABASE_DIRECT_URL]
     runtimeKeys: []
   fleetEnsure:
     secretKeys: [LAZYCLOUD_TOKEN, LAZYCLOUD_FLEET_EXTERNAL_ID]
@@ -109,6 +110,7 @@ wireguard:
 # Server ceiling comes from the infrastructure descriptor.
 database:
   maxConnections: 0
+  poolerMaxConnections: 0
   # Kept back for an operator's psql and the database's own sessions.
   reserved: 3
 
@@ -187,9 +189,8 @@ scheduler:
     # One per loop with headroom, not one per loop times what a loop might nest.
     # Sessions are opened around an operation rather than held for a pass, so
     # four loops draw four at their peak; the rest is for a pass that opens a
-    # second inside the first. Bounded from above by the server's ceiling, which
-    # `lazycloud.databaseBudget` enforces at render time. This and the control
-    # plane's four engine pools are what that 25 is divided between.
+    # second inside the first. These are PgBouncer client connections; Terraform
+    # bounds the shared pool of PostgreSQL backends separately.
     poolSize: 5
     maxOverflow: 2
 

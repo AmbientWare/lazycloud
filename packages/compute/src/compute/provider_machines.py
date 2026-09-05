@@ -352,6 +352,13 @@ class ProviderMachineReconciler:
                 and bootstrap_phase is settled_existing.bootstrap_phase
                 else now
             )
+            bootstrap_phase_started_at = (
+                settled_existing.bootstrap_phase_started_at
+                or settled_existing.bootstrap_observed_at
+                if settled_existing is not None
+                and bootstrap_phase is settled_existing.bootstrap_phase
+                else now
+            )
             payload: dict[str, JsonValue | datetime] = {
                 "provider": pool.provider_ref,
                 "offer_id": offer.id,
@@ -388,6 +395,7 @@ class ProviderMachineReconciler:
                 "bootstrap_phase": bootstrap_phase,
                 "bootstrap_failure_reason": bootstrap_failure_reason,
                 "bootstrap_observed_at": bootstrap_observed_at,
+                "bootstrap_phase_started_at": bootstrap_phase_started_at,
                 # Named rather than omitted, because an omitted key on the
                 # relaunch path keeps the reclaimed launch's value: a new
                 # machine would inherit a proof that some earlier machine once
@@ -629,13 +637,19 @@ class ProviderMachineReconciler:
         if not _reservation_open(record.status):
             return False
         if bootstrap_failure_reason is not None:
+            observed_at = _utc(bootstrap_observed_at)
             record = record.model_copy(
                 update={
                     "bootstrap_phase": MachineBootstrapPhase.Failed,
                     "bootstrap_failure_reason": bootstrap_failure_reason,
                     "bootstrap_failure_detail": message,
-                    "bootstrap_observed_at": _utc(bootstrap_observed_at),
-                    "updated_at": _utc(bootstrap_observed_at),
+                    "bootstrap_observed_at": observed_at,
+                    "bootstrap_phase_started_at": (
+                        record.bootstrap_phase_started_at or record.bootstrap_observed_at
+                        if record.bootstrap_phase is MachineBootstrapPhase.Failed
+                        else observed_at
+                    ),
+                    "updated_at": observed_at,
                 }
             )
             ComputeProviderInstanceRepository(session).upsert(record)
@@ -990,7 +1004,9 @@ class ProviderMachineReconciler:
         deadline afresh rather than costing the fleet its life.
         """
 
-        phase_started_at = _utc(record.bootstrap_observed_at or record.created_at)
+        phase_started_at = _utc(
+            record.bootstrap_phase_started_at or record.bootstrap_observed_at or record.created_at
+        )
         return now - max(phase_started_at, observing_since) >= deadline
 
     def _persist_zero_capacity_repair(

@@ -18,6 +18,11 @@ resource "planetscale_postgres_branch" "control_plane" {
     pgconf = {
       max_connections = tostring(var.database_max_connections)
     }
+    pgbouncer = {
+      default_pool_size       = tostring(var.database_pooler_max_connections)
+      max_db_connections      = tostring(var.database_pooler_max_connections)
+      max_prepared_statements = "200"
+    }
   }
 }
 
@@ -45,16 +50,5 @@ resource "planetscale_postgres_branch_role" "control_plane" {
   inherited_roles = ["postgres"]
 }
 
-# No `planetscale_postgres_bouncer`, and this is not an omission.
-#
-# PlanetScale's managed PgBouncer runs in transaction pooling mode only, and
-# `ControlPlaneRecoveryFence.start_serving` takes `pg_advisory_lock_shared` and
-# holds it for the entire lifetime of a serving process. There is no transaction
-# to scope that to. Behind a transaction pooler the lock is released when the
-# backend is recycled, the fence stops fencing without erroring, and offline
-# recovery can mint an administrator credential while replicas are still serving.
-# `WorkspaceDeletionFence` has the same shape.
-#
-# So the control plane connects direct, on `access_host_url`. Adding a bouncer
-# here and pointing the URL at it would look like a performance change and behave
-# like a correctness one.
+# The branch includes a local PgBouncer on port 6432. Session advisory locks and
+# administrative operations use the separately published direct port 5432 URL.

@@ -5,8 +5,8 @@ x-process-env: &process-env
   LAZYCLOUD_LOG_LEVEL: "${LAZYCLOUD_LOG_LEVEL:-INFO}"
 
 # The host and port are literal, not `${VAR:-default}`. They are a fact of this
-# file's own topology: inside the stack the database is `postgres` and the cache
-# is `redis`. The same names in `.env` carry the host-side addresses that
+# file's own topology: applications use `pgbouncer`, migrations use `postgres`,
+# and the cache is `redis`. The same names in `.env` carry the host-side addresses that
 # `lazycloud-admin` uses to reach the same services, and a passthrough would hand
 # those to the containers, where `localhost` is the container itself. The
 # password is not topology, and is the one Postgres itself is initialized with,
@@ -16,7 +16,8 @@ x-database-env: &database-env
   # the postgres container is not among the services it starts. Deliberately not
   # named LAZYCLOUD_DATABASE_URL: that one is the host-side value the CLI uses and
   # points at localhost, which resolves to the wrong thing inside a container.
-  LAZYCLOUD_DATABASE_URL: "${LAZYCLOUD_COMPOSE_DATABASE_URL:-postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud}"
+  LAZYCLOUD_DATABASE_URL: "${LAZYCLOUD_COMPOSE_DATABASE_URL:-postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@pgbouncer:6432/lazycloud}"
+  LAZYCLOUD_DATABASE_DIRECT_URL: "${LAZYCLOUD_COMPOSE_DATABASE_DIRECT_URL:-postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud}"
 x-redis-env: &redis-env
   LAZYCLOUD_REDIS_URL: "redis://redis:6379/0"
 
@@ -149,7 +150,8 @@ x-database-bootstrap-env: &database-bootstrap-env
   # the postgres container is not among the services it starts. Deliberately not
   # named LAZYCLOUD_DATABASE_URL: that one is the host-side value the CLI uses and
   # points at localhost, which resolves to the wrong thing inside a container.
-  LAZYCLOUD_DATABASE_URL: "${LAZYCLOUD_COMPOSE_DATABASE_URL:-postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud}"
+  LAZYCLOUD_DATABASE_URL: "${LAZYCLOUD_COMPOSE_DATABASE_URL:-postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@pgbouncer:6432/lazycloud}"
+  LAZYCLOUD_DATABASE_DIRECT_URL: "${LAZYCLOUD_COMPOSE_DATABASE_DIRECT_URL:-postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud}"
 
 x-lazycloud-build-args: &lazycloud-build-args
   # Where the examples and the docs live, baked into the web bundle at build
@@ -236,7 +238,7 @@ x-container-worker-healthcheck: &container-worker-healthcheck
   start_period: 120s
 
 x-lazycloud-depends: &lazycloud-depends
-  postgres:
+  pgbouncer:
     condition: service_healthy
   database-bootstrap:
     condition: service_completed_successfully
@@ -279,6 +281,33 @@ services:
       timeout: 3s
       retries: 20
 
+  pgbouncer:
+    image: pgbouncer:local
+    build:
+      context: ./deploy/pgbouncer
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-lazycloud}"
+    ports:
+      - "127.0.0.1:${LAZYCLOUD_COMPOSE_PGBOUNCER_PORT:-6432}:6432"
+    tmpfs:
+      - /run/pgbouncer:uid=10001,gid=10001,mode=0700
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - PGPASSWORD="$$POSTGRES_PASSWORD" psql -X -w -h 127.0.0.1 -p 6432 -U lazycloud -d lazycloud -c 'SELECT 1' >/dev/null
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   workload-registry:
     image: registry:2.8.3
     restart: unless-stopped
@@ -302,7 +331,7 @@ services:
     command: ["lazycloud-admin", "database", "migrate"]
     environment: *database-bootstrap-env
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
 
   administrator-bootstrap:

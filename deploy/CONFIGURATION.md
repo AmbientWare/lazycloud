@@ -40,8 +40,9 @@ configuration and all three pins together, using a compare-and-swap branch push.
 The control-plane release must contain the same managed-package sources as the
 control plane. Changes to those packages require Ship to publish matching worker
 artifacts; a code-only deploy may retain the release when those sources match.
-Preflight also checks overlapping old and new database pools and refuses an old
-chart with undeclared pools. Failure before the push leaves the selected deployment unchanged. A partially
+Preflight also checks database backend capacity during rollout, including direct
+connections from a deployment that predates PgBouncer. Failure before the push
+leaves the selected deployment unchanged. A partially
 published image set fails explicitly because commit tags are immutable.
 
 CI authenticates to ECR Public before inspecting the worker image. Its deploy
@@ -53,41 +54,48 @@ Authentication failures stop preflight; they do not mean an image is missing.
 Cloudflared configuration and the AWS role-chain ConfigMaps have pod-template
 checksums. A change to a mounted configuration therefore rolls its consumers.
 
-## First transition on the existing installation
+## PostgreSQL connections
 
-Keep production changes stopped until an operator approves this checklist.
+Terraform publishes two secret properties. `LAZYCLOUD_DATABASE_URL` names
+PlanetScale's built-in transaction pooler on port 6432 for application SQL.
+`LAZYCLOUD_DATABASE_DIRECT_URL` names port 5432 for migrations, administrator
+commands, and session advisory locks. Neither endpoint is inferred from the other.
+Missing direct configuration fails the operation that requires it.
 
-1. Resolve the PlanetScale provider/state discrepancy. Earlier plans reported
-   existing database resources as deleted. Do not accept a replacement plan,
-   refresh-only deletion, state-only output rewrite, or `-refresh=false` apply
-   as a substitute for resolving that discrepancy.
-2. Review the core plan and apply the scoped Argo pause ownership change. Verify
-   that a child pause survives root reconciliation before relying on it.
-3. Remove application-only variables from the deployment tfvars. The control-plane
-   service-account variable is now a named object; its default names and existing
-   Pod Identity association keys are unchanged. Review the deployment plan.
-   Expected changes are descriptor publication, deploy IAM permissions and secret
-   description metadata, not database, network, identity or secret-value replacement.
-4. Set GitHub environment variable `INFRASTRUCTURE_CONFIG_URI` from the deployment
-   output. Keep `AWS_DEPLOY_ROLE_ARN` for OIDC. Deploy no longer uses `TF_STATE_BUCKET`.
-5. Check the old and proposed database budgets before the first rollout. The old
-   gateway did not declare a pool and could allocate up to 15 connections per
-   process. This chart explicitly limits its serial database work to one. With
-   the current replica counts, the target chart budgets 39 connections against
-   the unchanged server ceiling of 40, including overlap and an operator reserve.
-   Preflight intentionally refuses the old undeclared gateway pool. First narrow
-   the gateway pools in the deployment branch, retaining the running image and
-   all unrelated values, and let Argo apply that configuration-only change.
-   Inspect database sessions, pod revisions and scheduler progress before proceeding.
-6. Run the deploy preflight, then approve the application rollout. Verify build
-   completion, running-container continuity and warm placement latency across a
-   control-plane and scheduler replacement. Inspect durable records, worker and
-   API logs, queue depth and the provider's machine inventory each cycle. Stop on
-   growing pending work rather than waiting for a timeout.
+Each API replica has one bounded direct connection for workspace deletion and
+one for its recovery fence. Direct connections use autocommit and close their
+physical backend on exit, even if unlocking fails. Application transactions set
+their statement timeout with `SET LOCAL`, not startup options. Protocol prepared
+statements remain enabled; clients require libpq 17 or newer and the configured
+pooler tracks up to 200 statements. See the
+[PlanetScale connection guidance](https://planetscale.com/docs/postgres/connecting/pgbouncer)
+and [psycopg requirements](https://www.psycopg.org/psycopg3/docs/advanced/prepare.html).
 
-Schema changes are not part of this PR. Do not reset production data. The
-configuration-only gateway preparation is a deployment-branch operation using
-the existing binary, not a second application release.
+Terraform bounds the local pooler at 20 backend connections per database.
+The schema-2 infrastructure descriptor exports that bound to Helm. With two API
+replicas, two bootstrap connections and three reserved connections, the normal
+backend budget is 29 against a server ceiling of 40. Application client pools
+are separate from this backend budget.
+
+For the first migration from direct application connections, start from a stable
+deployment with no rollout in progress:
+
+1. Review and apply Terraform with `database_pooler_max_connections=3`, retaining
+   the existing database, role and password. It publishes both URLs and the
+   schema-2 descriptor. Never accept a database replacement or a state rewrite
+   to get past a provider read failure.
+2. Run Ship. Existing pods keep their direct URL until replaced; the old 28
+   application connections plus three pooler backends, four direct lock
+   connections, two bootstrap connections and three reserved connections total 40.
+3. Verify every application pod runs the new release and port-6432 configuration.
+   Check database sessions, successful workload enrollment, task completion and
+   worker logs. Only lock holders and administrator operations should remain direct.
+4. Apply Terraform with the normal bound of 20. Record its descriptor through
+   the normal deploy workflow, preserving the same application and release pins.
+
+Future deployments use the normal bound. Changing a client pool does not change
+the pooler's server allocation. Keep the operator reserve and direct lock budget
+when changing the server ceiling or replica count.
 
 ## Credential changes
 

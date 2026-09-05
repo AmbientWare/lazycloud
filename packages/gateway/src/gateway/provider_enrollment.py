@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from secrets import token_urlsafe
 
 from compute.agent_control import ComputePrincipal, plan_join_token_creation
+from compute.offers import ReservationStatus
 from compute.provider_launches import ProviderNodeLaunchService
 from compute.provider_nodes import ProviderNodeIdentityProof, ProviderNodeIdentityVerifier
 from compute.service import ComputeService
@@ -19,10 +20,10 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
-from database.repositories.identity import WorkspaceMemberRepository
+from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
+from database.types import DatabaseSession
 from provider_aws.provider_node_identity import AWS_STS_PROOF_TIMEOUT_SECONDS
 from pydantic import SecretStr
-from redis.exceptions import RedisError
 from shared.aws_connections import (
     AwsAccountAuthorizationPhase,
     AwsAccountConnection,
@@ -44,10 +45,10 @@ from shared.http.provider_nodes import (
     ProviderNodeEnrollmentRequest,
 )
 from shared.provider_config import ProviderKind
-from shared.timestamps import utc_now
 
+from gateway.agent_enrollment import AgentJoinResult
 from gateway.events import GatewayEventSink
-from gateway.http import JoinAgentRequest, JoinAgentResponse, LeaveAgentRequest
+from gateway.http import JoinAgentRequest, JoinAgentResponse
 from gateway.service import GatewayControlService
 
 # A degraded pool still enrolls and still accepts bootstrap reports. Refusing a
@@ -89,17 +90,6 @@ class ProviderNodeEnrollmentService:
         *,
         peer_address: str = "",
     ) -> JoinAgentResponse:
-        if request.provider is ProviderKind.Hetzner:
-            with self._require_launches().enrollment_capacity():
-                return self._enroll(request, peer_address=peer_address)
-        return self._enroll(request, peer_address=peer_address)
-
-    def _enroll(
-        self,
-        request: ProviderNodeEnrollmentRequest,
-        *,
-        peer_address: str,
-    ) -> JoinAgentResponse:
         pool, connection = self._enrollment_target(request)
         self._authorize_launch(request, pool)
         self._verify_active_node(
@@ -112,37 +102,54 @@ class ProviderNodeEnrollmentService:
             peer_address=peer_address,
             launch_id=request.launch_id,
         )
-        if request.provider is ProviderKind.Hetzner:
-            launches = self._require_launches()
-            with launches.enrollment(
-                request, pool, machine_fingerprint=request.machine_fingerprint
-            ) as lease:
-                resumed = self.gateway.resume_provider_agent(
+        with self.gateway.services.context.database.session() as session:
+            current, _ = self._enrollment_target_in_transaction(session, request)
+            if (
+                current.provider_ref != pool.provider_ref
+                or current.workspace_id != pool.workspace_id
+                or current.generation != pool.generation
+                or current.provider_state.resource_id != pool.provider_state.resource_id
+            ):
+                raise ConflictError("provider node enrollment request changed")
+            pool = current
+            lease = (
+                self._require_launches().lock_enrollment(
+                    session, request, pool, machine_fingerprint=request.machine_fingerprint
+                )
+                if request.provider is ProviderKind.Hetzner
+                else None
+            )
+            result = None
+            if lease is not None:
+                result = self.gateway.resume_provider_agent_in_transaction(
+                    session,
                     node_agent_token=SecretStr(request.node_agent_token),
                     pool=pool,
                     machine_fingerprint=request.machine_fingerprint,
                 )
-                if resumed is not None:
-                    if not lease.enrolled:
-                        self._finish_enrollment(request, pool, resumed)
-                        lease.complete()
-                    return resumed
-                if lease.enrolled:
+                if result is None and lease.enrolled:
                     raise InvalidInputError("provider node enrollment is no longer active")
-                joined = self._join_verified_node(request, pool)
+            if result is None:
+                result = self._join_verified_node(session, request, pool)
+            self._finish_enrollment(session, request, pool, result.response)
+            if lease is not None:
                 lease.complete()
-                return joined
-        return self._join_verified_node(request, pool)
+        self.gateway.publish_agent_join(result)
+        return result.response
 
     def _join_verified_node(
-        self, request: ProviderNodeEnrollmentRequest, pool: ComputeUnitRecord
-    ) -> JoinAgentResponse:
+        self,
+        session: DatabaseSession,
+        request: ProviderNodeEnrollmentRequest,
+        pool: ComputeUnitRecord,
+    ) -> AgentJoinResult:
         join_token = self._issue_join_token(
+            session,
             pool.id,
             pool.workspace_id,
             pool.pool,
             pool.capacity_owner_id,
-            owner_user_id=self._pool_owner(pool),
+            owner_user_id=self._pool_owner(session, pool),
         )
         join_request = JoinAgentRequest(
             join_token=join_token.get_secret_value(),
@@ -160,84 +167,44 @@ class ProviderNodeEnrollmentService:
             schedulable=request.requested_schedulable,
             executor=request.executor,
         )
-        joined = (
-            self.gateway.join_agent(
-                join_request, node_agent_token=SecretStr(request.node_agent_token)
-            )
-            if request.provider is ProviderKind.Hetzner
-            else self.gateway.join_agent(join_request)
+        return self.gateway.join_agent_in_transaction(
+            session,
+            join_request,
+            node_agent_token=(
+                SecretStr(request.node_agent_token)
+                if request.provider is ProviderKind.Hetzner
+                else None
+            ),
         )
-        self._finish_enrollment(request, pool, joined)
-        return joined
 
     def _finish_enrollment(
         self,
+        session: DatabaseSession,
         request: ProviderNodeEnrollmentRequest,
         pool: ComputeUnitRecord,
         joined: JoinAgentResponse,
     ) -> None:
-        try:
-            if joined.workspace_id != pool.workspace_id or joined.pool != pool.pool:
-                raise ConflictError("provider node joined a different compute pool")
-            with self.gateway.services.context.database.session() as session:
-                bound = ComputeProviderInstanceRepository(session).bind_machine(
-                    pool.id,
-                    request.provider_instance_id,
-                    joined.machine_id,
-                )
-            if bound is None:
-                raise ConflictError("provider node is no longer available for enrollment")
-            self.compute.record_provider_bootstrap_status(
-                pool_id=pool.id,
-                provider_instance_id=request.provider_instance_id,
-                phase=MachineBootstrapPhase.Joining,
-                failure_reason=None,
-            )
-        except Exception as exc:
-            # Leaving the agent deletes the machine, so the binding written above
-            # has to go with it. A reference to a deleted machine fails the
-            # foreign key on every later pool sync, which takes down enrollment
-            # for the whole pool — including the report that would explain this
-            # failure.
-            with suppress(Exception):
-                self._release_machine_binding(pool.id, request.provider_instance_id, joined)
-            with suppress(Exception):
-                self.gateway.leave_agent(LeaveAgentRequest(agent_token=joined.agent_token))
-            if self.events is not None:
-                # Recording the rollback must never replace the failure that
-                # caused it.
-                with suppress(Exception):
-                    self.events.emit(
-                        "provider-node.enrollment-rolled-back",
-                        resource_type="provider-instance",
-                        resource_id=request.provider_instance_id,
-                        message=(
-                            f"enrollment failed on pool {pool.name}; machine "
-                            f"binding and agent were rolled back "
-                            f"({type(exc).__name__})"
-                        ),
-                        level=EventLevel.Error,
-                        data={
-                            "pool": pool.name,
-                            "operation": "enroll",
-                            "error_type": type(exc).__name__,
-                        },
-                        workspace_id=pool.workspace_id,
-                    )
-            raise
-
-    def _release_machine_binding(
-        self,
-        pool_id: str,
-        provider_instance_id: str,
-        joined: JoinAgentResponse,
-    ) -> None:
-        with self.gateway.services.context.database.session() as session:
-            ComputeProviderInstanceRepository(session).unbind_machine(
-                pool_id,
-                provider_instance_id,
-                joined.machine_id,
-            )
+        if joined.workspace_id != pool.workspace_id or joined.pool != pool.pool:
+            raise ConflictError("provider node joined a different compute pool")
+        instances = ComputeProviderInstanceRepository(session)
+        instance = instances.get_for_pool_instance(
+            pool.id, request.provider_instance_id, for_update=True
+        )
+        if instance is None or instance.status not in {
+            ReservationStatus.Pending,
+            ReservationStatus.Active,
+        }:
+            raise ConflictError("provider node is no longer available for enrollment")
+        bound = instances.bind_machine(pool.id, request.provider_instance_id, joined.machine_id)
+        if bound is None:
+            raise ConflictError("provider node is no longer available for enrollment")
+        self.compute.record_provider_bootstrap_status_in_transaction(
+            session,
+            pool_id=pool.id,
+            provider_instance_id=request.provider_instance_id,
+            phase=MachineBootstrapPhase.Joining,
+            failure_reason=None,
+        )
 
     def report_failure(
         self,
@@ -432,7 +399,7 @@ class ProviderNodeEnrollmentService:
         ):
             return False
         with suppress(Exception):
-            self.compute.describe_internal_unit(pool.workspace_id, pool.name)
+            self.compute.describe_internal_unit(pool.workspace_id, pool.capacity_owner_id)
         return True
 
     def _enrollment_target(
@@ -444,28 +411,42 @@ class ProviderNodeEnrollmentService:
         ),
     ) -> tuple[ComputeUnitRecord, AwsAccountConnection | None]:
         with self.gateway.services.context.database.session() as session:
-            pool = ComputeUnitRepository(session).get(request.enrollment_request_id)
-            if pool is None:
-                raise InvalidInputError("provider node enrollment request was not found")
-            if (
-                pool.visibility is not ComputeUnitVisibility.Internal
-                or pool.capacity_mode is not ComputeCapacityMode.Pooled
-                or pool.phase not in _ENROLLABLE_UNIT_PHASES
-                or not pool.provider_ref.startswith(f"{request.provider.value}:")
-                or pool.region != request.region
-            ):
-                raise InvalidInputError("provider node enrollment request is not active")
-            if request.provider is ProviderKind.Hetzner:
-                if not pool.platform_fleet or pool.provider_connection_id is not None:
-                    raise InvalidInputError("Hetzner provider binding is not platform capacity")
-                return pool, None
-            if pool.provider_connection_id is None:
-                raise InvalidInputError("AWS provider connection is unavailable")
-            connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id)
-            # The account behind the unit's workspace, not the workspace itself: one
-            # connection backs every workspace its owner holds, so the tenancy check
-            # is that the unit and the connection answer to the same owner.
-            owner = WorkspaceMemberRepository(session).owner(pool.workspace_id)
+            return self._enrollment_target_in_transaction(session, request, for_update=False)
+
+    def _enrollment_target_in_transaction(
+        self,
+        session: DatabaseSession,
+        request: (
+            ProviderNodeEnrollmentRequest
+            | ProviderNodeBootstrapFailureRequest
+            | ProviderNodeBootstrapPhaseRequest
+        ),
+        *,
+        for_update: bool = True,
+    ) -> tuple[ComputeUnitRecord, AwsAccountConnection | None]:
+        units = ComputeUnitRepository(session)
+        pool = units.get(request.enrollment_request_id)
+        if pool is not None and for_update:
+            WorkspaceRepository(session).lock_active_owner(pool.workspace_id)
+            pool = units.get(request.enrollment_request_id, for_update=True)
+        if pool is None:
+            raise InvalidInputError("provider node enrollment request was not found")
+        if (
+            pool.visibility is not ComputeUnitVisibility.Internal
+            or pool.capacity_mode is not ComputeCapacityMode.Pooled
+            or pool.phase not in _ENROLLABLE_UNIT_PHASES
+            or not pool.provider_ref.startswith(f"{request.provider.value}:")
+            or pool.region != request.region
+        ):
+            raise InvalidInputError("provider node enrollment request is not active")
+        if request.provider is ProviderKind.Hetzner:
+            if not pool.platform_fleet or pool.provider_connection_id is not None:
+                raise InvalidInputError("Hetzner provider binding is not platform capacity")
+            return pool, None
+        if pool.provider_connection_id is None:
+            raise InvalidInputError("AWS provider connection is unavailable")
+        connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id)
+        owner = WorkspaceMemberRepository(session).owner(pool.workspace_id)
         if (
             connection is None
             or connection.id != pool.provider_ref.removeprefix("aws:")
@@ -478,15 +459,15 @@ class ProviderNodeEnrollmentService:
             raise InvalidInputError("provider node connection is not active")
         return pool, connection
 
-    def _pool_owner(self, pool: ComputeUnitRecord) -> str:
-        with self.gateway.services.context.database.session() as session:
-            owner = WorkspaceMemberRepository(session).owner(pool.workspace_id)
+    def _pool_owner(self, session: DatabaseSession, pool: ComputeUnitRecord) -> str:
+        owner = WorkspaceMemberRepository(session).owner(pool.workspace_id)
         if owner is None:
             raise InvalidInputError("provider capacity workspace has no owner")
         return owner.user_id
 
     def _issue_join_token(
         self,
+        session: DatabaseSession,
         unit_id: str,
         workspace_id: str,
         pool: MachinePool,
@@ -508,48 +489,16 @@ class ProviderNodeEnrollmentService:
             ttl="2m",
             max_uses=1,
         )
-        with self.gateway.services.context.database.session() as session:
-            unit = ComputeUnitRepository(session).get(unit_id, for_update=True)
-            if (
-                unit is None
-                or unit.workspace_id != workspace_id
-                or unit.capacity_owner_id != capacity_owner_id
-                or unit.pool != pool
-                or unit.phase not in _ENROLLABLE_UNIT_PHASES
-            ):
-                raise ConflictError("provider node enrollment request changed")
-            credentials = ComputeJoinCredentialRepository(session)
-            durable = credentials.create(
-                token_hash=plan.token_hash,
-                user_id=owner_user_id,
-                workspace_id=workspace_id,
-                capacity_owner_id=unit.capacity_owner_id,
-                pool=unit.pool,
-                created_by_token_id=None,
-                max_uses=1,
-                expires_at=plan.expires_at,
-            )
-        state = plan.state.model_copy(
-            update={
-                "credential_id": durable.id,
-                "capacity_owner_id": unit.capacity_owner_id,
-                "created_by_token_id": "provider-node",
-            }
+        ComputeJoinCredentialRepository(session).create(
+            token_hash=plan.token_hash,
+            user_id=owner_user_id,
+            workspace_id=workspace_id,
+            capacity_owner_id=capacity_owner_id,
+            pool=pool,
+            created_by_token_id=None,
+            max_uses=1,
+            expires_at=plan.expires_at,
         )
-        try:
-            self.gateway.compute_states.save_join_token_state(
-                state,
-                ttl_seconds=plan.ttl_seconds,
-            )
-        except RedisError as exc:
-            with self.gateway.services.context.database.session() as session:
-                credentials = ComputeJoinCredentialRepository(session)
-                current = credentials.get(durable.id, for_update=True)
-                if current is not None:
-                    credentials.save(current.revoke(now=utc_now()))
-            raise UpstreamUnavailableError(
-                "provider node enrollment coordination is unavailable"
-            ) from exc
         return SecretStr(plan.token)
 
 

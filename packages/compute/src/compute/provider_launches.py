@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from secrets import compare_digest, token_urlsafe
-from threading import BoundedSemaphore
 from typing import Protocol
 from uuid import uuid4
 
 from database.repositories.compute import ComputeMachineEnrollmentRepository, ComputeUnitRepository
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.provider_launches import ProviderNodeLaunchRepository
 from database.tables.provider_launches import ProviderNodeLaunchTable
+from database.types import DatabaseSession
 from pydantic import SecretStr
 from shared.compute_enrollment import ComputeMachineEnrollmentStatus
 from shared.compute_policy import ComputeUnitRecord
@@ -89,35 +89,14 @@ class ProviderNodeEnrollmentLease:
 class ProviderNodeLaunchService:
     database: DatabaseClient
     cipher_for_workspace: Callable[[str], ProviderNodeSecretCipher]
-    _enrollment_slots: BoundedSemaphore = field(init=False, repr=False)
-    _database_capacity: int = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        settings = self.database.settings
-        capacity = settings.pool_size + max(settings.max_overflow, 0)
-        self._database_capacity = capacity
-        # One launch transaction, one gateway transaction, and one nested unit
-        # lookup can hold connections together. Keep a spare for other requests.
-        self._enrollment_slots = BoundedSemaphore(max(min((capacity - 1) // 3, 8), 0))
-
-    @contextmanager
-    def enrollment_capacity(self) -> Iterator[None]:
-        if self._database_capacity < 4:
-            raise UpstreamUnavailableError(
-                "provider enrollment requires at least four database connections"
-            )
-        if not self._enrollment_slots.acquire(blocking=False):
-            raise UpstreamUnavailableError("provider enrollment database capacity is busy")
-        try:
-            yield
-        finally:
-            self._enrollment_slots.release()
 
     def prepare(
         self, request: ProviderUnitRequest, server_name: str
     ) -> ProviderNodeLaunchCredential:
         now = utc_now()
+        cipher = self.cipher_for_workspace(request.workspace_id)
         with self.database.session() as session:
+            WorkspaceRepository(session).lock_active_owner(request.workspace_id)
             repository = ProviderNodeLaunchRepository(session)
             repository.lock_unit(request.unit_id)
             pool = ComputeUnitRepository(session).get(request.unit_id)
@@ -135,7 +114,6 @@ class ProviderNodeLaunchService:
             # The workspace key is stored in this database too. This encryption
             # prevents plaintext exposure and binds the ciphertext to its launch;
             # it does not defend against an attacker who can read the whole DB.
-            cipher = self.cipher_for_workspace(pool.workspace_id)
             if launch is None:
                 launch_id = str(uuid4())
                 token = token_urlsafe(32)
@@ -252,29 +230,28 @@ class ProviderNodeLaunchService:
                 raise InvalidInputError("provider node enrollment no longer exists")
             ProviderNodeLaunchRepository(session).save(launch)
 
-    @contextmanager
-    def enrollment(
+    def lock_enrollment(
         self,
+        session: DatabaseSession,
         request: ProviderNodeIdentityRequest,
         pool: ComputeUnitRecord,
         *,
         machine_fingerprint: str,
-    ) -> Iterator[ProviderNodeEnrollmentLease]:
-        with self.database.session() as session:
-            launch = _require_launch(
-                ProviderNodeLaunchRepository(session).get(request.launch_id, for_update=True),
-                request,
-                pool,
-            )
-            if launch.node_token_hash is None or not compare_digest(
-                launch.node_token_hash, hash_compute_token(request.node_agent_token)
-            ):
-                raise InvalidInputError("provider node credential is invalid")
-            fingerprint = hash_machine_fingerprint(machine_fingerprint)
-            if launch.fingerprint_hash not in {None, fingerprint}:
-                raise InvalidInputError("provider launch cannot enroll another machine")
-            launch.fingerprint_hash = fingerprint
-            yield ProviderNodeEnrollmentLease(launch)
+    ) -> ProviderNodeEnrollmentLease:
+        launch = _require_launch(
+            ProviderNodeLaunchRepository(session).get(request.launch_id, for_update=True),
+            request,
+            pool,
+        )
+        if launch.node_token_hash is None or not compare_digest(
+            launch.node_token_hash, hash_compute_token(request.node_agent_token)
+        ):
+            raise InvalidInputError("provider node credential is invalid")
+        fingerprint = hash_machine_fingerprint(machine_fingerprint)
+        if launch.fingerprint_hash not in {None, fingerprint}:
+            raise InvalidInputError("provider launch cannot enroll another machine")
+        launch.fingerprint_hash = fingerprint
+        return ProviderNodeEnrollmentLease(launch)
 
 
 def _require_launch(

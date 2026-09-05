@@ -20,6 +20,13 @@ sizes. Supply the
 `LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS` to the existing operator secret.
 Only credentials are operator-owned; capacity policy is deployment-owned.
 
+PostgreSQL application traffic uses the branch's built-in PgBouncer on port 6432.
+Terraform also publishes an explicit port-5432 URL for migrations, administration
+and session advisory locks. `database_pooler_max_connections` bounds pooled
+backends separately from application client pools. Follow the first-transition
+steps in [deployment configuration](../CONFIGURATION.md) before switching an
+existing direct-only deployment.
+
 ## Two deployments, one cluster
 
 Each deployment is a namespace, `lazycloud-prod` or `lazycloud-staging`, and

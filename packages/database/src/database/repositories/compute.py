@@ -146,6 +146,8 @@ class ComputeProviderInstanceRecord(ContractModel):
     bootstrap_failure_reason: MachineBootstrapFailureReason | None = None
     bootstrap_failure_detail: str = ""
     bootstrap_observed_at: datetime = Field(default_factory=utc_now)
+    bootstrap_phase_started_at: datetime | None = None
+    """Phase-entry time, unaffected by repeated node observations."""
     # What the platform concluded, beside what the node reported above. A node
     # cannot observe that it serves workloads, so these are stamped by the
     # reconcile that watches it rather than by anything the machine says. They
