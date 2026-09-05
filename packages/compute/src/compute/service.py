@@ -1338,11 +1338,11 @@ class ComputeService:
         # owner: it is what releases open capacity operations and retires the
         # sizing state. Writing a zero record alone leaves both behind, and the
         # sizing reconciler raises the machine straight back. This runs after the
-        # preparing session has closed; `scale_internal_pool` takes the mutation
+        # preparing session has closed; `scale_internal_unit` takes the mutation
         # lease and locks the same row.
         return self.scale_internal_unit(
             pool.workspace_id,
-            pool.name,
+            pool.capacity_owner_id,
             0,
             before_mutation=_policy_owned_scale,
         )
