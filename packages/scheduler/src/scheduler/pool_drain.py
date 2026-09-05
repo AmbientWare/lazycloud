@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
-from compute.provider_machines import provider_unit_operational_capacity
 from compute.providers import ProviderUnitSnapshot
 from compute.service import ComputeService
 from compute.state import ComputeUnitState, RedisComputeStateRepository
@@ -241,32 +240,6 @@ class ManagedComputeWorkerPoolDrainController:
                 pool=self.pool,
                 reason="worker-pool capacity changed during provider observation",
             )
-        operational_desired, _maximum = provider_unit_operational_capacity(current_unit)
-        if observation.snapshot.observed_machines > operational_desired:
-            workers_by_machine = _workers_by_machine(
-                self.workers.list_workers_for_capacity_owner(self.capacity_owner_id)
-            )
-            candidate = _idle_machine_candidate(
-                workers_by_machine,
-                self.workers,
-                self.containers,
-                now=current_time,
-                idle_seconds=0,
-                retain_machines=operational_desired,
-            )
-            if candidate is not None:
-                pooled = self.compute.release_internal_unit_machine(
-                    self.state.workspace_id, self.capacity_owner_id, candidate.machine_id
-                )
-                return WorkerPoolDrainResult(
-                    capacity_owner_id=self.capacity_owner_id,
-                    pool=self.pool,
-                    action=WorkerPoolDrainAction.TerminateProviderMachine,
-                    machine_id=candidate.machine_id,
-                    desired_replicas=pooled.desired_machines,
-                    observed_replicas=pooled.observed_machines,
-                    reason="released idle provider machine above capacity intent",
-                )
         config = _drain_config_from_state(self.state)
         if not config.enabled:
             return WorkerPoolDrainResult(

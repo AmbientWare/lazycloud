@@ -159,8 +159,6 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     permission to shrink the pool.
     """
     replacement_template_version: str = Field(default="", max_length=160)
-    worker_rollout_surge: bool = False
-    """One temporary host preserving serving capacity during worker image updates."""
     generation: int = Field(default=1, ge=1)
     phase: ComputeUnitPhase = ComputeUnitPhase.Ready
     provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)

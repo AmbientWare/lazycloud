@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.common import (
@@ -21,7 +21,6 @@ from shared.checkpoints import (
     CheckpointRecord,
     CheckpointStatus,
 )
-from shared.errors import NotFoundError
 from shared.image_building.records import (
     BuildStatus,
     ImageArchiveRecord,
@@ -425,23 +424,11 @@ class ImageBuildRepository:
         if build.status not in {BuildStatus.Pending, BuildStatus.Running}:
             row.publication_claim_id = ""
             row.publication_claimed_at = None
-            row.dispatch_payload = None
-            row.dispatch_claim_id = None
         self.session.flush()
         return saved
 
     def get(self, build_id: str, *, workspace_id: str) -> ImageBuildRecord | None:
         return self.records.get(build_id, workspace_id=workspace_id)
-
-    def lock_build(self, build_id: str, *, workspace_id: str) -> ImageBuildRecord:
-        row = self.session.scalar(
-            select(ImageBuildTable)
-            .where(ImageBuildTable.id == build_id, ImageBuildTable.workspace_id == workspace_id)
-            .with_for_update()
-        )
-        if row is None:
-            raise NotFoundError("image build not found")
-        return ImageBuildRecord.model_validate(row.payload)
 
     def get_across_workspaces(self, build_id: str) -> ImageBuildRecord | None:
         """System lookup for workers/reconcilers acting on placed builds."""
@@ -654,10 +641,7 @@ class ImageBuildRepository:
                 ImageBuildTable.id == build_id,
                 ImageBuildTable.workspace_id == workspace_id,
                 ImageBuildTable.status.in_([BuildStatus.Pending.value, BuildStatus.Running.value]),
-                or_(
-                    ImageBuildTable.publication_claim_id == "",
-                    ImageBuildTable.publication_claimed_at < now - timedelta(seconds=30),
-                ),
+                ImageBuildTable.publication_claim_id == "",
             )
             .values(
                 publication_claim_id=claim_id,
@@ -668,35 +652,21 @@ class ImageBuildRepository:
         )
         return updated_id is not None
 
-    def release_publication(self, build_id: str, *, workspace_id: str, claim_id: str) -> None:
-        self.session.execute(
-            update(ImageBuildTable)
-            .where(
-                ImageBuildTable.id == build_id,
-                ImageBuildTable.workspace_id == workspace_id,
-                ImageBuildTable.publication_claim_id == claim_id,
-            )
-            .values(publication_claim_id="", publication_claimed_at=None)
-        )
-
     def finalize_publication(
         self,
         build: ImageBuildRecord,
         *,
         workspace_id: str,
         claim_id: str,
-        clip_version: int,
         archive_published: bool = False,
     ) -> ImageBuildRecord:
         row = self.session.scalars(
-            select(ImageBuildTable)
-            .where(
+            select(ImageBuildTable).where(
                 ImageBuildTable.id == build.id,
                 ImageBuildTable.workspace_id == workspace_id,
                 ImageBuildTable.status.in_([BuildStatus.Pending.value, BuildStatus.Running.value]),
                 ImageBuildTable.publication_claim_id == claim_id,
             )
-            .with_for_update()
         ).first()
         if row is None:
             raise RuntimeError("image build publication ownership was lost before completion")
@@ -709,8 +679,6 @@ class ImageBuildRepository:
         row.publication_claim_id = ""
         row.publication_claimed_at = None
         if archive_published:
-            row.dispatch_payload = None
-            row.dispatch_claim_id = None
             # The archive itself is global and was written when the upload was
             # reserved. What publication establishes here is this workspace's
             # authorization to resolve it.
@@ -724,7 +692,7 @@ class ImageBuildRepository:
                     id=existing.id if existing is not None else "",
                     workspace_id=workspace_id,
                     image_id=build.image_id or "",
-                    clip_version=clip_version,
+                    clip_version=existing.clip_version if existing is not None else 1,
                     aliases=existing.aliases if existing is not None else [],
                 )
             )

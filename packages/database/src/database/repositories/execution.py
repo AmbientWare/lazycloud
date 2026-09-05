@@ -13,7 +13,6 @@ from database.repositories.common import (
     TableRepositoryConfig,
     WorkspaceTableRepository,
 )
-from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.tables.apps import AppTable, DeploymentTable, StubTable
 from database.tables.execution import (
     CronJobRunTable,
@@ -245,13 +244,6 @@ class TaskRepository:
 
         if limit <= 0:
             return []
-        if not ContainerRolloutRepository(self.session).accepting_work(
-            container_id, stub_id=stub_id
-        ):
-            return []
-        ContainerRolloutRepository(self.session).record_workload_ready(
-            container_id, now=datetime.now(UTC)
-        )
         rows = (
             self.session.scalars(
                 select(TaskTable)

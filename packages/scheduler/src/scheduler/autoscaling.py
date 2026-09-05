@@ -9,7 +9,6 @@ from typing import Protocol
 from coordination.redis_client import RedisClient
 from database.records.apps import AutoscalingStub, AutoscalingStubConfig, StubKind
 from database.repositories.apps import AppRepository, DeploymentRepository
-from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.orchestration import ContainerRepository
 from pydantic import Field, JsonValue
 from shared.autoscaler_state import (
@@ -428,11 +427,6 @@ class AutoscalingDriver:
             now=current_time,
         )
         actions = self._recover(stale)
-        with self.services.context.database.session() as session:
-            rollouts = ContainerRolloutRepository(session)
-            draining_ids = rollouts.draining_ids([container.id for container in holding])
-            rollout_floor = rollouts.serving_floor(stub.id)
-        holding = [container for container in holding if container.id not in draining_ids]
         current = len(holding)
         pending = _pending_container_count(holding)
         plan = self.workload.plan(stub, signal=signal.value, current=current)
@@ -452,7 +446,7 @@ class AutoscalingDriver:
         failure_threshold_reached = (
             failure_threshold > 0 and len(failed_containers) >= failure_threshold
         )
-        desired = max(plan.desired_containers, min(rollout_floor, plan.max_containers))
+        desired = plan.desired_containers
         reason = plan.reason
         decision = plan.decision
         if not active:

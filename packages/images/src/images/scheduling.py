@@ -7,6 +7,7 @@ from uuid import uuid4
 from pydantic import Field, JsonValue
 from shared.contracts import ContractModel
 from shared.image_building.authoring import LinuxArchitecture
+from shared.managed_runtime_integrity import managed_package_source_digest
 from shared.scheduling import (
     SchedulerContainerState,
     SchedulerContainerStatus,
@@ -42,6 +43,11 @@ class ImageBuildSchedulerCredentialSource(StrEnum):
 
 class ImageBuildContainerBuildOptions(ContractModel):
     architecture: LinuxArchitecture = LinuxArchitecture.Amd64
+    managed_package_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     source_image: str = ""
     dockerfile: str = ""
     build_context_object: str = ""
@@ -88,6 +94,7 @@ def plan_image_build_container_request(
 ) -> ImageBuildContainerRequestPlan:
     build_options = ImageBuildContainerBuildOptions(
         architecture=request.plan.spec.architecture,
+        managed_package_digest=managed_package_source_digest(),
         source_image=request.plan.spec.base,
         dockerfile=request.plan.dockerfile,
         build_context_object=request.plan.spec.context_object_id or "",
