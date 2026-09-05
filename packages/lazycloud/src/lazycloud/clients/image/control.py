@@ -1,25 +1,33 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator, Mapping
+from contextlib import closing
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
+from pydantic import JsonValue
 from shared.http.images import (
+    BuildImageEvent,
     BuildImageRequest,
     BuildImageResponse,
     VerifyImageBuildRequest,
     VerifyImageBuildResponse,
 )
 from shared.http_transport import HttpChannel
+from shared.image_building.records import ImageBuildPhase
 from shared.transport_retry import TRANSIENT_TRANSPORT_ERRORS, TransientRetry
 
 from lazycloud.control import workspace_path
 
 
 class ImageControlChannel(Protocol):
-    def post(self, path: str, payload: dict[str, Any] | None = None) -> Any: ...
+    def post(self, path: str, payload: Mapping[str, JsonValue] | None = None) -> JsonValue: ...
 
-    def stream_post(self, path: str, payload: dict[str, Any] | None = None) -> Iterator[Any]: ...
+    def stream_post(
+        self, path: str, payload: Mapping[str, JsonValue] | None = None
+    ) -> Generator[JsonValue]: ...
+
+    def stream_get(self, path: str) -> Generator[str]: ...
 
 
 @dataclass
@@ -64,32 +72,46 @@ class ImageControlClient:
     def build_image(self, request: BuildImageRequest) -> Iterator[BuildImageResponse]:
         retry = TransientRetry()
         payload = request.model_dump(mode="json")
-        seen: set[tuple[str, str, str, bool, bool, str, bool, str, str, str]] = set()
+        build_id = ""
+        cursor = 0
         while True:
             try:
-                for item in self.channel.stream_post(
-                    self._scoped("/api/v1/images/build"),
-                    payload,
-                ):
-                    response = BuildImageResponse.model_validate(item)
-                    key = (
-                        response.image_id,
-                        response.build_id,
-                        response.msg,
-                        response.done,
-                        response.success,
-                        response.python_version,
-                        response.warning,
-                        response.status.value,
-                        response.phase.value,
-                        response.error,
+                if not build_id:
+                    with closing(
+                        self.channel.stream_post(self._scoped("/api/v1/images/build"), payload)
+                    ) as submission:
+                        for item in submission:
+                            response = BuildImageResponse.model_validate(item)
+                            retry.reset()
+                            if response.done:
+                                yield response
+                                return
+                            if response.build_id and response.phase is not ImageBuildPhase.Reused:
+                                build_id = response.build_id
+                                break
+                            yield response
+                    if not build_id:
+                        raise ConnectionError(
+                            "image build submission closed without build identity"
+                        )
+                with closing(
+                    self.channel.stream_get(
+                        self._scoped(f"/api/v1/image-builds/{build_id}/events?after={cursor}")
                     )
-                    if key not in seen:
-                        seen.add(key)
-                        retry.reset()
-                        yield response
-                    if response.done:
-                        return
+                ) as events:
+                    for line in events:
+                        if not line.strip():
+                            continue
+                        event = BuildImageEvent.model_validate_json(line)
+                        response = event.response
+                        if response.build_id != build_id:
+                            raise ValueError("image build stream changed build identity")
+                        if event.sequence > cursor or event.sequence == 0:
+                            cursor = max(cursor, event.sequence)
+                            retry.reset()
+                            yield response
+                        if response.done:
+                            return
             except TRANSIENT_TRANSPORT_ERRORS as exc:
                 retry.backoff(exc)
             else:

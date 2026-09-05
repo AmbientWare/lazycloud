@@ -11,8 +11,8 @@ substitutes, and gives every service an explicit owner and health check.
 - Never commit secrets, generated credentials, or local state. A value that
   identifies a resource may live here; a value that authenticates to one may
   not, and belongs in a file the deployment points at.
-- While predeployment, maintain one fresh-install database baseline and no
-  historical transition paths.
+- Deployed databases are persistent. Append Alembic revisions; never rewrite
+  the baseline or reset production data during an upgrade.
 - A deployment value is usually read on several independent paths, so correcting
   one place proves nothing about the rest. When a name, origin, or credential
   changes, find every consumer of it in the same change.
@@ -38,11 +38,14 @@ substitutes, and gives every service an explicit owner and health check.
   tagged deploy raced the release it was meant to run. Ship is dispatched with
   a bump choice, pushes the tag itself, and passes the version to both as an
   input; a tag pushed with the workflow token starts no other workflow.
+- Control-plane, worker-image and host releases have independent manifest pins.
+  Routine Ship advances the first two and retains the host pin. Updating the host
+  agent executable or AMIs requires an explicit host manifest selection.
 - Helm owns application settings and secret property bindings. Terraform publishes
   non-secret resource identities in a versioned infrastructure descriptor; app CI
   reads that document, never Terraform state. Git records the descriptor snapshot,
-  environment settings, image commit and release URL together on the deployment
-  branch. A deploy with no release input retains the branch's recorded release.
+  environment settings, image commit and all three release URLs together on the
+  deployment branch. A code-only deploy retains the recorded pins.
 - CI builds and records; Argo installs. The deploy workflow pushes images and
   commits the values naming them to the deployment's branch, and stops. Nothing in
   CI runs `helm install`, because a workflow that installs and a controller that
@@ -51,7 +54,7 @@ substitutes, and gives every service an explicit owner and health check.
 - An image belongs to a commit, not to a deployment. Deploy builds a commit
   once into repositories every deployment shares, tagged by the commit, and a
   deployment names the tag it runs. Promotion records the commit staging runs
-  for prod and builds nothing; what crosses is the tag and the release URL,
+  for prod and builds nothing; what crosses is the tag and all three release URLs,
   and prod's values are rendered from prod's own infrastructure descriptor.
 - The list of deployments lives on `main`; what each runs lives on its branch.
   Argo's root Application reads `deploy/argocd/apps` on `main`, one file per

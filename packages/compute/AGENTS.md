@@ -29,6 +29,13 @@ plus the AWS connection covers the compute story this product sells, and each of
 those three answers a problem a self-hosted engine has and a hosted platform
 does not. Absence here is the shape of the product, not a backlog.
 
+An authenticated machine enrollment owns its worker runtime. The worker's
+identity and resource allocation derive from that enrollment, not from a
+scheduler registration that can expire or stop accepting placement. Planned
+draining preserves the runtime while its existing work finishes. Revoking a
+machine or removing a slot is a lifecycle operation, not a consequence of a
+placement status.
+
 A connected cloud account belongs to a user, not a workspace, and backs every
 workspace that user owns. Runtime lookups therefore resolve
 `workspace -> owner -> connection` through `get_for_workspace_owner`, and anything

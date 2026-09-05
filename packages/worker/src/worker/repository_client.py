@@ -117,6 +117,8 @@ from worker.repository_payloads import (
     RemoveNetworkLockRequest,
     RemoveNetworkLockResponse,
     RemoveWorkerResponse,
+    ReportImageBuildProgressRequest,
+    ReportImageBuildProgressResponse,
     ReportImageBuildResultRequest,
     ReportImageBuildResultResponse,
     ResolveSourceCacheCleanupRequest,
@@ -333,6 +335,15 @@ class WorkerRepositoryHttpClient:
             "/worker-repository/acknowledge-container-request",
             request,
             AcknowledgeContainerRequestResponse,
+        )
+
+    def report_image_build_progress(
+        self, request: ReportImageBuildProgressRequest
+    ) -> ReportImageBuildProgressResponse:
+        return self._post_model(
+            "/worker-repository/report-image-build-progress",
+            request,
+            ReportImageBuildProgressResponse,
         )
 
     def report_image_build_result(
@@ -882,6 +893,10 @@ class RemoteSchedulerWorkerRepository:
         request: SchedulerWorkerRequest,
         result: WorkerImageBuildExecutionResult,
     ) -> None:
+        for after in range(0, len(result.logs), 256):
+            self.report_image_build_progress(
+                request, after=after, logs=result.logs[after : after + 256]
+            )
         response = self.client.report_image_build_result(
             ReportImageBuildResultRequest(
                 worker_id=self.state.worker_id,
@@ -893,7 +908,7 @@ class RemoteSchedulerWorkerRepository:
                 object_key=result.object_key,
                 archive_size_bytes=result.archive_size_bytes,
                 archive_sha256=result.archive_sha256,
-                logs=[_bounded_image_build_log(line) for line in result.logs[-256:]],
+                logs=[],
                 error_message=result.error_message[:65_536],
             )
         )
@@ -901,6 +916,20 @@ class RemoteSchedulerWorkerRepository:
             raise WorkerRepositoryClientError(
                 f"image build result was not accepted for {result.build_id!r}"
             )
+
+    def report_image_build_progress(
+        self, request: SchedulerWorkerRequest, *, after: int, logs: list[str]
+    ) -> int:
+        return self.client.report_image_build_progress(
+            ReportImageBuildProgressRequest(
+                worker_id=self.state.worker_id,
+                workspace_id=request.workspace_id,
+                container_id=request.container_id,
+                build_id=request.container_id,
+                after=after,
+                logs=[_bounded_image_build_log(line) for line in logs],
+            )
+        ).sequence
 
     def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None:
         return self.client.get_worker_by_id(WorkerIdRequest(worker_id=worker_id)).worker

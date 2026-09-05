@@ -205,7 +205,8 @@ def provider_unit_request(
 def provider_unit_operational_capacity(pool: ComputeUnitRecord) -> tuple[int, int]:
     """Capacity sent to the provider, including an active replacement surge."""
 
-    desired = pool.desired_machines + int(bool(pool.replacement_machine_id))
+    surge = max(int(bool(pool.replacement_machine_id)), int(pool.worker_rollout_surge))
+    desired = pool.desired_machines + surge
     return desired, max(pool.max_machines, desired, 1)
 
 
@@ -296,6 +297,11 @@ class ProviderMachineReconciler:
                     metadata.pop(stale_key, None)
             settled_existing = existing if existing is not None and not relaunched else None
             provider_status = _reservation_status_from_provider(instance.status).value
+            if (
+                settled_existing is not None
+                and settled_existing.status == ReservationStatus.Terminating.value
+            ):
+                provider_status = ReservationStatus.Terminating.value
             bootstrap_phase = (
                 settled_existing.bootstrap_phase
                 if settled_existing is not None
@@ -439,7 +445,6 @@ class ProviderMachineReconciler:
         snapshot: ProviderUnitSnapshot,
         *,
         provider: PooledCapacityProvider,
-        update_capacity: bool,
         now: datetime | None = None,
     ) -> ComputeUnitRecord:
         current_time = _utc(now)
@@ -522,33 +527,13 @@ class ProviderMachineReconciler:
         missing_machine_ids: set[str]
         with self.context.database.session() as session:
             repository = ComputeUnitRepository(session)
-            if update_capacity:
-                # The provider reports what its group holds; the floor is a
-                # decision it was never told about. Releasing the last machine of
-                # a pool that keeps one takes the group to zero, and intent
-                # following it there is a record no unit may hold, so the release
-                # fails and the machine it was releasing stays. Deleting a unit
-                # lowers the floor first, which is what lets that path reach zero.
-                desired_machines = max(snapshot.desired_machines, pool.min_machines)
-                updated = repository.update_capacity(
-                    pool.id,
-                    expected_generation=pool.generation,
-                    desired_machines=desired_machines,
-                    max_machines=max(snapshot.max_machines, desired_machines, 1),
-                    observed_machines=snapshot.observed_machines,
-                    phase=phase,
-                    provider_state=provider_state,
-                    replacement_machine_id=pool.replacement_machine_id,
-                    replacement_template_version=pool.replacement_template_version,
-                )
-            else:
-                updated = repository.apply_provider_state(
-                    pool.id,
-                    generation=pool.generation,
-                    observed_machines=snapshot.observed_machines,
-                    phase=phase,
-                    provider_state=provider_state,
-                )
+            updated = repository.apply_provider_state(
+                pool.id,
+                generation=pool.generation,
+                observed_machines=snapshot.observed_machines,
+                phase=phase,
+                provider_state=provider_state,
+            )
             if updated is None:
                 current = repository.get(pool.id)
                 if current is None:

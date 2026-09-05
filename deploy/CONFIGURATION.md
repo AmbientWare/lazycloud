@@ -16,9 +16,16 @@ unless credentials are supplied, so production uses Pod Identity without static
 keys. Development credentials belong in Compose, not client defaults.
 
 Postgres owns customer configuration and workload state. Redis owns coordination.
-The immutable release manifest owns agent artifacts, worker image digests and host
-AMI identities. It is selected in the deployment branch, alongside configuration
-and control-plane images. The CLI and application do not pick a newer release
+Immutable manifests describe release artifacts. The deployment branch records
+three explicit URLs alongside configuration and control-plane images:
+
+- `LAZYCLOUD_RELEASE_MANIFEST_URL` supplies the control-plane release and customer authorization template.
+- `LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL` selects the worker image.
+- `LAZYCLOUD_RELEASE_HOST_MANIFEST_URL` selects the host agent executable and AMIs.
+
+Routine Ship advances control and worker pins, retaining the recorded host pin.
+Pass `host_manifest_url` only for an intentional host upgrade. The first deployment
+must supply it. The CLI and application do not pick a newer release
 from S3. Customer-connected accounts remain database-owned; Helm governs only
 the platform fleet. Fleet ensure refuses a changed account, role, external ID or
 network instead of replacing or adopting the existing connection.
@@ -27,10 +34,10 @@ network instead of replacing or adopting the existing connection.
 
 Deploy captures the current branch revision and the infrastructure descriptor,
 validates the descriptor and environment values, and renders the exact Helm
-chart. It verifies the selected release's agent artifact and worker image before
+chart. It verifies the separately selected host artifact and worker image before
 building control-plane images. Only after all images exist does it publish the
-configuration and release together, using a compare-and-swap branch push.
-The selected release must contain the same managed-package sources as the
+configuration and all three pins together, using a compare-and-swap branch push.
+The control-plane release must contain the same managed-package sources as the
 control plane. Changes to those packages require Ship to publish matching worker
 artifacts; a code-only deploy may retain the release when those sources match.
 Preflight also checks overlapping old and new database pools and refuses an old

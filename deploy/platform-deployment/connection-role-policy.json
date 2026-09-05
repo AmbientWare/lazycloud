@@ -73,6 +73,7 @@
       "Action": [
         "autoscaling:DeleteAutoScalingGroup",
         "autoscaling:SetDesiredCapacity",
+        "autoscaling:SetInstanceProtection",
         "autoscaling:TerminateInstanceInAutoScalingGroup",
         "autoscaling:UpdateAutoScalingGroup"
       ],

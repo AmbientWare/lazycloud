@@ -43,6 +43,14 @@ on:
           built, which is a values commit and no build.
         type: string
         default: ""
+      worker_manifest_url:
+        description: Worker release to run. Empty follows a named release, otherwise retains the recorded worker.
+        type: string
+        default: ""
+      host_manifest_url:
+        description: Host agent and AMI release. Empty retains the recorded host pin; required for the first deployment.
+        type: string
+        default: ""
       release_manifest_url:
         description: |
           Release this deployment should run. Empty keeps whichever release it
@@ -60,6 +68,14 @@ on:
         required: true
       commit:
         description: Commit to record. Empty records the caller's commit.
+        type: string
+        default: ""
+      worker_manifest_url:
+        description: Worker release to run. Empty follows a named release, otherwise retains the recorded worker.
+        type: string
+        default: ""
+      host_manifest_url:
+        description: Host agent and AMI release. Empty retains the recorded host pin; required for the first deployment.
         type: string
         default: ""
       release_manifest_url:
@@ -100,6 +116,8 @@ jobs:
       COMMIT: ${{ inputs.commit || github.sha }}
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       RELEASE_MANIFEST_URL: ${{ inputs.release_manifest_url }}
+      WORKER_MANIFEST_URL: ${{ inputs.worker_manifest_url }}
+      HOST_MANIFEST_URL: ${{ inputs.host_manifest_url }}
     steps:
       # A `workflow_call` input is a string, so the choice above does not
       # constrain a caller. The two names are the two GitHub environments and
@@ -167,6 +185,8 @@ jobs:
             --environment "deploy/chart/environments/$BRANCH.yaml" \
             --deployment "$DEPLOYMENT" --tag "$COMMIT" \
             --release-manifest-url "$RELEASE_MANIFEST_URL" \
+            --worker-manifest-url "$WORKER_MANIFEST_URL" \
+            --host-manifest-url "$HOST_MANIFEST_URL" \
             "${previous_args[@]}" --output "$RUNNER_TEMP/values-deployment.yaml"
           helm lint deploy/chart --strict -f "$RUNNER_TEMP/values-deployment.yaml"
           helm template "$DEPLOYMENT" deploy/chart --namespace "$DEPLOYMENT" \
@@ -181,6 +201,8 @@ jobs:
           with open(os.environ["GITHUB_ENV"], "a") as out:
               out.write(f"IMAGE_PREFIX={values['image']['repositoryPrefix']}\n")
               out.write(f"RELEASE_MANIFEST_URL={values['runtime']['LAZYCLOUD_RELEASE_MANIFEST_URL']}\n")
+              out.write(f"WORKER_MANIFEST_URL={values['runtime']['LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL']}\n")
+              out.write(f"HOST_MANIFEST_URL={values['runtime']['LAZYCLOUD_RELEASE_HOST_MANIFEST_URL']}\n")
           PY
 
       - name: Authenticate to the public release registry
@@ -199,9 +221,12 @@ jobs:
           import re
           import subprocess
           from pathlib import Path
-          from provider_clients.release import fetch_release_manifest, materialize_agent_artifact
+          from provider_clients.release import fetch_release_manifest, materialize_agent_artifact, validate_connection_template
           from shared.managed_runtime_integrity import MANAGED_PACKAGE_NAMES
           manifest = fetch_release_manifest(os.environ["RELEASE_MANIFEST_URL"])
+          validate_connection_template(manifest)
+          worker = fetch_release_manifest(os.environ["WORKER_MANIFEST_URL"])
+          host = fetch_release_manifest(os.environ["HOST_MANIFEST_URL"])
           if not re.fullmatch(r"[0-9a-f]{40}", manifest.source_revision):
               raise SystemExit("Selected release does not identify its source commit")
           subprocess.run(["git", "fetch", "--depth=1", "origin", manifest.source_revision], check=True)
@@ -210,9 +235,9 @@ jobs:
               "git", "diff", "--exit-code", "--name-only", manifest.source_revision, "HEAD", "--", *packages,
           ])
           if comparison.returncode:
-              raise SystemExit("Selected worker release has different managed packages; run Ship to publish matching artifacts")
-          materialize_agent_artifact(manifest, into=Path(os.environ["RUNNER_TEMP"]) / "agent-artifact")
-          subprocess.run(["docker", "buildx", "imagetools", "inspect", manifest.container_worker_image], check=True)
+              raise SystemExit("Selected control-plane release has different managed packages; run Ship to publish matching artifacts")
+          materialize_agent_artifact(host, into=Path(os.environ["RUNNER_TEMP"]) / "agent-artifact")
+          subprocess.run(["docker", "buildx", "imagetools", "inspect", worker.container_worker_image], check=True)
           print(f"Verified release {manifest.release_version}")
           PY
 

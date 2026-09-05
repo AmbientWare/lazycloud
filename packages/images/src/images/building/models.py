@@ -201,6 +201,7 @@ class ImageBuildWaitPlan(ContractModel):
 
 
 class ImageBuildStreamEventPlan(ContractModel):
+    sequence: int = Field(default=0, ge=0)
     kind: ImageBuildStreamEventKind
     image_id: str = ""
     build_id: str = ""

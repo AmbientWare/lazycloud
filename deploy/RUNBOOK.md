@@ -66,14 +66,13 @@ command refuses beyond that rather than freezing a cost no invoice can carry.
 
 ## Publishing a release
 
-Do not perform the sequence by hand. It was written down here first and was
-still performed wrong — two images rebuilt out of nine, and the mismatch
-surfaced an hour later on a running EC2 node.
+For a local connected-AWS stack, explicitly retain its host release:
 
 ```bash
 uv run python deploy/release.py \
   --bucket "$AWS_RELEASE_ASSET_BUCKET" \
   --worker-repository <registry>/lazycloud-container-worker \
+  --host-manifest-url "$LAZYCLOUD_RELEASE_HOST_MANIFEST_URL" \
   --cpu-ami us-east-1=ami-<id> \
   --gpu-ami us-east-1=ami-<id>
 ```
@@ -81,13 +80,13 @@ uv run python deploy/release.py \
 It refuses a dirty tree, because a version label that names a revision the
 artifacts do not contain is worse than no label. It builds every image and the
 agent executable from that one revision, publishes the worker image and the
-release, and points `.env` at the published manifest.
+release, and updates the stack's release pins in `.env`.
 
-`.env` receives one line: `LAZYCLOUD_RELEASE_MANIFEST_URL`. The agent artifact
-version and digest, the URL serving it, the container-worker image, the customer
-authorization template, and both baked AMI catalogs are read from that manifest
-at startup. They were six copied variables until a deployment held five from one
-release and one from another; there is now no second place for them to disagree.
+`LAZYCLOUD_RELEASE_MANIFEST_URL` and `LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL`
+select the new release. `LAZYCLOUD_RELEASE_HOST_MANIFEST_URL` retains the supplied
+host release, which owns the agent executable and AMIs. All three URLs are
+required for managed capacity. Publishing an agent artifact does not select it
+for an existing host.
 
 `--cpu-ami` names the base image managed nodes boot. It is not optional for a
 deployment that runs managed capacity: a release naming no AMI produces a control
@@ -119,7 +118,9 @@ A release rebuilds only the application artifact whose inputs changed.
 and decides whether to rebuild the worker image and agent binary. Host images
 come from the separately dispatched Node Images workflow. Release resolves its
 current catalog and refuses to continue if the catalog's recipe does not match
-the checked-out revision. Worker changes never start an AMI bake.
+the checked-out revision. Worker changes never start an AMI bake. Routine Ship
+retains the deployed host manifest. Supply `host_manifest_url` only for an
+intentional host upgrade or the first deployment.
 Both PyPI projects accept the workflow through trusted publishing, configured on
 each project as repository `AmbientWare/lazycloud`, workflow `ship.yml`,
 environment `release`. No token is stored anywhere. The projects themselves were
@@ -132,40 +133,20 @@ such limit.
 --install arm64`), or the cross-architecture stage fails with `exec format
 error`.
 
-### Did it reach the nodes
+### Checking the deployment
 
-Publishing replaces no running instance. An Auto Scaling group whose launch
-template moves v1→v2 leaves every InService node on v1 by design, so the last
-thing the command does is say which release each node is actually running, and
-exit non-zero when that is not this one.
+The command checks that `control-plane` and `scheduler` loaded the selected
+control, worker and host URLs and agree on `LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL`.
+Disagreement fails the check.
 
-First it compares the two processes that each compose a pool's bootstrap —
-`control-plane` and `scheduler` — over the variables the release publishes plus
-`LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL`, read from the environment each container
-actually holds. While those disagree the launch template alternates on every
-reconcile and no node settles on either version, so nothing said about nodes
-afterwards would mean anything. Both holding the *previous* release fails here
-too: it is the shape a restart that did not take leaves behind.
+It then prints each host's booted launch-template version beside the pool's
+recorded target, polling for a post-restart observation. Missing or stale host
+versions fail the report. This is host inventory, not proof that workers switched
+images or that workloads survived. Verify the target worker image on enrolled
+slots and run the public workload acceptance before declaring rollout complete.
 
-Then, per pool, it prints every node's booted launch-template version against
-the pool's current one and repeats the reading until the record has been
-rewritten by a reconcile newer than the restart — up to three minutes, since
-the pooled reconcile runs on a 60s timer. Rows print every cycle whether or not
-anything is stale; a report that prints only problems reads the same as one that
-failed to look.
-
-It only reads, and only the platform's own durable record: the control plane
-owns the writes that would replace a node (see **Draining capacity**), and
-re-querying EC2 would test EC2 rather than the release. The pool's current
-launch-template version is the one value with no HTTP surface — it lives in the
-pool's provider state — so both halves of the comparison come from one query at
-one instant. A version the record cannot supply fails the report rather than
-passing it.
-
-`--skip-restart` skips the guard and the report along with the restart. The
-release is published but this stack has not loaded it, so every node would read
-as stale when nothing is wrong, and the closing line says published rather than
-live.
+`--skip-restart` publishes and writes the pins without restarting the local
+stack. It skips the running-process and host checks.
 
 The API answers on host port **8000** (container port 9000). `docker compose port
 control-plane 9000` prints the mapping if it changes.

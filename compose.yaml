@@ -100,12 +100,12 @@ x-image-build-env: &image-build-env
   # so a deployment whose capacity is a connected provider queues each build for
   # local capacity that does not exist until it hits the retry limit.
 
-# The release a deployment points at publishes the agent artifact version and
-# digest, the URL serving it, the container-worker image, the customer
-# authorization template, and the baked CPU AMIs. Every process that composes a
-# pool bootstrap needs the same one.
+# Both bootstrap composers need the same three pins. Worker image releases can
+# advance while the host agent and AMIs remain on their selected release.
 x-release-env: &release-env
   LAZYCLOUD_RELEASE_MANIFEST_URL: "${LAZYCLOUD_RELEASE_MANIFEST_URL:-}"
+  LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL: "${LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL:-}"
+  LAZYCLOUD_RELEASE_HOST_MANIFEST_URL: "${LAZYCLOUD_RELEASE_HOST_MANIFEST_URL:-}"
 
 x-agent-binary-env: &agent-binary-env
   LAZYCLOUD_AGENT_BINARY_DIR: "${LAZYCLOUD_AGENT_BINARY_DIR:-/var/lib/lazycloud/agent-binarys}"
