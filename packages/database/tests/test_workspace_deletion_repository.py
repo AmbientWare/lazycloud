@@ -82,6 +82,8 @@ def test_postgresql_workspace_deletion_serializes_complete_attempts(
     postgres_database_url: URL,
 ) -> None:
     database = _postgres_database(postgres_database_url)
+    same_replica = DatabaseClient.from_settings(database.settings)
+    other_replica = DatabaseClient.from_settings(database.settings)
     first_id = _create_workspace(database, "attempt-first")
     second_id = _create_workspace(database, "attempt-second")
     release_first = Event()
@@ -96,11 +98,11 @@ def test_postgresql_workspace_deletion_serializes_complete_attempts(
 
     def acquire_same() -> None:
         same_started.set()
-        with WorkspaceDeletionFence(database).acquire(first_id):
+        with WorkspaceDeletionFence(same_replica).acquire(first_id):
             return
 
     def acquire_other() -> None:
-        with WorkspaceDeletionFence(database).acquire(second_id):
+        with WorkspaceDeletionFence(other_replica).acquire(second_id):
             other_locked.set()
 
     try:
@@ -120,6 +122,8 @@ def test_postgresql_workspace_deletion_serializes_complete_attempts(
         release_first.set()
         _remove_test_workspace(database, first_id)
         _remove_test_workspace(database, second_id)
+        same_replica.dispose()
+        other_replica.dispose()
         database.dispose()
 
 
@@ -285,6 +289,7 @@ def _postgres_database(database_url: URL) -> DatabaseClient:
     database = DatabaseClient.from_settings(
         DatabaseSettings(
             url=database_url.render_as_string(hide_password=False),
+            direct_url=database_url.render_as_string(hide_password=False),
             # Above the widest contender count below, because those tests hold
             # every connection at a barrier at once. A pool smaller than the
             # concurrency it serves waits for a connection nobody will return.

@@ -21,6 +21,13 @@ locals {
 
   platform_values = {
     LAZYCLOUD_DATABASE_URL = format(
+      "postgresql+psycopg://%s:%s@%s:6432/%s",
+      planetscale_postgres_branch_role.control_plane.username,
+      planetscale_postgres_branch_role.control_plane.password,
+      planetscale_postgres_branch_role.control_plane.access_host_url,
+      planetscale_postgres_branch_role.control_plane.database_name,
+    )
+    LAZYCLOUD_DATABASE_DIRECT_URL = format(
       "postgresql+psycopg://%s:%s@%s:5432/%s",
       planetscale_postgres_branch_role.control_plane.username,
       planetscale_postgres_branch_role.control_plane.password,

@@ -11,7 +11,6 @@ from compute.agent_control import (
 )
 from compute.projection import PrivateUnitState
 from compute.state import (
-    ComputeJoinTokenState,
     ComputeUnitState,
     RedisComputeStateRepository,
 )
@@ -188,31 +187,6 @@ class GatewayUnitStateCoordinator:
                 for machine in self.compute.list_machines(workspace=workspace_id)
                 if machine.capacity_owner_id == unit.capacity_owner_id
             ]
-        )
-
-    def private_unit_for_join_token(
-        self,
-        token_state: ComputeJoinTokenState | None,
-    ) -> PrivateUnitState | None:
-        """Resolve the unit a join credential was minted against.
-
-        Keyed by capacity owner, not by the credential's pool name: that name is
-        the pool the machine will join, and a pool may be fed by several units,
-        so it identifies no single row to configure the agent from.
-        """
-        if token_state is None:
-            return None
-        unit = self.unit_by_capacity_owner(
-            token_state.capacity_owner_id,
-            workspace_id=token_state.workspace_id,
-        )
-        state = self.compute_states.get_unit_state(token_state.workspace_id, unit.capacity_owner_id)
-        if state is not None:
-            return private_pool_from_compute_state(state)
-        return self.ensure_compute_pool_state(
-            unit,
-            workspace_id=token_state.workspace_id,
-            owner_token_id=token_state.created_by_token_id or "gateway",
         )
 
     def unit_by_capacity_owner(

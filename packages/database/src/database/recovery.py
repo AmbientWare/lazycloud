@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AsyncExitStack, ExitStack, contextmanager
 from dataclasses import dataclass
 
 from sqlalchemy import text
@@ -20,6 +20,7 @@ _CONTROL_PLANE_RECOVERY_LOCK_ID = 7_312_990_118_742_021_765
 class ControlPlaneRecoveryFence:
     database: DatabaseClient
     _serving_connection: Connection | None = None
+    _serving_stack: ExitStack | None = None
 
     @property
     def supported(self) -> bool:
@@ -28,20 +29,24 @@ class ControlPlaneRecoveryFence:
     def start_serving(self) -> None:
         if not self.supported or self._serving_connection is not None:
             return
-        connection = self.database.engine.connect()
+        stack = ExitStack()
         try:
+            connection = stack.enter_context(self.database.direct_connection())
             connection.execute(
                 text("SELECT pg_advisory_lock_shared(:lock_id)"),
                 {"lock_id": _CONTROL_PLANE_RECOVERY_LOCK_ID},
             )
         except BaseException:
-            connection.close()
+            stack.close()
             raise
         self._serving_connection = connection
+        self._serving_stack = stack
 
     def stop_serving(self) -> None:
         connection = self._serving_connection
+        stack = self._serving_stack
         self._serving_connection = None
+        self._serving_stack = None
         if connection is None:
             return
         try:
@@ -50,36 +55,37 @@ class ControlPlaneRecoveryFence:
                 {"lock_id": _CONTROL_PLANE_RECOVERY_LOCK_ID},
             )
         finally:
-            connection.close()
+            if stack is not None:
+                stack.close()
 
     @contextmanager
     def offline_recovery(self) -> Iterator[bool]:
         if not self.supported:
             yield False
             return
-        connection = self.database.engine.connect()
-        acquired = False
-        try:
-            acquired = bool(
-                connection.scalar(
-                    text("SELECT pg_try_advisory_lock(:lock_id)"),
-                    {"lock_id": _CONTROL_PLANE_RECOVERY_LOCK_ID},
+        with self.database.direct_connection() as connection:
+            acquired = False
+            try:
+                acquired = bool(
+                    connection.scalar(
+                        text("SELECT pg_try_advisory_lock(:lock_id)"),
+                        {"lock_id": _CONTROL_PLANE_RECOVERY_LOCK_ID},
+                    )
                 )
-            )
-            yield acquired
-        finally:
-            if acquired:
-                connection.execute(
-                    text("SELECT pg_advisory_unlock(:lock_id)"),
-                    {"lock_id": _CONTROL_PLANE_RECOVERY_LOCK_ID},
-                )
-            connection.close()
+                yield acquired
+            finally:
+                if acquired:
+                    connection.execute(
+                        text("SELECT pg_advisory_unlock(:lock_id)"),
+                        {"lock_id": _CONTROL_PLANE_RECOVERY_LOCK_ID},
+                    )
 
 
 @dataclass(slots=True)
 class AsyncControlPlaneRecoveryFence:
     database: AsyncDatabaseClient
     _serving_connection: AsyncConnection | None = None
+    _serving_stack: AsyncExitStack | None = None
 
     @property
     def supported(self) -> bool:
@@ -88,20 +94,24 @@ class AsyncControlPlaneRecoveryFence:
     async def start_serving(self) -> None:
         if not self.supported or self._serving_connection is not None:
             return
-        connection = await self.database.engine.connect()
+        stack = AsyncExitStack()
         try:
+            connection = await stack.enter_async_context(self.database.direct_connection())
             await connection.execute(
                 text("SELECT pg_advisory_lock_shared(:lock_id)"),
                 {"lock_id": _CONTROL_PLANE_RECOVERY_LOCK_ID},
             )
         except BaseException:
-            await connection.close()
+            await stack.aclose()
             raise
         self._serving_connection = connection
+        self._serving_stack = stack
 
     async def stop_serving(self) -> None:
         connection = self._serving_connection
+        stack = self._serving_stack
         self._serving_connection = None
+        self._serving_stack = None
         if connection is None:
             return
         try:
@@ -110,4 +120,5 @@ class AsyncControlPlaneRecoveryFence:
                 {"lock_id": _CONTROL_PLANE_RECOVERY_LOCK_ID},
             )
         finally:
-            await connection.close()
+            if stack is not None:
+                await stack.aclose()

@@ -216,41 +216,64 @@ class ComputeService:
         failure_detail: str = "",
         now: datetime | None = None,
     ) -> ComputeProviderInstanceRecord:
+        with self.context.database.session() as session:
+            return self.record_provider_bootstrap_status_in_transaction(
+                session,
+                pool_id=pool_id,
+                provider_instance_id=provider_instance_id,
+                phase=phase,
+                failure_reason=failure_reason,
+                failure_detail=failure_detail,
+                now=now,
+            )
+
+    def record_provider_bootstrap_status_in_transaction(
+        self,
+        session: DatabaseSession,
+        *,
+        pool_id: str,
+        provider_instance_id: str,
+        phase: MachineBootstrapPhase,
+        failure_reason: MachineBootstrapFailureReason | None,
+        failure_detail: str = "",
+        now: datetime | None = None,
+    ) -> ComputeProviderInstanceRecord:
         if phase is MachineBootstrapPhase.Failed and failure_reason is None:
             raise InvalidInputError("failed provider bootstrap requires a failure reason")
         if phase is not MachineBootstrapPhase.Failed and failure_reason is not None:
             raise InvalidInputError("provider bootstrap failure reason requires failed phase")
         current_time = _utc(now)
-        with self.context.database.session() as session:
-            repository = ComputeProviderInstanceRepository(session)
-            record = repository.get_for_pool_instance(
-                pool_id,
-                provider_instance_id,
-                for_update=True,
-            )
-            if record is None:
-                raise NotFoundError("provider node is no longer active")
-            if phase is not record.bootstrap_phase:
-                allowed = _BOOTSTRAP_PHASE_TRANSITIONS[record.bootstrap_phase]
-                if phase not in allowed:
-                    raise ConflictError(
-                        "provider bootstrap phase cannot move from "
-                        f"{record.bootstrap_phase.value} to {phase.value}"
-                    )
-            update: dict[str, object] = {
-                "bootstrap_phase": phase,
-                "bootstrap_failure_reason": failure_reason,
-                "bootstrap_failure_detail": failure_detail,
-                "bootstrap_observed_at": current_time,
-                "updated_at": current_time,
-            }
-            if phase is MachineBootstrapPhase.Joining and record.first_enrolled_at is None:
-                # Kept in the payload, where the machine row's foreign key cannot
-                # reach it. `machine_id` is cleared when that row is deleted, and
-                # without this the record would read afterwards as one that never
-                # enrolled at all.
-                update["first_enrolled_at"] = current_time
-            return repository.upsert(record.model_copy(update=update))
+        repository = ComputeProviderInstanceRepository(session)
+        record = repository.get_for_pool_instance(
+            pool_id,
+            provider_instance_id,
+            for_update=True,
+        )
+        if record is None:
+            raise NotFoundError("provider node is no longer active")
+        if phase is not record.bootstrap_phase:
+            allowed = _BOOTSTRAP_PHASE_TRANSITIONS[record.bootstrap_phase]
+            if phase not in allowed:
+                raise ConflictError(
+                    "provider bootstrap phase cannot move from "
+                    f"{record.bootstrap_phase.value} to {phase.value}"
+                )
+        update: dict[str, JsonValue | datetime] = {
+            "bootstrap_phase": phase,
+            "bootstrap_failure_reason": failure_reason,
+            "bootstrap_failure_detail": failure_detail,
+            "bootstrap_observed_at": current_time,
+            "bootstrap_phase_started_at": (
+                current_time
+                if phase is not record.bootstrap_phase
+                else record.bootstrap_phase_started_at or record.bootstrap_observed_at
+            ),
+            "updated_at": current_time,
+        }
+        if phase is MachineBootstrapPhase.Joining and record.first_enrolled_at is None:
+            # This survives deletion of the machine row and its foreign-key binding.
+            update["first_enrolled_at"] = current_time
+        return repository.upsert(record.model_copy(update=update))
 
     def ensure_capacity(
         self,

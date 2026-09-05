@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 from sqlalchemy import text
-from sqlalchemy.engine import Connection
 
 from database.client import DatabaseClient
 
@@ -31,23 +30,22 @@ class WorkspaceDeletionFence:
                 f"workspace deletion serialization is unsupported for database dialect: {dialect}"
             )
 
-        connection: Connection = self.database.engine.connect()
         lock_key = f"workspace-deletion:{workspace_id}"
-        acquired = False
-        try:
-            connection.execute(
-                text("SELECT pg_advisory_lock(hashtextextended(:lock_key, 0))"),
-                {"lock_key": lock_key},
-            )
-            acquired = True
-            yield
-        finally:
-            if acquired:
+        with self.database.direct_connection() as connection:
+            acquired = False
+            try:
                 connection.execute(
-                    text("SELECT pg_advisory_unlock(hashtextextended(:lock_key, 0))"),
+                    text("SELECT pg_advisory_lock(hashtextextended(:lock_key, 0))"),
                     {"lock_key": lock_key},
                 )
-            connection.close()
+                acquired = True
+                yield
+            finally:
+                if acquired:
+                    connection.execute(
+                        text("SELECT pg_advisory_unlock(hashtextextended(:lock_key, 0))"),
+                        {"lock_key": lock_key},
+                    )
 
 
 __all__ = ["WorkspaceDeletionFence"]

@@ -219,3 +219,13 @@ variable "database_max_connections" {
     error_message = "database_max_connections must be a positive integer."
   }
 }
+
+variable "database_pooler_max_connections" {
+  description = "Local PgBouncer server connections per database, exported for deployment budgeting."
+  type        = number
+  default     = 20
+  validation {
+    condition     = var.database_pooler_max_connections > 0 && floor(var.database_pooler_max_connections) == var.database_pooler_max_connections
+    error_message = "database_pooler_max_connections must be a positive integer."
+  }
+}

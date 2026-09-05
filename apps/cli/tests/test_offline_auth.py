@@ -40,6 +40,7 @@ def test_offline_bootstrap_publishes_a_private_credential_and_fails_loudly_witho
     """
     database_url = f"sqlite+pysqlite:///{tmp_path / 'bootstrap.db'}"
     monkeypatch.setenv("LAZYCLOUD_DATABASE_URL", database_url)
+    monkeypatch.setenv("LAZYCLOUD_DATABASE_DIRECT_URL", database_url)
     database = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.Test)
     )
@@ -82,6 +83,7 @@ def test_offline_recovery_refuses_non_postgresql_authority(
 ) -> None:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'recovery.db'}"
     monkeypatch.setenv("LAZYCLOUD_DATABASE_URL", database_url)
+    monkeypatch.setenv("LAZYCLOUD_DATABASE_DIRECT_URL", database_url)
     database = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.Test)
     )
@@ -114,6 +116,7 @@ def test_offline_bootstrap_accepts_configured_token_only_through_private_file(
 ) -> None:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'configured-bootstrap.db'}"
     monkeypatch.setenv("LAZYCLOUD_DATABASE_URL", database_url)
+    monkeypatch.setenv("LAZYCLOUD_DATABASE_DIRECT_URL", database_url)
     database = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.Test)
     )
