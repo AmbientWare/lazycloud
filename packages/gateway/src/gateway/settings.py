@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from networking.wireguard import wireguard_platform_address, wireguard_platform_index
+from networking.wireguard import WIREGUARD_GATEWAY_ADDRESS, WIREGUARD_RUNTIME_SERVICE_PORT
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.deployment_settings import MissingDeploymentSettingError
@@ -18,20 +18,9 @@ class GatewaySettings(BaseSettings):
     # account, and the address a node enrols against. A localhost default would
     # be accepted everywhere and correct nowhere.
     public_http_url: str = Field(default="", validation_alias=PUBLIC_HTTP_URL_VARIABLE)
-    # Workers reach the replica that assigned them through its WireGuard address.
-    # The ordinal selects that address without a second registry beside the
-    # StatefulSet and gateway peer list.
     runtime_callback_http_url: str = Field(
-        default="",
+        default=f"http://{WIREGUARD_GATEWAY_ADDRESS}:{WIREGUARD_RUNTIME_SERVICE_PORT}",
         validation_alias="LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL",
-    )
-    wireguard_platform_index: int | None = Field(
-        default=0,
-        validation_alias="LAZYCLOUD_WIREGUARD_PLATFORM_INDEX",
-    )
-    wireguard_pod_name: str = Field(
-        default="",
-        validation_alias="LAZYCLOUD_WIREGUARD_POD_NAME",
     )
 
     model_config = SettingsConfigDict(
@@ -54,13 +43,9 @@ class GatewaySettings(BaseSettings):
                 purpose="the public origin this deployment is reached on",
             )
         if not self.runtime_callback_http_url:
-            index = wireguard_platform_index(
-                self.wireguard_platform_index,
-                pod_name=self.wireguard_pod_name,
-            )
-            self.runtime_callback_http_url = normalize_http_origin(
-                f"http://{wireguard_platform_address(index)}:9000",
-                field_name="gateway runtime HTTP URL",
+            raise MissingDeploymentSettingError(
+                "LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL",
+                purpose="the private API service reached through WireGuard",
             )
         return self
 

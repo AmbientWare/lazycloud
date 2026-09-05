@@ -107,12 +107,19 @@ RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
     uv sync --frozen --no-dev --package scheduler-app --no-editable
 
 FROM python-manifests AS tunnel-gateway-dependencies
+ARG SOURCE_DATE_EPOCH=0
 RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
     uv sync --frozen --no-dev --package tunnel-gateway-app --no-install-workspace
 
 FROM tunnel-gateway-dependencies AS tunnel-gateway-install
-COPY --from=workspace-source /packages ./packages
-COPY --from=workspace-source /apps ./apps
+COPY apps/tunnel-gateway/src ./apps/tunnel-gateway/src
+COPY packages/compute/src ./packages/compute/src
+COPY packages/coordination/src ./packages/coordination/src
+COPY packages/database/src ./packages/database/src
+COPY packages/foundation/src ./packages/foundation/src
+COPY packages/networking/src ./packages/networking/src
+COPY packages/observability/src ./packages/observability/src
+COPY packages/shared/src ./packages/shared/src
 RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
     uv sync --frozen --no-dev --package tunnel-gateway-app --no-editable
 

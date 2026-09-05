@@ -5,6 +5,7 @@ import signal
 import socket
 import threading
 from dataclasses import dataclass
+from ipaddress import IPv4Address
 from pathlib import Path
 from time import monotonic
 from uuid import uuid4
@@ -22,8 +23,16 @@ from database.repositories.compute import (
     WireGuardPeerRepository,
 )
 from database.settings import DatabaseApplicationName, DatabaseSettings
-from networking.wireguard import WireGuardError, wireguard_platform_address
-from networking.wireguard_gateway import WireGuardGatewayPeer, WireGuardGatewayRuntime
+from networking.wireguard import (
+    WIREGUARD_GATEWAY_HEALTH_PORT,
+    WireGuardError,
+    wireguard_platform_address,
+)
+from networking.wireguard_gateway import (
+    WireGuardGatewayPeer,
+    WireGuardGatewayRuntime,
+    WireGuardRuntimeService,
+)
 from observability.process_logs import configure_process_logging
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -32,15 +41,17 @@ from shared.compute_enrollment import WireGuardGateway
 from shared.timestamps import utc_now
 
 LOGGER = logging.getLogger(__name__)
+RUNTIME_SERVICE_DNS_REFRESH_SECONDS = 10.0
 
 
 class TunnelGatewaySettings(BaseSettings):
+    runtime_service_host: str = Field(default="", min_length=1, max_length=253)
+    runtime_service_port: int = Field(default=0, ge=1, le=65535)
     private_key_file: Path = Path()
     public_endpoint: str = ""
     platform_key_directory: Path = Path()
     platform_peer_count: int = Field(default=2, ge=1, le=32)
     ready_file: Path = Path("/tmp/lazycloud-tunnel-gateway.ready")
-    health_port: int = Field(default=8080, ge=1, le=65535)
     lease_ttl_seconds: int = Field(default=10, ge=4, le=120)
     reconcile_interval_seconds: float = Field(default=2.0, ge=0.25, le=30)
 
@@ -63,6 +74,56 @@ class TunnelGatewaySettings(BaseSettings):
         if str(value) in {"", "."}:
             raise ValueError("WireGuard key paths are required")
         return value
+
+    @field_validator("runtime_service_host")
+    @classmethod
+    def validate_runtime_service_host(cls, value: str) -> str:
+        if value != value.strip() or any(character in value for character in "/:@\\\n\r\t "):
+            raise ValueError("runtime Service host must be an IPv4 address or DNS hostname")
+        return value
+
+
+@dataclass(slots=True)
+class RuntimeServiceResolver:
+    host: str
+    port: int
+    _target: WireGuardRuntimeService | None = None
+    _refresh_after: float = 0.0
+
+    def resolve(self) -> WireGuardRuntimeService:
+        now = monotonic()
+        if self._target is not None and now < self._refresh_after:
+            return self._target
+        self._refresh_after = now + RUNTIME_SERVICE_DNS_REFRESH_SECONDS
+        try:
+            addresses = {
+                IPv4Address(address[4][0])
+                for address in socket.getaddrinfo(
+                    self.host, self.port, family=socket.AF_INET, type=socket.SOCK_STREAM
+                )
+            }
+        except socket.gaierror as exc:
+            if self._target is None:
+                raise WireGuardError(f"could not resolve runtime Service host {self.host}") from exc
+            LOGGER.warning(
+                "Runtime Service DNS refresh failed host=%s; retaining validated address=%s",
+                self.host,
+                self._target.address,
+                exc_info=True,
+            )
+            return self._target
+        if len(addresses) != 1:
+            raise WireGuardError("runtime Service host must resolve to exactly one IPv4 address")
+        target = WireGuardRuntimeService(address=addresses.pop(), port=self.port)
+        if target != self._target:
+            LOGGER.info(
+                "Runtime Service resolved host=%s address=%s port=%s",
+                self.host,
+                target.address,
+                target.port,
+            )
+        self._target = target
+        return target
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +217,10 @@ class _GatewayLease:
     def fresh(self) -> bool:
         with self._state_lock:
             return not self._lost.is_set() and monotonic() < self._confirmed_until
+
+    @property
+    def cancelled(self) -> threading.Event:
+        return self._lost
 
     def start(self) -> None:
         if not self.fresh:
@@ -252,6 +317,7 @@ class TunnelGatewayProcess:
     database: DatabaseClient
     redis: RedisClient
     runtime: WireGuardGatewayRuntime
+    runtime_service_resolver: RuntimeServiceResolver
     platform_peers: tuple[WireGuardGatewayPeer, ...]
     settings: TunnelGatewaySettings
     stop: threading.Event
@@ -279,11 +345,11 @@ class TunnelGatewayProcess:
                             ttl_seconds=self.settings.lease_ttl_seconds,
                             acquired_at=attempted_at,
                             ready_file=self.settings.ready_file,
-                            health_port=self.settings.health_port,
+                            health_port=WIREGUARD_GATEWAY_HEALTH_PORT,
                             runtime=self.runtime,
                         )
                         lease.start()
-                        self.runtime.start()
+                        self.runtime.start(cancelled=lease.cancelled)
                         if not lease.fresh:
                             self._close_lease(lease, lease_key, token, release=False)
                             lease = None
@@ -335,6 +401,7 @@ class TunnelGatewayProcess:
             release_token_lock(self.redis, lease_key, token)
 
     def _reconcile(self) -> tuple[int, int]:
+        self.runtime.reconcile_runtime_service(self.runtime_service_resolver.resolve())
         with self.database.session() as session:
             peers = WireGuardPeerRepository(session).active()
         self.runtime.reconcile((*self.platform_peers, *peers))
@@ -402,6 +469,10 @@ def _platform_peers(settings: TunnelGatewaySettings) -> tuple[WireGuardGatewayPe
 def main() -> None:
     configure_process_logging()
     settings = TunnelGatewaySettings()
+    runtime_service_resolver = RuntimeServiceResolver(
+        settings.runtime_service_host, settings.runtime_service_port
+    )
+    runtime_service = runtime_service_resolver.resolve()
     database = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.TunnelGateway)
     )
@@ -417,7 +488,8 @@ def main() -> None:
         TunnelGatewayProcess(
             database=database,
             redis=redis,
-            runtime=WireGuardGatewayRuntime(settings.private_key_file),
+            runtime=WireGuardGatewayRuntime(settings.private_key_file, runtime_service),
+            runtime_service_resolver=runtime_service_resolver,
             platform_peers=_platform_peers(settings),
             settings=settings,
             stop=stop,

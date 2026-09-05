@@ -188,7 +188,8 @@
       "required": [
         "registry",
         "repositoryPrefix",
-        "tag"
+        "tag",
+        "networkDigest"
       ],
       "properties": {
         "registry": {
@@ -202,6 +203,10 @@
         "tag": {
           "type": "string",
           "pattern": "^[a-f0-9]{40}$"
+        },
+        "networkDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
         }
       }
     },

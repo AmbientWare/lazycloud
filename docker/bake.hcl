@@ -49,6 +49,12 @@ target "tunnel-gateway" {
   inherits = ["_control-plane"]
   target   = "tunnel-gateway"
   tags     = ["tunnel-gateway:${TAG}"]
+  platforms = ["linux/amd64"]
+  output = ["type=image,rewrite-timestamp=true"]
+  attest = ["type=provenance,mode=min"]
+  args = {
+    SOURCE_DATE_EPOCH = "0"
+  }
 }
 
 target "cache-server" {

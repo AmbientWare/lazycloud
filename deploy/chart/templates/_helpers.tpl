@@ -35,11 +35,16 @@ forgot it, and reported as though the image were wrong rather than missing.
 {{- define "lazycloud.image" -}}
 {{- $root := index . 0 -}}
 {{- $name := index . 1 -}}
+{{- if eq $name "tunnel-gateway" -}}
+{{- $digest := required "image.networkDigest must name the executable network image manifest" $root.Values.image.networkDigest -}}
+{{- printf "%s/%s/%s@%s" $root.Values.image.registry $root.Values.image.repositoryPrefix $name $digest -}}
+{{- else -}}
 {{- $tag := $root.Values.image.tag -}}
 {{- if not $tag -}}
 {{- fail "image.tag was not supplied; CI writes it to the deployment branch after it builds" -}}
 {{- end -}}
 {{- printf "%s/%s/%s:%s" $root.Values.image.registry $root.Values.image.repositoryPrefix $name $tag -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

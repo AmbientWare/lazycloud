@@ -82,6 +82,7 @@ jobs:
             --environment deploy/chart/environments/prod.yaml \
             --deployment lazycloud-prod \
             --tag 0000000000000000000000000000000000000000 \
+            --network-digest sha256:0000000000000000000000000000000000000000000000000000000000000000 \
             --release-manifest-url https://example.invalid/releases/v1/manifest.json \
             --worker-manifest-url https://example.invalid/releases/v1/manifest.json \
             --host-manifest-url https://example.invalid/releases/host/manifest.json \

@@ -41,6 +41,12 @@ substitutes, and gives every service an explicit owner and health check.
 - Control-plane, worker-image and host releases have independent manifest pins.
   Routine Ship advances the first two and retains the host pin. Updating the host
   agent executable or AMIs requires an explicit host manifest selection.
+- The network image records its executable linux/amd64 manifest digest, not its
+  commit tag or attestation index. Deploy selects it from the same published
+  commit automatically. Its Docker build copies only the installed network
+  workspace dependencies, so an unrelated API edit does not restart WireGuard.
+  Network source or dependency changes publish and select a new image without an
+  operator-maintained release pin.
 - Helm owns application settings and secret property bindings. Terraform publishes
   non-secret resource identities in a versioned infrastructure descriptor; app CI
   reads that document, never Terraform state. Git records the descriptor snapshot,

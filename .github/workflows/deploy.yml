@@ -187,15 +187,12 @@ jobs:
             --release-manifest-url "$RELEASE_MANIFEST_URL" \
             --worker-manifest-url "$WORKER_MANIFEST_URL" \
             --host-manifest-url "$HOST_MANIFEST_URL" \
-            "${previous_args[@]}" --output "$RUNNER_TEMP/values-deployment.yaml"
-          helm lint deploy/chart --strict -f "$RUNNER_TEMP/values-deployment.yaml"
-          helm template "$DEPLOYMENT" deploy/chart --namespace "$DEPLOYMENT" \
-            -f "$RUNNER_TEMP/values-deployment.yaml" >"$RUNNER_TEMP/rendered.yaml"
+            "${previous_args[@]}" --preflight --output "$RUNNER_TEMP/deployment-preflight.yaml"
           uv run --frozen --python 3.12 --group workspace python - <<'PY'
           import os
           from pathlib import Path
           import yaml
-          values = yaml.safe_load((Path(os.environ["RUNNER_TEMP"]) / "values-deployment.yaml").read_text())
+          values = yaml.safe_load((Path(os.environ["RUNNER_TEMP"]) / "deployment-preflight.yaml").read_text())
           if values["image"]["registry"] != os.environ["ECR_REGISTRY"]:
               raise SystemExit("Infrastructure registry does not match the deployment AWS account")
           with open(os.environ["GITHUB_ENV"], "a") as out:
@@ -291,8 +288,20 @@ jobs:
           targets: control-plane
           push: true
           set: |
-            *.cache-from=type=gha,scope=deploy-control-plane
-            *.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            api.cache-from=type=gha,scope=deploy-control-plane
+            api.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            scheduler.cache-from=type=gha,scope=deploy-control-plane
+            scheduler.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            cache-server.cache-from=type=gha,scope=deploy-control-plane
+            cache-server.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            worker-bootstrap.cache-from=type=gha,scope=deploy-control-plane
+            worker-bootstrap.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            cli.cache-from=type=gha,scope=deploy-control-plane
+            cli.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            database-bootstrap.cache-from=type=gha,scope=deploy-control-plane
+            database-bootstrap.cache-to=type=gha,mode=max,scope=deploy-control-plane
+            tunnel-gateway.cache-from=type=gha,scope=deploy-network
+            tunnel-gateway.cache-to=type=gha,mode=max,scope=deploy-network
             api.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/api:${{ env.COMMIT }}
             scheduler.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/scheduler:${{ env.COMMIT }}
             tunnel-gateway.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/tunnel-gateway:${{ env.COMMIT }}
@@ -308,6 +317,34 @@ jobs:
             aws ecr describe-images --repository-name "$IMAGE_PREFIX/$repository" \
               --image-ids "imageTag=$COMMIT" --query 'imageDetails[0].imageDigest' --output text
           done
+
+      - name: Resolve the network artifact and validate the deployment
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          network_image="$ECR_REGISTRY/$IMAGE_PREFIX/tunnel-gateway"
+          docker buildx imagetools inspect --raw "$network_image:$COMMIT" >"$RUNNER_TEMP/network-index.json"
+          network_digest="$(jq -er '
+            [.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")]
+            | if length == 1 then .[0].digest else error("Expected one executable linux/amd64 network manifest") end
+          ' "$RUNNER_TEMP/network-index.json")"
+          docker buildx imagetools inspect "$network_image@$network_digest" >/dev/null
+          previous_args=()
+          if [ -n "$PREVIOUS_DEPLOYMENT" ]; then
+            previous_args=(--previous-values "$RUNNER_TEMP/previous-values.yaml" --previous-chart-values "$RUNNER_TEMP/previous-chart-values.yaml")
+          fi
+          uv run --frozen --python 3.12 --group workspace python deploy/chart_values.py \
+            --infrastructure "$RUNNER_TEMP/infrastructure.json" \
+            --environment "deploy/chart/environments/$BRANCH.yaml" \
+            --deployment "$DEPLOYMENT" --tag "$COMMIT" --network-digest "$network_digest" \
+            --release-manifest-url "$RELEASE_MANIFEST_URL" \
+            --worker-manifest-url "$WORKER_MANIFEST_URL" \
+            --host-manifest-url "$HOST_MANIFEST_URL" \
+            "${previous_args[@]}" --output "$RUNNER_TEMP/values-deployment.yaml"
+          helm lint deploy/chart --strict -f "$RUNNER_TEMP/values-deployment.yaml"
+          helm template "$DEPLOYMENT" deploy/chart --namespace "$DEPLOYMENT" \
+            -f "$RUNNER_TEMP/values-deployment.yaml" >"$RUNNER_TEMP/rendered.yaml"
 
       - name: Record it on the deployment branch
         run: |
