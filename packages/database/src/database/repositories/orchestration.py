@@ -638,12 +638,18 @@ class ContainerRepository:
         not terminated on a readiness signal that says only that we have stopped
         hearing from it. The reclaim bounds how long this may hold: rows outlive
         the worker that owned them when nothing settles them.
+
+        Platform assignments carry only the runtime machine identity; private
+        assignments also bind the durable machine foreign key.
         """
 
         return int(
             self.session.scalar(
                 select(func.count(ContainerTable.id)).where(
-                    ContainerTable.machine_id == machine_id,
+                    or_(
+                        ContainerTable.machine_id == machine_id,
+                        ContainerTable.payload["runtime_machine_id"].as_string() == machine_id,
+                    ),
                     ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
                 )
             )

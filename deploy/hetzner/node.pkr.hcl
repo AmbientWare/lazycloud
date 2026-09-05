@@ -38,7 +38,7 @@ variable "manifest_path" {
 source "hcloud" "cpu" {
   image                   = var.base_image_id
   location                = var.location
-  server_type             = "ccx23"
+  server_type             = "ccx13"
   server_name             = "lc-bake-${var.bake_id}"
   snapshot_name           = "lc-cpu-${substr(var.recipe_sha256, 0, 16)}-${var.bake_id}"
   ssh_username            = "root"

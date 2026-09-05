@@ -423,6 +423,75 @@ def test_drain_never_releases_a_machine_another_unit_owns(
     assert workers.get_worker("worker-joined-host") is not None
 
 
+def test_idle_capacity_retires_while_a_replacement_has_not_registered(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    compute = _Compute(
+        current_template_version="2",
+        instances=[("i-busy", "1"), ("i-idle", "1"), ("i-new", "2")],
+        desired_machines=2,
+        replacement_machine_id="machine-i-busy",
+        replacement_template_version="2",
+    )
+    _seed_pool_state(
+        compute_states,
+        capacity_owner_id=PROVIDER_OWNER_ID,
+        active_machines=2,
+    )
+    for instance_id in ("i-busy", "i-idle"):
+        _add_worker(
+            workers,
+            f"worker-{instance_id}",
+            NOW - timedelta(minutes=10),
+            machine_id=f"machine-{instance_id}",
+            capacity_owner_id=PROVIDER_OWNER_ID,
+        )
+    _add_container(redis, "container-running", "worker-i-busy")
+
+    result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+
+    assert result[0].action is WorkerPoolDrainAction.TerminateProviderMachine
+    assert result[0].machine_id == "machine-i-idle"
+    assert result[0].desired_replicas == 1
+    assert ("i-busy", "1") in compute.instances
+
+
+def test_final_idle_machine_scales_to_zero_with_its_unregistered_replacement(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    compute = _Compute(
+        current_template_version="2",
+        instances=[("i-old", "1"), ("i-new", "2")],
+        desired_machines=1,
+        replacement_machine_id="machine-i-old",
+        replacement_template_version="2",
+    )
+    _seed_pool_state(
+        compute_states,
+        capacity_owner_id=PROVIDER_OWNER_ID,
+        active_machines=1,
+    )
+    _add_worker(
+        workers,
+        "worker-old",
+        NOW - timedelta(minutes=10),
+        machine_id="machine-i-old",
+        capacity_owner_id=PROVIDER_OWNER_ID,
+    )
+
+    result = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+
+    assert result[0].action is WorkerPoolDrainAction.ScaleWorkerPool
+    assert result[0].desired_replicas == 0
+    assert compute._unit().desired_machines == 0
+
+
 def test_replacement_surges_before_it_drains_anything(
     real_redis_actors: _RealRedisActors,
 ) -> None:

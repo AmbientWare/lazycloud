@@ -57,7 +57,6 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.container_requests import OciRuntimeName, schedulable_capacity
-from shared.containers import ContainerStatus
 from shared.contracts import ContractModel
 from shared.errors import (
     CapacityLimitReachedError,
@@ -1339,11 +1338,11 @@ class ComputeService:
         # owner: it is what releases open capacity operations and retires the
         # sizing state. Writing a zero record alone leaves both behind, and the
         # sizing reconciler raises the machine straight back. This runs after the
-        # preparing session has closed; `scale_internal_pool` takes the mutation
+        # preparing session has closed; `scale_internal_unit` takes the mutation
         # lease and locks the same row.
         return self.scale_internal_unit(
             pool.workspace_id,
-            pool.name,
+            pool.capacity_owner_id,
             0,
             before_mutation=_policy_owned_scale,
         )
@@ -1384,7 +1383,6 @@ class ComputeService:
             protected = {
                 pool.id: self._machines_holding_active_work(
                     session,
-                    workspace_id=workspace_id,
                     pool_id=pool.id,
                 )
                 for pool in pools
@@ -1406,19 +1404,9 @@ class ComputeService:
         self,
         session: DatabaseSession,
         *,
-        workspace_id: str,
         pool_id: str,
     ) -> int:
-        """Count this pool's machines that are running customer work.
-
-        Zeroing the policy must not destroy a running workload. The provider
-        scales in by picking its own victim, so the floor has to hold the busy
-        machines back here; the scheduler's drain owner already refuses to
-        release a machine with active containers and takes them one at a time as
-        they go idle. Lowering the policy floor is what unblocks that owner, so
-        capacity above this count is released now and the rest converges to zero
-        as the work finishes.
-        """
+        """Count machines with pending or running work across all tenant workspaces."""
 
         machine_ids = {
             instance.machine_id
@@ -1427,15 +1415,8 @@ class ComputeService:
         }
         if not machine_ids:
             return 0
-        busy = {
-            container.machine_id or container.runtime_machine_id
-            for container in ContainerRepository(session).list(
-                workspace_id=workspace_id,
-                statuses=(ContainerStatus.Pending.value, ContainerStatus.Running.value),
-            )
-            if (container.machine_id or container.runtime_machine_id) in machine_ids
-        }
-        return len(busy)
+        containers = ContainerRepository(session)
+        return sum(containers.count_live_for_machine(machine_id) > 0 for machine_id in machine_ids)
 
     def _prepare_pooled_capacity(
         self,
@@ -1572,7 +1553,6 @@ class ComputeService:
                         min(
                             self._machines_holding_active_work(
                                 session,
-                                workspace_id=workspace_id,
                                 pool_id=current.id,
                             ),
                             current.desired_machines,
@@ -1835,6 +1815,10 @@ class ComputeService:
                 unit_ref=capacity_owner_id,
             )
             before_mutation(unit)
+            if desired_machines == 0 and self._machines_holding_active_work(
+                session, pool_id=unit.id
+            ):
+                raise ConflictError("compute pool still has active workloads")
             if desired_machines > unit.desired_machines:
                 offer = self._available_unit_offer(provider, unit)
                 if not provider.policy.accepts(offer):
@@ -2446,6 +2430,27 @@ class ComputeService:
                         self._provider_unit_request(current, offer), record.instance_id
                     )
             current = self._relaunch_degraded_pool_after_interval(current, now=now)
+            request = self._provider_unit_request(current, offer)
+            if request.desired_machines == 0:
+                with dispatch_fence.dispatch_lock(current.capacity_owner_id):
+                    snapshot = pooled.describe_unit(request)
+                    if (
+                        snapshot.desired_machines
+                        or snapshot.observed_machines
+                        or snapshot.instances
+                    ):
+                        snapshot = pooled.set_unit_capacity(
+                            request,
+                            desired_machines=0,
+                            max_machines=request.max_machines,
+                        )
+                return self.provider_machines._apply_pooled_snapshot(
+                    current,
+                    offer,
+                    snapshot,
+                    provider=pooled,
+                    now=now,
+                )
             offer = self._available_unit_offer(provider, current)
             placement_allows = provider.policy is not None and provider.policy.accepts(offer)
             degraded = current.provider_state.degraded_reason is not None or not placement_allows

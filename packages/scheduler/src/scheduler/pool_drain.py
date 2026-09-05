@@ -278,13 +278,30 @@ class ManagedComputeWorkerPoolDrainController:
                 pool=self.pool,
                 reason="worker-pool drain disabled",
             )
+        idle = self._reconcile_idle_capacity(
+            current_unit,
+            observation=observation,
+            config=config,
+            now=current_time,
+        )
+        if idle.action is not WorkerPoolDrainAction.None_:
+            return idle
         replacement = self._reconcile_replacement(
             current_unit,
             snapshot=observation.snapshot,
             now=current_time,
         )
-        if replacement is not None:
-            return replacement
+        return replacement if replacement is not None else idle
+
+    def _reconcile_idle_capacity(
+        self,
+        current_unit: ComputeUnitRecord,
+        *,
+        observation: WorkerPoolDrainObservation,
+        config: WorkerPoolDrainConfig,
+        now: datetime,
+    ) -> WorkerPoolDrainResult:
+        current_time = now
         sizing_state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
         if sizing_state.pending_operation_id or sizing_state.desired_units > (
             self.state.active_machines
@@ -319,7 +336,10 @@ class ManagedComputeWorkerPoolDrainController:
                 pool=self.pool,
                 reason="worker-pool scale-down cooldown is active",
             )
-        if self.state.active_machines <= config.min_workers:
+        if self.state.active_machines <= config.min_workers or (
+            (current_unit.replacement_machine_id or current_unit.worker_rollout_surge)
+            and current_unit.desired_machines <= config.min_workers
+        ):
             return WorkerPoolDrainResult(
                 capacity_owner_id=self.capacity_owner_id,
                 pool=self.pool,
@@ -358,6 +378,7 @@ class ManagedComputeWorkerPoolDrainController:
             idle_seconds=config.idle_seconds,
             retain_machines=config.min_workers,
             paid_machine_ids=paid_machines,
+            replacement_machine_id=current_unit.replacement_machine_id,
             reserve_idle_machines=(
                 max(
                     ceil(
@@ -382,6 +403,35 @@ class ManagedComputeWorkerPoolDrainController:
                 desired_replicas=self.state.desired_machines,
                 observed_replicas=self.state.active_machines,
                 reason="no idle provider machine candidate",
+            )
+        if (
+            current_unit.desired_machines == 1
+            and (current_unit.replacement_machine_id or current_unit.worker_rollout_surge)
+            and config.min_workers == 0
+            and current_unit.min_free_cpu_millicores == 0
+            and current_unit.min_free_memory_mib == 0
+            and current_unit.min_free_gpu_count == 0
+            and not paid_machines
+            and all(
+                not _pool_has_active_containers(workers, self.workers, self.containers)
+                and len(_idle_workers(workers, current_time, config.idle_seconds)) == len(workers)
+                for workers in workers_by_machine.values()
+            )
+        ):
+            pooled = self.compute.scale_internal_unit(
+                self.state.workspace_id,
+                self.capacity_owner_id,
+                0,
+                before_mutation=lambda _unit: None,
+                now=current_time,
+            )
+            return WorkerPoolDrainResult(
+                capacity_owner_id=self.capacity_owner_id,
+                pool=self.pool,
+                action=WorkerPoolDrainAction.ScaleWorkerPool,
+                desired_replicas=pooled.desired_machines,
+                observed_replicas=pooled.observed_machines,
+                reason="released idle capacity and its replacement surge",
             )
         pooled = self.compute.release_internal_unit_machine(
             self.state.workspace_id,
@@ -411,12 +461,8 @@ class ManagedComputeWorkerPoolDrainController:
     ) -> WorkerPoolDrainResult | None:
         """Move the pool onto the version it would launch today, one machine at a time.
 
-        Surging before draining is what lets a pool at `min_machines` update
-        itself: the idle-drain phase below refuses to go under that floor, and
-        adding first means active is above it by the time anything is removed.
-
-        Returns None when there is nothing superseded, so the idle-drain phase
-        runs as it did before.
+        Idle retirement runs first and preserves the minimum capacity. Surging
+        adds a ready replacement before draining a machine the floor still needs.
         """
         current_version = snapshot.current_template_version
         if not current_version:
@@ -794,6 +840,7 @@ def _idle_machine_candidate(
     retain_machines: int,
     paid_machine_ids: set[str],
     reserve_idle_machines: int,
+    replacement_machine_id: str = "",
 ) -> _IdleMachineCandidate | None:
     healthy_machines = [
         (machine_id, workers)
@@ -823,11 +870,12 @@ def _idle_machine_candidate(
         candidates.append(_IdleMachineCandidate(machine_id=machine_id, workers=idle_workers))
     if not candidates or idle_count <= reserve_idle_machines:
         return None
-    # Scale-out nodes begin with an empty image cache. Retire the newest idle
-    # machine so the long-lived node keeps the cache it accumulated serving work.
+    # Retiring the paired machine settles its surge without lowering demand.
+    # Otherwise retire the newest idle machine to preserve the older image cache.
     return max(
         candidates,
         key=lambda item: (
+            item.machine_id != replacement_machine_id,
             min(worker.created_at for worker in item.workers),
             item.machine_id,
         ),

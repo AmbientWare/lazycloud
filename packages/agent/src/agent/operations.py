@@ -373,9 +373,8 @@ validate_input() {
     fi
   fi
   if [ -n "$PROVIDER_ENROLLMENT_REQUEST" ]; then
-    if [ "$PROVIDER" != "aws" ] || [ "$PROVIDER_INSTANCE_IDENTITY" != "imds-v2" ]; then
-      fail "AWS provider enrollment requires --provider aws and \
---provider-instance-identity imds-v2" 2
+    if [ -z "$PROVIDER" ] || [ -z "$PROVIDER_INSTANCE_IDENTITY" ]; then
+      fail "provider enrollment requires --provider and --provider-instance-identity" 2
     fi
   fi
   if [ -n "$GATEWAY" ]; then

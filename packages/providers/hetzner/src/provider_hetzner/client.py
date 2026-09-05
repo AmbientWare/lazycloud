@@ -74,6 +74,7 @@ class Image(ApiModel):
     id: int
     status: str
     architecture: str
+    disk_size: int = Field(ge=0)
     labels: dict[str, str] = Field(default_factory=dict)
 
 
