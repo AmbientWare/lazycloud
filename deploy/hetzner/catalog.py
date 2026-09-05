@@ -64,6 +64,8 @@ def main() -> None:
         or snapshot.labels.get("lazycloud-release") != metadata.recipe_sha256[:63]
     ):
         raise ValueError("the snapshot is unavailable or does not match its recipe")
+    if not 0 < snapshot.disk_size <= 80:
+        raise ValueError("the snapshot must fit the smallest supported node's 80-GiB disk")
     with args.output.open("x", encoding="utf-8") as handle:
         json.dump(
             {

@@ -1833,17 +1833,18 @@ def _log_worker_pool_drain_decisions(
 
     for result in results:
         pool = str(result.pool)
-        last = logged_at.get(pool)
+        last = logged_at.get(result.capacity_owner_id)
         acted = result.action is not WorkerPoolDrainAction.None_
         due = last is None or (now - last).total_seconds() >= (
             WORKER_POOL_DRAIN_LOG_INTERVAL_SECONDS
         )
         if not acted and not due:
             continue
-        logged_at[pool] = now
+        logged_at[result.capacity_owner_id] = now
         LOGGER.info(
-            "worker-pool drain for %s: action=%s reason=%s desired=%d observed=%d%s",
+            "worker-pool drain for %s (%s): action=%s reason=%s desired=%d observed=%d%s",
             pool,
+            result.capacity_owner_id,
             result.action.value,
             result.reason or "-",
             result.desired_replicas,

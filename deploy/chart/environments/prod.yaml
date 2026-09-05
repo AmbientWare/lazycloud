@@ -7,7 +7,8 @@ runtime:
       "policy": {
         "default_region": "ash",
         "allowed_regions": ["ash"],
-        "allowed_instance_types": ["ccx33", "ccx43", "ccx53", "ccx63"],
+        "allowed_instance_types": ["ccx13", "ccx23", "ccx33", "ccx43", "ccx53", "ccx63"],
+        "root_volume_gib": 80,
         "warm_cpu_min": 1
       },
       "usd_per_currency_unit": "1",

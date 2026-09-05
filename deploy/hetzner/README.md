@@ -54,13 +54,16 @@ uv run python -m deploy.hetzner.catalog \
 ```
 
 The catalog command checks the manifest recipe against this checkout and the
-snapshot against the real project. It refuses an unfinished build server and
-never creates provider resources or writes credentials. Its output must be a
+snapshot against the real project, including its 80-GiB disk ceiling. It refuses
+an unfinished build server and never creates provider resources or writes
+credentials. Its output must be a
 new file. For additional locations, preserve existing image entries when
 assembling the deployment's image map.
 
-The build creates one paid CCX23 server and retains one paid snapshot. Record
-the exact server, primary IP, and temporary SSH key IDs during the build, then
+The build creates one paid CCX13 server and retains one paid snapshot. Baking
+on its 80-GiB disk lets every allowed server size boot the snapshot. A snapshot
+baked on a larger disk cannot boot a smaller server. Record the exact server,
+primary IP, and temporary SSH key IDs during the build, then
 verify their absence. The catalog check does not replace the IP and SSH-key
 cleanup audit. A failed build is not cleanup evidence. Never remove unrelated
 project resources or a shared image still used by a deployment.
@@ -75,13 +78,15 @@ not prove that a node can enroll or run a workload.
 
 ## Deployment defaults and differences
 
-`deploy/chart/environments/prod.yaml` declares Ashburn, `ash`, with CCX33,
-CCX43, CCX53, and CCX63. The cheapest compatible CPU shape holds an adaptive
-warm floor starting at one node. Larger shapes are acquired on demand. Other
-platform pools remain cold. Users request container CPU, memory, and GPUs;
+`deploy/chart/environments/prod.yaml` declares Ashburn, `ash`, with CCX13,
+CCX23, CCX33, CCX43, CCX53, and CCX63. The cheapest compatible CPU shape holds
+an adaptive warm floor starting at one node. Larger shapes are acquired on demand.
+Other platform pools remain cold. Users request container CPU, memory, and GPUs;
 they do not select a server size.
 
-The default shape range has enough included disk for the 200-GiB node policy.
+Hetzner's node policy requires at least 80 GiB of included disk. AWS keeps its
+200-GiB root-volume default. Publish the CCX13-built image before enabling the
+smaller shapes in an existing deployment. A 160-GiB snapshot cannot boot CCX13.
 The adapter supports dedicated x86 Cloud servers, not shared CPU, Robot,
 attached volumes, or GPUs. AWS supplies GPU capacity. Additional locations
 need their images and deployment policy before they can supply capacity.

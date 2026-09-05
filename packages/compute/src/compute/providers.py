@@ -211,7 +211,13 @@ class PooledCapacityProvider(Protocol):
         *,
         desired_machines: int,
         max_machines: int,
-    ) -> ProviderUnitSnapshot: ...
+    ) -> ProviderUnitSnapshot:
+        """Set desired capacity without choosing scale-in victims.
+
+        Only release_machine may retire an exact live instance. Observed
+        capacity may exceed desired capacity while the drain proceeds.
+        """
+        ...
 
     def release_machine(
         self,

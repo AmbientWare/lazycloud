@@ -79,6 +79,12 @@ must still work if that offer disappears or the catalog endpoint fails. A
 provider binding, its credentials, and necessary image metadata must remain
 available until its units have completed cleanup.
 
+Zero-capacity reconciliation observes the owned unit and applies zero without
+consulting the purchase catalog or creating a missing unit. Idle retirement
+does not depend on a replacement enrolling. The shared drain service preserves
+warm floors and provisioning reservations; compute also checks durable live
+work across every workspace using the unit before scaling it to zero.
+
 Adapters return the same typed snapshots, machine identities, billing clocks,
 and provisioning phases. They must not report a missing, never-created unit
 as a successfully deleted unit. Provider uncertainty remains observable and
@@ -123,6 +129,10 @@ provider resources, enrollment, scheduler state, and worker logs together.
 Verify results and usage charges. Confirm cold nodes and their IPs disappear
 after drain, while the intended warm baseline remains. Do not reset production
 data or delete unrelated resources during acceptance.
+
+Use a billing-enabled account for workload checks. An administrator token does
+not bypass billing admission. A billing refusal must finish the image build as
+failed with its reason and clean up dispatch credentials, not keep retrying.
 
 Host-image preparation has passed. Full live workload acceptance is outstanding.
 Check CI for the exact release commit. Local owner checks do not establish either.
