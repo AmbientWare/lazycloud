@@ -80,12 +80,19 @@ Agents and platform sidecars probe the gateway through WireGuard. When it is
 unreachable, they refresh the configured endpoint's DNS without removing the
 interface or replacing peer keys. This recovery is provider-neutral. Existing
 hosts need an updated host agent binary to receive it; shipping a new worker
-container image alone does not update that binary. Selecting a new host release
-updates future installations, not running agents. Upgrade existing hosts one at
-a time through the installer's `--install-only` mode and the agent restart
-command, preserving their service arguments and enrollment state. Cordon each
-worker and finish its active work before restarting its host agent, then verify
-private connectivity before uncordoning it.
+container image alone does not update that binary.
+
+For managed AWS pools, selecting a new host release changes the launch template.
+The pool controller adds a replacement, checks that it enrolled, drains the
+superseded host, and retires it after its work finishes. It then removes the
+temporary capacity. Let that controller complete; do not also run installer
+updates on hosts it is replacing.
+
+Self-hosted machines do not use that replacement path. Upgrade them one at a
+time through the installer's `--install-only` mode and the agent restart command,
+preserving their service arguments and enrollment state. Cordon each worker and
+finish its active work before restarting its host agent, then verify private
+connectivity before uncordoning it.
 
 The stack is usable when all three services are healthy. The platform sidecar's
 readiness proves it can reach the active gateway's health listener through
