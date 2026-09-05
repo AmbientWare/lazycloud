@@ -2419,10 +2419,9 @@ class GatewayControlService:
                             worker.capacity_owner_id
                         )
                     except SchedulerRepositoryError:
-                        if fleet_size > 1:
-                            return current, False
+                        return current, False
                     else:
-                        minimum_available = max(fleet_size - max_unavailable, 0)
+                        minimum_available = max(fleet_size - max_unavailable, 1)
                         if pool_state.available_workers - 1 < minimum_available:
                             return current, False
                 elif current.status is not SchedulerWorkerStatus.Draining:

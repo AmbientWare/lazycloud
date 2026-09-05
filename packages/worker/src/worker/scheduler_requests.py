@@ -697,11 +697,19 @@ class WorkerSchedulerRequestProcessor:
     ) -> WorkerSchedulerRequestResult:
         # A native build has no OCI registration. Publish ownership before
         # acknowledging the request so a failed write can still be redelivered.
-        self.containers.update_container_status(
+        ownership = self.containers.update_container_status(
             request.container_id,
             SchedulerContainerStatus.Running,
             ttl_seconds=DEFAULT_CONTAINER_STATE_TTL_SECONDS,
         )
+        if ownership.next_status is not SchedulerContainerStatus.Running:
+            return self._drop_request(
+                request,
+                plan_delivered_container_request(
+                    state_missing=False,
+                    state_status=ownership.next_status,
+                ),
+            )
         if self.lifecycle is not None:
             self.lifecycle.register_container(
                 image_build_request_context(request, worker_gpu_type=self.worker_gpu_type)
