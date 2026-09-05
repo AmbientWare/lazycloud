@@ -15,7 +15,7 @@ from uuid import UUID
 
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
 from database.repositories.execution import TaskRepository
-from database.repositories.images import ImageArchiveRepository
+from database.repositories.images import ImageArchiveRepository, ImageBuildRepository
 from database.repositories.orchestration import (
     AutoscalingTargetRepository,
     ContainerPageCursor,
@@ -39,6 +39,7 @@ from shared.deployments import StubKind
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.events import EventLevel
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
+from shared.image_building.records import BuildStatus
 from shared.scheduling import (
     SchedulerContainerCancellationResult,
     SchedulerContainerSubmitResult,
@@ -226,6 +227,20 @@ class ContainerService:
         """
 
         with self.context.database.session() as session:
+            build = ImageBuildRepository(session).lock_build(
+                container_id, workspace_id=workspace_id
+            )
+            if build.status not in {BuildStatus.Pending, BuildStatus.Running}:
+                raise ConflictError("image build is no longer active")
+            if build.image_id != image_id:
+                raise ConflictError("image build container image does not match")
+            repository = ContainerRepository(session)
+            repository.lock_reservation(container_id)
+            existing = repository.get_across_workspaces(container_id)
+            if existing is not None:
+                if existing.workspace_id != workspace_id or existing.image != image_id:
+                    raise ConflictError("image build container identity does not match")
+                return existing
             record = self.reserve_pending(
                 session,
                 PendingContainerReservation(
