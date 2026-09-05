@@ -1815,15 +1815,10 @@ class ComputeService:
                 unit_ref=capacity_owner_id,
             )
             before_mutation(unit)
-            if desired_machines == 0:
-                if (
-                    unit.min_free_cpu_millicores
-                    or unit.min_free_memory_mib
-                    or unit.min_free_gpu_count
-                ):
-                    raise ConflictError("compute pool still requires free capacity")
-                if self._machines_holding_active_work(session, pool_id=unit.id):
-                    raise ConflictError("compute pool still has active workloads")
+            if desired_machines == 0 and self._machines_holding_active_work(
+                session, pool_id=unit.id
+            ):
+                raise ConflictError("compute pool still has active workloads")
             if desired_machines > unit.desired_machines:
                 offer = self._available_unit_offer(provider, unit)
                 if not provider.policy.accepts(offer):
