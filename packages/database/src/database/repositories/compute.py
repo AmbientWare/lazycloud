@@ -347,6 +347,12 @@ def _locked_claimed_row[RowT: IdPayloadTable, RecordT: _ClaimedRecord](
     return row
 
 
+def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
+    return ComputeUnitRecord.model_validate(
+        {**row.payload, "worker_rollout_surge": row.worker_rollout_surge}
+    )
+
+
 @dataclass(slots=True)
 class ComputeUnitRepository:
     session: Session
@@ -406,7 +412,7 @@ class ComputeUnitRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).one_or_none()
-        return ComputeUnitRecord.model_validate(row.payload) if row is not None else None
+        return _compute_unit_record(row) if row is not None else None
 
     def get_by_capacity_owner_id(
         self,
@@ -427,7 +433,7 @@ class ComputeUnitRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).one_or_none()
-        return ComputeUnitRecord.model_validate(row.payload) if row is not None else None
+        return _compute_unit_record(row) if row is not None else None
 
     def delete_for_workspace_deletion(self, pool_id: str, *, workspace_id: str) -> bool:
         workspace = WorkspaceRepository(self.session).lock_for_deletion(workspace_id)
@@ -448,7 +454,7 @@ class ComputeUnitRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
-        return ComputeUnitRecord.model_validate(row.payload) if row is not None else None
+        return _compute_unit_record(row) if row is not None else None
 
     def get_by_identity(
         self,
@@ -478,7 +484,7 @@ class ComputeUnitRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
-        return ComputeUnitRecord.model_validate(row.payload) if row is not None else None
+        return _compute_unit_record(row) if row is not None else None
 
     def list_for_machine_pool(
         self,
@@ -494,9 +500,7 @@ class ComputeUnitRepository:
             )
             .order_by(ComputeUnitTable.priority.desc(), ComputeUnitTable.id)
         )
-        return [
-            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_for_workspace(self, workspace_id: str) -> list[ComputeUnitRecord]:
         statement = (
@@ -504,9 +508,7 @@ class ComputeUnitRepository:
             .where(ComputeUnitTable.workspace_id == workspace_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
-        return [
-            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_across_workspaces(self) -> list[ComputeUnitRecord]:
         """System listing every unit, for scheduler controller construction."""
@@ -514,9 +516,7 @@ class ComputeUnitRepository:
             ComputeUnitTable.workspace_id,
             ComputeUnitTable.id,
         )
-        return [
-            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_internal(self, *, workspace_id: str) -> list[ComputeUnitRecord]:
         return self._list_internal(workspace_id=workspace_id)
@@ -532,9 +532,7 @@ class ComputeUnitRepository:
         if workspace_id is not None:
             statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
         statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id)
-        return [
-            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_for_provider_connection(self, connection_id: str) -> list[ComputeUnitRecord]:
         statement = (
@@ -542,9 +540,7 @@ class ComputeUnitRepository:
             .where(ComputeUnitTable.provider_connection_id == connection_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
-        return [
-            ComputeUnitRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def desired_capacity_for_provider_connection(
         self,
@@ -578,6 +574,7 @@ class ComputeUnitRepository:
         provider_state: ComputeUnitProviderState,
         replacement_machine_id: str | None = None,
         replacement_template_version: str | None = None,
+        worker_rollout_surge: bool | None = None,
     ) -> ComputeUnitRecord | None:
         current = self.get(pool_id, for_update=True)
         if current is None or current.generation != expected_generation:
@@ -601,9 +598,32 @@ class ComputeUnitRepository:
                     if replacement_template_version is None
                     else replacement_template_version
                 ),
+                "worker_rollout_surge": (
+                    current.worker_rollout_surge
+                    if worker_rollout_surge is None
+                    else worker_rollout_surge
+                ),
             }
         )
         return self.upsert(updated)
+
+    def set_worker_rollout_surge(
+        self,
+        pool_id: str,
+        *,
+        expected_generation: int,
+        enabled: bool,
+    ) -> ComputeUnitRecord | None:
+        current = self.get(pool_id, for_update=True)
+        if current is None or current.generation != expected_generation:
+            return None
+        if current.worker_rollout_surge == enabled:
+            return current
+        return self.upsert(
+            current.model_copy(
+                update={"worker_rollout_surge": enabled, "generation": current.generation + 1}
+            )
+        )
 
     def apply_provider_state(
         self,
@@ -631,6 +651,10 @@ class ComputeUnitRepository:
         row = self.session.scalars(
             select(ComputeUnitTable).where(ComputeUnitTable.id == record.id).with_for_update()
         ).one()
+        row.worker_rollout_surge = record.worker_rollout_surge
+        row.payload = {
+            key: value for key, value in row.payload.items() if key != "worker_rollout_surge"
+        }
         row.provider_ref = record.provider_ref
         row.capacity_owner_id = record.capacity_owner_id
         row.capacity_owner_kind = record.capacity_owner_kind.value
