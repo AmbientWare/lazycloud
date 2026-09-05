@@ -18,6 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from threading import Lock
 from typing import Protocol
 
 from foundation.process import ProcessResult, run_command_with_timeout
@@ -41,11 +42,12 @@ QUOTA_CAPABLE_FILESYSTEMS = frozenset({"xfs"})
 # XFS accounts project quotas only when mounted with one of these. A root
 # filesystem that is already xfs but carries `noquota` is not usable.
 PROJECT_QUOTA_MOUNT_OPTIONS = frozenset({"prjquota", "pquota"})
-# Provisioned once at worker start, not per container: a loopback image keeps the
+# Provisioned once per worker, not per container: a loopback image keeps the
 # quota-capable filesystem provider-neutral, so managed hosts, connected-cloud
 # hosts, and agent-enrolled machines all get the same enforcement without any
 # launch-spec or AMI difference between them.
 CONTAINER_ROOTFS_BACKING_IMAGE_NAME = "container-rootfs.xfs"
+# Maximum size; smaller hosts retain their free-space reserve outside this image.
 DEFAULT_CONTAINER_ROOTFS_BACKING_BYTES = 100 * 1024**3
 # No `loop` option: the image is attached to a loop device explicitly, so mount
 # is handed a block device and must not try to wrap it in another one.
@@ -348,6 +350,7 @@ class ContainerRootfsOverlayManager:
     backing_image_bytes: int = DEFAULT_CONTAINER_ROOTFS_BACKING_BYTES
     backing_image_path: Path | None = None
     _root_prepared: bool = field(default=False, init=False, repr=False)
+    _prepare_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _quota_mount: FilesystemMount = field(default_factory=FilesystemMount, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -394,7 +397,8 @@ class ContainerRootfsOverlayManager:
                 reason=f"image directory is not present: {plan.lower_dir}",
             )
 
-        self._prepare_scratch_root()
+        with self._prepare_lock:
+            self._prepare_scratch_root()
 
         merged = Path(plan.merged_dir)
         if self.system.mount_checker(plan.merged_dir):
@@ -547,15 +551,20 @@ class ContainerRootfsOverlayManager:
         image.parent.mkdir(parents=True, exist_ok=True)
         if not image.exists():
             free = shutil.disk_usage(image.parent).free
-            if free < self.backing_image_bytes:
+            backing_bytes = min(self.backing_image_bytes, free - self.minimum_free_bytes)
+            minimum_backing_bytes = max(
+                MINIMUM_CONTAINER_ROOTFS_BACKING_BYTES, self.minimum_free_bytes * 2
+            )
+            if backing_bytes < minimum_backing_bytes:
                 msg = (
                     "not enough free space to provision container rootfs storage: "
-                    f"free={free} required={self.backing_image_bytes}"
+                    f"free={free} required={minimum_backing_bytes + self.minimum_free_bytes}"
                 )
                 raise ContainerRootfsError(msg)
-            # Sparse: the image reserves an address space, not the bytes.
+            # Leave room outside the writable layers for the worker and image cache.
+            # The per-container quota remains a ceiling, not reserved disk capacity.
             with image.open("wb") as handle:
-                handle.truncate(self.backing_image_bytes)
+                handle.truncate(backing_bytes)
             result = self.system.run_command(
                 self.mount_timeout_seconds,
                 ["mkfs.xfs", "-q", str(image)],
@@ -646,6 +655,12 @@ class ContainerRootfsOverlayManager:
         if self.minimum_free_bytes <= 0:
             return ""
         free = shutil.disk_usage(self.scratch_root).free
+        image = (
+            self.backing_image_path
+            or self.scratch_root.parent / CONTAINER_ROOTFS_BACKING_IMAGE_NAME
+        )
+        if image.exists():
+            free = min(free, shutil.disk_usage(image.parent).free)
         if free >= self.minimum_free_bytes:
             return ""
         # The per-container cap is oversubscribed on purpose, so this floor is

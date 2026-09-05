@@ -12,6 +12,8 @@ from compute.provider_nodes import (
     ProviderNodeIdentityVerifier,
     VerifiedProviderNodeIdentity,
 )
+from coordination.redis_client import RedisClient
+from coordination.request_cooldown import RedisRequestCooldown
 from provider_aws import (
     AwsEc2ProviderNodeIdentityProofProvider,
     AwsProviderNodeIdentityError,
@@ -308,12 +310,18 @@ class ProviderNodeIdentityRegistry:
 
 
 def configured_provider_node_identity_registry(
-    *, aws: AwsProviderNodeIdentityAdapter, platform_settings: PlatformCapacitySettings
+    *,
+    aws: AwsProviderNodeIdentityAdapter,
+    platform_settings: PlatformCapacitySettings,
+    redis: RedisClient,
 ) -> ProviderNodeIdentityRegistry:
     return ProviderNodeIdentityRegistry(
         aws=aws,
         hetzner_clients={
-            binding.ref: HetznerClient(platform_settings.hetzner_tokens[binding.ref])
+            binding.ref: HetznerClient(
+                platform_settings.hetzner_tokens[binding.ref],
+                cooldown=RedisRequestCooldown(redis, binding.ref),
+            )
             for binding in platform_settings.hetzner
         },
     )

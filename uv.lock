@@ -1614,6 +1614,7 @@ source = { editable = "packages/provider-clients" }
 dependencies = [
     { name = "agent" },
     { name = "compute" },
+    { name = "coordination" },
     { name = "images" },
     { name = "lazycloud-shared" },
     { name = "networking" },
@@ -1627,6 +1628,7 @@ dependencies = [
 requires-dist = [
     { name = "agent", editable = "packages/agent" },
     { name = "compute", editable = "packages/compute" },
+    { name = "coordination", editable = "packages/coordination" },
     { name = "images", editable = "packages/images" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "networking", editable = "packages/networking" },
@@ -1676,6 +1678,7 @@ version = "0.1.0"
 source = { editable = "packages/providers/hetzner" }
 dependencies = [
     { name = "compute" },
+    { name = "coordination" },
     { name = "httpx" },
     { name = "lazycloud-shared" },
 ]
@@ -1683,6 +1686,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "compute", editable = "packages/compute" },
+    { name = "coordination", editable = "packages/coordination" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "lazycloud-shared", editable = "packages/shared" },
 ]

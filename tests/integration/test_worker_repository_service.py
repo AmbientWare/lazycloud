@@ -121,6 +121,7 @@ from worker.checkpoints import (
     WorkerCheckpointStatus,
 )
 from worker.events import (
+    ContainerExecutionPhase,
     ContainerLifecyclePayload,
 )
 from worker.image_lifecycle import ImageRegistryStore
@@ -2064,6 +2065,49 @@ def test_worker_repository_lifecycle_failure_marks_container_and_task_failed(
     assert updated_task.kwargs["container_id"] == container.id
     assert updated_task.error == (
         "container startup failed during load-image: image archive missing"
+    )
+
+
+def test_worker_exit_retains_pooled_startup_failure_when_detail_arrives_after_exit(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    service = _worker_repository_service(isolated_services, real_redis_actors.client())
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        container = ContainerRepository(session).records.create(
+            {
+                "name": "pooled-startup-failure",
+                "image": FUNCTION_IMAGE,
+                "command": ["python", "-m", "runner.function"],
+                "workspace_id": workspace_id,
+                "runtime_worker_id": "worker-1",
+                "status": ContainerStatus.Pending.value,
+            },
+            workspace_id=workspace_id,
+            name="pooled-startup-failure",
+            status=ContainerStatus.Pending.value,
+        )
+    principal = WorkerRepositoryPrincipal(worker_id="worker-1")
+    exit_report = SetContainerExitCodeRequest(container_id=container.id, exit_code=1)
+    service.set_container_exit_code(exit_report, principal=principal)
+    service.set_container_exit_code(
+        exit_report.model_copy(
+            update={
+                "failed_phase": ContainerExecutionPhase.PrepareRootfs,
+                "failure_detail": "not enough free space",
+            }
+        ),
+        principal=principal,
+    )
+    service.set_container_exit_code(exit_report, principal=principal)
+    with isolated_services.context.database.session() as session:
+        saved = ContainerRepository(session).get_across_workspaces(container.id)
+    assert saved is not None
+    assert saved.task_id is None
+    assert saved.status is ContainerStatus.Failed
+    assert saved.startup_error == (
+        "container startup failed during prepare-rootfs: not enough free space"
     )
 
 

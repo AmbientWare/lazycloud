@@ -842,6 +842,7 @@ class ApiServices(ApiServiceCore):
                     platform_capacity_config,
                     launch_credentials=provider_node_launches,
                     capacity_workspace=platform_capacity_workspace,
+                    redis=redis,
                 ),
                 gateway_origin=gateway_config.public_http_url,
                 presigned_origin=object_store_config.presigned_endpoint_url or "",
@@ -1312,6 +1313,7 @@ def _compose_api_services(
                     replay_guard=RedisProviderNodeIdentityReplayGuard(redis),
                 ),
                 platform_settings=core.platform_capacity_settings,
+                redis=redis,
             ),
         )
         if core.compute.provider_resolver is not None

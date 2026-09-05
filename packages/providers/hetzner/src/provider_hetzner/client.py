@@ -1,19 +1,49 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from email.utils import parsedate_to_datetime
 
 import httpx
+from coordination.request_cooldown import RedisRequestCooldown
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr
 
 
 class HetznerError(RuntimeError):
-    def __init__(self, code: str, status_code: int) -> None:
-        super().__init__(f"Hetzner request failed: {code} ({status_code})")
+    def __init__(self, code: str, status_code: int, *, retry_at: datetime | None = None) -> None:
+        message = f"Hetzner request failed: {code} ({status_code})"
+        if retry_at is not None:
+            message += f"; retry at {retry_at.isoformat()}"
+        super().__init__(message)
         self.code = code
         self.status_code = status_code
+        self.retry_at = retry_at
+
+
+def _rate_limit_retry_at(headers: httpx.Headers) -> datetime:
+    now = datetime.now(UTC)
+    deadlines: list[datetime] = []
+    retry_after = headers.get("Retry-After")
+    if retry_after is not None:
+        try:
+            deadlines.append(now + timedelta(seconds=max(float(retry_after), 0)))
+        except (ValueError, OverflowError):
+            try:
+                parsed = parsedate_to_datetime(retry_after)
+                if parsed.tzinfo is not None:
+                    deadlines.append(parsed.astimezone(UTC))
+            except (ValueError, TypeError, OverflowError):
+                pass
+    reset = headers.get("RateLimit-Reset")
+    if reset is not None:
+        with suppress(ValueError, OverflowError, OSError):
+            deadlines.append(datetime.fromtimestamp(float(reset), tz=UTC))
+    return max(
+        (deadline for deadline in deadlines if deadline > now), default=now + timedelta(seconds=60)
+    )
 
 
 class ApiModel(BaseModel):
@@ -174,6 +204,7 @@ class ErrorResponse(ApiModel):
 @dataclass(frozen=True, slots=True)
 class HetznerClient:
     token: SecretStr
+    cooldown: RedisRequestCooldown | None = None
 
     def _request(
         self,
@@ -183,6 +214,10 @@ class HetznerClient:
         params: Mapping[str, str | int] | None = None,
         body: dict[str, JsonValue] | None = None,
     ) -> bytes:
+        if self.cooldown is not None:
+            retry_at = self.cooldown.blocked_until()
+            if retry_at is not None:
+                raise HetznerError("rate_limit_cooldown", 429, retry_at=retry_at)
         try:
             with httpx.Client(
                 base_url="https://api.hetzner.cloud/v1",
@@ -195,11 +230,16 @@ class HetznerClient:
         except httpx.HTTPError as exc:
             raise HetznerError("transport_unavailable", 0) from exc
         if not response.is_success:
+            retry_at = None
+            if response.status_code == 429:
+                retry_at = _rate_limit_retry_at(response.headers)
+                if self.cooldown is not None:
+                    retry_at = self.cooldown.defer_until(retry_at)
             try:
                 code = ErrorResponse.model_validate_json(response.content).error.code
             except ValueError:
                 code = "invalid_response"
-            raise HetznerError(code, response.status_code)
+            raise HetznerError(code, response.status_code, retry_at=retry_at)
         return response.content
 
     def server_types(self) -> Iterator[ServerType]:
@@ -278,10 +318,12 @@ class HetznerClient:
             yield from response.primary_ips
             page = response.meta.pagination.next_page
 
-    def tag_primary_ip(self, ip_id: int, labels: dict[str, str]) -> None:
-        address = PrimaryIPResponse.model_validate_json(
+    def primary_ip(self, ip_id: int) -> PrimaryIP:
+        return PrimaryIPResponse.model_validate_json(
             self._request("GET", f"/primary_ips/{ip_id}")
         ).primary_ip
+
+    def tag_primary_ip(self, address: PrimaryIP, labels: dict[str, str]) -> None:
         if address.assignee_id is None or str(address.assignee_id) != labels["lazycloud-server"]:
             raise ValueError("Hetzner primary IP is not attached to the expected server")
         merged = {**address.labels, **labels}
@@ -289,7 +331,7 @@ class HetznerClient:
             return
         self._request(
             "PUT",
-            f"/primary_ips/{ip_id}",
+            f"/primary_ips/{address.id}",
             body={"auto_delete": True, "labels": dict(merged)},
         )
 

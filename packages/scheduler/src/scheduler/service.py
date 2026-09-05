@@ -459,6 +459,8 @@ class Scheduler:
     reconcile_agent_pools_enabled: bool = True
     managed_compute_reconcile_interval_seconds: float = MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
     last_managed_compute_reconcile_at: datetime | None = field(default=None, init=False)
+    worker_pool_drain_interval_seconds: float = 30.0
+    last_worker_pool_drain_at: datetime | None = field(default=None, init=False)
     custom_domain_reconcile_interval_seconds: float = 60.0
     last_custom_domain_reconcile_at: datetime | None = field(default=None, init=False)
     token_prune_interval_seconds: float = 3600.0
@@ -1607,8 +1609,17 @@ class Scheduler:
         now: datetime | None,
         limit: int,
     ) -> list[WorkerPoolDrainResult]:
+        current_time = now or utc_now()
+        # Provider inventory is needed for retirement, not for each dispatch tick.
+        if (
+            self.last_worker_pool_drain_at is not None
+            and (current_time - self.last_worker_pool_drain_at).total_seconds()
+            < self.worker_pool_drain_interval_seconds
+        ):
+            return []
+        self.last_worker_pool_drain_at = current_time
         try:
-            return self.drain_worker_pools(now=now, limit=limit)
+            return self.drain_worker_pools(now=current_time, limit=limit)
         except Exception:
             LOGGER.exception("scheduler worker-pool drain failed")
             return []
