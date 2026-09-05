@@ -83,6 +83,7 @@ class Infrastructure(Contract):
 _VALUES = TypeAdapter(dict[str, JsonValue])
 _STRINGS = TypeAdapter(dict[str, str])
 _TAG = TypeAdapter[str](Annotated[str, Field(pattern=r"^[a-f0-9]{40}$")])
+_DIGEST = TypeAdapter[str](Annotated[str, Field(pattern=r"^sha256:[a-f0-9]{64}$")])
 _RELEASE = TypeAdapter[str](
     Annotated[str, Field(pattern=r"^https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+/manifest\.json$")]
 )
@@ -251,6 +252,9 @@ def main() -> None:
     parser.add_argument("--environment", type=Path, required=True)
     parser.add_argument("--deployment", required=True)
     parser.add_argument("--tag", required=True)
+    artifact = parser.add_mutually_exclusive_group(required=True)
+    artifact.add_argument("--preflight", action="store_true")
+    artifact.add_argument("--network-digest")
     parser.add_argument("--release-manifest-url", default="")
     parser.add_argument("--worker-manifest-url", default="")
     parser.add_argument("--host-manifest-url", default="")
@@ -296,6 +300,10 @@ def main() -> None:
                 values,
                 ceiling=infrastructure.database_max_connections,
             )
+        if not args.preflight:
+            image = _mapping(values, "image")
+            image["networkDigest"] = _DIGEST.validate_python(args.network_digest)
+            values["image"] = image
         args.output.write_text(yaml.safe_dump(values, sort_keys=True))
     except ValidationError as error:
         locations = [".".join(map(str, item["loc"])) for item in error.errors(include_input=False)]
