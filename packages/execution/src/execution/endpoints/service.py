@@ -14,7 +14,6 @@ from database.records.endpoint_dispatch import (
     EndpointDispatchStateRecord,
 )
 from database.repositories.apps import StubRepository
-from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.endpoint_dispatch import EndpointDispatchRepository
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
@@ -854,7 +853,6 @@ class EndpointControlService:
                 stub.id,
                 container_loads=loads,
                 max_inflight_per_container=max_inflight_per_container,
-                excluded_container_ids=await repository.closed_containers(stub.id),
             )
             if target is None:
                 if not wait.warmup_attempted:
@@ -863,10 +861,11 @@ class EndpointControlService:
                 await asyncio.sleep(wait.poll_delay())
                 continue
 
-            record = await repository.claim(task, container_id=target.container_id)
-            if record is None:
-                await asyncio.sleep(wait.poll_delay())
-                continue
+            record = await repository.transition(
+                task,
+                EndpointDispatchStatus.Inflight,
+                container_id=target.container_id,
+            )
             await self._emit_dispatch_lifecycle(stub, record)
             # Bind the task to the container that will serve it, so its record
             # carries the same attribution every other workload kind has.
@@ -1204,27 +1203,6 @@ class EndpointDispatchStateRepository:
 @dataclass(slots=True)
 class AsyncEndpointDispatchStateRepository:
     database: AsyncDatabaseClient
-
-    async def closed_containers(self, stub_id: str) -> set[str]:
-        return await self.database.run_transaction(
-            lambda session: ContainerRolloutRepository(session).closed_for_stub(stub_id)
-        )
-
-    async def claim(self, task: Task, *, container_id: str) -> EndpointDispatchRecord | None:
-        def claim_in_session(session: DatabaseSession) -> EndpointDispatchRecord | None:
-            if not ContainerRolloutRepository(session).accepting_work(
-                container_id, stub_id=task.stub_id or ""
-            ):
-                return None
-            return _transition_dispatch_in_session(
-                session,
-                task,
-                EndpointDispatchStatus.Inflight,
-                container_id=container_id,
-                error=None,
-            )
-
-        return await self.database.run_transaction(claim_in_session)
 
     async def transition(
         self,

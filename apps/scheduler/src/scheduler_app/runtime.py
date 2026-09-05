@@ -14,7 +14,6 @@ from execution.pods.service import PodControlService
 from execution.services import ExecutionServices
 from identity.token_invalidation import AuthTokenInvalidation, configure_token_invalidation
 from images.settings import ImageBuildContainerSettings
-from images.submission import ImageBuildSubmissionService
 from scheduler.agent_pool import SchedulerAgentPoolService
 from scheduler.autoscaling import (
     AutoscalingDriver,
@@ -63,7 +62,6 @@ from scheduler.state import (
     RedisWorkerPoolStateRepository,
 )
 from storage.retention_settings import RetentionSettings
-from worker_repository.image_build_dispatch import DurableImageBuildDispatch
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 from scheduler_app.capacity_interruptions import DatabaseCapacityInterruptionSource
@@ -219,15 +217,6 @@ class SchedulerRuntime:
             services=scheduler_services,
             managed_compute_reconcile_interval_seconds=(managed_compute_reconcile_interval_seconds),
             workloads=SchedulerWorkloadControls(
-                image_builds=ImageBuildSubmissionService(
-                    scheduler_services.context.database,
-                    DurableImageBuildDispatch(
-                        scheduler_services.context.database,
-                        dispatch_requests,
-                        execution_services.containers,
-                        image_build_container_settings,
-                    ),
-                ),
                 containers=dispatch_requests,
                 dispatch_wake=RedisWakeSignal(redis_client, CONTAINER_DISPATCH_WAKE_SCOPE),
                 autoscaling_targets=AutoscalingTargetService(scheduler_services.context),

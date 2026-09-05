@@ -17,6 +17,7 @@ from gateway.service import GatewayControlService
 from gateway.settings import GatewaySettings
 from identity.token_invalidation import AuthTokenInvalidation, configure_token_invalidation
 from images.control import ImageControlService
+from images.execution import ImageBuildExecutorKind
 from images.settings import (
     ImageBuildContainerSettings,
     ImageBuildExecutionSettings,
@@ -238,8 +239,10 @@ def _production_api_services() -> ApiServices:
         object_store_client = S3ObjectStoreClient.from_settings(object_store_settings)
         rollback.callback(object_store_client.close)
         resolved_image_archive_settings = image_archive_settings.resolve(object_store_settings)
-        image_archive_store = S3ObjectStoreClient.from_settings(
-            resolved_image_archive_settings.storage
+        image_archive_store = (
+            S3ObjectStoreClient.from_settings(resolved_image_archive_settings.storage)
+            if image_build_execution_settings.executor is ImageBuildExecutorKind.BuildContainer
+            else None
         )
         if image_archive_store is not None:
             rollback.callback(image_archive_store.close)

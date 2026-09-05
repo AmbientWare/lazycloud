@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import tempfile
 import time
 from collections.abc import Generator, Iterator
@@ -8,9 +9,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from shared.errors import InvalidInputError
+from pydantic import JsonValue
+from shared.errors import InvalidInputError, NotFoundError
 from shared.http.images import (
-    BuildImageEvent,
     BuildImageRequest,
     BuildImageResponse,
     BuildStep,
@@ -19,7 +20,8 @@ from shared.http.images import (
 )
 from shared.image_building.authoring import ImageBuildStep, ImageBuildStepKind, ImageSpec
 from shared.image_building.credentials import image_secret_names
-from shared.image_building.records import ImageBuildRecord, ImageRecord
+from shared.image_building.records import ImageBuildPhase, ImageBuildRecord, ImageRecord
+from shared.managed_runtime_integrity import managed_package_source_digest
 
 from images.building import (
     BaseImageDigestCache,
@@ -31,9 +33,11 @@ from images.building import (
     ImageSourceReference,
     build_image_plan,
     image_build_source_plan,
+    image_build_stream_event_key,
     marshal_registry_credentials,
     pin_dockerfile_base_images,
     plan_image_build_failure_event,
+    plan_image_build_log_event,
     plan_image_build_registry_credentials,
     plan_image_build_reused_stream,
     registry_credentials_for_image,
@@ -41,17 +45,15 @@ from images.building import (
 )
 from images.context import ImageSecretReader
 from images.metadata import CURRENT_IMAGE_CLIP_VERSION
+from images.service import ImageBuildExecutionController
 
 IMAGE_BUILD_STREAM_POLL_SECONDS = 0.25
+IMAGE_BUILD_RECORD_WAIT_TIMEOUT_SECONDS = 30.0
 MAX_IMAGE_BUILD_CONTEXT_ARCHIVE_BYTES = 256 * 1024 * 1024
+MANAGED_PACKAGE_BUILD_CONTRACT_VERSION = 3
 
 
 class ImageBuildWorkflow(Protocol):
-    def get(self, build_id: str, *, workspace_id: str | None = None) -> ImageBuildRecord: ...
-    def find_by_request_id(
-        self, request_id: str, *, workspace_id: str
-    ) -> ImageBuildRecord | None: ...
-
     def get_image_metadata(
         self,
         image_id: str,
@@ -79,7 +81,7 @@ class ImageBuildWorkflow(Protocol):
         self, fingerprint: str, *, workspace_id: str | None = None
     ) -> ImageBuildRecord | None: ...
 
-    def build(
+    def start_background_execution(
         self,
         image: ImageSpec,
         *,
@@ -88,11 +90,10 @@ class ImageBuildWorkflow(Protocol):
         credential_plan: ImageBuildCredentialPlan | None = None,
         registry_credential_payload: str | None = None,
         build_args: dict[str, str] | None = None,
-        request_id: str | None = None,
-    ) -> ImageBuildRecord: ...
+    ) -> ImageBuildExecutionController: ...
 
     def stream_events(
-        self, build_id: str, *, workspace_id: str | None = None, after: int = 0
+        self, build_id: str, *, workspace_id: str | None = None
     ) -> list[ImageBuildStreamEventPlan]: ...
 
     def persist_image_metadata(
@@ -108,6 +109,7 @@ class ImageBuildWorkflow(Protocol):
         build_id: str,
         *,
         workspace_id: str | None = None,
+        container_connected: bool = False,
         reason: str = "Build was aborted.",
     ) -> ImageBuildRecord: ...
 
@@ -219,29 +221,12 @@ class ImageControlService:
                 reason=str(exc),
             )
 
-    def follow_build(
-        self, build_id: str, *, workspace_id: str, after: int = 0
-    ) -> Iterator[BuildImageEvent]:
-        self.services.images.get(build_id, workspace_id=workspace_id)
-        return stream_build_events(
-            self.services.images, build_id, workspace_id=workspace_id, after=after
-        )
-
     def build_image(
         self,
         request: BuildImageRequest,
         *,
         workspace_id: str,
     ) -> Generator[BuildImageResponse]:
-        prior = self.services.images.find_by_request_id(
-            str(request.request_id), workspace_id=workspace_id
-        )
-        if prior is not None:
-            for event in stream_build_events(
-                self.services.images, prior.id, workspace_id=workspace_id
-            ):
-                yield event.response
-            return
         try:
             _validate_secret_references(request.secrets)
             context_digest = self._resolve_build_context(
@@ -303,7 +288,6 @@ class ImageControlService:
         yield from _stream_image_execution(
             self.services,
             spec,
-            request_id=str(request.request_id),
             workspace_id=workspace_id,
             credential_plan=credential_plan,
             registry_credential_payload=_build_source_credential_payload(
@@ -370,7 +354,7 @@ class ImageControlService:
         if claimed_digest and not object_id:
             raise InvalidInputError("build context digest requires an uploaded context object")
         if not object_id:
-            return None
+            return _managed_context_digest(None)
         if self.build_context_reader is None:
             raise RuntimeError("build context object reader is not configured")
         record = self.build_context_reader.get_by_id_for_workspace(
@@ -402,7 +386,7 @@ class ImageControlService:
             actual_digest = digest.hexdigest()
         if claimed_digest and claimed_digest != actual_digest:
             raise InvalidInputError("build context digest does not match uploaded object content")
-        return actual_digest
+        return _managed_context_digest(actual_digest)
 
     def _resolve_image_spec(
         self,
@@ -524,6 +508,19 @@ def _env_mapping(values: list[str]) -> dict[str, str]:
     return env
 
 
+def _managed_context_digest(context_digest: str | None) -> str | None:
+    package_digest = managed_package_source_digest()
+    if not package_digest:
+        return context_digest
+    payload: dict[str, JsonValue] = {
+        "build_context": context_digest or "",
+        "managed_package_build_contract_version": MANAGED_PACKAGE_BUILD_CONTRACT_VERSION,
+        "managed_packages": package_digest,
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
 def _source_image_for_spec(spec: ImageSpec) -> str:
     source = image_build_source_plan(spec)
     if source.source_image:
@@ -558,63 +555,166 @@ def _stream_image_execution(
     spec: ImageSpec,
     *,
     workspace_id: str,
-    request_id: str,
     credential_plan: ImageBuildCredentialPlan,
     registry_credential_payload: str | None,
     build_args: dict[str, str],
     python_version: str,
     image_id: str,
 ) -> Iterator[BuildImageResponse]:
-    record = services.images.build(
+    plan = build_image_plan(spec)
+    controller = services.images.start_background_execution(
         spec,
         workspace_id=workspace_id,
-        request_id=request_id,
         credential_plan=credential_plan,
         registry_credential_payload=registry_credential_payload,
         build_args=build_args,
     )
-    yield BuildImageResponse(
-        build_id=record.id,
-        image_id=record.image_id or "",
-        python_version=record.image.python_version,
-        status=record.status,
-        phase=record.phase,
-    )
-    for event in stream_build_events(services.images, record.id, workspace_id=workspace_id):
-        yield event.response
+    seen: set[tuple[str, str, str, str, str, bool, str]] = set()
+    build_id = ""
+    record_deadline = time.monotonic() + IMAGE_BUILD_RECORD_WAIT_TIMEOUT_SECONDS
+    next_wait_message = time.monotonic() + max(IMAGE_BUILD_STREAM_POLL_SECONDS * 4, 1.0)
+
+    try:
+        while controller.is_alive:
+            build_id = build_id or _stream_build_id(
+                services,
+                plan.cache_key,
+                controller,
+                workspace_id=workspace_id,
+            )
+            if build_id:
+                yield from _new_build_responses(
+                    services,
+                    build_id,
+                    seen,
+                    workspace_id=workspace_id,
+                )
+            elif time.monotonic() >= next_wait_message:
+                next_wait_message = time.monotonic() + max(IMAGE_BUILD_STREAM_POLL_SECONDS * 4, 1.0)
+                yield _response_from_stream_plan(
+                    plan_image_build_log_event(
+                        "waiting for image build record",
+                        image_id=image_id,
+                        python_version=python_version,
+                    )
+                )
+            elif time.monotonic() >= record_deadline:
+                yield _response_from_stream_plan(
+                    plan_image_build_failure_event(
+                        "image build did not create a build record before streaming timed out",
+                        image_id=image_id,
+                        python_version=python_version,
+                    )
+                )
+                break
+            time.sleep(IMAGE_BUILD_STREAM_POLL_SECONDS)
+
+        controller.join(timeout=0)
+        if controller.error is not None:
+            yield _failed_build_response(
+                controller.error,
+                image_id=image_id,
+                python_version=python_version,
+            )
+            return
+
+        execution = controller.execution
+        record = execution.record if execution is not None else None
+        if record is not None and record.phase is ImageBuildPhase.Reused:
+            yield from _responses_from_stream_plans(
+                plan_image_build_reused_stream(
+                    image_id=record.image_id or "",
+                    build_id=record.id,
+                    python_version=record.image.python_version,
+                )
+            )
+            return
+        if execution is not None:
+            yield from _new_event_responses(execution.events, seen)
+        if _terminal_event_seen(seen):
+            return
+        build_id = build_id or _stream_build_id(
+            services,
+            plan.cache_key,
+            controller,
+            workspace_id=workspace_id,
+        )
+        if build_id:
+            try:
+                yield from _new_build_responses(
+                    services,
+                    build_id,
+                    seen,
+                    workspace_id=workspace_id,
+                )
+            except NotFoundError:
+                yield _failed_build_response(
+                    RuntimeError(
+                        "image build record was removed before a terminal event was available"
+                    ),
+                    image_id=image_id,
+                    python_version=python_version,
+                )
+                return
+        if _terminal_event_seen(seen):
+            return
+        yield _failed_build_response(
+            RuntimeError("image build execution finished without a terminal event"),
+            image_id=image_id,
+            python_version=python_version,
+        )
+    finally:
+        controller.join(timeout=0)
 
 
-def stream_build_events(
-    images: ImageBuildWorkflow,
-    build_id: str,
+def _stream_build_id(
+    services: ImageControlDependencies,
+    fingerprint: str,
+    controller: ImageBuildExecutionController,
     *,
     workspace_id: str,
-    after: int = 0,
-) -> Iterator[BuildImageEvent]:
-    cursor = after
-    record = images.get(build_id, workspace_id=workspace_id)
-    heartbeat_at = time.monotonic() + 5
-    while True:
-        events = images.stream_events(build_id, workspace_id=workspace_id, after=cursor)
-        for event in events:
-            if event.sequence <= cursor:
-                continue
-            response = _response_from_stream_plan(event)
-            cursor = event.sequence
-            yield BuildImageEvent(sequence=event.sequence, response=response)
-            if response.done:
-                return
-        if time.monotonic() >= heartbeat_at:
-            heartbeat_at = time.monotonic() + 5
-            yield BuildImageEvent(
-                sequence=0,
-                response=BuildImageResponse(
-                    build_id=build_id,
-                    image_id=record.image_id or "",
-                    python_version=record.image.python_version,
-                ),
-            )
-        time.sleep(IMAGE_BUILD_STREAM_POLL_SECONDS)
+) -> str:
+    execution = controller.execution
+    if execution is not None:
+        return execution.record.id
+    active = services.images.find_active_by_fingerprint(
+        fingerprint,
+        workspace_id=workspace_id,
+    )
+    if active is not None:
+        return active.id
+    return ""
+
+
+def _new_build_responses(
+    services: ImageControlDependencies,
+    build_id: str,
+    seen: set[tuple[str, str, str, str, str, bool, str]],
+    *,
+    workspace_id: str,
+) -> Iterator[BuildImageResponse]:
+    yield from _new_event_responses(
+        services.images.stream_events(build_id, workspace_id=workspace_id),
+        seen,
+    )
+
+
+def _new_event_responses(
+    events: list[ImageBuildStreamEventPlan],
+    seen: set[tuple[str, str, str, str, str, bool, str]],
+) -> Iterator[BuildImageResponse]:
+    for event in events:
+        key = image_build_stream_event_key(event)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield _response_from_stream_plan(event)
+
+
+def _terminal_event_seen(
+    seen: set[tuple[str, str, str, str, str, bool, str]],
+) -> bool:
+    return any(done for _, _, _, _, _, done, _ in seen)
 
 
 def _validate_secret_references(secrets: list[str]) -> None:

@@ -5,7 +5,7 @@ import json
 import ssl
 import urllib.error
 import urllib.request
-from collections.abc import Generator, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from email.message import Message
 from types import TracebackType
@@ -90,7 +90,7 @@ class HttpChannel:
     def get(self, path: str) -> JsonValue:
         return self.request("GET", path)
 
-    def stream_get(self, path: str) -> Generator[str]:
+    def stream_get(self, path: str) -> Iterator[str]:
         headers = _request_headers(self.token)
         request = urllib.request.Request(
             f"{self.endpoint.rstrip('/')}/{path.lstrip('/')}",
@@ -118,7 +118,7 @@ class HttpChannel:
         self,
         path: str,
         payload: Mapping[str, JsonValue] | None = None,
-    ) -> Generator[JsonValue]:
+    ) -> Iterator[JsonValue]:
         data = _encode_payload(payload)
         headers = _request_headers(
             self.token,

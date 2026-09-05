@@ -227,7 +227,6 @@ class AsyncEndpointRequestDispatcher(Protocol):
         *,
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
-        excluded_container_ids: frozenset[str] | set[str] = frozenset(),
     ) -> EndpointDispatchTarget | None: ...
 
     async def unprobed_target(self, stub_id: str) -> EndpointDispatchTarget | None: ...
@@ -254,25 +253,12 @@ class AsyncEndpointInstanceDispatcher:
     route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
     endpoint_port: int = CONTAINER_INNER_PORT
 
-    async def ready_container_ids(self, stub_id: str, container_ids: list[str]) -> set[str]:
-        wanted = set(container_ids)
-        ready: set[str] = set()
-        for target in await self._ordered_targets(
-            stub_id,
-            container_loads=None,
-            max_inflight_per_container=UNLIMITED_ENDPOINT_CONTAINER_CONCURRENCY,
-        ):
-            if target.container_id in wanted and await self._is_ready(target, stub_id):
-                ready.add(target.container_id)
-        return ready
-
     async def select_target(
         self,
         stub_id: str,
         *,
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
-        excluded_container_ids: frozenset[str] | set[str] = frozenset(),
     ) -> EndpointDispatchTarget | None:
         # Probed one at a time in load order rather than all at once: the slowest
         # probe is the container that is not answering, and it would otherwise put
@@ -282,9 +268,7 @@ class AsyncEndpointInstanceDispatcher:
             container_loads=container_loads,
             max_inflight_per_container=max_inflight_per_container,
         ):
-            if target.container_id not in excluded_container_ids and await self._is_ready(
-                target, stub_id
-            ):
+            if await self._is_ready(target, stub_id):
                 return target
         return None
 

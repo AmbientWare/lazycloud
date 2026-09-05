@@ -38,7 +38,6 @@ from database.tables.compute import (
     WireGuardPeerTable,
     WorkspaceComputePolicyTable,
 )
-from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.custom_domains import CustomDomainTable
 from database.tables.email_outbox import EmailOutboxTable
 from database.tables.endpoint_dispatch import EndpointDispatchTable
@@ -119,7 +118,6 @@ __all__ = [
     "ComputeUnitTable",
     "ConcurrencyLimitTable",
     "ContainerBillingShapeTable",
-    "ContainerRolloutDrainTable",
     "ContainerTable",
     "CredentialTable",
     "CronJobRunTable",

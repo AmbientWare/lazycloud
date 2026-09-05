@@ -1,24 +1,33 @@
 from __future__ import annotations
 
+import json
 import logging
-from dataclasses import dataclass
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import timedelta
+from pathlib import Path
+from threading import Event, Lock, Thread
+from typing import Protocol
 from uuid import uuid4
 
-from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
-from database.repositories.image_build_logs import ImageBuildLogRepository
 from database.repositories.images import (
     ImageArchiveRepository,
     ImageBuildRepository,
     ImageRepository,
 )
 from observability.events import EventService
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter
+from shared.container_requests import StopContainerReason
+from shared.containers import ContainerRecord
 from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.image_building.authoring import ImageSpec
+from shared.image_building.planning import ImageBuildPlan
 from shared.image_building.records import (
     BuildStatus,
     ImageArchiveRecord,
+    ImageBuildPhase,
     ImageBuildRecord,
     ImageRecord,
 )
@@ -27,11 +36,15 @@ from storage.image_archive import ResolvedImageArchiveSettings
 
 from images.building import (
     ImageBuildCredentialPlan,
+    ImageBuildSessionPlan,
     ImageBuildStreamEventPlan,
+    build_image_plan,
     image_build_stream_event_key,
     plan_image_build_complete_event,
     plan_image_build_failure_event,
     plan_image_build_log_event,
+    plan_image_build_reused_stream,
+    plan_image_build_session,
 )
 from images.cleanup import (
     ImageBuildCleanupExecutor,
@@ -41,7 +54,11 @@ from images.cleanup import (
 )
 from images.context import ImageContext
 from images.execution import (
+    ImageBuildExecutionRequest,
     ImageBuildExecutionResult,
+    ImageBuildExecutor,
+    ImageBuildExecutorKind,
+    ManifestImageBuildExecutor,
 )
 from images.metadata import (
     CURRENT_IMAGE_CLIP_VERSION,
@@ -54,15 +71,44 @@ from images.publication import (
     ImageBuildPublicationPublishStatus,
     image_build_publication_from_execution,
 )
-from images.submission import ImageBuildSubmissionService
 
 LOGGER = logging.getLogger(__name__)
 
+DEFAULT_IMAGE_BUILD_DUPLICATE_WAIT_TIMEOUT_SECONDS = 900.0
+DEFAULT_IMAGE_BUILD_DUPLICATE_WAIT_POLL_SECONDS = 0.5
+DEFAULT_IMAGE_BUILD_CLAIM_LEASE_SECONDS = 120.0
+DEFAULT_IMAGE_BUILD_CLAIM_HEARTBEAT_SECONDS = 30.0
+DEFAULT_IMAGE_BUILD_PUBLICATION_CLAIM_LEASE_SECONDS = 900.0
 IMAGE_BUILD_REUSE_CANDIDATE_LIMIT = 16
 MAX_IMAGE_BUILD_DIAGNOSTIC_LINES = 256
 MAX_IMAGE_BUILD_DIAGNOSTIC_LINE_BYTES = 8 * 1024
 MAX_IMAGE_BUILD_DIAGNOSTIC_BYTES = 64 * 1024
 _JSON_VALUE_ADAPTER = TypeAdapter[JsonValue](JsonValue)
+
+type ImageBuildSleep = Callable[[float], None]
+
+
+class ImageBuildContainerControl(Protocol):
+    def stop(
+        self,
+        container_id: str,
+        *,
+        reason: StopContainerReason | None = None,
+    ) -> ContainerRecord: ...
+
+
+@dataclass(slots=True)
+class ImageBuildExecution:
+    record: ImageBuildRecord
+    session: ImageBuildSessionPlan
+    events: list[ImageBuildStreamEventPlan]
+    credential_plan: ImageBuildCredentialPlan | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ImageBuildClaim:
+    record: ImageBuildRecord
+    owned: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,12 +119,112 @@ class ImageArchiveReservation:
     upload_required: bool
 
 
-def _reusable_build(record: ImageBuildRecord) -> bool:
-    return (
-        record.status is BuildStatus.Complete
-        and record.cache_metadata.get("build_container_required") == "true"
-        and record.cache_metadata.get("image_archive_format_version") == "2"
-    )
+@dataclass(slots=True)
+class _ImageBuildClaimHeartbeat:
+    stop_event: Event
+    thread: Thread
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.thread.join()
+
+
+@dataclass(slots=True, eq=False)
+class ImageBuildExecutionController:
+    """One service-owned background image build and its terminal state."""
+
+    service: ImageBuildService
+    image: ImageSpec
+    workspace_id: str | None
+    tag: str | None
+    credential_plan: ImageBuildCredentialPlan | None
+    registry_credential_payload: str
+    build_args: dict[str, str]
+    thread_name: str
+    execution_key: tuple[str, str]
+    _state_lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _thread: Thread = field(init=False, repr=False)
+    _execution: ImageBuildExecution | None = field(default=None, init=False, repr=False)
+    _error: Exception | None = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._thread = Thread(target=self._run, name=self.thread_name, daemon=True)
+
+    @property
+    def execution(self) -> ImageBuildExecution | None:
+        with self._state_lock:
+            return self._execution
+
+    @property
+    def error(self) -> Exception | None:
+        with self._state_lock:
+            return self._error
+
+    @property
+    def is_alive(self) -> bool:
+        return self._thread.is_alive()
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def join(self, timeout: float | None = None) -> None:
+        self._thread.join(timeout=timeout)
+
+    def _run(self) -> None:
+        try:
+            execution = self.service.execute(
+                self.image,
+                workspace_id=self.workspace_id,
+                tag=self.tag,
+                credential_plan=self.credential_plan,
+                registry_credential_payload=self.registry_credential_payload,
+                build_args=self.build_args,
+            )
+            with self._state_lock:
+                self._execution = execution
+        except Exception as exc:
+            with self._state_lock:
+                self._error = exc
+        finally:
+            self.service._complete_background_execution(self)
+
+
+def _build_record_matches_executor(
+    record: ImageBuildRecord,
+    executor: ImageBuildExecutor,
+) -> bool:
+    if record.status is not BuildStatus.Complete:
+        return False
+
+    expected_markers = _executor_cache_markers(executor)
+    if not expected_markers:
+        return False
+
+    actual_marker = record.cache_metadata.get("executor")
+    if actual_marker not in expected_markers:
+        return False
+
+    if actual_marker == ImageBuildExecutorKind.Manifest.value:
+        return bool(record.manifest_path or record.artifact_path)
+    if actual_marker == ImageBuildExecutorKind.LocalDocker.value:
+        return bool(record.published_ref)
+    if actual_marker in {
+        ImageBuildExecutorKind.BuildContainer.value,
+        "container-client",
+    }:
+        return (
+            bool(record.cache_metadata.get("scheduler_submit_status"))
+            and record.cache_metadata.get("build_container_required") == "true"
+            and (
+                not executor.requires_archive_publication
+                or record.cache_metadata.get("image_archive_format_version") == "2"
+            )
+        )
+    return False
+
+
+def _executor_cache_markers(executor: ImageBuildExecutor) -> set[str]:
+    return set(executor.cache_markers)
 
 
 def _active_build_status(status: BuildStatus) -> bool:
@@ -88,12 +234,91 @@ def _active_build_status(status: BuildStatus) -> bool:
 @dataclass(slots=True)
 class ImageBuildService:
     context: ImageContext
-    submission: ImageBuildSubmissionService
     events: EventService | None = None
+    executor: ImageBuildExecutor = field(default_factory=ManifestImageBuildExecutor)
     publication_publisher: ImageBuildPublicationPublisher | None = None
     cleanup_executor: ImageBuildCleanupExecutor | None = None
+    container_control: ImageBuildContainerControl | None = None
     archive_settings: ResolvedImageArchiveSettings | None = None
     archive_store: ImageBuildArchiveObjectStore | None = None
+    duplicate_wait_timeout_seconds: float = DEFAULT_IMAGE_BUILD_DUPLICATE_WAIT_TIMEOUT_SECONDS
+    duplicate_wait_poll_seconds: float = DEFAULT_IMAGE_BUILD_DUPLICATE_WAIT_POLL_SECONDS
+    claim_lease_seconds: float = DEFAULT_IMAGE_BUILD_CLAIM_LEASE_SECONDS
+    claim_heartbeat_seconds: float = DEFAULT_IMAGE_BUILD_CLAIM_HEARTBEAT_SECONDS
+    publication_claim_lease_seconds: float = DEFAULT_IMAGE_BUILD_PUBLICATION_CLAIM_LEASE_SECONDS
+    sleep: ImageBuildSleep = time.sleep
+    _execution_lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _background_executions: dict[tuple[str, str], ImageBuildExecutionController] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
+    _closed: bool = field(default=False, init=False, repr=False)
+
+    @property
+    def closed(self) -> bool:
+        with self._execution_lock:
+            return self._closed
+
+    @property
+    def active_background_execution_count(self) -> int:
+        with self._execution_lock:
+            return len(self._background_executions)
+
+    def start_background_execution(
+        self,
+        image: ImageSpec,
+        *,
+        workspace_id: str | None = None,
+        tag: str | None = None,
+        credential_plan: ImageBuildCredentialPlan | None = None,
+        registry_credential_payload: str | None = None,
+        build_args: dict[str, str] | None = None,
+    ) -> ImageBuildExecutionController:
+        plan = build_image_plan(image)
+        resolved_workspace_id = self._resolve_workspace_id(workspace_id)
+        execution_key = (resolved_workspace_id, plan.cache_key)
+        controller = ImageBuildExecutionController(
+            service=self,
+            image=image,
+            workspace_id=resolved_workspace_id,
+            tag=tag,
+            credential_plan=credential_plan,
+            registry_credential_payload=registry_credential_payload or "",
+            build_args=dict(build_args or {}),
+            thread_name=f"image-build-{plan.cache_key}",
+            execution_key=execution_key,
+        )
+        with self._execution_lock:
+            if self._closed:
+                raise RuntimeError("image build service is closed")
+            existing = self._background_executions.get(execution_key)
+            if existing is not None and existing.is_alive:
+                return existing
+            self._background_executions[execution_key] = controller
+            try:
+                controller.start()
+            except BaseException:
+                self._background_executions.pop(execution_key, None)
+                raise
+        return controller
+
+    def close(self) -> None:
+        with self._execution_lock:
+            self._closed = True
+
+    def _complete_background_execution(
+        self,
+        execution: ImageBuildExecutionController,
+    ) -> None:
+        with self._execution_lock:
+            if self._background_executions.get(execution.execution_key) is execution:
+                self._background_executions.pop(execution.execution_key)
+
+    def _ensure_open(self) -> None:
+        with self._execution_lock:
+            if self._closed:
+                raise RuntimeError("image build service is closed")
 
     def build(
         self,
@@ -104,16 +329,529 @@ class ImageBuildService:
         credential_plan: ImageBuildCredentialPlan | None = None,
         registry_credential_payload: str | None = None,
         build_args: dict[str, str] | None = None,
-        request_id: str | None = None,
     ) -> ImageBuildRecord:
-        return self.submission.submit(
+        execution = self.start_background_execution(
             image,
-            workspace_id=self._resolve_workspace_id(workspace_id),
+            workspace_id=workspace_id,
             tag=tag,
             credential_plan=credential_plan,
             registry_credential_payload=registry_credential_payload,
             build_args=build_args,
-            request_id=request_id,
+        )
+        execution.join()
+        if execution.error is not None:
+            raise execution.error
+        result = execution.execution
+        if result is None:
+            raise RuntimeError("image build execution finished without a result")
+        return result.record
+
+    def start(
+        self,
+        image: ImageSpec,
+        *,
+        workspace_id: str | None = None,
+        tag: str | None = None,
+        credential_plan: ImageBuildCredentialPlan | None = None,
+    ) -> ImageBuildExecution:
+        self._ensure_open()
+        resolved_workspace_id = self._resolve_workspace_id(workspace_id)
+        plan = build_image_plan(image)
+        claim = self._claim_build_for_execution(
+            plan,
+            workspace_id=resolved_workspace_id,
+            tag=tag,
+        )
+        if not claim.owned:
+            return self._reused_execution(
+                plan,
+                claim.record,
+                credential_plan=credential_plan,
+            )
+        record = claim.record
+        session = plan_image_build_session(
+            plan.spec,
+            require_archive_publication=self.executor.requires_archive_publication,
+            image_id=plan.image_id,
+            build_id=record.id,
+        )
+        record = self._record_lifecycle_session(
+            record,
+            session,
+            workspace_id=resolved_workspace_id,
+        )
+        emitted: list[ImageBuildStreamEventPlan] = []
+        for event in session.stream_events:
+            if event.done:
+                continue
+            emitted.append(
+                self.append_stream_event(
+                    record.id,
+                    event,
+                    workspace_id=resolved_workspace_id,
+                )
+            )
+        return ImageBuildExecution(
+            record=self.get(record.id, workspace_id=resolved_workspace_id),
+            session=session,
+            events=emitted,
+            credential_plan=credential_plan,
+        )
+
+    def execute(
+        self,
+        image: ImageSpec,
+        *,
+        workspace_id: str | None = None,
+        tag: str | None = None,
+        credential_plan: ImageBuildCredentialPlan | None = None,
+        registry_credential_payload: str | None = None,
+        build_args: dict[str, str] | None = None,
+    ) -> ImageBuildExecution:
+        self._ensure_open()
+        resolved_workspace_id = self._resolve_workspace_id(workspace_id)
+        plan = build_image_plan(image)
+        claim = self._claim_build_for_execution(
+            plan,
+            workspace_id=resolved_workspace_id,
+            tag=tag,
+        )
+        if not claim.owned:
+            return self._reused_execution(
+                plan,
+                claim.record,
+                credential_plan=credential_plan,
+            )
+
+        record = claim.record
+        session = plan_image_build_session(
+            plan.spec,
+            require_archive_publication=self.executor.requires_archive_publication,
+            image_id=plan.image_id,
+            build_id=record.id,
+        )
+        emitted: list[ImageBuildStreamEventPlan] = []
+        sensitive_values = _image_build_sensitive_values(
+            plan,
+            registry_credential_payload=registry_credential_payload or "",
+            build_args=build_args or {},
+        )
+        heartbeat = self._start_claim_heartbeat(record.id, workspace_id=resolved_workspace_id)
+        try:
+            record = self._record_lifecycle_session(
+                record,
+                session,
+                workspace_id=resolved_workspace_id,
+            )
+            for event in session.stream_events:
+                if event.done:
+                    continue
+                emitted.append(
+                    self.append_stream_event(
+                        record.id,
+                        event,
+                        workspace_id=resolved_workspace_id,
+                        sensitive_values=sensitive_values,
+                    )
+                )
+            cache_event = plan_image_build_log_event(
+                f"cache key: {plan.cache_key}",
+                image_id=plan.image_id,
+                build_id=record.id,
+                python_version=plan.spec.python_version,
+            )
+            emitted.append(
+                self.append_stream_event(
+                    record.id,
+                    cache_event,
+                    workspace_id=resolved_workspace_id,
+                    sensitive_values=sensitive_values,
+                )
+            )
+            self._write_build_files(
+                record,
+                plan,
+                session=session,
+                credential_plan=credential_plan,
+                workspace_id=resolved_workspace_id,
+            )
+            manifest_event = plan_image_build_log_event(
+                "manifest written",
+                image_id=plan.image_id,
+                build_id=record.id,
+                python_version=plan.spec.python_version,
+            )
+            emitted.append(
+                self.append_stream_event(
+                    record.id,
+                    manifest_event,
+                    workspace_id=resolved_workspace_id,
+                    sensitive_values=sensitive_values,
+                )
+            )
+            execution_result = self.executor.execute(
+                self._execution_request(
+                    record,
+                    plan,
+                    session=session,
+                    credential_plan=credential_plan,
+                    registry_credential_payload=registry_credential_payload or "",
+                    build_args=build_args or {},
+                    workspace_id=resolved_workspace_id,
+                    sensitive_values=sensitive_values,
+                )
+            )
+            self._require_active_claim(record.id, workspace_id=resolved_workspace_id)
+            emitted.extend(
+                self._persist_execution_result(
+                    record.id,
+                    execution_result,
+                    workspace_id=resolved_workspace_id,
+                    sensitive_values=sensitive_values,
+                )
+            )
+            completed = self.get(record.id, workspace_id=resolved_workspace_id)
+            if completed.status is BuildStatus.Complete:
+                self.persist_image_metadata(
+                    record.id,
+                    workspace_id=resolved_workspace_id,
+                    clip_version=session.clip_version,
+                )
+        except Exception as exc:
+            failed = self.fail(
+                record.id,
+                str(exc),
+                workspace_id=resolved_workspace_id,
+                sensitive_values=sensitive_values,
+            )
+            emitted.append(self._stream_event_from_record(failed))
+            return ImageBuildExecution(
+                record=failed,
+                session=session,
+                events=emitted,
+                credential_plan=credential_plan,
+            )
+        finally:
+            heartbeat.stop()
+        completed = self.get(record.id, workspace_id=resolved_workspace_id)
+        return ImageBuildExecution(
+            record=completed,
+            session=session,
+            events=emitted,
+            credential_plan=credential_plan,
+        )
+
+    def _reused_execution(
+        self,
+        plan: ImageBuildPlan,
+        record: ImageBuildRecord,
+        *,
+        credential_plan: ImageBuildCredentialPlan | None,
+    ) -> ImageBuildExecution:
+        reused = record.model_copy(update={"phase": ImageBuildPhase.Reused})
+        session = plan_image_build_session(
+            reused.image,
+            require_archive_publication=self.executor.requires_archive_publication,
+            image_id=reused.image_id or plan.image_id,
+            build_id=reused.id,
+        )
+        return ImageBuildExecution(
+            record=reused,
+            session=session,
+            events=[
+                *plan_image_build_reused_stream(
+                    image_id=reused.image_id or plan.image_id,
+                    build_id=reused.id,
+                    python_version=reused.image.python_version,
+                )
+            ],
+            credential_plan=credential_plan,
+        )
+
+    def _claim_build_for_execution(
+        self,
+        plan: ImageBuildPlan,
+        *,
+        workspace_id: str,
+        tag: str | None,
+    ) -> ImageBuildClaim:
+        deadline = time.monotonic() + max(self.duplicate_wait_timeout_seconds, 0.0)
+        claim = self._claim_build(plan, workspace_id=workspace_id, tag=tag)
+        while not claim.owned:
+            if _build_record_matches_executor(claim.record, self.executor):
+                return claim
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"timed out waiting for equivalent image build {claim.record.id}"
+                )
+            probe_deadline = time.monotonic() + min(
+                remaining,
+                max(self.claim_lease_seconds, 0.01),
+            )
+            current = claim.record
+            while _active_build_status(current.status) and time.monotonic() < probe_deadline:
+                self.sleep(max(self.duplicate_wait_poll_seconds, 0.0))
+                current = self.get(current.id, workspace_id=workspace_id)
+            claim = self._claim_build(plan, workspace_id=workspace_id, tag=tag)
+        return claim
+
+    def _claim_build(
+        self,
+        plan: ImageBuildPlan,
+        *,
+        workspace_id: str,
+        tag: str | None,
+    ) -> ImageBuildClaim:
+        stale: list[ImageBuildRecord] = []
+        with self.context.database.session() as session:
+            repository = ImageBuildRepository(session)
+            repository.lock_fingerprint(plan.cache_key, workspace_id=workspace_id)
+            completed = repository.list_completed_by_fingerprint(
+                plan.cache_key,
+                workspace_id=workspace_id,
+                limit=IMAGE_BUILD_REUSE_CANDIDATE_LIMIT,
+            )
+            reusable = next(
+                (
+                    record
+                    for record in completed
+                    if _build_record_matches_executor(record, self.executor)
+                ),
+                None,
+            )
+            if reusable is not None:
+                return ImageBuildClaim(record=reusable)
+            stale = repository.fail_stale_active(
+                plan.cache_key,
+                workspace_id=workspace_id,
+                stale_before=utc_now() - timedelta(seconds=max(self.claim_lease_seconds, 0.0)),
+                publication_stale_before=utc_now()
+                - timedelta(seconds=max(self.publication_claim_lease_seconds, 0.01)),
+            )
+            active = repository.get_active_by_fingerprint(
+                plan.cache_key,
+                workspace_id=workspace_id,
+            )
+            if active is not None:
+                return ImageBuildClaim(record=active)
+            saved = self._create_build_record(
+                repository,
+                plan,
+                workspace_id=workspace_id,
+                tag=tag,
+            )
+        for record in stale:
+            self._cancel_stale_build_container(record, workspace_id=workspace_id)
+            self._emit(
+                "lease.expired",
+                record,
+                workspace_id=workspace_id,
+                level=EventLevel.Error,
+            )
+        self._emit("started", saved, workspace_id=workspace_id)
+        return ImageBuildClaim(record=saved, owned=True)
+
+    def _cancel_stale_build_container(
+        self,
+        record: ImageBuildRecord,
+        *,
+        workspace_id: str,
+    ) -> None:
+        try:
+            self._stop_build_container(record, reason=StopContainerReason.Scheduler)
+        except Exception as exc:
+            self._emit(
+                "lease.cancel.error",
+                self.get(record.id, workspace_id=workspace_id),
+                workspace_id=workspace_id,
+                level=EventLevel.Error,
+                data={"reason": str(exc)},
+            )
+
+    def _start_claim_heartbeat(
+        self,
+        build_id: str,
+        *,
+        workspace_id: str,
+    ) -> _ImageBuildClaimHeartbeat:
+        stop_event = Event()
+        interval = max(self.claim_heartbeat_seconds, 0.01)
+
+        def heartbeat() -> None:
+            while not stop_event.wait(interval):
+                try:
+                    with self.context.database.session() as session:
+                        active = ImageBuildRepository(session).heartbeat_active(
+                            build_id,
+                            workspace_id=workspace_id,
+                        )
+                except Exception:
+                    LOGGER.debug("build claim heartbeat failed", exc_info=True)
+                    continue
+                if not active:
+                    return
+
+        thread = Thread(
+            target=heartbeat,
+            name=f"image-build-claim-{build_id}",
+            daemon=True,
+        )
+        thread.start()
+        return _ImageBuildClaimHeartbeat(stop_event=stop_event, thread=thread)
+
+    def _require_active_claim(self, build_id: str, *, workspace_id: str) -> None:
+        record = self.get(build_id, workspace_id=workspace_id)
+        if _active_build_status(record.status):
+            return
+        reason = record.error or record.status.value
+        raise RuntimeError(f"image build ownership was lost before publication: {reason}")
+
+    def _create_build_record(
+        self,
+        repository: ImageBuildRepository,
+        plan: ImageBuildPlan,
+        *,
+        workspace_id: str,
+        tag: str | None,
+    ) -> ImageBuildRecord:
+        fingerprint = plan.cache_key
+        record = repository.records.create(
+            {
+                "image": plan.spec.model_dump(mode="json"),
+                "fingerprint": fingerprint,
+                "image_id": plan.image_id,
+                "cache_key": plan.cache_key,
+                "dockerfile": plan.dockerfile,
+                "context_digest": plan.context_digest,
+                "status": BuildStatus.Running.value,
+                "phase": ImageBuildPhase.Submitted.value,
+                "tag": tag or f"local:{fingerprint[:12]}",
+                "started_at": utc_now().isoformat(),
+                "logs": [],
+            },
+            workspace_id=workspace_id,
+            status=BuildStatus.Running.value,
+        )
+        record.manifest_path = str(self.context.paths.build_path(record.id) / "manifest.json")
+        return repository.records.upsert(
+            record,
+            workspace_id=workspace_id,
+            status=record.status.value,
+        )
+
+    def _write_build_files(
+        self,
+        record: ImageBuildRecord,
+        plan: ImageBuildPlan,
+        *,
+        session: ImageBuildSessionPlan,
+        credential_plan: ImageBuildCredentialPlan | None,
+        workspace_id: str,
+    ) -> ImageBuildRecord:
+        if record.manifest_path is None:
+            msg = f"image build has no manifest path: {record.id}"
+            raise ValueError(msg)
+        manifest_path = Path(record.manifest_path)
+        _dockerfile_path_for_manifest(manifest_path).write_text(
+            plan.dockerfile,
+            encoding="utf-8",
+        )
+        return self._write_manifest(
+            record,
+            plan,
+            session=session,
+            credential_plan=credential_plan,
+            workspace_id=workspace_id,
+        )
+
+    def _write_manifest(
+        self,
+        record: ImageBuildRecord,
+        plan: ImageBuildPlan,
+        *,
+        session: ImageBuildSessionPlan,
+        credential_plan: ImageBuildCredentialPlan | None,
+        workspace_id: str,
+    ) -> ImageBuildRecord:
+        if record.manifest_path is None:
+            msg = f"image build has no manifest path: {record.id}"
+            raise ValueError(msg)
+        manifest_path = Path(record.manifest_path)
+        manifest_path.write_text(
+            json.dumps(
+                _manifest_payload(
+                    record,
+                    plan,
+                    session=session,
+                    credential_plan=credential_plan,
+                ),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        record = self.get(record.id, workspace_id=workspace_id)
+        record.phase = ImageBuildPhase.Manifest
+        with self.context.database.session() as database_session:
+            return ImageBuildRepository(database_session).upsert(
+                record,
+                workspace_id=workspace_id,
+            )
+
+    def _execution_request(
+        self,
+        record: ImageBuildRecord,
+        plan: ImageBuildPlan,
+        *,
+        session: ImageBuildSessionPlan,
+        credential_plan: ImageBuildCredentialPlan | None,
+        registry_credential_payload: str,
+        build_args: dict[str, str],
+        workspace_id: str,
+        sensitive_values: tuple[str, ...],
+    ) -> ImageBuildExecutionRequest:
+        if record.manifest_path is None:
+            msg = f"image build has no manifest path: {record.id}"
+            raise ValueError(msg)
+        manifest_path = Path(record.manifest_path)
+        return ImageBuildExecutionRequest(
+            build_id=record.id,
+            workspace_id=workspace_id,
+            image_id=plan.image_id,
+            tag=record.tag or "",
+            build_dir=str(manifest_path.parent),
+            dockerfile_path=str(_dockerfile_path_for_manifest(manifest_path)),
+            manifest_path=str(manifest_path),
+            plan=plan,
+            session=session,
+            credential_plan=credential_plan,
+            registry_credential_payload=registry_credential_payload,
+            build_args=build_args,
+            event_sink=lambda event: self._append_execution_stream_event(
+                record.id,
+                event,
+                workspace_id=workspace_id,
+                sensitive_values=sensitive_values,
+            ),
+        )
+
+    def _append_execution_stream_event(
+        self,
+        build_id: str,
+        event: ImageBuildStreamEventPlan,
+        *,
+        workspace_id: str,
+        sensitive_values: tuple[str, ...],
+    ) -> None:
+        if event.done:
+            return
+        self.append_stream_event(
+            build_id,
+            event,
+            workspace_id=workspace_id,
+            sensitive_values=sensitive_values,
         )
 
     def _persist_execution_result(
@@ -201,90 +939,102 @@ class ImageBuildService:
             ):
                 raise RuntimeError("image build publication ownership is no longer active")
 
-        try:
-            with self.context.database.session() as session:
-                repository = ImageBuildRepository(session)
-                record = repository.get_claimed_publication(
-                    build_id,
-                    workspace_id=workspace_id,
-                    claim_id=claim_id,
-                )
-                if record is None:
-                    raise RuntimeError(
-                        "image build publication ownership was lost before promotion"
-                    )
-            publication = image_build_publication_from_execution(record, result).model_copy(
-                update={"workspace_id": workspace_id}
-            )
-            if not publication.published:
-                raise RuntimeError(publication.reason or "image build publication was skipped")
-
-            publish_result = None
-            if self.publication_publisher is not None:
-                publish_result = self.publication_publisher.publish(record, publication)
-                publication.cache_metadata = {
-                    **publication.cache_metadata,
-                    **publish_result.cache_metadata,
-                    "cache_publish_result": publish_result.status.value,
-                }
-                if publish_result.reason:
-                    publication.cache_metadata["cache_publish_reason"] = publish_result.reason
-                if publish_result.status is ImageBuildPublicationPublishStatus.Error:
-                    raise RuntimeError(publish_result.reason or "image build publication failed")
-
-            archive_published = (
-                publish_result is not None
-                and publish_result.status is ImageBuildPublicationPublishStatus.Published
-                and publish_result.cache_metadata.get("image_archive_status") == "ready"
-            )
-            if not archive_published:
-                reason = publish_result.reason if publish_result is not None else ""
-                raise RuntimeError(reason or "required image archive publication was not completed")
-
-            record.published_ref = publication.published_ref
-            record.artifact_path = publication.artifact_path
-            record.cache_metadata = publication.cache_metadata
-            completion_event = plan_image_build_complete_event(
-                image_id=record.image_id or "",
-                build_id=record.id,
-                python_version=record.image.python_version,
-            )
-            if completion_event.message:
-                _append_image_build_diagnostic(
-                    record,
-                    completion_event.message,
-                    sensitive_values=sensitive_values,
-                )
-            record.status = completion_event.status
-            record.phase = completion_event.phase
-            record.finished_at = utc_now()
-
-            with self.context.database.session() as session:
-                repository = ImageBuildRepository(session)
-                repository.lock_fingerprint(initial.fingerprint, workspace_id=workspace_id)
-                completed = repository.finalize_publication(
-                    record,
-                    workspace_id=workspace_id,
-                    claim_id=claim_id,
-                    clip_version=CURRENT_IMAGE_CLIP_VERSION,
-                    archive_published=archive_published,
-                )
-
-            self._emit(
-                completion_event.kind.value,
-                completed,
+        with self.context.database.session() as session:
+            repository = ImageBuildRepository(session)
+            record = repository.get_claimed_publication(
+                build_id,
                 workspace_id=workspace_id,
-                data={
-                    "phase": completion_event.phase.value,
-                    "status": completion_event.status.value,
-                },
+                claim_id=claim_id,
             )
-            return completed
-        finally:
-            with self.context.database.session() as session:
-                ImageBuildRepository(session).release_publication(
-                    build_id, workspace_id=workspace_id, claim_id=claim_id
-                )
+            if record is None:
+                raise RuntimeError("image build publication ownership was lost before promotion")
+        publication = image_build_publication_from_execution(record, result).model_copy(
+            update={"workspace_id": workspace_id}
+        )
+        if not publication.published:
+            raise RuntimeError(publication.reason or "image build publication was skipped")
+
+        publish_result = None
+        if self.publication_publisher is not None:
+            publish_result = self.publication_publisher.publish(record, publication)
+            publication.cache_metadata = {
+                **publication.cache_metadata,
+                **publish_result.cache_metadata,
+                "cache_publish_result": publish_result.status.value,
+            }
+            if publish_result.reason:
+                publication.cache_metadata["cache_publish_reason"] = publish_result.reason
+            if publish_result.status is ImageBuildPublicationPublishStatus.Error:
+                raise RuntimeError(publish_result.reason or "image build publication failed")
+
+        archive_published = (
+            publish_result is not None
+            and publish_result.status is ImageBuildPublicationPublishStatus.Published
+            and publish_result.cache_metadata.get("image_archive_status") == "ready"
+        )
+        if self.executor.requires_archive_publication and not archive_published:
+            reason = publish_result.reason if publish_result is not None else ""
+            raise RuntimeError(reason or "required image archive publication was not completed")
+
+        record.published_ref = publication.published_ref
+        record.artifact_path = publication.artifact_path
+        record.cache_metadata = publication.cache_metadata
+        completion_event = plan_image_build_complete_event(
+            image_id=record.image_id or "",
+            build_id=record.id,
+            python_version=record.image.python_version,
+        )
+        if completion_event.message:
+            _append_image_build_diagnostic(
+                record,
+                completion_event.message,
+                sensitive_values=sensitive_values,
+            )
+        record.status = completion_event.status
+        record.phase = completion_event.phase
+        record.finished_at = utc_now()
+
+        with self.context.database.session() as session:
+            repository = ImageBuildRepository(session)
+            repository.lock_fingerprint(initial.fingerprint, workspace_id=workspace_id)
+            completed = repository.finalize_publication(
+                record,
+                workspace_id=workspace_id,
+                claim_id=claim_id,
+                archive_published=archive_published,
+            )
+
+        self._emit(
+            completion_event.kind.value,
+            completed,
+            workspace_id=workspace_id,
+            data={
+                "phase": completion_event.phase.value,
+                "status": completion_event.status.value,
+            },
+        )
+        return completed
+
+    def complete(
+        self,
+        build_id: str,
+        *,
+        workspace_id: str | None = None,
+    ) -> ImageBuildRecord:
+        resolved_workspace_id = self._resolve_workspace_id(workspace_id)
+        record = self.get(build_id, workspace_id=resolved_workspace_id)
+        if _is_terminal_build_status(record.status):
+            return record
+        event = plan_image_build_complete_event(
+            image_id=record.image_id or "",
+            build_id=record.id,
+            python_version=record.image.python_version,
+        )
+        return self._persist_stream_event(
+            record,
+            event,
+            workspace_id=resolved_workspace_id,
+        )
 
     def fail(
         self,
@@ -384,10 +1134,16 @@ class ImageBuildService:
         build_id: str,
         *,
         workspace_id: str | None = None,
+        container_connected: bool = False,
         reason: str = "Build was aborted.",
     ) -> ImageBuildRecord:
-        return self.submission.cancel(
-            build_id, workspace_id=self._resolve_workspace_id(workspace_id), reason=reason
+        resolved_workspace_id = self._resolve_workspace_id(workspace_id)
+        record = self.get(build_id, workspace_id=resolved_workspace_id)
+        return self._cancel_record(
+            record,
+            workspace_id=resolved_workspace_id,
+            container_connected=container_connected,
+            reason=reason,
         )
 
     def cancel_for_workspace(
@@ -395,9 +1151,65 @@ class ImageBuildService:
         build_id: str,
         *,
         workspace_id: str,
+        container_connected: bool = False,
         reason: str = "Build was aborted.",
     ) -> ImageBuildRecord:
-        return self.submission.cancel(build_id, workspace_id=workspace_id, reason=reason)
+        record = self.get_for_workspace(build_id, workspace_id=workspace_id)
+        return self._cancel_record(
+            record,
+            workspace_id=workspace_id,
+            container_connected=container_connected,
+            reason=reason,
+        )
+
+    def _cancel_record(
+        self,
+        record: ImageBuildRecord,
+        *,
+        workspace_id: str,
+        container_connected: bool,
+        reason: str,
+    ) -> ImageBuildRecord:
+        if _is_terminal_build_status(record.status):
+            return record
+        cancellation_metadata = self._stop_build_container(
+            record,
+            reason=StopContainerReason.User,
+        )
+        event = plan_image_build_failure_event(
+            reason,
+            image_id=record.image_id or "",
+            build_id=record.id,
+            python_version=record.image.python_version,
+            status=BuildStatus.Cancelled,
+        )
+        return self._persist_stream_event(
+            record,
+            event,
+            workspace_id=workspace_id,
+            level=EventLevel.Info,
+            data={
+                "reason": reason,
+                "container_connected": container_connected,
+                **cancellation_metadata,
+            },
+        )
+
+    def _stop_build_container(
+        self,
+        record: ImageBuildRecord,
+        *,
+        reason: StopContainerReason,
+    ) -> dict[str, str]:
+        if record.cache_metadata.get("build_container_required") != "true":
+            return {"build_container_cancel_status": "not-required"}
+        if self.container_control is None:
+            raise RuntimeError("image build container control is not configured")
+        try:
+            self.container_control.stop(record.id, reason=reason)
+        except NotFoundError:
+            return {"build_container_cancel_status": "not-found"}
+        return {"build_container_cancel_status": "complete"}
 
     def persist_image_metadata(
         self,
@@ -578,6 +1390,40 @@ class ImageBuildService:
             ImageBuildRepository(session).upsert(build, workspace_id=resolved_workspace_id)
         return result
 
+    def _record_lifecycle_session(
+        self,
+        record: ImageBuildRecord,
+        session: ImageBuildSessionPlan,
+        *,
+        workspace_id: str,
+    ) -> ImageBuildRecord:
+        metadata = {
+            "build_container_id": session.container_id,
+            "build_container_required": str(session.build_container_required).lower(),
+            "build_container_steps": ",".join(step.value for step in session.steps),
+            "build_container_ttl_seconds": str(session.ttl_seconds),
+            "build_container_keepalive_interval_seconds": str(session.keepalive_interval_seconds),
+        }
+        return self._merge_cache_metadata(
+            record.id,
+            metadata,
+            workspace_id=workspace_id,
+        )
+
+    def _merge_cache_metadata(
+        self,
+        build_id: str,
+        metadata: dict[str, str],
+        *,
+        workspace_id: str,
+    ) -> ImageBuildRecord:
+        record = self.get(build_id, workspace_id=workspace_id)
+        if not metadata:
+            return record
+        record.cache_metadata = {**record.cache_metadata, **metadata}
+        with self.context.database.session() as session:
+            return ImageBuildRepository(session).upsert(record, workspace_id=workspace_id)
+
     def append_stream_event(
         self,
         build_id: str,
@@ -600,48 +1446,29 @@ class ImageBuildService:
         )
         return sanitized
 
-    def record_worker_progress(
-        self, build_id: str, *, workspace_id: str, after: int, messages: list[str]
-    ) -> int:
-        with self.context.database.session() as session:
-            logs = ImageBuildLogRepository(session)
-            sequence = logs.append(
-                build_id, workspace_id=workspace_id, after=after, messages=messages
-            )
-            repository = ImageBuildRepository(session)
-            record = repository.get(build_id, workspace_id=workspace_id)
-            if record is not None and _active_build_status(record.status):
-                record.status = BuildStatus.Running
-                record.started_at = record.started_at or utc_now()
-                repository.upsert(record, workspace_id=workspace_id)
-            return sequence
-
     def stream_events(
         self,
         build_id: str,
         *,
         workspace_id: str | None = None,
-        after: int = 0,
     ) -> list[ImageBuildStreamEventPlan]:
         resolved_workspace_id = self._resolve_workspace_id(workspace_id)
         record = self.get(build_id, workspace_id=resolved_workspace_id)
-        with self.context.database.session() as session:
-            repository = ImageBuildLogRepository(session)
-            messages = repository.page(build_id, after=after)
-            last = repository.last_sequence(build_id)
+        terminal = _is_terminal_build_status(record.status)
+        messages = list(record.logs)
+        if terminal and messages:
+            messages = messages[:-1]
         events = [
             plan_image_build_log_event(
                 message,
                 image_id=record.image_id or "",
                 build_id=record.id,
                 python_version=record.image.python_version,
-            ).model_copy(update={"sequence": sequence})
-            for sequence, message in messages
-        ]
-        if _is_terminal_build_status(record.status) and (not messages or messages[-1][0] == last):
-            events.append(
-                self._stream_event_from_record(record).model_copy(update={"sequence": last + 1})
             )
+            for message in messages
+        ]
+        if terminal:
+            events.append(self._stream_event_from_record(record))
         return events
 
     def get(self, build_id: str, *, workspace_id: str | None = None) -> ImageBuildRecord:
@@ -665,17 +1492,6 @@ class ImageBuildService:
 
     def get_for_workspace(self, build_id: str, *, workspace_id: str) -> ImageBuildRecord:
         return self.get(build_id, workspace_id=workspace_id)
-
-    def find_by_request_id(self, request_id: str, *, workspace_id: str) -> ImageBuildRecord | None:
-        with self.context.database.session() as session:
-            build_id = ImageBuildDispatchRepository(session).request_build_id(
-                request_id, workspace_id=workspace_id
-            )
-            return (
-                ImageBuildRepository(session).get(build_id, workspace_id=workspace_id)
-                if build_id
-                else None
-            )
 
     def find_by_fingerprint(
         self,
@@ -704,7 +1520,7 @@ class ImageBuildService:
                     fingerprint,
                     workspace_id=resolved_workspace_id,
                 )
-                if _reusable_build(record)
+                if _build_record_matches_executor(record, self.executor)
             ),
             None,
         )
@@ -749,7 +1565,7 @@ class ImageBuildService:
                     image_id,
                     workspace_id=resolved_workspace_id,
                 )
-                if _reusable_build(record)
+                if _build_record_matches_executor(record, self.executor)
             ),
             None,
         )
@@ -804,24 +1620,23 @@ class ImageBuildService:
         level: EventLevel | None = None,
         data: dict[str, JsonValue] | None = None,
     ) -> ImageBuildRecord:
+        if event.message:
+            _append_image_build_diagnostic(
+                record,
+                event.message,
+                sensitive_values=sensitive_values,
+            )
+        record.status = event.status
+        record.phase = event.phase
+        if event.error:
+            record.error = _sanitize_image_build_diagnostic(
+                event.error,
+                sensitive_values=sensitive_values,
+            )
+        if event.done:
+            record.finished_at = utc_now()
         with self.context.database.session() as session:
-            repository = ImageBuildRepository(session)
-            current = repository.lock_build(record.id, workspace_id=workspace_id)
-            if _is_terminal_build_status(current.status):
-                return current
-            if event.message:
-                _append_image_build_diagnostic(
-                    current, event.message, sensitive_values=sensitive_values
-                )
-            current.status = event.status
-            current.phase = event.phase
-            if event.error:
-                current.error = _sanitize_image_build_diagnostic(
-                    event.error, sensitive_values=sensitive_values
-                )
-            if event.done:
-                current.finished_at = utc_now()
-            saved = repository.upsert(current, workspace_id=workspace_id)
+            saved = ImageBuildRepository(session).upsert(record, workspace_id=workspace_id)
         self._emit(
             event.kind.value,
             saved,
@@ -881,6 +1696,49 @@ class ImageBuildService:
             data=event_data,
             workspace_id=workspace_id,
         )
+
+
+def _image_build_sensitive_values(
+    plan: ImageBuildPlan,
+    *,
+    registry_credential_payload: str,
+    build_args: dict[str, str],
+) -> tuple[str, ...]:
+    values = {
+        *(value for value in plan.spec.env.values() if value),
+        *(value for value in build_args.values() if value),
+        *_json_string_values(registry_credential_payload),
+    }
+    if registry_credential_payload:
+        values.add(registry_credential_payload)
+    return tuple(sorted(values, key=len, reverse=True))
+
+
+def _json_string_values(serialized: str) -> set[str]:
+    if not serialized:
+        return set()
+    try:
+        payload = _JSON_VALUE_ADAPTER.validate_json(serialized)
+    except ValueError:
+        return {serialized}
+
+    values: set[str] = set()
+
+    def collect(value: JsonValue) -> None:
+        if isinstance(value, str):
+            if value:
+                values.add(value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                collect(item)
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                collect(item)
+
+    collect(payload)
+    return values
 
 
 def _sanitize_image_build_diagnostic(
@@ -964,6 +1822,53 @@ def _image_build_failure_diagnostic(
         if any(marker in lowered for marker in ("error", "exception", "failed", "exit code")):
             return message.rstrip("\n")
     return sanitized_reason.rstrip("\n")
+
+
+def _manifest_payload(
+    record: ImageBuildRecord,
+    plan: ImageBuildPlan,
+    *,
+    session: ImageBuildSessionPlan,
+    credential_plan: ImageBuildCredentialPlan | None,
+) -> dict[str, JsonValue]:
+    return {
+        "id": record.id,
+        "tag": record.tag,
+        "fingerprint": record.fingerprint,
+        "image_id": plan.image_id,
+        "cache_key": plan.cache_key,
+        "context_digest": plan.context_digest,
+        "credential_keys": _string_json_values(plan.credential_keys),
+        "dockerfile": plan.dockerfile,
+        "dockerfile_path": str(
+            _dockerfile_path_for_manifest(Path(record.manifest_path or "manifest.json"))
+        ),
+        "image": _model_json_value(plan.spec),
+        "cache": {
+            "cache_key": plan.cache_key,
+            "context_digest": plan.context_digest,
+            "fingerprint": record.fingerprint,
+            "tag": record.tag,
+        },
+        "credential_plan": (
+            _model_json_value(credential_plan) if credential_plan is not None else None
+        ),
+        "session": _model_json_value(session),
+    }
+
+
+def _model_json_value(model: BaseModel) -> JsonValue:
+    return _JSON_VALUE_ADAPTER.validate_json(model.model_dump_json())
+
+
+def _string_json_values(values: list[str]) -> list[JsonValue]:
+    result: list[JsonValue] = []
+    result.extend(values)
+    return result
+
+
+def _dockerfile_path_for_manifest(manifest_path: Path) -> Path:
+    return manifest_path.with_name("Dockerfile")
 
 
 def _is_terminal_build_status(status: BuildStatus) -> bool:
