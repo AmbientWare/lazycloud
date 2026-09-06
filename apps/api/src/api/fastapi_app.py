@@ -53,6 +53,7 @@ from starlette.types import Scope
 from api.control_runtime import ControlPlaneRuntime
 from api.server import include_api_routers, service_dependencies
 from api.server.async_io import ApiAsyncIo
+from api.server.client_version import ClientVersionMiddleware
 from api.server.host_routing import GeneratedInvokeHostRoutingMiddleware
 from api.server.rate_limit import UnauthenticatedRateLimitMiddleware
 from api.server.services import (
@@ -228,6 +229,10 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
         event_sink=_CurrentGatewayEventSink(services_provider),
         workspace_resolver=_CurrentWorkspaceResolver(services_provider),
         metrics_sink=_CurrentGatewayMetricsSink(services_provider),
+    )
+    app.add_middleware(
+        ClientVersionMiddleware,
+        recommended_version=lambda: services_provider.current().client_release_version,
     )
 
     @app.exception_handler(RequestValidationError)

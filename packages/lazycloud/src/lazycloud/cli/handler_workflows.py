@@ -5,10 +5,13 @@ import inspect
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Protocol, runtime_checkable
 
 import typer
 from shared.env import importing_user_code
+
+from lazycloud.abstractions.app import App
 
 
 class HandlerLoadError(ValueError):
@@ -43,6 +46,25 @@ def apply_handler_reference(user_object: object, reference: str) -> object:
     return user_object
 
 
+def load_deployment_object(reference: str) -> object:
+    if ":" in reference:
+        return apply_handler_reference(load_handler_object(reference), reference)
+    module = _load_module(reference)
+    apps: list[tuple[str, App]] = []
+    seen: set[int] = set()
+    for name, value in vars(module).items():
+        if not isinstance(value, App) or id(value) in seen:
+            continue
+        seen.add(id(value))
+        apps.append((name, value))
+    if not apps:
+        raise HandlerLoadError(f"no App found in {reference}; use {reference}:handler")
+    if len(apps) > 1:
+        choices = ", ".join(f"{reference}:{name}" for name, _ in apps)
+        raise HandlerLoadError(f"multiple apps found; select one: {choices}")
+    return apps[0][1]
+
+
 def invoke_handler_method(
     user_object: object,
     method_name: str,
@@ -69,7 +91,7 @@ def call_handler(
     return user_object(*(args or []), **(kwargs or {}))
 
 
-def _load_module(module_ref: str) -> object:
+def _load_module(module_ref: str) -> ModuleType:
     module_name = _canonical_module_name(module_ref)
     _ensure_current_directory_on_path()
     with importing_user_code():
@@ -133,5 +155,6 @@ __all__ = [
     "apply_handler_reference",
     "call_handler",
     "invoke_handler_method",
+    "load_deployment_object",
     "load_handler_object",
 ]

@@ -11,16 +11,32 @@ import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 lazycloud deploy HANDLER [options]
 ```
 
-Deploys one decorated object, or every resource in an `App`:
+Deploys one decorated object or every deployable resource registered with an `App`.
+Omit `:object` when the file or module contains exactly one app:
 
 ```bash
 lazycloud deploy quickstart.py:hello
+lazycloud deploy quickstart.py
+lazycloud deploy quickstart.py:app
 lazycloud deploy myproject.api:app
 lazycloud deploy myproject.api:app --resource endpoint:predict
 ```
 
-`--name` overrides the deployment name when deploying one resource, and
+`--name` overrides the deployment name when you select a handler or use `--resource`.
 `--source-root <dir>` packages a different directory as the code root.
+
+`quickstart.py` and `quickstart.py:app` deploy the same app, including its functions,
+endpoints, pods, and other deployable resources. App references imported into the
+module count too; aliases for the same app count once. Resources belong to the
+selected app even when their definitions live in other files.
+
+If the module contains multiple apps, choose one with `file.py:app_name`. If it
+contains no app, supply an explicit handler reference. A decorated handler such as
+`quickstart.py:hello` deploys only that handler.
+
+`--resource` also works with a bare file. With `--json`, a successful app deployment
+returns one object containing the app name and its resource results. A deployment
+failure stops the command without undoing resources already deployed.
 
 ## lazycloud run
 

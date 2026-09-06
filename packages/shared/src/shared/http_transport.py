@@ -14,6 +14,11 @@ from typing import Protocol
 import certifi
 from pydantic import JsonValue, TypeAdapter
 
+from shared.client_version import (
+    RECOMMENDED_CLIENT_VERSION_HEADER,
+    client_version,
+    report_client_version,
+)
 from shared.http.errors import (
     HttpResponseDecodeError,
     HttpTransportError,
@@ -40,7 +45,6 @@ class _HttpResponse(Protocol):
 
 
 _JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
-HTTP_USER_AGENT = "lazycloud/0.1.0"
 
 
 def build_http_ssl_context() -> ssl.SSLContext:
@@ -81,8 +85,10 @@ class HttpChannel:
                 context=self.ssl_context,
             )
             with opened as response:
+                report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
                 return _decode_response(response)
         except urllib.error.HTTPError as exc:
+            report_client_version(exc.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
             raise http_api_error_from_http_error(exc) from exc
         except (OSError, http.client.HTTPException) as exc:
             raise _transport_error(method, request.full_url, exc) from exc
@@ -104,9 +110,11 @@ class HttpChannel:
                 context=self.ssl_context,
             )
             with opened as response:
+                report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
                 for raw_line in response:
                     yield raw_line.decode("utf-8")
         except urllib.error.HTTPError as exc:
+            report_client_version(exc.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
             raise http_api_error_from_http_error(exc) from exc
         except (OSError, http.client.HTTPException) as exc:
             raise _transport_error("GET", request.full_url, exc) from exc
@@ -140,11 +148,13 @@ class HttpChannel:
                 context=self.ssl_context,
             )
             with opened as response:
+                report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
                 for raw_line in response:
                     line = raw_line.strip()
                     if line:
                         yield _decode_json(line)
         except urllib.error.HTTPError as exc:
+            report_client_version(exc.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
             raise http_api_error_from_http_error(exc) from exc
         except (OSError, http.client.HTTPException) as exc:
             raise _transport_error("POST", request.full_url, exc) from exc
@@ -179,7 +189,8 @@ def _request_headers(
     token: str | None,
     headers: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    merged = {"User-Agent": HTTP_USER_AGENT}
+    version = client_version()
+    merged = {"User-Agent": f"lazycloud/{version}"}
     if token:
         merged["Authorization"] = f"Bearer {token}"
     if headers:
