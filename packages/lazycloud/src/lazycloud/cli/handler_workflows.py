@@ -11,8 +11,7 @@ from typing import Any, Protocol, runtime_checkable
 import typer
 from shared.env import importing_user_code
 
-from lazycloud.abstractions.endpoint import ASGI, Endpoint
-from lazycloud.abstractions.function import Function
+from lazycloud.abstractions.app import App
 
 
 class HandlerLoadError(ValueError):
@@ -47,27 +46,23 @@ def apply_handler_reference(user_object: object, reference: str) -> object:
     return user_object
 
 
-def load_deployment_objects(reference: str) -> tuple[tuple[str, object], ...]:
+def load_deployment_object(reference: str) -> object:
     if ":" in reference:
-        return ((reference, apply_handler_reference(load_handler_object(reference), reference)),)
+        return apply_handler_reference(load_handler_object(reference), reference)
     module = _load_module(reference)
-    targets: list[tuple[str, object]] = []
+    apps: list[tuple[str, App]] = []
     seen: set[int] = set()
     for name, value in vars(module).items():
-        if _decorated_function_module(value) != module.__name__ or id(value) in seen:
+        if not isinstance(value, App) or id(value) in seen:
             continue
         seen.add(id(value))
-        handler = f"{module.__name__}:{name}"
-        targets.append((handler, apply_handler_reference(value, handler)))
-    if not targets:
-        raise HandlerLoadError(f"no deployable decorated functions found in {reference}")
-    return tuple(targets)
-
-
-def _decorated_function_module(value: object) -> str | None:
-    if isinstance(value, (Function, Endpoint, ASGI)):
-        return value.__module__
-    return None
+        apps.append((name, value))
+    if not apps:
+        raise HandlerLoadError(f"no App found in {reference}; use {reference}:handler")
+    if len(apps) > 1:
+        choices = ", ".join(f"{reference}:{name}" for name, _ in apps)
+        raise HandlerLoadError(f"multiple apps found; select one: {choices}")
+    return apps[0][1]
 
 
 def invoke_handler_method(
@@ -160,6 +155,6 @@ __all__ = [
     "apply_handler_reference",
     "call_handler",
     "invoke_handler_method",
-    "load_deployment_objects",
+    "load_deployment_object",
     "load_handler_object",
 ]

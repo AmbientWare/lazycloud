@@ -225,9 +225,9 @@ def _register_public_commands(registry: PublicCliRegistry) -> None:
 
 
 def _register_deploy(application: typer.Typer) -> None:
-    application.command(
-        "deploy", help="Deploy a handler, app, or all decorated functions in a file."
-    )(deploy)
+    application.command("deploy", help="Deploy a handler, an app, or the single app in a file.")(
+        deploy
+    )
 
 
 def _register_run(application: typer.Typer) -> None:

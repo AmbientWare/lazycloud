@@ -31,7 +31,9 @@ everything it registers; `--resource <name>` or `--resource <kind>:<name>`
 selects one.
 
 `deploy` also accepts a file or module without `:object`, such as
-`lazycloud deploy quickstart.py`, to deploy every decorated function defined there.
+`lazycloud deploy quickstart.py`, when it contains exactly one app. This deploys
+everything registered with that app. If there are several apps, choose one with
+`file.py:app_name`.
 
 ## Command groups
 

@@ -31,7 +31,7 @@ from lazycloud.cli.handler_workflows import (
     apply_handler_reference,
     call_handler,
     invoke_handler_method,
-    load_deployment_objects,
+    load_deployment_object,
     load_handler_object,
 )
 from lazycloud.cli.workflow_options import (
@@ -109,99 +109,69 @@ def deploy(
     selected_workspace = workspace or resolve_control_client_config().workspace
     with control_workspace_scope(selected_workspace):
         try:
-            targets = load_deployment_objects(handler)
+            user_object = load_deployment_object(handler)
         except HandlerLoadError as exc:
             raise typer.BadParameter(str(exc)) from exc
-        if len(targets) > 1 and name is not None:
-            raise typer.BadParameter("--name requires a single handler; use file.py:function")
-        if ":" not in handler and resource is not None:
-            raise typer.BadParameter("--resource requires an app reference; use file.py:app")
+        if isinstance(user_object, App) and name is not None and resource is None:
+            raise typer.BadParameter("--name requires a handler reference or --resource")
+        _attach_workflow_terminal(user_object)
         deployment_image = _deployment_image(overrides)
-        for _, user_object in targets:
-            _configure_deployment_object(user_object, overrides, deployment_image)
-        for reference, user_object in targets:
-            response = _deploy_object(
-                user_object,
-                overrides=overrides,
-                deployment_image=deployment_image,
+        if isinstance(user_object, Pod):
+            _configure_pod(user_object, overrides)
+        elif isinstance(user_object, Function):
+            _validate_function_overrides(overrides)
+            user_object.configure(
+                image=deployment_image,
+                cpu=overrides.cpu,
+                memory=overrides.memory,
+                gpu=overrides.gpu,
+                gpu_count=overrides.gpu_count,
+                env=overrides.env,
+                secrets=overrides.secrets,
+                region=overrides.region,
+                pool=overrides.pool,
+                preemptible=overrides.preemptible,
+            )
+        elif not isinstance(user_object, App) and overrides.has_values():
+            msg = "deployment overrides require an App, Function, or Pod handler"
+            raise typer.BadParameter(msg)
+        if isinstance(user_object, App):
+            response = user_object.deploy(
+                resource=overrides.resource,
+                name=name,
+                workspace=selected_workspace,
+                source_root=source_root,
+                image=deployment_image,
+                cpu=overrides.cpu,
+                memory=overrides.memory,
+                gpu=overrides.gpu,
+                gpu_count=overrides.gpu_count,
+                env=overrides.env,
+                secrets=overrides.secrets,
+                ports=overrides.ports,
+                keep_warm=overrides.keep_warm,
+                tcp=overrides.tcp,
+                region=overrides.region,
+                pool=overrides.pool,
+                preemptible=overrides.preemptible,
+                entrypoint=overrides.entrypoint,
+            )
+        elif isinstance(user_object, (Pod, Function)):
+            response = user_object.deploy(
                 name=name,
                 workspace=selected_workspace,
                 source_root=source_root,
             )
-            _print_deployment(ctx, user_object, response, handler=reference, name=name)
-
-
-def _configure_deployment_object(
-    user_object: object, overrides: DeploymentOverrides, deployment_image: Image | None
-) -> None:
-    _attach_workflow_terminal(user_object)
-    if isinstance(user_object, Pod):
-        _configure_pod(user_object, overrides)
-    elif isinstance(user_object, Function):
-        _validate_function_overrides(overrides)
-        user_object.configure(
-            image=deployment_image,
-            cpu=overrides.cpu,
-            memory=overrides.memory,
-            gpu=overrides.gpu,
-            gpu_count=overrides.gpu_count,
-            env=overrides.env,
-            secrets=overrides.secrets,
-            region=overrides.region,
-            pool=overrides.pool,
-            preemptible=overrides.preemptible,
-        )
-    elif not isinstance(user_object, App) and overrides.has_values():
-        raise typer.BadParameter("deployment overrides require an App, Function, or Pod handler")
-
-
-def _deploy_object(
-    user_object: object,
-    *,
-    overrides: DeploymentOverrides,
-    deployment_image: Image | None,
-    name: str | None,
-    workspace: str,
-    source_root: str | None,
-) -> object:
-    if isinstance(user_object, App):
-        return user_object.deploy(
-            resource=overrides.resource,
-            name=name,
-            workspace=workspace,
-            source_root=source_root,
-            image=deployment_image,
-            cpu=overrides.cpu,
-            memory=overrides.memory,
-            gpu=overrides.gpu,
-            gpu_count=overrides.gpu_count,
-            env=overrides.env,
-            secrets=overrides.secrets,
-            ports=overrides.ports,
-            keep_warm=overrides.keep_warm,
-            tcp=overrides.tcp,
-            region=overrides.region,
-            pool=overrides.pool,
-            preemptible=overrides.preemptible,
-            entrypoint=overrides.entrypoint,
-        )
-    if isinstance(user_object, (Pod, Function)):
-        return user_object.deploy(name=name, workspace=workspace, source_root=source_root)
-    return invoke_handler_method(
-        user_object,
-        "deploy",
-        kwargs={"workspace": workspace, "name": name, "source_root": source_root},
-    )
-
-
-def _print_deployment(
-    ctx: typer.Context,
-    user_object: object,
-    response: object,
-    *,
-    handler: str,
-    name: str | None,
-) -> None:
+        else:
+            response = invoke_handler_method(
+                user_object,
+                "deploy",
+                kwargs={
+                    "workspace": selected_workspace,
+                    "name": name,
+                    "source_root": source_root,
+                },
+            )
     payload = payload_data(response)
     if isinstance(user_object, (App, Function, Pod)):
         emit(
