@@ -12,10 +12,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from lazycloud.cli.main import build_public_cli
 from lazycloud.http_transport import request_raw
 from lazycloud.session.uploads import stream_object_bytes, stream_object_file
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
+from shared.client_version import RECOMMENDED_CLIENT_VERSION_HEADER, observe_client_versions
 from shared.http.errors import HttpApiError, HttpResponseDecodeError
+from shared.http_transport import HttpChannel
+from typer.testing import CliRunner
 
 
 class _TransportHandler(BaseHTTPRequestHandler):
@@ -30,6 +34,17 @@ class _TransportHandler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == "/api/v1/workspaces":
+            self._respond(200, b'{"workspaces": []}', content_type="application/json")
+            return
+        if parsed.path == "/api/v1/workspaces/current":
+            self._respond(
+                200,
+                b'{"id":"workspace-1","name":"default",'
+                b'"created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-01T00:00:00Z"}',
+                content_type="application/json",
+            )
+            return
         if parsed.path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/final?redirected=1")
@@ -99,6 +114,7 @@ class _TransportHandler(BaseHTTPRequestHandler):
     ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
+        self.send_header(RECOMMENDED_CLIENT_VERSION_HEADER, "999.0.0")
         if duplicate_header:
             self.send_header("X-Request-Result", "one")
             self.send_header("X-Request-Result", "two")
@@ -147,6 +163,32 @@ def test_raw_transport_sends_a_bounded_readable_body_without_json_encoding() -> 
 
     assert json.loads(response.content)["body"] == "streamed"
     assert len(reads) > 1
+
+
+def test_cli_version_advice_keeps_json_stdout_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _http_server() as endpoint:
+        monkeypatch.setenv("LAZYCLOUD_ENDPOINT", endpoint)
+        result = CliRunner().invoke(build_public_cli(), ["--json", "workspace", "list"])
+        human_result = CliRunner().invoke(build_public_cli(), ["workspace", "list"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {"workspaces": []}
+    assert "999.0.0" in result.stderr
+    assert "lazycloud update" in result.stderr
+    assert human_result.exit_code == 0, human_result.output
+    assert human_result.stderr.count("lazycloud update") == 1
+
+
+def test_version_advice_reaches_the_client_on_streams_and_http_errors() -> None:
+    versions: list[str] = []
+    with _http_server() as endpoint, observe_client_versions(versions.append):
+        channel = HttpChannel(endpoint=endpoint)
+        list(channel.stream_get("/echo"))
+        list(channel.stream_post("/api/v1/functions/invoke/stream", {}))
+        with pytest.raises(HttpApiError):
+            channel.get("/status/403")
+        response = request_raw(endpoint, method="GET", path="/status/403")
+        assert response.status_code == 403
+    assert versions == ["999.0.0"] * 4
 
 
 def test_object_upload_streams_with_progress_and_validates_response() -> None:

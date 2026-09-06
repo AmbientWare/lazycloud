@@ -3,7 +3,9 @@ from __future__ import annotations
 import ssl
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from email.message import Message
+from importlib.metadata import version
 
 import pytest
 from shared.http.errors import HttpTransportError
@@ -13,6 +15,7 @@ from shared.http_transport import HttpChannel, build_http_ssl_context
 @dataclass(slots=True)
 class _NoContentResponse:
     status: int = 204
+    headers: Message = field(default_factory=Message)
 
     def __enter__(self) -> _NoContentResponse:
         return self
@@ -62,7 +65,7 @@ def test_http_channel_sends_the_lazycloud_user_agent(
         context: ssl.SSLContext,
     ) -> _NoContentResponse:
         _ = timeout, context
-        assert request.get_header("User-agent") == "lazycloud/0.1.0"
+        assert request.get_header("User-agent") == f"lazycloud/{version('lazycloud-shared')}"
         assert request.get_header("Authorization") == "Bearer test-token"
         assert request.get_header("Content-type") == "application/json"
         return _NoContentResponse()

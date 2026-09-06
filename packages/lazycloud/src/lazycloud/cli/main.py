@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Annotated, Protocol, TypeVar
 
 import typer
+from shared.client_version import observe_client_versions, release_is_newer
 
 from lazycloud.cli.apps import app_app
 from lazycloud.cli.client import client_app
@@ -14,6 +15,7 @@ from lazycloud.cli.components.errors import (
 )
 from lazycloud.cli.components.output import (
     CliContextState,
+    error_console,
     json_output_active,
     set_json_output,
 )
@@ -36,6 +38,7 @@ from lazycloud.cli.serve import serve
 from lazycloud.cli.update import update
 from lazycloud.cli.volumes import volume_app, volume_cp, volume_ls, volume_mv, volume_rm
 from lazycloud.cli.workspaces import workspace_app
+from lazycloud.self_update import installed_version
 
 _GLOBAL_FLAGS = ("--json", "--debug")
 _RegistryValue = TypeVar("_RegistryValue")
@@ -187,6 +190,21 @@ def _public_cli_callback(
     previous_json_output = json_output_active()
     set_json_output(json_output)
     ctx.call_on_close(lambda: set_json_output(previous_json_output))
+    current = installed_version()
+    notified = False
+
+    def notify_update(recommended: str) -> None:
+        nonlocal notified
+        if not notified and release_is_newer(recommended, current):
+            notified = True
+            error_console.print(
+                f"lazycloud {current} is out of date; this server recommends {recommended}. "
+                "Run `lazycloud update` to upgrade.",
+                markup=False,
+                soft_wrap=True,
+            )
+
+    ctx.with_resource(observe_client_versions(notify_update))
 
 
 def _register_public_commands(registry: PublicCliRegistry) -> None:
@@ -207,7 +225,9 @@ def _register_public_commands(registry: PublicCliRegistry) -> None:
 
 
 def _register_deploy(application: typer.Typer) -> None:
-    application.command("deploy", help="Deploy a handler or app object.")(deploy)
+    application.command(
+        "deploy", help="Deploy a handler, app, or all decorated functions in a file."
+    )(deploy)
 
 
 def _register_run(application: typer.Typer) -> None:
