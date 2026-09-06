@@ -521,6 +521,7 @@ class ApiServiceCore:
     owns_redis_client: bool
     owns_binary_redis_client: bool
     owned_resources: tuple[ApiOwnedResource, ...]
+    client_release_version: str | None
 
     @property
     def database(self) -> DatabaseClient:
@@ -620,6 +621,7 @@ class ApiServices(ApiServiceCore):
         volume_service: VolumeControlService | None = None,
         worker_repository_service: WorkerRepositoryService | None = None,
         owned_resources: tuple[ApiOwnedResource, ...] = (),
+        client_release_version: str | None = None,
     ) -> ApiServices:
         context = ServiceContext.create(database, root=root, create_schema=create_schema)
         auth_token_cache = AuthTokenCache()
@@ -1018,6 +1020,7 @@ class ApiServices(ApiServiceCore):
         )
         autoscaler_states = AutoscalerStateService(context)
         core = ApiServiceCore(
+            client_release_version=client_release_version,
             context=context,
             auth=auth,
             users=users,
@@ -1363,6 +1366,7 @@ def _compose_api_services(
         ),
     )
     return ApiServices(
+        client_release_version=core.client_release_version,
         context=core.context,
         auth=core.auth,
         users=core.users,

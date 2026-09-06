@@ -32,6 +32,10 @@ lazycloud update
 `lazycloud update --check` reports the installed and latest versions without
 changing anything.
 
+API responses tell the CLI which client version the server recommends. If yours
+is older, the CLI prints a `lazycloud update` hint once per command. The hint goes
+to stderr, including when you use `--json`. Requests continue normally.
+
 The CLI keeps its sign-in state under `~/.lazycloud`. Set `LAZYCLOUD_HOME` to
 put it somewhere else.
 

@@ -54,7 +54,7 @@ def test_pip_environments_upgrade_with_their_own_interpreter() -> None:
 
 
 def test_release_is_newer_only_for_a_higher_release() -> None:
-    from lazycloud.self_update import release_is_newer
+    from shared.client_version import release_is_newer
 
     assert release_is_newer("0.0.8", "0.0.7")
     assert not release_is_newer("0.0.7", "0.1.0")

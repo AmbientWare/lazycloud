@@ -48,18 +48,6 @@ class _PypiDocument(BaseModel):
     info: _PypiInfo
 
 
-def release_is_newer(candidate: str, installed: str) -> bool:
-    """Compare release versions; an unparsable version counts as different, not newer."""
-    try:
-        return _release_tuple(candidate) > _release_tuple(installed)
-    except ValueError:
-        return False
-
-
-def _release_tuple(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in version.strip().split("."))
-
-
 def detect_installation(
     *,
     prefix: Path,

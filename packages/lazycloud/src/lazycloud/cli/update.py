@@ -4,6 +4,7 @@ import subprocess
 from typing import Annotated
 
 import typer
+from shared.client_version import release_is_newer
 
 from lazycloud.cli.components.cards import notice_card
 from lazycloud.cli.components.errors import ClientError
@@ -13,7 +14,6 @@ from lazycloud.self_update import (
     current_installation,
     installed_version,
     latest_version,
-    release_is_newer,
 )
 
 

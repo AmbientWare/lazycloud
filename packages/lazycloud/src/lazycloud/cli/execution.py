@@ -31,6 +31,7 @@ from lazycloud.cli.handler_workflows import (
     apply_handler_reference,
     call_handler,
     invoke_handler_method,
+    load_deployment_object,
     load_handler_object,
 )
 from lazycloud.cli.workflow_options import (
@@ -57,7 +58,9 @@ class RemoteWorkflow(Protocol):
 
 def deploy(
     ctx: typer.Context,
-    handler: str,
+    handler: Annotated[
+        str, typer.Argument(help="Python file, module, or module:object reference.")
+    ],
     name: Annotated[str | None, typer.Option("--name")] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
     source_root: Annotated[str | None, typer.Option("--source-root")] = None,
@@ -106,10 +109,11 @@ def deploy(
     selected_workspace = workspace or resolve_control_client_config().workspace
     with control_workspace_scope(selected_workspace):
         try:
-            user_object = load_handler_object(handler)
+            user_object = load_deployment_object(handler)
         except HandlerLoadError as exc:
             raise typer.BadParameter(str(exc)) from exc
-        user_object: object = apply_handler_reference(user_object, handler)
+        if isinstance(user_object, App) and name is not None and resource is None:
+            raise typer.BadParameter("--name requires a handler reference or --resource")
         _attach_workflow_terminal(user_object)
         deployment_image = _deployment_image(overrides)
         if isinstance(user_object, Pod):

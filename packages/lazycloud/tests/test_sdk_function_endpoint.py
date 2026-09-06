@@ -6,6 +6,7 @@ import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from email.message import Message
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -205,20 +206,6 @@ class FakeUrlopenCall:
     context: ssl.SSLContext
 
 
-class FakeHeaders:
-    def __init__(self, values: dict[str, list[str]]) -> None:
-        self.values = values
-
-    def keys(self) -> list[str]:
-        return list(self.values)
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.values)
-
-    def get_all(self, key: str) -> list[str]:
-        return self.values[key]
-
-
 class FakeHttpResponse:
     def __init__(
         self,
@@ -229,7 +216,10 @@ class FakeHttpResponse:
     ) -> None:
         self.status = status
         self.body = body
-        self.headers = FakeHeaders(headers or {"content-type": ["application/json"]})
+        self.headers = Message()
+        for name, values in (headers or {"content-type": ["application/json"]}).items():
+            for value in values:
+                self.headers[name] = value
 
     def __enter__(self) -> FakeHttpResponse:
         return self

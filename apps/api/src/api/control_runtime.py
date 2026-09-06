@@ -248,6 +248,7 @@ def _production_api_services() -> ApiServices:
             owned_resources.append(image_archive_store)
         services = ApiServices.create(
             database,
+            client_release_version=release.version or None,
             create_schema=False,
             tcp_ingress_settings=tcp_ingress_settings,
             agent_route_reconciliation_settings=agent_route_reconciliation_settings,

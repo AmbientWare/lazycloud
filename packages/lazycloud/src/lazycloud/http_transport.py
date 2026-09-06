@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from email.message import Message
 from typing import Protocol, runtime_checkable
 
+from shared.client_version import (
+    RECOMMENDED_CLIENT_VERSION_HEADER,
+    client_version,
+    report_client_version,
+)
 from shared.http.errors import HttpTransportError
 from shared.http_transport import build_http_ssl_context
 from shared.serialization import to_json_value
@@ -89,6 +94,8 @@ def request_raw(
 ) -> RawHttpResponse:
     body, content_type = _request_body(json_body=json_body, data=data)
     request_headers = dict(headers or {})
+    if not _has_header(request_headers, "user-agent"):
+        request_headers["User-Agent"] = f"lazycloud/{client_version()}"
     if not _has_header(request_headers, "accept"):
         request_headers["Accept"] = "*/*"
     if token and not _has_header(request_headers, "authorization"):
@@ -108,6 +115,7 @@ def request_raw(
             timeout_seconds=timeout_seconds,
             ssl_context=ssl_context or _SSL_CONTEXT,
         ) as response:
+            report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
             return RawHttpResponse(
                 status_code=response.status,
                 headers=_response_headers(response.headers),
@@ -115,6 +123,7 @@ def request_raw(
                 final_url=response.geturl(),
             )
     except urllib.error.HTTPError as exc:
+        report_client_version(exc.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
         return RawHttpResponse(
             status_code=exc.code,
             headers=_response_headers(exc.headers),
