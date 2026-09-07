@@ -141,4 +141,6 @@ def test_container_attaches_to_existing_container(
     assert response.done is True
     assert response.output == "attached\ncomplete\n"
     assert gateway.attached == ["ctr-existing"]
-    assert capsys.readouterr().out == "attached\ncomplete\n"
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "attached\ncomplete\n"

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from lazycloud.cli.components.progress import CliTerminal
+from lazycloud.terminal import Terminal
 from shared.http.images import (
     BuildImageRequest,
     BuildImageResponse,
@@ -14,7 +17,45 @@ from shared.http.images import (
 )
 from shared.image_building.credentials import ImageCredentialLookupError
 
-from lazycloud import Image
+from lazycloud import Image, output
+
+
+@pytest.mark.parametrize("cli", [False, True])
+@pytest.mark.parametrize("success", [False, True])
+def test_build_output_retains_logs_on_stderr_and_can_be_silenced(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    cli: bool,
+    success: bool,
+) -> None:
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: cli)
+    terminal = CliTerminal() if cli else Terminal(automatic=True)
+    lines = [f"build-line-{index}" for index in range(6)]
+    responses = [BuildImageResponse(msg=f"{line}\n") for line in lines]
+    responses.append(
+        BuildImageResponse(
+            done=True,
+            success=success,
+            image_id="image-built" if success else "",
+            error="build failed" if not success else "",
+        )
+    )
+    for enabled in (True, False):
+        client = FakeCachedImageControlClient(
+            verify_responses=[VerifyImageBuildResponse(image_id="", valid=True, exists=False)],
+            build_responses=responses,
+        )
+        with output(enabled=enabled):
+            result = Image().build(client, terminal=terminal)
+        assert result.success is success
+        assert result.error == ("" if success else "build failed")
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        if enabled:
+            for line in lines:
+                assert captured.err.count(line) == 1
+        else:
+            assert captured.err == ""
 
 
 @dataclass

@@ -48,6 +48,42 @@ From the CLI, `lazycloud run reports.py:build_report 2026-06` submits one call
 and prints the result. An argument that parses as JSON is passed as that
 value; anything else is a string.
 
+## Local progress and logs
+
+When you call a decorated function's `.remote()` from an interactive local Python
+process, the SDK shows image-build logs, source-upload progress, task status, and
+the function's stdout and stderr. Build logs stay in your terminal history.
+`async_remote()` uses the same output settings.
+
+Progress and replayed remote logs go to **stderr**. Return values are not printed
+automatically, and your own `print()` calls still write to stdout.
+
+Automatic output requires both stdout and stderr to be terminals. Calls inside a
+LazyCloud container and scripts with redirected output are quiet by default. Use
+`output()` to override this for a block, including in notebooks or CI:
+
+```python
+from lazycloud import output
+
+with output(enabled=True):
+    result = build_report.remote("2026-06")
+
+with output(enabled=False):
+    result = build_report.remote("2026-06")
+
+print(result)
+```
+
+The setting applies to functions created before the block too. Nested blocks
+restore the enclosing setting when they exit, even after an exception. Async
+tasks inherit the setting when created; changing it in one task does not change
+another task's setting.
+
+Quiet output does not suppress exceptions or disable stored logs. A cloud call
+still returns its result without replaying child logs into the parent by default.
+Detached calls such as `.spawn()` do not keep following logs after submission;
+read them through [Tasks and logs](/concepts/tasks-and-logs).
+
 ## Sizing, timeouts, and retries
 
 Functions default to `cpu=0.125`, `memory="128Mi"`, `timeout_seconds=3600`,
