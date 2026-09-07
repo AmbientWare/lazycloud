@@ -48,28 +48,27 @@ From the CLI, `lazycloud run reports.py:build_report 2026-06` submits one call
 and prints the result. An argument that parses as JSON is passed as that
 value; anything else is a string.
 
-## Local progress and logs
+## Progress and logs
 
-When you call a decorated function's `.remote()` from an interactive local Python
-process, the SDK shows image-build logs, source-upload progress, task status, and
-the function's stdout and stderr. Build logs stay in your terminal history.
-`async_remote()` uses the same output settings.
+Python `.remote()` calls are quiet by default, including in local terminals,
+notebooks, CI, and LazyCloud containers. Use `output()` to show image-build logs,
+source-upload progress, task status, and the function's stdout and stderr for a
+block. Build logs stay in your terminal history. `async_remote()` uses the same
+output settings.
 
 Progress and replayed remote logs go to **stderr**. Return values are not printed
 automatically, and your own `print()` calls still write to stdout.
 
-Automatic output requires both stdout and stderr to be terminals. Calls inside a
-LazyCloud container and scripts with redirected output are quiet by default. Use
-`output()` to override this for a block, including in notebooks or CI:
+`output()` defaults to `enabled=True`. Use `enabled=False` to silence a block
+inside an enabled scope:
 
 ```python
 from lazycloud import output
 
 with output(enabled=True):
     result = build_report.remote("2026-06")
-
-with output(enabled=False):
-    result = build_report.remote("2026-06")
+    with output(enabled=False):
+        result = build_report.remote("2026-07")
 
 print(result)
 ```

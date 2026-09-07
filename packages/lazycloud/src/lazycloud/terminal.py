@@ -11,8 +11,6 @@ from typing import TypeAlias
 
 from typing_extensions import Self
 
-from lazycloud.env import is_local
-
 ProgressCallback: TypeAlias = Callable[[int], None]
 _output_enabled: ContextVar[bool | None] = ContextVar("lazycloud_output_enabled", default=None)
 
@@ -94,7 +92,7 @@ class TerminalStep:
 @dataclass
 class Terminal:
     quiet: bool = False
-    automatic: bool = False
+    default_enabled: bool = True
     _remote_partial: bool = field(default=False, init=False, repr=False)
 
     @property
@@ -104,7 +102,7 @@ class Terminal:
         override = _output_enabled.get()
         if override is not None:
             return override
-        return not self.automatic or (is_local() and sys.stdout.isatty() and sys.stderr.isatty())
+        return self.default_enabled
 
     def write(self, message: str) -> None:
         if self.enabled:

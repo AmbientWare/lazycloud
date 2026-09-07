@@ -438,10 +438,9 @@ def test_a_function_declares_its_own_schedule(
 @pytest.mark.parametrize(
     ("stdout_tty", "stderr_tty", "cloud", "override", "visible"),
     [
-        (True, True, False, None, True),
-        (False, True, False, None, False),
-        (True, False, False, None, False),
+        (True, True, False, None, False),
         (True, True, True, None, False),
+        (True, True, False, True, True),
         (True, True, False, False, False),
         (False, False, True, True, True),
     ],
