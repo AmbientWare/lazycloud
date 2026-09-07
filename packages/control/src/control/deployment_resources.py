@@ -35,6 +35,14 @@ class DeploymentResource:
             raise InvalidInputError(str(exc)) from exc
 
 
+@dataclass(frozen=True, slots=True)
+class WorkloadSummary:
+    resource: DeploymentResource
+    version_count: int
+    running_containers: int
+    active_containers: int
+
+
 def client_manifest_resource(
     resource: DeploymentResource,
     *,
@@ -66,6 +74,36 @@ def client_manifest_resource(
 @dataclass(slots=True)
 class DeploymentResourceService:
     context: ControlContext
+
+    def workloads(
+        self,
+        *,
+        workspace: str,
+        app_id: str,
+        name: str | None = None,
+        kind: DeploymentKind | None = None,
+        after: str | None = None,
+        limit: int = 50,
+    ) -> list[WorkloadSummary]:
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
+            rows = DeploymentResourceRepository(session).workloads(
+                workspace_id=workspace_id,
+                app_id=app_id,
+                name=name,
+                kind=kind,
+                after=after,
+                limit=limit,
+            )
+            return [
+                WorkloadSummary(
+                    resource=_deployment_resource(row.resource),
+                    version_count=row.version_count,
+                    running_containers=row.running_containers,
+                    active_containers=row.active_containers,
+                )
+                for row in rows
+            ]
 
     def list(
         self,

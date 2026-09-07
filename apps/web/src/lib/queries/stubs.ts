@@ -16,31 +16,20 @@ export function deployedStubsQueryOptions(workspaceId: string, appId?: string) {
   });
 }
 
-/** Per-stub task-duration percentiles (p50/p95) plus cold starts, bucketed over time. */
-export function taskLatencyQueryOptions(
-  workspaceId: string,
-  stubIds: string[],
-  options: { deploymentId?: string; windowSeconds?: number } = {},
-) {
-  const windowSeconds = options.windowSeconds ?? 3600;
+export function taskLatencyQueryOptions(workspaceId: string, appId: string, workloadName: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.tasks.latency(
-      workspaceId,
-      [...stubIds].sort().join(","),
-      options.deploymentId ?? null,
-      windowSeconds,
-    ),
+    queryKey: workspaceQueryKeys.tasks.latency(workspaceId, `${appId}:${workloadName}`, null, 3600),
     queryFn: () => {
-      const params = new URLSearchParams();
-      for (const stubId of stubIds) params.append("stub_id", stubId);
-      params.set("window_seconds", String(windowSeconds));
-      if (options.deploymentId) params.set("deployment_id", options.deploymentId);
+      const params = new URLSearchParams({
+        app_id: appId,
+        workload_name: workloadName,
+        window_seconds: "3600",
+      });
       return apiRequest(
-        withWorkspace(`/api/v1/metrics/task-latency?${params.toString()}`, workspaceId),
+        withWorkspace(`/api/v1/metrics/task-latency?${params}`, workspaceId),
         taskLatencyTimeseriesSchema,
       );
     },
-    enabled: stubIds.length > 0,
     meta: workspaceLiveQueryMeta(true),
   });
 }

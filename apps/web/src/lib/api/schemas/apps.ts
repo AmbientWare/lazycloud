@@ -88,6 +88,19 @@ export const deploymentListSchema = z.object({
 });
 export type DeploymentList = z.infer<typeof deploymentListSchema>;
 
+export const workloadSummarySchema = z.object({
+  deployment: deploymentSchema,
+  public: z.boolean(),
+  version_count: z.number().int().nonnegative(),
+  running_containers: z.number().int().nonnegative(),
+  active_containers: z.number().int().nonnegative(),
+});
+export type WorkloadSummary = z.infer<typeof workloadSummarySchema>;
+export const workloadPageSchema = z.object({
+  data: z.array(workloadSummarySchema),
+  next: z.string(),
+});
+
 // Synced to packages/shared/src/shared/http/deployments.py (DeploymentUrlResponse);
 // scoped to the invoke URL the dashboard consumes.
 export const deploymentUrlSchema = z.object({

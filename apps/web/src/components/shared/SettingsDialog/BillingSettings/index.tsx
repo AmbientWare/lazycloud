@@ -1,4 +1,5 @@
-import { CreditCard, ExternalLink, LoaderCircle, Sparkles } from "lucide-react";
+import { CreditCard, ExternalLink, LoaderCircle } from "lucide-react";
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
@@ -41,12 +42,23 @@ export function BillingSettings({
               <Skeleton className="h-2 w-full" />
               <Skeleton className="h-4 w-72" />
             </div>
-          ) : controller.loadError || !summary ? (
-            <p className="text-sm text-destructive" role="alert">
-              {controller.loadError?.message ?? "The plan for this account could not be read."}
-            </p>
+          ) : !summary ? (
+            <ApiErrorNotice
+              title="Could not load your plan"
+              error={controller.loadError}
+              onRetry={controller.retryLoad}
+              retrying={controller.retrying}
+            />
           ) : (
             <>
+              {controller.loadError ? (
+                <ApiErrorNotice
+                  title="Your plan could not be refreshed"
+                  error={controller.loadError}
+                  onRetry={controller.retryLoad}
+                  retrying={controller.retrying}
+                />
+              ) : null}
               {complimentary ? (
                 <p className="text-sm text-muted-foreground">
                   Usage on this account is tracked but not billed.
@@ -107,7 +119,6 @@ export function BillingSettings({
                       disabled={controller.busy}
                       onClick={controller.openPlan}
                     >
-                      <Sparkles className="size-4" />
                       Manage subscription
                     </Button>
                     <Button

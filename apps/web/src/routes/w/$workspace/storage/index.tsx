@@ -31,10 +31,7 @@ type StorageSearch = {
 
 export const Route = createFileRoute("/w/$workspace/storage/")({
   validateSearch: (search: Record<string, unknown>): StorageSearch => ({
-    view:
-      typeof search.view === "string" && STORAGE_TABS.some((tab) => tab.key === search.view)
-        ? (search.view as StorageTab)
-        : "volumes",
+    view: STORAGE_TABS.find((tab) => tab.key === search.view)?.key ?? "volumes",
   }),
   component: StoragePage,
   errorComponent: RouteErrorFallback,
@@ -69,10 +66,12 @@ function StoragePage() {
           thing they are steering, not to the space above it. */}
       <section className="panel flex h-full min-h-0 flex-col overflow-hidden rounded-md">
         <Tabs
+          key={workspace.id}
           value={search.view}
           onValueChange={(view) => {
             setCreating(null);
-            void navigate({ search: { view: view as StorageTab }, replace: true });
+            const next = STORAGE_TABS.find((tab) => tab.key === view)?.key;
+            if (next) void navigate({ search: { view: next }, replace: true });
           }}
           className="flex h-full min-h-0 w-full flex-col overflow-hidden"
         >

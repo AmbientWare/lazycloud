@@ -1,5 +1,5 @@
-import { useDeferredValue, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useDeferredValue, useState } from "react";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import {
   Activity,
@@ -12,6 +12,8 @@ import {
   SquareTerminal,
 } from "lucide-react";
 
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
+import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import {
   CommandDialog,
   CommandEmpty,
@@ -20,20 +22,12 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { formatKind } from "@/lib/format";
-import { appSummariesQueryOptions } from "@/lib/queries/apps";
-import { sandboxesQueryOptions } from "@/lib/queries/sandboxes";
-import { deployedStubsQueryOptions } from "@/lib/queries/stubs";
-import { tasksQueryOptions } from "@/lib/queries/tasks";
+import type { ResourceSearchResult } from "@/lib/api/schemas/search";
+import { resourceSearchQueryOptions } from "@/lib/queries/search";
 import { useWorkspace } from "@/lib/workspace-context";
 
-type SearchResult = {
-  key: string;
-  label: string;
-  detail: string;
-  href: string;
-  icon: typeof Search;
-};
+const resourceIcons = { app: AppWindow, workload: Boxes, task: Activity, sandbox: SquareTerminal };
+const resourceLabels = { app: "App", workload: "Workload", task: "Task", sandbox: "Sandbox" };
 
 export function GlobalSearch({
   open,
@@ -46,182 +40,133 @@ export function GlobalSearch({
   const router = useRouter();
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query.trim());
-  const normalizedQuery = deferredQuery.toLowerCase();
+  const resources = useInfiniteQuery(resourceSearchQueryOptions(workspace.id, deferredQuery));
+  const base = `/w/${encodeURIComponent(workspace.name)}`;
+  const destinations = [
+    { label: "Apps", href: `${base}/apps`, icon: Boxes },
+    { label: "Tasks", href: `${base}/tasks`, icon: Activity },
+    { label: "Storage", href: `${base}/storage`, icon: Database },
+    { label: "Usage", href: `${base}/usage`, icon: ChartNoAxesCombined },
+    { label: "Settings", href: "settings", icon: Settings },
+  ].filter((destination) => destination.label.toLowerCase().includes(query.trim().toLowerCase()));
+  const results = resources.data?.pages.flatMap((page) => page.data) ?? [];
+  const searching = deferredQuery.length > 0 && resources.isPending;
 
-  const apps = useQuery({ ...appSummariesQueryOptions(workspace.id), enabled: open });
-  const workloads = useQuery({ ...deployedStubsQueryOptions(workspace.id), enabled: open });
-  const tasks = useQuery({
-    ...tasksQueryOptions(workspace.id, { limit: 10, search: deferredQuery }),
-    enabled: open && deferredQuery.length >= 2,
-  });
-  const sandboxes = useQuery({ ...sandboxesQueryOptions(workspace.id), enabled: open });
-
-  const results = useMemo(() => {
-    const base = `/w/${encodeURIComponent(workspace.name)}`;
-    const matches = (value: string) =>
-      !normalizedQuery || value.toLowerCase().includes(normalizedQuery);
-    const next: SearchResult[] = [];
-
-    const destinations: SearchResult[] = [
-      {
-        key: "destination-apps",
-        label: "Apps",
-        detail: "Workspace",
-        href: `${base}/apps`,
-        icon: Boxes,
-      },
-      {
-        key: "destination-tasks",
-        label: "Tasks",
-        detail: "Workspace",
-        href: `${base}/tasks`,
-        icon: Activity,
-      },
-      {
-        key: "destination-storage",
-        label: "Storage",
-        detail: "Workspace",
-        href: `${base}/storage`,
-        icon: Database,
-      },
-      {
-        key: "destination-usage",
-        label: "Usage",
-        detail: "Workspace",
-        href: `${base}/usage`,
-        icon: ChartNoAxesCombined,
-      },
-      {
-        key: "destination-settings",
-        label: "Settings",
-        detail: "Account",
-        // Settings is a layer over the current page rather than a page of its own,
-        // so it is reached by asking for it here rather than by navigating away.
-        href: `${base}/apps?settings=general`,
-        icon: Settings,
-      },
-    ];
-    next.push(...destinations.filter((item) => matches(`${item.label} ${item.detail}`)));
-
-    for (const item of apps.data?.items ?? []) {
-      if (!matches(`${item.app.name} ${item.app.id}`)) continue;
-      next.push({
-        key: `app-${item.app.id}`,
-        label: item.app.name,
-        detail: `App · ${item.workload_count} ${item.workload_count === 1 ? "workload" : "workloads"}`,
-        href: `${base}/apps/${encodeURIComponent(item.app.id)}`,
-        icon: AppWindow,
-      });
-    }
-
-    for (const workload of workloads.data?.stubs ?? []) {
-      if (
-        !workload.app_id ||
-        !matches(`${workload.name} ${workload.handler ?? ""} ${workload.id} ${workload.kind}`)
-      )
-        continue;
-      next.push({
-        key: `workload-${workload.id}`,
-        label: workload.name,
-        detail: workload.handler
-          ? `${formatKind(workload.kind)} · ${workload.handler}`
-          : formatKind(workload.kind),
-        href: `${base}/apps/${encodeURIComponent(workload.app_id)}/workloads/${encodeURIComponent(workload.name)}`,
-        icon: Boxes,
-      });
-    }
-
-    for (const task of tasks.data?.data ?? []) {
-      next.push({
-        key: `task-${task.id}`,
-        label: task.name || "Task",
-        detail: `Task · ${formatKind(task.workload?.kind ?? "workload")} · ${formatKind(task.status)}`,
-        href: `${base}/tasks/${encodeURIComponent(task.id)}`,
-        icon: Activity,
-      });
-    }
-
-    for (const sandbox of sandboxes.data?.data ?? []) {
-      if (
-        !sandbox.container_id ||
-        !matches(`${sandbox.name} ${sandbox.id} ${sandbox.container_id}`)
-      )
-        continue;
-      next.push({
-        key: `sandbox-${sandbox.id}-${sandbox.container_id}`,
-        label: sandbox.name,
-        detail: `Sandbox · ${formatKind(sandbox.status)}`,
-        href: `${base}/sandboxes/${encodeURIComponent(sandbox.container_id)}`,
-        icon: SquareTerminal,
-      });
-    }
-
-    return next.slice(0, 30);
-  }, [apps.data, normalizedQuery, tasks.data, sandboxes.data, workspace.name, workloads.data]);
-
-  const openResult = (result: SearchResult) => {
+  const openDestination = (href: string) => {
     onOpenChange(false);
-    setQuery("");
-    router.history.push(result.href);
+    if (href === "settings") {
+      void router.navigate({
+        to: ".",
+        search: (previous) => ({ ...previous, settings: "general" }),
+      });
+    } else {
+      router.history.push(href);
+    }
   };
-
-  const loading =
-    apps.isPending ||
-    workloads.isPending ||
-    sandboxes.isPending ||
-    (deferredQuery.length >= 2 && tasks.isPending);
-  const partialError = apps.isError || workloads.isError || sandboxes.isError || tasks.isError;
 
   return (
     <CommandDialog
       open={open}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen) setQuery("");
-        onOpenChange(nextOpen);
-      }}
+      onOpenChange={onOpenChange}
+      shouldFilter={false}
       title="Search workspace"
-      description="Find apps, workloads, tasks, sandboxes, and workspace destinations"
-      className="top-[10svh] max-h-[75svh] w-[calc(100%-1.5rem)] max-w-2xl translate-y-0 border-border bg-popover shadow-2xl"
+      description="Find apps, workloads, tasks, and sandboxes"
+      className="top-[10svh] max-h-[75svh] w-[calc(100%-1.5rem)] max-w-2xl translate-y-0"
     >
       <CommandInput
         autoFocus
         value={query}
+        maxLength={240}
         onValueChange={setQuery}
-        placeholder="Search apps, workloads, tasks, sandboxes"
+        placeholder="Search workspace"
         className="pr-10"
       />
       <CommandList data-search-results-scroll="" className="max-h-[calc(75svh-3rem)] min-h-24 p-2">
-        <CommandEmpty>{loading ? "Searching workspace" : "No matching resources"}</CommandEmpty>
-        <CommandGroup>
-          {results.map((result) => {
-            const Icon = result.icon;
-            return (
-              <CommandItem
-                key={result.key}
-                value={`${result.key} ${result.label} ${result.detail}`}
-                onSelect={() => openResult(result)}
-                className="min-h-11 gap-3 px-3 py-2 text-muted-foreground data-[selected=true]:bg-accent/70 data-[selected=true]:text-foreground"
-              >
-                <Icon className="size-4 shrink-0" aria-hidden="true" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-foreground">
-                    {result.label}
-                  </span>
-                  <span className="mono block truncate text-[11px] text-muted-foreground">
-                    {result.detail}
-                  </span>
-                </span>
-              </CommandItem>
-            );
-          })}
-        </CommandGroup>
-        {loading && results.length > 0 ? (
-          <p className="px-3 py-2 text-xs text-muted-foreground">Searching workspace</p>
+        {!resources.isError ? (
+          <CommandEmpty>{searching ? "Searching workspace" : "No matching resources"}</CommandEmpty>
         ) : null}
-        {partialError ? (
-          <p className="px-3 py-2 text-xs text-warning">Some resource results are unavailable.</p>
+        {destinations.length > 0 ? (
+          <CommandGroup heading={query ? "Pages" : undefined}>
+            {destinations.map((destination) => (
+              <SearchItem
+                key={destination.href}
+                id={destination.href}
+                label={destination.label}
+                icon={destination.icon}
+                onSelect={() => openDestination(destination.href)}
+              />
+            ))}
+          </CommandGroup>
+        ) : null}
+        {deferredQuery ? (
+          <CommandGroup heading={results.length > 0 ? "Resources" : undefined}>
+            {results.map((result) => (
+              <SearchItem
+                key={`${result.kind}-${result.id}`}
+                id={`${result.kind}-${result.id}`}
+                label={result.name || resourceLabels[result.kind]}
+                detail={resourceLabels[result.kind]}
+                icon={resourceIcons[result.kind]}
+                onSelect={() => openDestination(resourceHref(base, result))}
+              />
+            ))}
+          </CommandGroup>
+        ) : null}
+        {resources.isError && !resources.isFetchNextPageError ? (
+          <ApiErrorNotice
+            compact
+            error={resources.error}
+            title="Search could not be completed"
+            onRetry={() => void resources.refetch()}
+            retrying={resources.isFetching}
+          />
+        ) : null}
+        {searching && destinations.length > 0 ? (
+          <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
+            Searching workspace
+          </p>
+        ) : null}
+        {deferredQuery && resources.data ? (
+          <InfiniteScrollBoundary
+            key={deferredQuery}
+            nextCursor={resources.data.pages.at(-1)?.next}
+            loading={resources.isFetchingNextPage}
+            error={resources.isFetchNextPageError}
+            onLoadMore={() => void resources.fetchNextPage()}
+            resourceLabel="search results"
+          />
         ) : null}
       </CommandList>
     </CommandDialog>
   );
+}
+
+function SearchItem({
+  id,
+  label,
+  detail,
+  icon: Icon,
+  onSelect,
+}: {
+  id: string;
+  label: string;
+  detail?: string;
+  icon: typeof Search;
+  onSelect: () => void;
+}) {
+  return (
+    <CommandItem value={id} onSelect={onSelect} className="min-h-11 gap-3 px-3 py-2">
+      <Icon className="size-4 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
+      {detail ? <span className="text-xs text-muted-foreground">{detail}</span> : null}
+    </CommandItem>
+  );
+}
+
+function resourceHref(base: string, result: ResourceSearchResult): string {
+  if (result.kind === "app") return `${base}/apps/${encodeURIComponent(result.id)}`;
+  if (result.kind === "workload")
+    return `${base}/apps/${encodeURIComponent(result.app_id)}/workloads/${encodeURIComponent(result.name)}`;
+  if (result.kind === "task") return `${base}/tasks/${encodeURIComponent(result.id)}`;
+  return `${base}/sandboxes/${encodeURIComponent(result.id)}`;
 }

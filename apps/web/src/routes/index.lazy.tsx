@@ -15,7 +15,6 @@ import {
   GetStartedButton,
   MarketingCard,
   SectionHeading,
-  StatusDot,
   shell,
 } from "./-marketing/MarketingPrimitives";
 import {
@@ -91,35 +90,30 @@ const heroStories = [
     label: "APIs",
     code: endpointExample,
     command: "lazycloud deploy application.py:app",
-    status: "deployed",
   },
   {
     key: "functions",
     label: "Functions",
     code: functionExample,
     command: "lazycloud deploy application.py:app",
-    status: "deployed",
   },
   {
     key: "sandboxes",
     label: "Sandboxes",
     code: sandboxExample,
     command: "python application.py",
-    status: "sandbox ready",
   },
   {
     key: "services",
     label: "Services",
     code: podExample,
     command: "lazycloud deploy application.py:app",
-    status: "deployed",
   },
   {
     key: "schedules",
     label: "Schedules",
     code: cronExample,
     command: "lazycloud deploy application.py:app",
-    status: "deployed",
   },
 ] as const;
 
@@ -249,7 +243,7 @@ function MarketingHome() {
               "relative z-[2] grid grid-cols-[0.84fr_1.16fr] items-center gap-10 pt-12 pb-16 sm:gap-12 sm:pt-16 sm:pb-20 lg:min-h-[700px] lg:gap-16 lg:pt-23 lg:pb-13 max-lg:grid-cols-1",
             )}
           >
-            <div className="marketing-rise">
+            <div>
               <h1 className="max-w-[620px] text-balance font-serif text-[clamp(42px,8vw,88px)] leading-[0.96] font-normal tracking-[-0.005em] lg:text-[clamp(52px,6.4vw,88px)] [&_em]:text-brand [&_em]:italic">
                 Deploy as fast as you <em>develop.</em>
               </h1>
@@ -275,7 +269,7 @@ function MarketingHome() {
               </div>
             </div>
 
-            <MarketingCard className="marketing-rise relative z-[2] min-w-0 [animation-delay:100ms]">
+            <MarketingCard className="relative z-[2] min-w-0">
               <Tabs className="min-w-0 text-foreground" defaultValue={heroStories[0].key}>
                 <TabsList
                   /* The split hero keeps a stable 3×2 control through compact
@@ -312,10 +306,6 @@ function MarketingHome() {
                           <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
                             {story.command}
                           </span>
-                          <i className="marketing-cursor" aria-hidden="true" />
-                          <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
-                            <StatusDot /> {story.status}
-                          </strong>
                         </div>
                       }
                     >
@@ -602,7 +592,7 @@ function PlatformStoryRail() {
                 className="marketing-story-panel min-w-0"
                 role="region"
               >
-                <div className="marketing-story-visual flex h-[390px] sm:h-[430px] lg:h-[clamp(380px,46dvh,430px)] [&>div]:flex-1">
+                <div className="marketing-story-visual flex min-h-[340px] [&>div]:flex-1">
                   <StoryPreview visual={story.visual} />
                 </div>
               </div>

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import pytest
 from api.server.services import ApiServices
 from database.repositories.identity import UserIdentityRepository, WorkspaceMemberRepository
+from identity.auth import AuthError
 from identity.sign_in import SignInService
 from shared.errors import UpstreamUnavailableError
 from shared.external_identity import ExternalIdentityProfile
@@ -85,11 +86,15 @@ def test_a_sign_in_whose_provisioning_fails_mints_no_session(
         owned = WorkspaceMemberRepository(session).owned_workspace_ids(linked.user_id)
     assert owned
 
-    retried = service.start()
-    exchange_code = service.complete(code="auth-code", state=identity.states[-1])
-    session_credential = service.redeem(code=exchange_code, nonce=retried.nonce)
+    return_to = "/activate?code=BCDF-GHJK"
+    retried = service.start(return_to=return_to)
+    exchange = service.complete(code="auth-code", state=identity.states[-1])
+    session_credential = service.redeem(code=exchange.code, nonce=retried.nonce)
 
     assert session_credential.user.id == linked.user_id
+    assert exchange.return_to == session_credential.return_to == return_to
+    with pytest.raises(AuthError):
+        service.redeem(code=exchange.code, nonce=retried.nonce)
     assert [call[0] for call in provisioner.calls] == [linked.user_id, linked.user_id]
     # One workspace across both attempts, and one the account already owns: a
     # retry that provisioned against a second would bill the wrong thing.

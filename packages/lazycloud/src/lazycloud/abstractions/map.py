@@ -39,7 +39,7 @@ class MapClient(Protocol):
 
     def count(self, name: str) -> MapCountResponse: ...
 
-    def keys(self, name: str) -> MapKeysResponse: ...
+    def keys(self, name: str, *, cursor: str = "", search: str = "") -> MapKeysResponse: ...
 
     def delete_map(self, name: str) -> None: ...
 
@@ -130,8 +130,17 @@ class Map(MutableMapping[str, Any]):
         return isinstance(key, str) and self.get(key, _MISSING) is not _MISSING
 
     def __iter__(self) -> Iterator[str]:
-        response = self.control_client.keys(self.name)
-        return iter(response.keys)
+        cursor = ""
+        seen: set[str] = set()
+        while True:
+            response = self.control_client.keys(self.name, cursor=cursor)
+            for key in response.data:
+                if key not in seen:
+                    seen.add(key)
+                    yield key
+            cursor = response.next
+            if not cursor:
+                return
 
     def __len__(self) -> int:
         response = self.control_client.count(self.name)

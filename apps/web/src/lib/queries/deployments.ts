@@ -1,8 +1,13 @@
-import { infiniteQueryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { LIVE_LIST_MAX_PAGES } from "./infinite-list";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
-import { deploymentListSchema, type Deployment, type DeploymentList } from "@/lib/api/schemas";
+import {
+  deploymentListSchema,
+  workloadPageSchema,
+  type Deployment,
+  type DeploymentList,
+} from "@/lib/api/schemas";
 
 import { selectInfiniteList, type InfiniteListQueryData } from "./infinite-list";
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
@@ -12,6 +17,39 @@ export type DeploymentListOptions = {
   name?: string;
   limit?: number;
 };
+
+export function workloadsInfiniteQueryOptions(workspaceId: string, appId: string, kind?: string) {
+  return infiniteQueryOptions({
+    queryKey: workspaceQueryKeys.deployments.workloads(workspaceId, appId, undefined, kind),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ limit: "50" });
+      if (pageParam) params.set("cursor", pageParam);
+      if (kind) params.set("kind", kind);
+      return apiRequest(
+        withWorkspace(`/api/v1/apps/${encodeURIComponent(appId)}/workloads?${params}`, workspaceId),
+        workloadPageSchema,
+      );
+    },
+    getNextPageParam: (page) => page.next || undefined,
+    meta: workspaceLiveQueryMeta(true),
+  });
+}
+
+export function workloadQueryOptions(workspaceId: string, appId: string, name: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.deployments.workloads(workspaceId, appId, name),
+    queryFn: async () => {
+      const params = new URLSearchParams({ name, limit: "1" });
+      const page = await apiRequest(
+        withWorkspace(`/api/v1/apps/${encodeURIComponent(appId)}/workloads?${params}`, workspaceId),
+        workloadPageSchema,
+      );
+      return page.data[0] ?? null;
+    },
+    meta: workspaceLiveQueryMeta(true),
+  });
+}
 
 export function deploymentsInfiniteQueryOptions(
   workspaceId: string,

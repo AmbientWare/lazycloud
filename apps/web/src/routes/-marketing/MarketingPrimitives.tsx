@@ -44,11 +44,6 @@ export function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
-/* Live status dot, shared by terminal footers and product rows. */
-export function StatusDot() {
-  return <i className="size-1.5 rounded-full bg-positive shadow-[0_0_10px_var(--positive)]" />;
-}
-
 export function MarketingButton({
   to,
   hash,

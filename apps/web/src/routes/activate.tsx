@@ -179,16 +179,18 @@ function DeviceCodeDecision({
           className="flex-1"
           disabled={approve.isPending || deny.isPending}
           onClick={() => approve.mutate({ userCode })}
+          pending={approve.isPending}
         >
-          {approve.isPending ? <Loader2 className="size-4 animate-spin" /> : "Approve"}
+          Approve
         </Button>
         <Button
           variant="outline"
           className="flex-1"
           disabled={approve.isPending || deny.isPending}
           onClick={() => deny.mutate({ userCode })}
+          pending={deny.isPending}
         >
-          {deny.isPending ? <Loader2 className="size-4 animate-spin" /> : "Deny"}
+          Deny
         </Button>
       </div>
     </div>

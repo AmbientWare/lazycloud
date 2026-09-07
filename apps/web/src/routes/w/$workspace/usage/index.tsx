@@ -88,7 +88,6 @@ function UsagePage() {
       </Panel>
       <Panel
         title="Apps"
-        description="Open an app to see its workloads"
         className="min-h-[22rem] flex-1"
         contentClassName="flex min-h-0 flex-col overflow-hidden"
       >

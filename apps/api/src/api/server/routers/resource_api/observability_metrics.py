@@ -30,7 +30,9 @@ router = APIRouter()
     operation_id="get_task_latency_timeseries",
 )
 def api_v1_task_latency_timeseries(
-    stub_id: Annotated[list[str], Query()],
+    stub_id: Annotated[list[str], Query(default_factory=list)],
+    app_id: identifier_filter = None,
+    workload_name: str | None = None,
     deployment_id: identifier_filter = None,
     window_seconds: int = Query(default=3600, ge=1),
     start: str | None = None,
@@ -44,6 +46,8 @@ def api_v1_task_latency_timeseries(
             workspace_id,
             stub_ids=tuple(value.strip() for value in stub_id if value.strip()),
             deployment_id=deployment_id,
+            app_id=app_id,
+            workload_name=workload_name,
             window_seconds=window_seconds,
             start=_parsed_time(start),
             end=_parsed_time(end),

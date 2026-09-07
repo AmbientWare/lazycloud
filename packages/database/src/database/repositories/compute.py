@@ -1426,6 +1426,18 @@ class ComputeMachineEnrollmentRepository:
             if observed_at is not None
         ]
 
+    def by_join_credential(
+        self, credential_id: str, *, user_id: str
+    ) -> ComputeMachineEnrollmentRecord | None:
+        return self._one(
+            select(ComputeMachineEnrollmentTable).where(
+                ComputeMachineEnrollmentTable.join_credential_id == credential_id,
+                ComputeMachineEnrollmentTable.user_id == user_id,
+                ComputeMachineEnrollmentTable.status == ComputeMachineEnrollmentStatus.Active.value,
+            ),
+            for_update=False,
+        )
+
     def by_credential_hash(
         self,
         credential_hash: str,

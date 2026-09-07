@@ -125,7 +125,7 @@ export function TaskTable({
                   </TableCell>
                 ) : null}
                 <TableCell>
-                  <StatusChip status={task.status} live={task.status === "running"} />
+                  <StatusChip status={task.status} />
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
                   <LiveRelativeTime value={task.created_at} />

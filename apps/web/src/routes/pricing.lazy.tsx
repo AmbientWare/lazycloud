@@ -1,6 +1,9 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createLazyFileRoute } from "@tanstack/react-router";
+
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
+import { Skeleton } from "@/components/ui/skeleton";
 
 import type { PricingCatalog, PublishedPlacementRate } from "@/lib/api/schemas";
 import { gpuModelsLabel, limitFigure, memberLimitFigure } from "@/lib/entitlements";
@@ -180,10 +183,36 @@ function MarketingPricing() {
   if (!catalog) {
     return (
       <MarketingLayout>
-        <main className={cn(shell, "py-24")} id="marketing-main">
-          <p className={pricing.error ? "text-destructive" : "text-muted-foreground"}>
-            {pricing.error?.message ?? "Loading current pricing…"}
-          </p>
+        <main id="marketing-main">
+          <PricingHero>
+            <ResourceCostsPanel>
+              {pricing.error ? (
+                <ApiErrorNotice
+                  className="mt-6 px-0"
+                  title="Could not load current pricing"
+                  error={pricing.error}
+                  onRetry={() => void pricing.refetch()}
+                  retrying={pricing.isFetching}
+                />
+              ) : (
+                <div className="mt-6" role="status">
+                  <span className="sr-only">Loading current pricing</span>
+                  <div className="space-y-8" aria-hidden="true">
+                    <Skeleton className="h-12 w-full" />
+                    {Array.from({ length: 5 }, (_, index) => (
+                      <div
+                        className="flex justify-between gap-8 border-t border-border pt-5"
+                        key={index}
+                      >
+                        <Skeleton className="h-5 w-1/3" />
+                        <Skeleton className="h-5 w-1/4" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </ResourceCostsPanel>
+          </PricingHero>
         </main>
       </MarketingLayout>
     );
@@ -196,93 +225,57 @@ function MarketingPricing() {
   return (
     <MarketingLayout>
       <main id="marketing-main">
-        <section className="border-b border-border bg-background">
-          <div
-            className={cn(
-              shell,
-              "grid grid-cols-[minmax(0,0.68fr)_minmax(0,1fr)] gap-x-14 gap-y-12 pt-12 pb-16 sm:pt-14 lg:gap-x-20 lg:pt-20 lg:pb-24 max-lg:grid-cols-1",
-            )}
+        <PricingHero plansAvailable>
+          <ResourceCostsPanel
+            controls={<MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />}
           >
-            <div className="flex min-w-0 flex-col">
-              <h1 className="font-serif text-[clamp(2.75rem,6.6vw,4.5rem)] leading-[0.94] font-normal tracking-[-0.01em] text-balance [&_em]:text-brand [&_em]:italic">
-                The meter starts and stops with your <em>code</em>.
-              </h1>
-              <p className="mt-6 max-w-[30rem] text-[15px] leading-[1.6] text-muted-foreground sm:text-base">
-                Compute billing starts with the container and stops with it. You pay by the second.
+            <p className="mt-3.5 text-[12.5px] leading-snug text-muted-foreground">
+              Rates for machines managed by LazyCloud, effective{" "}
+              <time dateTime={catalog.metered_rates_effective_at}>
+                {new Date(catalog.metered_rates_effective_at).toLocaleString(undefined, {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                  timeZone: "UTC",
+                })}{" "}
+                UTC
+              </time>
+              .
+            </p>
+            <div className="mt-5 space-y-2">
+              <label className="block text-[13px] font-medium" htmlFor={regionId}>
+                Compute region
+              </label>
+              <select
+                id={regionId}
+                aria-describedby={`${regionId}-help`}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
+                value={rateClass}
+                onChange={(event) => setRateClass(event.target.value)}
+                disabled={!hasRegions}
+              >
+                {catalog.placement_rates.map((rate) => (
+                  <option key={rate.rate_class} value={rate.rate_class}>
+                    {rate.name} · {rate.multiplier}x base compute rate
+                  </option>
+                ))}
+              </select>
+              <p id={`${regionId}-help`} className="text-xs leading-relaxed text-muted-foreground">
+                {hasRegions
+                  ? `Automatic lets LazyCloud choose where your code runs. Region selection is available on ${catalog.plans
+                      .filter((plan) => plan.entitlements.region_selection)
+                      .map((plan) => plan.name)
+                      .join(" and ")}. Prices below include the selected region's adjustment.`
+                  : "Automatic lets LazyCloud choose where your code runs. Region selection is not available yet. These are the current base rates."}{" "}
+                Storage and egress rates do not change with this selection.
               </p>
-              <div className="mt-8 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
-                <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
-                <MarketingButton
-                  className="marketing-action-secondary stamp-quiet border-input"
-                  endGlyph="↓"
-                  hash="plans"
-                  to="/pricing"
-                >
-                  See the plans
-                </MarketingButton>
-              </div>
             </div>
 
-            <MarketingCard className="min-w-0 p-5 sm:p-6">
-              {/* The caption sits under the row rather than beside the heading, so
-                  the toggle keeps one position however the line above rewraps. */}
-              <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
-                <h2 className="font-serif text-[clamp(1.625rem,3vw,2.125rem)] leading-none font-normal">
-                  Resource costs
-                </h2>
-                <MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />
-              </div>
-              <p className="mt-3.5 text-[12.5px] leading-snug text-muted-foreground">
-                Rates for machines managed by LazyCloud, effective{" "}
-                <time dateTime={catalog.metered_rates_effective_at}>
-                  {new Date(catalog.metered_rates_effective_at).toLocaleString(undefined, {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                    timeZone: "UTC",
-                  })}{" "}
-                  UTC
-                </time>
-                .
-              </p>
-              <div className="mt-5 space-y-2">
-                <label className="block text-[13px] font-medium" htmlFor={regionId}>
-                  Compute region
-                </label>
-                <select
-                  id={regionId}
-                  aria-describedby={`${regionId}-help`}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
-                  value={rateClass}
-                  onChange={(event) => setRateClass(event.target.value)}
-                  disabled={!hasRegions}
-                >
-                  {catalog.placement_rates.map((rate) => (
-                    <option key={rate.rate_class} value={rate.rate_class}>
-                      {rate.name} · {rate.multiplier}x base compute rate
-                    </option>
-                  ))}
-                </select>
-                <p
-                  id={`${regionId}-help`}
-                  className="text-xs leading-relaxed text-muted-foreground"
-                >
-                  {hasRegions
-                    ? `Automatic lets LazyCloud choose where your code runs. Region selection is available on ${catalog.plans
-                        .filter((plan) => plan.entitlements.region_selection)
-                        .map((plan) => plan.name)
-                        .join(" and ")}. Prices below include the selected region's adjustment.`
-                    : "Automatic lets LazyCloud choose where your code runs. Region selection is not available yet. These are the current base rates."}{" "}
-                  Storage and egress rates do not change with this selection.
-                </p>
-              </div>
-
-              <RateList
-                groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
-                id={fleetRatesId}
-              />
-            </MarketingCard>
-          </div>
-        </section>
+            <RateList
+              groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
+              id={fleetRatesId}
+            />
+          </ResourceCostsPanel>
+        </PricingHero>
 
         <section className="border-b border-border bg-muted py-14 sm:py-16 lg:py-20" id="plans">
           <div className={shell}>
@@ -388,9 +381,62 @@ function MarketingPricing() {
   );
 }
 
-/* One term of a plan, read off the catalog. The value column is monospaced
-   whether it holds a figure, a list of models, or a word, so the eye runs down
-   one column rather than two typefaces. */
+function ResourceCostsPanel({ children, controls }: { children: ReactNode; controls?: ReactNode }) {
+  return (
+    <MarketingCard className="min-h-[36rem] min-w-0 p-5 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
+        <h2 className="font-serif text-[clamp(1.625rem,3vw,2.125rem)] leading-none font-normal">
+          Resource costs
+        </h2>
+        {controls}
+      </div>
+      {children}
+    </MarketingCard>
+  );
+}
+
+function PricingHero({
+  children,
+  plansAvailable = false,
+}: {
+  children: ReactNode;
+  plansAvailable?: boolean;
+}) {
+  return (
+    <section className="border-b border-border bg-background">
+      <div
+        className={cn(
+          shell,
+          "grid grid-cols-[minmax(0,0.68fr)_minmax(0,1fr)] gap-x-14 gap-y-12 pt-12 pb-16 sm:pt-14 lg:gap-x-20 lg:pt-20 lg:pb-24 max-lg:grid-cols-1",
+        )}
+      >
+        <div className="flex min-w-0 flex-col">
+          <h1 className="font-serif text-[clamp(2.75rem,6.6vw,4.5rem)] leading-[0.94] font-normal tracking-[-0.01em] text-balance [&_em]:text-brand [&_em]:italic">
+            The meter starts and stops with your <em>code</em>.
+          </h1>
+          <p className="mt-6 max-w-[30rem] text-[15px] leading-[1.6] text-muted-foreground sm:text-base">
+            Compute billing starts with the container and stops with it. You pay by the second.
+          </p>
+          <div className="mt-8 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
+            <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
+            {plansAvailable ? (
+              <MarketingButton
+                className="marketing-action-secondary stamp-quiet border-input"
+                endGlyph="↓"
+                hash="plans"
+                to="/pricing"
+              >
+                See the plans
+              </MarketingButton>
+            ) : null}
+          </div>
+        </div>
+        {children}
+      </div>
+    </section>
+  );
+}
+
 function PlanLimit({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">

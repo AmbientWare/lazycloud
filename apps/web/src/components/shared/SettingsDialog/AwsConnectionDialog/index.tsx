@@ -250,7 +250,7 @@ function ConnectForm({
       </div>
 
       <div className="flex items-start gap-3 rounded-md border border-border bg-card p-3">
-        <ShieldCheck className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+        <ShieldCheck className="mt-0.5 size-4 shrink-0 text-positive" aria-hidden="true" />
         <div>
           <h3 className="text-sm font-medium">One-time AWS authorization</h3>
           <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
@@ -303,7 +303,7 @@ function ConnectionActions({
           <h3 className="text-sm font-medium">Account {connection.account_id}</h3>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">{connection.detail}</p>
         </div>
-        <StatusChip status={presentation.label} live={presentation.live} />
+        <StatusChip status={presentation.label} />
       </div>
 
       {showCapacity ? (

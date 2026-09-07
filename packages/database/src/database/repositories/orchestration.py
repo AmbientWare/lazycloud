@@ -952,6 +952,8 @@ class ContainerRepository:
         *,
         workspace_id: str,
         stub_ids: tuple[str, ...],
+        app_id: str | None = None,
+        workload_name: str | None = None,
         start: datetime | None = None,
         end: datetime | None = None,
         limit: int = 10_000,
@@ -961,12 +963,23 @@ class ContainerRepository:
         Every container creation is one cold start; rows come back bounded and
         in ascending time order for the caller to bucket.
         """
-        if not stub_ids:
+        if not stub_ids and not (app_id and workload_name):
             return []
         statement = select(ContainerTable.created_at).where(
             ContainerTable.workspace_id == workspace_id,
-            ContainerTable.stub_id.in_(stub_ids),
         )
+        if stub_ids:
+            statement = statement.where(ContainerTable.stub_id.in_(stub_ids))
+        if app_id is not None:
+            statement = statement.where(ContainerTable.app_id == app_id)
+        if workload_name is not None:
+            statement = statement.where(
+                ContainerTable.stub_id.in_(
+                    select(StubTable.id).where(
+                        StubTable.workspace_id == workspace_id, StubTable.name == workload_name
+                    )
+                )
+            )
         if start is not None:
             statement = statement.where(ContainerTable.created_at >= start)
         if end is not None:

@@ -27,6 +27,7 @@ from shared.http.pods import (
     PodSandboxListFilesResponse,
     PodSandboxListProcessesResponse,
     PodSandboxListUrlsResponse,
+    PodSandboxPreviewFileResponse,
     PodSandboxReplaceInFilesRequest,
     PodSandboxReplaceInFilesResponse,
     PodSandboxSnapshotMemoryRequest,
@@ -169,6 +170,17 @@ class PodControlClient:
                 self._scoped(
                     f"/api/v1/pods/{container_id}/files/download"
                     f"?container_path={_query(container_path)}"
+                )
+            )
+        )
+
+    def sandbox_preview_file(
+        self, container_id: str, container_path: str
+    ) -> PodSandboxPreviewFileResponse:
+        return PodSandboxPreviewFileResponse.model_validate(
+            self.channel.get(
+                self._scoped(
+                    f"/api/v1/pods/{container_id}/files/preview?container_path={_query(container_path)}"
                 )
             )
         )

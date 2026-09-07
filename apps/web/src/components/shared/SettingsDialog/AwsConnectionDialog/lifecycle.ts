@@ -8,7 +8,6 @@ export type AwsConnectionPresentation = {
     | "Needs attention"
     | "Removing"
     | "Action required";
-  live: boolean;
 };
 
 export type AwsConnectionDialogRecoveryAction = Exclude<
@@ -25,21 +24,21 @@ export type AwsConnectionDialogActionPlan = {
 export function awsConnectionPresentation(connection: AwsConnection): AwsConnectionPresentation {
   switch (connection.phase) {
     case "awaiting_authorization":
-      return { label: "Authorization required", live: false };
+      return { label: "Authorization required" };
     case "validating":
     case "reconnect_pending":
     case "retiring_authorization":
-      return { label: "Checking", live: false };
+      return { label: "Checking" };
     case "ready":
-      return { label: "Connected", live: true };
+      return { label: "Connected" };
     case "degraded":
-      return { label: "Needs attention", live: false };
+      return { label: "Needs attention" };
     case "disconnect_draining":
     case "revoking":
     case "verifying_revocation":
-      return { label: "Removing", live: false };
+      return { label: "Removing" };
     case "action_required":
-      return { label: "Action required", live: false };
+      return { label: "Action required" };
   }
 }
 

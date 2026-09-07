@@ -1,7 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 
 import { apiBlob, apiRequest, withWorkspace } from "@/lib/api/client";
-import { artifactListSchema, type ArtifactList } from "@/lib/api/schemas";
+import { artifactListSchema, artifactPreviewSchema, type ArtifactList } from "@/lib/api/schemas";
 
 import { workspaceQueryKeys } from "./workspace-keys";
 
@@ -36,4 +36,15 @@ export async function fetchArtifactBlob(
     filename: artifact.filename,
   });
   return apiBlob(withWorkspace(`/api/v1/artifacts/content?${query.toString()}`, workspaceId));
+}
+
+export function fetchArtifactPreview(
+  workspaceId: string,
+  artifact: { id: string; task_id: string; filename: string },
+) {
+  const query = new URLSearchParams(artifact);
+  return apiRequest(
+    withWorkspace(`/api/v1/artifacts/preview?${query}`, workspaceId),
+    artifactPreviewSchema,
+  );
 }

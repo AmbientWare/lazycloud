@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, Loader2, Play } from "lucide-react";
+import { ArrowUpRight, Play } from "lucide-react";
 
 import { PanelError } from "@/components/shared/PanelError";
 import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
@@ -9,7 +9,7 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { invokeDeployment, type InvokeResult } from "@/lib/api/invoke";
-import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
+import { isTerminalTaskStatus, type DeploymentManifest, type JsonValue } from "@/lib/api/schemas";
 import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
 import { taskQueryOptions } from "@/lib/queries/tasks";
 
@@ -50,6 +50,7 @@ export function Playground({
   }
   return (
     <PlaygroundForm
+      key={deploymentId}
       manifest={manifest.data}
       workspaceId={workspaceId}
       workspaceName={workspaceName}
@@ -138,12 +139,8 @@ function PlaygroundForm({
           </div>
         )}
         <div className="flex items-center gap-3">
-          <Button size="sm" onClick={submit} disabled={invoke.isPending}>
-            {invoke.isPending ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Play className="size-3.5" />
-            )}
+          <Button pending={invoke.isPending} size="sm" onClick={submit} disabled={invoke.isPending}>
+            <Play className="size-3.5" />
             Invoke
           </Button>
           {inputError ? <span className="text-xs text-destructive">{inputError}</span> : null}
@@ -172,8 +169,12 @@ function FieldInput({
 }) {
   const inputId = `playground-${field.name}`;
   return (
-    <div className="flex items-center gap-3">
-      <label htmlFor={inputId} className="mono w-32 shrink-0 truncate text-xs" title={field.name}>
+    <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:gap-3">
+      <label
+        htmlFor={inputId}
+        className="mono w-full shrink-0 truncate text-xs sm:w-32"
+        title={field.name}
+      >
         {field.name}
         {field.required ? null : <span className="text-muted-foreground">?</span>}
       </label>
@@ -284,9 +285,7 @@ function TaskInvokeOutcome({
     <section className="overflow-hidden rounded-md border border-border bg-muted/20">
       <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         {meta}
-        {task.data ? (
-          <StatusChip status={task.data.status} live={task.data.status === "running"} />
-        ) : null}
+        {task.data ? <StatusChip status={task.data.status} /> : null}
         <Link
           to="/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId"
           params={{ workspace: workspaceName, appId, name: workloadName, taskId }}
@@ -307,7 +306,9 @@ function TaskInvokeOutcome({
         <ResultBody error={task.data.error} result={task.data.result} />
       ) : (
         <p className="p-3 text-xs text-muted-foreground">
-          {task.data.status === "complete" ? "The task returned no result." : "Result pending."}
+          {isTerminalTaskStatus(task.data.status)
+            ? "The task ended without a result."
+            : "Result pending."}
         </p>
       )}
     </section>

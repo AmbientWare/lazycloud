@@ -2,14 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
-import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelError } from "@/components/shared/PanelError";
-import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AppSummary } from "@/lib/api/schemas";
-import { countLabel, formatKind } from "@/lib/format";
+import { countLabel } from "@/lib/format";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -98,19 +96,13 @@ function AppCard({
   workspaceId: string;
   workspaceName: string;
 }) {
-  const latest = item.latest_workload;
-  const lastDeployedAt = item.last_deployed_at ?? item.app.updated_at;
-  const workloadKinds = Object.entries(item.workload_kinds).sort(([left], [right]) =>
-    left.localeCompare(right),
-  );
-
   return (
     <article className="interactive-panel panel group relative min-w-0 rounded-md">
       <Link
         to="/w/$workspace/apps/$appId"
         params={{ workspace: workspaceName, appId: item.app.id }}
         aria-label={item.app.name}
-        className="flex h-full min-h-[17.5rem] flex-col rounded-md p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        className="flex h-full min-h-[13rem] flex-col rounded-md p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       >
         <header className="flex min-w-0 items-start gap-4 pr-8">
           <div className="min-w-0 flex-1">
@@ -126,18 +118,6 @@ function AppCard({
                 />
                 {item.app.active ? "Active" : "Inactive"}
               </span>
-            </div>
-            <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-              <span className="shrink-0">Latest workload</span>
-              <span aria-hidden="true">·</span>
-              {latest ? (
-                <span className="flex min-w-0 items-center gap-1.5 text-foreground">
-                  <StubKindIcon kind={latest.kind} className="size-3.5" />
-                  <span className="mono truncate">{latest.name}</span>
-                </span>
-              ) : (
-                <span>None</span>
-              )}
             </div>
           </div>
         </header>
@@ -170,26 +150,9 @@ function AppCard({
           />
         </section>
 
-        <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <span>{countLabel(item.running_containers, "running container")}</span>
-          <span aria-hidden="true">·</span>
-          <span className="shrink-0">
-            Deployed <LiveRelativeTime value={lastDeployedAt} />
-          </span>
-        </div>
-
-        <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
-          {workloadKinds.map(([kind, count]) => (
-            <span key={kind} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <StubKindIcon kind={kind} className="size-3.5" />
-              <span>{formatKind(kind)}</span>
-              <span className="mono tabular-nums text-foreground">{count}</span>
-            </span>
-          ))}
-          {workloadKinds.length === 0 ? (
-            <span className="text-xs text-muted-foreground">None</span>
-          ) : null}
-        </div>
+        <p className="mt-4 text-xs text-muted-foreground">
+          {countLabel(item.workload_count, "workload")}
+        </p>
       </Link>
       <div className="absolute right-3 top-3 z-10">
         <AppCardActionsTrigger app={item.app} workspaceId={workspaceId} />
@@ -202,7 +165,7 @@ function AppCardsSkeleton() {
   return (
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3" aria-hidden="true">
       {Array.from({ length: 6 }, (_, index) => (
-        <div key={index} className="panel min-h-[17.5rem] rounded-md bg-card p-4">
+        <div key={index} className="panel min-h-[13rem] rounded-md bg-card p-4">
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-2">
               <Skeleton className="h-4 w-36" />

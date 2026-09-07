@@ -94,7 +94,7 @@ function RecentRunsList({
               )}
             </span>
           </span>
-          <StatusChip status={task.status} live={task.status === "running"} />
+          <StatusChip status={task.status} />
           <span className="col-span-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
             <span>
               Requested <LiveRelativeTime value={task.created_at} />

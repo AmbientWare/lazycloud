@@ -923,6 +923,17 @@ class ManagementService:
             )
         return scaling
 
+    def delete_workload(self, workspace: str, *, app_id: str, name: str) -> None:
+        self.services.apps.get(app_id, workspace=workspace)
+        resources = self.services.deployment_resources.list(
+            workspace=workspace,
+            app_id=app_id,
+            name=name,
+            active=None,
+        )
+        for resource in resources:
+            self.delete_deployment(workspace, resource.deployment.id)
+
     def delete_deployment(self, workspace: str, deployment_id_or_name: str) -> Deployment:
         deployment = self.retrieve_deployment(workspace, deployment_id_or_name)
         self._stop_deployment_containers(workspace, deployment)
@@ -1159,6 +1170,7 @@ class ManagementService:
         status: TaskStatus | None = None,
         deployment_id: str | None = None,
         app_id: str | None = None,
+        workload_name: str | None = None,
         stub_ids: tuple[str, ...] = (),
         kind: StubKind | None = None,
         created_after: datetime | None = None,
@@ -1177,6 +1189,7 @@ class ManagementService:
                 status=status,
                 deployment_id=deployment_id,
                 app_id=app_id,
+                workload_name=workload_name,
                 stub_ids=stub_ids,
                 kind=kind,
                 created_after=created_after,
@@ -1430,6 +1443,8 @@ class ManagementService:
         *,
         stub_ids: tuple[str, ...],
         deployment_id: str | None = None,
+        app_id: str | None = None,
+        workload_name: str | None = None,
         window_seconds: int = 3600,
         start: datetime | None = None,
         end: datetime | None = None,
@@ -1444,7 +1459,7 @@ class ManagementService:
         if window_seconds <= 0:
             msg = "window_seconds must be greater than zero"
             raise InvalidInputError(msg)
-        if not stub_ids:
+        if not stub_ids and not (app_id and workload_name):
             msg = "at least one stub_id is required"
             raise InvalidInputError(msg)
         workspace_record = self.control_plane.get_workspace(workspace)
@@ -1454,6 +1469,8 @@ class ManagementService:
             samples = TaskRepository(session).duration_samples(
                 workspace_id=workspace_record.id,
                 stub_ids=stub_ids,
+                app_id=app_id,
+                workload_name=workload_name,
                 deployment_id=deployment_id,
                 start=resolved_start,
                 end=resolved_end,
@@ -1461,6 +1478,8 @@ class ManagementService:
             cold_start_times = ContainerRepository(session).creation_times(
                 workspace_id=workspace_record.id,
                 stub_ids=stub_ids,
+                app_id=app_id,
+                workload_name=workload_name,
                 start=resolved_start,
                 end=resolved_end,
             )

@@ -49,6 +49,8 @@ export type AccessTokensController = {
   tokens: readonly AuthToken[];
   isLoading: boolean;
   loadError: Error | null;
+  retryLoad: () => void;
+  retrying: boolean;
   nextCursor: string | undefined;
   loadingMore: boolean;
   loadMoreError: boolean;
@@ -169,6 +171,8 @@ export function useAccessTokensController(): AccessTokensController {
     tokens: list.items,
     isLoading: query.isPending,
     loadError: query.error,
+    retryLoad: () => void query.refetch(),
+    retrying: query.isFetching,
     nextCursor: list.nextCursor,
     loadingMore: query.isFetchingNextPage,
     loadMoreError: query.isFetchNextPageError,
