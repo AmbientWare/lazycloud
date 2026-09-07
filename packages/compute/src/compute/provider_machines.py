@@ -295,11 +295,17 @@ class ProviderMachineReconciler:
     ) -> set[str]:
         repository = ComputeProviderInstanceRepository(session)
         missing_machine_ids: set[str] = set()
-        current = repository.list_for_pool(pool.id, for_update=True)
+        observed = {item.provider_instance_id: item for item in snapshot.instances}
+        current = repository.list_for_reconciliation(
+            pool.id,
+            terminal_statuses=(ReservationStatus.Deleted.value, ReservationStatus.Failed.value),
+            observed_instance_ids=observed,
+            for_update=True,
+        )
+        next_launch_attempt: int | None = None
         by_instance_id = {
             item.instance_id: item for item in current if item.instance_id is not None
         }
-        observed = {item.provider_instance_id: item for item in snapshot.instances}
         for instance_id, instance in observed.items():
             existing = by_instance_id.get(instance_id)
             # A provider may reuse an instance identity after a reclaimed
@@ -341,11 +347,12 @@ class ProviderMachineReconciler:
             if instance.status == ProviderMachineStatus.Unhealthy:
                 bootstrap_phase = MachineBootstrapPhase.Failed
                 bootstrap_failure_reason = MachineBootstrapFailureReason.ProviderStopped
-            launch_attempt = (
-                settled_existing.launch_attempt
-                if settled_existing is not None
-                else max((item.launch_attempt for item in current), default=0) + 1
-            )
+            if settled_existing is not None:
+                launch_attempt = settled_existing.launch_attempt
+            else:
+                if next_launch_attempt is None:
+                    next_launch_attempt = repository.highest_launch_attempt(pool.id) + 1
+                launch_attempt = next_launch_attempt
             bootstrap_observed_at = (
                 settled_existing.bootstrap_observed_at
                 if settled_existing is not None
@@ -529,7 +536,11 @@ class ProviderMachineReconciler:
         observed_instance_ids = {item.provider_instance_id for item in snapshot.instances}
         authoritative_zero = _provider_zero_capacity_converged(snapshot)
         with self.context.database.session() as session:
-            prior_instances = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+            prior_instances = ComputeProviderInstanceRepository(session).list_for_reconciliation(
+                pool.id,
+                terminal_statuses=(ReservationStatus.Deleted.value, ReservationStatus.Failed.value),
+                observed_instance_ids=observed_instance_ids,
+            )
         destroyed_record_ids: set[str] = set()
         for instance in prior_instances:
             if instance.instance_id is not None and instance.instance_id in observed_instance_ids:

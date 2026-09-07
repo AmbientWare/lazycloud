@@ -19,6 +19,7 @@ from observability.settings import (
     VolumeMeteringSettings,
 )
 from scheduler.containers import SchedulerContainerRequestService
+from scheduler.service import DEFAULT_AUTOSCALING_RECONCILE_LIMIT
 from scheduler_app import main as scheduler
 from scheduler_app.runtime import SchedulerRuntime
 from scheduler_app.services import (
@@ -147,6 +148,7 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
         include_containers: bool = True,
         include_container_dispatch: bool = True,
         container_limit: int = 100,
+        autoscaling_limit: int = DEFAULT_AUTOSCALING_RECONCILE_LIMIT,
     ) -> Never:
         _ = (
             now,
@@ -154,6 +156,7 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
             include_containers,
             include_container_dispatch,
             container_limit,
+            autoscaling_limit,
         )
         raise RuntimeError("scheduler pass failed")
 
