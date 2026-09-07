@@ -173,6 +173,14 @@ def test_reconciliation_preserves_unproved_cleanup_and_reappearing_instances(
             )
         } == {complete.id, unproved.id, active.id}
         assert repository.highest_launch_attempt(pool.id) == 7
+        for record in (complete, unproved, active):
+            session.execute(
+                update(ComputeProviderInstanceTable)
+                .where(ComputeProviderInstanceTable.id == record.id)
+                .values(payload=record.model_dump(mode="json", exclude={"launch_attempt"}))
+            )
+        assert repository.highest_launch_attempt(pool.id, default=7) == 1
+        assert repository.highest_launch_attempt(str(uuid4()), default=7) == 7
 
 
 def test_pool_sizing_counts_retiring_capacity_until_release_is_terminal(

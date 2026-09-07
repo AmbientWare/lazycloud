@@ -41,6 +41,7 @@ from scheduler.capacity_reservations import (
     RedisCapacityReservationRepository,
 )
 from scheduler.fleet import SchedulerContainerStatus
+from scheduler.pool_state import SchedulerPoolStateService
 from scheduler.preemption import SchedulerWorkerMaintenanceService
 from scheduler.state import (
     RedisSchedulerContainerRepository,
@@ -361,10 +362,32 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
         status=SchedulerContainerStatus.Running,
     )
     scheduler_containers.set_container_state(container)
+    pool_states = SchedulerPoolStateService(
+        scheduler_workers,
+        scheduler_containers,
+        gateway.scheduler_pool_state_repository,
+    )
+    pool_states.refresh()
     gateway = replace(
         gateway,
         agent_worker_image="registry.test/worker@sha256:new",
     )
+    held = gateway.stream_agent(
+        StreamAgentRequest(agent_token=joined.agent_token, active_worker_images=current_image)
+    )
+    assert held.slots[0].status is AgentWorkerSlotStatus.Active
+
+    scheduler_workers.add_worker(
+        SchedulerWorkerRecord(
+            worker_id=str(uuid4()),
+            pool=pool,
+            capacity_owner_id=unit.capacity_owner_id,
+            workspace_id=workspace_id,
+            machine_id=str(uuid4()),
+            status=SchedulerWorkerStatus.Available,
+        )
+    )
+    pool_states.refresh()
 
     draining = gateway.stream_agent(
         StreamAgentRequest(agent_token=joined.agent_token, active_worker_images=current_image)

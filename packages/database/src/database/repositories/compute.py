@@ -1177,7 +1177,11 @@ class ComputeProviderInstanceRepository:
     def highest_launch_attempt(self, pool_id: str, *, default: int = 0) -> int:
         highest = self.session.scalar(
             select(
-                func.max(ComputeProviderInstanceTable.payload["launch_attempt"].as_integer())
+                func.max(
+                    func.coalesce(
+                        ComputeProviderInstanceTable.payload["launch_attempt"].as_integer(), 1
+                    )
+                )
             ).where(ComputeProviderInstanceTable.pool_id == pool_id)
         )
         return highest if highest is not None else default
