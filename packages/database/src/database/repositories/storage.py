@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import overload
 from uuid import uuid4
 
@@ -28,7 +28,7 @@ from shared.identity import WorkspaceRecord, WorkspaceStatus
 from shared.image_building.records import BuildStatus, ImageBuildRecord, ImageRecord
 from shared.objects import ObjectRecord, ObjectWriteCommand
 from shared.tasks import TaskStatus
-from shared.timestamps import utc_now
+from shared.timestamps import to_utc, utc_now
 from shared.volumes import VolumeRecord
 from sqlalchemy import (
     CompoundSelect,
@@ -130,6 +130,8 @@ class ObjectRepository:
             raise ConflictError(
                 f"object location already has a different id: {command.bucket}/{command.key}"
             )
+        if existing is not None and existing.artifact_task_id is not None:
+            raise ConflictError("saved artifacts are immutable; save a new artifact")
         if existing is not None and not overwrite:
             if not _object_content_matches_write_command(existing, command):
                 raise ConflictError(f"object already exists: {command.bucket}/{command.key}")
@@ -177,7 +179,9 @@ class ObjectRepository:
         )
         return ObjectWriteClaim(record=target, claim_id=claim_id, created=False)
 
-    def complete_write(self, claim: ObjectWriteClaim, *, workspace_id: str) -> ObjectRecord:
+    def complete_write(
+        self, claim: ObjectWriteClaim, *, workspace_id: str, stored_at: datetime | None = None
+    ) -> ObjectRecord:
         if not claim.write_required:
             return claim.record
         WorkspaceRepository(self.session).lock_object_write_completion_owner(workspace_id)
@@ -205,6 +209,18 @@ class ObjectRepository:
                 "write_target": None,
             }
         )
+        if completed.artifact_task_id is not None and completed.artifact_stored_at is None:
+            stored = stored_at or utc_now()
+            completed.artifact_stored_at = stored
+            completed.artifact_metered_at = (
+                max(to_utc(completed.artifact_metered_at), to_utc(stored))
+                if completed.artifact_metered_at is not None
+                else stored
+            )
+            if completed.artifact_retention_seconds is not None:
+                completed.artifact_expires_at = stored + timedelta(
+                    seconds=completed.artifact_retention_seconds
+                )
         _write_object_row(row, completed)
         self.session.flush()
         return completed
@@ -312,6 +328,8 @@ class ObjectRepository:
             command.key,
             workspace_id=workspace_id,
         )
+        if existing is not None and existing.artifact_task_id is not None:
+            raise ConflictError("saved artifacts are immutable; save a new artifact")
         if existing is not None and not overwrite:
             return existing
         payload = _object_write_payload(command)
@@ -581,17 +599,7 @@ def _object_content_matches_write_command(
 
 def _object_write_payload(command: ObjectWriteCommand) -> dict[str, JsonValue]:
     """Copy one validated command into the durable object-record fields."""
-    metadata: dict[str, JsonValue] = {}
-    metadata.update(command.metadata)
-    return {
-        "bucket": command.bucket,
-        "key": command.key,
-        "path": command.path,
-        "size": command.size,
-        "sha256": command.sha256,
-        "content_type": command.content_type,
-        "metadata": metadata,
-    }
+    return command.model_dump(mode="json")
 
 
 def _write_object_row(row: ObjectTable, record: ObjectRecord) -> None:
@@ -606,6 +614,10 @@ def _write_object_row(row: ObjectTable, record: ObjectRecord) -> None:
     row.write_claimed_at = record.write_claimed_at
     row.cleanup_kind = record.cleanup_kind
     row.cleanup_claimed_at = record.cleanup_claimed_at
+    row.artifact_task_id = record.artifact_task_id
+    row.artifact_app_id = record.artifact_app_id
+    row.artifact_expires_at = record.artifact_expires_at
+    row.artifact_metered_at = record.artifact_metered_at
     row.updated_at = utc_now()
     flag_modified(row, "payload")
 

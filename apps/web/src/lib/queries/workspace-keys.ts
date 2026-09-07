@@ -71,8 +71,6 @@ export const workspaceQueryKeys = {
     details: (workspaceId: string) => [...workspaceRoot(workspaceId), "tasks", "detail"] as const,
     detail: (workspaceId: string, taskId: string) =>
       [...workspaceRoot(workspaceId), "tasks", "detail", taskId] as const,
-    artifacts: (workspaceId: string, taskId: string) =>
-      [...workspaceRoot(workspaceId), "tasks", "artifacts", taskId] as const,
     callGraphs: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "tasks", "call-graph"] as const,
     callGraph: (workspaceId: string, rootTaskId: string) =>
@@ -149,6 +147,8 @@ export const workspaceQueryKeys = {
   },
   storage: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "storage"] as const,
+    artifacts: (workspaceId: string) =>
+      [...workspaceRoot(workspaceId), "storage", "artifacts"] as const,
     secrets: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "storage", "secrets"] as const,
     volumes: (workspaceId: string) =>

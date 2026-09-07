@@ -1441,7 +1441,8 @@ def _compose_api_services(
         signal_service=signal_service or RedisSignalService(RedisSignalRepository(redis)),
         map_service=map_service or RedisMapService(core.binary_redis()),
         simple_queue_service=(simple_queue_service or RedisSimpleQueueService(core.binary_redis())),
-        artifact_service=artifact_service or ArtifactStorageService(core.context),
+        artifact_service=artifact_service
+        or ArtifactStorageService(core.context, object_storage=core.object_storage),
         endpoint_service=endpoint,
         function_service=function,
         gateway_service=gateway,

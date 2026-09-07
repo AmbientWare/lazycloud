@@ -12,6 +12,13 @@ export const artifactSummarySchema = z.object({
   content_type: z.string().default("application/octet-stream"),
   size: z.number().nonnegative().default(0),
   created_at: z.string().nullable().default(null),
+  app_id: z.string().nullable().default(null),
+  app_name: z.string().default(""),
+  expires_at: z.string().nullable().default(null),
+  retention_seconds: z.number().int().positive().nullable().default(null),
+  retention_source: z.enum(["workspace", "explicit"]).default("workspace"),
+  deleting: z.boolean().default(false),
+  deletion_failed: z.boolean().default(false),
 });
 export type ArtifactSummary = z.infer<typeof artifactSummarySchema>;
 
@@ -20,3 +27,21 @@ export const artifactListSchema = z.object({
   next: z.string().default(""),
 });
 export type ArtifactList = z.infer<typeof artifactListSchema>;
+
+export const artifactStorageSummarySchema = z.object({
+  count: z.number().int().nonnegative(),
+  size_bytes: z.number().nonnegative(),
+  estimated_monthly_nanos: z.number().nonnegative().nullable(),
+  accrued_nanos: z.number().nonnegative(),
+  accrued_since: z.string(),
+  retention_seconds: z.number().int().positive().nullable(),
+});
+export type ArtifactStorageSummary = z.infer<typeof artifactStorageSummarySchema>;
+export const artifactRetentionPolicySchema = z.object({
+  retention_seconds: z.number().int().positive().nullable(),
+});
+export const artifactRetentionPreviewSchema = z.object({
+  data: z.array(artifactSummarySchema),
+  total_bytes: z.number().nonnegative(),
+});
+export type ArtifactRetentionPreview = z.infer<typeof artifactRetentionPreviewSchema>;

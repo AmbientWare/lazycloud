@@ -49,6 +49,77 @@ artifact.
 authentication until it expires. Hand it to a browser or a webhook.
 `artifact.exists()` and `artifact.stat()` check and describe the saved file.
 
-Saved artifacts are listed on the task's page in the
-[dashboard](/platform/dashboard). To save from outside the producing
-container, pass `task_id=...` explicitly.
+Browse all workspace artifacts under **Storage → Artifacts** in the
+[dashboard](/platform/dashboard), or open a task's Artifacts tab. Search filenames,
+filter by app, task, type, or date, and preview or download files. Artifacts remain
+accessible after the originating task is deleted. To save from outside the
+producing container, pass `task_id=...` explicitly.
+
+## Storage charges
+
+Artifacts count toward **Volume storage**, at the same published storage rate as
+volumes. Usage appears as **Artifacts**. Charges depend on the stored file's size
+and how long it is retained, including files deleted between metering scans.
+Directories are billed at their uploaded archive size.
+
+The Storage page shows total bytes, the estimated monthly cost at the current
+size, and accrued charges for the current UTC calendar month. Estimates exclude
+future uploads, deletions, and account allowances. Billing continues until storage
+confirms deletion, including when a deletion needs a retry.
+
+Use `Artifact.save()` to persist an artifact. The implicit `/artifacts` mount is
+read-only. For a writable shared filesystem, declare a `Volume` explicitly.
+
+## Retention
+
+Set retention when constructing an artifact. All factory methods accept
+`retention_seconds`:
+
+```python
+# Use the workspace default captured when the artifact is saved.
+artifact = Artifact.file("report.pdf")
+
+# Expire seven days after the upload succeeds.
+artifact = Artifact(path="report.pdf", retention_seconds=7 * 24 * 60 * 60)
+saved = artifact.save()
+print(saved.expires_at)
+
+# Retain indefinitely, regardless of the workspace default.
+artifact = Artifact.file("report.pdf", retention_seconds=None)
+```
+
+Omitting retention inherits the workspace default. Explicit `None` means keep
+until deleted; a positive integer specifies seconds. Zero, negative durations,
+and booleans are rejected. The initial workspace default is keep until deleted.
+Retention applies to remote storage, not locally packaged files.
+
+Change a saved artifact's retention or delete it with:
+
+```python
+artifact.set_retention(30 * 24 * 60 * 60)
+artifact.delete()
+```
+
+Retention is measured from the original save time. Shortening it can expire a
+file immediately. Expired files become unavailable through the artifact API;
+background cleanup removes their stored bytes. Newly issued public URLs cannot
+outlive the artifact's expiration. Previously issued URLs may remain usable
+until their own expiry or physical deletion.
+
+Workspace default changes affect future saves. To update existing files, select
+them in Storage → Artifacts and preview **Apply workspace retention**. The preview
+shows affected files, bytes, and expiration dates. Explicit artifact settings are
+preserved. File deletion is permanent.
+
+## CLI
+
+```bash
+lazycloud artifact list --search report
+lazycloud artifact usage
+lazycloud artifact default-retention --seconds 604800
+lazycloud artifact retention ARTIFACT_ID --keep
+lazycloud artifact delete ARTIFACT_ID
+```
+
+Lists return a `next` cursor; pass it with `--cursor` to continue. Use `--workspace`
+to select a workspace and the global `--json` option for machine-readable output.

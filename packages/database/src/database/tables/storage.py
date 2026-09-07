@@ -34,6 +34,12 @@ class ObjectTable(IdPayloadTable, DatabaseBase):
         Index("ix_objects_write_claimed_at", "write_claimed_at"),
         Index("ix_objects_cleanup_claimed_at", "cleanup_claimed_at"),
         CheckConstraint("size >= 0", name="ck_objects_size_nonnegative"),
+        Index(
+            "ix_objects_artifact_listing", "workspace_id", "artifact_task_id", "created_at", "id"
+        ),
+        Index("ix_objects_artifact_app", "workspace_id", "artifact_app_id"),
+        Index("ix_objects_artifact_expiration", "artifact_expires_at", "id"),
+        Index("ix_objects_artifact_metering", "artifact_metered_at", "id"),
     )
 
     workspace_id: Mapped[str] = mapped_column(
@@ -55,6 +61,25 @@ class ObjectTable(IdPayloadTable, DatabaseBase):
     cleanup_claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    artifact_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifact_app_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifact_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    artifact_metered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ArtifactRetentionTable(DatabaseBase):
+    __tablename__ = "artifact_retention"
+    __table_args__: tuple[SchemaItem, ...] = (
+        CheckConstraint("retention_seconds > 0", name="ck_artifact_retention_positive"),
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        uuid_type, ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    retention_seconds: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class VolumeTable(NamedWorkspacePayloadTable, DatabaseBase):

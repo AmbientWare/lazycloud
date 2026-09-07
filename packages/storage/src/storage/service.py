@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from database.repositories.cleanup import OBJECT_CLEANUP_DELETE
+from billing.admission import DatabaseBillingAdmission
+from database.repositories.artifacts import ArtifactRepository
+from database.repositories.cleanup import OBJECT_CLEANUP_DELETE, CleanupRepository
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.storage import (
     CacheEntryRepository,
     ObjectRepository,
@@ -26,6 +29,7 @@ from shared.app_identity import (
     SOURCE_PACKAGE_BUCKET,
     WORKSPACE_OBJECT_BUCKET,
 )
+from shared.artifacts import ArtifactObjectFields
 from shared.cache_records import CacheEntry
 from shared.errors import (
     ConflictError,
@@ -45,6 +49,7 @@ from storage_client.s3 import (
 )
 
 from database import AsyncDatabaseClient
+from storage.artifact_metering import meter_artifact
 from storage.context import StorageContext
 
 OBJECT_SHA256_METADATA_KEY = "artifact-sha256"
@@ -353,6 +358,7 @@ class ObjectStorage:
         object_id: str | None = None,
         content_type: str = "application/octet-stream",
         metadata: dict[str, str] | None = None,
+        artifact: ArtifactObjectFields | None = None,
     ) -> ObjectRecord:
         self._validate_bucket(bucket)
         physical_bucket = self.physical_bucket(bucket)
@@ -366,8 +372,13 @@ class ObjectStorage:
             sha256=_sha256_bytes(data),
             content_type=content_type,
             metadata=metadata or {},
+            **(artifact.model_dump() if artifact is not None else {}),
         )
         with self.context.database.session() as session:
+            if artifact is not None:
+                DatabaseBillingAdmission().assert_may_take_on_billed_work(
+                    session, workspace_id=workspace_id
+                )
             claim = ObjectRepository(session).begin_write(
                 command,
                 workspace_id=workspace_id,
@@ -383,8 +394,9 @@ class ObjectStorage:
                 metadata={**(metadata or {}), OBJECT_SHA256_METADATA_KEY: claim.record.sha256},
             )
         except Exception:
-            with self.context.database.session() as session:
-                ObjectRepository(session).abort_write(claim, workspace_id=workspace_id)
+            if artifact is None:
+                with self.context.database.session() as session:
+                    ObjectRepository(session).abort_write(claim, workspace_id=workspace_id)
             raise
         with self.context.database.session() as session:
             return ObjectRepository(session).complete_write(claim, workspace_id=workspace_id)
@@ -902,14 +914,26 @@ class ObjectStorage:
             )
             if record is None:
                 return False
-            record = repository.claim_delete(
-                record.id,
-                cleanup_kind=OBJECT_CLEANUP_DELETE,
-                claimed_at=utc_now(),
-            )
+            if record.cleanup_kind != OBJECT_CLEANUP_DELETE:
+                if record.artifact_task_id is not None:
+                    WorkspaceRepository(session).lock_active_owner(workspace_id)
+                    current = ArtifactRepository(session).get(
+                        record.id, workspace_id=workspace_id, lock=True
+                    )
+                    if current is None:
+                        return False
+                    record = CleanupRepository(session).mark_object_claimed(
+                        current.id, cleanup_kind=OBJECT_CLEANUP_DELETE, claimed_at=utc_now()
+                    )
+                else:
+                    record = repository.claim_delete(
+                        record.id,
+                        cleanup_kind=OBJECT_CLEANUP_DELETE,
+                        claimed_at=utc_now(),
+                    )
         return self._delete_claimed_object(
             record,
-            release_on_confirmation_failure=True,
+            release_on_confirmation_failure=record.artifact_task_id is None,
         )
 
     def delete_required_for_workspace(
@@ -934,10 +958,23 @@ class ObjectStorage:
         release_on_confirmation_failure: bool = False,
         deleting_workspace_id: str | None = None,
     ) -> bool:
-        physical_key = self.physical_key_for_record(record)
+        try:
+            physical_key = self.physical_key_for_record(record)
+        except NotFoundError:
+            if record.artifact_task_id is not None:
+                return False
+            raise
         physical_bucket = self.physical_bucket(record.bucket)
-        self.object_client.delete(physical_key, bucket=physical_bucket)
-        if self.object_client.exists(physical_key, bucket=physical_bucket):
+        try:
+            self.object_client.delete(physical_key, bucket=physical_bucket)
+            remains = self.object_client.exists(physical_key, bucket=physical_bucket)
+        except Exception as exc:
+            self._record_artifact_deletion_failure(record)
+            if record.artifact_task_id is not None:
+                raise UpstreamUnavailableError("artifact deletion could not be confirmed") from exc
+            raise
+        if remains:
+            self._record_artifact_deletion_failure(record)
             if release_on_confirmation_failure:
                 with self.context.database.session() as session:
                     ObjectRepository(session).release_delete_claim(
@@ -954,6 +991,16 @@ class ObjectStorage:
                 return False
             if owned.record.cleanup_kind != OBJECT_CLEANUP_DELETE:
                 raise RuntimeError(f"object delete claim was replaced: {record.id}")
+            if owned.record.artifact_task_id is not None:
+                meter_artifact(
+                    session,
+                    workspace_id=owned.workspace_id,
+                    artifact_id=record.id,
+                    now=utc_now(),
+                )
+                return ArtifactRepository(session).delete_claimed(
+                    record.id, workspace_id=owned.workspace_id
+                )
             if deleting_workspace_id is not None:
                 return repository.delete_for_workspace_deletion(
                     record.id,
@@ -961,6 +1008,20 @@ class ObjectStorage:
                     cleanup_kind=OBJECT_CLEANUP_DELETE,
                 )
             return repository.delete_across_workspaces(record.id)
+
+    def _record_artifact_deletion_failure(self, record: ObjectRecord) -> None:
+        if record.artifact_task_id is None:
+            return
+        with self.context.database.session() as session:
+            owned = ObjectRepository(session).get_owned(record.id, include_operations=True)
+            if owned is None:
+                return
+            WorkspaceRepository(session).lock_storage_accounting_owner(owned.workspace_id)
+            repository = ArtifactRepository(session)
+            current = repository.get(record.id, workspace_id=owned.workspace_id, lock=True)
+            if current is not None:
+                current.artifact_deletion_failed = True
+                repository.update(current)
 
     def reconcile_operations(
         self,
@@ -986,6 +1047,7 @@ class ObjectStorage:
             record = owned.record
             target = record.write_target
             matches_target = False
+            stored_at: datetime | None = None
             physical_key = (
                 self.physical_key_for_workspace(
                     owned.workspace_id,
@@ -1007,6 +1069,7 @@ class ObjectStorage:
                     info.size == target.size
                     and info.metadata.get(OBJECT_SHA256_METADATA_KEY) == target.sha256
                 )
+                stored_at = info.last_modified
             claim = ObjectWriteClaim(
                 record=(
                     record.model_copy(update=target.model_dump()) if target is not None else record
@@ -1017,7 +1080,9 @@ class ObjectStorage:
             with self.context.database.session() as session:
                 repository = ObjectRepository(session)
                 if matches_target:
-                    repository.complete_write(claim, workspace_id=owned.workspace_id)
+                    repository.complete_write(
+                        claim, workspace_id=owned.workspace_id, stored_at=stored_at
+                    )
                 else:
                     repository.abort_write(claim, workspace_id=owned.workspace_id)
             reconciled += 1

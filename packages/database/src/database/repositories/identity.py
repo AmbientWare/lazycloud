@@ -1038,12 +1038,35 @@ class WorkspaceRepository:
             .where(
                 WorkspaceTable.id == workspace_id,
                 WorkspaceTable.status.in_(
-                    (WorkspaceStatus.Active.value, WorkspaceStatus.Deleting.value)
+                    (
+                        WorkspaceStatus.Active.value,
+                        WorkspaceStatus.Disabled.value,
+                        WorkspaceStatus.Deleting.value,
+                    )
                 ),
             )
             .with_for_update(read=True, key_share=True)
             .execution_options(populate_existing=True)
         ).first()
+        return _workspace_record(row, workspace_id)
+
+    def lock_storage_accounting_owner(self, workspace_id: str) -> WorkspaceRecord:
+        """Stored bytes accrue usage until removal, even while a workspace is disabled."""
+        row = self.session.scalar(
+            select(WorkspaceTable)
+            .where(
+                WorkspaceTable.id == workspace_id,
+                WorkspaceTable.status.in_(
+                    (
+                        WorkspaceStatus.Active.value,
+                        WorkspaceStatus.Disabled.value,
+                        WorkspaceStatus.Deleting.value,
+                    )
+                ),
+            )
+            .with_for_update(read=True, key_share=True)
+            .execution_options(populate_existing=True)
+        )
         return _workspace_record(row, workspace_id)
 
     def deletion_blockers(self, workspace_id: str) -> tuple[str, ...]:
