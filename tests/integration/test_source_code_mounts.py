@@ -61,8 +61,10 @@ class _ObjectClient:
     ) -> S3ObjectInfo:
         return self.put_bytes(key, Path(source).read_bytes(), bucket=bucket)
 
-    def read_bytes(self, key: str, *, bucket: str | None = None) -> bytes:
-        return self.objects[(bucket or "default", key)]
+    def read_bytes(
+        self, key: str, *, bucket: str | None = None, max_bytes: int | None = None
+    ) -> bytes:
+        return self.objects[(bucket or "default", key)][:max_bytes]
 
     def download_file(
         self,

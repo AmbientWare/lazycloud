@@ -135,6 +135,8 @@ class S3PresignedUpload(ContractModel):
 class _S3ReadableBody(Protocol):
     def read(self, amount: int | None = None) -> bytes: ...
 
+    def close(self) -> None: ...
+
 
 class _GetObjectResponse(TypedDict):
     Body: _S3ReadableBody
@@ -261,7 +263,7 @@ class _UploadFileClient(Protocol):
 
 @runtime_checkable
 class _GetObjectClient(Protocol):
-    def get_object(self, *, Bucket: str, Key: str) -> _GetObjectResponse: ...
+    def get_object(self, *, Bucket: str, Key: str, Range: str = "") -> _GetObjectResponse: ...
 
 
 @runtime_checkable
@@ -536,14 +538,25 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
             metadata=metadata or {},
         )
 
-    def read_bytes(self, key: str, *, bucket: str | None = None) -> bytes:
+    def read_bytes(
+        self, key: str, *, bucket: str | None = None, max_bytes: int | None = None
+    ) -> bytes:
         target_bucket = bucket or self.settings.bucket
         client = self.client
         if not isinstance(client, _GetObjectClient):
             raise TypeError("configured S3 client does not support object downloads")
-        response = client.get_object(Bucket=target_bucket, Key=key)
+        if max_bytes is not None and max_bytes <= 0:
+            raise ValueError("max_bytes must be positive")
+        response = (
+            client.get_object(Bucket=target_bucket, Key=key)
+            if max_bytes is None
+            else client.get_object(Bucket=target_bucket, Key=key, Range=f"bytes=0-{max_bytes - 1}")
+        )
         body = response["Body"]
-        return body.read()
+        try:
+            return body.read(max_bytes)
+        finally:
+            body.close()
 
     def download_file(
         self,

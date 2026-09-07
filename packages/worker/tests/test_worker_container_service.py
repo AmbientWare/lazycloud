@@ -486,6 +486,36 @@ def test_worker_container_service_sandboxed_download_streams_from_supervisor(
     assert manager.cleanup_count == 1
 
 
+def test_sandbox_preview_refuses_excess_output_and_stops_its_read_process(tmp_path: Path) -> None:
+    manager = ProcessManager(
+        events=[
+            SandboxProcessEvent(
+                event_type=SandboxProcessEventType.Chunk,
+                pid=41,
+                seq=1,
+                stream=SandboxLogStream.Stdout,
+                data=b"too much data",
+            ),
+        ]
+    )
+    service = WorkerContainerService(
+        instances=_store(
+            _instance(tmp_path, runtime=OciRuntimeName.Runsc, sandbox_process_manager_ready=True)
+        ),
+        process_managers=ProcessManagerFactory(manager),
+    )
+    response = service.sandbox_download_file(
+        ContainerSandboxDownloadFileRequest(
+            container_id="ctr-1", container_path="large.txt", max_bytes=4
+        )
+    )
+    assert not response.ok
+    assert response.data == b""
+    assert "byte limit" in response.error_msg
+    assert manager.killed == [41]
+    assert manager.cleanup_count == 1
+
+
 def test_worker_container_service_exposes_ports_and_updates_network(tmp_path: Path) -> None:
     store = _store(
         _instance(

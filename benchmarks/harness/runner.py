@@ -95,8 +95,10 @@ class _BenchmarkObjectClient:
             metadata=metadata,
         )
 
-    def read_bytes(self, key: str, *, bucket: str | None = None) -> bytes:
-        return self.objects[(bucket or "default", key)]
+    def read_bytes(
+        self, key: str, *, bucket: str | None = None, max_bytes: int | None = None
+    ) -> bytes:
+        return self.objects[(bucket or "default", key)][:max_bytes]
 
     def download_file(
         self,

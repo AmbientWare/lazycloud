@@ -1,20 +1,21 @@
-import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Check, Circle, Loader2, Server } from "lucide-react";
 
 import { CliHint } from "@/components/shared/CliHint";
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogBody,
   DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { UnitMachine } from "@/lib/api/schemas";
-import { createMachineJoinCommand, machinesQueryOptions } from "@/lib/queries/compute";
+import { createMachineJoinCommand, machineJoinStatusQueryOptions } from "@/lib/queries/compute";
 import { cn } from "@/lib/utils";
 
 export function JoinMachineDialog({
@@ -32,22 +33,11 @@ export function JoinMachineDialog({
 }
 
 function JoinMachineFlow() {
-  const machinesQuery = useQuery(machinesQueryOptions());
-  const [generatedAt, setGeneratedAt] = useState<number | null>(null);
-  const [baselineMachineIds, setBaselineMachineIds] = useState<ReadonlySet<string>>(new Set());
   const join = useMutation({
     mutationFn: () => createMachineJoinCommand(),
-    onMutate: () => {
-      setGeneratedAt(Date.now());
-      setBaselineMachineIds(new Set((machinesQuery.data?.data ?? []).map((machine) => machine.id)));
-    },
   });
-  const targetMachine = findJoinedMachine(
-    machinesQuery.data?.data ?? [],
-    baselineMachineIds,
-    generatedAt,
-  );
-  const queryError = machinesQuery.error;
+  const status = useQuery(machineJoinStatusQueryOptions(join.data?.id));
+  const expired = status.data?.status === "expired" || status.data?.status === "revoked";
 
   return (
     <DialogContent className="flex max-h-[min(46rem,calc(100svh-2rem))] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
@@ -59,17 +49,22 @@ function JoinMachineFlow() {
         <DialogDescription>Connect a Linux amd64 or arm64 host to your account.</DialogDescription>
       </DialogHeader>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        {machinesQuery.isPending ? (
-          <div className="flex h-36 items-center justify-center text-sm text-muted-foreground">
-            <Loader2 className="mr-2 size-4 animate-spin" />
-            Loading connected machines
-          </div>
-        ) : queryError ? (
-          <div className="border-l-2 border-destructive bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {queryError.message}
-          </div>
-        ) : !join.data ? (
+      <DialogBody className="p-5">
+        {status.error ? (
+          <ApiErrorNotice
+            title="Could not check the machine"
+            error={status.error}
+            onRetry={() => void status.refetch()}
+            retrying={status.isFetching}
+          />
+        ) : null}
+        {expired ? (
+          <p role="status" className="mb-3 text-sm text-muted-foreground">
+            This install command {status.data?.status === "expired" ? "expired" : "was revoked"}.
+            Generate another command to continue.
+          </p>
+        ) : null}
+        {!join.data || expired ? (
           <GenerateCommandStep
             onGenerate={() => join.mutate()}
             pending={join.isPending}
@@ -79,10 +74,10 @@ function JoinMachineFlow() {
           <JoinProgress
             command={join.data.command}
             expiresAt={join.data.expires_at}
-            machine={targetMachine}
+            machine={status.data?.machine ?? undefined}
           />
         )}
-      </div>
+      </DialogBody>
     </DialogContent>
   );
 }
@@ -127,8 +122,7 @@ function GenerateCommandStep({
         </p>
       </div>
       <div className="mt-4">
-        <Button onClick={onGenerate} disabled={pending}>
-          {pending ? <Loader2 className="animate-spin" /> : null}
+        <Button onClick={onGenerate} pending={pending}>
           Generate install command
         </Button>
       </div>
@@ -170,7 +164,7 @@ function JoinProgress({
               Credential expires <LiveRelativeTime value={expiresAt} />
             </p>
           </div>
-          <StatusChip status={ready ? "Ready" : blocked ? "Failed" : "Pending"} live={ready} />
+          <StatusChip status={ready ? "Ready" : blocked ? "Failed" : "Pending"} />
         </div>
         <CliHint command={command} className="mt-3 bg-muted/30" />
         <p className="mt-2 text-[11px] text-muted-foreground">
@@ -264,23 +258,4 @@ function ProgressRow({
       </p>
     </div>
   );
-}
-
-function findJoinedMachine(
-  machines: UnitMachine[],
-  baselineMachineIds: ReadonlySet<string>,
-  generatedAt: number | null,
-): UnitMachine | undefined {
-  if (generatedAt === null) return undefined;
-  return machines
-    .filter((machine) => {
-      if (!baselineMachineIds.has(machine.id)) return true;
-      if (!machine.last_seen_at) return false;
-      return new Date(machine.last_seen_at).getTime() >= generatedAt;
-    })
-    .sort((left, right) => {
-      const leftSeen = new Date(left.last_seen_at ?? 0).getTime();
-      const rightSeen = new Date(right.last_seen_at ?? 0).getTime();
-      return rightSeen - leftSeen;
-    })[0];
 }

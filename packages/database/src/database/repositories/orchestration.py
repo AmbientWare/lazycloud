@@ -37,6 +37,7 @@ from shared.autoscaler_state import (
 from shared.compute_fleet import AgentLease, AgentRecord, Machine, ResourceStatus, Worker
 from shared.container_requests import ContainerShutdownTarget, StopContainerReason
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
+from shared.deployments import DeploymentKind
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.routing import AgentBackendRoute
@@ -952,6 +953,9 @@ class ContainerRepository:
         *,
         workspace_id: str,
         stub_ids: tuple[str, ...],
+        app_id: str | None = None,
+        workload_name: str | None = None,
+        workload_kind: DeploymentKind | None = None,
         start: datetime | None = None,
         end: datetime | None = None,
         limit: int = 10_000,
@@ -961,12 +965,32 @@ class ContainerRepository:
         Every container creation is one cold start; rows come back bounded and
         in ascending time order for the caller to bucket.
         """
-        if not stub_ids:
+        if not stub_ids and not (app_id and workload_name and workload_kind):
             return []
         statement = select(ContainerTable.created_at).where(
             ContainerTable.workspace_id == workspace_id,
-            ContainerTable.stub_id.in_(stub_ids),
         )
+        if stub_ids:
+            statement = statement.where(ContainerTable.stub_id.in_(stub_ids))
+        if app_id is not None:
+            statement = statement.where(ContainerTable.app_id == app_id)
+        if workload_name is not None:
+            statement = statement.where(
+                ContainerTable.stub_id.in_(
+                    select(StubTable.id).where(
+                        StubTable.workspace_id == workspace_id, StubTable.name == workload_name
+                    )
+                )
+            )
+        if workload_kind is not None:
+            statement = statement.where(
+                ContainerTable.stub_id.in_(
+                    select(StubTable.id).where(
+                        StubTable.workspace_id == workspace_id,
+                        StubTable.type == workload_kind.value,
+                    )
+                )
+            )
         if start is not None:
             statement = statement.where(ContainerTable.created_at >= start)
         if end is not None:

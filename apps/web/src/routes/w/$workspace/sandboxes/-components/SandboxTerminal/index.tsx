@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 
 import { Terminal } from "@/components/shared/Terminal";
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { createContainerShell, shellWebSocketUrl } from "@/lib/queries/shells";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -36,13 +37,17 @@ export function SandboxTerminal({
   }
   if (session.isError) {
     return (
-      <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-        {session.error.message}
-      </div>
+      <ApiErrorNotice
+        title="Could not start the shell"
+        error={session.error}
+        onRetry={() => session.mutate()}
+      />
     );
   }
   return (
     <Terminal
+      key={session.submittedAt}
+      onReconnect={() => session.mutate()}
       socketUrl={shellWebSocketUrl(
         session.data.stub_id,
         containerId,

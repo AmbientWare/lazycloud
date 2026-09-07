@@ -153,8 +153,11 @@ def map_keys(
     name: str,
     workspace_id: read_workspace,
     service: RedisMapService = Depends(map_service),
+    cursor: str = Query(default="", max_length=32),
+    limit: int = Query(default=100, ge=1, le=100),
+    q: str = Query(default="", max_length=240),
 ) -> MapKeysResponse:
-    return MapKeysResponse(keys=list(service.map_keys(workspace_id, name)))
+    return service.map_keys_page(workspace_id, name, cursor=cursor, limit=limit, search=q)
 
 
 @router.delete(

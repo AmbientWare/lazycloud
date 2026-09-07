@@ -6,6 +6,7 @@ import {
   podEmptyMutationSchema,
   podFileDownloadSchema,
   podFileListSchema,
+  podFilePreviewSchema,
   podMemorySnapshotSchema,
   podProcessListSchema,
   podUrlsSchema,
@@ -100,7 +101,7 @@ export function deleteSandboxFileMutationOptions(workspaceId: string, containerI
     mutationFn: (path: string) =>
       apiRequest(
         withWorkspace(
-          `/api/v1/pods/${encodeURIComponent(containerId)}/files/${encodeSandboxPath(path)}`,
+          `/api/v1/pods/${encodeURIComponent(containerId)}/files?${new URLSearchParams({ container_path: path })}`,
           workspaceId,
         ),
         podEmptyMutationSchema,
@@ -161,23 +162,34 @@ export function downloadSandboxFile(
   containerId: string,
   path: string,
 ): Promise<PodFileDownload> {
-  // Mirror the SDK pod client: paths are sent relative (stripped of leading
-  // and trailing slashes), "." for the root.
-  const encodedPath = encodeSandboxPath(path);
   return apiRequest(
     withWorkspace(
-      `/api/v1/pods/${encodeURIComponent(containerId)}/files/download/${encodedPath}`,
+      `/api/v1/pods/${encodeURIComponent(containerId)}/files/download?${new URLSearchParams({ container_path: path })}`,
       workspaceId,
     ),
     podFileDownloadSchema,
   );
 }
 
-function encodeSandboxPath(path: string): string {
-  return (path.replace(/^\/+|\/+$/g, "") || ".")
-    .split("/")
-    .map((part) => encodeURIComponent(part))
-    .join("/");
+export function sandboxPreviewQueryOptions(
+  workspaceId: string,
+  containerId: string,
+  path: string | null,
+) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.sandboxes.preview(workspaceId, containerId, path),
+    enabled: path !== null,
+    gcTime: 0,
+    queryFn: ({ signal }) =>
+      apiRequest(
+        withWorkspace(
+          `/api/v1/pods/${encodeURIComponent(containerId)}/files/preview?${new URLSearchParams({ container_path: path ?? "" })}`,
+          workspaceId,
+        ),
+        podFilePreviewSchema,
+        { signal },
+      ),
+  });
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, KeyRound, Loader2, Pencil, Trash2 } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
+import { FormField } from "@/components/shared/FormField";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
-import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -57,14 +58,28 @@ export function SecretsTab({
             onCancel={() => onCreatingChange(false)}
           />
         ) : null}
+        {query.isError && query.data ? (
+          <ApiErrorNotice
+            compact
+            error={query.error}
+            title="Secrets could not be refreshed"
+            onRetry={() => void query.refetch()}
+            retrying={query.isFetching}
+          />
+        ) : null}
         {query.isPending ? (
           <SecretsSkeleton />
-        ) : query.isError ? (
-          <PanelError message={query.error.message} />
-        ) : query.data.secrets.length === 0 && !creating ? (
+        ) : query.isError && !query.data ? (
+          <ApiErrorNotice
+            error={query.error}
+            title="Secrets could not be loaded"
+            onRetry={() => void query.refetch()}
+            retrying={query.isFetching}
+          />
+        ) : query.data?.secrets.length === 0 && !creating ? (
           <PanelEmpty message="No secrets. Create one to inject into a workload." className="p-6" />
         ) : (
-          query.data.secrets.map((secret) =>
+          query.data?.secrets.map((secret) =>
             editing === secret.name ? (
               <SecretForm
                 key={secret.name}
@@ -126,6 +141,16 @@ function SecretRow({
   const [revealedValue, setRevealedValue] = useState<string | null>(null);
   const [revealing, setRevealing] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
+  const revealRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => revealRequest.current?.abort(), []);
+
+  const clearReveal = () => {
+    revealRequest.current?.abort();
+    revealRequest.current = null;
+    setRevealedValue(null);
+    setRevealing(false);
+    setRevealError(null);
+  };
   const remove = useMutation({
     mutationFn: () => deleteSecret(workspaceId, secret.name),
     onSuccess: () =>
@@ -135,25 +160,31 @@ function SecretRow({
   });
 
   const toggleReveal = async () => {
-    if (revealedValue !== null) {
-      setRevealedValue(null);
-      setRevealError(null);
+    if (revealedValue !== null || revealing) {
+      clearReveal();
       return;
     }
+    if (confirming || remove.isPending) return;
+    const request = new AbortController();
+    revealRequest.current = request;
     setRevealing(true);
     setRevealError(null);
     try {
-      setRevealedValue(await revealSecretValue(workspaceId, secret.name));
+      const value = await revealSecretValue(workspaceId, secret.name, request.signal);
+      if (!request.signal.aborted) setRevealedValue(value);
     } catch (error) {
-      setRevealError(error instanceof Error ? error.message : "Unable to reveal secret");
+      if (!request.signal.aborted)
+        setRevealError(error instanceof Error ? error.message : "Unable to reveal secret");
     } finally {
-      setRevealing(false);
+      if (revealRequest.current === request) {
+        revealRequest.current = null;
+        setRevealing(false);
+      }
     }
   };
 
   const beginDelete = () => {
-    setRevealedValue(null);
-    setRevealError(null);
+    clearReveal();
     setConfirming(true);
   };
 
@@ -191,10 +222,16 @@ function SecretRow({
           variant="ghost"
           size="icon"
           className="mr-1 size-7 shrink-0"
-          disabled={revealing}
+          disabled={confirming || remove.isPending}
           onClick={() => void toggleReveal()}
-          aria-label={`${revealedValue !== null ? "Hide" : "Reveal"} secret ${secret.name}`}
-          title={revealedValue !== null ? "Hide secret" : "Reveal secret"}
+          aria-label={`${revealing ? "Cancel revealing" : revealedValue !== null ? "Hide" : "Reveal"} secret ${secret.name}`}
+          title={
+            revealing
+              ? "Cancel revealing"
+              : revealedValue !== null
+                ? "Hide secret"
+                : "Reveal secret"
+          }
         >
           {revealing ? (
             <Loader2 className="animate-spin" />
@@ -212,11 +249,17 @@ function SecretRow({
             variant="destructive"
             size="sm"
             disabled={remove.isPending}
+            pending={remove.isPending}
             onClick={() => remove.mutate()}
           >
-            {remove.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Delete"}
+            Delete
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={remove.isPending}
+            onClick={() => setConfirming(false)}
+          >
             Keep
           </Button>
         </div>
@@ -226,7 +269,10 @@ function SecretRow({
             variant="ghost"
             size="icon"
             className="size-7"
-            onClick={onEdit}
+            onClick={() => {
+              clearReveal();
+              onEdit();
+            }}
             aria-label={`Rotate secret ${secret.name}`}
             title="Rotate secret"
           >
@@ -245,12 +291,12 @@ function SecretRow({
         </div>
       )}
       {remove.isError ? (
-        <p className="col-span-2 text-right text-xs text-destructive sm:col-span-3">
+        <p role="alert" className="col-span-2 text-right text-xs text-destructive sm:col-span-3">
           {remove.error.message}
         </p>
       ) : null}
       {revealError ? (
-        <p className="col-span-2 text-right text-xs text-destructive sm:col-span-3">
+        <p role="alert" className="col-span-2 text-right text-xs text-destructive sm:col-span-3">
           {revealError}
         </p>
       ) : null}
@@ -298,44 +344,40 @@ function SecretForm({
         mutation.mutate();
       }}
     >
-      <label className="min-w-0">
-        <span className="micro-label mb-1.5 block">Secret</span>
-        <input
-          autoFocus={mode === "create"}
-          value={name}
-          disabled={mode === "update"}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="SECRET_NAME"
-          className="mono h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors focus:border-ring disabled:bg-muted/40 disabled:text-muted-foreground"
-        />
-      </label>
-      <label className="min-w-0">
-        <span className="micro-label mb-1.5 block">
-          {mode === "create" ? "Value" : "New value"}
-        </span>
-        <input
-          autoFocus={mode === "update"}
-          value={value}
-          onChange={(event) => setValue(event.target.value)}
-          type="password"
-          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors focus:border-ring"
-        />
-      </label>
+      <FormField
+        label="Secret name"
+        autoFocus={mode === "create"}
+        value={name}
+        disabled={mode === "update" || mutation.isPending}
+        onChange={(event) => setName(event.target.value)}
+        placeholder="SECRET_NAME"
+        className="mono h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors focus:border-ring disabled:bg-muted/40 disabled:text-muted-foreground"
+      />
+      <FormField
+        label={mode === "create" ? "Value" : "New value"}
+        disabled={mutation.isPending}
+        autoFocus={mode === "update"}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        type="password"
+        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors focus:border-ring"
+      />
       <div className="flex items-center justify-end gap-2">
         <Button
           type="submit"
           size="sm"
           disabled={mutation.isPending || !value || (mode === "create" && !name.trim())}
+          pending={mutation.isPending}
         >
-          {mutation.isPending ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : mode === "create" ? (
-            "Create"
-          ) : (
-            "Rotate"
-          )}
+          {mode === "create" ? "Create" : "Rotate"}
         </Button>
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={mutation.isPending}
+          onClick={onCancel}
+        >
           Cancel
         </Button>
       </div>

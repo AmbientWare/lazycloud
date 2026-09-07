@@ -1,15 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  ChevronDown,
-  ChevronRight,
-  Cloud,
-  CloudCog,
-  Loader2,
-  Plus,
-  Save,
-  Server,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, Cloud, CloudCog, Plus, Save, Server } from "lucide-react";
 
 import {
   awsConnectionIsRemoving,
@@ -17,7 +8,7 @@ import {
   awsConnectionPresentation,
 } from "./AwsConnectionDialog/lifecycle";
 import { Panel } from "@/components/shared/Panel";
-import { PanelError } from "@/components/shared/PanelError";
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
@@ -63,16 +54,30 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const [awsDialogOpen, setAwsDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const catalog = useQuery(computeCatalogQueryOptions(expandedProvider === "aws"));
-  const loadError = connection.error ?? instances.error;
+  const loadError = connection.error ?? instances.error ?? billing.error;
+  const retry = () => {
+    void connection.refetch();
+    void instances.refetch();
+    void billing.refetch();
+  };
+  const retrying = connection.isFetching || instances.isFetching || billing.isFetching;
 
   if (connection.isPending || instances.isPending || billing.isPending) {
     return <SettingsSkeleton />;
   }
 
-  if (loadError) {
+  if (
+    loadError &&
+    (connection.data === undefined || instances.data === undefined || billing.data === undefined)
+  ) {
     return (
       <Panel title="Compute">
-        <PanelError message={loadError.message} />
+        <ApiErrorNotice
+          title="Could not load compute"
+          error={loadError}
+          onRetry={retry}
+          retrying={retrying}
+        />
       </Panel>
     );
   }
@@ -84,6 +89,14 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
 
   return (
     <div className="flex min-h-full flex-col gap-5 pb-1">
+      {loadError ? (
+        <ApiErrorNotice
+          title="Compute could not be refreshed"
+          error={loadError}
+          onRetry={retry}
+          retrying={retrying}
+        />
+      ) : null}
       <ConnectedCloudsPanel
         connection={connection.data ?? null}
         instances={awsInstances}
@@ -101,6 +114,8 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
         machines={selfHostedMachines}
         loading={machines.isPending}
         error={machines.error}
+        onRetry={() => void machines.refetch()}
+        retrying={machines.isFetching}
         onJoin={() => setJoinDialogOpen(true)}
       />
       <AwsConnectionDialog
@@ -142,7 +157,7 @@ function ConnectedCloudsPanel({
   return (
     <Panel
       title="Connected clouds"
-      description="Available to every workspace in this account"
+      description="Shared across your account"
       action={
         <AddCloudMenu
           connection={connection}
@@ -254,16 +269,6 @@ function AddCloudMenu({
             </span>
           ) : null}
         </DropdownMenuItem>
-        <DropdownMenuItem disabled className="h-9 whitespace-nowrap">
-          <Cloud />
-          <span className="min-w-0 flex-1 whitespace-nowrap">Google Cloud</span>
-          <span className="ml-auto shrink-0 text-[11px]">Coming soon</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem disabled className="h-9 whitespace-nowrap">
-          <Cloud />
-          <span className="min-w-0 flex-1 whitespace-nowrap">Microsoft Azure</span>
-          <span className="ml-auto shrink-0 text-[11px]">Coming soon</span>
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -322,7 +327,7 @@ function CloudProviderRow({
         </span>
       </button>
       <span className="sm:justify-self-end">
-        <StatusChip status={presentation.label} live={presentation.live} />
+        <StatusChip status={presentation.label} />
       </span>
       {usable ? (
         <span className="min-w-24 text-left sm:text-right">
@@ -357,14 +362,12 @@ function AwsComputeForm({ regions }: { regions: string[] }) {
 
   if (controller.loadError || !controller.draft) {
     return (
-      <div className="space-y-3" role="alert">
-        <p className="text-sm text-destructive">
-          {controller.loadError?.message ?? "AWS provisioning settings are unavailable"}
-        </p>
-        <Button type="button" size="sm" variant="outline" onClick={controller.retryLoad}>
-          Retry loading settings
-        </Button>
-      </div>
+      <ApiErrorNotice
+        title="Could not load AWS settings"
+        error={controller.loadError}
+        onRetry={controller.retryLoad}
+        retrying={controller.isLoading}
+      />
     );
   }
 
@@ -543,10 +546,17 @@ function AwsComputeForm({ regions }: { regions: string[] }) {
           </p>
         ) : null}
         {controller.isSaved && !controller.isDirty ? (
-          <p className="mr-auto text-xs text-success">Settings saved</p>
+          <p className="mr-auto text-xs text-positive" role="status">
+            Settings saved
+          </p>
         ) : null}
-        <Button type="submit" size="sm" disabled={!controller.canSave}>
-          {controller.isSaving ? <Loader2 className="animate-spin" /> : <Save />}
+        <Button
+          type="submit"
+          size="sm"
+          disabled={!controller.canSave}
+          pending={controller.isSaving}
+        >
+          {controller.isSaving ? null : <Save />}
           Save settings
         </Button>
       </div>
@@ -589,7 +599,7 @@ function CloudInstances({ instances }: { instances: CustomerComputeInstance[] })
                   {instance.instance_type ?? "AWS instance"} · {instance.region}
                 </p>
               </div>
-              <StatusChip status={instance.status} live={instanceStatusReady(instance.status)} />
+              <StatusChip status={instance.status} />
               <div className="text-left text-[11px] text-muted-foreground sm:text-right">
                 <p className="mono text-foreground">
                   {formatCpu(instance.cpu_millicores)} · {formatMemory(instance.memory_mb)}
@@ -672,16 +682,19 @@ function SelfHostedPanel({
   loading,
   error,
   onJoin,
+  onRetry,
+  retrying,
 }: {
   machines: UnitMachine[];
   loading: boolean;
   error: Error | null;
   onJoin: () => void;
+  onRetry: () => void;
+  retrying: boolean;
 }) {
   return (
     <Panel
       title="Self-hosted machines"
-      description="Hosts you connected"
       action={
         <Button size="sm" variant="outline" onClick={onJoin}>
           <Server />
@@ -691,12 +704,20 @@ function SelfHostedPanel({
       className="shrink-0 lg:max-h-[15rem]"
       contentClassName="overflow-y-auto"
     >
+      {error ? (
+        <ApiErrorNotice
+          title="Could not load machines"
+          error={error}
+          onRetry={onRetry}
+          retrying={retrying}
+        />
+      ) : null}
       {loading ? (
         <RowsSkeleton rows={2} height="h-10" />
-      ) : error ? (
-        <PanelError message={error.message} />
       ) : machines.length === 0 ? (
-        <PanelEmpty message="No self-hosted machines connected" className="px-4 py-6" />
+        error ? null : (
+          <PanelEmpty message="No self-hosted machines connected" className="px-4 py-6" />
+        )
       ) : (
         <ul aria-label="Self-hosted machines" className="divide-y divide-border">
           {machines.map((machine) => (
@@ -710,10 +731,7 @@ function SelfHostedPanel({
                   {machine.readiness_message}
                 </p>
               </div>
-              <StatusChip
-                status={machine.readiness_phase}
-                live={machine.readiness_phase === "ready"}
-              />
+              <StatusChip status={machine.readiness_phase} />
               <p className="mono text-[11px] text-muted-foreground sm:text-right">
                 {formatCpu(machine.cpu)} · {formatMemory(machine.memory)}
               </p>

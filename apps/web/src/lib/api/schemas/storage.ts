@@ -76,7 +76,6 @@ export const mapListSchema = z.object({
 });
 
 export const queueSizeSchema = z.object({ size: z.number().default(0) });
-export const mapCountSchema = z.object({ count: z.number().default(0) });
 
 export const volumePathInfoSchema = z.object({
   path: z.string(),
@@ -95,5 +94,6 @@ export const encodedValueSchema = z.object({
 });
 
 export const mapKeysSchema = z.object({
-  keys: z.array(z.string()).default([]),
+  data: z.array(z.string()).default([]),
+  next: z.string().default(""),
 });

@@ -35,14 +35,12 @@ export function CallMethods({
     <div className="min-w-0 divide-y divide-border/70">
       <Snippet
         title="curl"
-        description="Reads LAZYCLOUD_TOKEN from the environment."
         text={curlSnippet(manifest.data.invoke_url, body)}
         label="curl command"
         language="shell"
       />
       <Snippet
         title="Python requests"
-        description="Makes the same HTTP request with the requests package."
         text={pythonSnippet(manifest.data.invoke_url, body)}
         label="Python request"
         language="python"
@@ -50,7 +48,6 @@ export function CallMethods({
       {generatedClient ? (
         <Snippet
           title="Typed Python client"
-          description="Installs the pinned client, then calls the typed method."
           text={generatedClient}
           label="typed Python client"
           language="python"
@@ -62,30 +59,22 @@ export function CallMethods({
 
 function Snippet({
   title,
-  description,
   text,
   label,
   language,
 }: {
   title: string;
-  description: string;
   text: string;
   label: string;
   language: Exclude<CodeLanguage, "auto">;
 }) {
   return (
     <section className="min-w-0 px-4 py-5">
-      <div className="min-w-0">
+      <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-medium text-foreground">{title}</h3>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
+        <CopyButton value={text} label={label} className="size-7" />
       </div>
       <div className="dark mt-3 min-w-0 overflow-hidden border-l-2 border-brand/60 bg-card">
-        <div className="flex h-9 items-center justify-between border-b border-border px-3">
-          <span className="font-mono text-[10px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
-            {language === "shell" ? "Shell" : "Python"}
-          </span>
-          <CopyButton value={text} label={label} className="size-7" />
-        </div>
         <pre
           className="m-0 min-w-0 overflow-x-hidden p-4 font-mono text-xs leading-5 whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
           aria-label={label}
@@ -103,7 +92,6 @@ function SnippetSkeleton() {
     <div className="min-w-0 space-y-3 px-4 py-5">
       <div className="space-y-2 pt-0.5">
         <Skeleton className="h-3 w-20" />
-        <Skeleton className="h-3 w-28 max-w-full" />
       </div>
       <Skeleton className="h-40 min-w-0 w-full rounded-none border-l-2 border-brand/20" />
     </div>

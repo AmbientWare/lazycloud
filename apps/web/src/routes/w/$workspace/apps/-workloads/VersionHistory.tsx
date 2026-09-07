@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Loader2, Pause, Play, Trash2 } from "lucide-react";
+import { Pause, Play, Trash2 } from "lucide-react";
 
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
@@ -19,6 +19,7 @@ import type { WorkloadGroup } from "./grouping";
 
 export function VersionHistory({
   group,
+  versionCount,
   appId,
   workspaceId,
   workspaceName,
@@ -28,6 +29,7 @@ export function VersionHistory({
   onLoadMore,
 }: {
   group: WorkloadGroup;
+  versionCount: number;
   appId: string;
   workspaceId: string;
   workspaceName: string;
@@ -45,7 +47,7 @@ export function VersionHistory({
             key={deployment.id}
             deployment={deployment}
             latest={deployment.id === group.latest.id}
-            lastDeployment={group.deployments.length === 1}
+            lastDeployment={versionCount === 1}
             appId={appId}
             workspaceId={workspaceId}
             workspaceName={workspaceName}
@@ -143,7 +145,7 @@ function VersionRow({
         {latest ? <span className="micro-label text-muted-foreground">Latest</span> : null}
       </span>
       <span className="flex min-w-0">
-        <StatusChip status={deployment.active ? "active" : "stopped"} live={deployment.active} />
+        <StatusChip status={deployment.active ? "active" : "stopped"} />
       </span>
       <span className="flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
         <LiveRelativeTime value={deployment.created_at} />
@@ -161,13 +163,14 @@ function VersionRow({
           {confirmingDelete ? (
             <>
               <Button
+                pending={remove.isPending}
                 type="button"
                 variant="destructive"
                 size="sm"
                 disabled={pending}
                 onClick={() => remove.mutate()}
               >
-                {remove.isPending ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                <Trash2 />
                 Delete v{deployment.version}
               </Button>
               <Button
@@ -184,6 +187,7 @@ function VersionRow({
             <>
               {deployment.actions.can_start ? (
                 <Button
+                  pending={start.isPending}
                   type="button"
                   variant="ghost"
                   size="icon"
@@ -192,11 +196,12 @@ function VersionRow({
                   disabled={pending}
                   onClick={() => start.mutate()}
                 >
-                  {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
+                  <Play />
                 </Button>
               ) : null}
               {deployment.actions.can_stop ? (
                 <Button
+                  pending={stop.isPending}
                   type="button"
                   variant="ghost"
                   size="icon"
@@ -205,7 +210,7 @@ function VersionRow({
                   disabled={pending}
                   onClick={() => stop.mutate()}
                 >
-                  {stop.isPending ? <Loader2 className="animate-spin" /> : <Pause />}
+                  <Pause />
                 </Button>
               ) : null}
               {deployment.actions.can_delete ? (

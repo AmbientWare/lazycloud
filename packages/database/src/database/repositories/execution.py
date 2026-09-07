@@ -30,7 +30,7 @@ from database.tables.orchestration import ContainerTable
 from pydantic import BaseModel, JsonValue, field_validator
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRun
-from shared.deployments import StubKind
+from shared.deployments import DeploymentKind, StubKind
 from shared.events import Event
 from shared.logs import LogEntry
 from shared.queue_messages import QueueMessage
@@ -542,6 +542,7 @@ class TaskRepository:
         workspace_id: str,
         status: TaskStatus | None = None,
         app_id: str | None = None,
+        workload_name: str | None = None,
         deployment_id: str | None = None,
         stub_ids: tuple[str, ...] = (),
         kind: StubKind | None = None,
@@ -558,6 +559,8 @@ class TaskRepository:
             statement = statement.where(TaskTable.status == status.value)
         if app_id is not None:
             statement = statement.where(TaskTable.app_id == app_id)
+        if workload_name is not None:
+            statement = statement.where(StubTable.name == workload_name)
         if deployment_id is not None:
             statement = statement.where(TaskTable.deployment_id == deployment_id)
         if stub_ids:
@@ -665,6 +668,8 @@ class TaskRepository:
         stub_ids: tuple[str, ...] = (),
         deployment_id: str | None = None,
         app_id: str | None = None,
+        workload_name: str | None = None,
+        workload_kind: DeploymentKind | None = None,
         start: datetime | None = None,
         end: datetime | None = None,
         limit: int = DEFAULT_DURATION_SAMPLE_LIMIT,
@@ -691,6 +696,23 @@ class TaskRepository:
             statement = statement.where(TaskTable.deployment_id == deployment_id)
         if app_id is not None:
             statement = statement.where(TaskTable.app_id == app_id)
+        if workload_name is not None:
+            statement = statement.where(
+                TaskTable.stub_id.in_(
+                    select(StubTable.id).where(
+                        StubTable.workspace_id == workspace_id, StubTable.name == workload_name
+                    )
+                )
+            )
+        if workload_kind is not None:
+            statement = statement.where(
+                TaskTable.stub_id.in_(
+                    select(StubTable.id).where(
+                        StubTable.workspace_id == workspace_id,
+                        StubTable.type == workload_kind.value,
+                    )
+                )
+            )
         if start is not None:
             statement = statement.where(TaskTable.created_at >= start)
         if end is not None:

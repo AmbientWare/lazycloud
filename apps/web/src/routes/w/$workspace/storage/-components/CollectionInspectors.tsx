@@ -1,19 +1,14 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useDeferredValue, useState } from "react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { Fact } from "@/components/shared/Fact";
-import { PanelError } from "@/components/shared/PanelError";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
+import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { countLabel, formatBytes, formatDuration } from "@/lib/format";
 import {
-  mapCountQueryOptions,
   mapKeysQueryOptions,
   mapValueQueryOptions,
   queuePeekQueryOptions,
@@ -37,7 +32,19 @@ export function QueueInspector({
   const peek = useQuery(queuePeekQueryOptions(workspaceId, name));
   const error = size.error ?? peek.error;
   const depth = size.data?.size ?? 0;
-  if (error) return <PanelError message={error.message} />;
+  const retry = () => {
+    void size.refetch();
+    void peek.refetch();
+  };
+  if (error && (!size.data || !peek.data))
+    return (
+      <ApiErrorNotice
+        error={error}
+        title="Queue could not be loaded"
+        onRetry={retry}
+        retrying={size.isFetching || peek.isFetching}
+      />
+    );
 
   if (size.isPending || peek.isPending) {
     return <InspectorSkeleton />;
@@ -45,6 +52,15 @@ export function QueueInspector({
 
   return (
     <div className="min-w-0 px-4 py-3">
+      {error ? (
+        <ApiErrorNotice
+          compact
+          error={error}
+          title="Queue could not be refreshed"
+          onRetry={retry}
+          retrying={size.isFetching || peek.isFetching}
+        />
+      ) : null}
       <InspectorHeader label="Head message" count={depth} singular="message" />
       <CollectionStats
         items={[
@@ -75,30 +91,22 @@ export function MapInspector({
   sizeBytes,
   expiringKeys,
   nearestExpirySeconds,
+  keyCount,
 }: {
   workspaceId: string;
   name: string;
   sizeBytes: number;
   expiringKeys: number;
   nearestExpirySeconds: number | null;
+  keyCount: number;
 }) {
-  const count = useQuery(mapCountQueryOptions(workspaceId, name));
-  const keys = useQuery(mapKeysQueryOptions(workspaceId, name));
+  const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
+  const keys = useInfiniteQuery(mapKeysQueryOptions(workspaceId, name, deferredSearch));
   const [selectedKey, setSelectedKey] = useState("");
-  const effectiveSelectedKey = keys.data?.keys.includes(selectedKey)
-    ? selectedKey
-    : (keys.data?.keys[0] ?? "");
+  const allKeys = [...new Set(keys.data?.pages.flatMap((page) => page.data) ?? [])];
+  const effectiveSelectedKey = allKeys.includes(selectedKey) ? selectedKey : (allKeys[0] ?? "");
   const value = useQuery(mapValueQueryOptions(workspaceId, name, effectiveSelectedKey));
-  const error = count.error ?? keys.error;
-  if (error) return <PanelError message={error.message} />;
-
-  if (count.isPending || keys.isPending) {
-    return <InspectorSkeleton withControl />;
-  }
-
-  const allKeys = keys.data?.keys ?? [];
-  const visibleKeys = allKeys.slice(0, 100);
-  const keyCount = count.data?.count ?? allKeys.length;
   return (
     <div className="min-w-0 px-4 py-3">
       <InspectorHeader label="Value" count={keyCount} singular="key" />
@@ -115,41 +123,88 @@ export function MapInspector({
           },
         ]}
       />
-      {visibleKeys.length ? (
+      <div className="mt-3 flex gap-2 border-t border-border/60 pt-3">
+        <Input
+          aria-label="Search map keys"
+          placeholder="Search keys"
+          maxLength={240}
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          className="h-8 font-mono"
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={keys.isFetching}
+          onClick={() => void keys.refetch()}
+        >
+          Refresh
+        </Button>
+      </div>
+      {keys.isPending ? (
+        <InspectorSkeleton withControl />
+      ) : keys.isError && !keys.data ? (
+        <ApiErrorNotice
+          error={keys.error}
+          title="Map keys could not be loaded"
+          onRetry={() => void keys.refetch()}
+          retrying={keys.isFetching}
+        />
+      ) : (
         <>
-          <div className="mt-3 border-t border-border/60 pt-3">
-            <Select value={effectiveSelectedKey} onValueChange={setSelectedKey}>
-              <SelectTrigger size="sm" aria-label="Map key" className="mono w-full text-xs sm:w-64">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent align="start">
-                {visibleKeys.map((key) => (
-                  <SelectItem key={key} value={key} className="mono text-xs">
-                    {key}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {allKeys.length > visibleKeys.length ? (
-              <p className="mt-2 text-[11px] text-muted-foreground">
-                Showing first {visibleKeys.length.toLocaleString()} keys
+          {keys.isError && !keys.isFetchNextPageError ? (
+            <ApiErrorNotice
+              compact
+              error={keys.error}
+              title="Map keys could not be refreshed"
+              onRetry={() => void keys.refetch()}
+              retrying={keys.isFetching}
+            />
+          ) : null}
+          <div className="mt-2 max-h-40 overflow-y-auto border border-border" aria-label="Map keys">
+            {allKeys.map((key) => (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={key === effectiveSelectedKey}
+                data-selected={key === effectiveSelectedKey}
+                className="interactive-row mono block w-full truncate px-3 py-2 text-left text-xs"
+                onClick={() => setSelectedKey(key)}
+              >
+                {key}
+              </button>
+            ))}
+            <InfiniteScrollBoundary
+              key={deferredSearch}
+              nextCursor={keys.data?.pages.at(-1)?.next}
+              loading={keys.isFetchingNextPage}
+              error={keys.isFetchNextPageError}
+              onLoadMore={() => void keys.fetchNextPage()}
+              resourceLabel="map keys"
+            />
+            {allKeys.length === 0 && !keys.hasNextPage ? (
+              <p className="p-3 text-xs text-muted-foreground">
+                {search ? "No matching keys" : "Map is empty"}
               </p>
             ) : null}
           </div>
-          <div className="mt-3 min-w-0 border-t border-border/60 pt-3">
-            {value.isPending ? (
-              <PreviewSkeleton />
-            ) : value.isError ? (
-              <p className="text-xs text-destructive">{value.error.message}</p>
-            ) : (
-              <EncodedValuePreview valueBase64={value.data?.value_base64} className="max-h-40" />
-            )}
-          </div>
+          {effectiveSelectedKey ? (
+            <div className="mt-3 min-w-0 border-t border-border/60 pt-3">
+              {value.isPending ? (
+                <PreviewSkeleton />
+              ) : value.isError ? (
+                <ApiErrorNotice
+                  error={value.error}
+                  title="Value could not be loaded"
+                  onRetry={() => void value.refetch()}
+                  retrying={value.isFetching}
+                />
+              ) : (
+                <EncodedValuePreview valueBase64={value.data?.value_base64} className="max-h-40" />
+              )}
+            </div>
+          ) : null}
         </>
-      ) : (
-        <p className="mt-3 border-t border-border/60 pt-3 text-xs text-muted-foreground">
-          Map is empty
-        </p>
       )}
     </div>
   );

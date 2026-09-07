@@ -2,11 +2,11 @@ import { useState } from "react";
 import { Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
-import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -63,14 +63,15 @@ export function AccessTokens() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {controller.isLoading ? (
           <TokenTableSkeleton />
-        ) : controller.loadError ? (
-          <PanelError message="Couldn't load access tokens. Try again." />
-        ) : controller.tokens.length === 0 ? (
-          <PanelEmpty
-            message="No tokens yet"
-            detail="Create a token for CLI, CI, or API access."
-            className="min-h-32 p-8"
+        ) : controller.loadError && controller.tokens.length === 0 ? (
+          <ApiErrorNotice
+            title="Could not load access tokens"
+            error={controller.loadError}
+            onRetry={controller.retryLoad}
+            retrying={controller.retrying}
           />
+        ) : controller.tokens.length === 0 ? (
+          <PanelEmpty message="No access tokens" className="min-h-32 p-8" />
         ) : (
           <TokenTable controller={controller} tokens={controller.tokens} />
         )}
@@ -115,7 +116,6 @@ function TokenTable({
 }
 
 function TokenRow({ token, controller }: { token: AuthToken; controller: AccessTokensController }) {
-  const active = token.status === "active";
   const owned = controller.actionTokenId === token.id;
   const confirming =
     owned && (controller.actionMode === "confirming" || controller.actionMode === "error");
@@ -136,7 +136,7 @@ function TokenRow({ token, controller }: { token: AuthToken; controller: AccessT
       </div>
       <div className="min-w-0 lg:col-span-2">
         <div className="micro-label mb-1 lg:hidden">Status</div>
-        <StatusChip status={token.status} live={active} />
+        <StatusChip status={token.status} />
         {token.disabled_by_admin ? (
           <div className="mt-1 text-xs text-warning">Disabled by admin</div>
         ) : null}
@@ -298,8 +298,7 @@ function CreateTokenForm({ controller }: { controller: AccessTokensController })
         >
           Cancel
         </Button>
-        <Button type="submit" size="sm" disabled={creating || !name.trim()}>
-          {creating ? <Loader2 className="animate-spin" /> : null}
+        <Button type="submit" size="sm" disabled={!name.trim()} pending={creating}>
           Create token
         </Button>
       </div>

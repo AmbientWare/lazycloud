@@ -66,6 +66,13 @@ class DeploymentResourceRow(BaseModel):
     stub_payload: dict[str, JsonValue]
 
 
+class WorkloadSummaryRow(BaseModel):
+    resource: DeploymentResourceRow
+    version_count: int
+    running_containers: int
+    active_containers: int
+
+
 class AppRunningResult(BaseModel):
     app_id: str
     running: int
@@ -1017,6 +1024,128 @@ def _visible_deployment(
 @dataclass(slots=True)
 class DeploymentResourceRepository:
     session: Session
+
+    def workloads(
+        self,
+        *,
+        workspace_id: str,
+        app_id: str,
+        name: str | None = None,
+        kind: DeploymentKind | None = None,
+        after: tuple[str, DeploymentKind] | None = None,
+        limit: int = 50,
+    ) -> list[WorkloadSummaryRow]:
+        versions = (
+            select(
+                DeploymentTable.id,
+                func.row_number()
+                .over(
+                    partition_by=(DeploymentTable.name, DeploymentTable.kind),
+                    order_by=(
+                        DeploymentTable.version.desc(),
+                        DeploymentTable.created_at.desc(),
+                        DeploymentTable.id,
+                    ),
+                )
+                .label("rank"),
+                func.count()
+                .over(partition_by=(DeploymentTable.name, DeploymentTable.kind))
+                .label("version_count"),
+            )
+            .where(
+                DeploymentTable.workspace_id == workspace_id,
+                DeploymentTable.app_id == app_id,
+                DeploymentTable.deleted_at.is_(None),
+            )
+            .subquery()
+        )
+        counts = (
+            select(
+                DeploymentTable.name,
+                DeploymentTable.kind,
+                func.count(func.distinct(ContainerTable.id))
+                .filter(ContainerTable.status == ContainerStatus.Running.value)
+                .label("running"),
+                func.count(func.distinct(ContainerTable.id))
+                .filter(
+                    ContainerTable.status.in_(
+                        [ContainerStatus.Pending.value, ContainerStatus.Running.value]
+                    )
+                )
+                .label("active"),
+            )
+            .join(ContainerTable, ContainerTable.stub_id == DeploymentTable.stub_id)
+            .where(
+                DeploymentTable.workspace_id == workspace_id,
+                DeploymentTable.app_id == app_id,
+                ContainerTable.workspace_id == workspace_id,
+                ContainerTable.app_id == app_id,
+                ContainerTable.status.in_(
+                    [ContainerStatus.Pending.value, ContainerStatus.Running.value]
+                ),
+            )
+            .group_by(DeploymentTable.name, DeploymentTable.kind)
+            .subquery()
+        )
+        statement = (
+            select(
+                AppTable,
+                DeploymentTable,
+                StubTable,
+                versions.c.version_count,
+                func.coalesce(counts.c.running, 0),
+                func.coalesce(counts.c.active, 0),
+            )
+            .join(DeploymentTable, DeploymentTable.app_id == AppTable.id)
+            .join(StubTable, StubTable.id == DeploymentTable.stub_id)
+            .join(versions, and_(versions.c.id == DeploymentTable.id, versions.c.rank == 1))
+            .outerjoin(
+                counts,
+                and_(counts.c.name == DeploymentTable.name, counts.c.kind == DeploymentTable.kind),
+            )
+            .where(
+                AppTable.workspace_id == workspace_id,
+                AppTable.id == app_id,
+                AppTable.deleted_at.is_(None),
+                DeploymentTable.workspace_id == workspace_id,
+                DeploymentTable.deleted_at.is_(None),
+            )
+            .order_by(DeploymentTable.name, DeploymentTable.kind)
+            .limit(limit)
+        )
+        if name is not None:
+            statement = statement.where(DeploymentTable.name == name)
+        if kind is not None:
+            statement = statement.where(DeploymentTable.kind == kind.value)
+        if after is not None:
+            statement = statement.where(
+                or_(
+                    DeploymentTable.name > after[0],
+                    and_(DeploymentTable.name == after[0], DeploymentTable.kind > after[1].value),
+                )
+            )
+        return [
+            WorkloadSummaryRow(
+                resource=DeploymentResourceRow(
+                    app=app_record_from_table(app_row),
+                    deployment_payload=deployment_row.payload,
+                    deployment_app_id=str(deployment_row.app_id),
+                    deployment_stub_id=str(deployment_row.stub_id),
+                    stub_payload=stub_row.payload,
+                ),
+                version_count=version_count,
+                running_containers=running,
+                active_containers=active,
+            )
+            for (
+                app_row,
+                deployment_row,
+                stub_row,
+                version_count,
+                running,
+                active,
+            ) in self.session.execute(statement).tuples()
+        ]
 
     def list(
         self,

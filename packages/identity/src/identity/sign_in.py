@@ -78,6 +78,12 @@ class SignInStart:
 
 
 @dataclass(frozen=True, slots=True)
+class SignInExchange:
+    code: str = field(repr=False)
+    return_to: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class AuthenticatedSession:
     token: str = field(repr=False)
     record: AuthTokenRecord
@@ -128,8 +134,8 @@ class SignInService:
         )
         return SignInStart(authorize_url=authorize_url, nonce=nonce)
 
-    def complete(self, *, code: str, state: str) -> str:
-        """Redeem the provider's authorization code and return an exchange code."""
+    def complete(self, *, code: str, state: str) -> SignInExchange:
+        """Redeem the provider code and preserve the destination for browser recovery."""
         # GETDEL first: a bad payload, a wrong nonce, or a refused provider call all
         # burn the state permanently rather than leaving it replayable.
         encoded = self.redis.getdel(self._key(_SIGN_IN_STATE_KEY_NAMESPACE, state))
@@ -148,7 +154,7 @@ class SignInService:
         # provisioning must never start work.
         workspace = self.provision_default_workspace(user.id, profile.login)
         self.provision_billing_account(user_id=user.id, workspace_id=workspace.id)
-        return self._store(
+        exchange_code = self._store(
             _SIGN_IN_EXCHANGE_KEY_NAMESPACE,
             _SIGN_IN_EXCHANGE_PREFIX,
             _SignInExchangePayload(
@@ -158,6 +164,7 @@ class SignInService:
             ).model_dump_json(),
             ttl_seconds=SIGN_IN_EXCHANGE_TTL_SECONDS,
         )
+        return SignInExchange(code=exchange_code, return_to=payload.return_to)
 
     def redeem(self, *, code: str, nonce: str) -> AuthenticatedSession:
         """Trade a single-use exchange code for the session credential."""
@@ -285,6 +292,7 @@ __all__ = [
     "SIGN_IN_STATE_TTL_SECONDS",
     "AuthenticatedSession",
     "BillingProvisioner",
+    "SignInExchange",
     "SignInService",
     "SignInStart",
     "SignInStateStoreError",
