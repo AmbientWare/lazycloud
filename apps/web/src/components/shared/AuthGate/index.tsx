@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
+import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { ApiError, clearAuthToken } from "@/lib/api/client";
 import { useAuthToken } from "@/hooks/use-auth-token";
 import { currentSessionQueryOptions, signOut } from "@/lib/queries/auth";
@@ -70,7 +72,15 @@ function AuthenticatedSession({ children }: { children: ReactNode }) {
   }
 
   if (!token) {
-    return <SignInScreen />;
+    return (
+      <SignInScreen
+        error={
+          session.error instanceof ApiError && session.error.status === 401
+            ? "Your session expired. Sign in again."
+            : undefined
+        }
+      />
+    );
   }
 
   if (session.isPending) {
@@ -78,7 +88,20 @@ function AuthenticatedSession({ children }: { children: ReactNode }) {
   }
 
   if (session.isError || !contextValue) {
-    return <SignInScreen error={loginErrorMessage(session.error)} />;
+    return (
+      <PreShellScreen>
+        <ApiErrorNotice
+          title="Could not load your session"
+          error={
+            session.error instanceof ApiError
+              ? session.error
+              : new Error("Check your connection and try again.")
+          }
+          onRetry={() => void session.refetch()}
+          retrying={session.isFetching}
+        />
+      </PreShellScreen>
+    );
   }
 
   return <SessionContext.Provider value={contextValue}>{children}</SessionContext.Provider>;
@@ -95,17 +118,4 @@ function LoadingScreen() {
       <Loader2 className="size-6 animate-spin text-brand" />
     </div>
   );
-}
-
-function loginErrorMessage(error: unknown): string {
-  if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-    return "Your session expired. Sign in again.";
-  }
-  if (error instanceof ApiError) {
-    return `Sign-in failed (${error.status} ${error.statusText}).`;
-  }
-  if (error instanceof Error && error.message) {
-    return "Cannot reach the LazyCloud API. Check that it is running, then retry.";
-  }
-  return "Could not validate the session.";
 }

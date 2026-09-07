@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
-import { setAuthToken } from "@/lib/api/client";
+import { ApiError, setAuthToken } from "@/lib/api/client";
 import { completeSignInMutationOptions, githubSignInHref } from "@/lib/queries/auth";
 
 export const Route = createFileRoute("/callback")({
@@ -18,7 +18,7 @@ export const Route = createFileRoute("/callback")({
 const SIGNED_OUT_PATHS = new Set(["", "/", "/signin", "/callback"]);
 
 function signedInDestination(returnTo: string): string {
-  const normalized = returnTo.split("?")[0].replace(/\/+$/, "");
+  const normalized = returnTo.split(/[?#]/)[0].replace(/\/+$/, "");
   return SIGNED_OUT_PATHS.has(normalized) ? "/dashboard" : returnTo;
 }
 
@@ -31,6 +31,7 @@ function signedInDestination(returnTo: string): string {
  */
 function SignInCallbackPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   // Read once, before the effect clears the fragment. A lazy initializer only reads,
   // so re-running it under StrictMode's remount yields the same code. The build
   // prerenders this route with no `window`, where there is no fragment to read and
@@ -46,6 +47,7 @@ function SignInCallbackPage() {
   const complete = useMutation({
     ...completeSignInMutationOptions(),
     onSuccess: (session) => {
+      queryClient.clear();
       setAuthToken(session.token);
       // `replace`, so Back cannot return to a callback URL whose code is spent.
       void navigate({ to: signedInDestination(session.return_to), replace: true });
@@ -62,7 +64,9 @@ function SignInCallbackPage() {
   }, [code, mutate]);
 
   const failure = complete.isError
-    ? "That sign-in link has expired or was already used."
+    ? complete.error instanceof ApiError && complete.error.status === 401
+      ? "That sign-in link has expired or was already used."
+      : "Could not complete sign-in. Please start again."
     : // Only the browser can know the fragment was empty; during the prerender it
       // always is, and reporting that as a failure would bake it into the page.
       typeof window !== "undefined" && !code
