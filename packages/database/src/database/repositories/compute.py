@@ -643,7 +643,7 @@ class ComputeUnitRepository:
 
     def lock_capacity_workspace(self, workspace_id: str) -> None:
         workspace = self.session.scalar(
-            select(WorkspaceTable).where(WorkspaceTable.id == workspace_id).with_for_update()
+            select(WorkspaceTable.id).where(WorkspaceTable.id == workspace_id).with_for_update()
         )
         if workspace is None:
             raise LookupError("provider capacity workspace no longer exists")

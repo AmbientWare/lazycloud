@@ -13,8 +13,9 @@ from shared.errors import NotFoundError
 from shared.identity import UserStatus, WorkspaceStatus
 from sqlalchemy import BigInteger, DateTime, Select, Uuid, cast, extract, func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import InstrumentedAttribute, Session, class_mapper
+from sqlalchemy.orm import InstrumentedAttribute, Session, class_mapper, defer
 from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.orm.interfaces import ORMOption
 from sqlalchemy.sql.base import ReadOnlyColumnCollection
 from sqlalchemy.sql.elements import ColumnElement, KeyedColumnElement
 
@@ -83,28 +84,26 @@ def bucket_index(
 
 def _lock_active_workspace(session: Session, workspace_id: str) -> None:
     row = session.scalars(
-        select(WorkspaceTable)
+        select(WorkspaceTable.id)
         .where(
             WorkspaceTable.id == workspace_id,
             WorkspaceTable.status == WorkspaceStatus.Active.value,
         )
         .with_for_update(read=True, key_share=True)
-        .execution_options(populate_existing=True)
     ).first()
     if row is None:
         raise NotFoundError(f"workspace not found: {workspace_id}")
 
 
 def _lock_active_user(session: Session, user_id: str) -> None:
-    row = session.scalars(
-        select(UserTable)
+    status = session.scalar(
+        select(UserTable.status)
         .where(UserTable.id == user_id)
         .with_for_update(read=True, key_share=True)
-        .execution_options(populate_existing=True)
-    ).first()
-    if row is None:
+    )
+    if status is None:
         raise NotFoundError(f"user not found: {user_id}")
-    if UserStatus(row.status) is not UserStatus.Active:
+    if UserStatus(status) is not UserStatus.Active:
         raise NotFoundError(f"user not found: {user_id}")
 
 
@@ -185,7 +184,12 @@ class _TableRecordStore[TModel: BaseModel]:
         payload = _json_object(model)
         lookup_key = key or _payload_key(payload, self.config.key_field)
         row = (
-            self._get_row(lookup_key, scope_id=scope_id, scoped=scoped)
+            self._get_row(
+                lookup_key,
+                scope_id=scope_id,
+                scoped=scoped,
+                options=(defer(self.config.table.payload, raiseload=True),),
+            )
             if lookup_key is not None
             else None
         )
@@ -266,6 +270,7 @@ class _TableRecordStore[TModel: BaseModel]:
         *,
         scope_id: str | None,
         scoped: bool,
+        options: tuple[ORMOption, ...] = (),
     ) -> TableRow | None:
         if key is None:
             return None
@@ -274,18 +279,18 @@ class _TableRecordStore[TModel: BaseModel]:
             if lookup_key is None:
                 return None
             if not scoped:
-                return self.session.get(self.config.table, lookup_key)
+                return self.session.get(self.config.table, lookup_key, options=options)
             id_column = _required_table_column(self.config.table, "id")
             statement = select(self.config.table).where(
                 id_column == lookup_key,
                 self._scope_column_element() == scope_id,
             )
-            return self.session.scalars(statement).first()
+            return self.session.scalars(statement.options(*options)).first()
         column = _required_table_column(self.config.table, self.config.key_field)
         statement: Select[tuple[TableRow]] = select(self.config.table).where(column == key)
         if scoped:
             statement = statement.where(self._scope_column_element() == scope_id)
-        return self.session.scalars(statement).first()
+        return self.session.scalars(statement.options(*options)).first()
 
     def _scope_column_element(self) -> ColumnElement[ColumnValue]:
         if self._scope_column is None:
@@ -295,11 +300,15 @@ class _TableRecordStore[TModel: BaseModel]:
 
     def _existing_scope_id(self, key: str | None) -> str | None:
         """The owner already recorded for a row, so a cross-scope write still locks it."""
-        row = self._get_row(key, scope_id=None, scoped=False)
-        if row is None:
+        if key is None:
             return None
-        id_column = _required_table_column(self.config.table, "id")
-        value = self.session.scalar(select(self._scope_column_element()).where(id_column == row.id))
+        lookup_key = _uuid_lookup_key(key) if self.config.key_field == "id" else key
+        if lookup_key is None:
+            return None
+        key_column = _required_table_column(self.config.table, self.config.key_field)
+        value = self.session.scalar(
+            select(self._scope_column_element()).where(key_column == lookup_key)
+        )
         return value if isinstance(value, str) and value else None
 
     def _new_row(
