@@ -1,4 +1,4 @@
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -15,14 +15,7 @@ import type { Workspace } from "@/lib/api/schemas";
 
 import { useWorkspaceRenameController } from "./controller";
 
-/**
- * Rename one workspace, from wherever it was picked.
- *
- * Mounted only while open, so a cancelled edit leaves no draft and no error
- * behind for the next one. The controller is the same one the settings panel
- * used before this moved to the workspace menu — the rename rules did not
- * change, only where you reach them from.
- */
+/** Mounted only while open, so cancelled drafts do not survive reopening. */
 export function WorkspaceRenameDialog({
   workspace,
   onClose,
@@ -31,23 +24,28 @@ export function WorkspaceRenameDialog({
   onClose: () => void;
 }) {
   const navigate = useNavigate();
+  const router = useRouter();
   const rename = useWorkspaceRenameController({
     workspace,
-    // The name is in the address, so a rename has to move the page with it or
-    // the next navigation resolves a workspace that no longer answers to it.
     onRenamed: (name) => {
-      void navigate({
-        to: ".",
-        params: { workspace: name },
-        search: (previous: Record<string, unknown>) => previous,
-        replace: true,
-      });
+      const activeWorkspaceName = router.state.matches.find(
+        (match) => match.routeId === "/w/$workspace",
+      )?.params.workspace;
+      if (activeWorkspaceName === workspace.name) {
+        void navigate({
+          to: ".",
+          params: { workspace: name },
+          search: true,
+          hash: true,
+          replace: true,
+        });
+      }
       onClose();
     },
   });
 
   return (
-    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+    <Dialog open onOpenChange={(next) => (!next && !rename.isSaving ? onClose() : undefined)}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Rename workspace</DialogTitle>
