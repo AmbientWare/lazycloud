@@ -74,7 +74,7 @@ and [psycopg requirements](https://www.psycopg.org/psycopg3/docs/advanced/prepar
 Terraform sets `max_db_connections` to bound the local pooler at 20 backend
 connections per database, across all user pools. Other pooler settings retain
 PlanetScale's defaults; its API omits overrides equal to those defaults.
-The schema-2 infrastructure descriptor exports that bound to Helm. With two API
+The infrastructure descriptor exports that bound to Helm. With two API
 replicas, two bootstrap connections and three reserved connections, the normal
 backend budget is 29 against a server ceiling of 40. Application client pools
 are separate from this backend budget.
@@ -84,8 +84,8 @@ deployment with no rollout in progress:
 
 1. Review and apply Terraform with `database_pooler_max_connections=3`, retaining
    the existing database, role and password. It publishes both URLs and the
-   schema-2 descriptor. Never accept a database replacement or a state rewrite
-   to get past a provider read failure.
+   current infrastructure descriptor. Never accept a database replacement or a
+   state rewrite to get past a provider read failure.
 2. Run Ship. Existing pods keep their direct URL until replaced; the old 28
    application connections plus three pooler backends, four direct lock
    connections, two bootstrap connections and three reserved connections total 40.
