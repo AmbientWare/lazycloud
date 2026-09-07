@@ -60,8 +60,15 @@ class ServiceAccounts(Contract):
     wireguardBootstrap: Name
 
 
+class ImageArchiveInfrastructure(Contract):
+    bucket: Name
+    endpoint_url: Annotated[
+        str, Field(pattern=r"^https://[a-f0-9]{32}\.r2\.cloudflarestorage\.com$")
+    ]
+
+
 class Infrastructure(Contract):
-    schema_version: Literal[2]
+    schema_version: Literal[3]
     deployment: Name
     region: Name
     registry: Name
@@ -69,6 +76,7 @@ class Infrastructure(Contract):
     storage_class: Name
     service_accounts: ServiceAccounts
     object_bucket: Name
+    image_archive: ImageArchiveInfrastructure
     workspace_bucket_prefix: Name
     workspace_storage_role_arn: Name
     workload_image_repository: Name
@@ -201,6 +209,10 @@ def render(
             raise ValueError(f"Environment values cannot override infrastructure-owned {key}")
     runtime: dict[str, JsonValue] = {
         "LAZYCLOUD_OBJECT_STORE_BUCKET": infrastructure.object_bucket,
+        "LAZYCLOUD_IMAGE_ARCHIVE_BACKEND__BUCKET": infrastructure.image_archive.bucket,
+        "LAZYCLOUD_IMAGE_ARCHIVE_BACKEND__ENDPOINT_URL": infrastructure.image_archive.endpoint_url,
+        "LAZYCLOUD_IMAGE_ARCHIVE_BACKEND__REGION_NAME": "auto",
+        "LAZYCLOUD_IMAGE_ARCHIVE_BACKEND__FORCE_PATH_STYLE": "true",
         "LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX": infrastructure.workspace_bucket_prefix,
         "LAZYCLOUD_OBJECT_STORE_REGION_NAME": infrastructure.region,
         "LAZYCLOUD_WORKSPACE_STORAGE_ISSUER": "aws",

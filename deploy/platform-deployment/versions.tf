@@ -4,6 +4,10 @@ terraform {
   backend "s3" {}
 
   required_providers {
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "= 5.23.0"
+    }
     aws = {
       source  = "hashicorp/aws"
       version = "~> 6.0"
@@ -18,6 +22,8 @@ terraform {
     }
   }
 }
+
+provider "cloudflare" {}
 
 # No Kubernetes or Helm provider. Everything this module puts in the cluster is
 # an AWS association keyed on the cluster's name, so an apply never reaches the

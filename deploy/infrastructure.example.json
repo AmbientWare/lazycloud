@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "deployment": "lazycloud-prod",
   "region": "us-east-1",
   "registry": "000000000000.dkr.ecr.us-east-1.amazonaws.com",
@@ -12,6 +12,10 @@
     "wireguardBootstrap": "wireguard-bootstrap"
   },
   "object_bucket": "example-objects",
+  "image_archive": {
+    "bucket": "example-image-archives",
+    "endpoint_url": "https://00000000000000000000000000000000.r2.cloudflarestorage.com"
+  },
   "workspace_bucket_prefix": "example-workspace",
   "workspace_storage_role_arn": "arn:aws:iam::000000000000:role/workspace",
   "workload_image_repository": "000000000000.dkr.ecr.us-east-1.amazonaws.com/lazycloud/workloads",
