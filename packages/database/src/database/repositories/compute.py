@@ -32,7 +32,7 @@ from shared.aws_connections import (
     AwsAccountConnection,
     AwsAuthorizationCleanupTombstone,
 )
-from shared.capacity import TERMINAL_REASON_MAX_LENGTH, CapacityFailureCode
+from shared.capacity import TERMINAL_REASON_MAX_LENGTH, CapacityFailureCode, CapacityOwnerKind
 from shared.compute_enrollment import (
     AgentCapacityState,
     ComputeCredentialStatus,
@@ -164,9 +164,16 @@ class ComputeProviderInstanceRecord(ContractModel):
 
 
 @dataclass(frozen=True, slots=True)
-class ComputeProviderInstanceSizingRecord:
-    status: str
-    updated_at: datetime
+class ComputeProviderInstanceSizingSummary:
+    open_count: int
+    last_released_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ComputeUnitSizingRecord:
+    id: str
+    capacity_owner_kind: CapacityOwnerKind
+    desired_machines: int
 
 
 class ComputeJoinCredentialRecord(ContractModel):
@@ -424,6 +431,11 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
+        statement = statement.options(
+            load_only(
+                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
+            )
+        )
         row = self.session.scalars(statement).one_or_none()
         return _compute_unit_record(row) if row is not None else None
 
@@ -445,8 +457,29 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
+        statement = statement.options(
+            load_only(
+                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
+            )
+        )
         row = self.session.scalars(statement).one_or_none()
         return _compute_unit_record(row) if row is not None else None
+
+    def sizing_for_owner(self, capacity_owner_id: str) -> ComputeUnitSizingRecord | None:
+        row = self.session.execute(
+            select(
+                ComputeUnitTable.id,
+                ComputeUnitTable.capacity_owner_kind,
+                ComputeUnitTable.desired_machines,
+            ).where(ComputeUnitTable.capacity_owner_id == capacity_owner_id)
+        ).one_or_none()
+        if row is None:
+            return None
+        return ComputeUnitSizingRecord(
+            id=row.id,
+            capacity_owner_kind=CapacityOwnerKind(row.capacity_owner_kind),
+            desired_machines=row.desired_machines,
+        )
 
     def delete_for_workspace_deletion(self, pool_id: str, *, workspace_id: str) -> bool:
         workspace = WorkspaceRepository(self.session).lock_for_deletion(workspace_id)
@@ -466,6 +499,11 @@ class ComputeUnitRepository:
         statement = select(ComputeUnitTable).where(ComputeUnitTable.id == pool_id)
         if for_update:
             statement = statement.with_for_update()
+        statement = statement.options(
+            load_only(
+                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
+            )
+        )
         row = self.session.scalars(statement).first()
         return _compute_unit_record(row) if row is not None else None
 
@@ -496,6 +534,11 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
+        statement = statement.options(
+            load_only(
+                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
+            )
+        )
         row = self.session.scalars(statement).first()
         return _compute_unit_record(row) if row is not None else None
 
@@ -507,6 +550,11 @@ class ComputeUnitRepository:
         """Every unit feeding one scheduling group, best candidate first."""
         statement = (
             select(ComputeUnitTable)
+            .options(
+                load_only(
+                    ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
+                )
+            )
             .where(
                 ComputeUnitTable.workspace_id == workspace_id,
                 ComputeUnitTable.pool == pool,
@@ -518,16 +566,32 @@ class ComputeUnitRepository:
     def list_for_workspace(self, workspace_id: str) -> list[ComputeUnitRecord]:
         statement = (
             select(ComputeUnitTable)
+            .options(
+                load_only(
+                    ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
+                )
+            )
             .where(ComputeUnitTable.workspace_id == workspace_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
-    def list_across_workspaces(self) -> list[ComputeUnitRecord]:
+    def list_across_workspaces(
+        self, *, capacity_owner_kind: CapacityOwnerKind | None = None
+    ) -> list[ComputeUnitRecord]:
         """System listing every unit, for scheduler controller construction."""
         statement = select(ComputeUnitTable).order_by(
             ComputeUnitTable.workspace_id,
             ComputeUnitTable.id,
+        )
+        if capacity_owner_kind is not None:
+            statement = statement.where(
+                ComputeUnitTable.capacity_owner_kind == capacity_owner_kind.value
+            )
+        statement = statement.options(
+            load_only(
+                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
+            )
         )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
@@ -545,11 +609,21 @@ class ComputeUnitRepository:
         if workspace_id is not None:
             statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
         statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id)
+        statement = statement.options(
+            load_only(
+                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
+            )
+        )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_for_provider_connection(self, connection_id: str) -> list[ComputeUnitRecord]:
         statement = (
             select(ComputeUnitTable)
+            .options(
+                load_only(
+                    ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
+                )
+            )
             .where(ComputeUnitTable.provider_connection_id == connection_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
@@ -1113,17 +1187,21 @@ class ComputeProviderInstanceRepository:
             if instance_id is not None and machine_id is not None
         }
 
-    def list_sizing_for_pool(self, pool_id: str) -> list[ComputeProviderInstanceSizingRecord]:
-        rows = self.session.execute(
+    def sizing_summary_for_pool(
+        self, pool_id: str, *, terminal_statuses: Collection[str]
+    ) -> ComputeProviderInstanceSizingSummary:
+        open_count, last_released_at = self.session.execute(
             select(
-                ComputeProviderInstanceTable.status,
-                ComputeProviderInstanceTable.updated_at,
+                func.count().filter(ComputeProviderInstanceTable.status.not_in(terminal_statuses)),
+                func.max(ComputeProviderInstanceTable.updated_at).filter(
+                    ComputeProviderInstanceTable.status.in_(terminal_statuses)
+                ),
             ).where(ComputeProviderInstanceTable.pool_id == pool_id)
-        ).tuples()
-        return [
-            ComputeProviderInstanceSizingRecord(status=status, updated_at=to_utc(updated_at))
-            for status, updated_at in rows
-        ]
+        ).one()
+        return ComputeProviderInstanceSizingSummary(
+            open_count=open_count,
+            last_released_at=to_utc(last_released_at) if last_released_at is not None else None,
+        )
 
     def bind_machine(
         self,

@@ -969,14 +969,18 @@ class ComputeService:
         records.sort(key=lambda item: item.name)
         return records
 
-    def list_units_across_workspaces(self) -> list[ComputeUnitRecord]:
+    def list_units_across_workspaces(
+        self, *, capacity_owner_kind: CapacityOwnerKind | None = None
+    ) -> list[ComputeUnitRecord]:
         """Every provisioning unit, for scheduler controller construction.
 
         A unit carries its own workspace, so the caller does not pair it with
         one; two units in the same group are distinguished by capacity owner.
         """
         with self.context.database.session() as session:
-            records = ComputeUnitRepository(session).list_across_workspaces()
+            records = ComputeUnitRepository(session).list_across_workspaces(
+                capacity_owner_kind=capacity_owner_kind
+            )
         return sorted(records, key=lambda item: (item.workspace_id, item.name))
 
     def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
@@ -997,7 +1001,7 @@ class ComputeService:
         drain-initiated release.
         """
         with self.context.database.session() as session:
-            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(capacity_owner_id)
+            unit = ComputeUnitRepository(session).sizing_for_owner(capacity_owner_id)
             if unit is None:
                 raise ConflictError(
                     f"compute pool capacity owner does not exist: {capacity_owner_id}"
@@ -1005,12 +1009,14 @@ class ComputeService:
             operations = ComputeCapacityOperationRepository(session)
             open_operations = operations.list_open_sizing_for_owner(capacity_owner_id)
             operation_history = operations.sizing_history_summary_for_owner(capacity_owner_id)
-            machines = ComputeProviderInstanceRepository(session).list_sizing_for_pool(unit.id)
-        open_machines = [record for record in machines if _reservation_open(record.status)]
+            machines = ComputeProviderInstanceRepository(session).sizing_summary_for_pool(
+                unit.id,
+                terminal_statuses=(ReservationStatus.Deleted.value, ReservationStatus.Failed.value),
+            )
         desired_units = (
             unit.desired_machines
             if unit.capacity_owner_kind is CapacityOwnerKind.PooledProvider
-            else len(open_machines)
+            else machines.open_count
         )
         pending = next(
             (
@@ -1033,10 +1039,7 @@ class ComputeService:
             pending_operation_id=pending.operation_id if pending is not None else "",
             pending_desired_units=pending.desired_unit if pending is not None else 0,
             last_requested_at=operation_history.last_requested_at,
-            last_released_at=max(
-                (record.updated_at for record in machines if not _reservation_open(record.status)),
-                default=None,
-            ),
+            last_released_at=machines.last_released_at,
             consecutive_failures=max(failed.failure_count, 1) if failed is not None else 0,
             last_failure_at=failed.updated_at if failed is not None else None,
         )

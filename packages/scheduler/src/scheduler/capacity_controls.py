@@ -47,7 +47,9 @@ class SchedulerCapacityControllerProvider:
         group, and keying by the label would silently drop all but one of them.
         """
         configs: dict[str, AgentPoolConfig] = {}
-        for unit in self.services.compute.list_units_across_workspaces():
+        for unit in self.services.compute.list_units_across_workspaces(
+            capacity_owner_kind=CapacityOwnerKind.WorkspaceAgent
+        ):
             config = agent_pool_config_from_pool(unit)
             if config is not None:
                 configs[config.capacity_owner_id] = config
@@ -70,8 +72,9 @@ class SchedulerCapacityControllerProvider:
                 self.services.compute,
                 self.workers,
             )
-            for unit in self.services.compute.list_units_across_workspaces()
-            if unit.capacity_owner_kind is CapacityOwnerKind.PooledProvider
+            for unit in self.services.compute.list_units_across_workspaces(
+                capacity_owner_kind=CapacityOwnerKind.PooledProvider
+            )
         ]
         controllers.sort(key=lambda item: item.capacity_owner_id)
         return controllers
