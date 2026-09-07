@@ -3018,32 +3018,35 @@ class GatewayControlService:
 
     def _agent_state_for_token(self, agent_token: str) -> ComputeAgentTokenState | None:
         token_hash = hash_compute_token(agent_token)
+        state = self.compute_states.get_agent_token_state(token_hash)
+        if state is not None:
+            with self.services.context.database.session() as session:
+                credential = ComputeMachineEnrollmentRepository(session).credential_by_hash(
+                    token_hash
+                )
+            if credential is None or credential.status is not ComputeMachineEnrollmentStatus.Active:
+                return None
+            if (
+                state.credential_id == credential.id
+                and state.credential_generation == credential.credential_generation
+            ):
+                authoritative = state.model_copy(
+                    update={
+                        "owner_user_id": credential.user_id,
+                        "schedulable": credential.schedulable,
+                        "capacity_state": credential.capacity_state,
+                        "capacity_reason": credential.capacity_reason,
+                        "capacity_observed_at": credential.capacity_observed_at,
+                        "capacity_notice_at": credential.capacity_notice_at,
+                    }
+                )
+                if authoritative != state:
+                    self.compute_states.save_agent_token_state(authoritative)
+                return authoritative
         with self.services.context.database.session() as session:
             enrollment = ComputeMachineEnrollmentRepository(session).by_credential_hash(token_hash)
         if enrollment is None or enrollment.status is not ComputeMachineEnrollmentStatus.Active:
             return None
-        state = self.compute_states.get_agent_token_state(token_hash)
-        if (
-            state is not None
-            and state.credential_id == enrollment.id
-            and state.credential_generation == enrollment.credential_generation
-        ):
-            authoritative = state.model_copy(
-                update={
-                    # The enrollment owns tenancy, so a hot record that predates the
-                    # machine having an account converges here rather than staying
-                    # unschedulable until the agent re-joins.
-                    "owner_user_id": enrollment.user_id,
-                    "schedulable": enrollment.schedulable,
-                    "capacity_state": enrollment.capacity_state,
-                    "capacity_reason": enrollment.capacity_reason,
-                    "capacity_observed_at": enrollment.capacity_observed_at,
-                    "capacity_notice_at": enrollment.capacity_notice_at,
-                }
-            )
-            if authoritative != state:
-                self.compute_states.save_agent_token_state(authoritative)
-            return authoritative
         state = _agent_state_from_enrollment(enrollment)
         if state is not None:
             self.compute_states.save_agent_token_state(state)
