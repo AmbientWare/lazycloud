@@ -110,7 +110,7 @@ def calculate(
     env={APP_NAME_ENV: APP_NAME},
 )
 def nested_calculation(value: int = 6) -> NestedCalculationResult:
-    child = calculate(value)
+    child = calculate.remote(value)
     return {"child": child, "nested": True}
 
 

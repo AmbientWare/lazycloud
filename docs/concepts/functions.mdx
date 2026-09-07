@@ -27,9 +27,9 @@ Deploy it with `lazycloud deploy reports.py:build_report` or
 ## Call it
 
 ```python
-build_report.local("2026-06")     # runs in your own process
+build_report("2026-06")           # runs in the current process
+build_report.local("2026-06")     # same as the direct call
 build_report.remote("2026-06")    # runs on LazyCloud and returns the result
-build_report("2026-06")           # same as .remote(...)
 
 handle = build_report.spawn("2026-06")   # returns a FunctionCall without waiting
 handle.task_id
@@ -40,11 +40,21 @@ for result in build_report.map(["2026-05", "2026-06"]):   # one task per input
 handles = build_report.spawn_map(["2026-05", "2026-06"])
 ```
 
+Direct calls and `.local()` execute the Python callable in the current process,
+both on your machine and inside a LazyCloud container. They do not build an image,
+submit a task, or apply the decorator's remote configuration and lifecycle hooks.
+A decorated `main()` called under `if __name__ == "__main__":` therefore runs in
+your Python process when you execute `python script.py`.
+
+Use `.remote()` to submit a remote task, including when calling another function
+from a cloud task. For a decorated async function, direct calls and `.local()`
+return a coroutine to await in the current process.
+
 `async_remote` and `async_spawn` are the awaitable forms. A `FunctionCall`
 carries the task id; see [Tasks and logs](/concepts/tasks-and-logs) for
 results, waiting, and logs.
 
-From the CLI, `lazycloud run reports.py:build_report 2026-06` submits one call
+From the CLI, `lazycloud run reports.py:build_report 2026-06` submits one remote call
 and prints the result. An argument that parses as JSON is passed as that
 value; anything else is a string.
 

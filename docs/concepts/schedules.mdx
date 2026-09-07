@@ -41,8 +41,8 @@ timeout, retries, secrets, volumes, hooks, and pool. Each run is a durable
 task, so a failing run retries per its retry settings and shows up in
 [task history](/concepts/tasks-and-logs) and the dashboard.
 
-You can still call it directly. `.local()` runs it in your process, and
-`.remote()` or `.spawn()` trigger a run outside the schedule.
+Calling it directly or through `.local()` runs it in the current process.
+`.remote()` or `.spawn()` submit a remote task outside the schedule.
 
 `keep_warm` defaults to `0` for a scheduled function, since the next run is
 usually further away than a warm window is worth. Set it if runs are close

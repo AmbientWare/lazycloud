@@ -236,7 +236,7 @@ class Function(Generic[P, R]):
         )
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
-        return self.remote(*args, **kwargs)
+        return self.local(*args, **kwargs)
 
     def local(self, *args: P.args, **kwargs: P.kwargs) -> R:
         return self.func(*args, **kwargs)

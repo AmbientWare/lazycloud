@@ -265,6 +265,27 @@ def test_function_remote_stops_reading_after_terminal_stream_response(
     assert terminal_stream.remote() == "complete"
 
 
+@pytest.mark.parametrize("container_id", [None, "ctr-runtime"])
+def test_function_direct_call_runs_in_current_process(
+    monkeypatch: pytest.MonkeyPatch,
+    container_id: str | None,
+) -> None:
+    if container_id is None:
+        monkeypatch.delenv(CONTAINER_ID_ENV, raising=False)
+    else:
+        monkeypatch.setenv(CONTAINER_ID_ENV, container_id)
+
+    @App("test").function()
+    def append(values: list[int], *, value: int) -> list[int]:
+        values.append(value)
+        return values
+
+    values: list[int] = []
+    assert append(values, value=2) is values
+    assert append.local(values, value=3) is values
+    assert values == [2, 3]
+
+
 def test_function_remote_submits_child_task_inside_runtime_container(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -326,8 +347,9 @@ def test_function_import_guard_rejects_every_remote_invocation(
 
     _bind_internal_state(guarded, stub_id="stub-1", client=client)
 
+    assert guarded() == "local"
+    assert guarded.local() == "local"
     for invoke in (
-        guarded,
         guarded.remote,
         guarded.spawn,
         lambda: guarded.spawn_map([]),
