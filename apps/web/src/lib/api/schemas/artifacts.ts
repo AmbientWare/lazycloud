@@ -20,3 +20,9 @@ export const artifactListSchema = z.object({
   next: z.string().default(""),
 });
 export type ArtifactList = z.infer<typeof artifactListSchema>;
+
+export const artifactPreviewSchema = z.object({
+  value_base64: z.string(),
+  content_type: z.string(),
+  truncated: z.boolean(),
+});

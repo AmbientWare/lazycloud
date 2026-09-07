@@ -11,21 +11,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { fetchArtifactBlob, taskArtifactsQuery } from "@/lib/queries/artifacts";
+import {
+  fetchArtifactBlob,
+  fetchArtifactPreview,
+  taskArtifactsQuery,
+} from "@/lib/queries/artifacts";
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
+import { formatBytes } from "@/lib/format";
 import type { ArtifactSummary } from "@/lib/api/schemas";
-
-/** Bytes as something a person reads at a glance. */
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
-}
 
 type PreviewKind = "image" | "pdf" | "text" | "none";
 
@@ -73,6 +68,7 @@ function PreviewBody({
   const [text, setText] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [undecodable, setUndecodable] = useState(false);
+  const [truncated, setTruncated] = useState(false);
   // Depend on the identifying fields rather than the artifact object: the
   // list query hands back a fresh object on every refetch, and re-running
   // this effect would revoke a URL the rendered element is still showing.
@@ -83,7 +79,11 @@ function PreviewBody({
     let cancelled = false;
     void (async () => {
       try {
-        const blob = await fetchArtifactBlob(workspaceId, { id, task_id: taskId, filename });
+        const preview = await fetchArtifactPreview(workspaceId, { id, task_id: taskId, filename });
+        const bytes = Uint8Array.from(atob(preview.value_base64), (character) =>
+          character.charCodeAt(0),
+        );
+        const blob = new Blob([bytes], { type: preview.content_type });
         const decoded = kind === "text" ? await blob.text() : null;
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
@@ -94,6 +94,7 @@ function PreviewBody({
           return;
         }
         if (decoded !== null) setText(decoded);
+        setTruncated(preview.truncated);
         setUrl(objectUrl);
       } catch (error) {
         if (!cancelled) setFailure(error instanceof Error ? error.message : "unknown error");
@@ -125,7 +126,7 @@ function PreviewBody({
     if (undecodable) {
       return (
         <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
-          This image could not be decoded — download it to inspect the file.
+          This image could not be decoded. Download it to inspect the file.
         </div>
       );
     }
@@ -144,9 +145,16 @@ function PreviewBody({
     return <iframe src={url} title={artifact.filename} className="flex-1 rounded border-0" />;
   }
   return (
-    <pre className="mono flex-1 overflow-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap">
-      {text ?? ""}
-    </pre>
+    <>
+      {truncated ? (
+        <p className="text-xs text-muted-foreground">
+          Preview limited to 256 KiB. Download the file for its full contents.
+        </p>
+      ) : null}
+      <pre className="mono min-h-0 flex-1 overflow-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap">
+        {text ?? ""}
+      </pre>
+    </>
   );
 }
 
@@ -185,7 +193,7 @@ function ArtifactRow({
       <span className="mono truncate text-xs" title={artifact.filename}>
         {artifact.filename}
       </span>
-      <span className="shrink-0 text-xs text-muted-foreground">{formatSize(artifact.size)}</span>
+      <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(artifact.size)}</span>
       <span className="truncate text-xs text-muted-foreground">{artifact.content_type}</span>
       <div className="ml-auto flex shrink-0 items-center">
         {kind !== "none" && (
@@ -221,7 +229,7 @@ function ArtifactRow({
           <DialogHeader className="shrink-0">
             <DialogTitle className="mono truncate pr-6 text-sm">{artifact.filename}</DialogTitle>
             <DialogDescription className="text-xs">
-              {artifact.content_type} · {formatSize(artifact.size)}
+              {artifact.content_type} · {formatBytes(artifact.size)}
             </DialogDescription>
           </DialogHeader>
           {open && <PreviewBody artifact={artifact} workspaceId={workspaceId} kind={kind} />}
@@ -238,17 +246,26 @@ export function ArtifactsTab({
   workspaceId: string;
   taskId: string;
 }): ReactNode {
-  const { data, isLoading, error } = useQuery(taskArtifactsQuery(workspaceId, taskId));
+  const { data, isLoading, error, refetch, isFetching } = useQuery(
+    taskArtifactsQuery(workspaceId, taskId),
+  );
 
   if (isLoading) {
-    return <div className="px-3 py-2 text-xs text-muted-foreground">Loading artifacts…</div>;
+    return <RowsSkeleton rows={3} height="h-10" />;
   }
-  if (error) {
-    return <div className="px-3 py-2 text-xs text-muted-foreground">Could not load artifacts</div>;
+  if (error && !data) {
+    return (
+      <ApiErrorNotice
+        error={error}
+        title="Artifacts could not be loaded"
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+      />
+    );
   }
   const artifacts = data?.data ?? [];
   if (artifacts.length === 0) {
-    return <div className="px-3 py-2 text-xs text-muted-foreground">No artifacts saved</div>;
+    return <PanelEmpty message="No artifacts saved" />;
   }
   return (
     <div className="flex min-h-full flex-col overflow-auto">

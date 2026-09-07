@@ -1,9 +1,11 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, File, Folder, Loader2, Trash2, Upload } from "lucide-react";
+import { Download, Trash2, Upload } from "lucide-react";
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
+import { FileBreadcrumbs, FileRow, FileRowsSkeleton } from "@/components/shared/FileBrowser";
+import { FormField } from "@/components/shared/FormField";
 
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
-import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,7 +21,6 @@ import {
   volumesQueryOptions,
 } from "@/lib/queries/storage";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
-import { cn } from "@/lib/utils";
 import { ResourceWorkloadLinks } from "./ResourceWorkloadLinks";
 
 export function VolumesTab({
@@ -52,15 +53,29 @@ export function VolumesTab({
               onCancel={() => onCreatingChange(false)}
             />
           ) : null}
+          {query.isError && query.data ? (
+            <ApiErrorNotice
+              compact
+              error={query.error}
+              title="Volumes could not be refreshed"
+              onRetry={() => void query.refetch()}
+              retrying={query.isFetching}
+            />
+          ) : null}
           {query.isPending ? (
             <VolumesSkeleton />
-          ) : query.isError ? (
-            <PanelError message={query.error.message} />
-          ) : query.data.volumes.length === 0 && !creating ? (
+          ) : query.isError && !query.data ? (
+            <ApiErrorNotice
+              error={query.error}
+              title="Volumes could not be loaded"
+              onRetry={() => void query.refetch()}
+              retrying={query.isFetching}
+            />
+          ) : query.data?.volumes.length === 0 && !creating ? (
             <PanelEmpty message="No volumes. Create one to mount in a workload." className="p-6" />
           ) : (
             <div className="divide-y divide-border/60">
-              {query.data.volumes.map((volume) => (
+              {query.data?.volumes.map((volume) => (
                 <VolumeRow
                   key={volume.id}
                   workspaceId={workspaceId}
@@ -128,7 +143,12 @@ function VolumeRow({
   return (
     <div className="interactive-row group px-3 py-2.5" data-selected={selected}>
       <div className="flex min-w-0 items-center gap-2">
-        <button type="button" className="min-w-0 flex-1 text-left" onClick={onSelect}>
+        <button
+          type="button"
+          className="min-w-0 flex-1 text-left"
+          aria-pressed={selected}
+          onClick={onSelect}
+        >
           <span className="mono block truncate text-[13px] font-medium text-foreground">
             {volume.name}
           </span>
@@ -161,18 +181,25 @@ function VolumeRow({
           <Button
             variant="destructive"
             size="sm"
-            disabled={remove.isPending}
+            pending={remove.isPending}
             onClick={() => remove.mutate()}
           >
-            {remove.isPending ? <Loader2 className="animate-spin" /> : "Delete"}
+            Delete
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={remove.isPending}
+            onClick={() => setConfirming(false)}
+          >
             Keep
           </Button>
         </div>
       ) : null}
       {remove.isError ? (
-        <p className="mt-2 text-xs text-destructive">{remove.error.message}</p>
+        <p role="alert" className="mt-2 text-xs text-destructive">
+          {remove.error.message}
+        </p>
       ) : null}
     </div>
   );
@@ -184,6 +211,7 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
   const [path, setPath] = useState("");
   const [confirmPath, setConfirmPath] = useState("");
   const [transferError, setTransferError] = useState("");
+  const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
   const query = useQuery(volumePathQueryOptions(workspaceId, volume.name, path));
   const upload = useMutation({
     mutationFn: (file: File) => uploadVolumeFile(workspaceId, volume.name, path, file),
@@ -200,6 +228,7 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
 
   const download = async (item: VolumePathInfo) => {
     setTransferError("");
+    setDownloadingPath(item.path);
     try {
       const url = await volumeDownloadUrl(workspaceId, volume.name, item.path);
       const anchor = document.createElement("a");
@@ -211,6 +240,8 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
       anchor.remove();
     } catch (error) {
       setTransferError(error instanceof Error ? error.message : "Download failed");
+    } finally {
+      setDownloadingPath(null);
     }
   };
 
@@ -219,27 +250,18 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
   return (
     <section className="flex min-h-0 flex-col overflow-visible lg:overflow-hidden">
       <div className="flex min-h-11 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto text-xs">
-          {volumeBreadcrumbs(volume.name, path).map((crumb, index) => (
-            <span key={crumb.path} className="flex shrink-0 items-center gap-1">
-              {index > 0 ? <ChevronRight className="size-3 text-muted-foreground" /> : null}
-              <button
-                type="button"
-                className={cn(
-                  "interactive-link mono hover:text-foreground",
-                  crumb.path === path ? "text-foreground" : "text-muted-foreground",
-                )}
-                onClick={() => setPath(crumb.path)}
-              >
-                {crumb.label}
-              </button>
-            </span>
-          ))}
-        </div>
+        <FileBreadcrumbs
+          path={path}
+          rootLabel={volume.name}
+          onNavigate={(next) => {
+            setPath(next);
+            setConfirmPath("");
+          }}
+        />
         <input
           ref={inputRef}
           type="file"
-          className="sr-only"
+          className="hidden"
           onChange={(event) => {
             const file = event.currentTarget.files?.[0];
             if (file) {
@@ -252,22 +274,36 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
         <Button
           size="sm"
           variant="outline"
-          disabled={upload.isPending}
+          pending={upload.isPending}
           onClick={() => inputRef.current?.click()}
         >
-          {upload.isPending ? <Loader2 className="animate-spin" /> : <Upload />}
+          <Upload />
           Upload
         </Button>
       </div>
 
       {transferError ? (
-        <p className="border-b border-border px-3 py-2 text-xs text-destructive">{transferError}</p>
+        <ApiErrorNotice compact error={new Error(transferError)} title="File transfer failed" />
+      ) : null}
+      {query.isError && query.data ? (
+        <ApiErrorNotice
+          compact
+          error={query.error}
+          title="Directory could not be refreshed"
+          onRetry={() => void query.refetch()}
+          retrying={query.isFetching}
+        />
       ) : null}
       <div className="min-h-0 flex-1 overflow-visible lg:overflow-y-auto">
         {query.isPending ? (
-          <FileSkeleton />
-        ) : query.isError ? (
-          <PanelError message={query.error.message} />
+          <FileRowsSkeleton />
+        ) : query.isError && !query.data ? (
+          <ApiErrorNotice
+            error={query.error}
+            title="Directory could not be loaded"
+            onRetry={() => void query.refetch()}
+            retrying={query.isFetching}
+          />
         ) : items.length === 0 ? (
           <PanelEmpty message="Empty directory" className="p-8" />
         ) : (
@@ -276,43 +312,30 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
               const itemName = fileName(item.path);
               const confirming = confirmPath === item.path;
               return (
-                <div
+                <FileRow
                   key={item.path}
-                  className="interactive-row group flex min-w-0 items-center gap-2 px-3 py-2"
+                  name={itemName}
+                  directory={item.is_dir}
+                  size={item.size}
+                  modifiedAt={item.mod_time}
+                  onOpen={
+                    item.is_dir
+                      ? () => {
+                          setPath(item.path);
+                          setConfirmPath("");
+                        }
+                      : undefined
+                  }
                 >
-                  {item.is_dir ? (
-                    <Folder className="size-4 shrink-0 text-brand" />
-                  ) : (
-                    <File className="size-4 shrink-0 text-muted-foreground" />
-                  )}
-                  {item.is_dir ? (
-                    <button
-                      type="button"
-                      className="interactive-link mono min-w-0 flex-1 truncate text-left text-[13px]"
-                      onClick={() => setPath(item.path)}
-                    >
-                      {itemName}
-                    </button>
-                  ) : (
-                    <span className="mono min-w-0 flex-1 truncate text-[13px]">{itemName}</span>
-                  )}
-                  <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">
-                    <LiveRelativeTime value={item.mod_time} />
-                  </span>
-                  {!item.is_dir ? (
-                    <span className="mono w-16 shrink-0 text-right text-[11px] text-muted-foreground">
-                      {formatBytes(item.size)}
-                    </span>
-                  ) : null}
                   {confirming ? (
                     <span className="flex items-center gap-1">
                       <Button
                         size="sm"
                         variant="destructive"
-                        disabled={remove.isPending}
+                        pending={remove.isPending}
                         onClick={() => remove.mutate(item.path)}
                       >
-                        {remove.isPending ? <Loader2 className="animate-spin" /> : "Delete"}
+                        Delete
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => setConfirmPath("")}>
                         Keep
@@ -327,6 +350,8 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
                           className="size-7"
                           aria-label={`Download ${itemName}`}
                           title="Download file"
+                          pending={downloadingPath === item.path}
+                          disabled={downloadingPath !== null}
                           onClick={() => void download(item)}
                         >
                           <Download />
@@ -344,7 +369,7 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
                       </Button>
                     </span>
                   )}
-                </div>
+                </FileRow>
               );
             })}
           </div>
@@ -356,20 +381,6 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
         </p>
       ) : null}
     </section>
-  );
-}
-
-function FileSkeleton() {
-  return (
-    <div aria-hidden="true" className="divide-y divide-border/60">
-      {Array.from({ length: 5 }, (_, index) => (
-        <div key={index} className="flex items-center gap-2 px-3 py-2">
-          <Skeleton className="size-4" />
-          <Skeleton className="h-3.5 w-48" />
-          <Skeleton className="ml-auto h-3 w-16" />
-        </div>
-      ))}
-    </div>
   );
 }
 
@@ -402,7 +413,9 @@ function VolumeForm({
         create.mutate();
       }}
     >
-      <input
+      <FormField
+        label="Volume name"
+        disabled={create.isPending}
         autoFocus
         value={name}
         onChange={(event) => setName(event.target.value)}
@@ -410,8 +423,8 @@ function VolumeForm({
         className="mono h-8 w-full rounded-md border border-input bg-background px-2.5 text-sm outline-none focus:border-ring"
       />
       <div className="flex items-center gap-1.5">
-        <Button type="submit" size="sm" disabled={create.isPending || !name.trim()}>
-          {create.isPending ? <Loader2 className="animate-spin" /> : "Create"}
+        <Button type="submit" size="sm" pending={create.isPending} disabled={!name.trim()}>
+          Create
         </Button>
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
           Cancel
@@ -444,17 +457,4 @@ function fileName(path: string): string {
 function byDirectoryThenName(left: VolumePathInfo, right: VolumePathInfo): number {
   if (left.is_dir !== right.is_dir) return left.is_dir ? -1 : 1;
   return left.path.localeCompare(right.path);
-}
-
-function volumeBreadcrumbs(
-  volumeName: string,
-  path: string,
-): Array<{ label: string; path: string }> {
-  const crumbs = [{ label: volumeName, path: "" }];
-  let current = "";
-  for (const part of path.split("/").filter(Boolean)) {
-    current = current ? `${current}/${part}` : part;
-    crumbs.push({ label: part, path: current });
-  }
-  return crumbs;
 }

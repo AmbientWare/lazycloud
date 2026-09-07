@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Check, ChevronRight, Loader2, Minus, Plus, Server } from "lucide-react";
+import { ChevronRight, Minus, Plus, Server } from "lucide-react";
 import { toast } from "sonner";
 
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
@@ -18,7 +18,6 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Container, Deployment } from "@/lib/api/schemas";
-import { countLabel } from "@/lib/format";
 import { useLiveNow } from "@/hooks/use-live-now";
 import { scaleDeploymentMutationOptions } from "@/lib/queries/apps";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
@@ -26,7 +25,6 @@ import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { podInstanceUptime } from "./pod-instance-format";
 
 export const ACTIVE_POD_CONTAINER_STATUSES = ["pending", "running"] as const;
-const ACTIVE_CONTAINER_STATUSES = new Set<string>(ACTIVE_POD_CONTAINER_STATUSES);
 export type PodInstanceStatusFilter = "active" | "all";
 
 export function PodInstances({
@@ -61,25 +59,19 @@ export function PodInstances({
   onLoadMore: () => void;
 }) {
   const instances = useMemo(() => orderInstances(containers), [containers]);
-  const active = instances.filter((container) =>
-    ACTIVE_CONTAINER_STATUSES.has(container.status),
-  ).length;
   const running = instances.filter((container) => container.status === "running").length;
   const now = useLiveNow(running > 0);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border/80 px-3 py-2">
-        {/* The header already states how many are running; what it cannot say is
-            how many the Pod was told to hold. */}
         <p className="text-[11px] text-muted-foreground">
-          {countLabel(active, "active", "active")} · {configuredReplicaLabel(deployment)} configured
+          {configuredReplicaLabel(deployment)} configured
         </p>
         <InstanceControls
           workspaceId={workspaceId}
           appId={appId}
           deployment={deployment}
-          running={running}
           statusFilter={statusFilter}
           onStatusFilterChange={onStatusFilterChange}
         />
@@ -133,14 +125,12 @@ function InstanceControls({
   workspaceId,
   appId,
   deployment,
-  running,
   statusFilter,
   onStatusFilterChange,
 }: {
   workspaceId: string;
   appId: string;
   deployment: Deployment;
-  running: number;
   statusFilter: PodInstanceStatusFilter;
   onStatusFilterChange: (value: PodInstanceStatusFilter) => void;
 }) {
@@ -149,12 +139,7 @@ function InstanceControls({
       className="flex w-full min-w-0 items-center justify-end gap-1 sm:w-auto"
       aria-label="Instance controls"
     >
-      <ReplicaControl
-        workspaceId={workspaceId}
-        appId={appId}
-        deployment={deployment}
-        running={running}
-      />
+      <ReplicaControl workspaceId={workspaceId} appId={appId} deployment={deployment} />
       <InstanceStatusFilter value={statusFilter} onChange={onStatusFilterChange} />
     </div>
   );
@@ -164,16 +149,14 @@ function ReplicaControl({
   workspaceId,
   appId,
   deployment,
-  running,
 }: {
   workspaceId: string;
   appId: string;
   deployment: Deployment;
-  running: number;
 }) {
-  const configured = deployment.scaling?.max_replicas ?? running;
+  const configured = deployment.scaling?.max_replicas;
   const [draft, setDraft] = useState<number | null>(null);
-  const replicas = draft ?? configured;
+  const replicas = draft ?? configured ?? 0;
   const queryClient = useQueryClient();
   const scale = useMutation({
     ...scaleDeploymentMutationOptions(workspaceId, deployment.id, replicas),
@@ -196,7 +179,7 @@ function ReplicaControl({
     onError: (error) => toast.error("Pod could not be scaled", { description: error.message }),
   });
 
-  if (!deployment.actions.can_scale) {
+  if (!deployment.actions.can_scale || configured === undefined) {
     return (
       <div className="text-right text-xs text-muted-foreground">
         <span className="mono text-foreground">{configuredReplicaLabel(deployment)}</span>{" "}
@@ -245,14 +228,10 @@ function ReplicaControl({
         size="sm"
         className="w-16 gap-1 px-1"
         aria-label="Apply"
-        disabled={!changed || scale.isPending}
+        disabled={!changed}
+        pending={scale.isPending}
         onClick={() => scale.mutate()}
       >
-        {scale.isPending ? (
-          <Loader2 className="animate-spin" />
-        ) : scale.isSuccess ? (
-          <Check />
-        ) : null}
         Apply
       </Button>
     </div>
@@ -312,11 +291,11 @@ function InstanceRow({
   container: Container;
   now: number;
 }) {
-  const running = container.status === "running";
   return (
     <div role="listitem" className="border-b border-border/70 last:border-b-0">
       <Link
         to="/w/$workspace/apps/$appId/workloads/$name/instances/$containerId"
+        search={{ kind: "pod" }}
         params={{
           workspace: workspaceName,
           appId,
@@ -329,11 +308,11 @@ function InstanceRow({
         <span className="min-w-0">
           <span className="mono block truncate text-sm font-medium">{container.id}</span>
           <span className="mt-1 block lg:hidden">
-            <StatusChip status={container.status} live={running} />
+            <StatusChip status={container.status} />
           </span>
         </span>
         <span className="hidden lg:block">
-          <StatusChip status={container.status} live={running} />
+          <StatusChip status={container.status} />
         </span>
         <span className="mono hidden truncate text-xs tabular-nums text-muted-foreground lg:block">
           {podInstanceUptime(container, now)}

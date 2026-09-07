@@ -1,6 +1,6 @@
-import { useState, type MouseEvent } from "react";
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, MoreHorizontal, Trash2 } from "lucide-react";
+import { MoreHorizontal, Trash2 } from "lucide-react";
 
 import {
   AlertDialog,
@@ -22,26 +22,23 @@ import { deleteWorkloadMutationOptions } from "@/lib/queries/apps";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { countLabel } from "@/lib/format";
 
-import type { WorkloadGroup } from "../-workloads/grouping";
+import type { WorkloadSummary } from "@/lib/api/schemas";
 
 /** Deletes every version of one workload from the app's workload list. */
 export function WorkloadRowActions({
-  group,
+  workload,
   workspaceId,
   appId,
 }: {
-  group: WorkloadGroup;
+  workload: WorkloadSummary;
   workspaceId: string;
   appId: string;
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const queryClient = useQueryClient();
-  const deletable = group.deployments.filter((deployment) => deployment.actions.can_delete);
+  const deployment = workload.deployment;
   const remove = useMutation({
-    ...deleteWorkloadMutationOptions(
-      workspaceId,
-      deletable.map((deployment) => deployment.id),
-    ),
+    ...deleteWorkloadMutationOptions(workspaceId, appId, deployment.name, deployment.kind),
     onSuccess: async () => {
       setConfirmingDelete(false);
       await Promise.all([
@@ -58,14 +55,9 @@ export function WorkloadRowActions({
       ]);
     },
   });
-  if (deletable.length === 0) {
+  if (!deployment.actions.can_delete) {
     return null;
   }
-  // The row itself is a link; the menu must not follow it.
-  const stop = (event: MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-  };
   return (
     <>
       <DropdownMenu>
@@ -75,14 +67,13 @@ export function WorkloadRowActions({
             variant="ghost"
             size="icon"
             className="size-7"
-            aria-label={`Open actions for ${group.name}`}
+            aria-label={`Open actions for ${deployment.name}`}
             title="Workload actions"
-            onClick={stop}
           >
             <MoreHorizontal className="size-3.5" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-48" onClick={stop}>
+        <DropdownMenuContent align="end" className="w-48">
           <DropdownMenuItem variant="destructive" onSelect={() => setConfirmingDelete(true)}>
             <Trash2 />
             Delete workload
@@ -90,12 +81,12 @@ export function WorkloadRowActions({
         </DropdownMenuContent>
       </DropdownMenu>
       <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
-        <AlertDialogContent onClick={stop}>
+        <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {group.name}?</AlertDialogTitle>
+            <AlertDialogTitle>Delete {deployment.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This stops its containers and deletes {countLabel(deletable.length, "version")} of
-              this workload. The app stays.
+              This stops its containers and deletes {countLabel(workload.version_count, "version")}{" "}
+              of this workload. The app stays.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {remove.error ? <p className="text-sm text-destructive">{remove.error.message}</p> : null}
@@ -104,10 +95,10 @@ export function WorkloadRowActions({
             <Button
               type="button"
               variant="destructive"
-              disabled={remove.isPending}
+              pending={remove.isPending}
               onClick={() => remove.mutate()}
             >
-              {remove.isPending ? <Loader2 className="animate-spin" /> : <Trash2 />}
+              <Trash2 />
               Delete workload
             </Button>
           </AlertDialogFooter>

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ConfirmAction } from "@/components/shared/ConfirmAction";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Loader2, MailPlus, RefreshCw, X } from "lucide-react";
@@ -9,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogBody,
   DialogDescription,
   DialogHeader,
   DialogTitle,
@@ -90,7 +92,7 @@ export function WorkspaceMembersDialog({
 
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="flex max-w-lg flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{workspace.name} members</DialogTitle>
           <DialogDescription>People who can access this workspace.</DialogDescription>
@@ -105,43 +107,45 @@ export function WorkspaceMembersDialog({
           </p>
         ) : null}
         {manages ? <InviteForm workspace={workspace} /> : null}
-        {members.isPending ? (
-          <div className="space-y-2" aria-hidden="true">
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-12 w-full" />
-          </div>
-        ) : members.error ? (
-          <p className="text-sm text-destructive" role="alert">
-            {members.error.message}
-          </p>
-        ) : (
-          <ul className="divide-y divide-border border-y border-border">
-            {(members.data?.data ?? []).map((member) => (
-              <MemberRow
-                key={member.user_id}
-                workspace={workspace}
-                member={member}
-                self={member.user_id === user.id}
-                manages={manages}
-                onLeft={onClose}
-              />
-            ))}
-            {manages
-              ? (invitations.data?.data ?? []).map((invitation) => (
-                  <InvitationRow
-                    key={invitation.id}
-                    workspace={workspace}
-                    invitation={invitation}
-                  />
-                ))
-              : null}
-          </ul>
-        )}
-        {manages && invitations.error ? (
-          <p className="text-sm text-destructive" role="alert">
-            {invitations.error.message}
-          </p>
-        ) : null}
+        <DialogBody>
+          {members.isPending ? (
+            <div className="space-y-2" aria-hidden="true">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : members.error ? (
+            <p className="text-sm text-destructive" role="alert">
+              {members.error.message}
+            </p>
+          ) : (
+            <ul className="divide-y divide-border border-y border-border">
+              {(members.data?.data ?? []).map((member) => (
+                <MemberRow
+                  key={member.user_id}
+                  workspace={workspace}
+                  member={member}
+                  self={member.user_id === user.id}
+                  manages={manages}
+                  onLeft={onClose}
+                />
+              ))}
+              {manages
+                ? (invitations.data?.data ?? []).map((invitation) => (
+                    <InvitationRow
+                      key={invitation.id}
+                      workspace={workspace}
+                      invitation={invitation}
+                    />
+                  ))
+                : null}
+            </ul>
+          )}
+          {manages && invitations.error ? (
+            <p className="text-sm text-destructive" role="alert">
+              {invitations.error.message}
+            </p>
+          ) : null}
+        </DialogBody>
       </DialogContent>
     </Dialog>
   );
@@ -306,21 +310,33 @@ function MemberRow({
           <span className="text-xs text-muted-foreground">{ROLE_LABELS[member.role]}</span>
         )}
         {removable ? (
-          <Button
-            aria-label={self ? "Leave this workspace" : `Remove ${label}`}
-            disabled={remove.isPending}
-            onClick={() => remove.mutate()}
-            size={self ? "sm" : "icon"}
-            type="button"
-            variant={self ? "outline" : "ghost"}
+          <ConfirmAction
+            title={self ? `Leave ${workspace.name}?` : `Remove ${label}?`}
+            description={
+              self
+                ? "You will lose access to this workspace. A workspace administrator must invite you to join again."
+                : `This person will lose access to ${workspace.name}.`
+            }
+            label={self ? "Leave workspace" : "Remove member"}
+            onConfirm={async () => {
+              await remove.mutateAsync();
+            }}
           >
-            {remove.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : self ? null : (
-              <X className="size-4" />
-            )}
-            {self ? "Leave" : null}
-          </Button>
+            <Button
+              aria-label={self ? "Leave this workspace" : `Remove ${label}`}
+              disabled={remove.isPending}
+              size={self ? "sm" : "icon"}
+              type="button"
+              variant={self ? "outline" : "ghost"}
+            >
+              {remove.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : self ? null : (
+                <X className="size-4" />
+              )}
+              {self ? "Leave" : null}
+            </Button>
+          </ConfirmAction>
         ) : null}
       </span>
     </li>

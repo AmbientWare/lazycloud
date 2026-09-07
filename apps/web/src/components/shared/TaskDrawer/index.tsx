@@ -1,6 +1,7 @@
+import { WorkloadLink } from "@/components/shared/WorkloadLink";
 import { Link, useNavigate, type LinkProps } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Loader2, RotateCcw } from "lucide-react";
+import { Ban, RotateCcw } from "lucide-react";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
@@ -16,10 +17,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { postJson, withWorkspace } from "@/lib/api/client";
 import { isTerminalTaskStatus, taskSchema, type Task } from "@/lib/api/schemas";
-import { startupBetween } from "@/lib/format";
 import { rerunTask, taskQueryOptions } from "@/lib/queries/tasks";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
-import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { ArtifactsTab } from "@/components/shared/TaskDrawer/ArtifactsTab";
@@ -28,7 +27,6 @@ import { LogViewer } from "@/components/shared/TaskDrawer/LogViewer";
 import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
 import { TaskTimeline } from "@/components/shared/TaskDrawer/TaskTimeline";
 import { PhaseBar } from "@/components/shared/TaskDrawer/TaskTimeline/PhaseBar";
-import { StatCell } from "@/components/shared/TaskDrawer/StatCell";
 
 /** Slide-over task detail; rendered by nested routes over app and deployment pages. */
 export function TaskDrawer({
@@ -128,26 +126,9 @@ function TaskDrawerSkeleton() {
             <Skeleton className="h-4 w-20" />
             <Skeleton className="h-4 w-56" />
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4">
-            {Array.from({ length: 4 }, (_, index) => (
-              <div
-                key={index}
-                className={cn(
-                  "space-y-2 p-3",
-                  index % 2 === 0 && "border-r border-border",
-                  index < 2 && "border-b border-border sm:border-b-0",
-                  index === 1 && "sm:border-r sm:border-border",
-                  index === 2 && "sm:border-r sm:border-border",
-                )}
-              >
-                <Skeleton className="h-3 w-14" />
-                <Skeleton className="h-4 w-16" />
-              </div>
-            ))}
-          </div>
-          <div className="space-y-2 border-t border-border p-3">
-            <Skeleton className="h-3 w-16" />
-            <Skeleton className="h-24 w-full" />
+          <div className="flex gap-4 p-3">
+            <Skeleton className="h-4 w-28" />
+            <Skeleton className="h-4 w-20" />
           </div>
         </div>
         <div className="panel min-h-0 flex-1 space-y-3 overflow-hidden rounded-md p-3">
@@ -198,7 +179,7 @@ function TaskDrawerBody({
         <div className="flex min-w-0 flex-wrap items-center gap-2.5">
           <SheetTitle className="min-w-0 truncate">{record.name}</SheetTitle>
           <span aria-live="polite">
-            <StatusChip status={record.status} live={record.status === "running"} />
+            <StatusChip status={record.status} />
           </span>
           <div className="ml-auto flex shrink-0 items-center gap-2 max-sm:w-full max-sm:justify-end">
             {record.actions.can_shell && record.container_id ? (
@@ -208,32 +189,24 @@ function TaskDrawerBody({
               <Button
                 variant="outline"
                 size="sm"
-                disabled={rerunPending}
+                pending={rerunPending}
                 aria-busy={rerunPending}
                 onClick={onRerun}
               >
-                {rerunPending ? (
-                  <Loader2 className="size-3 animate-spin" />
-                ) : (
-                  <RotateCcw className="size-3" />
-                )}
-                {rerunPending ? "Starting" : "Re-run"}
+                <RotateCcw className="size-3" />
+                Re-run
               </Button>
             ) : null}
             {record.actions.can_cancel ? (
               <Button
                 variant="destructive"
                 size="sm"
-                disabled={cancelPending}
+                pending={cancelPending}
                 aria-busy={cancelPending}
                 onClick={onCancel}
               >
-                {cancelPending ? (
-                  <Loader2 className="size-3 animate-spin" />
-                ) : (
-                  <Ban className="size-3" />
-                )}
-                {cancelPending ? "Cancelling" : "Cancel"}
+                <Ban className="size-3" />
+                Cancel
               </Button>
             ) : null}
           </div>
@@ -265,17 +238,15 @@ function TaskDrawerBody({
               <span className="flex items-center gap-1.5">
                 <StubKindIcon kind={kind} className="size-3" />
                 {record.app_id ? (
-                  <Link
-                    to="/w/$workspace/apps/$appId/workloads/$name"
-                    params={{
-                      workspace: workspace.name,
-                      appId: record.app_id,
-                      name: record.workload.name,
-                    }}
+                  <WorkloadLink
+                    workspaceName={workspace.name}
+                    appId={record.app_id}
+                    name={record.workload.name}
+                    kind={record.workload.kind}
                     className="text-brand hover:underline"
                   >
                     {record.workload.name}
-                  </Link>
+                  </WorkloadLink>
                 ) : (
                   record.workload.name
                 )}
@@ -302,31 +273,16 @@ function TaskDrawerBody({
             ) : null}
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4">
-            <StatCell
-              label="Queued"
-              value={startupBetween(record.created_at, record.started_at) ?? "—"}
-              className="border-b border-r border-border sm:border-b-0"
-            />
-            <StatCell
-              label="Execution"
-              value={<LiveDuration startedAt={record.started_at} finishedAt={record.finished_at} />}
-              className="border-b border-border sm:border-b-0 sm:border-r"
-            />
-            <StatCell
-              label="Total"
-              value={<LiveDuration startedAt={record.created_at} finishedAt={record.finished_at} />}
-              className="border-r border-border"
-            />
-            <StatCell
-              label="Attempt"
-              value={`${Math.max(record.attempt_number, 1)}/${record.max_attempts}`}
-            />
-          </div>
-
-          <div className="border-t border-border">
-            <div className="micro-label px-3 pt-2.5">Lifecycle</div>
-            <PhaseBar workspaceId={workspace.id} task={record} />
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2 text-xs text-muted-foreground">
+            <span>
+              Duration{" "}
+              <LiveDuration startedAt={record.started_at} finishedAt={record.finished_at} />
+            </span>
+            {record.max_attempts > 1 ? (
+              <span>
+                Attempt {Math.max(record.attempt_number, 1)}/{record.max_attempts}
+              </span>
+            ) : null}
           </div>
         </section>
 
@@ -368,6 +324,7 @@ function TaskDrawerBody({
           </TabsContent>
           <TabsContent value="trace" className="m-0 min-h-0 flex-1 overflow-auto">
             <PanelErrorBoundary key={taskId} title="Trace could not be displayed">
+              <PhaseBar workspaceId={workspace.id} task={record} />
               <TaskTimeline workspaceId={workspace.id} taskLink={taskLink} task={record} />
             </PanelErrorBoundary>
           </TabsContent>

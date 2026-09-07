@@ -11,6 +11,33 @@ from shared.http.collections import MAX_MAP_TTL_SECONDS
 from tests.real_redis import RealRedisActors
 
 
+def test_map_key_pages_cover_packed_sets_and_keep_workspace_and_search_scope(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    service = RedisMapService(real_redis_actors.client())
+    for index in range(207):
+        service.map_set("owner", "cache", str(index), b"value")
+    service.map_set("other", "cache", "private", b"value")
+    cursor = ""
+    keys: set[str] = set()
+    for _ in range(20):
+        page = service.map_keys_page("owner", "cache", cursor=cursor)
+        assert len(page.data) <= 100
+        keys.update(page.data)
+        cursor = page.next
+        if not cursor:
+            break
+    assert not cursor
+    assert keys == {str(index) for index in range(207)}
+    filtered = service.map_keys_page("owner", "cache", search="206")
+    assert filtered.data == ["206"]
+    service.map_set("owner", "literal", "star*key", b"value")
+    service.map_set("owner", "literal", "star-other-key", b"value")
+    assert service.map_keys_page("owner", "literal", search="*").data == ["star*key"]
+    service.map_set("owner", "literal", "trailing:", b"value")
+    assert service.map_keys_page("owner", "literal", search="trailing:").data == ["trailing:"]
+
+
 def test_real_redis_map_round_trip_stats_and_workspace_cleanup(
     real_redis_actors: RealRedisActors,
 ) -> None:

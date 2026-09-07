@@ -1,14 +1,13 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight } from "lucide-react";
+import { ExpandableRow } from "@/components/shared/ExpandableRow";
 
-import { PanelError } from "@/components/shared/PanelError";
+import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ResourceConfig, ResourceRow } from "@/lib/api/resources";
 import { displayValue } from "@/lib/format";
 import { resourceQueryOptions } from "@/lib/queries/resources";
-import { cn } from "@/lib/utils";
 
 import { MapInspector, QueueInspector } from "./CollectionInspectors";
 
@@ -35,10 +34,24 @@ export function CollectionAccordion({
           <h2 className="text-sm font-medium">{config.title}</h2>
           <span className="mono text-xs text-muted-foreground">{rows.length}</span>
         </div>
+        {query.isError && query.data ? (
+          <ApiErrorNotice
+            compact
+            error={query.error}
+            title="Collections could not be refreshed"
+            onRetry={() => void query.refetch()}
+            retrying={query.isFetching}
+          />
+        ) : null}
         {query.isPending ? (
           <CollectionSkeleton />
-        ) : query.isError ? (
-          <PanelError message={query.error.message} />
+        ) : query.isError && !query.data ? (
+          <ApiErrorNotice
+            error={query.error}
+            title="Collections could not be loaded"
+            onRetry={() => void query.refetch()}
+            retrying={query.isFetching}
+          />
         ) : rows.length === 0 ? (
           <PanelEmpty message={`No ${config.title.toLowerCase()}`} className="p-8" />
         ) : (
@@ -47,45 +60,31 @@ export function CollectionAccordion({
               const open = openId === row.id;
               const name = String(row.name ?? row.id);
               return (
-                <div key={row.id}>
-                  <CollectionRow
-                    config={config}
-                    row={row}
-                    open={open}
-                    onToggle={(element) => {
-                      setOpenId(open ? null : row.id);
-                      if (!open) {
-                        requestAnimationFrame(() => {
-                          requestAnimationFrame(() => element.scrollIntoView({ block: "nearest" }));
-                        });
-                      }
-                    }}
-                  />
-                  {open ? (
-                    <div
-                      role="region"
-                      aria-label={`${name} ${singular} inspector`}
-                      className="border-t border-border bg-background/35"
-                    >
-                      {config.key === "queues" ? (
-                        <QueueInspector
-                          workspaceId={workspaceId}
-                          name={name}
-                          oldestMessageAgeSeconds={numberValue(row.oldest_message_age_seconds)}
-                          putRatePerMinute={numberValue(row.put_rate_per_minute) ?? 0}
-                        />
-                      ) : (
-                        <MapInspector
-                          workspaceId={workspaceId}
-                          name={name}
-                          sizeBytes={numberValue(row.size_bytes) ?? 0}
-                          expiringKeys={numberValue(row.expiring_keys) ?? 0}
-                          nearestExpirySeconds={numberValue(row.nearest_expiry_seconds)}
-                        />
-                      )}
-                    </div>
-                  ) : null}
-                </div>
+                <ExpandableRow
+                  key={row.id}
+                  open={open}
+                  onOpenChange={(next) => setOpenId(next ? row.id : null)}
+                  label={`${name} ${singular} inspector`}
+                  summary={<CollectionSummary config={config} row={row} />}
+                >
+                  {config.key === "queues" ? (
+                    <QueueInspector
+                      workspaceId={workspaceId}
+                      name={name}
+                      oldestMessageAgeSeconds={numberValue(row.oldest_message_age_seconds)}
+                      putRatePerMinute={numberValue(row.put_rate_per_minute) ?? 0}
+                    />
+                  ) : (
+                    <MapInspector
+                      workspaceId={workspaceId}
+                      name={name}
+                      sizeBytes={numberValue(row.size_bytes) ?? 0}
+                      keyCount={numberValue(row.keys) ?? 0}
+                      expiringKeys={numberValue(row.expiring_keys) ?? 0}
+                      nearestExpirySeconds={numberValue(row.nearest_expiry_seconds)}
+                    />
+                  )}
+                </ExpandableRow>
               );
             })}
           </div>
@@ -95,35 +94,13 @@ export function CollectionAccordion({
   );
 }
 
-function CollectionRow({
-  config,
-  row,
-  open,
-  onToggle,
-}: {
-  config: ResourceConfig;
-  row: ResourceRow;
-  open: boolean;
-  onToggle: (element: HTMLElement) => void;
-}) {
+function CollectionSummary({ config, row }: { config: ResourceConfig; row: ResourceRow }) {
   const name = String(row.name ?? row.id);
   const amount = config.key === "queues" ? row.size : row.keys;
   const unit = collectionUnit(config.key, amount);
 
   return (
-    <button
-      type="button"
-      aria-expanded={open}
-      data-selected={open}
-      className="interactive-row group flex w-full min-w-0 items-center gap-3 px-3 py-3 text-left"
-      onClick={(event) => onToggle(event.currentTarget.parentElement ?? event.currentTarget)}
-    >
-      <ChevronRight
-        className={cn(
-          "interactive-row-indicator size-3.5 shrink-0 text-muted-foreground transition-transform",
-          open && "rotate-90 text-brand",
-        )}
-      />
+    <>
       <span className="mono min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
         {name}
       </span>
@@ -131,7 +108,7 @@ function CollectionRow({
         <span className="readout block text-sm text-foreground">{displayValue(amount)}</span>
         <span className="block text-[10px] text-muted-foreground">{unit}</span>
       </span>
-    </button>
+    </>
   );
 }
 

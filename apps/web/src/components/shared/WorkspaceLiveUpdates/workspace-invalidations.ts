@@ -63,6 +63,10 @@ export function workspaceInvalidationTargets(
       ]);
     case "containers":
       return compactTargets([
+        {
+          queryKey: workspaceQueryKeys.deployments.workloadSummaries(workspaceId),
+          expensive: true,
+        },
         { queryKey: workspaceQueryKeys.containers.lists(workspaceId) },
         containerId
           ? { queryKey: workspaceQueryKeys.containers.detail(workspaceId, containerId) }

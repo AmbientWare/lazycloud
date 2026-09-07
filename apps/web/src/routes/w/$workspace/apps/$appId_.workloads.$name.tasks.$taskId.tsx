@@ -11,6 +11,7 @@ export const Route = createFileRoute("/w/$workspace/apps/$appId_/workloads/$name
 
 function WorkloadTaskDrawerRoute() {
   const { appId, name, taskId } = Route.useParams();
+  const { kind } = Route.useSearch();
   const { workspace } = useWorkspace();
   const navigate = useNavigate();
 
@@ -19,6 +20,7 @@ function WorkloadTaskDrawerRoute() {
       taskId={taskId}
       taskLink={(nextTaskId) => ({
         to: "/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId",
+        search: { kind },
         params: {
           workspace: workspace.name,
           appId,
@@ -30,6 +32,7 @@ function WorkloadTaskDrawerRoute() {
         void navigate({
           to: "/w/$workspace/apps/$appId/workloads/$name",
           params: { workspace: workspace.name, appId, name },
+          search: { kind },
         });
       }}
     />

@@ -34,7 +34,8 @@ class MapCountResponse(HttpModel):
 
 
 class MapKeysResponse(HttpModel):
-    keys: list[str] = Field(default_factory=list)
+    data: list[str] = Field(default_factory=list)
+    next: str = ""
 
 
 class SimpleQueuePutBody(EncodedBytesBody):

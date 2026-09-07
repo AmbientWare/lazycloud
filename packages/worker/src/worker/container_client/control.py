@@ -221,12 +221,15 @@ class ContainerServiceClient:
         self,
         container_id: str,
         container_path: str,
+        *,
+        max_bytes: int | None = None,
     ) -> ContainerSandboxDownloadFileResponse:
         return self._unary(
             ContainerServiceMethod.ContainerSandboxDownloadFile,
             ContainerSandboxDownloadFileRequest(
                 container_id=container_id,
                 container_path=container_path,
+                max_bytes=max_bytes,
             ),
             ContainerSandboxDownloadFileResponse,
         )

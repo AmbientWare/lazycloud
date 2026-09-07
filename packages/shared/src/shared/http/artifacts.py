@@ -64,9 +64,16 @@ class ArtifactListResponse(HttpModel):
     next: str = ""
 
 
+class ArtifactPreviewResponse(HttpModel):
+    value_base64: str
+    content_type: str
+    truncated: bool
+
+
 __all__ = [
     "DEFAULT_ARTIFACT_PUBLIC_URL_EXPIRES_SECONDS",
     "ArtifactListResponse",
+    "ArtifactPreviewResponse",
     "ArtifactPublicUrlRequest",
     "ArtifactPublicUrlResponse",
     "ArtifactSaveBody",

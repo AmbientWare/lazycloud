@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from collections.abc import Callable
@@ -7,6 +8,7 @@ from dataclasses import dataclass
 
 from coordination.redis_client import RedisClient, RedisWireResponse, RedisWireScalar
 from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
+from shared.http.collections import MapKeysResponse
 
 from execution.collections.planning import (
     MapSetStatus,
@@ -24,6 +26,25 @@ from execution.collections.planning import (
 )
 
 SIMPLE_QUEUE_ACTIVITY_RETENTION_SECONDS = 60 * 60
+
+# SSCAN's COUNT is a hint. Preserve an offset within a returned batch so packed
+# sets cannot turn one response into an unbounded key list or lose the remainder.
+_MAP_KEYS_PAGE = """
+local page = redis.call('SSCAN', KEYS[1], ARGV[1], 'MATCH', ARGV[4], 'COUNT', ARGV[3])
+local offset = tonumber(ARGV[2])
+local stop = math.min(#page[2], offset + tonumber(ARGV[3]))
+local next_cursor = tostring(page[1]) .. ':0'
+if stop < #page[2] then next_cursor = ARGV[1] .. ':' .. tostring(stop) end
+if stop == #page[2] and tostring(page[1]) == '0' then next_cursor = '' end
+local result = {next_cursor}
+for i = offset + 1, stop do
+  local entry_key = string.gsub(ARGV[5] .. page[2][i], ':+$', '')
+  if redis.call('EXISTS', entry_key) == 1 then
+    table.insert(result, page[2][i])
+  end
+end
+return result
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +67,42 @@ class SimpleQueueStats:
 @dataclass(slots=True)
 class RedisMapService:
     redis: RedisClient
+
+    def map_keys_page(
+        self,
+        workspace_id: str,
+        name: str,
+        *,
+        cursor: str = "",
+        limit: int = 100,
+        search: str = "",
+    ) -> MapKeysResponse:
+        if not 1 <= limit <= 100 or len(search) > 240:
+            raise InvalidInputError(
+                "Map key page limit must be 1 to 100 and search at most 240 characters"
+            )
+        if cursor and not re.fullmatch(r"[0-9]{1,20}:[0-9]{1,10}", cursor):
+            raise InvalidInputError("Invalid map key cursor")
+        scan_cursor, offset = (cursor or "0:0").split(":")
+        pattern = "*" + re.sub(r"([\\*?\[\]])", r"\\\1", search) + "*"
+        try:
+            result = self.redis.eval_scalars(
+                _MAP_KEYS_PAGE,
+                1,
+                self._key(map_index_key(workspace_id, name)),
+                scan_cursor,
+                offset,
+                limit,
+                pattern,
+                self._key(map_index_key(workspace_id, name)).removesuffix("index"),
+            )
+        except Exception as exc:
+            raise UpstreamUnavailableError("Map keys could not be read") from exc
+        if not result:
+            raise UpstreamUnavailableError("Redis returned an empty map key page")
+        return MapKeysResponse(
+            data=[_to_text(item) for item in result[1:]], next=_to_text(result[0])
+        )
 
     def map_set(
         self,

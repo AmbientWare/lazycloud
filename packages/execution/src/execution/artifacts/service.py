@@ -6,7 +6,9 @@ from urllib.parse import quote, unquote
 from uuid import uuid4
 
 from database.repositories.execution import TaskRepository
-from shared.errors import NotFoundError
+from shared.bytes_transport import encode_bytes
+from shared.errors import InvalidInputError, NotFoundError
+from shared.http.artifacts import ArtifactPreviewResponse
 from shared.objects import ObjectRecord
 from shared.tasks import Task
 from storage.service import ObjectStorage
@@ -220,6 +222,44 @@ class ArtifactStorageService:
             target_path=path.storage_key,
             expires_seconds=expires_seconds,
             presigned_url=presigned_url,
+        )
+
+    def preview(
+        self,
+        *,
+        workspace_id: str,
+        task_id: str,
+        artifact_id: str,
+        filename: str,
+    ) -> ArtifactPreviewResponse:
+        path, record = self._path_and_record(
+            workspace_id=workspace_id,
+            task_id=task_id,
+            artifact_id=artifact_id,
+            filename=filename,
+        )
+        content_type = record.content_type or "application/octet-stream"
+        binary_preview = content_type.startswith("image/") or content_type == "application/pdf"
+        limit = 8 * 1024 * 1024 if binary_preview else 256 * 1024
+        content = (
+            b""
+            if record.size == 0
+            else self.object_storage.read_bytes_for_workspace(
+                workspace_id=workspace_id,
+                bucket=self.bucket,
+                key=path.storage_key,
+                max_bytes=limit + 1,
+            )
+        )
+        truncated = len(content) > limit
+        if binary_preview and truncated:
+            raise InvalidInputError(
+                "This file exceeds the 8 MiB preview limit. Download it to inspect it."
+            )
+        return ArtifactPreviewResponse(
+            value_base64=encode_bytes(content[:limit]),
+            content_type=content_type,
+            truncated=truncated,
         )
 
     def _path_and_record(

@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import { Loader2 } from "lucide-react";
 
 import { DrawerHeader } from "@/components/shared/DrawerHeader";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { FormField } from "@/components/shared/FormField";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { createWorkspace } from "@/lib/queries/workspace";
@@ -26,7 +25,7 @@ export function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
   });
 
   return (
-    <Sheet open onOpenChange={(next) => (next ? undefined : onClose())}>
+    <Sheet open onOpenChange={(next) => (next || create.isPending ? undefined : onClose())}>
       <SheetContent aria-describedby={undefined} className="gap-0 sm:max-w-md">
         <DrawerHeader>
           <SheetTitle>Create workspace</SheetTitle>
@@ -35,30 +34,33 @@ export function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
           className="flex flex-col gap-3 p-4"
           onSubmit={(event) => {
             event.preventDefault();
-            create.mutate();
+            if (!create.isPending && name.trim()) create.mutate();
           }}
         >
-          <label className="block text-xs font-medium text-muted-foreground">
-            Name
-            <Input
-              autoFocus
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="workspace-name"
-              className="mono mt-1"
-            />
-          </label>
+          <FormField
+            label="Name"
+            autoFocus
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="workspace-name"
+            className="mono"
+            disabled={create.isPending}
+            error={create.error?.message}
+          />
           <div className="flex items-center gap-2">
-            <Button type="submit" size="sm" disabled={create.isPending || !name.trim()}>
-              {create.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Create"}
+            <Button type="submit" size="sm" pending={create.isPending} disabled={!name.trim()}>
+              Create
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onClose}
+              disabled={create.isPending}
+            >
               Cancel
             </Button>
           </div>
-          {create.isError ? (
-            <p className="text-xs text-destructive">{create.error.message}</p>
-          ) : null}
         </form>
       </SheetContent>
     </Sheet>

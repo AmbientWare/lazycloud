@@ -194,8 +194,10 @@ class FakeObjectClient:
             bucket=target_bucket, key=key, size=len(self.objects[(target_bucket, key)])
         )
 
-    def read_bytes(self, key: str, *, bucket: str | None = None) -> bytes:
-        return self.objects[(bucket or "default", key)]
+    def read_bytes(
+        self, key: str, *, bucket: str | None = None, max_bytes: int | None = None
+    ) -> bytes:
+        return self.objects[(bucket or "default", key)][:max_bytes]
 
     def download_file(
         self,

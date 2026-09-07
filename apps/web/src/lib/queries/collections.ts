@@ -1,12 +1,7 @@
-import { queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
-import {
-  encodedValueSchema,
-  mapCountSchema,
-  mapKeysSchema,
-  queueSizeSchema,
-} from "@/lib/api/schemas";
+import { encodedValueSchema, mapKeysSchema, queueSizeSchema } from "@/lib/api/schemas";
 
 import { workspaceQueryKeys } from "./workspace-keys";
 
@@ -30,18 +25,6 @@ export function queueSizeQueryOptions(workspaceId: string, name: string) {
   });
 }
 
-export function mapCountQueryOptions(workspaceId: string, name: string) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.collections.mapCount(workspaceId, name),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/maps/${encodePath(name)}/count`, workspaceId),
-        mapCountSchema,
-      ),
-    refetchInterval: LIVE_INTERVAL_MS,
-  });
-}
-
 export function queuePeekQueryOptions(workspaceId: string, name: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.collections.queuePeek(workspaceId, name),
@@ -54,15 +37,20 @@ export function queuePeekQueryOptions(workspaceId: string, name: string) {
   });
 }
 
-export function mapKeysQueryOptions(workspaceId: string, name: string) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.collections.mapKeys(workspaceId, name),
-    queryFn: () =>
+export function mapKeysQueryOptions(workspaceId: string, name: string, search: string) {
+  return infiniteQueryOptions({
+    queryKey: workspaceQueryKeys.collections.mapKeys(workspaceId, name, search),
+    initialPageParam: "",
+    queryFn: ({ pageParam, signal }) =>
       apiRequest(
-        withWorkspace(`/api/v1/maps/${encodePath(name)}/keys`, workspaceId),
+        withWorkspace(
+          `/api/v1/maps/${encodePath(name)}/keys?${new URLSearchParams({ cursor: pageParam, q: search })}`,
+          workspaceId,
+        ),
         mapKeysSchema,
+        { signal },
       ),
-    refetchInterval: LIVE_INTERVAL_MS,
+    getNextPageParam: (page) => page.next || undefined,
   });
 }
 

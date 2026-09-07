@@ -9,6 +9,7 @@ from api.server.routers.resource_api import (
     observability,
     operations,
     pricing,
+    search,
     secrets,
     tasks,
 )
@@ -18,6 +19,7 @@ router.include_router(billing.router)
 router.include_router(pricing.router)
 router.include_router(deployments.router)
 router.include_router(tasks.router)
+router.include_router(search.router)
 router.include_router(secrets.router)
 router.include_router(observability.router)
 router.include_router(compute.router)

@@ -9,6 +9,8 @@ from shared.bytes_transport import EncodedBytesBody
 from shared.enums import StringEnum
 from shared.http.base import HttpModel
 
+SANDBOX_PREVIEW_BYTES = 256 * 1024
+
 
 class CreatePodRequest(HttpModel):
     stub_id: str = ""
@@ -90,6 +92,10 @@ class PodSandboxDownloadFileResponse(EncodedBytesBody):
     @classmethod
     def from_bytes(cls, value: bytes) -> PodSandboxDownloadFileResponse:
         return cls(value_base64=EncodedBytesBody.from_bytes(value).value_base64)
+
+
+class PodSandboxPreviewFileResponse(EncodedBytesBody):
+    truncated: bool
 
 
 class PodSandboxFileInfo(HttpModel):
@@ -282,6 +288,7 @@ class SandboxTimeline(HttpModel):
 
 
 __all__ = [
+    "SANDBOX_PREVIEW_BYTES",
     "CreatePodRequest",
     "CreatePodResponse",
     "PodFileSearchMatch",
@@ -305,6 +312,7 @@ __all__ = [
     "PodSandboxListFilesResponse",
     "PodSandboxListProcessesResponse",
     "PodSandboxListUrlsResponse",
+    "PodSandboxPreviewFileResponse",
     "PodSandboxReplaceInFilesRequest",
     "PodSandboxReplaceInFilesResponse",
     "PodSandboxSnapshotMemoryRequest",

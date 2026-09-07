@@ -83,6 +83,8 @@ export type BillingSettingsController = {
   summary: BillingSummary | undefined;
   isLoading: boolean;
   loadError: Error | null;
+  retryLoad: () => void;
+  retrying: boolean;
   offers: readonly PlanOffer[];
   settling: boolean;
   /** An administrator has waived this account's bill; nothing here is for sale to it. */
@@ -168,6 +170,11 @@ export function useBillingSettingsController({
     summary: query.data,
     isLoading: query.isPending || catalog.isPending,
     loadError: query.error ?? catalog.error,
+    retryLoad: () => {
+      void query.refetch();
+      void catalog.refetch();
+    },
+    retrying: query.isFetching || catalog.isFetching,
     offers: planOffers(query.data, catalog.data),
     settling,
     complimentary,

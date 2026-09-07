@@ -5,6 +5,7 @@ from enum import StrEnum
 
 from pydantic import Field, JsonValue
 from shared.contracts import ContractModel
+from shared.http.pods import SANDBOX_PREVIEW_BYTES
 
 CONTAINER_CLIENT_SANDBOX_EXEC_TIMEOUT_SECONDS = 15.0
 CONTAINER_CLIENT_SANDBOX_STATUS_TIMEOUT_SECONDS = 5.0
@@ -211,6 +212,7 @@ class ContainerSandboxUploadFileResponse(ContractModel):
 class ContainerSandboxDownloadFileRequest(ContractModel):
     container_id: str
     container_path: str
+    max_bytes: int | None = Field(default=None, ge=1, le=SANDBOX_PREVIEW_BYTES + 1)
 
 
 class ContainerSandboxDownloadFileResponse(ContractModel):

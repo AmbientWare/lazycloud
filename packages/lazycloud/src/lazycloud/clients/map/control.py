@@ -86,9 +86,13 @@ class MapControlClient:
             self.channel.get(self._path(name, "count", workspace=self.workspace))
         )
 
-    def keys(self, name: str) -> MapKeysResponse:
+    def keys(self, name: str, *, cursor: str = "", search: str = "") -> MapKeysResponse:
         return MapKeysResponse.model_validate(
-            self.channel.get(self._path(name, "keys", workspace=self.workspace))
+            self.channel.get(
+                self._path(
+                    name, "keys", workspace=self.workspace, query={"cursor": cursor, "q": search}
+                )
+            )
         )
 
     def delete_map(self, name: str) -> None:
