@@ -160,6 +160,7 @@ export function downloadSandboxFile(
   workspaceId: string,
   containerId: string,
   path: string,
+  signal?: AbortSignal,
 ): Promise<PodFileDownload> {
   // Mirror the SDK pod client: paths are sent relative (stripped of leading
   // and trailing slashes), "." for the root.
@@ -170,6 +171,7 @@ export function downloadSandboxFile(
       workspaceId,
     ),
     podFileDownloadSchema,
+    { signal },
   );
 }
 
