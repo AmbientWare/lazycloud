@@ -106,9 +106,7 @@ class ObjectByteClient(Protocol):
         metadata: dict[str, str] | None = None,
     ) -> S3ObjectInfo: ...
 
-    def read_bytes(
-        self, key: str, *, bucket: str | None = None, max_bytes: int | None = None
-    ) -> bytes: ...
+    def read_bytes(self, key: str, *, bucket: str | None = None) -> bytes: ...
 
     def download_file(
         self,
@@ -707,13 +705,11 @@ class ObjectStorage:
         workspace_id: str,
         bucket: str,
         key: str,
-        max_bytes: int | None = None,
     ) -> bytes:
         self.get_for_workspace(workspace_id=workspace_id, bucket=bucket, key=key)
         return self.object_client.read_bytes(
             self.physical_key_for_workspace(workspace_id, bucket=bucket, key=key),
             bucket=self.physical_bucket(bucket),
-            max_bytes=max_bytes,
         )
 
     def read_content_for_workspace(

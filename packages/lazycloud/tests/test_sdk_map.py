@@ -61,8 +61,8 @@ class FakeMapClient:
     def count(self, name: str) -> MapCountResponse:
         return MapCountResponse(count=len(self._keys(name)))
 
-    def keys(self, name: str, *, cursor: str = "", search: str = "") -> MapKeysResponse:
-        return MapKeysResponse(data=self._keys(name))
+    def keys(self, name: str) -> MapKeysResponse:
+        return MapKeysResponse(keys=self._keys(name))
 
     def delete_map(self, name: str) -> None:
         keys = [storage_key for storage_key in self.values if storage_key[0] == name]

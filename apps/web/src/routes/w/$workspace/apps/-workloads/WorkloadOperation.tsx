@@ -105,7 +105,7 @@ function PodFacts({ deployment }: { deployment: Deployment }) {
 
 function ScheduleFacts({ workspaceId, group }: { workspaceId: string; group: WorkloadGroup }) {
   const cronJobs = useQuery(cronJobsQueryOptions(workspaceId));
-  const deploymentIds = new Set([group.latest.id]);
+  const deploymentIds = new Set(group.deployments.map((deployment) => deployment.id));
   const job: CronJob | undefined = (cronJobs.data?.cron_jobs ?? []).find((item) =>
     deploymentIds.has(item.deployment_id),
   );

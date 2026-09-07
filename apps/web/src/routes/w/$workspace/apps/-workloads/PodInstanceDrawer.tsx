@@ -1,4 +1,4 @@
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { CliHint } from "@/components/shared/CliHint";
@@ -20,8 +20,9 @@ import {
   containerMetricsTimeseriesQueryOptions,
   containerQueryOptions,
 } from "@/lib/queries/containers";
-import { workloadQueryOptions } from "@/lib/queries/deployments";
+import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
 
+import { currentDeployment, findWorkloadGroup } from "./grouping";
 import { podInstancePlacement, podInstanceUptime } from "./pod-instance-format";
 
 export function PodInstanceDrawer({
@@ -38,8 +39,12 @@ export function PodInstanceDrawer({
   onClose: () => void;
 }) {
   const container = useQuery(containerQueryOptions(workspaceId, containerId));
-  const workload = useQuery(workloadQueryOptions(workspaceId, appId, workloadName, "pod"));
-  const deployment = workload.data?.deployment;
+  const deployments = useInfiniteQuery(
+    deploymentsInfiniteQueryOptions(workspaceId, { appId, name: workloadName }),
+  );
+  const deploymentList = selectDeploymentList(deployments.data, deployments.hasNextPage);
+  const group = findWorkloadGroup(deploymentList.items, appId, workloadName);
+  const deployment = group?.kind === "pod" ? currentDeployment(group) : undefined;
   const member = Boolean(
     container.data && deployment?.stub_id && container.data.stub_id === deployment.stub_id,
   );
@@ -52,8 +57,8 @@ export function PodInstanceDrawer({
     enabled: member,
   });
 
-  const pending = container.isPending || workload.isPending;
-  const error = container.error ?? workload.error;
+  const pending = container.isPending || deployments.isPending;
+  const error = container.error ?? deployments.error;
   const membershipError =
     !pending && !error && (!container.data || !deployment || !member)
       ? new Error("This instance is not part of the current Pod deployment")
@@ -75,9 +80,9 @@ export function PodInstanceDrawer({
                 error={error ?? membershipError ?? new Error("Pod instance could not be loaded")}
                 title="Pod instance could not be loaded"
                 onRetry={() => {
-                  void Promise.all([container.refetch(), workload.refetch()]);
+                  void Promise.all([container.refetch(), deployments.refetch()]);
                 }}
-                retrying={container.isFetching || workload.isFetching}
+                retrying={container.isFetching || deployments.isFetching}
                 className="panel w-full max-w-lg rounded-md"
               />
             </div>
@@ -115,7 +120,7 @@ function PodInstanceDrawerBody({
       <DrawerHeader>
         <div className="flex min-w-0 flex-wrap items-center gap-2.5">
           <SheetTitle>Pod instance</SheetTitle>
-          <StatusChip status={record.status} />
+          <StatusChip status={record.status} live={running} />
           <div className="ml-auto">
             {record.actions.can_shell ? (
               <ShellButton containerId={record.id} running={running} />

@@ -6,7 +6,6 @@ import { TerminalSquare, X } from "lucide-react";
 
 import { PanelErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { Terminal } from "@/components/shared/Terminal";
-import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { Button } from "@/components/ui/button";
 import { createContainerShell, shellWebSocketUrl } from "@/lib/queries/shells";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -75,17 +74,15 @@ function ShellDialog({ containerId }: { containerId: string }) {
               Starting shell server…
             </div>
           ) : session.isError ? (
-            <ApiErrorNotice
-              title="Could not start the shell"
-              error={session.error}
-              onRetry={() => session.mutate()}
-              retrying={session.isPending}
-            />
+            <div
+              className="m-auto w-full max-w-xl rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+              role="alert"
+            >
+              {session.error.message}
+            </div>
           ) : session.data ? (
             <PanelErrorBoundary key={containerId} title="Terminal could not be displayed">
               <Terminal
-                key={session.submittedAt}
-                onReconnect={() => session.mutate()}
                 socketUrl={shellWebSocketUrl(
                   session.data.stub_id,
                   containerId,

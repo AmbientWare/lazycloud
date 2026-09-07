@@ -36,6 +36,19 @@ export function Glyph({ children }: { children: ReactNode }) {
   );
 }
 
+export function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <p className="mb-4 font-mono text-[11px] font-semibold tracking-[0.13em] text-brand uppercase">
+      // {children}
+    </p>
+  );
+}
+
+/* Live status dot, shared by terminal footers and product rows. */
+export function StatusDot() {
+  return <i className="size-1.5 rounded-full bg-positive shadow-[0_0_10px_var(--positive)]" />;
+}
+
 export function MarketingButton({
   to,
   hash,
@@ -127,17 +140,62 @@ export function GetStartedButton({
   );
 }
 
-export function SectionHeading({ title, body }: { title: ReactNode; body?: string }) {
+export function SectionHeading({
+  label,
+  title,
+  body,
+  centered = false,
+}: {
+  label?: string;
+  title: ReactNode;
+  body?: string;
+  centered?: boolean;
+}) {
   return (
-    <div className="mb-10 max-w-[770px] sm:mb-12 lg:mb-14">
-      <h2 className="max-w-[740px] font-serif text-[clamp(2.125rem,8vw,3.625rem)] leading-[1.02] font-normal tracking-[-0.005em] text-balance sm:leading-[0.99] [&_em]:text-brand [&_em]:italic">
+    <div className={cn("mb-10 max-w-[770px] sm:mb-12 lg:mb-14", centered && "mx-auto text-center")}>
+      {label ? <SectionLabel>{label}</SectionLabel> : null}
+      <h2
+        className={cn(
+          "max-w-[740px] font-serif text-[clamp(2.125rem,8vw,3.625rem)] leading-[1.02] font-normal tracking-[-0.005em] text-balance sm:leading-[0.99] [&_em]:text-brand [&_em]:italic",
+          centered && "mx-auto",
+        )}
+      >
         {title}
       </h2>
       {body ? (
-        <p className="mt-4 max-w-[620px] text-base leading-[1.6] text-muted-foreground sm:mt-5 sm:text-lg sm:leading-[1.55]">
+        <p
+          className={cn(
+            "mt-4 max-w-[620px] text-base leading-[1.6] text-muted-foreground sm:mt-5 sm:text-lg sm:leading-[1.55]",
+            centered && "mx-auto",
+          )}
+        >
           {body}
         </p>
       ) : null}
     </div>
+  );
+}
+
+export function FinalCta({ title, body }: { title: ReactNode; body: string }) {
+  return (
+    <section className="marketing-final-cta relative !min-h-[clamp(32rem,75svh,43.125rem)] overflow-hidden border-t border-input text-foreground [@media(max-height:500px)]:!min-h-[27rem]">
+      <div className="marketing-cta-grid" aria-hidden="true" />
+      <div
+        className={cn(
+          shell,
+          "marketing-final-inner relative z-[2] flex !min-h-[clamp(32rem,75svh,43.125rem)] flex-col items-center justify-center py-16 text-center sm:py-20 lg:py-30 [@media(max-height:500px)]:!min-h-[27rem] [@media(max-height:500px)]:py-12",
+        )}
+      >
+        <h2 className="max-w-[950px] font-serif !text-[clamp(2.5rem,10vw,5rem)] leading-[1.01] font-normal tracking-[-0.005em] text-balance sm:leading-[0.99] [&_em]:text-brand [&_em]:italic">
+          {title}
+        </h2>
+        <p className="mt-5 max-w-[600px] !text-base leading-relaxed text-muted-foreground sm:mt-6 sm:!text-[17px]">
+          {body}
+        </p>
+        <div className="mt-8 flex w-full max-w-[22rem] justify-center sm:w-auto sm:max-w-none">
+          <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
+        </div>
+      </div>
+    </section>
   );
 }

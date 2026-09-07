@@ -2,7 +2,6 @@ import { z } from "zod";
 import { cpuRequestSchema, memoryRequestSchema } from "./resources";
 import { productRegionSchema } from "./placement";
 
-import { deploymentKindSchema } from "./deployments";
 import { stubSchema } from "./stubs";
 
 export const appSchema = z.object({
@@ -29,7 +28,7 @@ export type App = z.infer<typeof appSchema>;
 export const deploymentSchema = z.object({
   id: z.string(),
   name: z.string(),
-  kind: deploymentKindSchema,
+  kind: z.string(),
   app_id: z.string().nullish(),
   stub_id: z.string().nullish(),
   version: z.number(),
@@ -88,19 +87,6 @@ export const deploymentListSchema = z.object({
   next: z.string().default(""),
 });
 export type DeploymentList = z.infer<typeof deploymentListSchema>;
-
-export const workloadSummarySchema = z.object({
-  deployment: deploymentSchema,
-  public: z.boolean(),
-  version_count: z.number().int().nonnegative(),
-  running_containers: z.number().int().nonnegative(),
-  active_containers: z.number().int().nonnegative(),
-});
-export type WorkloadSummary = z.infer<typeof workloadSummarySchema>;
-export const workloadPageSchema = z.object({
-  data: z.array(workloadSummarySchema),
-  next: z.string(),
-});
 
 // Synced to packages/shared/src/shared/http/deployments.py (DeploymentUrlResponse);
 // scoped to the invoke URL the dashboard consumes.

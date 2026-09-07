@@ -4,7 +4,6 @@ export type TaskListKeyParts = {
   status: string | null;
   deploymentId: string | null;
   appId: string | null;
-  workloadName: string | null;
   stubIds: string | null;
   kind: string | null;
   createdAfter: string | null;
@@ -37,8 +36,6 @@ const workspaceRoot = (workspaceId: string) => ["workspace", workspaceId] as con
 
 export const workspaceQueryKeys = {
   root: workspaceRoot,
-  search: (workspaceId: string, query: string) =>
-    [...workspaceRoot(workspaceId), "search", query] as const,
   apps: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "apps"] as const,
     summaries: (workspaceId: string) =>
@@ -55,20 +52,9 @@ export const workspaceQueryKeys = {
   invitations: (workspaceId: string) => [...workspaceRoot(workspaceId), "invitations"] as const,
   deployments: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "deployments"] as const,
-    workloadSummaries: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "deployments", "workloads"] as const,
-    workloads: (workspaceId: string, appId: string, name?: string, kind?: string) =>
-      [
-        ...workspaceRoot(workspaceId),
-        "deployments",
-        "workloads",
-        appId,
-        name ?? null,
-        kind ?? null,
-      ] as const,
     list: (
       workspaceId: string,
-      options: { limit: number; appId: string | null; name: string | null; kind: string | null },
+      options: { limit: number; appId: string | null; name: string | null },
     ) => [...workspaceRoot(workspaceId), "deployments", "list", options] as const,
   },
   workloads: {
@@ -156,8 +142,6 @@ export const workspaceQueryKeys = {
         containerId,
         ...(path ? [path] : []),
       ] as const,
-    preview: (workspaceId: string, containerId: string, path: string | null) =>
-      [...workspaceRoot(workspaceId), "sandboxes", "preview", containerId, path] as const,
     processes: (workspaceId: string, containerId: string) =>
       [...workspaceRoot(workspaceId), "sandboxes", "processes", containerId] as const,
     urls: (workspaceId: string, containerId: string) =>
@@ -183,8 +167,10 @@ export const workspaceQueryKeys = {
       [...workspaceRoot(workspaceId), "collections", "queue", name, "size"] as const,
     queuePeek: (workspaceId: string, name: string) =>
       [...workspaceRoot(workspaceId), "collections", "queue", name, "peek"] as const,
-    mapKeys: (workspaceId: string, name: string, search: string) =>
-      [...workspaceRoot(workspaceId), "collections", "map", name, "keys", search] as const,
+    mapCount: (workspaceId: string, name: string) =>
+      [...workspaceRoot(workspaceId), "collections", "map", name, "count"] as const,
+    mapKeys: (workspaceId: string, name: string) =>
+      [...workspaceRoot(workspaceId), "collections", "map", name, "keys"] as const,
     mapValue: (workspaceId: string, name: string, key: string) =>
       [...workspaceRoot(workspaceId), "collections", "map", name, "value", key] as const,
   },

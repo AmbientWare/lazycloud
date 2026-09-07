@@ -1,6 +1,5 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { Download, Pause, Play, Search } from "lucide-react";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
@@ -19,6 +18,7 @@ import {
 } from "@/lib/queries/logs";
 import { cn } from "@/lib/utils";
 
+const MAX_RENDERED_LINES = 1_000;
 const MAX_LIVE_RECORDS = 2_000;
 
 export function LogViewer({
@@ -56,6 +56,10 @@ export function LogViewer({
         const next = [...previous, parsed];
         return next.length > MAX_LIVE_RECORDS ? next.slice(-MAX_LIVE_RECORDS) : next;
       });
+      queueMicrotask(() => {
+        const node = scrollRef.current;
+        if (node) node.scrollTop = node.scrollHeight;
+      });
     },
   });
 
@@ -65,75 +69,54 @@ export function LogViewer({
 
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    return needle ? records.filter((record) => logSearchText(record).includes(needle)) : records;
+    const filtered = needle
+      ? records.filter((record) => logSearchText(record).includes(needle))
+      : records;
+    return filtered.slice(-MAX_RENDERED_LINES);
   }, [filter, records]);
-
-  const getItemKey = useCallback((index: number) => recordKey(visible[index]), [visible]);
-  const virtualizer = useVirtualizer({
-    useFlushSync: false,
-    count: visible.length,
-    getScrollElement: () => scrollRef.current,
-    getItemKey,
-    estimateSize: () => 28,
-    overscan: 12,
-    paddingStart: 40,
-    paddingEnd: 8,
-    anchorTo: "end",
-    followOnAppend: follow,
-    scrollEndThreshold: 60,
-    onChange: (instance, scrolling) => {
-      if (!scrolling || instance.scrollDirection !== "backward") return;
-      setFollow(false);
-      if (
-        (instance.scrollOffset ?? 0) < 160 &&
-        history.hasNextPage &&
-        !history.isFetching &&
-        !history.isFetchNextPageError &&
-        !filter.trim()
-      ) {
-        void history.fetchNextPage({ cancelRefetch: false });
-      }
-    },
-  });
-  const initialized = useRef(false);
-  useLayoutEffect(() => {
-    if (initialized.current || visible.length === 0) return;
-    initialized.current = true;
-    virtualizer.scrollToEnd();
-  }, [virtualizer, visible.length]);
-  const virtualRows = virtualizer.getVirtualItems();
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border p-2">
         <label className="flex h-8 min-w-40 flex-1 items-center gap-2 rounded-md border border-input bg-muted px-2 focus-within:border-ring">
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="sr-only">Filter loaded logs</span>
+          <span className="sr-only">Filter logs</span>
           <input
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
-            placeholder="Filter loaded logs"
+            placeholder="Filter logs"
             className="mono min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none"
           />
         </label>
         <Button
           variant={follow ? "default" : "outline"}
           size="sm"
-          onClick={() => {
-            setFollow((previous) => !previous);
-            if (!follow) virtualizer.scrollToEnd();
-          }}
+          onClick={() => setFollow((previous) => !previous)}
         >
           {follow ? <Pause className="size-3" /> : <Play className="size-3" />}
           {follow ? "Following" : "Follow"}
         </Button>
-        {follow && streamStatus !== "open" ? (
-          <span className="text-xs text-muted-foreground" role="status">
+        {follow ? (
+          <span
+            className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
+            data-stream-stale={streamStatus === "reconnecting" ? "" : undefined}
+          >
+            <span
+              className={cn(
+                "size-1.5 rounded-full",
+                streamStatus === "open"
+                  ? "pulse-live bg-positive"
+                  : streamStatus === "reconnecting"
+                    ? "bg-warning"
+                    : "bg-muted-foreground/50",
+              )}
+              aria-hidden="true"
+            />
             {streamStatusLabel(streamStatus)}
           </span>
         ) : null}
         <CopyButton
-          value={() => formatLogRecords(virtualRows.map((row) => visible[row.index]))}
+          value={() => formatLogRecords(visible)}
           label="visible logs"
           disabled={visible.length === 0}
         />
@@ -152,16 +135,31 @@ export function LogViewer({
         ref={scrollRef}
         data-log-scroll=""
         className="min-h-0 flex-1 overflow-auto bg-background/60"
-        tabIndex={0}
-        aria-label="Log output"
       >
+        {!history.isPending && !history.isError && historyList.nextCursor ? (
+          <div className="flex justify-center border-b border-border/60 p-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={history.isFetchingNextPage}
+              onClick={() => void history.fetchNextPage()}
+            >
+              {history.isFetchNextPageError
+                ? "Retry loading older logs"
+                : history.isFetchingNextPage
+                  ? "Loading older logs"
+                  : "Load older logs"}
+            </Button>
+          </div>
+        ) : null}
         {history.isPending ? (
           <div className="space-y-1.5 p-2" aria-hidden="true">
             {[80, 60, 90, 45, 70].map((width, index) => (
               <Skeleton key={index} className="h-4" style={{ width: `${width}%` }} />
             ))}
           </div>
-        ) : history.isError && !history.data ? (
+        ) : history.isError ? (
           <ApiErrorNotice
             error={history.error}
             title="Logs could not be loaded"
@@ -171,45 +169,13 @@ export function LogViewer({
         ) : visible.length === 0 ? (
           <PanelEmpty message="No log lines" className="h-32" />
         ) : (
-          <div
-            className="mono relative w-full text-xs leading-5"
-            style={{ height: virtualizer.getTotalSize() }}
-            role="list"
-            aria-label="Log output"
-          >
-            <div className="absolute inset-x-0 top-0 flex h-10 items-center justify-center text-muted-foreground">
-              {history.isFetchNextPageError ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void history.fetchNextPage({ cancelRefetch: false })}
-                >
-                  Retry older logs
-                </Button>
-              ) : history.isFetchingNextPage ? (
-                <span role="status">Loading older logs</span>
-              ) : historyList.nextCursor ? (
-                "Scroll up for older logs"
-              ) : (
-                "Beginning of loaded history"
-              )}
-            </div>
-            {virtualRows.map((row) => (
-              <div
-                key={row.key}
-                data-index={row.index}
-                ref={virtualizer.measureElement}
-                className="absolute left-0 top-0 w-full"
-                style={{ transform: `translateY(${row.start}px)` }}
-              >
-                <LogLine
-                  record={visible[row.index]}
-                  showDate={
-                    row.index === 0 ||
-                    logDateKey(visible[row.index]) !== logDateKey(visible[row.index - 1])
-                  }
-                />
-              </div>
+          <div className="mono py-2 text-xs leading-5" role="list" aria-label="Log output">
+            {visible.map((record, index) => (
+              <LogLine
+                key={recordKey(record)}
+                record={record}
+                showDate={index === 0 || logDateKey(record) !== logDateKey(visible[index - 1])}
+              />
             ))}
           </div>
         )}

@@ -510,10 +510,7 @@ class WorkerContainerService:
             if instance.runtime is OciRuntimeName.Runsc:
                 stdout, stderr, exit_code = self._sandbox_control_exec(
                     instance,
-                    ["head", "-c", str(request.max_bytes), "--", plan.container_path]
-                    if request.max_bytes is not None
-                    else ["cat", plan.container_path],
-                    max_output_bytes=request.max_bytes,
+                    ["cat", plan.container_path],
                 )
                 if exit_code != 0:
                     detail = stderr.decode("utf-8", errors="replace").strip()
@@ -522,11 +519,10 @@ class WorkerContainerService:
                         error_msg=detail or f"sandbox file read exited {exit_code}",
                     )
                 return ContainerSandboxDownloadFileResponse(ok=True, data=stdout)
-            with Path(plan.host_path).open("rb") as source:
-                return ContainerSandboxDownloadFileResponse(
-                    ok=True,
-                    data=source.read(request.max_bytes if request.max_bytes is not None else -1),
-                )
+            return ContainerSandboxDownloadFileResponse(
+                ok=True,
+                data=Path(plan.host_path).read_bytes(),
+            )
         except Exception as exc:
             return ContainerSandboxDownloadFileResponse(ok=False, error_msg=str(exc))
 
@@ -841,8 +837,6 @@ class WorkerContainerService:
         self,
         instance: WorkerContainerServiceInstance,
         argv: list[str],
-        *,
-        max_output_bytes: int | None = None,
     ) -> tuple[bytes, bytes, int]:
         manager = self._ready_process_manager(instance)
         if isinstance(manager, str):
@@ -853,13 +847,6 @@ class WorkerContainerService:
         try:
             for event in manager.stream_exec(argv, cwd=instance.cwd, env=instance.env):
                 if event.event_type is SandboxProcessEventType.Chunk:
-                    if (
-                        max_output_bytes is not None
-                        and len(stdout) + len(stderr) + len(event.data) > max_output_bytes
-                    ):
-                        manager.ack(event.pid, event.seq, ok=False)
-                        manager.kill(event.pid)
-                        raise RuntimeError("Sandbox file read exceeded its byte limit")
                     if event.stream is SandboxLogStream.Stderr:
                         stderr.extend(event.data)
                     else:

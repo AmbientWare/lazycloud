@@ -1,4 +1,3 @@
-import { WorkloadLink } from "@/components/shared/WorkloadLink";
 import { Link } from "@tanstack/react-router";
 
 import { Panel } from "@/components/shared/Panel";
@@ -79,15 +78,13 @@ function RecentRunsList({
               {task.workload ? (
                 <>
                   <StubKindIcon kind={task.workload.kind} className="size-3" />
-                  <WorkloadLink
-                    workspaceName={workspaceName}
-                    appId={appId}
-                    name={task.workload.name}
-                    kind={task.workload.kind}
+                  <Link
+                    to="/w/$workspace/apps/$appId/workloads/$name"
+                    params={{ workspace: workspaceName, appId, name: task.workload.name }}
                     className="interactive-link min-w-0 truncate"
                   >
                     {task.workload.name}
-                  </WorkloadLink>
+                  </Link>
                   {task.deployment ? (
                     <span className="mono shrink-0">v{task.deployment.version}</span>
                   ) : null}
@@ -97,7 +94,7 @@ function RecentRunsList({
               )}
             </span>
           </span>
-          <StatusChip status={task.status} />
+          <StatusChip status={task.status} live={task.status === "running"} />
           <span className="col-span-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
             <span>
               Requested <LiveRelativeTime value={task.created_at} />

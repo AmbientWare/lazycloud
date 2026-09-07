@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Annotated
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from gateway.machine_lifecycle import MachineLifecycleService
@@ -11,7 +10,6 @@ from shared.http.compute import (
     MachineCreateRequest,
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
-    MachineJoinStatusResponse,
     MachineJoinTokenResponse,
     MachineListResponse,
     MachineResponse,
@@ -91,19 +89,6 @@ def machine_join_command(
         user_id=user_id,
         owner_token_id=token.id,
     )
-
-
-@router.get(
-    "/api/v1/machines/join-commands/{join_id}",
-    response_model=MachineJoinStatusResponse,
-    operation_id="get_machine_join_status",
-)
-def machine_join_status(
-    join_id: UUID,
-    user_id: read_user,
-    service: GatewayControlService = Depends(gateway_service),
-) -> MachineJoinStatusResponse:
-    return service.machine_join_status(str(join_id), user_id=user_id)
 
 
 @router.post(

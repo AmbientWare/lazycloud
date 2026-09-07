@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from database.records.apps import AppRecord
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, status
 from fastapi.responses import Response
 from identity.authz import token_has_scope
 from operations.management import AppOperationalSummary, ManagementService
@@ -16,8 +16,6 @@ from shared.http.apps import (
     AppResponse,
     AppSummaryListResponse,
     AppSummaryResponse,
-    WorkloadPageResponse,
-    WorkloadSummaryResponse,
 )
 from shared.http.deployments import (
     DeploymentScalingResponse,
@@ -27,7 +25,6 @@ from shared.identity import AuthScope
 
 from api.server.auth import read_token, read_workspace, write_workspace
 from api.server.dependencies import current_services
-from api.server.identifiers import resource_identifier
 from api.server.response_mapping import actionable_deployment_response
 from api.server.services import ApiServices
 
@@ -183,62 +180,6 @@ def list_app_summaries(
 
 
 @router.get(
-    "/api/v1/apps/{app_id}/workloads",
-    response_model=WorkloadPageResponse,
-    operation_id="list_app_workloads",
-)
-def list_app_workloads(
-    app_id: str,
-    workspace_id: read_workspace,
-    token: read_token,
-    name: str | None = None,
-    kind: DeploymentKind | None = None,
-    cursor: str | None = None,
-    limit: int = Query(default=50, ge=1, le=100),
-    services: ApiServices = Depends(current_services),
-) -> WorkloadPageResponse:
-    summaries = services.deployment_resources.workloads(
-        workspace=workspace_id,
-        app_id=resource_identifier(app_id, resource="app"),
-        name=name,
-        kind=kind,
-        cursor=cursor,
-        limit=limit,
-    )
-    page = summaries.data
-    scaling = ManagementService(services).pod_deployment_scaling(
-        workspace_id,
-        {
-            item.resource.deployment.id
-            for item in page
-            if item.resource.deployment.kind is DeploymentKind.Pod
-        },
-    )
-    return WorkloadPageResponse(
-        data=[
-            WorkloadSummaryResponse(
-                deployment=actionable_deployment_response(
-                    item.resource.deployment,
-                    can_write=token_has_scope(token, AuthScope.Write),
-                    app_active=item.resource.app.active,
-                    scaling=DeploymentScalingResponse.model_validate(
-                        scaling[item.resource.deployment.id]
-                    )
-                    if item.resource.deployment.id in scaling
-                    else None,
-                ),
-                public=item.resource.app.public or item.resource.stub.public,
-                version_count=item.version_count,
-                running_containers=item.running_containers,
-                active_containers=item.active_containers,
-            )
-            for item in page
-        ],
-        next=summaries.next,
-    )
-
-
-@router.get(
     "/api/v1/apps/{app_id}",
     response_model=AppResponse,
     operation_id="get_app",
@@ -252,24 +193,6 @@ def get_app(
     return _app_response(
         services.apps.get(app_id, workspace=workspace_id),
         can_write=token_has_scope(token, AuthScope.Write),
-    )
-
-
-@router.delete(
-    "/api/v1/apps/{app_id}/workloads/{name}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    response_class=Response,
-    operation_id="delete_app_workload",
-)
-def delete_app_workload(
-    app_id: str,
-    name: str,
-    kind: DeploymentKind,
-    workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
-) -> None:
-    ManagementService(services).delete_workload(
-        workspace_id, app_id=resource_identifier(app_id, resource="app"), name=name, kind=kind
     )
 
 

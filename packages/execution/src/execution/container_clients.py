@@ -153,7 +153,7 @@ class PodContainerControlClient(Protocol):
         self, container_id: str, container_path: str, data: bytes, *, mode: int = 0o644
     ) -> ContainerOperationResponse: ...
     def sandbox_download_file(
-        self, container_id: str, container_path: str, *, max_bytes: int | None = None
+        self, container_id: str, container_path: str
     ) -> ContainerDownloadResponse: ...
     def sandbox_stat_file(
         self, container_id: str, container_path: str

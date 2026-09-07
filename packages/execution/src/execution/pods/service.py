@@ -36,7 +36,6 @@ from shared.containers import (
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.http.pods import (
-    SANDBOX_PREVIEW_BYTES,
     CreatePodRequest,
     CreatePodResponse,
     PodFileSearchMatch,
@@ -60,7 +59,6 @@ from shared.http.pods import (
     PodSandboxListFilesResponse,
     PodSandboxListProcessesResponse,
     PodSandboxListUrlsResponse,
-    PodSandboxPreviewFileResponse,
     PodSandboxProcessInfo,
     PodSandboxReplaceInFilesRequest,
     PodSandboxReplaceInFilesResponse,
@@ -585,20 +583,6 @@ class PodControlService:
         )
         _raise_container_response_error(response)
         return PodSandboxDownloadFileResponse.from_bytes(response.data)
-
-    def sandbox_preview_file(
-        self, container_id: str, container_path: str
-    ) -> PodSandboxPreviewFileResponse:
-        response = self._client(container_id).sandbox_download_file(
-            container_id, container_path, max_bytes=SANDBOX_PREVIEW_BYTES + 1
-        )
-        _raise_container_response_error(response)
-        return PodSandboxPreviewFileResponse(
-            value_base64=PodSandboxDownloadFileResponse.from_bytes(
-                response.data[:SANDBOX_PREVIEW_BYTES]
-            ).value_base64,
-            truncated=len(response.data) > SANDBOX_PREVIEW_BYTES,
-        )
 
     def sandbox_stat_file(
         self,

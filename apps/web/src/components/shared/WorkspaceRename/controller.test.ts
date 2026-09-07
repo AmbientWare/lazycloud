@@ -37,6 +37,7 @@ describe("workspace identity controller", () => {
     updateWorkspaceMock.mockResolvedValue(accepted);
     const { result } = renderController({ queryClient, workspace: target, onRenamed });
 
+    act(() => result.current.beginEditing());
     act(() => result.current.setDraftName("  platform_team  "));
     act(() => result.current.save());
 
@@ -60,6 +61,7 @@ describe("workspace identity controller", () => {
       onRenamed,
     });
 
+    act(() => result.current.beginEditing());
     act(() => result.current.setDraftName("platform"));
     act(() => result.current.save());
 
@@ -70,7 +72,7 @@ describe("workspace identity controller", () => {
     expect(onRenamed).not.toHaveBeenCalled();
   });
 
-  it("rejects a duplicate submission synchronously", async () => {
+  it("rejects a duplicate submission synchronously and keeps cancel locked while saving", async () => {
     const pending = deferred<Workspace>();
     updateWorkspaceMock.mockReturnValue(pending.promise);
     const { result } = renderController({
@@ -79,6 +81,7 @@ describe("workspace identity controller", () => {
       onRenamed: vi.fn(),
     });
 
+    act(() => result.current.beginEditing());
     act(() => result.current.setDraftName("platform"));
     act(() => {
       result.current.save();
@@ -87,6 +90,7 @@ describe("workspace identity controller", () => {
 
     expect(result.current.mode).toBe("saving");
     await waitFor(() => expect(updateWorkspaceMock).toHaveBeenCalledOnce());
+    act(() => result.current.cancel());
     expect(result.current.mode).toBe("saving");
 
     pending.resolve(workspace("workspace-1", "platform"));
@@ -101,6 +105,7 @@ describe("workspace identity controller", () => {
       onRenamed: vi.fn(),
     });
 
+    act(() => result.current.beginEditing());
     expect(result.current.canSave).toBe(false);
     act(() => result.current.save());
 
@@ -132,15 +137,17 @@ describe("workspace identity controller", () => {
         wrapper: controllerWrapper(queryClient),
       },
     );
+    act(() => result.current.beginEditing());
     act(() => result.current.setDraftName("platform"));
     act(() => result.current.save());
     await waitFor(() => expect(result.current.mode).toBe("error"));
 
     rerender({ workspaceValue: workspace("workspace-2", "research") });
 
-    expect(result.current.mode).toBe("editing");
+    expect(result.current.mode).toBe("idle");
     expect(result.current.draftName).toBe("research");
     expect(result.current.error).toBeNull();
+    expect(result.current.isEditing).toBe(false);
   });
 });
 

@@ -91,7 +91,6 @@ export const customerComputeCatalogSchema = z
 
 export const poolJoinCommandResponseSchema = z
   .object({
-    id: z.string(),
     command: z.string(),
     expires_at: z.string(),
   })
@@ -130,15 +129,6 @@ export const unitMachineSchema = z.object({
   last_seen_at: z.string().nullable(),
 });
 export type UnitMachine = z.infer<typeof unitMachineSchema>;
-
-export const machineJoinStatusSchema = z
-  .object({
-    id: z.string(),
-    status: z.enum(["pending", "joined", "expired", "revoked"]),
-    expires_at: z.string(),
-    machine: unitMachineSchema.nullable(),
-  })
-  .strict();
 
 export const unitMachineListSchema = z
   .object({

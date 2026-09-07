@@ -108,7 +108,6 @@ def list_deployments(
     active: bool | None = None,
     app_id: identifier_filter = None,
     name: str | None = None,
-    kind: DeploymentKind | None = None,
     latest: bool = False,
     limit: int = 100,
     cursor: str | None = None,
@@ -124,7 +123,6 @@ def list_deployments(
             workspace_id,
             app_id=app_id,
             name=name,
-            kind=kind,
             limit=limit,
         )
         return _deployment_list_response(
@@ -139,7 +137,6 @@ def list_deployments(
         active=active,
         app_id=app_id,
         name=name,
-        kind=kind,
         limit=limit,
         cursor=cursor,
     )

@@ -1,6 +1,7 @@
 import { Boxes, TerminalSquare } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
+import { useWorkspaceLiveUpdates } from "@/lib/workspace-context";
 
 const QUICKSTART_STEPS = [
   {
@@ -26,6 +27,8 @@ const QUICKSTART_STEPS = [
  * as the first deployment lands.
  */
 export function QuickstartEmptyState() {
+  const { status: streamStatus } = useWorkspaceLiveUpdates();
+
   return (
     <section className="panel grid h-full min-h-[34rem] overflow-hidden rounded-md lg:grid-cols-[minmax(0,4fr)_minmax(0,6fr)]">
       <div className="flex min-w-0 flex-col justify-between gap-12 p-6 sm:p-8 lg:p-10">
@@ -33,12 +36,32 @@ export function QuickstartEmptyState() {
           <div className="flex size-11 items-center justify-center rounded-md border border-brand/25 bg-brand/10 text-brand">
             <Boxes className="size-5" aria-hidden="true" />
           </div>
-          <h2 className="mt-6 max-w-md text-2xl font-semibold tracking-tight text-foreground">
+          <p className="micro-label mt-8">First deployment</p>
+          <h2 className="mt-2 max-w-md text-2xl font-semibold tracking-tight text-foreground">
             Deploy your first app
           </h2>
           <p className="mt-3 max-w-md text-sm leading-6 text-muted-foreground">
             Quickstart writes a Python function, deploys it, and gives you a task to inspect. Run
             these commands in a terminal to get started.
+          </p>
+        </div>
+
+        <div className="border-t border-border pt-4" aria-live="polite">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span
+              className={`size-1.5 shrink-0 rounded-full ${
+                streamStatus === "open"
+                  ? "animate-pulse bg-positive motion-reduce:animate-none"
+                  : "bg-muted-foreground/60"
+              }`}
+              aria-hidden="true"
+            />
+            {streamStatus === "open"
+              ? "Listening for your first deployment"
+              : "Connecting live updates"}
+          </div>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            This page will switch to your app list when the deployment arrives.
           </p>
         </div>
       </div>

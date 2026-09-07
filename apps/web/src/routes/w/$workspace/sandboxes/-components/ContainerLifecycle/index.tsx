@@ -61,6 +61,7 @@ export function ContainerLifecycle({
                 className={cn(
                   "mb-2 size-2.5 rounded-full border-2 bg-background",
                   stage.active ? "border-positive" : "border-muted-foreground/40",
+                  running && index === stages.length - 1 ? "animate-pulse" : null,
                 )}
                 aria-hidden="true"
               />
