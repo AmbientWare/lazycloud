@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, KeyRound, Loader2, Pencil, Trash2 } from "lucide-react";
 
@@ -76,7 +76,12 @@ export function SecretsTab({
               />
             ) : (
               <SecretRow
-                key={secret.name}
+                key={JSON.stringify([
+                  workspaceId,
+                  secret.name,
+                  secret.created_at,
+                  secret.updated_at,
+                ])}
                 workspaceId={workspaceId}
                 workspaceName={workspaceName}
                 secret={secret}
@@ -126,6 +131,13 @@ function SecretRow({
   const [revealedValue, setRevealedValue] = useState<string | null>(null);
   const [revealing, setRevealing] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
+  const revealRequest = useRef(0);
+  useEffect(
+    () => () => {
+      revealRequest.current += 1;
+    },
+    [],
+  );
   const remove = useMutation({
     mutationFn: () => deleteSecret(workspaceId, secret.name),
     onSuccess: () =>
@@ -135,6 +147,7 @@ function SecretRow({
   });
 
   const toggleReveal = async () => {
+    const request = ++revealRequest.current;
     if (revealedValue !== null) {
       setRevealedValue(null);
       setRevealError(null);
@@ -143,15 +156,20 @@ function SecretRow({
     setRevealing(true);
     setRevealError(null);
     try {
-      setRevealedValue(await revealSecretValue(workspaceId, secret.name));
+      const value = await revealSecretValue(workspaceId, secret.name);
+      if (request === revealRequest.current) setRevealedValue(value);
     } catch (error) {
-      setRevealError(error instanceof Error ? error.message : "Unable to reveal secret");
+      if (request === revealRequest.current) {
+        setRevealError(error instanceof Error ? error.message : "Unable to reveal secret");
+      }
     } finally {
-      setRevealing(false);
+      if (request === revealRequest.current) setRevealing(false);
     }
   };
 
   const beginDelete = () => {
+    revealRequest.current += 1;
+    setRevealing(false);
     setRevealedValue(null);
     setRevealError(null);
     setConfirming(true);
@@ -191,7 +209,7 @@ function SecretRow({
           variant="ghost"
           size="icon"
           className="mr-1 size-7 shrink-0"
-          disabled={revealing}
+          disabled={revealing || confirming || remove.isPending}
           onClick={() => void toggleReveal()}
           aria-label={`${revealedValue !== null ? "Hide" : "Reveal"} secret ${secret.name}`}
           title={revealedValue !== null ? "Hide secret" : "Reveal secret"}
@@ -214,9 +232,17 @@ function SecretRow({
             disabled={remove.isPending}
             onClick={() => remove.mutate()}
           >
-            {remove.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Delete"}
+            {remove.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            ) : null}
+            Delete
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={remove.isPending}
+            onClick={() => setConfirming(false)}
+          >
             Keep
           </Button>
         </div>
