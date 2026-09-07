@@ -5,11 +5,9 @@ short-lived signed S3 URLs. Terraform publishes the bucket and endpoint in
 infrastructure descriptor version 3; the chart supplies a separate archive
 backend to the control plane and scheduler.
 
-The initial transition is a clean reset of the owner's image archive storage.
-Existing objects will not be copied or retained for recovery. This code provisions
-the archive destination; it does not delete existing buckets or reset application
-records. The scoped archive reset must be implemented and reviewed before
-deploying these settings to the existing installation.
+The initial transition discards existing archives and rebuilds them in R2. This
+module provisions the destination. Complete the scoped reset below before
+deploying the new settings to an existing installation.
 
 ## Prepare the destination
 
@@ -37,14 +35,14 @@ Image archives can switch independently of workspace storage. Provision and
 validate the archive destination before removing its source data. Apply the same
 clean-reset approach to the remaining stores as their R2 consumers are ready.
 
-Inventory the exact deployment and workspace buckets, object versions, multipart
-uploads and consumers. Build the deletion list from that inventory. Application
-storage may share a bucket with artifacts still needed by deployment or running
-workers. Terraform state, release artifacts and active deployment configuration
-are outside the application-data reset; resolve any shared bucket before deleting
-it. Remove obsolete Terraform resources and IAM bindings with their consumers so
-a later apply cannot recreate the retired buckets.
+Inventory `image_archives` and resolve each physical key using the current
+archive prefix. Record its object versions, multipart uploads, image
+authorizations and completed builds. Find the apps, deployments and tasks that
+use those images. Keep a shared source bucket while other consumers still use it.
+Terraform state, release artifacts and deployment configuration have separate
+cutovers.
 
+Pause affected apps through the public lifecycle API and resolve queued tasks.
 Stop workload admission, image builds, checkpoint publication and retention.
 Drain running work and storage mounts, suspend reconciliation that would restart
 old services, and stop the control plane and scheduler. Confirm issued upload
@@ -52,18 +50,22 @@ and storage credentials have expired and in-flight transfers have ended. Poll
 worker, database and object-store signals; stopping an API does not revoke a
 previously issued capability.
 
-Reset the affected durable image, checkpoint, source and workspace storage
-references through their owning services, limited to the stores being reset.
-Invalidate the corresponding worker and shared caches. Existing account and
-billing data may also be reset when needed; re-bootstrap a usable owner account.
-Workloads must rebuild or redeploy from available source rather than refer to
-deleted archives or files.
-Deleting objects alone leaves the application claiming those objects still exist.
+There is no archive-only reset command. With writers stopped, use the image
+repositories to delete the inventoried build records,
+workspace image authorizations and archive rows in one transaction, asserting
+the expected IDs and counts. Build logs and request mappings cascade with their
+build. Completed builds must be cleared too: fingerprint reuse can otherwise
+skip rebuilding even when the archive no longer exists.
 
-After those references and writers are resolved, empty and delete only the
-reviewed source buckets, including versions, delete markers and unfinished
-multipart uploads. This deletion is irreversible. Verify each named bucket is
-absent and every retained resource is intact before reopening admission.
+Invalidate matching worker and shared caches. Keep affected apps paused until
+their images have been rebuilt and their workloads redeployed. Leave workspace
+files, source packages and checkpoints for their own storage cutovers.
+
+Delete only the reviewed archive keys, including their versions, delete markers
+and unfinished multipart uploads. This deletion is irreversible. Delete a source
+bucket only when its entire contents and every consumer belong to this cutover;
+remove its Terraform resource and IAM bindings in the same change. Verify the
+named objects are gone and retained resources are intact.
 
 ## Start and verify
 
@@ -73,5 +75,5 @@ against the empty R2 archive store, then rebuild and redeploy the owner's worklo
 
 Prove image upload, wrong-checksum rejection, signed download, multipart cleanup
 and a cold worker image pull followed by workload execution. Verify retention on
-a disposable archive and workspace credential isolation separately. The reset
+a disposable archive. The reset
 has no data rollback; an application rollback cannot restore deleted objects.

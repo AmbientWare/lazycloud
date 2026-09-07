@@ -84,8 +84,8 @@ deployment with no rollout in progress:
 
 1. Review and apply Terraform with `database_pooler_max_connections=3`, retaining
    the existing database, role and password. It publishes both URLs and the
-   current infrastructure descriptor. Never accept a database replacement or a state rewrite
-   to get past a provider read failure.
+   current infrastructure descriptor. Never accept a database replacement or a
+   state rewrite to get past a provider read failure.
 2. Run Ship. Existing pods keep their direct URL until replaced; the old 28
    application connections plus three pooler backends, four direct lock
    connections, two bootstrap connections and three reserved connections total 40.
