@@ -79,13 +79,11 @@ class TerminalStep:
     def done(self, summary: str = "") -> None:
         self.finished = True
         self.summary = summary or self.summary
-        self.terminal.flush_remote_output()
         self.terminal.line(f"   {self.name}: {self.summary} ({format_elapsed(self.elapsed)})")
 
     def fail(self, summary: str = "") -> None:
         self.finished = True
         self.summary = summary or self.summary
-        self.terminal.flush_remote_output()
         self.terminal.error(f"{self.name} failed: {self.summary}")
 
 

@@ -43,8 +43,8 @@ handles = build_report.spawn_map(["2026-05", "2026-06"])
 Direct calls and `.local()` execute the Python callable in the current process,
 both on your machine and inside a LazyCloud container. They do not build an image,
 submit a task, or apply the decorator's remote configuration and lifecycle hooks.
-A decorated `main()` called under `if __name__ == "__main__":` therefore runs in
-your Python process when you execute `python script.py`.
+With `python script.py`, a decorated `main()` called under
+`if __name__ == "__main__":` runs in that Python process.
 
 Use `.remote()` to submit a remote task, including when calling another function
 from a cloud task. For a decorated async function, direct calls and `.local()`
@@ -66,7 +66,7 @@ source-upload progress, task status, and the function's stdout and stderr for a
 block. Build logs stay in your terminal history. `async_remote()` uses the same
 output settings.
 
-Progress and replayed remote logs go to **stderr**. Return values are not printed
+Progress and replayed remote logs go to stderr. Return values are not printed
 automatically, and your own `print()` calls still write to stdout.
 
 `output()` defaults to `enabled=True`. Use `enabled=False` to silence a block
@@ -88,8 +88,7 @@ restore the enclosing setting when they exit, even after an exception. Async
 tasks inherit the setting when created; changing it in one task does not change
 another task's setting.
 
-Quiet output does not suppress exceptions or disable stored logs. A cloud call
-still returns its result without replaying child logs into the parent by default.
+Quiet output does not suppress exceptions or disable stored logs.
 Detached calls such as `.spawn()` do not keep following logs after submission;
 read them through [Tasks and logs](/concepts/tasks-and-logs).
 
