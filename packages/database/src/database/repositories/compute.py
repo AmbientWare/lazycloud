@@ -57,6 +57,7 @@ from shared.compute_policy import (
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
+from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -135,13 +136,14 @@ class ComputeProviderInstanceRecord(ContractModel):
     gpu_count: int = 0
     cpu_millicores: int = 0
     memory_mb: int = 0
-    hourly_cost_micros: int = 0
+    cost_terms: SupplierCostTerms = Field(default_factory=SupplierCostTerms)
+    storage_mib: int | None = Field(default=None, ge=0)
+    supplier_cpu_unit: SupplierCpuUnit = SupplierCpuUnit.Unknown
+    supplier_cpu_count: int | None = Field(default=None, ge=0)
     committed_micros: int = 0
     expires_at: datetime | None = None
     billing_renewal_at: datetime | None = None
     billing_started_at: datetime | None = None
-    billing_minimum_seconds: int = Field(default=0, ge=0)
-    billing_quantum_seconds: int = Field(default=0, ge=0)
     bootstrap_phase: MachineBootstrapPhase = MachineBootstrapPhase.Requested
     bootstrap_failure_reason: MachineBootstrapFailureReason | None = None
     bootstrap_failure_detail: str = ""

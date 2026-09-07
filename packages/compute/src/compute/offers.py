@@ -7,6 +7,7 @@ from shared.compute_policy import ComputeCapacityMode, ComputeUnitRecord
 from shared.container_requests import OciRuntimeName, capacity_with_overhead
 from shared.contracts import ContractModel
 from shared.gpu import gpu_preference_accepts, gpu_preference_rank
+from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 
 
 class ReservationStatus(StrEnum):
@@ -31,9 +32,9 @@ class ComputeOffer(ContractModel):
     gpu: str | None = None
     gpu_count: int = 0
     node_count: int = 0
-    hourly_cost_micros: int = 0
-    billing_minimum_seconds: int = Field(default=0, ge=0)
-    billing_quantum_seconds: int = Field(default=0, ge=0)
+    cost_terms: SupplierCostTerms = Field(default_factory=SupplierCostTerms)
+    supplier_cpu_unit: SupplierCpuUnit = SupplierCpuUnit.Unknown
+    supplier_cpu_count: int | None = Field(default=None, ge=0)
     reliability: float = 0.0
     available: int = 1
     capacity_mode: ComputeCapacityMode = ComputeCapacityMode.Direct
@@ -45,6 +46,18 @@ class ComputeOffer(ContractModel):
     latitude: float = 0.0
     longitude: float = 0.0
     labels: dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def hourly_cost_micros(self) -> int | None:
+        return self.cost_terms.known_hourly_cost_micros
+
+    @property
+    def billing_minimum_seconds(self) -> int | None:
+        return self.cost_terms.billing_minimum_seconds
+
+    @property
+    def billing_quantum_seconds(self) -> int | None:
+        return self.cost_terms.billing_quantum_seconds
 
 
 # What a pooled cloud node is, independent of whose cloud it is. A provider that
@@ -66,8 +79,10 @@ def pooled_cloud_offer(
     region: str,
     cpu_millicores: int,
     memory_mb: int,
-    hourly_cost_micros: int,
+    cost_terms: SupplierCostTerms,
     capability_key: str,
+    supplier_cpu_unit: SupplierCpuUnit = SupplierCpuUnit.Unknown,
+    supplier_cpu_count: int | None = None,
     gpu: str | None = None,
     gpu_count: int = 0,
     storage_mb: int = DEFAULT_POOLED_NODE_STORAGE_MB,
@@ -95,7 +110,9 @@ def pooled_cloud_offer(
         gpu=gpu,
         gpu_count=gpu_count,
         node_count=1,
-        hourly_cost_micros=hourly_cost_micros,
+        cost_terms=cost_terms,
+        supplier_cpu_unit=supplier_cpu_unit,
+        supplier_cpu_count=supplier_cpu_count,
         reliability=1.0,
         available=DEFAULT_POOLED_NODE_AVAILABILITY,
         capacity_mode=ComputeCapacityMode.Pooled,
@@ -126,7 +143,7 @@ def recorded_unit_offer(
     unit: ComputeUnitRecord, *, cloud: str, instance_type: str, architecture: str = "amd64"
 ) -> ComputeOffer:
     """Describe owned capacity without depending on the supplier's sale catalog."""
-    if unit.offer_hourly_cost_micros is None or len(unit.worker_runtimes) != 1:
+    if len(unit.worker_runtimes) != 1:
         raise ValueError("provider unit has incomplete recorded offer data")
     return pooled_cloud_offer(
         offer_id=unit.offer_id,
@@ -136,10 +153,14 @@ def recorded_unit_offer(
         region=unit.region,
         cpu_millicores=unit.worker_cpu_millicores,
         memory_mb=unit.worker_memory_mib,
-        storage_mb=unit.root_volume_gib * 1024,
+        storage_mb=unit.offer_storage_mib if unit.offer_storage_mib is not None else 0,
         gpu=unit.worker_gpu_type or None,
         gpu_count=unit.worker_gpu_count,
-        hourly_cost_micros=unit.offer_hourly_cost_micros,
+        cost_terms=(
+            unit.offer_cost_terms if unit.offer_cost_terms is not None else SupplierCostTerms()
+        ),
+        supplier_cpu_unit=unit.supplier_cpu_unit,
+        supplier_cpu_count=unit.supplier_cpu_count,
         capability_key=unit.capability_key,
         architecture=architecture,
         runtime=unit.worker_runtimes[0],
@@ -182,9 +203,9 @@ def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[Com
             and offer.reliability < request.min_reliability
         ):
             continue
-        if (
-            request.max_hourly_cost_micros > 0
-            and offer.hourly_cost_micros > request.max_hourly_cost_micros
+        if request.max_hourly_cost_micros > 0 and (
+            offer.cost_terms.complete_hourly_cost_micros is None
+            or offer.cost_terms.complete_hourly_cost_micros > request.max_hourly_cost_micros
         ):
             continue
         if offer.available <= 0:
@@ -231,7 +252,7 @@ def offer_node_capacity(offer: ComputeOffer) -> int:
 
 def offer_cost_per_node(offer: ComputeOffer) -> float:
     capacity = offer_node_capacity(offer)
-    if capacity <= 0:
+    if capacity <= 0 or offer.hourly_cost_micros is None:
         return float("inf")
     return offer.hourly_cost_micros / capacity
 

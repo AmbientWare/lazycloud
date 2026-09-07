@@ -359,6 +359,8 @@ class ManagedComputeWorkerPoolDrainController:
             for instance in observation.snapshot.instances
             if instance.provider_instance_id in machines_by_instance
             and instance.billing_started_at is not None
+            and instance.billing_minimum_seconds is not None
+            and instance.billing_quantum_seconds is not None
             and (
                 renewal := next_billing_renewal(
                     started_at=instance.billing_started_at,

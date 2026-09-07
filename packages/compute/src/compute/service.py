@@ -1483,7 +1483,7 @@ class ComputeService:
                 continue
             offers.extend(
                 offer
-                for offer in pooled.list_offers()
+                for offer in pooled.list_offers(root_volume_gib=root_volume_gib)
                 if (not region or offer.region == region)
                 and provider.policy.accepts(offer)
                 and (not allowed_instance_types or offer.instance_type in allowed_instance_types)
@@ -1630,6 +1630,14 @@ class ComputeService:
                 else 0
             )
             free_gpu = current.min_free_gpu_count if current is not None else 0
+            cost_terms = offer.cost_terms
+            if current is not None and current.offer_cost_terms is not None:
+                recorded_terms = current.offer_cost_terms
+                if (
+                    cost_terms.model_copy(update={"observed_at": recorded_terms.observed_at})
+                    == recorded_terms
+                ):
+                    cost_terms = recorded_terms
             # One construction for both create and update: everything the unit
             # derives from the offer and the baseline is stated here, and only
             # the facts the provider owns are carried over from the stored row.
@@ -1654,7 +1662,10 @@ class ComputeService:
                 offer_id=offer.id,
                 capability_key=offer.capability_key,
                 desired_machines=desired,
-                offer_hourly_cost_micros=offer.hourly_cost_micros,
+                offer_cost_terms=cost_terms,
+                offer_storage_mib=offer.storage_mb,
+                supplier_cpu_unit=offer.supplier_cpu_unit,
+                supplier_cpu_count=offer.supplier_cpu_count,
                 initial_machines=min(max(initial, minimum), maximum),
                 min_machines=minimum,
                 max_machines=maximum,
@@ -1699,6 +1710,7 @@ class ComputeService:
                 provider_state=(
                     current.provider_state if current is not None else ComputeUnitProviderState()
                 ),
+                created_at=current.created_at if current is not None else utc_now(),
             )
             created = current is None
             if current is None or unit != current:
@@ -2301,7 +2313,11 @@ class ComputeService:
                             provider_ref=provider.ref,
                         )
                     continue
-                offers = [offer for offer in provider.pooled.list_offers() if policy.accepts(offer)]
+                offers = [
+                    offer
+                    for offer in provider.pooled.list_offers(root_volume_gib=policy.root_volume_gib)
+                    if policy.accepts(offer)
+                ]
                 offer = choose_offer(
                     offers,
                     OfferRequest(
@@ -3005,7 +3021,7 @@ class ComputeService:
         offer = next(
             (
                 item
-                for item in pooled.list_offers()
+                for item in pooled.list_offers(root_volume_gib=pool.root_volume_gib)
                 if item.id == pool.offer_id and item.region == pool.region
             ),
             None,

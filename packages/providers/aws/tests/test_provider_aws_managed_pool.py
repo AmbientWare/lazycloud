@@ -34,6 +34,7 @@ from shared.compute_policy import (
     ComputeUnitProviderState,
     UnitName,
 )
+from shared.supplier_costs import SupplierCostTerms
 
 _VPC_ID = "vpc-00000000000000001"
 _SUBNET_IDS = ("subnet-00000000000000001", "subnet-00000000000000002")
@@ -421,7 +422,7 @@ def _pool_request(provider_ref: str) -> ProviderUnitRequest:
             cpu_millicores=4_000,
             memory_mb=32_768,
             storage_mb=204_800,
-            hourly_cost_micros=340_000,
+            cost_terms=SupplierCostTerms(compute_hourly_micros=340_000),
             available=100,
             capacity_mode=ComputeCapacityMode.Pooled,
             capability_key="aws:us-east-1:m7i.xlarge:amd64:runsc",
@@ -600,10 +601,11 @@ def test_pooled_provider_does_not_offer_unpriced_instance_types() -> None:
         ),
     )
 
-    offers = list(provider.list_offers())
+    offers = list(provider.list_offers(root_volume_gib=300))
 
     assert [offer.instance_type for offer in offers] == ["m7i.xlarge"]
     assert offers[0].hourly_cost_micros == 340_000
+    assert offers[0].storage_mb == 300 * 1024
 
 
 def test_managed_pool_agent_artifact_change_versions_template_and_updates_group() -> None:

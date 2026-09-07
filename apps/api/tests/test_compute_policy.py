@@ -73,6 +73,7 @@ from shared.http.compute_policy import (
 )
 from shared.identity import TokenKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
+from shared.supplier_costs import SupplierCostTerms
 from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.service_fixtures import owned_workspace, workspace_owner_user_id
 from tests.url_constants import EXAMPLE_COM_URL
@@ -318,7 +319,11 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                     instance_type="m7i.xlarge",
                     instance_id=f"i-{uuid4().hex[:17]}",
                     machine_id=ready_machine_id if status == "active" else None,
-                    hourly_cost_micros=hourly_cost_micros,
+                    cost_terms=SupplierCostTerms(
+                        compute_hourly_micros=hourly_cost_micros,
+                        root_disk_hourly_micros=0,
+                        public_ipv4_hourly_micros=0,
+                    ),
                 )
             )
 

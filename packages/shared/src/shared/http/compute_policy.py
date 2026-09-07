@@ -78,8 +78,8 @@ class ComputeCapacitySummaryResponse(HttpModel):
 
 
 class ComputeCostSummaryResponse(HttpModel):
-    hourly_micros: int = Field(default=0, ge=0)
-    daily_micros: int = Field(default=0, ge=0)
+    hourly_micros: int | None = Field(default=None, ge=0)
+    daily_micros: int | None = Field(default=None, ge=0)
     currency: Literal["USD"] = "USD"
     estimated: bool = True
 

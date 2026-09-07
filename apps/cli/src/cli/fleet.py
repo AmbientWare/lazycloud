@@ -1,16 +1,4 @@
-"""Register the capacity the platform provisions in its own AWS account.
-
-The shared fleet is a connection like a customer's, because the code has exactly
-one way to say "an account we may provision in": `provider_machines` refuses to
-launch unless a pool carries a `provider_connection_id`, and even an internal
-unit is created with one. Ours differs only in that Terraform builds the network
-and the role rather than a stack the customer deploys.
-
-That leaves one durable record to create, which is why this exists as a command
-rather than a runbook step. A deploy runs it every time, so the fleet is
-registered by the same thing that ships the release rather than by whoever
-remembers.
-"""
+"""Operator registration, teardown and supplier cost inspection for platform capacity."""
 
 from __future__ import annotations
 
@@ -18,6 +6,7 @@ import time
 from typing import Annotated
 
 import typer
+from compute.supplier_costs import SupplierCostInspectionService
 from lazycloud.cli.components.cards import result_card
 from lazycloud.cli.components.output import console, emit
 from lazycloud.cli.components.results import emit_result
@@ -30,8 +19,40 @@ from shared.http.compute import UnitResponse
 from shared.http.errors import HttpApiError
 
 from cli.api_client import admin_api_client
+from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 fleet_app = typer.Typer(help="Register the platform's own compute capacity.")
+
+
+@fleet_app.command("costs")
+def fleet_costs(
+    ctx: typer.Context,
+    workspace_id: Annotated[str, typer.Option("--workspace-id", help="Unit's workspace ID.")],
+    unit_id: Annotated[str, typer.Option("--unit-id", help="Provisioning unit ID.")],
+) -> None:
+    """Inspect saved supplier estimates and unknown costs without refreshing the catalog."""
+    database = DatabaseClient.from_settings(
+        DatabaseSettings(application_name=DatabaseApplicationName.Admin).direct()
+    )
+    try:
+        report = SupplierCostInspectionService(database).inspect(
+            workspace_id=workspace_id, unit_id=unit_id
+        )
+    finally:
+        database.dispose()
+    emit_result(
+        ctx,
+        payload=report.model_dump(mode="json"),
+        title="Recorded supplier cost estimates",
+        fields={
+            "unit": report.unit_id,
+            "provider": report.provider,
+            "offer known hourly USD micros": report.offer.known_hourly_micros,
+            "offer complete hourly USD micros": report.offer.complete_hourly_micros,
+            "nodes": [node.model_dump(mode="json") for node in report.nodes],
+        },
+        tone="info",
+    )
 
 
 @fleet_app.command("ensure")

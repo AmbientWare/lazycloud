@@ -81,6 +81,7 @@ from shared.http.provider_nodes import (
     ProviderNodeEnrollmentRequest,
 )
 from shared.provider_config import ProviderKind
+from shared.supplier_costs import SupplierCostTerms
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import ProgrammingError
 from tests.backing_services import postgres_url
@@ -150,7 +151,7 @@ class _PooledProvider:
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
         return _offer()
 
-    def list_offers(self) -> Iterable[ComputeOffer]:
+    def list_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
         return (_offer(),)
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
@@ -915,7 +916,9 @@ def _offer() -> ComputeOffer:
         cpu_millicores=4_000,
         memory_mb=32 * 1024,
         storage_mb=200 * 1024,
-        hourly_cost_micros=340_000,
+        cost_terms=SupplierCostTerms(
+            compute_hourly_micros=340_000, root_disk_hourly_micros=0, public_ipv4_hourly_micros=0
+        ),
         available=10,
         capacity_mode=ComputeCapacityMode.Pooled,
         capability_key="aws:us-east-1:m7i.xlarge:amd64:runsc",

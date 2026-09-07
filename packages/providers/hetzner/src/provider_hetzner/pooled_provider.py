@@ -21,6 +21,7 @@ from compute.providers import (
 )
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from shared.compute_policy import ComputeUnitProviderState, ComputeUnitRecord
+from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit, SupplierNetworkTerms
 from shared.timestamps import utc_now
 
 from provider_hetzner.client import HetznerClient, HetznerError, Server
@@ -63,7 +64,7 @@ class HetznerPooledProvider:
             raise ValueError("Hetzner unit has invalid provider offer identity")
         return recorded_unit_offer(unit, cloud="hetzner", instance_type=instance_type)
 
-    def list_offers(self) -> Iterable[ComputeOffer]:
+    def list_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
         if self.usd_per_currency_unit <= 0:
             raise ValueError("Hetzner supplier currency conversion must be positive")
         for shape in self.client.server_types():
@@ -83,15 +84,17 @@ class HetznerPooledProvider:
                     and location.deprecation.unavailable_after <= utc_now()
                 ):
                     continue
-                micros = (
-                    int(
-                        (
-                            price.price_hourly.net * self.usd_per_currency_unit * 1_000_000
-                        ).to_integral_value(rounding=ROUND_CEILING)
-                    )
-                    + self.primary_ipv4_hourly_micros
+                compute_micros = int(
+                    (
+                        price.price_hourly.net * self.usd_per_currency_unit * 1_000_000
+                    ).to_integral_value(rounding=ROUND_CEILING)
                 )
-                if micros <= 0:
+                monthly_cap_micros = int(
+                    (
+                        price.price_monthly.net * self.usd_per_currency_unit * 1_000_000
+                    ).to_integral_value(rounding=ROUND_CEILING)
+                )
+                if compute_micros <= 0:
                     raise ValueError("Hetzner returned a nonpositive offer price")
                 yield pooled_cloud_offer(
                     offer_id=f"{price.location}:{shape.name}",
@@ -102,7 +105,23 @@ class HetznerPooledProvider:
                     cpu_millicores=shape.cores * 1000,
                     memory_mb=int(shape.memory * 1024),
                     storage_mb=shape.disk * 1024,
-                    hourly_cost_micros=micros,
+                    cost_terms=SupplierCostTerms(
+                        source="api:hetzner.server_types;deployment:primary_ipv4_hourly_micros",
+                        observed_at=utc_now(),
+                        compute_hourly_micros=compute_micros,
+                        root_disk_hourly_micros=0,
+                        public_ipv4_hourly_micros=self.primary_ipv4_hourly_micros,
+                        compute_monthly_cap_micros=monthly_cap_micros,
+                        setup_micros=0,
+                        billing_minimum_seconds=3600,
+                        billing_quantum_seconds=3600,
+                        network=SupplierNetworkTerms(
+                            ingress_micros_per_gb=0,
+                            billing_quantum_bytes=100_000_000,
+                        ),
+                    ),
+                    supplier_cpu_unit=SupplierCpuUnit.Vcpu,
+                    supplier_cpu_count=shape.cores,
                     capability_key=f"hetzner:{price.location}:{shape.name}:amd64:runsc",
                 )
 

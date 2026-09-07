@@ -10,6 +10,7 @@ from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
+from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 from shared.timestamps import utc_now
 
 _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -144,7 +145,10 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     region: str = Field(default="", max_length=64)
     offer_id: str = Field(default="", max_length=255)
     capability_key: str = Field(default="", max_length=255)
-    offer_hourly_cost_micros: int | None = Field(default=None, gt=0)
+    offer_cost_terms: SupplierCostTerms | None = None
+    offer_storage_mib: int | None = Field(default=None, ge=0)
+    supplier_cpu_unit: SupplierCpuUnit = SupplierCpuUnit.Unknown
+    supplier_cpu_count: int | None = Field(default=None, ge=0)
     desired_machines: int = Field(default=0, ge=0)
     initial_machines: int = Field(default=0, ge=0)
     min_machines: int = Field(default=0, ge=0)

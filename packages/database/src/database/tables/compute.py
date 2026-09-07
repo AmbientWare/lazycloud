@@ -238,7 +238,6 @@ class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):
     gpu_count: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     cpu_millicores: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     memory_mb: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    hourly_cost_micros: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     committed_micros: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     source: Mapped[str] = mapped_column(String(80), nullable=False)
     status: Mapped[str] = mapped_column(String(80), nullable=False)

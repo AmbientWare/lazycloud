@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "agent",
     "boto3>=1.35,<2",
+    "compute",
     "control",
     "database",
     "foundation",

@@ -100,7 +100,7 @@ class ComputeSummary:
     pending_instance_count: int
     degraded_instance_count: int
     workload_count: int
-    hourly_cost_micros: int
+    hourly_cost_micros: int | None
 
 
 class AwsDefaultCapacityOwner(Protocol):
@@ -503,7 +503,18 @@ class WorkspaceComputePolicyService:
                 len(instances) - ready_instance_count - pending_instance_count
             ),
             workload_count=len(workloads),
-            hourly_cost_micros=sum(item.record.hourly_cost_micros for item in instances),
+            hourly_cost_micros=(
+                sum(
+                    cost
+                    for item in instances
+                    if (cost := item.record.cost_terms.complete_hourly_cost_micros) is not None
+                )
+                if all(
+                    item.record.cost_terms.complete_hourly_cost_micros is not None
+                    for item in instances
+                )
+                else None
+            ),
         )
 
     @staticmethod

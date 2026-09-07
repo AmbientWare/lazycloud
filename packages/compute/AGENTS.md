@@ -37,6 +37,15 @@ units; account admission owns plan concurrency and billing limits.
 Desired-capacity changes lock the
 binding's capacity workspace before reading the sum or updating a unit.
 
+Supplier quotes are immutable component estimates recorded when a node is first
+observed. A unit records its prepared offer; reconciling its existing nodes must
+not replace their terms with a later offer. These snapshots do not establish the
+supplier's invoiced charge or identify an asynchronous launch's purchase quote.
+Missing costs remain unknown, and
+historical aggregates remain unallocated because today's catalog cannot establish
+what a previous purchase included. CPU, RAM and GPU share one supplier compute
+charge; the customer usage ledger is a separate billing boundary.
+
 An authenticated machine enrollment owns its worker runtime. The worker's
 identity and resource allocation derive from that enrollment, not from a
 scheduler registration that can expire or stop accepting placement. Planned

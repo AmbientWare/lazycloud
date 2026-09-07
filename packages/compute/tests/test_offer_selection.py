@@ -8,6 +8,7 @@ from compute.offers import (
     pooled_cloud_offer,
 )
 from shared.container_requests import OciRuntimeName
+from shared.supplier_costs import SupplierCostTerms
 
 
 def _offer(instance_type: str, cpu_millicores: int, memory_mb: int) -> ComputeOffer:
@@ -19,7 +20,7 @@ def _offer(instance_type: str, cpu_millicores: int, memory_mb: int) -> ComputeOf
         region="us-east-1",
         cpu_millicores=cpu_millicores,
         memory_mb=memory_mb,
-        hourly_cost_micros=100_000,
+        cost_terms=SupplierCostTerms(compute_hourly_micros=100_000),
         capability_key=f"aws:us-east-1:{instance_type}:amd64:runsc",
     )
 
@@ -55,7 +56,7 @@ def _gpu_offer(instance_type: str, gpu: str, hourly_cost_micros: int) -> Compute
         region="us-east-1",
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
-        hourly_cost_micros=hourly_cost_micros,
+        cost_terms=SupplierCostTerms(compute_hourly_micros=hourly_cost_micros),
         capability_key=f"aws:us-east-1:{instance_type}:amd64:runsc",
         gpu=gpu,
         gpu_count=1,
@@ -105,3 +106,28 @@ def test_the_order_an_author_wrote_outranks_the_cheaper_card() -> None:
     assert choose_offer([cheaper, preferred], _gpu_request(["h100", "l4"])) is preferred
     # Cost still decides among cards the author ranked equally.
     assert choose_offer([cheaper, preferred], _gpu_request(["any"])) is cheaper
+
+
+def test_unknown_additional_costs_cannot_satisfy_a_purchase_price_cap() -> None:
+    partial = _offer("partial", 4_000, 8 * 1024)
+    unknown = partial.model_copy(update={"cost_terms": SupplierCostTerms()})
+    complete = partial.model_copy(
+        update={
+            "cost_terms": SupplierCostTerms(
+                compute_hourly_micros=100_000,
+                root_disk_hourly_micros=0,
+                public_ipv4_hourly_micros=5_000,
+            )
+        }
+    )
+    request = OfferRequest(max_hourly_cost_micros=105_000)
+
+    assert filter_offers([unknown, partial, complete], request) == [complete]
+    assert filter_offers([complete], OfferRequest(max_hourly_cost_micros=104_999)) == []
+
+
+def test_an_unknown_supplier_price_does_not_outrank_known_costs() -> None:
+    known = _offer("known", 4_000, 8 * 1024)
+    unknown = known.model_copy(update={"cost_terms": SupplierCostTerms()})
+
+    assert choose_offer([unknown, known], OfferRequest()) is known

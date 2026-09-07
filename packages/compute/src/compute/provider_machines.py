@@ -93,13 +93,15 @@ def provider_billing_renewal(
     now: datetime,
 ) -> datetime | None:
     started = instance.billing_started_at or (existing.billing_started_at if existing else None)
-    quantum = instance.billing_quantum_seconds or (
-        existing.billing_quantum_seconds if existing else offer.billing_quantum_seconds
-    )
-    minimum = instance.billing_minimum_seconds or (
-        existing.billing_minimum_seconds if existing else offer.billing_minimum_seconds
-    )
-    if started is None or quantum == 0:
+    terms = existing.cost_terms if existing is not None else offer.cost_terms
+    quantum = terms.billing_quantum_seconds
+    minimum = terms.billing_minimum_seconds
+    if existing is None:
+        if instance.billing_quantum_seconds is not None:
+            quantum = instance.billing_quantum_seconds
+        if instance.billing_minimum_seconds is not None:
+            minimum = instance.billing_minimum_seconds
+    if started is None or quantum is None or minimum is None:
         return existing.billing_renewal_at if existing else None
     return next_billing_renewal(
         started_at=started,
@@ -366,6 +368,19 @@ class ProviderMachineReconciler:
                 and bootstrap_phase is settled_existing.bootstrap_phase
                 else now
             )
+            if settled_existing is not None:
+                cost_terms = settled_existing.cost_terms
+            else:
+                cost_terms = offer.cost_terms.model_copy(
+                    update={
+                        key: value
+                        for key, value in (
+                            ("billing_minimum_seconds", instance.billing_minimum_seconds),
+                            ("billing_quantum_seconds", instance.billing_quantum_seconds),
+                        )
+                        if value is not None
+                    }
+                )
             payload: dict[str, JsonValue | datetime] = {
                 "provider": pool.provider_ref,
                 "offer_id": offer.id,
@@ -375,27 +390,38 @@ class ProviderMachineReconciler:
                 "instance_type": offer.instance_type,
                 "instance_id": instance_id,
                 "machine_id": settled_existing.machine_id if settled_existing is not None else None,
-                "gpu": offer.gpu,
-                "gpu_count": offer.gpu_count,
-                "cpu_millicores": offer.cpu_millicores,
-                "memory_mb": offer.memory_mb,
-                "hourly_cost_micros": offer.hourly_cost_micros,
+                "gpu": settled_existing.gpu if settled_existing is not None else offer.gpu,
+                "gpu_count": (
+                    settled_existing.gpu_count if settled_existing is not None else offer.gpu_count
+                ),
+                "cpu_millicores": (
+                    settled_existing.cpu_millicores
+                    if settled_existing is not None
+                    else offer.cpu_millicores
+                ),
+                "memory_mb": (
+                    settled_existing.memory_mb if settled_existing is not None else offer.memory_mb
+                ),
+                "storage_mib": (
+                    settled_existing.storage_mib
+                    if settled_existing is not None
+                    else offer.storage_mb
+                ),
+                "cost_terms": cost_terms.model_dump(mode="json"),
+                "supplier_cpu_unit": (
+                    settled_existing.supplier_cpu_unit
+                    if settled_existing is not None
+                    else offer.supplier_cpu_unit
+                ),
+                "supplier_cpu_count": (
+                    settled_existing.supplier_cpu_count
+                    if settled_existing is not None
+                    else offer.supplier_cpu_count
+                ),
                 "committed_micros": 0,
                 "expires_at": None,
                 "billing_started_at": instance.billing_started_at
                 or (settled_existing.billing_started_at if settled_existing is not None else None),
-                "billing_minimum_seconds": instance.billing_minimum_seconds
-                or (
-                    settled_existing.billing_minimum_seconds
-                    if settled_existing is not None
-                    else offer.billing_minimum_seconds
-                ),
-                "billing_quantum_seconds": instance.billing_quantum_seconds
-                or (
-                    settled_existing.billing_quantum_seconds
-                    if settled_existing is not None
-                    else offer.billing_quantum_seconds
-                ),
                 "billing_renewal_at": provider_billing_renewal(
                     instance, settled_existing, offer, now
                 ),
@@ -425,7 +451,6 @@ class ProviderMachineReconciler:
                     "architecture": offer.architecture,
                     "runtime": offer.runtime,
                     "region": offer.region,
-                    "storage_mb": offer.storage_mb,
                     "availability_zone": instance.availability_zone,
                     "storage_volume_ids": list(instance.storage_volume_ids),
                     "booted_template_version": instance.booted_template_version,
@@ -434,7 +459,11 @@ class ProviderMachineReconciler:
             if existing is None:
                 repository.records.create(payload, status=provider_status)
             else:
-                repository.upsert(existing.model_copy(update=payload))
+                repository.upsert(
+                    ComputeProviderInstanceRecord.model_validate(
+                        {**existing.model_dump(), **payload}
+                    )
+                )
         for existing in current:
             if existing.instance_id is not None and existing.instance_id in observed:
                 continue
@@ -604,12 +633,6 @@ class ProviderMachineReconciler:
                 if current is None:
                     raise RuntimeError(f"compute pool disappeared during reconciliation: {pool.id}")
                 return current
-            if updated.offer_hourly_cost_micros != offer.hourly_cost_micros:
-                updated = repository.upsert(
-                    updated.model_copy(
-                        update={"offer_hourly_cost_micros": offer.hourly_cost_micros}
-                    )
-                )
             missing_machine_ids = self._sync_pooled_instances(
                 session,
                 pool=updated,
