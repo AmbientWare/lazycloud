@@ -6,7 +6,7 @@ import type { CurrentSession, Workspace } from "@/lib/api/schemas";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { updateWorkspace } from "@/lib/queries/workspace";
 
-export type WorkspaceRenameMode = "idle" | "editing" | "saving" | "saved" | "error";
+type WorkspaceRenameMode = "editing" | "saving" | "saved" | "error";
 
 type WorkspaceRenameState = {
   workspaceId: string;
@@ -25,12 +25,9 @@ export type WorkspaceRenameController = {
   mode: WorkspaceRenameMode;
   draftName: string;
   error: Error | null;
-  isEditing: boolean;
   isSaving: boolean;
   canSave: boolean;
-  beginEditing: () => void;
   setDraftName: (name: string) => void;
-  cancel: () => void;
   save: () => void;
 };
 
@@ -42,12 +39,12 @@ export function useWorkspaceRenameController({
   onRenamed: (name: string) => void;
 }): WorkspaceRenameController {
   const queryClient = useQueryClient();
-  const [state, setState] = useState<WorkspaceRenameState>(() => idleState(workspace));
+  const [state, setState] = useState<WorkspaceRenameState>(() => editingState(workspace));
   const activeSaves = useRef(new Set<string>());
 
   const workspaceChanged =
     state.workspaceId !== workspace.id || state.sourceName !== workspace.name;
-  const currentState = workspaceChanged ? idleState(workspace) : state;
+  const currentState = workspaceChanged ? editingState(workspace) : state;
   if (workspaceChanged) setState(currentState);
 
   const rename = useMutation({
@@ -109,20 +106,8 @@ export function useWorkspaceRenameController({
     mode: currentState.mode,
     draftName: currentState.draftName,
     error: currentState.error,
-    isEditing: editing,
     isSaving: saving,
     canSave,
-    beginEditing: () => {
-      if (activeSaves.current.has(workspace.id)) return;
-      const editingState: WorkspaceRenameState = {
-        workspaceId: workspace.id,
-        sourceName: workspace.name,
-        draftName: workspace.name,
-        mode: "editing",
-        error: null,
-      };
-      setState(editingState);
-    },
     setDraftName: (draftName) => {
       const current = currentState;
       if (!isEditorMode(current.mode) || current.mode === "saving") return;
@@ -132,10 +117,6 @@ export function useWorkspaceRenameController({
         mode: "editing",
         error: null,
       });
-    },
-    cancel: () => {
-      if (currentState.mode === "saving" || activeSaves.current.has(workspace.id)) return;
-      setState(idleState(workspace));
     },
     save: () => {
       const current = currentState;
@@ -162,12 +143,12 @@ export function useWorkspaceRenameController({
   };
 }
 
-function idleState(workspace: Workspace): WorkspaceRenameState {
+function editingState(workspace: Workspace): WorkspaceRenameState {
   return {
     workspaceId: workspace.id,
     sourceName: workspace.name,
     draftName: workspace.name,
-    mode: "idle",
+    mode: "editing",
     error: null,
   };
 }
