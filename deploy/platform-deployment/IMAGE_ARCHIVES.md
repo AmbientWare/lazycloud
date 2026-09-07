@@ -5,10 +5,10 @@ short-lived signed S3 URLs. Terraform publishes the bucket and endpoint in
 infrastructure descriptor version 3; the chart supplies a separate archive
 backend to the control plane and scheduler.
 
-The initial transition is a clean reset of the owner's application storage.
+The initial transition is a clean reset of the owner's image archive storage.
 Existing objects will not be copied or retained for recovery. This code provisions
 the archive destination; it does not delete existing buckets or reset application
-records. The coordinated storage reset must be implemented and reviewed before
+records. The scoped archive reset must be implemented and reviewed before
 deploying these settings to the existing installation.
 
 ## Prepare the destination
@@ -31,10 +31,11 @@ deploying these settings to the existing installation.
    R2 does not implement S3 versioning or public-access-block APIs. See
    [R2 compatibility](https://developers.cloudflare.com/r2/api/s3/api/).
 
-## Coordinate the storage reset
+## Coordinate the archive reset
 
-The reset also needs the R2 workspace bucket and credential lifecycle. Provision
-and validate both destinations before removing source data.
+Image archives can switch independently of workspace storage. Provision and
+validate the archive destination before removing its source data. Apply the same
+clean-reset approach to the remaining stores as their R2 consumers are ready.
 
 Inventory the exact deployment and workspace buckets, object versions, multipart
 uploads and consumers. Build the deletion list from that inventory. Application
@@ -52,9 +53,11 @@ worker, database and object-store signals; stopping an API does not revoke a
 previously issued capability.
 
 Reset the affected durable image, checkpoint, source and workspace storage
-references through their owning services. Invalidate the corresponding worker
-and shared caches. Preserve accounts and billing history. Workloads must rebuild
-or redeploy from available source rather than refer to deleted archives or files.
+references through their owning services, limited to the stores being reset.
+Invalidate the corresponding worker and shared caches. Existing account and
+billing data may also be reset when needed; re-bootstrap a usable owner account.
+Workloads must rebuild or redeploy from available source rather than refer to
+deleted archives or files.
 Deleting objects alone leaves the application claiming those objects still exist.
 
 After those references and writers are resolved, empty and delete only the
@@ -66,7 +69,7 @@ absent and every retained resource is intact before reopening admission.
 
 Deploy the chart with descriptor version 3 and the new bucket credentials. Remove
 legacy archive bucket, prefix and signing-endpoint overrides. Resume services
-against the empty R2 stores, then rebuild and redeploy the owner's workloads.
+against the empty R2 archive store, then rebuild and redeploy the owner's workloads.
 
 Prove image upload, wrong-checksum rejection, signed download, multipart cleanup
 and a cold worker image pull followed by workload execution. Verify retention on
