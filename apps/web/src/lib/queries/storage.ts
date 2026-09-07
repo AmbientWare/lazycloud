@@ -54,15 +54,10 @@ export function updateSecretValue(
   );
 }
 
-export async function revealSecretValue(
-  workspaceId: string,
-  name: string,
-  signal: AbortSignal,
-): Promise<string> {
+export async function revealSecretValue(workspaceId: string, name: string): Promise<string> {
   const response = await apiRequest(
     withWorkspace(`/api/v1/secrets/${encodeURIComponent(name)}`, workspaceId),
     secretRevealResponseSchema,
-    { signal },
   );
   if (!response.secret) throw new Error("Secret not found");
   return response.secret.value;

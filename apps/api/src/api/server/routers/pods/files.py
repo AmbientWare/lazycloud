@@ -8,7 +8,6 @@ from shared.http.pods import (
     PodSandboxFindInFilesRequest,
     PodSandboxFindInFilesResponse,
     PodSandboxListFilesResponse,
-    PodSandboxPreviewFileResponse,
     PodSandboxReplaceInFilesRequest,
     PodSandboxReplaceInFilesResponse,
     PodSandboxStatFileResponse,
@@ -43,20 +42,6 @@ def sandbox_download_file(
     service: PodControlService = Depends(pod_service),
 ) -> PodSandboxDownloadFileResponse:
     return service.sandbox_download_file(container_id, container_path)
-
-
-@router.get(
-    "/{container_id}/files/preview",
-    response_model=PodSandboxPreviewFileResponse,
-    operation_id="preview_sandbox_file",
-)
-def sandbox_preview_file(
-    container_id: str,
-    container_path: str,
-    _auth: read_container,
-    service: PodControlService = Depends(pod_service),
-) -> PodSandboxPreviewFileResponse:
-    return service.sandbox_preview_file(container_id, container_path)
 
 
 @router.get("/{container_id}/files/stat", response_model=PodSandboxStatFileResponse)

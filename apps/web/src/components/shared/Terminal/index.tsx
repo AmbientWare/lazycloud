@@ -10,7 +10,6 @@ import {
   ShellFrameType,
 } from "@/lib/shell-protocol";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 
 type ShellCredentials = { username: string; password: string };
 
@@ -26,12 +25,10 @@ export function Terminal({
   socketUrl,
   credentials,
   className,
-  onReconnect,
 }: {
   socketUrl: string;
   credentials: ShellCredentials;
   className?: string;
-  onReconnect: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<ConnectionState>("connecting");
@@ -41,22 +38,16 @@ export function Terminal({
     const host = containerRef.current;
     if (!host) return;
 
-    const styles = getComputedStyle(host);
-    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const term = new XTerm({
       fontSize: 12,
-      fontFamily: styles.getPropertyValue("--font-mono").trim(),
-      cursorBlink: !motion.matches,
+      fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+      cursorBlink: true,
       convertEol: true,
-      theme: { background: styles.backgroundColor, foreground: styles.color },
+      theme: { background: "#0a0a0f" },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
-    const updateMotion = () => {
-      term.options.cursorBlink = !motion.matches;
-    };
-    motion.addEventListener("change", updateMotion);
     fit.fit();
 
     const decoder = new ShellFrameDecoder();
@@ -157,7 +148,6 @@ export function Terminal({
 
     return () => {
       disposed = true;
-      motion.removeEventListener("change", updateMotion);
       resizeObserver.disconnect();
       inputDisposable.dispose();
       disposeResize.dispose();
@@ -173,7 +163,7 @@ export function Terminal({
           className={cn(
             "size-1.5 rounded-full",
             state === "open"
-              ? "bg-positive"
+              ? "pulse-live bg-positive"
               : state === "error"
                 ? "bg-destructive"
                 : state === "closed"
@@ -183,15 +173,10 @@ export function Terminal({
         />
         <span>{connectionLabel(state)}</span>
         {errorMessage ? <span className="text-destructive">{errorMessage}</span> : null}
-        {state === "closed" || state === "error" ? (
-          <Button variant="outline" size="sm" className="ml-auto" onClick={onReconnect}>
-            Reconnect
-          </Button>
-        ) : null}
       </div>
       <div
         ref={containerRef}
-        className="min-h-0 flex-1 overflow-hidden rounded-md bg-background text-foreground p-2"
+        className="min-h-0 flex-1 overflow-hidden rounded-md bg-[#0a0a0f] p-2"
       />
     </div>
   );

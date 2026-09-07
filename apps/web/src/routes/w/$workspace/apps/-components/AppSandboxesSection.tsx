@@ -94,7 +94,7 @@ function SandboxRowContent({ sandbox, linked }: { sandbox: SandboxRow; linked: b
         </span>
       </span>
       <span className="flex items-center justify-end gap-2">
-        <StatusChip status={sandbox.status} />
+        <StatusChip status={sandbox.status} live={sandbox.status === "running"} />
         {linked ? (
           <ArrowUpRight
             className="interactive-row-indicator size-3.5 text-muted-foreground"

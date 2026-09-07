@@ -1,4 +1,3 @@
-import { WorkloadLink } from "@/components/shared/WorkloadLink";
 import { Link } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 
@@ -31,16 +30,14 @@ export function ContainerLineage({
         <ChevronRight className="size-3 text-muted-foreground" />
       ) : null}
       {record.app && record.workload ? (
-        <WorkloadLink
-          workspaceName={workspaceName}
-          appId={record.app.id}
-          name={record.workload.name}
-          kind={record.workload.kind}
+        <Link
+          to="/w/$workspace/apps/$appId/workloads/$name"
+          params={{ workspace: workspaceName, appId: record.app.id, name: record.workload.name }}
           className="inline-flex items-center gap-1.5 text-brand hover:underline"
         >
           <StubKindIcon kind={record.workload.kind} className="size-3.5" />
           {record.workload.name}
-        </WorkloadLink>
+        </Link>
       ) : record.workload ? (
         <span className="inline-flex items-center gap-1.5 text-muted-foreground">
           <StubKindIcon kind={record.workload.kind} className="size-3.5" />

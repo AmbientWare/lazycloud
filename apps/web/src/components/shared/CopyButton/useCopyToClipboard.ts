@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 
 /**
  * How long the control reports a successful copy. Long enough to read, short
@@ -30,21 +29,11 @@ export function useCopyToClipboard(value: string | (() => string)): {
 
   const copy = () => {
     const text = typeof value === "function" ? value() : value;
-    setCopied(false);
-    if (!navigator.clipboard) {
-      toast.error("Clipboard is unavailable. Select and copy the text manually.");
-      return;
-    }
-    void navigator.clipboard
-      .writeText(text)
-      .then(() => {
-        setCopied(true);
-        clearTimeout(timer.current);
-        timer.current = setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
-      })
-      .catch(() => {
-        toast.error("Copy failed. Allow clipboard access or select and copy the text manually.");
-      });
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
+    });
   };
 
   return { copied, copy };

@@ -88,7 +88,6 @@ def list_tasks(
     status_filter: TaskStatus | None = Query(default=None, alias="status"),
     deployment_id: identifier_filter = None,
     app_id: identifier_filter = None,
-    workload_name: str | None = None,
     kind: StubKind | None = None,
     created_after: datetime | None = None,
     created_before: datetime | None = None,
@@ -107,7 +106,6 @@ def list_tasks(
         status=status_filter,
         deployment_id=deployment_id,
         app_id=app_id,
-        workload_name=workload_name,
         stub_ids=tuple(stub_ids),
         kind=kind,
         created_after=(

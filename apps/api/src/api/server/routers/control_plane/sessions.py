@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -107,7 +106,7 @@ def complete_github_sign_in(
     if not code or not state:
         return _failed(_SIGN_IN_LANDING_PATH, "invalid_state")
     try:
-        exchange = services.sign_in.complete(code=code, state=state)
+        exchange_code = services.sign_in.complete(code=code, state=state)
     except AuthError:
         LOGGER.info("github sign-in state was expired, replayed, or unknown")
         return _failed(_SIGN_IN_LANDING_PATH, "invalid_state")
@@ -131,9 +130,8 @@ def complete_github_sign_in(
         # the ones provisioning raises, which are not domain errors.
         LOGGER.exception("sign-in could not be completed")
         return _failed(_SIGN_IN_LANDING_PATH, "provider_unavailable")
-    fragment = urlencode({"code": exchange.code, "return_to": exchange.return_to})
     return RedirectResponse(
-        f"{_SIGN_IN_COMPLETE_PATH}#{fragment}",
+        f"{_SIGN_IN_COMPLETE_PATH}#code={exchange_code}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

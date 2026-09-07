@@ -1,8 +1,7 @@
-import type { DeploymentKind } from "@/lib/api/schemas/deployments";
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, Play } from "lucide-react";
+import { ArrowUpRight, Loader2, Play } from "lucide-react";
 
 import { PanelError } from "@/components/shared/PanelError";
 import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
@@ -10,7 +9,7 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { invokeDeployment, type InvokeResult } from "@/lib/api/invoke";
-import { isTerminalTaskStatus, type DeploymentManifest, type JsonValue } from "@/lib/api/schemas";
+import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
 import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
 import { taskQueryOptions } from "@/lib/queries/tasks";
 
@@ -28,14 +27,12 @@ export function Playground({
   workspaceName,
   appId,
   workloadName,
-  workloadKind,
   deploymentId,
 }: {
   workspaceId: string;
   workspaceName: string;
   appId: string;
   workloadName: string;
-  workloadKind: DeploymentKind;
   deploymentId: string;
 }) {
   const manifest = useQuery(deploymentManifestQueryOptions(workspaceId, deploymentId));
@@ -53,13 +50,11 @@ export function Playground({
   }
   return (
     <PlaygroundForm
-      key={deploymentId}
       manifest={manifest.data}
       workspaceId={workspaceId}
       workspaceName={workspaceName}
       appId={appId}
       workloadName={workloadName}
-      workloadKind={workloadKind}
     />
   );
 }
@@ -70,14 +65,12 @@ function PlaygroundForm({
   workspaceName,
   appId,
   workloadName,
-  workloadKind,
 }: {
   manifest: DeploymentManifest;
   workspaceId: string;
   workspaceName: string;
   appId: string;
   workloadName: string;
-  workloadKind: DeploymentKind;
 }) {
   const fields = useMemo(() => playgroundFields(manifest), [manifest]);
   const seeded = useMemo(() => JSON.stringify(exampleBody(manifest), null, 2), [manifest]);
@@ -145,8 +138,12 @@ function PlaygroundForm({
           </div>
         )}
         <div className="flex items-center gap-3">
-          <Button pending={invoke.isPending} size="sm" onClick={submit} disabled={invoke.isPending}>
-            <Play className="size-3.5" />
+          <Button size="sm" onClick={submit} disabled={invoke.isPending}>
+            {invoke.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Play className="size-3.5" />
+            )}
             Invoke
           </Button>
           {inputError ? <span className="text-xs text-destructive">{inputError}</span> : null}
@@ -158,7 +155,6 @@ function PlaygroundForm({
           workspaceName={workspaceName}
           appId={appId}
           workloadName={workloadName}
-          workloadKind={workloadKind}
         />
       </div>
     </div>
@@ -176,12 +172,8 @@ function FieldInput({
 }) {
   const inputId = `playground-${field.name}`;
   return (
-    <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:gap-3">
-      <label
-        htmlFor={inputId}
-        className="mono w-full shrink-0 truncate text-xs sm:w-32"
-        title={field.name}
-      >
+    <div className="flex items-center gap-3">
+      <label htmlFor={inputId} className="mono w-32 shrink-0 truncate text-xs" title={field.name}>
         {field.name}
         {field.required ? null : <span className="text-muted-foreground">?</span>}
       </label>
@@ -220,7 +212,6 @@ function InvokeOutcome({
   workspaceName,
   appId,
   workloadName,
-  workloadKind,
 }: {
   result: InvokeResult | undefined;
   error: Error | null;
@@ -228,7 +219,6 @@ function InvokeOutcome({
   workspaceName: string;
   appId: string;
   workloadName: string;
-  workloadKind: DeploymentKind;
 }) {
   if (error) {
     return <div className="text-xs text-destructive">{error.message}</div>;
@@ -250,7 +240,6 @@ function InvokeOutcome({
         workspaceName={workspaceName}
         appId={appId}
         workloadName={workloadName}
-        workloadKind={workloadKind}
       />
     );
   }
@@ -281,7 +270,6 @@ function TaskInvokeOutcome({
   workspaceName,
   appId,
   workloadName,
-  workloadKind,
 }: {
   taskId: string;
   meta: ReactNode;
@@ -289,7 +277,6 @@ function TaskInvokeOutcome({
   workspaceName: string;
   appId: string;
   workloadName: string;
-  workloadKind: DeploymentKind;
 }) {
   const task = useQuery(taskQueryOptions(workspaceId, taskId));
 
@@ -297,11 +284,12 @@ function TaskInvokeOutcome({
     <section className="overflow-hidden rounded-md border border-border bg-muted/20">
       <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         {meta}
-        {task.data ? <StatusChip status={task.data.status} /> : null}
+        {task.data ? (
+          <StatusChip status={task.data.status} live={task.data.status === "running"} />
+        ) : null}
         <Link
           to="/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId"
           params={{ workspace: workspaceName, appId, name: workloadName, taskId }}
-          search={{ kind: workloadKind }}
           className="ml-auto flex items-center gap-1 text-xs font-medium text-brand hover:underline"
         >
           Open task
@@ -319,9 +307,7 @@ function TaskInvokeOutcome({
         <ResultBody error={task.data.error} result={task.data.result} />
       ) : (
         <p className="p-3 text-xs text-muted-foreground">
-          {isTerminalTaskStatus(task.data.status)
-            ? "The task ended without a result."
-            : "Result pending."}
+          {task.data.status === "complete" ? "The task returned no result." : "Result pending."}
         </p>
       )}
     </section>

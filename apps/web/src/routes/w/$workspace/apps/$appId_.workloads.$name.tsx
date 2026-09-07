@@ -1,4 +1,3 @@
-import { deploymentKindSchema, type DeploymentKind } from "@/lib/api/schemas/deployments";
 import { useState } from "react";
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
@@ -18,16 +17,12 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { countLabel } from "@/lib/format";
 import { appQueryOptions } from "@/lib/queries/apps";
 import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
-import {
-  deploymentsInfiniteQueryOptions,
-  selectDeploymentList,
-  workloadQueryOptions,
-} from "@/lib/queries/deployments";
-import { taskLatencyQueryOptions } from "@/lib/queries/stubs";
+import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
+import { deployedStubsQueryOptions, taskLatencyQueryOptions } from "@/lib/queries/stubs";
 import { tasksQueryOptions } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
 
-import { type WorkloadGroup } from "./-workloads/grouping";
+import { currentDeployment, findWorkloadGroup, type WorkloadGroup } from "./-workloads/grouping";
 import { CallMethods } from "./-workloads/CallMethods";
 import { LatencyPanel, latencyHasSignal } from "./-workloads/LatencyPanel";
 import { Playground } from "./-workloads/Playground";
@@ -42,12 +37,6 @@ import { WorkloadConfiguration } from "./-workloads/WorkloadConfiguration";
 import { WorkloadOperation } from "./-workloads/WorkloadOperation";
 
 export const Route = createFileRoute("/w/$workspace/apps/$appId_/workloads/$name")({
-  validateSearch: (search) => {
-    const kind = deploymentKindSchema.safeParse(search.kind);
-    if (!kind.success)
-      throw new Error("A workload type is required. Open the workload from its app to continue.");
-    return { kind: kind.data };
-  },
   component: WorkloadDetailRoute,
   errorComponent: RouteErrorFallback,
 });
@@ -55,11 +44,9 @@ export const Route = createFileRoute("/w/$workspace/apps/$appId_/workloads/$name
 const OBSERVABLE_KINDS = new Set(["function", "endpoint", "asgi"]);
 
 function WorkloadDetailRoute() {
-  const { appId, name } = Route.useParams();
-  const { kind } = Route.useSearch();
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <WorkloadDetailPage key={`${appId}:${kind}:${name}`} />
+      <WorkloadDetailPage />
       <Outlet />
     </div>
   );
@@ -67,28 +54,17 @@ function WorkloadDetailRoute() {
 
 function WorkloadDetailPage() {
   const { appId, name } = Route.useParams();
-  const { kind } = Route.useSearch();
   const { workspace } = useWorkspace();
   const [podInstanceStatus, setPodInstanceStatus] = useState<PodInstanceStatusFilter>("active");
   const app = useQuery(appQueryOptions(workspace.id, appId));
   const deployments = useInfiniteQuery(
-    deploymentsInfiniteQueryOptions(workspace.id, { appId, name, kind }),
+    deploymentsInfiniteQueryOptions(workspace.id, { appId, name }),
   );
-  const workload = useQuery(workloadQueryOptions(workspace.id, appId, name, kind));
-  const [inspectorTab, setInspectorTab] = useState<string | null>(null);
+  const stubs = useQuery(deployedStubsQueryOptions(workspace.id, appId));
 
   const deploymentList = selectDeploymentList(deployments.data, deployments.hasNextPage);
-  const selectedDeployment = workload.data?.deployment;
-  const group: WorkloadGroup | undefined = selectedDeployment
-    ? {
-        name: selectedDeployment.name,
-        kind: selectedDeployment.kind,
-        active: selectedDeployment.active,
-        latest: selectedDeployment,
-        deployments: deploymentList.items,
-        stubIds: selectedDeployment.stub_id ? [selectedDeployment.stub_id] : [],
-      }
-    : undefined;
+  const group = findWorkloadGroup(deploymentList.items, appId, name);
+  const selectedDeployment = group ? currentDeployment(group) : undefined;
   const containerStubIds =
     group?.kind === "pod" && selectedDeployment?.stub_id
       ? [selectedDeployment.stub_id]
@@ -97,12 +73,15 @@ function WorkloadDetailPage() {
     containersQueryOptions(workspace.id, {
       appId,
       stubIds: containerStubIds,
+      // Only a Pod lists its containers; every other kind reports how many are
+      // running, and asking the server for those is what makes the count right
+      // rather than right about the newest page of a long history.
       statuses: podContainerStatuses(group?.kind, podInstanceStatus),
-      enabled: group?.kind === "pod",
+      enabled: Boolean(group),
     }),
   );
-  if (workload.isPending || app.isPending) return <WorkloadSkeleton />;
-  const loadError = !workload.data ? workload.error : !app.data ? app.error : null;
+  if (deployments.isPending || stubs.isPending || app.isPending) return <WorkloadSkeleton />;
+  const loadError = deployments.error ?? stubs.error ?? app.error;
   if (loadError) {
     return <PanelError message={loadError.message} />;
   }
@@ -112,12 +91,16 @@ function WorkloadDetailPage() {
     );
   }
 
-  const current = group.latest;
+  const current = currentDeployment(group);
+  const currentStub = stubs.data?.stubs.find((stub) => stub.id === current.stub_id);
   const containerList = selectContainerList(containers.data, containers.hasNextPage);
   const workloadContainers = containerList.items
     .map((item) => item.container)
     .sort((left, right) => right.created_at.localeCompare(left.created_at));
-  const isPublic = workload.data?.public;
+  const runningContainers = workloadContainers.filter(
+    (container) => container.status === "running",
+  );
+  const isPublic = Boolean(app.data?.public || currentStub?.public);
   const isPod = group.kind === "pod";
   const supportsInvoke = PLAYGROUND_KINDS.has(group.kind);
   const showsInvoke = group.active && PLAYGROUND_KINDS.has(group.kind);
@@ -136,9 +119,7 @@ function WorkloadDetailPage() {
               v{current.version}
             </span>,
             isPublic ? "Public" : "Token required",
-            workload.data
-              ? countLabel(workload.data.running_containers, "running", "running")
-              : null,
+            containers.data ? countLabel(runningContainers.length, "running", "running") : null,
           ]}
         />
       }
@@ -163,12 +144,7 @@ function WorkloadDetailPage() {
     >
       <Tabs
         key={`${appId}:${group.name}`}
-        value={
-          inspectorTab && (inspectorTab !== "invoke" || showsInvoke)
-            ? inspectorTab
-            : defaultInspectorTab(group, showsInvoke)
-        }
-        onValueChange={setInspectorTab}
+        defaultValue={defaultInspectorTab(group, showsInvoke)}
         className="panel flex flex-col overflow-hidden rounded-md max-lg:shrink-0 lg:min-h-0 lg:flex-1"
       >
         <LinearTabsList
@@ -183,14 +159,13 @@ function WorkloadDetailPage() {
         </LinearTabsList>
 
         {showsInvoke ? (
-          <TabsContent value="invoke" className="m-0 min-h-0 flex-1 overflow-auto">
+          <TabsContent value="invoke" className="m-0 min-h-0 flex-1 overflow-hidden">
             <PanelErrorBoundary title="Invoke could not be displayed">
               <Playground
                 workspaceId={workspace.id}
                 workspaceName={workspace.name}
                 appId={appId}
                 workloadName={group.name}
-                workloadKind={kind}
                 deploymentId={current.id}
               />
             </PanelErrorBoundary>
@@ -217,7 +192,7 @@ function WorkloadDetailPage() {
               onStatusFilterChange={setPodInstanceStatus}
               containers={workloadContainers}
               loading={containers.isPending}
-              error={containers.isError && !containers.data ? containers.error : null}
+              error={containers.error}
               nextCursor={containerList.nextCursor}
               loadingMore={containers.isFetchingNextPage}
               loadMoreError={containers.isFetchNextPageError}
@@ -227,23 +202,16 @@ function WorkloadDetailPage() {
         ) : null}
 
         <TabsContent value="versions" className="m-0 min-h-0 flex-1 overflow-auto">
-          {deployments.isPending ? (
-            <Skeleton className="m-4 h-36" />
-          ) : deployments.isError && !deployments.data ? (
-            <PanelError message={deployments.error.message} />
-          ) : (
-            <VersionHistory
-              group={group}
-              versionCount={workload.data?.version_count ?? 0}
-              appId={appId}
-              workspaceId={workspace.id}
-              workspaceName={workspace.name}
-              nextCursor={deploymentList.nextCursor}
-              loadingMore={deployments.isFetchingNextPage}
-              loadMoreError={deployments.isFetchNextPageError}
-              onLoadMore={() => void deployments.fetchNextPage()}
-            />
-          )}
+          <VersionHistory
+            group={group}
+            appId={appId}
+            workspaceId={workspace.id}
+            workspaceName={workspace.name}
+            nextCursor={deploymentList.nextCursor}
+            loadingMore={deployments.isFetchingNextPage}
+            loadMoreError={deployments.isFetchNextPageError}
+            onLoadMore={() => void deployments.fetchNextPage()}
+          />
         </TabsContent>
 
         <TabsContent value="configuration" className="m-0 min-h-0 flex-1 overflow-auto">
@@ -258,13 +226,13 @@ function WorkloadDetailPage() {
           contentClassName="flex flex-col overflow-hidden p-0"
           className="min-h-[24rem] lg:min-h-0"
         >
-          <WorkloadLatency workspaceId={workspace.id} appId={appId} group={group} />
+          <WorkloadLatency workspaceId={workspace.id} group={group} />
           <WorkloadRuns
             workspaceId={workspace.id}
             workspaceName={workspace.name}
             appId={appId}
             workloadName={group.name}
-            workloadKind={kind}
+            stubIds={group.stubIds}
           />
         </Panel>
       ) : null}
@@ -272,18 +240,10 @@ function WorkloadDetailPage() {
   );
 }
 
-function WorkloadLatency({
-  workspaceId,
-  appId,
-  group,
-}: {
-  workspaceId: string;
-  appId: string;
-  group: WorkloadGroup;
-}) {
+function WorkloadLatency({ workspaceId, group }: { workspaceId: string; group: WorkloadGroup }) {
   const observable = OBSERVABLE_KINDS.has(group.kind);
   const latency = useQuery({
-    ...taskLatencyQueryOptions(workspaceId, appId, group.name, group.kind),
+    ...taskLatencyQueryOptions(workspaceId, group.stubIds),
     enabled: observable,
   });
 
@@ -313,17 +273,15 @@ function WorkloadRuns({
   workspaceName,
   appId,
   workloadName,
-  workloadKind,
+  stubIds,
 }: {
   workspaceId: string;
   workspaceName: string;
   appId: string;
   workloadName: string;
-  workloadKind: DeploymentKind;
+  stubIds: string[];
 }) {
-  const tasks = useQuery(
-    tasksQueryOptions(workspaceId, { limit: 50, appId, workloadName, kind: workloadKind }),
-  );
+  const tasks = useQuery(tasksQueryOptions(workspaceId, { limit: 50, appId, stubIds }));
   if (tasks.isError) {
     return <PanelError message={tasks.error.message} />;
   }
@@ -335,7 +293,6 @@ function WorkloadRuns({
       taskLink={(taskId) => ({
         to: "/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId",
         params: { workspace: workspaceName, appId, name: workloadName, taskId },
-        search: { kind: workloadKind },
       })}
       emptyMessage="No tasks yet"
       compact

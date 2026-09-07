@@ -152,7 +152,7 @@ function TasksPage() {
               ) : null}
             </div>
           </div>
-          {tasks.isError && !tasks.data ? (
+          {tasks.isError ? (
             <PanelError message={tasks.error.message} layout="centered" />
           ) : (
             <>

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Pause, Play, Trash2 } from "lucide-react";
+import { Loader2, Pause, Play, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { App } from "@/lib/api/schemas";
@@ -71,14 +71,13 @@ export function AppLifecycleActions({
         <>
           <span className="px-1 text-xs text-muted-foreground">Delete app?</span>
           <Button
-            pending={remove.isPending}
             type="button"
             variant="destructive"
             size="sm"
             disabled={pending}
             onClick={() => remove.mutate()}
           >
-            <Trash2 />
+            {remove.isPending ? <Loader2 className="animate-spin" /> : <Trash2 />}
             Delete
           </Button>
           <Button
@@ -95,27 +94,25 @@ export function AppLifecycleActions({
         <>
           {app.actions.can_pause ? (
             <Button
-              pending={pause.isPending}
               type="button"
               variant="outline"
               size="sm"
               disabled={pending}
               onClick={() => pause.mutate()}
             >
-              <Pause />
+              {pause.isPending ? <Loader2 className="animate-spin" /> : <Pause />}
               Pause
             </Button>
           ) : null}
           {app.actions.can_resume ? (
             <Button
-              pending={resume.isPending}
               type="button"
               variant="default"
               size="sm"
               disabled={pending}
               onClick={() => resume.mutate()}
             >
-              <Play />
+              {resume.isPending ? <Loader2 className="animate-spin" /> : <Play />}
               Resume
             </Button>
           ) : null}

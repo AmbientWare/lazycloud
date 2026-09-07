@@ -72,6 +72,7 @@ function ContainerDetails({
     wasLive.current = live;
   }, [live, queryClient, workspaceId, containerId]);
 
+  const running = container.status === "running";
   const command = container.command.join(" ");
   const ports = [...new Set(Object.values(container.ports))].sort((a, b) => a - b);
   const facts = [
@@ -130,7 +131,7 @@ function ContainerDetails({
           <h3 id="container-identity-heading" className="mono min-w-0 truncate text-sm font-medium">
             {container.name || containerId}
           </h3>
-          <StatusChip status={container.status} />
+          <StatusChip status={container.status} live={running} />
         </div>
         <FactGrid columns={3} className="mt-4">
           {facts.map((fact) => (

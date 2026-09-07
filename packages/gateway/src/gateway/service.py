@@ -165,7 +165,6 @@ from shared.http.client_manifests import (
 from shared.http.compute import (
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
-    MachineJoinStatusResponse,
     MachineJoinTokenResponse,
     UnitJoinCommandResponse,
     UnitMachineListResponse,
@@ -1199,7 +1198,6 @@ class GatewayControlService:
         """
         plan = self._mint_account_join_credential(request, user_id=user_id, token_id=owner_token_id)
         return MachineJoinCommandResponse(
-            id=plan.state.credential_id,
             command=agent_install_command(
                 self.gateway_endpoint.http_url,
                 plan.token,
@@ -1207,41 +1205,6 @@ class GatewayControlService:
                 agent_sha256_by_arch=self.agent_sha256_by_arch,
             ),
             expires_at=plan.expires_at,
-        )
-
-    def machine_join_status(self, join_id: str, *, user_id: str) -> MachineJoinStatusResponse:
-        with self.services.context.database.session() as session:
-            credential = ComputeJoinCredentialRepository(session).get(join_id)
-            if credential is None or credential.user_id != user_id:
-                raise NotFoundError("machine join command not found")
-            enrollment = ComputeMachineEnrollmentRepository(session).by_join_credential(
-                join_id, user_id=user_id
-            )
-        machine = (
-            next(
-                (
-                    view
-                    for view in self.machine_views(enrollment.workspace_id)
-                    if view.id == enrollment.machine_id
-                ),
-                None,
-            )
-            if enrollment
-            else None
-        )
-        return MachineJoinStatusResponse(
-            id=credential.id,
-            status=(
-                "joined"
-                if enrollment
-                else "revoked"
-                if credential.status is ComputeCredentialStatus.Revoked or credential.use_count > 0
-                else "expired"
-                if credential.expires_at <= utc_now()
-                else "pending"
-            ),
-            expires_at=credential.expires_at,
-            machine=machine,
         )
 
     def machine_join_token(

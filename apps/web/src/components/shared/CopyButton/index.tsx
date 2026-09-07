@@ -26,22 +26,17 @@ export function CopyButton({
   const { copied, copy } = useCopyToClipboard(value);
 
   return (
-    <>
-      <Button
-        type="button"
-        variant={variant}
-        size="icon"
-        disabled={disabled}
-        onClick={copy}
-        aria-label={`Copy ${label}`}
-        title={copied ? "Copied" : `Copy ${label}`}
-        className={className}
-      >
-        {copied ? <Check className="size-3.5 text-positive" /> : <Copy className="size-3.5" />}
-      </Button>
-      <span role="status" className="sr-only">
-        {copied ? `Copied ${label}` : ""}
-      </span>
-    </>
+    <Button
+      type="button"
+      variant={variant}
+      size="icon"
+      disabled={disabled}
+      onClick={copy}
+      aria-label={`Copy ${label}`}
+      title={copied ? "Copied" : `Copy ${label}`}
+      className={className}
+    >
+      {copied ? <Check className="size-3.5 text-positive" /> : <Copy className="size-3.5" />}
+    </Button>
   );
 }

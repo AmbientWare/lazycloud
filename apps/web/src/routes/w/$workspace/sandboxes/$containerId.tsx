@@ -65,7 +65,7 @@ function SandboxDetailPage() {
       description={<ContainerLineage record={record} workspaceName={workspace.name} />}
       actions={
         <>
-          <StatusChip status={record.status} />
+          <StatusChip status={record.status} live={running} />
           <SandboxActions record={record} onStop={() => stop.mutate()} stopping={stop.isPending} />
           {stop.isError ? <p className="text-xs text-destructive">{stop.error.message}</p> : null}
         </>

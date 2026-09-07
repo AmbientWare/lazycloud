@@ -26,14 +26,14 @@ export function Panel({
     >
       <div
         className={cn(
-          "flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border/80 px-4 py-2.5",
+          "flex min-h-11 shrink-0 items-center justify-between gap-3 border-b border-border/80 px-4 py-2.5",
           headerClassName,
         )}
       >
         <div className="min-w-0">
           <h2 className="truncate text-sm font-medium text-foreground">{title}</h2>
           {description ? (
-            <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+            <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{description}</p>
           ) : null}
         </div>
         {action}

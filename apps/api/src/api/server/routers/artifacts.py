@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 from shared.http.artifacts import (
     ArtifactListResponse,
-    ArtifactPreviewResponse,
     ArtifactPublicUrlRequest,
     ArtifactPublicUrlResponse,
     ArtifactSaveBody,
@@ -91,22 +90,6 @@ def read_artifact_content(
             # file, so the browser must not be free to reinterpret it.
             "X-Content-Type-Options": "nosniff",
         },
-    )
-
-
-@router.get("/preview", response_model=ArtifactPreviewResponse, operation_id="preview_artifact")
-def preview_artifact(
-    id: str,
-    task_id: str,
-    filename: str,
-    workspace_id: read_workspace,
-    service: ArtifactStorageService = Depends(artifact_service),
-) -> ArtifactPreviewResponse:
-    return service.preview(
-        workspace_id=workspace_id,
-        task_id=task_id,
-        artifact_id=id,
-        filename=filename,
     )
 
 

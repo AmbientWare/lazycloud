@@ -150,7 +150,7 @@ function tickPlacement(index: number, length: number): "start" | "middle" | "end
 }
 
 function phaseKey(phase: ExecutionPhase): string {
-  return `${phase.kind}-${phase.label}-${phase.startMs}`;
+  return `${phase.kind}-${phase.label}-${phase.startMs}-${phase.endMs}`;
 }
 
 function phaseClass(phase: ExecutionPhase): string {

@@ -1,4 +1,3 @@
-import type { Deployment } from "@/lib/api/schemas";
 import { queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 
@@ -63,22 +62,18 @@ export function deleteAppMutationOptions(workspaceId: string, appId: string) {
   };
 }
 
-export function deleteWorkloadMutationOptions(
-  workspaceId: string,
-  appId: string,
-  name: string,
-  kind: Deployment["kind"],
-) {
+export function deleteWorkloadMutationOptions(workspaceId: string, deploymentIds: string[]) {
   return {
-    mutationFn: () =>
-      apiRequest(
-        withWorkspace(
-          `/api/v1/apps/${encodeURIComponent(appId)}/workloads/${encodeURIComponent(name)}?kind=${encodeURIComponent(kind)}`,
-          workspaceId,
-        ),
-        noContentSchema,
-        { method: "DELETE" },
-      ),
+    mutationFn: async () => {
+      for (const deploymentId of deploymentIds) {
+        await apiRequest(
+          withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}`, workspaceId),
+          noContentSchema,
+          { method: "DELETE" },
+        );
+      }
+      return null;
+    },
   };
 }
 

@@ -1,8 +1,6 @@
 import { useState } from "react";
-import { ConfirmAction } from "@/components/shared/ConfirmAction";
-import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Plus, Trash2 } from "lucide-react";
+import { Check, Copy, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { useCopyToClipboard } from "@/components/shared/CopyButton/useCopyToClipboard";
 import { Panel } from "@/components/shared/Panel";
@@ -54,14 +52,14 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
   return (
     <Panel
       title="Domains"
-      description="Shared across your account"
+      description="Available to every workspace in this account"
       action={
         billing.isPending || billing.error ? null : customDomainsEnabled ? (
           <form
-            className="flex w-full flex-wrap items-center gap-2 sm:w-auto"
+            className="flex items-center gap-2"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!pending && hostname.trim()) register.mutate(hostname);
+              if (hostname.trim()) register.mutate(hostname);
             }}
           >
             <Input
@@ -69,16 +67,11 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
               onChange={(event) => setHostname(event.target.value)}
               placeholder="app.acme.com"
               aria-label="Domain to register"
-              className="h-8 min-w-0 flex-1 sm:w-56"
+              className="h-8 w-56"
               disabled={pending}
             />
-            <Button
-              size="sm"
-              type="submit"
-              disabled={pending || !hostname.trim()}
-              pending={register.isPending}
-            >
-              {register.isPending ? null : <Plus />}
+            <Button size="sm" type="submit" disabled={pending || !hostname.trim()}>
+              {register.isPending ? <Loader2 className="animate-spin" /> : <Plus />}
               Add
             </Button>
           </form>
@@ -90,15 +83,9 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
       }
     >
       {billing.error || domains.error ? (
-        <ApiErrorNotice
-          title="Could not load domains"
-          error={billing.error ?? domains.error}
-          onRetry={() => {
-            void billing.refetch();
-            void domains.refetch();
-          }}
-          retrying={billing.isFetching || domains.isFetching}
-        />
+        <p className="border-b border-border/80 px-4 py-2 text-sm text-destructive" role="alert">
+          {(billing.error ?? domains.error)?.message}
+        </p>
       ) : failure ? (
         <p className="border-b border-border/80 px-4 py-2 text-[11px] text-destructive">
           {failure}
@@ -109,7 +96,7 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
         </div>
-      ) : domains.error && !domains.data ? null : rows.length === 0 ? (
+      ) : rows.length === 0 ? (
         <p className="p-4 text-[11px] text-muted-foreground">
           {customDomainsEnabled
             ? "No domains yet. Add one to use it for deployments."
@@ -122,9 +109,7 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
               key={domain.id}
               domain={domain}
               disabled={pending}
-              onRemove={async () => {
-                await remove.mutateAsync(domain.hostname);
-              }}
+              onRemove={() => remove.mutate(domain.hostname)}
             />
           ))}
         </ul>
@@ -140,7 +125,7 @@ function DomainRow({
 }: {
   domain: CustomDomain;
   disabled: boolean;
-  onRemove: () => Promise<void>;
+  onRemove: () => void;
 }) {
   return (
     <li className="flex items-start justify-between gap-3 px-4 py-2.5">
@@ -159,21 +144,15 @@ function DomainRow({
           <p className="mt-0.5 text-[11px] text-destructive">{domain.error_message}</p>
         ) : null}
       </div>
-      <ConfirmAction
-        title={`Remove ${domain.hostname}?`}
-        description="Deployments using this domain will stop receiving requests at this hostname. This affects every workspace in your account."
-        label="Remove domain"
-        onConfirm={onRemove}
+      <Button
+        variant="ghost"
+        size="sm"
+        aria-label={`Remove ${domain.hostname}`}
+        disabled={disabled}
+        onClick={onRemove}
       >
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label={`Remove ${domain.hostname}`}
-          disabled={disabled}
-        >
-          <Trash2 />
-        </Button>
-      </ConfirmAction>
+        <Trash2 />
+      </Button>
     </li>
   );
 }

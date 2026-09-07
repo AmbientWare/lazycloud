@@ -1,5 +1,4 @@
-import { Slot, Slottable } from "@radix-ui/react-slot";
-import { Loader2 } from "lucide-react";
+import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 import type * as React from "react";
 
@@ -38,33 +37,11 @@ const buttonVariants = cva(
 export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean;
-    pending?: boolean;
   };
 
-export function Button({
-  className,
-  variant,
-  size,
-  asChild = false,
-  pending = false,
-  disabled,
-  children,
-  ...props
-}: ButtonProps) {
+export function Button({ className, variant, size, asChild = false, ...props }: ButtonProps) {
   const Component = asChild ? Slot : "button";
-  return (
-    <Component
-      className={cn(buttonVariants({ variant, size }), className)}
-      disabled={disabled || pending}
-      aria-busy={pending || undefined}
-      {...props}
-    >
-      {pending ? (
-        <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-      ) : null}
-      <Slottable>{children}</Slottable>
-    </Component>
-  );
+  return <Component className={cn(buttonVariants({ variant, size }), className)} {...props} />;
 }
 
 export { buttonVariants };

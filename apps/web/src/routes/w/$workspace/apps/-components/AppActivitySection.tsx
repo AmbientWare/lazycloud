@@ -14,7 +14,7 @@ export function AppActivitySection({
   error,
 }: {
   buckets: TaskTimeWindowBucket[] | undefined;
-  runningContainers: number | undefined;
+  runningContainers: number;
   pending: boolean;
   error: string | undefined;
 }) {
@@ -75,9 +75,7 @@ export function AppActivitySection({
               {/* Counted now, not over the window the figures beside it cover —
                   labelled "running" rather than given the same 24-hour framing. */}
               <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                {runningContainers === undefined
-                  ? null
-                  : `${countLabel(runningContainers, "container")} running`}
+                {countLabel(runningContainers, "container")} running
               </span>
             </div>
             <AppActivityChart

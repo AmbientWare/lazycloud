@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { ExpandableRow } from "@/components/shared/ExpandableRow";
+import { ChevronRight } from "lucide-react";
 
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
@@ -10,6 +10,7 @@ import type { UsageCostRow } from "@/lib/api/schemas";
 import { shareLabel } from "@/lib/format";
 import { selectInfiniteList } from "@/lib/queries/infinite-list";
 import { accountCostsQueryOptions, type UsageCostWindow } from "@/lib/queries/usage";
+import { cn } from "@/lib/utils";
 
 import { AppWorkloadCosts } from "./AppWorkloadCosts";
 import { RowFigures } from "./RowFigures";
@@ -47,7 +48,7 @@ export function AppCostAccordion({
   // A request that failed and a range nothing ran in are opposite answers, and
   // only one of them means the figures on this page are missing. Reported as an
   // empty range, a failure reads as reassurance.
-  if (costs.isError && !costs.data) {
+  if (costs.isError) {
     return <PanelError message={costs.error.message} />;
   }
   if (rows.length === 0) {
@@ -62,45 +63,93 @@ export function AppCostAccordion({
           const open = openKey === key;
           const name = appName(row);
           const share = total > 0 ? row.cost_nanos / total : 0;
-          return row.app_id ? (
-            <ExpandableRow
-              key={key}
-              label={`${name} workload costs`}
-              open={open}
-              onOpenChange={(next) => setOpenKey(next ? key : null)}
-              buttonClassName="py-2.5"
-              summary={
-                <>
-                  <RowIdentity name={name} detail={workspaceLabel(row)} title={row.app_id} />
-                  <RowFigures
-                    share={share}
-                    label={`${shareLabel(share)} of spend over this range`}
-                    costNanos={row.cost_nanos}
+          return (
+            <div key={key}>
+              {row.app_id ? (
+                <AppRow
+                  row={row}
+                  name={name}
+                  open={open}
+                  share={share}
+                  currency={currency}
+                  onToggle={(element) => {
+                    setOpenKey(open ? null : key);
+                    if (!open) {
+                      requestAnimationFrame(() => {
+                        requestAnimationFrame(() => element.scrollIntoView({ block: "nearest" }));
+                      });
+                    }
+                  }}
+                />
+              ) : (
+                <UnattributedRow row={row} share={share} currency={currency} />
+              )}
+              {open && row.app_id ? (
+                <div
+                  role="region"
+                  aria-label={`${name} workload costs`}
+                  className="border-t border-border bg-background/35"
+                >
+                  <AppWorkloadCosts
+                    window={window}
+                    appId={row.app_id}
+                    appCostNanos={row.cost_nanos}
                     currency={currency}
                   />
-                </>
-              }
-            >
-              <AppWorkloadCosts
-                window={window}
-                appId={row.app_id}
-                appCostNanos={row.cost_nanos}
-                currency={currency}
-              />
-            </ExpandableRow>
-          ) : (
-            <UnattributedRow key={key} row={row} share={share} currency={currency} />
+                </div>
+              ) : null}
+            </div>
           );
         })}
       </div>
       <InfiniteScrollBoundary
         nextCursor={nextCursor}
         loading={costs.isFetchingNextPage}
-        error={costs.isFetchNextPageError}
+        error={costs.isError}
         onLoadMore={() => void costs.fetchNextPage()}
         resourceLabel="apps"
       />
     </div>
+  );
+}
+
+function AppRow({
+  row,
+  name,
+  open,
+  share,
+  currency,
+  onToggle,
+}: {
+  row: UsageCostRow;
+  name: string;
+  open: boolean;
+  share: number;
+  currency: string;
+  onToggle: (element: HTMLElement) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      data-selected={open}
+      className="interactive-row group flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left"
+      onClick={(event) => onToggle(event.currentTarget.parentElement ?? event.currentTarget)}
+    >
+      <ChevronRight
+        className={cn(
+          "interactive-row-indicator size-3.5 shrink-0 text-muted-foreground transition-transform",
+          open && "rotate-90 text-brand",
+        )}
+      />
+      <RowIdentity name={name} detail={workspaceLabel(row)} title={row.app_id} />
+      <RowFigures
+        share={share}
+        label={`${shareLabel(share)} of spend over this range`}
+        costNanos={row.cost_nanos}
+        currency={currency}
+      />
+    </button>
   );
 }
 

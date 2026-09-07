@@ -28,7 +28,6 @@ export type TaskListOptions = {
   status?: string;
   deploymentId?: string;
   appId?: string;
-  workloadName?: string;
   stubIds?: string[];
   kind?: string;
   createdAfter?: string;
@@ -85,7 +84,6 @@ function taskListParams(options: TaskListOptions, cursor = ""): URLSearchParams 
   if (options.status) params.set("status", options.status);
   if (options.deploymentId) params.set("deployment_id", options.deploymentId);
   if (options.appId) params.set("app_id", options.appId);
-  if (options.workloadName) params.set("workload_name", options.workloadName);
   for (const stubId of options.stubIds ?? []) params.append("stub_id", stubId);
   if (options.kind) params.set("kind", options.kind);
   if (options.createdAfter) params.set("created_after", options.createdAfter);
@@ -109,7 +107,6 @@ function taskListKey(
     status: options.status ?? null,
     deploymentId: options.deploymentId ?? null,
     appId: options.appId ?? null,
-    workloadName: options.workloadName ?? null,
     stubIds: options.stubIds?.join(",") ?? null,
     kind: options.kind ?? null,
     createdAfter: options.createdAfter ?? null,

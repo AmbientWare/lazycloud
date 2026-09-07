@@ -18,11 +18,6 @@ export const podFileDownloadSchema = z.object({
 });
 export type PodFileDownload = z.infer<typeof podFileDownloadSchema>;
 
-export const podFilePreviewSchema = z.object({
-  value_base64: z.string(),
-  truncated: z.boolean(),
-});
-
 const podProcessSchema = z.object({
   pid: z.number(),
   command: z.string().default(""),

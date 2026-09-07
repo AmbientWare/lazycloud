@@ -79,11 +79,6 @@ mobile falls back to one predictable content scroller.
 - Prefer a few framed operational regions over nested decorative cards, badge
   mosaics, or dense grids of tiny metrics. A repeated resource becomes a card
   only when the whole card navigates.
-- Keep copy brief on every page, including marketing. Remove repeated headings,
-  subtitles that restate labels, obvious instructions, and routine status chatter.
-  Keep scope, price units, errors, and consequences needed to make a decision.
-- Marketing should explain the offer without configuration controls or unavailable
-  options. Pricing shows the published base rates without a compute-region picker.
 - Use the shared status and icon components and the radius tokens, and apply
   semantic color consistently rather than decoratively.
 - Loading skeletons match the layout they replace; spinners are for inline
