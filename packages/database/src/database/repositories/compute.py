@@ -217,6 +217,18 @@ class ComputeJoinCredentialRecord(ContractModel):
         return self.model_copy(update={"use_count": use_count, "updated_at": now})
 
 
+class ComputeMachineCredentialRecord(ContractModel):
+    id: str
+    user_id: str
+    credential_generation: int
+    status: ComputeMachineEnrollmentStatus
+    schedulable: bool
+    capacity_state: AgentCapacityState
+    capacity_reason: str
+    capacity_observed_at: datetime | None
+    capacity_notice_at: datetime | None
+
+
 class ComputeMachineEnrollmentRecord(ContractModel):
     id: str
     user_id: str
@@ -1572,6 +1584,30 @@ class ComputeMachineEnrollmentRepository:
             if observed_at is not None
         ]
 
+    def credential_by_hash(self, credential_hash: str) -> ComputeMachineCredentialRecord | None:
+        row = self.session.execute(
+            select(
+                ComputeMachineEnrollmentTable.id,
+                ComputeMachineEnrollmentTable.user_id,
+                ComputeMachineEnrollmentTable.credential_generation,
+                ComputeMachineEnrollmentTable.status,
+                ComputeMachineEnrollmentTable.schedulable,
+                ComputeMachineEnrollmentTable.capacity_state,
+                func.coalesce(
+                    ComputeMachineEnrollmentTable.payload["capacity_reason"].as_string(), ""
+                ).label("capacity_reason"),
+                ComputeMachineEnrollmentTable.payload["capacity_observed_at"]
+                .as_string()
+                .label("capacity_observed_at"),
+                ComputeMachineEnrollmentTable.payload["capacity_notice_at"]
+                .as_string()
+                .label("capacity_notice_at"),
+            ).where(ComputeMachineEnrollmentTable.credential_hash == credential_hash)
+        ).one_or_none()
+        return (
+            ComputeMachineCredentialRecord.model_validate(row._mapping) if row is not None else None
+        )
+
     def by_credential_hash(
         self,
         credential_hash: str,
@@ -1723,6 +1759,9 @@ class ComputeMachineEnrollmentRepository:
     ) -> ComputeMachineEnrollmentRecord | None:
         if for_update:
             statement = statement.with_for_update()
+        statement = statement.options(
+            load_only(ComputeMachineEnrollmentTable.payload, raiseload=True)
+        )
         row = self.session.scalars(statement).first()
         return (
             ComputeMachineEnrollmentRecord.model_validate(row.payload) if row is not None else None
