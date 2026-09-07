@@ -691,6 +691,7 @@ class ApiServices(ApiServiceCore):
         tasks = TaskService(
             context,
             events,
+            log_streams=stream_events,
             workspace_changes=workspace_changes,
             async_database=async_database,
             async_workspace_changes=async_workspace_changes,

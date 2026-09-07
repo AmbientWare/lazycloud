@@ -345,6 +345,10 @@ function MarketingPricing() {
                       />
                       <PlanFeature label="Self-hosted" included={plan.entitlements.self_hosted} />
                       <PlanLimit
+                        label="Log retention"
+                        value={`${plan.entitlements.log_retention_days} days`}
+                      />
+                      <PlanLimit
                         label="Region selection"
                         value={
                           plan.entitlements.region_selection

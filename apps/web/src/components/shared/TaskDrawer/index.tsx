@@ -350,8 +350,7 @@ function TaskDrawerBody({
             <PanelErrorBoundary key={taskId} title="Logs could not be displayed">
               <LogViewer
                 workspaceId={workspace.id}
-                scope={{ taskId }}
-                follow={!terminal}
+                scope={{ taskId, stubId: record.stub_id ?? undefined }}
                 className="h-full min-h-0"
               />
             </PanelErrorBoundary>

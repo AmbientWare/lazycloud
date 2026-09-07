@@ -17,6 +17,8 @@ from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
 from foundation.ids import optional_uuid, required_uuid
 from observability.events import EventService
+from observability.log_retention import LogRetentionService
+from observability.stream_state import RedisEventStreamRepository
 from observability.workspace_changes import AsyncWorkspaceChangeService, WorkspaceChangePublisher
 from pydantic import JsonValue
 from shared.containers import TERMINAL_CONTAINER_STATUSES
@@ -25,6 +27,7 @@ from shared.events import EventLevel
 from shared.function_payloads import FunctionInvocationPayload, FunctionResultPayload
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.logs import LogEntry
+from shared.realtime.contracts import EventRecordType
 from shared.realtime.streams import LogStreamQuery
 from shared.tasks import (
     RetryDecision,
@@ -61,6 +64,7 @@ class _TaskStartPersistence:
 class TaskService:
     context: ExecutionContext
     events: EventService
+    log_streams: RedisEventStreamRepository
     workspace_changes: WorkspaceChangePublisher | None = None
     callback_dispatcher: TaskCallbackDispatcher | None = None
     async_database: AsyncDatabaseClient | None = None
@@ -193,7 +197,7 @@ class TaskService:
         task = self.get(task_id)
         line = message.rstrip("\n")
         with self.context.database.session() as session:
-            LogRepository(session).records.create_across_workspaces(
+            entry = LogRepository(session).records.create_across_workspaces(
                 {
                     "task_id": required_uuid(task_id, field="task_id"),
                     "stream": stream,
@@ -201,6 +205,21 @@ class TaskService:
                 },
                 workspace_id=task.workspace_id,
             )
+        self.log_streams.append_event(
+            EventRecordType.ContainerLog,
+            {
+                "workspace_id": task.workspace_id or "",
+                "task_id": task.id,
+                "stub_id": task.stub_id or "",
+                "app_id": task.app_id or "",
+                "deployment_id": task.deployment_id or "",
+                "container_id": task.container_id or "",
+                "stream": entry.stream,
+                "message": entry.message,
+                "timestamp": entry.created_at.isoformat(),
+            },
+            event_id=entry.id,
+        )
 
     def transition(
         self,
@@ -859,7 +878,11 @@ class TaskService:
         if not workspace_id:
             raise ConflictError(f"task logs require a workspace-owned task: {task.id}")
         repository = LogRepository(session)
-        query = LogStreamQuery(workspace_id=workspace_id, task_id=task.id)
+        query = LogStreamQuery(
+            workspace_id=workspace_id,
+            task_id=task.id,
+            start_time=LogRetentionService.cutoff_in_session(session, workspace_id),
+        )
         if cursor is not None:
             return repository.page_after(
                 query,

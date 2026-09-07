@@ -25,6 +25,7 @@ from cli.identity import (
     token_revoke,
     user_app,
 )
+from cli.maintenance import maintenance_app
 from cli.offline_auth import auth_app
 from cli.operations import cron_app, image_app, scheduler_app
 from cli.release import release_app
@@ -86,6 +87,7 @@ _ADMIN_GROUP_ORDER = (
     "app",
     "concurrency",
     "database",
+    "maintenance",
     "release",
     "auth",
     "client",
@@ -138,6 +140,7 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.add_group("concurrency", concurrency_app)
     registry.add_group("billing", billing_app)
     registry.add_group("database", database_app)
+    registry.add_group("maintenance", maintenance_app)
     registry.add_group("release", release_app)
     registry.add_group("auth", auth_app)
     registry.add_group("user", user_app)

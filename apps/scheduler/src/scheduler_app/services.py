@@ -196,6 +196,7 @@ class SchedulerAppServices:
         tasks = TaskService(
             context,
             events,
+            log_streams=stream_events,
             workspace_changes=workspace_changes,
         )
         compute_policies = WorkspaceComputePolicyService(context)

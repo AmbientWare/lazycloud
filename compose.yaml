@@ -334,6 +334,37 @@ services:
       pgbouncer:
         condition: service_healthy
 
+  log-retention:
+    image: cli:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.control-plane
+      target: cli
+      args: *lazycloud-build-args
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        trap 'exit 0' TERM INT
+        while true; do
+          lazycloud-admin --json maintenance prune-logs
+          touch /tmp/log-retention.heartbeat
+          sleep 900 &
+          wait $$!
+        done
+    environment: *database-env
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      database-bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "shared.process_liveness", "--max-age-seconds", "1200", "/tmp/log-retention.heartbeat"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+      start_period: 300s
+
   administrator-bootstrap:
     image: database-bootstrap:local
     entrypoint: ["/bin/sh", "-ec"]

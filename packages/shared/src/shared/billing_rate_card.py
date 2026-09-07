@@ -12,7 +12,7 @@ from shared.gpu import NO_GPU, SUPPORTED_GPU_TYPES, GpuType
 from shared.placement import AUTO_RATE_CLASS, PlacementRateClass, ProductRegion
 from shared.usage import UsageBillingOwner
 
-PRICING_VERSION = "2026-09-04.a"
+PRICING_VERSION = "2026-09-07.a"
 """The version of the plans, entitlements, and rates exposed to customers."""
 
 FREE_PLAN_MONTHLY_NANOS = 0
@@ -413,9 +413,12 @@ class PlanEntitlements:
     connected_cloud: bool
     custom_domains: bool
     self_hosted: bool
+    log_retention_days: int
     region_selection: bool = False
 
     def __post_init__(self) -> None:
+        if self.log_retention_days <= 0:
+            raise ValueError("log retention must be positive")
         if self.max_concurrent_cpu_containers <= 0:
             raise ValueError("a plan must allow at least one concurrent CPU container")
         if self.max_concurrent_gpus <= 0:
@@ -567,6 +570,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             connected_cloud=False,
             custom_domains=False,
             self_hosted=True,
+            log_retention_days=1,
         ),
         terms=(
             "Every workload the platform runs: applications, APIs, functions, jobs, "
@@ -590,6 +594,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             region_selection=True,
             custom_domains=True,
             self_hosted=True,
+            log_retention_days=30,
         ),
         terms=(
             "The same workloads at the same metered rates, with higher account limits.",

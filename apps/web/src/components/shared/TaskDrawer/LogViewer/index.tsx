@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Download, Pause, Play, Search } from "lucide-react";
 
@@ -24,15 +24,13 @@ const MAX_LIVE_RECORDS = 2_000;
 export function LogViewer({
   workspaceId,
   scope,
-  follow: initialFollow = true,
   className,
 }: {
   workspaceId: string;
   scope: LogScope;
-  follow?: boolean;
   className?: string;
 }) {
-  const [follow, setFollow] = useState(initialFollow);
+  const [follow, setFollow] = useState(true);
   const [filter, setFilter] = useState("");
   const [liveRecords, setLiveRecords] = useState<LogRecord[]>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -45,6 +43,7 @@ export function LogViewer({
 
   const streamParams = logScopeParams(scope);
   streamParams.set("follow", "true");
+  streamParams.set("limit", "200");
   const streamUrl = withWorkspace(`/api/v1/logs/stream?${streamParams.toString()}`, workspaceId);
 
   const streamStatus = useEventStream(follow ? streamUrl : null, {
@@ -53,12 +52,9 @@ export function LogViewer({
       const parsed = parseLogEvent(event.data);
       if (!parsed) return;
       setLiveRecords((previous) => {
+        if (previous.some((record) => recordKey(record) === recordKey(parsed))) return previous;
         const next = [...previous, parsed];
         return next.length > MAX_LIVE_RECORDS ? next.slice(-MAX_LIVE_RECORDS) : next;
-      });
-      queueMicrotask(() => {
-        const node = scrollRef.current;
-        if (node) node.scrollTop = node.scrollHeight;
       });
     },
   });
@@ -74,6 +70,11 @@ export function LogViewer({
       : records;
     return filtered.slice(-MAX_RENDERED_LINES);
   }, [filter, records]);
+
+  useLayoutEffect(() => {
+    const node = scrollRef.current;
+    if (follow && node) node.scrollTop = node.scrollHeight;
+  }, [follow, visible]);
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
@@ -120,6 +121,9 @@ export function LogViewer({
           label="visible logs"
           disabled={visible.length === 0}
         />
+        {records.length > MAX_RENDERED_LINES && !filter ? (
+          <span className="text-[11px] text-muted-foreground">Latest 1,000 lines</span>
+        ) : null}
         <Button
           variant="ghost"
           size="icon"

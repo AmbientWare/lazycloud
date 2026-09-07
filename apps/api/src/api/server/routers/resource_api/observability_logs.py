@@ -7,6 +7,7 @@ from typing import TypedDict
 from coordination.stream_tail import RedisStreamTailBroker
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import StreamingResponse
+from observability.log_retention import LogRetentionService
 from observability.stream_state import (
     AsyncRedisEventStreamRepository,
     RedisStreamRecord,
@@ -79,6 +80,10 @@ def api_v1_stream_logs(
         last_event_id=last_event_id,
     )
     request = _resolve_log_query_request(services, request)
+    cutoff = LogRetentionService(services.context).cutoff(workspace_id)
+    request = request.model_copy(
+        update={"start_time": max(request.start_time, cutoff) if request.start_time else cutoff}
+    )
     stream_query = _log_stream_query(request, wait_seconds=wait_seconds)
     if follow:
         return _redis_log_response(

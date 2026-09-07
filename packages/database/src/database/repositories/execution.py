@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +15,7 @@ from database.repositories.common import (
 )
 from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.tables.apps import AppTable, DeploymentTable, StubTable
+from database.tables.billing import BillingAccountTable
 from database.tables.execution import (
     CronJobRunTable,
     EventTable,
@@ -26,6 +27,7 @@ from database.tables.execution import (
     TaskDependencyTable,
     TaskTable,
 )
+from database.tables.identity import WorkspaceMemberTable
 from database.tables.orchestration import ContainerTable
 from pydantic import BaseModel, JsonValue, field_validator
 from shared.containers import ContainerRecord, ContainerStatus
@@ -993,6 +995,46 @@ class TaskDependencyRepository:
 @dataclass(slots=True)
 class LogRepository:
     session: Session
+
+    def prune(
+        self,
+        *,
+        cutoffs: Mapping[str, datetime],
+        default_cutoff: datetime,
+        complimentary_cutoff: datetime,
+        limit: int,
+    ) -> int:
+        cutoff = case(
+            (BillingAccountTable.complimentary_since.is_not(None), complimentary_cutoff),
+            else_=case(dict(cutoffs), value=BillingAccountTable.plan, else_=default_cutoff),
+        )
+        expired = (
+            select(LogTable.id)
+            .outerjoin(
+                WorkspaceMemberTable,
+                and_(
+                    WorkspaceMemberTable.workspace_id == LogTable.workspace_id,
+                    WorkspaceMemberTable.role == "owner",
+                ),
+            )
+            .outerjoin(
+                BillingAccountTable, BillingAccountTable.user_id == WorkspaceMemberTable.user_id
+            )
+            .where(
+                LogTable.created_at < max(default_cutoff, complimentary_cutoff, *cutoffs.values()),
+                LogTable.created_at < cutoff,
+            )
+            .order_by(LogTable.created_at, LogTable.id)
+            .limit(limit)
+            .with_for_update(of=LogTable, skip_locked=True)
+        )
+        return len(
+            list(
+                self.session.scalars(
+                    delete(LogTable).where(LogTable.id.in_(expired)).returning(LogTable.id)
+                )
+            )
+        )
 
     @property
     def records(self) -> WorkspaceTableRepository[LogEntry]:
