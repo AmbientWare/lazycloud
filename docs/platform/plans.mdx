@@ -17,6 +17,19 @@ billing period; usage beyond that is invoiced monthly and charged to the card
 on file. The Usage page in the dashboard shows spend over time, broken down by
 app and workload.
 
+## Compute pricing
+
+The pricing page lists base rates for automatic placement. LazyCloud chooses
+where the workload runs. These rates have no regional surcharge.
+
+Choosing a specific region can cost more. Region selection requires both a
+plan that allows it and a published rate for that region. The selected region's
+compute rates apply instead of the base rates; volume and egress prices do not
+change. Only automatic placement is currently published.
+
+The [pricing catalog](https://lazycloud.dev/api/v1/pricing) lists published
+rates, regional multipliers, and the date the rates take effect.
+
 ## Plans
 
 Free has no subscription and no minimum term. It includes a small monthly
