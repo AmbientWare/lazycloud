@@ -152,7 +152,7 @@ function TasksPage() {
               ) : null}
             </div>
           </div>
-          {tasks.isError ? (
+          {tasks.isError && !tasks.isFetchNextPageError ? (
             <PanelError message={tasks.error.message} layout="centered" />
           ) : (
             <>

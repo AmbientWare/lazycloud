@@ -81,7 +81,8 @@ function WorkloadDetailPage() {
     }),
   );
   if (deployments.isPending || stubs.isPending || app.isPending) return <WorkloadSkeleton />;
-  const loadError = deployments.error ?? stubs.error ?? app.error;
+  const loadError =
+    (deployments.isFetchNextPageError ? null : deployments.error) ?? stubs.error ?? app.error;
   if (loadError) {
     return <PanelError message={loadError.message} />;
   }
@@ -192,7 +193,7 @@ function WorkloadDetailPage() {
               onStatusFilterChange={setPodInstanceStatus}
               containers={workloadContainers}
               loading={containers.isPending}
-              error={containers.error}
+              error={containers.isFetchNextPageError ? null : containers.error}
               nextCursor={containerList.nextCursor}
               loadingMore={containers.isFetchingNextPage}
               loadMoreError={containers.isFetchNextPageError}

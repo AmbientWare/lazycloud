@@ -48,7 +48,7 @@ export function AppCostAccordion({
   // A request that failed and a range nothing ran in are opposite answers, and
   // only one of them means the figures on this page are missing. Reported as an
   // empty range, a failure reads as reassurance.
-  if (costs.isError) {
+  if (costs.isError && !costs.isFetchNextPageError) {
     return <PanelError message={costs.error.message} />;
   }
   if (rows.length === 0) {
@@ -105,7 +105,7 @@ export function AppCostAccordion({
       <InfiniteScrollBoundary
         nextCursor={nextCursor}
         loading={costs.isFetchingNextPage}
-        error={costs.isError}
+        error={costs.isFetchNextPageError}
         onLoadMore={() => void costs.fetchNextPage()}
         resourceLabel="apps"
       />
