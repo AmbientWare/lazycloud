@@ -10,6 +10,7 @@ dependencies = [
     "control",
     "database",
     "foundation",
+    "gateway",
     "identity",
     "lazycloud-shared==0.1.0",
     "lazycloud-client==0.1.0",

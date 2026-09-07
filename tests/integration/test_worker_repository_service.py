@@ -109,8 +109,8 @@ from shared.usage import (
     UsageRecord,
     UsageUnit,
 )
-from storage.image_archive import ResolvedImageArchiveSettings
-from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings, S3PresignedUpload
+from storage.image_archive import ImageArchiveSettings
+from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 from tests.scheduler_composition import scheduler_request_service_for_redis
@@ -2877,12 +2877,8 @@ def _api_services(isolated_services: ApiServices, redis: RedisClient) -> ApiServ
     )
 
 
-def _archive_settings() -> ResolvedImageArchiveSettings:
-    return ResolvedImageArchiveSettings(
-        storage=S3ObjectStoreSettings(bucket="image-archives"),
-        prefix="",
-        presign_seconds=3600,
-    )
+def _archive_settings() -> ImageArchiveSettings:
+    return ImageArchiveSettings(bucket="image-archives", presign_seconds=3600)
 
 
 class _FakeObjectStorage:

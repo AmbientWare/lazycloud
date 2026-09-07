@@ -25,16 +25,23 @@ Connecting an AWS account needs the Team plan. The connection belongs to your
 account and backs every workspace you own.
 
 ```bash
-lazycloud cloud connect aws --account-id <id> [--role-arn <arn>] [--open]
+lazycloud cloud connect aws --account-id <id> [--role-arn <arn>]
+lazycloud cloud authorize [--profile <aws-profile>]
 lazycloud cloud status [--watch] [--until <phase>] [--interval <s>] [--timeout <s>]
 lazycloud cloud validate            # recheck the current authorization
-lazycloud cloud reconnect [--open]  # start a replacement authorization
+lazycloud cloud reconnect  # start a replacement authorization
 lazycloud cloud cancel-reconnect
 lazycloud cloud retry               # retry the connection's pending action
 lazycloud cloud disconnect [--wait]
 lazycloud cloud compute show
 lazycloud cloud compute update [options]
 ```
+
+For a managed connection, run `cloud authorize` with your AWS CLI profile after
+`cloud connect aws` or `cloud reconnect`. The CLI verifies that the profile
+belongs to the connected account, then submits the connection template directly
+to CloudFormation. Run `cloud validate` after the stack finishes. Your AWS
+credentials stay on your machine.
 
 `cloud status --until` accepts `awaiting_authorization`, `validating`,
 `ready`, `degraded`, `reconnect_pending`, `retiring_authorization`,

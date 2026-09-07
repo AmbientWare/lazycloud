@@ -27,7 +27,6 @@ from provider_aws import (
     aws_account_connection_template_identity,
     aws_node_bucket_access_policy,
     parse_aws_connection_stack_cleanup_action,
-    parse_aws_connection_stack_create_action,
     validate_aws_account_connection_template_policy,
 )
 from provider_aws.account_connection import (
@@ -74,10 +73,7 @@ def _planner() -> AwsAccountConnectionPlanner:
     return AwsAccountConnectionPlanner(
         platform_principal_arn=_PLATFORM_PRINCIPAL,
         publication=AwsAccountConnectionTemplatePublication(
-            url=(
-                "https://compute-artifacts.s3.us-east-1.amazonaws.com/"
-                f"connections/{identity.sha256}/template.json"
-            ),
+            url=(f"https://releases.example.com/connections/{identity.sha256}/template.json"),
             sha256=identity.sha256,
         ),
     )
@@ -119,12 +115,6 @@ def _active(generation: int = 1) -> AwsActiveAccountAuthorization:
     )
 
 
-def _quick_create_parameters(url: str) -> dict[str, list[str]]:
-    fragment = urlparse(url).fragment
-    query = fragment.partition("?")[2]
-    return parse_qs(query, keep_blank_values=True)
-
-
 def test_replacement_creates_new_generation_without_mutating_active() -> None:
     active = _active()
     replacement = _planner().plan_replacement(
@@ -140,7 +130,9 @@ def test_replacement_creates_new_generation_without_mutating_active() -> None:
     assert replacement.pending.stack_name != active.stack_name
     assert replacement.pending.role_arn != active.role_arn
     assert replacement.pending.node_identity == active.node_identity
-    parameters = _quick_create_parameters(replacement.authorization_url)
+    parameters = {
+        p.ParameterKey: p.ParameterValue for p in replacement.authorization_stack.request.Parameters
+    }
     assert "param_PredecessorStackId" not in parameters
     assert "param_PredecessorRoleArn" not in parameters
 
@@ -154,56 +146,30 @@ def test_replacement_creates_new_generation_without_mutating_active() -> None:
         )
 
 
-def test_customer_quick_create_action_is_bound_to_exact_account_and_generation() -> None:
+def test_customer_stack_request_binds_the_account_and_template() -> None:
+    from shared.aws_connections import AwsConnectionStackAction
+
     plan = _planner().plan_initial(
         user_id=_WORKSPACE_ID,
         connection_id=_CONNECTION_ID,
         account_id=_ACCOUNT_ID,
         external_id=SecretStr(_EXTERNAL_ID),
     )
-
-    action = parse_aws_connection_stack_create_action(
-        plan.authorization_url,
-        account_id=_ACCOUNT_ID,
-        region="us-east-1",
-        expected_template_url=_quick_create_parameters(plan.authorization_url)["templateURL"][0],
-        expected_platform_principal_arn=_PLATFORM_PRINCIPAL,
-    )
-
-    assert action.name == plan.pending.stack_name
-    assert action.parameters["ConnectionRoleName"] == plan.pending.role_name
-    assert action.parameters["TargetAccountId"] == _ACCOUNT_ID
-
-    with pytest.raises(ValueError, match="different AWS account"):
-        parse_aws_connection_stack_create_action(
-            plan.authorization_url.replace(_ACCOUNT_ID, "999999999999"),
-            account_id=_ACCOUNT_ID,
-            region="us-east-1",
-            expected_template_url=_quick_create_parameters(plan.authorization_url)["templateURL"][
-                0
-            ],
-            expected_platform_principal_arn=_PLATFORM_PRINCIPAL,
-        )
-
-    with pytest.raises(ValueError, match="different immutable template"):
-        parse_aws_connection_stack_create_action(
-            plan.authorization_url,
-            account_id=_ACCOUNT_ID,
-            region="us-east-1",
-            expected_template_url="https://example.invalid/unapproved-template.json",
-            expected_platform_principal_arn=_PLATFORM_PRINCIPAL,
-        )
-
-    with pytest.raises(ValueError, match="different platform principal"):
-        parse_aws_connection_stack_create_action(
-            plan.authorization_url,
-            account_id=_ACCOUNT_ID,
-            region="us-east-1",
-            expected_template_url=_quick_create_parameters(plan.authorization_url)["templateURL"][
-                0
-            ],
-            expected_platform_principal_arn=("arn:aws:iam::210987654321:role/unapproved-control"),
-        )
+    action = plan.authorization_stack
+    parameters = {p.ParameterKey: p.ParameterValue for p in action.request.Parameters}
+    assert action.request.StackName == plan.pending.stack_name
+    assert parameters["ConnectionRoleName"] == plan.pending.role_name
+    assert parameters["TargetAccountId"] == _ACCOUNT_ID
+    assert parameters["PlatformPrincipalArn"] == _PLATFORM_PRINCIPAL
+    assert action.request.TemplateBody.encode() == aws_account_connection_template_bytes()
+    changed = action.model_dump(mode="json")
+    changed["account_id"] = "999999999999"
+    with pytest.raises(ValueError, match="different account"):
+        AwsConnectionStackAction.model_validate(changed)
+    changed = action.model_dump(mode="json")
+    changed["template_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="does not match its digest"):
+        AwsConnectionStackAction.model_validate(changed)
 
 
 def test_customer_cleanup_action_requires_the_exact_managed_stack() -> None:

@@ -7,8 +7,8 @@ from control.service import ControlPlaneService
 from database.repositories.images import ImageArchiveRepository, ImageRepository
 from shared.identity import TokenKind
 from shared.image_building.records import ImageArchiveRecord, ImageRecord
-from storage.image_archive import ResolvedImageArchiveSettings
-from storage_client.s3 import S3ObjectStoreSettings, S3PresignedUpload
+from storage.image_archive import ImageArchiveSettings
+from storage_client.s3 import S3PresignedUpload
 from tests.service_fixtures import owned_workspace
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.image_lifecycle import ImageRegistryStore
@@ -29,10 +29,9 @@ REGISTRY_REPOSITORY = "registry.example.com/workloads"
 REGISTRY_REF = f"{REGISTRY_REPOSITORY}@{MANIFEST_DIGEST}"
 
 
-def _archive_settings() -> ResolvedImageArchiveSettings:
-    return ResolvedImageArchiveSettings(
-        storage=S3ObjectStoreSettings(bucket="archive-bucket"),
-        prefix="archives",
+def _archive_settings() -> ImageArchiveSettings:
+    return ImageArchiveSettings(
+        bucket="archive-bucket",
         presign_seconds=900,
     )
 
@@ -97,7 +96,7 @@ def test_archive_download_is_signed_only_for_an_authorized_workspace(
     )
 
     assert credentials.ok
-    physical_key = f"archives/{ARCHIVE_KEY}"
+    physical_key = ARCHIVE_KEY
     assert credentials.image_archive_url == f"https://signed/archive-bucket/{physical_key}?ttl=900"
     assert credentials.archive_size_bytes == archive.size_bytes
     assert credentials.archive_sha256 == ARCHIVE_SHA256
@@ -168,7 +167,7 @@ def test_archive_upload_binds_the_reserved_digest_and_skips_a_published_archive(
         upload.upload_headers["x-amz-checksum-sha256"]
         == b64encode(bytes.fromhex(ARCHIVE_SHA256)).decode()
     )
-    assert signer.calls[-1] == ("archive-bucket", f"archives/{ARCHIVE_KEY}", 900)
+    assert signer.calls[-1] == ("archive-bucket", ARCHIVE_KEY, 900)
 
     published = service.vend_upload(
         request,

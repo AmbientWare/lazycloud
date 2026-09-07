@@ -105,21 +105,14 @@ variable "github_repository" {
   default     = "AmbientWare/lazycloud"
 }
 
-variable "state_bucket" {
-  description = "Bucket holding every module's Terraform state: this one's, the core's it reads, and the cloudflare module's."
+variable "terraform_backend_config" {
+  description = "Absolute path to the operator's R2 backend JSON used by terraform init and remote state readers. Contains coordinates and profile, never credentials."
   type        = string
-}
 
-variable "destroy_buckets_with_contents" {
-  description = <<-EOT
-    Let `terraform destroy` remove buckets that still hold data.
-
-    True while predeployment, so the whole deployment can be torn down and rebuilt
-    to prove it reproduces. Set it false once these hold anything a customer would
-    miss; unlike `prevent_destroy`, this is a variable and can be switched.
-  EOT
-  type        = bool
-  default     = true
+  validation {
+    condition     = startswith(var.terraform_backend_config, "/") && can(jsondecode(file(var.terraform_backend_config)))
+    error_message = "terraform_backend_config must name an absolute path to a valid backend JSON file."
+  }
 }
 
 variable "cloudflare_state_key" {

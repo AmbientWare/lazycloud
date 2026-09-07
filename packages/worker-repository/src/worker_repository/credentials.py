@@ -126,8 +126,6 @@ class WorkerCredentialService:
     container_repository: WorkerCredentialContainerRepository | None = None
     container_lookup: WorkerCredentialContainerLookup | None = None
     gateway_token_ttl_seconds: int = DEFAULT_GATEWAY_TOKEN_TTL_SECONDS
-    platform_storage_endpoint: str = ""
-    platform_storage_public_endpoint: str = ""
     storage_issuer: WorkspaceStorageIssuer | None = None
     _gateway_token_leases: dict[str, _GatewayTokenLease] = field(
         default_factory=dict, init=False, repr=False
@@ -278,23 +276,7 @@ class WorkerCredentialService:
             msg = "workspace storage issuer is required to vend workspace credentials"
             raise WorkerCredentialError(msg)
         grant = self.storage_issuer.issue(workspace_id=workspace_id, storage=storage)
-        credentials = workspace_storage_credentials(grant)
-        return credentials.model_copy(
-            update={"endpoint_url": self._reachable_endpoint(credentials.endpoint_url)}
-        )
-
-    def _reachable_endpoint(self, endpoint_url: str) -> str:
-        """Address the object store by a name the worker can actually resolve.
-
-        The stored endpoint is the one control-plane services use inside the
-        deployment. A worker runs outside that network — on customer hardware it
-        always does — so it reaches platform storage the same way a client does.
-        """
-        if not self.platform_storage_endpoint or not self.platform_storage_public_endpoint:
-            return endpoint_url
-        if endpoint_url.strip().rstrip("/") != self.platform_storage_endpoint.strip().rstrip("/"):
-            return endpoint_url
-        return self.platform_storage_public_endpoint
+        return workspace_storage_credentials(grant)
 
     def _mount_credentials(
         self,

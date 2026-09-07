@@ -69,16 +69,14 @@ def _enabled_settings() -> _AwsOwnerSettings:
     return _AwsOwnerSettings(
         connection=AwsAccountConnectionSettings(
             template_url=(
-                "https://assets.s3.us-east-1.amazonaws.com/templates/"
-                f"{template_identity.sha256}/connection.json"
+                f"https://releases.example.com/templates/{template_identity.sha256}/connection.json"
             ),
             control_principal_arn=("arn:aws:iam::210987654321:role/customer-cloud-control"),
         ),
         capacity=AwsCapacitySettings(
             worker_image_digest=(f"registry.example.com/worker@sha256:{'c' * 64}"),
             agent_binary_url=(
-                f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'b' * 64}/"
-                "lazycloud-agent-linux-amd64"
+                f"https://releases.example.com/agents/0.1.0/{'b' * 64}/lazycloud-agent-linux-amd64"
             ),
             instance_hourly_micros={"m7i.xlarge": 340_000},
             cpu_ami_ids={"us-east-1": "ami-0123456789abcdef0"},
@@ -109,9 +107,7 @@ def test_aws_connection_composition_rejects_non_content_addressed_template_url()
     settings = replace(
         settings,
         connection=settings.connection.model_copy(
-            update={
-                "template_url": ("https://assets.s3.us-east-1.amazonaws.com/templates/latest.json")
-            }
+            update={"template_url": ("https://releases.example.com/templates/latest.json")}
         ),
     )
 

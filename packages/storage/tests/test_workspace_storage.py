@@ -31,9 +31,38 @@ from shared.identity import (
 )
 from shared.image_building.records import ImageRecord
 from storage.service import OBJECT_SHA256_METADATA_KEY, ObjectStorage
+from storage.workspace_storage_issuers import external_workspace_storage_settings
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings
 from tests.fakes import FakeObjectClient
 from tests.service_fixtures import owned_workspace
+
+
+def test_external_storage_never_inherits_platform_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", "platform-access")
+    monkeypatch.setenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY", "platform-secret")
+    monkeypatch.setenv("LAZYCLOUD_OBJECT_STORE_SESSION_TOKEN", "platform-session")
+    storage = WorkspaceStorageConfig(
+        backend="s3",
+        bucket="customer-bucket",
+        config={"endpoint_url": "https://customer-storage.example", "region": "us-east-1"},
+    )
+    with pytest.raises(ValueError, match="own endpoint and key pair"):
+        external_workspace_storage_settings(storage)
+    supplied = storage.model_copy(
+        update={
+            "config": {
+                **storage.config,
+                "access_key": "customer-access",
+                "secret_key": "customer-secret",
+            }
+        }
+    )
+    settings = external_workspace_storage_settings(supplied)
+    assert settings.access_key_id == "customer-access"
+    assert settings.secret_access_key == "customer-secret"
+    assert settings.session_token == ""
 
 
 @dataclass
@@ -41,6 +70,7 @@ class BucketClient(FakeObjectClient):
     settings: S3ObjectStoreSettings = field(
         default_factory=lambda: S3ObjectStoreSettings(
             bucket="lazycloud-objects",
+            workspace_bucket_prefix="workspace",
             endpoint_url="http://storage:9000",
             region_name="us-test-1",
             access_key_id="default-access",
@@ -62,6 +92,9 @@ class BucketClient(FakeObjectClient):
         if self.fail_validate:
             msg = f"denied: {target}"
             raise PermissionError(msg)
+
+    def configure_workspace_bucket(self, bucket: str, *, public_origin: str) -> None:
+        pass
 
     def close(self) -> None:
         self.close_count += 1
@@ -141,8 +174,6 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
     assert created.workspace.storage.bucket == f"workspace-{created.workspace_id}"
     assert workspace.storage.bucket == f"workspace-{created.workspace_id}"
     assert workspace.storage.backend == "s3"
-    # A dedicated bucket per workspace needs no prefix; it stays meaningful
-    # only for a bucket the customer attaches themselves.
     assert workspace.storage.prefix == ""
     assert workspace.storage.config["endpoint_url"] == "http://storage:9000"
     # The platform's own credentials are not copied here. They open every

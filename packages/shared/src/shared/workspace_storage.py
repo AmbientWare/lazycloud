@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
 from typing import Protocol
 
 from pydantic import Field, field_validator, model_validator
@@ -10,31 +9,10 @@ from shared.contracts import ContractModel
 from shared.identity import WorkspaceStorageConfig
 
 
-class WorkspaceStorageIssuerKind(str, Enum):
-    """Which store issues this deployment's workspace credentials.
-
-    Named rather than inferred from whatever object-store settings happen to be
-    present: the two stores need different grants, and a deployment that guessed
-    would report a credential failure from inside a worker rather than a missing
-    setting at startup.
-    """
-
-    Aws = "aws"
-    Garage = "garage"
-
-
 class WorkspaceStorageGrant(ContractModel):
-    """Permission to reach one workspace's bucket, and nothing else.
+    """Credentials for one workspace's S3-compatible bucket."""
 
-    Every field is what an S3 client needs, because the three stores this has to
-    serve all speak SigV4: AWS returns a session, Garage returns a key it granted
-    on one bucket, and a connected account's own storage returns what the customer
-    configured. Azure would need a different mount tool before it needed a
-    different credential, so this stays S3-shaped until that is the actual problem.
-    """
-
-    endpoint_url: str = ""
-    """Empty means the store's own public endpoint, which for AWS is real S3."""
+    endpoint_url: str = Field(min_length=1)
     region: str = ""
     bucket_name: str = ""
     prefix: str = ""
@@ -43,12 +21,6 @@ class WorkspaceStorageGrant(ContractModel):
     secret_key: str = Field(default="", repr=False)
     session_token: str = Field(default="", repr=False)
     expires_at: datetime | None = None
-    """When this stops working, or `None` for a store that cannot say.
-
-    Absent is a fact about the store rather than about the deployment: GCS HMAC
-    keys have no expiry to report. Both stores in use today set it, so the refresh
-    that reads it runs everywhere rather than only in production.
-    """
 
     @field_validator("expires_at")
     @classmethod
@@ -85,5 +57,4 @@ class WorkspaceStorageIssuer(Protocol):
 __all__ = [
     "WorkspaceStorageGrant",
     "WorkspaceStorageIssuer",
-    "WorkspaceStorageIssuerKind",
 ]

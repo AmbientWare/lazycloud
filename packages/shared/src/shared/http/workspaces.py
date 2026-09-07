@@ -120,11 +120,12 @@ class WorkspaceAuditListResponse(HttpModel):
 
 
 class WorkspaceStorageRequest(HttpModel):
-    bucket_name: str
-    access_key: str
-    secret_key: str
-    endpoint_url: str
-    region: str
+    bucket_name: str = Field(min_length=1)
+    access_key: str = Field(min_length=1, repr=False)
+    secret_key: str = Field(min_length=1, repr=False)
+    endpoint_url: str = Field(min_length=1)
+    region: str = Field(min_length=1)
+    force_path_style: bool = False
 
     def workspace_storage(self) -> WorkspaceStorageConfig:
         return WorkspaceStorageConfig(
@@ -135,6 +136,7 @@ class WorkspaceStorageRequest(HttpModel):
                 "secret_key": self.secret_key,
                 "endpoint_url": self.endpoint_url,
                 "region": self.region,
+                "force_path_style": self.force_path_style,
             },
         )
 

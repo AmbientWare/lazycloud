@@ -95,7 +95,7 @@ class GeeseFsMountConfig(ContractModel):
 
     bucket_name: str
     prefix: str = ""
-    endpoint_url: str = ""
+    endpoint_url: str = Field(min_length=1)
     region: str = ""
     access_key: str = ""
     secret_key: str = ""
@@ -271,16 +271,6 @@ class GeeseFsMountManager(StorageMountManager):
         self.mount_cmd = None
 
 
-def aws_s3_endpoint(region: str) -> str:
-    """The S3 endpoint for a region, spelled out because a mount needs one.
-
-    Regional rather than the global `s3.amazonaws.com`: a bucket outside
-    us-east-1 answers the global name with a redirect that a mount does not
-    follow.
-    """
-    return f"https://s3.{region}.amazonaws.com" if region else "https://s3.amazonaws.com"
-
-
 def geesefs_command(config: GeeseFsMountConfig, local_path: str) -> list[str]:
     command = [
         config.binary,
@@ -309,13 +299,7 @@ def geesefs_command(config: GeeseFsMountConfig, local_path: str) -> list[str]:
         # Listing a large bucket up front costs metadata cache for entries no
         # container asked for.
         command.append("--no-preload-dir")
-    # Always named, never left to the default. geesefs is a Yandex project and
-    # defaults to `storage.yandexcloud.net`, so an empty endpoint — which every
-    # other client in this repository reads as "real S3" — silently points the
-    # mount at another cloud, where the credentials mean nothing. It reports a
-    # 403 after falling back to the v2 signer, naming neither the endpoint nor
-    # the region it went to.
-    command.append(f"--endpoint={config.endpoint_url or aws_s3_endpoint(config.region)}")
+    command.append(f"--endpoint={config.endpoint_url}")
     if config.region:
         command.append(f"--region={config.region}")
     if not config.force_path_style:

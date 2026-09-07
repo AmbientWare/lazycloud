@@ -11,9 +11,5 @@
 data "terraform_remote_state" "cloudflare" {
   backend = "s3"
 
-  config = {
-    bucket = var.state_bucket
-    key    = var.cloudflare_state_key
-    region = var.region
-  }
+  config = merge(local.terraform_backend_config, { key = var.cloudflare_state_key })
 }

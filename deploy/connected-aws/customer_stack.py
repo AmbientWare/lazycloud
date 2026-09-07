@@ -1,7 +1,7 @@
 """Operator automation for the customer connected-AWS CloudFormation actions.
 
-The public API returns a CloudFormation console action for connecting or
-cleaning up a customer account. This deployment command validates that action
+The public API returns a typed stack request for connecting an account and
+console actions for cleanup. This deployment command validates each action
 against the exact verified release template and platform principal, then
 applies it with the ambient operator credentials. It creates or deletes only
 ``compute-connection-*-g*`` stacks and optionally passes the stack-owned
@@ -17,14 +17,17 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Sequence
+from pathlib import Path
 
 from provider_aws import (
+    aws_account_connection_template_identity,
     parse_aws_connection_stack_cleanup_action,
-    parse_aws_connection_stack_create_action,
 )
 from pydantic import BaseModel, Field, RootModel
+from shared.aws_connections import AwsConnectionStackAction
 
 _ACCOUNT_ID = re.compile(r"^[0-9]{12}$")
 _CREATE_WAIT_STATES = frozenset({"CREATE_IN_PROGRESS", "REVIEW_IN_PROGRESS"})
@@ -135,43 +138,34 @@ def _wait_stack(
 
 
 def _apply(args: argparse.Namespace, deadline: float) -> dict[str, str]:
-    action = parse_aws_connection_stack_create_action(
-        args.action_url,
-        account_id=args.account_id,
-        region=args.region,
-        expected_template_url=args.template_url,
-        expected_platform_principal_arn=args.platform_principal_arn,
-    )
-    if _stack_status(args.aws_cli, args.region, action.name) is None:
-        parameters = [
-            {"ParameterKey": key, "ParameterValue": value}
-            for key, value in sorted(action.parameters.items())
-        ]
+    action = AwsConnectionStackAction.model_validate_json(args.action_file.read_bytes())
+    if action.account_id != args.account_id or action.region != args.region:
+        raise CustomerStackError("stack creation request targets a different account or region")
+    if action.template_sha256 != aws_account_connection_template_identity().sha256:
+        raise CustomerStackError("stack creation request uses a different connection template")
+    parameters = {item.ParameterKey: item.ParameterValue for item in action.request.Parameters}
+    if parameters["PlatformPrincipalArn"] != args.platform_principal_arn:
+        raise CustomerStackError("stack creation request targets a different platform principal")
+    if _stack_status(args.aws_cli, args.region, action.request.StackName) is None:
         create: list[str] = [
             "cloudformation",
             "create-stack",
             "--region",
             args.region,
-            "--stack-name",
-            action.name,
-            "--template-url",
-            action.template_url,
-            "--parameters",
-            json.dumps(parameters, separators=(",", ":")),
-            "--capabilities",
-            "CAPABILITY_NAMED_IAM",
-            "--on-failure",
-            "DELETE",
             "--output",
             "json",
         ]
         if args.execution_role_arn is not None:
             create.extend(["--role-arn", args.execution_role_arn])
-        _run_aws(args.aws_cli, create)
+        with tempfile.TemporaryDirectory(prefix="lazycloud-customer-stack-") as directory:
+            request_file = Path(directory) / "request.json"
+            request_file.write_text(action.request.model_dump_json(), encoding="utf-8")
+            request_file.chmod(0o600)
+            _run_aws(args.aws_cli, [*create, "--cli-input-json", f"file://{request_file}"])
     _wait_stack(
         args.aws_cli,
         args.region,
-        action.name,
+        action.request.StackName,
         success="CREATE_COMPLETE",
         wait_states=_CREATE_WAIT_STATES,
         deadline=deadline,
@@ -181,7 +175,7 @@ def _apply(args: argparse.Namespace, deadline: float) -> dict[str, str]:
         "account_id": args.account_id,
         "action": "apply",
         "region": args.region,
-        "stack_name": action.name,
+        "stack_name": action.request.StackName,
         "status": "CREATE_COMPLETE",
     }
 
@@ -231,16 +225,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("remove", "Delete one exact managed customer connection stack."),
     ):
         subcommand = subcommands.add_parser(name, description=description)
-        subcommand.add_argument("--action-url", required=True)
         subcommand.add_argument("--account-id", required=True)
         subcommand.add_argument("--region", required=True)
         subcommand.add_argument("--execution-role-arn")
         subcommand.add_argument("--aws-cli", default="aws")
         subcommand.add_argument("--timeout", type=float, default=600)
     apply_command = subcommands.choices["apply"]
-    apply_command.add_argument("--template-url", required=True)
+    apply_command.add_argument("--action-file", type=Path, required=True)
     apply_command.add_argument("--platform-principal-arn", required=True)
     remove_command = subcommands.choices["remove"]
+    remove_command.add_argument("--action-url", required=True)
     remove_command.add_argument(
         "--stack-name",
         action="append",

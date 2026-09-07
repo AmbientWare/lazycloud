@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -16,6 +15,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from deploy.object_storage import put_object
 from provider_aws import (
     AwsAccountConnectionTemplatePublication,
     aws_account_connection_template_bytes,
@@ -26,15 +26,15 @@ from provider_clients.release_manifest import (
     AGENT_AMD64_FILENAME,
     AGENT_BINARY_DIRECTORY,
     AMI_PATTERN,
+    BUCKET_NAME_PATTERN,
     REGION_PATTERN,
-    S3_NAME_PATTERN,
     SCHEMA_VERSION,
     VERSION_PATTERN,
     WORKER_IMAGE_PATTERN,
     AwsReleaseManifest,
     ReleaseModel,
     ReleaseObject,
-    s3_public_url,
+    release_public_url,
 )
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError
 
@@ -59,13 +59,6 @@ class AgentArtifactManifest(ReleaseModel):
     schema_version: int
     version: str
     artifacts: list[AgentArtifactEntry]
-
-
-class AwsHeadObjectResponse(ReleaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    content_length: int = Field(alias="ContentLength")
-    checksum_sha256: str = Field(alias="ChecksumSHA256")
 
 
 class DockerImagePlatform(BaseModel):
@@ -108,7 +101,7 @@ def main() -> None:
     stage.add_argument("--agent-version-dir", type=Path, required=True)
     stage.add_argument("--worker-image", required=True)
     stage.add_argument("--bucket", required=True)
-    stage.add_argument("--region", required=True)
+    stage.add_argument("--public-base-url", required=True)
     stage.add_argument("--key-prefix", default="connected-aws")
     stage.add_argument(
         "--cpu-ami-ids",
@@ -133,7 +126,6 @@ def main() -> None:
 
     publish = subparsers.add_parser("publish")
     publish.add_argument("--manifest", type=Path, required=True)
-    publish.add_argument("--aws-cli", default="aws")
 
     verify = subparsers.add_parser("verify")
     verify.add_argument("--manifest", type=Path, required=True)
@@ -154,7 +146,7 @@ def main() -> None:
             reused_from=json.loads(args.reused_from),
             worker_image=args.worker_image,
             bucket=args.bucket,
-            region=args.region,
+            public_base_url=args.public_base_url,
             key_prefix=args.key_prefix,
             cpu_ami_ids=_parse_ami_ids(args.cpu_ami_ids, flag="--cpu-ami-ids"),
             gpu_ami_ids=_parse_ami_ids(args.gpu_ami_ids, flag="--gpu-ami-ids"),
@@ -172,7 +164,6 @@ def main() -> None:
         publish_release(
             manifest,
             bundle_root=manifest_path.parent,
-            aws_cli=args.aws_cli,
         )
         print(manifest.model_dump_json())
         return
@@ -236,7 +227,7 @@ def stage_release(
     agent_version_dir: Path,
     worker_image: str,
     bucket: str,
-    region: str,
+    public_base_url: str,
     key_prefix: str,
     output: Path,
     cpu_ami_ids: dict[str, str] | None = None,
@@ -246,11 +237,8 @@ def stage_release(
 ) -> AwsReleaseManifest:
     if not VERSION_PATTERN.fullmatch(version):
         raise ValueError("release version contains invalid characters")
-    if not S3_NAME_PATTERN.fullmatch(bucket):
+    if not BUCKET_NAME_PATTERN.fullmatch(bucket):
         raise ValueError("invalid AWS release bucket name")
-    normalized_region = region.strip().lower()
-    if not REGION_PATTERN.fullmatch(normalized_region):
-        raise ValueError("invalid AWS release region")
     normalized_prefix = key_prefix.strip().strip("/")
     if not normalized_prefix or any(part in {".", ".."} for part in normalized_prefix.split("/")):
         raise ValueError("AWS release key prefix is invalid")
@@ -300,9 +288,9 @@ def stage_release(
     )
     agent_key = f"{normalized_prefix}/agents/{version}/{agent.sha256}/{agent.filename}"
     manifest_key = f"{normalized_prefix}/releases/{version}/manifest.json"
-    template_url = s3_public_url(bucket, normalized_region, template_key)
-    agent_url = s3_public_url(bucket, normalized_region, agent_key)
-    manifest_url = s3_public_url(bucket, normalized_region, manifest_key)
+    template_url = release_public_url(public_base_url, template_key)
+    agent_url = release_public_url(public_base_url, agent_key)
+    manifest_url = release_public_url(public_base_url, manifest_key)
     AwsAccountConnectionTemplatePublication(
         url=template_url,
         sha256=template_identity.sha256,
@@ -312,7 +300,7 @@ def stage_release(
         schema_version=SCHEMA_VERSION,
         release_version=version,
         bucket=bucket,
-        region=normalized_region,
+        public_base_url=public_base_url,
         manifest_object_key=manifest_key,
         manifest_public_url=manifest_url,
         connection_template_version=template_identity.version,
@@ -440,7 +428,6 @@ def publish_release(
     manifest: AwsReleaseManifest,
     *,
     bundle_root: Path,
-    aws_cli: str,
 ) -> None:
     root = bundle_root.resolve()
     for release_object in manifest.objects:
@@ -449,8 +436,6 @@ def publish_release(
             source,
             release_object,
             bucket=manifest.bucket,
-            region=manifest.region,
-            aws_cli=aws_cli,
         )
     manifest_path = root / "manifest.json"
     expected_manifest = _manifest_payload(manifest)
@@ -468,8 +453,6 @@ def publish_release(
         manifest_path,
         manifest_object,
         bucket=manifest.bucket,
-        region=manifest.region,
-        aws_cli=aws_cli,
     )
 
 
@@ -650,127 +633,21 @@ def _publish_object(
     release_object: ReleaseObject,
     *,
     bucket: str,
-    region: str,
-    aws_cli: str,
 ) -> None:
     _verify_file(
         source,
         expected_sha256=release_object.sha256,
         expected_size=release_object.size_bytes,
     )
-    checksum = base64.b64encode(bytes.fromhex(release_object.sha256)).decode()
-    existing = subprocess.run(
-        [
-            aws_cli,
-            "s3api",
-            "head-object",
-            "--bucket",
-            bucket,
-            "--key",
-            release_object.object_key,
-            "--checksum-mode",
-            "ENABLED",
-            "--region",
-            region,
-            "--output",
-            "json",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
+    put_object(
+        source,
+        bucket=bucket,
+        key=release_object.object_key,
+        content_type=release_object.content_type,
+        cache_control=release_object.cache_control,
+        immutable=True,
     )
-    if existing.returncode == 0:
-        payload = AwsHeadObjectResponse.model_validate_json(existing.stdout)
-        if (
-            payload.content_length != release_object.size_bytes
-            or payload.checksum_sha256 != checksum
-        ):
-            raise RuntimeError(
-                f"immutable AWS release object already exists with different bytes: "
-                f"s3://{bucket}/{release_object.object_key}"
-            )
-    elif not _is_missing_s3_object(existing):
-        raise RuntimeError(f"could not inspect AWS release object: {_command_error(existing)}")
-    else:
-        _put_object_with_retry(
-            source,
-            release_object,
-            bucket=bucket,
-            region=region,
-            aws_cli=aws_cli,
-            checksum=checksum,
-        )
     _verify_public_object(release_object)
-
-
-_UPLOAD_ATTEMPTS = 4
-_TRANSPORT_FAILURES = ("SSL validation failed", "Connection reset", "EndpointConnectionError")
-
-
-def _put_object_with_retry(
-    source: Path,
-    release_object: ReleaseObject,
-    *,
-    bucket: str,
-    region: str,
-    aws_cli: str,
-    checksum: str,
-) -> None:
-    """Upload one immutable object, retrying only a dropped connection.
-
-    A release object is a single PUT, and the agent executable is large enough
-    that the connection is dropped mid-body often enough to have failed two
-    separate publishes. Retrying is safe precisely because the write is
-    conditional: `--if-none-match *` fails if the object exists, so an attempt
-    that actually landed before the connection broke is reported as a
-    precondition failure rather than overwriting anything.
-
-    Only a transport failure is retried. An access denial, a checksum
-    rejection, or a genuine precondition failure means the next attempt would
-    fail the same way, so it is raised with the message AWS gave.
-    """
-    argv = [
-        aws_cli,
-        "s3api",
-        "put-object",
-        "--bucket",
-        bucket,
-        "--key",
-        release_object.object_key,
-        "--body",
-        str(source),
-        "--content-type",
-        release_object.content_type,
-        "--cache-control",
-        release_object.cache_control,
-        "--checksum-algorithm",
-        "SHA256",
-        "--checksum-sha256",
-        checksum,
-        "--if-none-match",
-        "*",
-        "--region",
-        region,
-        "--output",
-        "json",
-    ]
-    for attempt in range(1, _UPLOAD_ATTEMPTS + 1):
-        uploaded = subprocess.run(argv, check=False, capture_output=True, text=True)
-        if uploaded.returncode == 0:
-            return
-        detail = _command_error(uploaded)
-        if not any(failure in detail for failure in _TRANSPORT_FAILURES):
-            raise RuntimeError(f"could not publish AWS release object: {detail}")
-        if attempt == _UPLOAD_ATTEMPTS:
-            raise RuntimeError(
-                f"could not publish AWS release object after {_UPLOAD_ATTEMPTS} attempts, "
-                f"the connection dropped every time: {detail}"
-            )
-        print(
-            f"  upload attempt {attempt} of {_UPLOAD_ATTEMPTS} lost the connection, retrying: "
-            f"{release_object.object_key}",
-            flush=True,
-        )
 
 
 def _release_object_path(root: Path, release_object: ReleaseObject) -> Path:
@@ -847,11 +724,6 @@ def _download_public(url: str) -> bytes:
             return response.read()
     except (OSError, urllib.error.HTTPError) as exc:
         raise RuntimeError(f"AWS release object is not anonymously readable: {url}") from exc
-
-
-def _is_missing_s3_object(result: subprocess.CompletedProcess[str]) -> bool:
-    detail = f"{result.stdout}\n{result.stderr}".casefold()
-    return "not found" in detail or "404" in detail or "nosuchkey" in detail
 
 
 def _command_error(result: subprocess.CompletedProcess[str]) -> str:

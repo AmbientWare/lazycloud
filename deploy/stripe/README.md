@@ -57,21 +57,16 @@ try again is the defect the hand-built engine was deleted for.
 
 ## Backend and credentials
 
-Terraform state contains secrets. The signing secret is returned only at
-creation, so state is the only place it survives — treat this state as
-credential-bearing and keep its bucket accordingly. This repository deliberately
-does not create or delete that bucket.
+Terraform state contains the webhook signing secret. Use the shared private
+[R2 state backend](../terraform-state/README.md), whose bucket is owned by the
+operator. Existing installations transfer their current state before apply.
 
 ```sh
-export AWS_PROFILE=platform-operations
 export STRIPE_API_KEY=rk_live_or_test_operator_key
 
 terraform -chdir=deploy/stripe init \
-  -backend-config="bucket=$STRIPE_STATE_BUCKET" \
-  -backend-config="key=$STRIPE_STATE_KEY" \
-  -backend-config="region=$STRIPE_STATE_REGION" \
-  -backend-config="encrypt=true" \
-  -backend-config="use_lockfile=true"
+  -backend-config="$TF_VAR_terraform_backend_config" \
+  -backend-config="key=stripe/production.tfstate"
 ```
 
 Use a separate state key per Stripe account. A sandbox and a live account are

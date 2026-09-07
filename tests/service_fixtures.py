@@ -40,7 +40,6 @@ from shared.identity import (
 )
 from shared.timestamps import utc_now
 from storage.volume_filesystem import LocalVolumeFilesystem
-from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from storage_client.s3 import S3ObjectStoreSettings
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -103,16 +102,7 @@ class _InMemoryWorkspaceBuckets:
     creation is faked; the rest of the flow is the production path.
     """
 
-    settings: S3ObjectStoreSettings = field(
-        default_factory=lambda: S3ObjectStoreSettings(
-            bucket="lazycloud-objects",
-            endpoint_url="http://object-store.invalid:9000",
-            region_name="us-east-1",
-            access_key_id="test-access",
-            secret_access_key="test-secret",
-            force_path_style=True,
-        )
-    )
+    settings: S3ObjectStoreSettings = field(default_factory=S3ObjectStoreSettings)
     created: list[str] = field(default_factory=list)
 
     def create_bucket(self, bucket: str | None = None) -> None:
@@ -120,6 +110,9 @@ class _InMemoryWorkspaceBuckets:
 
     def validate_bucket_access(self, bucket: str | None = None) -> None:
         del bucket
+
+    def configure_workspace_bucket(self, bucket: str, *, public_origin: str) -> None:
+        del bucket, public_origin
 
 
 @contextmanager
@@ -160,10 +153,6 @@ def service_graph(
         # endpoint, so a unit test that touches object storage reaches out over
         # the network instead of failing on its own terms.
         object_store_client=FakeObjectClient(),
-        # The passthrough issuer, because these services hold a fake object client
-        # and no store to mint against. Which issuer a deployment uses is
-        # composition, proven where a real store is.
-        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         workspace_storage_client=_InMemoryWorkspaceBuckets(),
         agent_binary_settings=AgentBinarySettings(
             binary_dir=tmp_path,

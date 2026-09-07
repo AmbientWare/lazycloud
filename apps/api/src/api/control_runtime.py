@@ -33,7 +33,6 @@ from provider_clients.release import resolve_deployment_release
 from provider_clients.settings import AwsCapacityReconciliationSettings
 from shared.app_identity import CONTROL_PLANE_SERVICE_NAME
 from shared.enums import StringEnum
-from storage.image_archive import ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 from worker.settings import ContainerServiceSettings
@@ -215,7 +214,6 @@ def _production_api_services() -> ApiServices:
     aws_capacity_reconciliation_settings = AwsCapacityReconciliationSettings()
     redis_settings = RedisSettings()
     object_store_settings = S3ObjectStoreSettings()
-    image_archive_settings = ImageArchiveSettings()
     image_build_execution_settings = ImageBuildExecutionSettings()
     image_build_registry_settings = ImageBuildRegistrySettings()
     image_build_container_settings = ImageBuildContainerSettings()
@@ -237,15 +235,7 @@ def _production_api_services() -> ApiServices:
         rollback.callback(binary_redis_client.close)
         object_store_client = S3ObjectStoreClient.from_settings(object_store_settings)
         rollback.callback(object_store_client.close)
-        resolved_image_archive_settings = image_archive_settings.resolve(object_store_settings)
-        image_archive_store = S3ObjectStoreClient.from_settings(
-            resolved_image_archive_settings.storage
-        )
-        if image_archive_store is not None:
-            rollback.callback(image_archive_store.close)
         owned_resources.append(object_store_client)
-        if image_archive_store is not None:
-            owned_resources.append(image_archive_store)
         services = ApiServices.create(
             database,
             client_release_version=release.version or None,
@@ -262,8 +252,6 @@ def _production_api_services() -> ApiServices:
             backend_route_settings=backend_route_settings,
             object_store_settings=object_store_settings,
             object_store_client=object_store_client,
-            image_archive_settings=image_archive_settings,
-            image_archive_store=image_archive_store,
             image_build_execution_settings=image_build_execution_settings,
             image_build_registry_settings=image_build_registry_settings,
             image_build_container_settings=image_build_container_settings,

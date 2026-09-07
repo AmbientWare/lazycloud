@@ -1,12 +1,14 @@
 [project]
 name = "provider-cloudflare"
 version = "0.1.0"
-description = "Cloudflare provider adapter for customer-owned hostnames."
+description = "Cloudflare R2 storage and customer hostname adapters."
 requires-python = ">=3.12"
 dependencies = [
     "lazycloud-shared==0.1.0",
     "httpx>=0.27,<1",
     "pydantic-settings>=2.5,<3",
+    "PyJWT>=2.9,<3",
+    "storage-client",
 ]
 
 [build-system]

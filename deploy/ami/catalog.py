@@ -10,19 +10,19 @@ import subprocess
 import tempfile
 import urllib.error
 import urllib.request
-from base64 import b64encode
 from collections.abc import Mapping, Sequence
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal
-from urllib.request import pathname2url
 
 from deploy.ami.recipe import host_recipe_sha256
+from deploy.object_storage import put_object
+from provider_clients.release_manifest import release_public_url
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 _AMI_PATTERN = re.compile(r"^ami-[0-9a-f]{8,17}$")
 _REGION_PATTERN = re.compile(r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
-_S3_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+_BUCKET_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 _RECIPE_TAG_KEY = "lazycloud:node-recipe"
 _VARIANT_TAG_KEY = "lazycloud:node-variant"
 _MANAGED_TAG_KEY = "cloud-pool:managed-by"
@@ -172,54 +172,25 @@ def _verify_images(
                 raise SystemExit(f"{region}: node image {image.image_id} is not platform managed")
 
 
-def _public_url(bucket: str, region: str, key: str) -> str:
-    encoded_key = "/".join(pathname2url(part) for part in key.split("/"))
-    return f"https://s3.{region}.amazonaws.com/{bucket}/{encoded_key}"
-
-
 def _put_catalog(
     payload: bytes,
     *,
     bucket: str,
-    region: str,
     key: str,
     cache_control: str,
-    aws_cli: str,
     immutable: bool,
 ) -> None:
-    checksum = b64encode(sha256(payload).digest()).decode()
     with tempfile.NamedTemporaryFile("wb", suffix=".json") as handle:
         handle.write(payload)
         handle.flush()
-        arguments = [
-            "s3api",
-            "put-object",
-            "--bucket",
-            bucket,
-            "--key",
-            key,
-            "--body",
-            handle.name,
-            "--content-type",
-            "application/json",
-            "--cache-control",
-            cache_control,
-            "--checksum-algorithm",
-            "SHA256",
-            "--checksum-sha256",
-            checksum,
-            "--region",
-            region,
-            "--output",
-            "json",
-        ]
-        if immutable:
-            arguments.extend(["--if-none-match", "*"])
-        result = _run_aws(aws_cli, arguments, check=False)
-    if result.returncode != 0:
-        detail = f"{result.stdout}\n{result.stderr}"
-        if not immutable or "PreconditionFailed" not in detail:
-            raise SystemExit(f"could not publish s3://{bucket}/{key}: {detail.strip()[-1000:]}")
+        put_object(
+            Path(handle.name),
+            bucket=bucket,
+            key=key,
+            content_type="application/json",
+            cache_control=cache_control,
+            immutable=immutable,
+        )
 
 
 def _verify_public_payload(url: str, expected: bytes) -> None:
@@ -233,7 +204,9 @@ def _verify_public_payload(url: str, expected: bytes) -> None:
         raise SystemExit(f"published node image catalog has different bytes: {url}")
 
 
-def publish_catalog(catalog: NodeImageCatalog, *, bucket: str, region: str, aws_cli: str) -> str:
+def publish_catalog(
+    catalog: NodeImageCatalog, *, bucket: str, public_base_url: str, aws_cli: str
+) -> str:
     _verify_images(
         {"cpu": catalog.cpu_ami_ids, "gpu": catalog.gpu_ami_ids},
         recipe_sha256=catalog.recipe_sha256,
@@ -246,24 +219,20 @@ def publish_catalog(catalog: NodeImageCatalog, *, bucket: str, region: str, aws_
     _put_catalog(
         payload,
         bucket=bucket,
-        region=region,
         key=immutable_key,
         cache_control="public, max-age=31536000, immutable",
-        aws_cli=aws_cli,
         immutable=True,
     )
-    immutable_url = _public_url(bucket, region, immutable_key)
+    immutable_url = release_public_url(public_base_url, immutable_key)
     _verify_public_payload(immutable_url, payload)
     _put_catalog(
         payload,
         bucket=bucket,
-        region=region,
         key=current_key,
         cache_control="no-cache",
-        aws_cli=aws_cli,
         immutable=False,
     )
-    _verify_public_payload(_public_url(bucket, region, current_key), payload)
+    _verify_public_payload(release_public_url(public_base_url, current_key), payload)
     return immutable_url
 
 
@@ -294,7 +263,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     publish.add_argument("--gpu-ami-ids", required=True)
     publish.add_argument("--source-revision", required=True)
     publish.add_argument("--bucket", required=True)
-    publish.add_argument("--region", required=True)
+    publish.add_argument("--public-base-url", required=True)
     publish.add_argument("--aws-cli", default="aws")
     publish.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
@@ -306,10 +275,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write_outputs(resolve_catalog(load_catalog(args.catalog)), args.github_output)
         return 0
 
-    if not _S3_NAME_PATTERN.fullmatch(args.bucket):
+    if not _BUCKET_NAME_PATTERN.fullmatch(args.bucket):
         raise SystemExit("invalid release bucket name")
-    if not _REGION_PATTERN.fullmatch(args.region):
-        raise SystemExit("invalid release bucket region")
     try:
         catalog = NodeImageCatalog(
             recipe_sha256=host_recipe_sha256(),
@@ -319,7 +286,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except ValidationError as exc:
         raise SystemExit("invalid node image catalog inputs") from exc
-    url = publish_catalog(catalog, bucket=args.bucket, region=args.region, aws_cli=args.aws_cli)
+    url = publish_catalog(
+        catalog, bucket=args.bucket, public_base_url=args.public_base_url, aws_cli=args.aws_cli
+    )
     if args.output is not None:
         args.output.write_bytes(catalog.payload())
     _write_outputs({"catalog_url": url, "recipe_sha256": catalog.recipe_sha256}, None)

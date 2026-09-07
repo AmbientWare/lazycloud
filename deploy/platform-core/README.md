@@ -15,11 +15,13 @@ Redis the cluster's VPC may reach. Bring-up and teardown of the pair are in
 
 ```sh
 terraform -chdir=deploy/platform-core init \
-  -backend-config="bucket=<state-bucket>" \
-  -backend-config="key=platform-core/lazycloud.tfstate" \
-  -backend-config="region=us-east-1"
+  -backend-config="$TF_VAR_terraform_backend_config" \
+  -backend-config="key=platform-core/lazycloud.tfstate"
 terraform -chdir=deploy/platform-core apply
 ```
+
+Use the shared [R2 state configuration](../terraform-state/README.md). An existing
+installation transfers its current state with `init -migrate-state` before apply.
 
 `terraform.tfvars` carries `cluster_api_cidrs`, which must include the address
 this apply runs from: the Kubernetes and Helm providers reach the cluster's API

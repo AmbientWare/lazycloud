@@ -13,6 +13,7 @@ from shared.aws_connections import (
     AwsAccountConnectionErrorCode,
     AwsAccountConnectionPhase,
     AwsAccountNetwork,
+    AwsConnectionStackAction,
 )
 from shared.http.base import HttpModel
 
@@ -101,6 +102,7 @@ class AwsAuthorizationGenerationResponse(HttpModel):
 
 
 class AwsConnectionCustomerAction(HttpModel):
+    stack: AwsConnectionStackAction | None = None
     url: str | None = Field(default=None, pattern=r"^https://[^\s]+$")
     label: str = Field(min_length=1, max_length=128)
 
@@ -129,7 +131,7 @@ class AwsConnectionCurrentResponse(HttpModel):
 
 
 class AwsConnectionAuthorization(HttpModel):
-    url: str | None = Field(default=None, pattern=r"^https://[^\s]+$")
+    stack: AwsConnectionStackAction | None = None
     external_id: str | None = Field(default=None, min_length=32, max_length=256, repr=False)
 
 

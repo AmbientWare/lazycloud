@@ -52,7 +52,7 @@ def validate_remote_provider_network_configuration(
     elif presigned_host and host_is_unreachable_from_a_remote_machine(presigned_host):
         issues.append(
             f"object store presigned endpoint host {presigned_host!r} is unreachable from a "
-            "remote machine; set LAZYCLOUD_OBJECT_STORE_PRESIGNED_ENDPOINT_URL to a public origin"
+            "remote machine; configure the deployment's R2 account endpoint"
         )
     try:
         BackendRouteAuthenticator(backend_route.auth_key)

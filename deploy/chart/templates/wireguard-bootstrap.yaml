@@ -21,7 +21,7 @@ spec:
             - --secret-id
             - {{ required "wireguard.secretId is required" .Values.wireguard.secretId | quote }}
             - --region
-            - {{ required "runtime.LAZYCLOUD_OBJECT_STORE_REGION_NAME is required" .Values.runtime.LAZYCLOUD_OBJECT_STORE_REGION_NAME | quote }}
+            - {{ required "aws.region is required" .Values.aws.region | quote }}
             - --platform-peers
             - {{ .Values.wireguard.platformPeers | quote }}
           resources:

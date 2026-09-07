@@ -1,7 +1,10 @@
 # Cloudflare provider
 
-Custom hostnames for one Cloudflare zone: the edge that terminates TLS for domains
-a customer owns rather than ones this platform issued.
+R2 owns application object storage and temporary credentials scoped to one
+workspace bucket. One deployment settings object supplies its account and parent
+credential pair. Parent credentials stay inside the control plane; workers receive
+only expiring workspace grants. Custom hostnames use a separate zone API token
+because their permissions differ from R2 storage administration.
 
 - Act on the hostname identifier the provider assigned, not on the hostname itself.
   The name belongs to the customer and can be registered again by someone else; the

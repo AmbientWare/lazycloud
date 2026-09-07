@@ -207,7 +207,7 @@ class _ConnectClient:
         return AwsConnectionAuthorizationResponse(
             connection=_connection(phase="awaiting_authorization"),
             authorization=AwsConnectionAuthorization(
-                url="https://console.aws.amazon.com/cloudformation/create"
+                external_id="customer-test-external-id-0123456789abcdef"
             ),
         )
 

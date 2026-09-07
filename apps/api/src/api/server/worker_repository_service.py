@@ -89,7 +89,7 @@ from shared.usage import (
     UsageBillingOwner,
     UsageRecord,
 )
-from storage.service import CacheStorage, ObjectStorage
+from storage.service import CacheStorage
 from worker.event_bridge import worker_stream_event_from_bus_event
 from worker.events import (
     WORKER_EVENT_HEARTBEAT_ID,
@@ -1964,7 +1964,7 @@ class WorkerRepositoryService:
         )
         if not checkpoint.origin_key:
             raise ConflictError("checkpoint archive origin is unavailable")
-        object_storage = self.object_storage or ObjectStorage(self.services.context)
+        object_storage = self.object_storage or self.services.object_storage
         try:
             object_storage.get_for_workspace(
                 workspace_id=request.workspace_id,
@@ -1994,7 +1994,7 @@ class WorkerRepositoryService:
             )
         if not request.checkpoint_bucket:
             raise InvalidInputError("checkpoint bucket is required")
-        object_storage = self.object_storage or ObjectStorage(self.services.context)
+        object_storage = self.object_storage or self.services.object_storage
         checkpoint = self.services.checkpoints.get(request.checkpoint_id)
         if checkpoint is None or not checkpoint.workspace_id:
             raise NotFoundError(f"checkpoint not found: {request.checkpoint_id}")
@@ -2037,7 +2037,7 @@ class WorkerRepositoryService:
             raise InvalidInputError("checkpoint bucket is required")
         if not request.origin_key or not request.cache_hash or request.cache_size_bytes <= 0:
             raise InvalidInputError("checkpoint archive metadata is incomplete")
-        object_storage = self.object_storage or ObjectStorage(self.services.context)
+        object_storage = self.object_storage or self.services.object_storage
         checkpoint = self.services.checkpoints.get(request.checkpoint_id)
         if checkpoint is None or not checkpoint.workspace_id:
             raise NotFoundError(f"checkpoint not found: {request.checkpoint_id}")

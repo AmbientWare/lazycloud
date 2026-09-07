@@ -71,7 +71,7 @@ def _create_scheduler_app_services(
         ),
         storage=SchedulerStorageSettings(
             object_store=services.object_store_settings,
-            image_archive=ImageArchiveSettings(),
+            image_archive=ImageArchiveSettings(bucket=services.object_store_settings.bucket),
             retention=RetentionSettings(),
             volume_metering=VolumeMeteringSettings(),
         ),

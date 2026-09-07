@@ -6,16 +6,28 @@
 # associations, a reader role the cluster's federation trusts, a Redis that the
 # cluster's VPC may reach. Nothing here is copied by hand; a value that lived in
 # two states would be two values the first time one moved.
+locals {
+  terraform_backend_config = jsondecode(file(var.terraform_backend_config))
+}
+
 data "terraform_remote_state" "core" {
   backend = "s3"
 
-  config = {
-    bucket = var.state_bucket
-    key    = var.core_state_key
-    region = var.region
-  }
+  config = merge(local.terraform_backend_config, { key = var.core_state_key })
 
   lifecycle {
+    precondition {
+      condition = try(
+        can(regex("^https://[a-zA-Z0-9.-]+$", local.terraform_backend_config.endpoints.s3)) &&
+        local.terraform_backend_config.profile == "lazycloud-object-storage" &&
+        length(local.terraform_backend_config.region) > 0 &&
+        local.terraform_backend_config.use_lockfile == true &&
+        length(setintersection(toset(keys(local.terraform_backend_config)), toset(["access_key", "secret_key", "token"]))) == 0,
+        false
+      )
+      error_message = "Terraform state requires an explicit HTTPS endpoint, signing region, lazycloud-object-storage credential profile and locking in the shared backend JSON, without embedded credentials."
+    }
+
     postcondition {
       condition     = self.outputs.region == var.region
       error_message = "The cluster is in ${self.outputs.region}; this deployment says ${var.region}. A deployment runs where its cluster does."

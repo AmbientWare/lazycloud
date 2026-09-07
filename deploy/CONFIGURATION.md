@@ -1,19 +1,21 @@
 # Deployment configuration
 
 Terraform owns resource identities, networks, IAM, secret documents and the
-database server ceiling. It publishes a non-secret infrastructure descriptor to
-the deployment bucket. Only Terraform writes this document. The deploy role can
-read that object and push images, but cannot read Terraform state or write S3.
+database server ceiling. It exports a non-secret infrastructure descriptor.
+The operator publishes that output to the private R2 deployment bucket with
+`python -m deploy.object_storage publish`. Deploy downloads it with the shared storage credentials;
+its AWS role grants registry access and has no object-storage permissions.
 
 Helm owns application defaults, environment policy, fleet ceilings and secret
 property bindings. Edit `chart/values.yaml` or `chart/environments/prod.yaml` and
 deploy. No infrastructure apply is needed for those changes. Runtime processes
 receive environment variables and mounted files, never Terraform output files.
 
-The chart explicitly selects native S3 with an empty object-store endpoint and
-virtual-hosted bucket addressing. The S3 client uses the AWS credential chain
-unless credentials are supplied, so production uses Pod Identity without static
-keys. Development credentials belong in Compose, not client defaults.
+The chart supplies one S3-compatible endpoint, signing configuration,
+application bucket, workspace bucket prefix and credential pair.
+Archives share the application bucket. Workspace mounts receive temporary,
+bucket-scoped credentials signed by the configured provider. Customer-owned
+storage uses customer credentials through the same storage contracts.
 
 Postgres owns customer configuration and workload state. Redis owns coordination.
 Immutable manifests describe release artifacts. The deployment branch records
@@ -26,7 +28,7 @@ three explicit URLs alongside configuration and control-plane images:
 Routine Ship advances control and worker pins, retaining the recorded host pin.
 Pass `host_manifest_url` only for an intentional host upgrade. The first deployment
 must supply it. The CLI and application do not pick a newer release
-from S3. Customer-connected accounts remain database-owned; Helm governs only
+from an unpinned release. Customer-connected accounts remain database-owned; Helm governs only
 the platform fleet. Fleet ensure refuses a changed account, role, external ID or
 network instead of replacing or adopting the existing connection.
 

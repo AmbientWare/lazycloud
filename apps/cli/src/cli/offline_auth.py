@@ -11,6 +11,7 @@ from typing import Annotated
 import typer
 from control.service import ControlPlaneService
 from database.context import ServiceContext
+from gateway.settings import GatewaySettings
 from identity.auth import AuthService, BootstrapAdminToken, IdentityDatabaseContext
 from identity.credential_files import CredentialFileError, CredentialFilePublication
 from lazycloud.cli.components.results import emit_result
@@ -169,7 +170,11 @@ def _provision_workspace_storage(
     at the operation that needs it, not refuse to serve the routes that do not.
     """
     context = ServiceContext.create(database, create_schema=False)
-    service = ControlPlaneService(context, workspace_storage_client=storage_client)
+    service = ControlPlaneService(
+        context,
+        workspace_storage_client=storage_client,
+        public_http_origin=GatewaySettings().public_http_url,
+    )
     record = service.ensure_workspace_storage(workspace)
     return record.storage
 

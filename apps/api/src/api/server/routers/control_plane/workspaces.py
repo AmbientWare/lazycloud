@@ -86,6 +86,35 @@ def api_v1_create_workspace(
         raise _storage_http_error(exc) from exc
 
 
+@router.post(
+    "/api/v1/workspaces/set-external-storage",
+    response_model=WorkspaceResponse,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="set_external_workspace_storage",
+)
+def api_v1_set_external_workspace_storage(
+    request: WorkspaceStorageRequest,
+    workspace_id: write_workspace,
+    token: write_token,
+    service: ControlPlaneService = Depends(control_plane_service),
+) -> WorkspaceResponse:
+    try:
+        return workspace_response(
+            service.attach_external_workspace_storage(
+                workspace_id,
+                request.workspace_storage(),
+                token_id_for_cache_invalidation=token.id,
+            )
+        )
+    except (
+        KeyError,
+        WorkspaceStorageAlreadyExistsError,
+        WorkspaceStorageAuthorizationError,
+        WorkspaceStorageError,
+    ) as exc:
+        raise _storage_http_error(exc) from exc
+
+
 @router.get(
     "/api/v1/workspaces",
     response_model=WorkspaceListResponse,
@@ -229,35 +258,6 @@ def api_v1_export_workspace_config(
             grpc_tls=scheme == "https",
         )
     )
-
-
-@router.post(
-    "/api/v1/workspaces/set-external-storage",
-    response_model=WorkspaceResponse,
-    status_code=status.HTTP_201_CREATED,
-    operation_id="set_external_workspace_storage",
-)
-def api_v1_set_external_workspace_storage(
-    request: WorkspaceStorageRequest,
-    workspace_id: write_workspace,
-    token: write_token,
-    service: ControlPlaneService = Depends(control_plane_service),
-) -> WorkspaceResponse:
-    try:
-        return workspace_response(
-            service.attach_external_workspace_storage(
-                workspace_id,
-                request.workspace_storage(),
-                token_id_for_cache_invalidation=token.id,
-            )
-        )
-    except (
-        KeyError,
-        WorkspaceStorageAlreadyExistsError,
-        WorkspaceStorageAuthorizationError,
-        WorkspaceStorageError,
-    ) as exc:
-        raise _storage_http_error(exc) from exc
 
 
 @router.get(

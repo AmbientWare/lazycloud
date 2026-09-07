@@ -60,25 +60,23 @@ class ServiceAccounts(Contract):
     wireguardBootstrap: Name
 
 
-class ImageArchiveInfrastructure(Contract):
+class ObjectStoreInfrastructure(Contract):
+    endpoint_url: Annotated[str, Field(pattern=r"^https://[a-zA-Z0-9.-]+$")]
+    region_name: Name
+    force_path_style: bool
     bucket: Name
-    endpoint_url: Annotated[
-        str, Field(pattern=r"^https://[a-f0-9]{32}\.r2\.cloudflarestorage\.com$")
-    ]
+    workspace_bucket_prefix: Name
 
 
 class Infrastructure(Contract):
-    schema_version: Literal[3]
+    schema_version: Literal[4]
     deployment: Name
     region: Name
     registry: Name
     repository_prefix: Name
     storage_class: Name
     service_accounts: ServiceAccounts
-    object_bucket: Name
-    image_archive: ImageArchiveInfrastructure
-    workspace_bucket_prefix: Name
-    workspace_storage_role_arn: Name
+    object_store: ObjectStoreInfrastructure
     workload_image_repository: Name
     control_principal_arn: Name
     public_origin: Annotated[str, Field(pattern=r"^https://[a-zA-Z0-9.-]+$")]
@@ -193,6 +191,7 @@ def render(
     owned: dict[str, set[str] | None] = {
         "image": None,
         "serviceAccounts": None,
+        "aws": {"region"},
         "storage": {"className"},
         "database": {"maxConnections", "poolerMaxConnections"},
         "secrets": {"documents", "readerRoleArn"},
@@ -207,17 +206,13 @@ def render(
         value = environment[key]
         if fields is None or not isinstance(value, dict) or fields.intersection(value):
             raise ValueError(f"Environment values cannot override infrastructure-owned {key}")
+    object_store = infrastructure.object_store
     runtime: dict[str, JsonValue] = {
-        "LAZYCLOUD_OBJECT_STORE_BUCKET": infrastructure.object_bucket,
-        "LAZYCLOUD_IMAGE_ARCHIVE_BACKEND__BUCKET": infrastructure.image_archive.bucket,
-        "LAZYCLOUD_IMAGE_ARCHIVE_BACKEND__ENDPOINT_URL": infrastructure.image_archive.endpoint_url,
-        "LAZYCLOUD_IMAGE_ARCHIVE_BACKEND__REGION_NAME": "auto",
-        "LAZYCLOUD_IMAGE_ARCHIVE_BACKEND__FORCE_PATH_STYLE": "true",
-        "LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX": infrastructure.workspace_bucket_prefix,
-        "LAZYCLOUD_OBJECT_STORE_REGION_NAME": infrastructure.region,
-        "LAZYCLOUD_WORKSPACE_STORAGE_ISSUER": "aws",
-        "LAZYCLOUD_WORKSPACE_STORAGE_ROLE_ARN": infrastructure.workspace_storage_role_arn,
-        "LAZYCLOUD_WORKSPACE_STORAGE_REGION_NAME": infrastructure.region,
+        "LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL": object_store.endpoint_url,
+        "LAZYCLOUD_OBJECT_STORE_REGION_NAME": object_store.region_name,
+        "LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE": str(object_store.force_path_style).lower(),
+        "LAZYCLOUD_OBJECT_STORE_BUCKET": object_store.bucket,
+        "LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX": object_store.workspace_bucket_prefix,
         "LAZYCLOUD_WORKLOAD_IMAGE_REGISTRY_REPOSITORY": infrastructure.workload_image_repository,
         "LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN": infrastructure.control_principal_arn,
         "LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL": infrastructure.public_origin,
@@ -261,6 +256,7 @@ def render(
             "tag": tag,
         },
         "serviceAccounts": infrastructure.service_accounts.model_dump(mode="json"),
+        "aws": {"region": infrastructure.region},
         "storage": {"className": infrastructure.storage_class},
         "database": {
             "maxConnections": infrastructure.database_max_connections,

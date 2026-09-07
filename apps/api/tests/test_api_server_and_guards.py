@@ -10,7 +10,6 @@ from api.server.services import ApiServices
 from coordination.redis_client import RedisClient, RedisWireScalar
 from fastapi.testclient import TestClient
 from shared.http.system import HealthResponse
-from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.redis_fakes import FakeRedis
 
 
@@ -85,7 +84,6 @@ def test_liveness_answers_without_the_service_graph(
     redis = RedisClient(_FailingRedis(), key_prefix="test")
     services = ApiServices.create(
         isolated_services.database,
-        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         root=isolated_services.root,
         create_schema=False,
         redis_client=redis,
@@ -107,7 +105,6 @@ def test_control_plane_health_endpoint_reports_dependency_failure(
     redis = RedisClient(_FailingRedis(), key_prefix="test")
     services = ApiServices.create(
         isolated_services.database,
-        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         root=isolated_services.root,
         create_schema=False,
         redis_client=redis,

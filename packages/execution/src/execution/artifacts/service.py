@@ -10,7 +10,6 @@ from shared.errors import NotFoundError
 from shared.objects import ObjectRecord
 from shared.tasks import Task
 from storage.service import ObjectStorage
-from storage_client.s3 import S3ObjectStoreSettings
 
 from execution.artifacts.planning import (
     DEFAULT_ARTIFACT_PUBLIC_URL_EXPIRES_SECONDS,
@@ -59,12 +58,12 @@ class ArtifactStorageService:
         self,
         context: ExecutionContext,
         *,
-        object_storage: ObjectStorage | None = None,
+        object_storage: ObjectStorage,
         bucket: str | None = None,
     ) -> None:
         self.context = context
-        self.object_storage = object_storage or ObjectStorage(context)
-        self.bucket = bucket or S3ObjectStoreSettings().bucket
+        self.object_storage = object_storage
+        self.bucket = bucket or object_storage.default_bucket
 
     def save(
         self,

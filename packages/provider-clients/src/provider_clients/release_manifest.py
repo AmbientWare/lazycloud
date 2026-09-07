@@ -17,10 +17,10 @@ from urllib.parse import urlparse
 from provider_aws import AwsAccountConnectionTemplatePublication
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 AMI_PATTERN = re.compile(r"^ami-[0-9a-f]{8,17}$")
 VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-S3_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+BUCKET_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 REGION_PATTERN = re.compile(r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
 WORKER_IMAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
 AGENT_BINARY_DIRECTORY = "agent-binarys"
@@ -45,7 +45,7 @@ class AwsReleaseManifest(ReleaseModel):
     schema_version: int
     release_version: str
     bucket: str
-    region: str
+    public_base_url: str
     manifest_object_key: str
     manifest_public_url: str
     connection_template_version: str
@@ -119,25 +119,22 @@ class AwsReleaseManifest(ReleaseModel):
                     raise ValueError(msg)
         if self.agent_artifact_version != self.release_version:
             raise ValueError("agent artifact version must equal the AWS release version")
-        if not S3_NAME_PATTERN.fullmatch(self.bucket):
+        if not BUCKET_NAME_PATTERN.fullmatch(self.bucket):
             raise ValueError("invalid AWS release bucket name")
-        if not REGION_PATTERN.fullmatch(self.region):
-            raise ValueError("invalid AWS release region")
         object_keys = [release_object.object_key for release_object in self.objects]
         if len(object_keys) != len(set(object_keys)):
             raise ValueError("AWS release object keys must be unique")
         if len(self.objects) != 2:
             raise ValueError("AWS release must contain one template and one agent object")
         for release_object in self.objects:
-            expected_url = s3_public_url(self.bucket, self.region, release_object.object_key)
+            expected_url = release_public_url(self.public_base_url, release_object.object_key)
             if release_object.public_url != expected_url:
-                raise ValueError("AWS release object URL does not match its S3 object key")
-        if self.manifest_public_url != s3_public_url(
-            self.bucket,
-            self.region,
+                raise ValueError("AWS release object URL does not match its object key")
+        if self.manifest_public_url != release_public_url(
+            self.public_base_url,
             self.manifest_object_key,
         ):
-            raise ValueError("AWS release manifest URL does not match its S3 object key")
+            raise ValueError("AWS release manifest URL does not match its object key")
         template_objects = self._connection_template_objects()
         agent_objects = self._agent_artifact_objects()
         if len(template_objects) != 1 or template_objects[0].sha256 != (
@@ -189,22 +186,36 @@ class AwsReleaseManifest(ReleaseModel):
         return self
 
 
-def s3_public_url(bucket: str, region: str, object_key: str) -> str:
+def release_public_url(public_base_url: str, object_key: str) -> str:
+    parsed = urlparse(public_base_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+        or any(character.isspace() for character in public_base_url)
+    ):
+        raise ValueError("release public base URL must be an HTTPS origin")
+    if not object_key or any(part in {"", ".", ".."} for part in object_key.split("/")):
+        raise ValueError("release object key must have nonempty, relative segments")
     encoded_key = "/".join(urllib.request.pathname2url(part) for part in object_key.split("/"))
-    return f"https://s3.{region}.amazonaws.com/{bucket}/{encoded_key}"
+    return f"{public_base_url.rstrip('/')}/{encoded_key}"
 
 
 __all__ = [
     "AGENT_AMD64_FILENAME",
     "AGENT_BINARY_DIRECTORY",
     "AMI_PATTERN",
+    "BUCKET_NAME_PATTERN",
     "REGION_PATTERN",
-    "S3_NAME_PATTERN",
     "SCHEMA_VERSION",
     "VERSION_PATTERN",
     "WORKER_IMAGE_PATTERN",
     "AwsReleaseManifest",
     "ReleaseModel",
     "ReleaseObject",
-    "s3_public_url",
+    "release_public_url",
 ]

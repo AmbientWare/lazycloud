@@ -71,29 +71,17 @@ exactly like a connector that is merely unhealthy.
 
 ## Backend and credentials
 
-Terraform state contains secrets — here, the tunnel secret in full. Supply a
-standard remote backend owned by the deployment operator; this repository
-deliberately does not create or delete its bucket. Keep backend coordinates and
-credentials outside the repository.
-
-Authenticate AWS and Cloudflare with short-lived operator credentials. Do not put
-credentials in `*.tfvars`:
-
-Set `AWS_PROFILE` to a profile whose credentials can reach the state bucket
-directly. A profile that assumes a role the current identity cannot assume fails
-at `init`, before Terraform reaches Cloudflare at all, and the error names STS
-rather than the backend.
+Terraform state contains the tunnel secret. Use the shared private
+[R2 state backend](../terraform-state/README.md), whose bucket is owned by the
+operator. Existing installations transfer their current state before apply.
+Keep Cloudflare credentials out of `*.tfvars`.
 
 ```sh
-export AWS_PROFILE=platform-operations
 export CLOUDFLARE_API_TOKEN=temporary-operator-token
 
 terraform -chdir=deploy/cloudflare init \
-  -backend-config="bucket=$CLOUDFLARE_STATE_BUCKET" \
-  -backend-config="key=$CLOUDFLARE_STATE_KEY" \
-  -backend-config="region=$CLOUDFLARE_STATE_REGION" \
-  -backend-config="encrypt=true" \
-  -backend-config="use_lockfile=true"
+  -backend-config="$TF_VAR_terraform_backend_config" \
+  -backend-config="key=cloudflare/production.tfstate"
 ```
 
 The operator token needs Account > Cloudflare Tunnel > Edit, Zone > DNS > Edit,

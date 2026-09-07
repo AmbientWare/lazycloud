@@ -28,6 +28,7 @@ from shared.aws_connections import (
     AwsAccountValidationResult,
     AwsAuthorizationCleanupStatus,
     AwsAuthorizationCleanupTombstone,
+    AwsConnectionStackAction,
 )
 from shared.capacity import MachinePool
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, ComputeUnitPhase
@@ -138,7 +139,7 @@ class AwsAccountConnectionValidationError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class AwsAccountConnectionAuthorization:
     connection: AwsAccountConnection
-    authorization_url: str | None
+    authorization_stack: AwsConnectionStackAction | None
     external_id: str | None
 
 
@@ -244,8 +245,10 @@ class AwsAccountConnectionService:
                 max_cpu_instances=request.max_cpu_instances,
                 max_gpu_instances=request.max_gpu_instances,
             ),
-            customer_action_url=plan.authorization_url,
-            customer_action_label=("Continue in AWS" if plan.authorization_url else ""),
+            customer_action_url=None,
+            customer_action_label=(
+                "Create the connection stack" if plan.authorization_stack else ""
+            ),
             next_reconcile_at=now,
             created_at=now,
             updated_at=now,
@@ -500,8 +503,10 @@ class AwsAccountConnectionService:
                 update={
                     "phase": AwsAccountConnectionPhase.ReconnectPending,
                     "pending_authorization": pending,
-                    "customer_action_url": plan.authorization_url,
-                    "customer_action_label": ("Continue in AWS" if plan.authorization_url else ""),
+                    "customer_action_url": None,
+                    "customer_action_label": (
+                        "Create the connection stack" if plan.authorization_stack else ""
+                    ),
                     "next_reconcile_at": now,
                     "reconcile_attempt_count": 0,
                     "last_error": "",
@@ -1210,7 +1215,7 @@ class AwsAccountConnectionService:
             update={
                 "managed_authorization": result.managed_authorization
                 or target.managed_authorization,
-                "authorization_url": None,
+                "authorization_stack": None,
                 "phase": AwsAccountAuthorizationPhase.Ready,
                 "last_validated_at": result.validated_at,
                 "error_code": None,
@@ -1454,7 +1459,7 @@ class AwsAccountConnectionService:
                 if plan.managed_authorization is not None
                 else None
             ),
-            authorization_url=plan.authorization_url,
+            authorization_stack=plan.authorization_stack,
             phase=AwsAccountAuthorizationPhase.AwaitingAuthorization,
             expires_at=expires_at,
             created_at=now,
@@ -1468,7 +1473,7 @@ class AwsAccountConnectionService:
     ) -> AwsAccountConnectionAuthorization:
         return AwsAccountConnectionAuthorization(
             connection=connection,
-            authorization_url=authorization.authorization_url,
+            authorization_stack=authorization.authorization_stack,
             external_id=(
                 connection.external_id
                 if authorization.authorization_mode is AwsAccountAuthorizationMode.ExistingRole

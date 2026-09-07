@@ -1,10 +1,7 @@
-# Application CI reads resource identities here, never the secret-bearing state.
-resource "aws_s3_object" "infrastructure" {
-  bucket       = aws_s3_bucket.deploy.id
-  key          = "configuration/infrastructure-v1.json"
-  content_type = "application/json"
-  content = jsonencode({
-    schema_version    = 3
+output "infrastructure_configuration" {
+  description = "Publish this non-secret descriptor with deploy/object_storage.py."
+  value = {
+    schema_version    = 4
     deployment        = var.deployment
     region            = var.region
     registry          = local.ecr_registry
@@ -16,18 +13,18 @@ resource "aws_s3_object" "infrastructure" {
       secretsReader      = var.secrets_reader_service_account
       wireguardBootstrap = var.wireguard_bootstrap_service_account
     }
-    object_bucket = aws_s3_bucket.objects["objects"].id
-    image_archive = {
-      bucket       = cloudflare_r2_bucket.image_archives.name
-      endpoint_url = "https://${local.cloudflare_account_id}.r2.cloudflarestorage.com"
+    object_store = {
+      endpoint_url            = "https://${local.cloudflare_account_id}.r2.cloudflarestorage.com"
+      region_name             = "auto"
+      force_path_style        = true
+      bucket                  = cloudflare_r2_bucket.storage["objects"].name
+      workspace_bucket_prefix = local.workspace_bucket_prefix
     }
-    workspace_bucket_prefix    = local.workspace_bucket_prefix
-    workspace_storage_role_arn = aws_iam_role.workspace_storage.arn
-    workload_image_repository  = local.workload_image_repository
-    control_principal_arn      = aws_iam_role.control_principal.arn
-    public_origin              = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}"
-    redis_host                 = aws_elasticache_replication_group.redis.primary_endpoint_address
-    hetzner_node_images        = var.hetzner_node_images
+    workload_image_repository = local.workload_image_repository
+    control_principal_arn     = aws_iam_role.control_principal.arn
+    public_origin             = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}"
+    redis_host                = aws_elasticache_replication_group.redis.primary_endpoint_address
+    hetzner_node_images       = var.hetzner_node_images
     fleet = {
       account_id        = data.aws_caller_identity.current.account_id
       role_arn          = aws_iam_role.fleet_connection.arn
@@ -44,10 +41,10 @@ resource "aws_s3_object" "infrastructure" {
     cloudflare_tunnel_id            = data.terraform_remote_state.cloudflare.outputs.tunnel_id
     database_max_connections        = var.database_max_connections
     database_pooler_max_connections = var.database_pooler_max_connections
-  })
+  }
 }
 
 output "infrastructure_config_uri" {
   description = "Set INFRASTRUCTURE_CONFIG_URI on this deployment's GitHub environment."
-  value       = "s3://${aws_s3_bucket.deploy.id}/${aws_s3_object.infrastructure.key}"
+  value       = "s3://${cloudflare_r2_bucket.storage["deploy"].name}/${var.deployment}/infrastructure.json"
 }

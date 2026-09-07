@@ -56,7 +56,15 @@ Answer condensed. This is a must-follow rule, not a preference.
   FastAPI composition, `apps/cli` owns internal `lazycloud-admin`, and
   `apps/web` owns the dashboard.
 - Provider implementations live under `packages/providers/*` behind
-  provider-neutral protocols.
+  provider-neutral protocols. Shared settings, contracts, functions and files use
+  protocol or domain names; provider-specific names belong inside the provider
+  implementation. Preserve customer-owned infrastructure paths when changing
+  the platform's provider.
+- Give configuration one canonical owner. Reuse settings and credentials among
+  consumers with the same trust boundary and required permissions. Separate sets
+  need a concrete permissions, tenant isolation, or lifecycle reason. Remove
+  transitional duplicates in the consuming feature's change; do not add
+  speculative configuration options or adapters.
 - PostgreSQL/SQLAlchemy/Alembic own durable state. Redis owns queues, locks,
   leases, pub/sub, coordination, and short-lived caches. Object storage and
   mounted filesystems own object/file data. Do not add duplicate stores or

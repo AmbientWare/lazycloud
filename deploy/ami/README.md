@@ -16,11 +16,23 @@ tags carry that digest, so rerunning an unchanged recipe reuses the same images.
 
 After both bakes pass, `catalog.py publish` verifies that every AMI is available
 and has the expected managed and recipe tags. It writes an immutable catalog and
-then replaces the current pointer:
+then replaces the current pointer in the public R2 release bucket:
 
 ```text
 connected-aws/node-images/catalogs/<catalog-sha256>.json
 connected-aws/node-images/current.json
+```
+
+Publication uses the canonical object-store credentials from the environment or
+the operator's `lazycloud-object-storage` profile. AMI verification uses AWS credentials.
+To publish a fresh catalog for existing verified AMIs:
+
+```sh
+uv run --group workspace python -m deploy.ami.catalog publish \
+  --cpu-ami-ids "$CPU_AMI_IDS" --gpu-ami-ids "$GPU_AMI_IDS" \
+  --source-revision "$(git rev-parse HEAD)" \
+  --bucket lazycloud-production-releases \
+  --public-base-url https://releases.lazycloud.dev
 ```
 
 The release workflow reads `current.json` before building application artifacts.

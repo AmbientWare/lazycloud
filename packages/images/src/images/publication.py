@@ -11,7 +11,7 @@ from pydantic import Field
 from shared.cache_records import CacheEntry
 from shared.contracts import ContractModel
 from shared.image_building.records import ImageBuildRecord
-from storage.image_archive import ResolvedImageArchiveSettings
+from storage.image_archive import ImageArchiveSettings
 
 from images.context import ImageContext
 from images.execution import ImageBuildExecutionResult
@@ -177,7 +177,7 @@ class ArchiveImageBuildPublicationPublisher:
     """
 
     object_store: ImageBuildArchiveObjectStore
-    settings: ResolvedImageArchiveSettings
+    settings: ImageArchiveSettings
     context: ImageContext
 
     def publish(

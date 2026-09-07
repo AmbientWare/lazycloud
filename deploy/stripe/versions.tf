@@ -1,6 +1,7 @@
 terraform {
   required_version = ">= 1.10.0, < 2.0.0"
 
+  # R2 uses the S3 protocol. Coordinates come from the shared operator backend JSON.
   backend "s3" {}
 
   required_providers {

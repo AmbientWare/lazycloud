@@ -23,7 +23,12 @@ from pydantic import (
     model_validator,
 )
 from shared.app_identity import ENV_PREFIX
-from shared.aws_connections import AwsAccountNetwork
+from shared.aws_connections import (
+    AwsAccountNetwork,
+    AwsConnectionStackAction,
+    AwsStackCreateRequest,
+    AwsStackParameter,
+)
 
 from .account_connection_policy import validate_aws_account_connection_template_policy
 from .boto3_clients import has_operations, is_boto3_client_factory
@@ -51,10 +56,6 @@ _PRINCIPAL_PATTERN = re.compile(
 )
 _REGION_PATTERN = re.compile(r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
 _CLIENT_REQUEST_TOKEN_PATTERN = re.compile(r"^[A-Za-z][-A-Za-z0-9]{0,127}$")
-_S3_TEMPLATE_HOST_PATTERN = re.compile(
-    r"^(?:s3[.-][a-z0-9-]+|[a-z0-9][a-z0-9.-]*\.s3[.-][a-z0-9-]+)"
-    r"\.amazonaws\.com(?:\.cn)?$"
-)
 _S3_BUCKET_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 _S3_BUCKET_POLICY_NAME = "mounted-bucket-access"
 _IAM_INLINE_POLICY_MAX_BYTES = 10_240
@@ -85,9 +86,10 @@ class AwsAccountConnectionTemplatePublication(AwsAccountConnectionModel):
             or parsed.username
             or parsed.password
             or parsed.fragment
-            or not _S3_TEMPLATE_HOST_PATTERN.fullmatch((parsed.hostname or "").lower())
+            or not parsed.hostname
+            or parsed.query
         ):
-            raise ValueError("connection template URL must be an HTTPS S3 object URL")
+            raise ValueError("connection template URL must be an public HTTPS object URL")
         return url
 
 
@@ -325,7 +327,7 @@ class AwsAccountConnectionAuthorizationPlan(AwsAccountConnectionModel):
     pending: AwsPendingAccountAuthorization
     template_version: str
     template_sha256: str
-    authorization_url: str
+    authorization_stack: AwsConnectionStackAction
 
     @model_validator(mode="after")
     def validate_generations(self) -> AwsAccountConnectionAuthorizationPlan:
@@ -1377,12 +1379,18 @@ def plan_aws_account_connection_authorization(
         "TargetAccountId": request.account_id,
     }
     stack_name = request.connection_role_name
-    query = [("stackName", stack_name), ("templateURL", publication.url)]
-    query.extend((f"param_{key}", value) for key, value in sorted(parameters.items()))
-    authorization_url = (
-        f"https://{aws_console_host(request.region)}/cloudformation/home?"
-        f"{urlencode({'region': request.region}, quote_via=quote, safe='')}"
-        f"#/stacks/create/review?{urlencode(query, quote_via=quote, safe='')}"
+    authorization_stack = AwsConnectionStackAction(
+        account_id=request.account_id,
+        region=request.region,
+        template_sha256=identity.sha256,
+        request=AwsStackCreateRequest(
+            StackName=stack_name,
+            TemplateBody=aws_account_connection_template_bytes().decode(),
+            Parameters=tuple(
+                AwsStackParameter(ParameterKey=key, ParameterValue=value)
+                for key, value in sorted(parameters.items())
+            ),
+        ),
     )
     pending = AwsPendingAccountAuthorization(
         account_id=request.account_id,
@@ -1401,7 +1409,7 @@ def plan_aws_account_connection_authorization(
         pending=pending,
         template_version=identity.version,
         template_sha256=identity.sha256,
-        authorization_url=authorization_url,
+        authorization_stack=authorization_stack,
     )
 
 

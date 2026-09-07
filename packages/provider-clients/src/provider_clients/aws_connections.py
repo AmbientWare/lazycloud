@@ -169,7 +169,7 @@ class _AwsAccountAuthorizationPlanner:
             raise ValueError("managed authorization generation is not sequential")
         return AwsAccountAuthorizationPlan(
             role_arn=plan.pending.role_arn,
-            authorization_url=plan.authorization_url,
+            authorization_stack=plan.authorization_stack,
             authorization_mode=AwsAccountAuthorizationMode.ManagedStack,
             managed_authorization=AwsManagedAuthorizationReference(
                 stack_name=plan.pending.stack_name,

@@ -6,7 +6,7 @@ action against the exact verified release template and platform principal.
 Run from the repository root:
 
 ``uv run --env-file .env python -m tests.e2e.external.aws.account_connection
---account-id <id> --template-url <url> --platform-principal-arn <arn>``
+--account-id <id> --platform-principal-arn <arn>``
 """
 
 from __future__ import annotations
@@ -16,11 +16,13 @@ import contextlib
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
+from pathlib import Path
 
 from lazycloud.cli.control import compute_client
 from lazycloud.clients.compute.control import ComputeClient
-from shared.aws_connections import AwsAccountConnectionPhase
+from shared.aws_connections import AwsAccountConnectionPhase, AwsConnectionStackAction
 from shared.http.aws_connections import AwsConnectionResponse
 from shared.http.errors import HttpTransportError
 from tests.e2e.external import _support
@@ -38,7 +40,7 @@ def _managed_region(connection: AwsConnectionResponse) -> str:
 
 
 def _apply_customer_action(
-    action_url: str,
+    action: AwsConnectionStackAction,
     args: argparse.Namespace,
     region: str,
     deadline: _support.Deadline,
@@ -47,14 +49,10 @@ def _apply_customer_action(
         sys.executable,
         _CUSTOMER_STACK_COMMAND,
         "apply",
-        "--action-url",
-        action_url,
         "--account-id",
         args.account_id,
         "--region",
         region,
-        "--template-url",
-        args.template_url,
         "--platform-principal-arn",
         args.platform_principal_arn,
         "--timeout",
@@ -62,7 +60,11 @@ def _apply_customer_action(
     ]
     if args.execution_role_arn is not None:
         command.extend(["--execution-role-arn", args.execution_role_arn])
-    result = subprocess.run(command, check=False)
+    with tempfile.TemporaryDirectory(prefix="lazycloud-aws-action-") as directory:
+        path = Path(directory) / "action.json"
+        path.write_text(action.model_dump_json(), encoding="utf-8")
+        path.chmod(0o600)
+        result = subprocess.run([*command, "--action-file", str(path)], check=False)
     if result.returncode != 0:
         raise RuntimeError("the operator customer-stack command failed")
 
@@ -109,7 +111,6 @@ def _wait_ready(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--account-id", required=True)
-    parser.add_argument("--template-url", required=True)
     parser.add_argument("--platform-principal-arn", required=True)
     parser.add_argument("--execution-role-arn")
     parser.add_argument("--timeout", type=float, default=600)
@@ -134,18 +135,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if current is None:
         response = client.connect_account(account_id=args.account_id)
         current = response.connection
-        action_url = response.authorization.url
+        action = response.authorization.stack
     elif current.phase is AwsAccountConnectionPhase.Degraded:
         response = client.reconnect_account()
         current = response.connection
-        action_url = response.authorization.url
+        action = response.authorization.stack
     else:
-        action_url = current.customer_action.url if current.customer_action is not None else None
+        action = current.customer_action.stack if current.customer_action is not None else None
 
     if current.phase is not AwsAccountConnectionPhase.Ready:
-        if action_url is not None:
+        if action is not None:
             region = _managed_region(current)
-            _apply_customer_action(action_url, args, region, deadline)
+            _apply_customer_action(action, args, region, deadline)
             client.validate_connection()
             stack_applied = True
             ready = _wait_ready(client, deadline, revalidation_attempts=5)

@@ -66,32 +66,13 @@ x-api-env: &api-env
   LAZYCLOUD_PUBLIC_INGRESS_CLIENT_IP_HEADER: "${LAZYCLOUD_PUBLIC_INGRESS_CLIENT_IP_HEADER:-}"
 
 x-object-store-env: &object-store-env
-  LAZYCLOUD_OBJECT_STORE_BUCKET: "${LAZYCLOUD_OBJECT_STORE_BUCKET:-lazycloud-objects}"
-  # Names the bucket each workspace gets. A deployment sharing an AWS account with
-  # another one must differ here, because the grant that reaches `workspace-*`
-  # cannot otherwise tell two deployments' customers apart.
-  LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX: "${LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX:-workspace}"
-  # Empty is meaningful and distinct from omitted: a connected-cloud deployment
-  # sets these to "" so the object store resolves the platform role through the
-  # SDK credential chain and presigns against the storage endpoint itself.
-  # Use "${VAR-default}" (not ":-") so an explicit empty value survives.
-  LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: "${LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL-http://object-store:9000}"
-  LAZYCLOUD_OBJECT_STORE_PRESIGNED_ENDPOINT_URL: "${LAZYCLOUD_OBJECT_STORE_PRESIGNED_ENDPOINT_URL-http://object-store.localhost:${LAZYCLOUD_COMPOSE_OBJECT_STORE_PORT:-9002}}"
-  LAZYCLOUD_OBJECT_STORE_REGION_NAME: "${LAZYCLOUD_OBJECT_STORE_REGION_NAME:-us-east-1}"
-  LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID: "${LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID-lazycloud-local}"
-  LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY: "${LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY-lazycloud-local-secret}"
+  LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: "${LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL:?Set the object storage endpoint}"
+  LAZYCLOUD_OBJECT_STORE_REGION_NAME: "${LAZYCLOUD_OBJECT_STORE_REGION_NAME:?Set the object storage signing region}"
+  LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID: "${LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID:?Set object storage credentials}"
+  LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY: "${LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY:?Set object storage credentials}"
   LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: "${LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE:-true}"
-
-# Which store cuts a workspace's storage credential, and how to reach its admin
-# API. Only the control plane mints; a worker is handed the result.
-x-workspace-storage-env: &workspace-storage-env
-  LAZYCLOUD_WORKSPACE_STORAGE_ISSUER: "garage"
-  LAZYCLOUD_GARAGE_ADMIN_ENDPOINT_URL: "http://object-store:3903"
-  LAZYCLOUD_GARAGE_ADMIN_TOKEN: "${LAZYCLOUD_GARAGE_ADMIN_TOKEN:-lazycloud-local-garage-admin}"
-  # Short by production standards, and deliberately: the rotation and refresh
-  # this drives are the parts that only ever run once an hour in production, so
-  # locally they run often enough to be seen failing.
-  LAZYCLOUD_GARAGE_ADMIN_CREDENTIAL_LIFETIME_SECONDS: "900"
+  LAZYCLOUD_OBJECT_STORE_BUCKET: "${LAZYCLOUD_OBJECT_STORE_BUCKET:?Set the application bucket}"
+  LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX: "${LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX:?Set a unique workspace bucket prefix}"
 
 x-image-build-env: &image-build-env
   LAZYCLOUD_IMAGE_BUILD_CONTAINER_ADDRESS_WAIT_TIMEOUT_SECONDS: "120"
@@ -244,10 +225,6 @@ x-lazycloud-depends: &lazycloud-depends
     condition: service_completed_successfully
   redis:
     condition: service_healthy
-  object-store:
-    condition: service_healthy
-  object-store-bucket:
-    condition: service_completed_successfully
 
 x-lazycloud-role-depends: &lazycloud-role-depends
   control-plane:
@@ -383,12 +360,10 @@ services:
           test "$$(stat -c '%a' "$$token_path")" = "600"
         fi
     environment:
-      <<: [*database-bootstrap-env, *object-store-env]
+      <<: [*database-bootstrap-env, *object-store-env, *gateway-env]
       LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID: "${LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID:-}"
     depends_on:
       database-bootstrap:
-        condition: service_completed_successfully
-      object-store-bucket:
         condition: service_completed_successfully
     volumes:
       - lazycloud-administrator-token:/var/lib/lazycloud/bootstrap
@@ -410,48 +385,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-
-  object-store:
-    image: dxflrs/garage:v2.3.0
-    restart: unless-stopped
-    command: ["/garage", "server", "--single-node", "--default-bucket"]
-    environment:
-      GARAGE_DEFAULT_BUCKET: "lazycloud-objects"
-      GARAGE_DEFAULT_ACCESS_KEY: "lazycloud-local"
-      GARAGE_DEFAULT_SECRET_KEY: "lazycloud-local-secret"
-    ports:
-      - "${LAZYCLOUD_COMPOSE_OBJECT_STORE_PORT:-9002}:9000"
-      - "${LAZYCLOUD_COMPOSE_OBJECT_STORE_ADMIN_PORT:-3903}:3903"
-    volumes:
-      - ./deploy/garage/garage.toml:/etc/garage.toml:ro
-      - object-store-data:/var/lib/garage
-    healthcheck:
-      test: ["CMD", "/garage", "status"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  object-store-bucket:
-    image: amazon/aws-cli:2.28.3
-    depends_on:
-      object-store:
-        condition: service_healthy
-    environment:
-      AWS_ACCESS_KEY_ID: "lazycloud-local"
-      AWS_SECRET_ACCESS_KEY: "lazycloud-local-secret"
-      AWS_DEFAULT_REGION: "us-east-1"
-      AWS_EC2_METADATA_DISABLED: "true"
-      GARAGE_ENDPOINT_URL: "http://object-store:9000"
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        for bucket in lazycloud-objects default lazycloud-data lazycloud-source-packages; do
-          if aws --endpoint-url "$$GARAGE_ENDPOINT_URL" s3api head-bucket --bucket "$$bucket" >/dev/null 2>&1; then
-            continue
-          fi
-          aws --endpoint-url "$$GARAGE_ENDPOINT_URL" s3api create-bucket --bucket "$$bucket" \
-            || aws --endpoint-url "$$GARAGE_ENDPOINT_URL" s3api head-bucket --bucket "$$bucket" >/dev/null
-        done
 
   tcp-certificate:
     image: api:local
@@ -523,10 +456,6 @@ services:
 
   control-plane:
     image: api:local
-    # The upload proxy streams to the presigned host, which is the host machine's
-    # published port rather than this container's loopback.
-    extra_hosts:
-      - "object-store.localhost:host-gateway"
     restart: unless-stopped
     build:
       context: .
@@ -556,7 +485,6 @@ services:
           *github-env,
           *api-env,
           *object-store-env,
-          *workspace-storage-env,
           *image-build-env,
           *release-env,
           *agent-binary-env,
@@ -781,7 +709,6 @@ services:
           --worker-bridge-name "${LAZYCLOUD_COMPOSE_AGENT_WORKER_BRIDGE:-rt_br0}" \
           --worker-bridge-subnet "${LAZYCLOUD_COMPOSE_AGENT_WORKER_SUBNET:-192.168.0.0/20}" \
           --worker-bridge-ipv6-subnet "${LAZYCLOUD_COMPOSE_AGENT_WORKER_IPV6_SUBNET:-fd00:abcd::/64}" \
-          --worker-host-alias "object-store.localhost:host-gateway" \
           --max-cpu "${LAZYCLOUD_COMPOSE_AGENT_MAX_CPU_CORES:-4}" \
           --max-memory "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MEMORY_MIB:-8192}MiB" \
           --stream-interval-seconds "${LAZYCLOUD_COMPOSE_AGENT_STREAM_INTERVAL_SECONDS:-1}"
@@ -790,16 +717,6 @@ services:
     devices:
       - /dev/fuse:/dev/fuse
       - /dev/net/tun:/dev/net/tun
-    environment:
-      # Forwarded to worker slots so they can back platform volumes. Platform
-      # deployments set these; agents on customer infrastructure do not, and
-      # their slots refuse volume work instead of writing to disposable disk.
-      DATA_STORAGE_BUCKET: "lazycloud-data"
-      DATA_STORAGE_ENDPOINT_URL: "http://object-store:9000"
-      DATA_STORAGE_REGION_NAME: "us-east-1"
-      DATA_STORAGE_ACCESS_KEY_ID: "lazycloud-local"
-      DATA_STORAGE_SECRET_ACCESS_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
-      DATA_STORAGE_FORCE_PATH_STYLE: "true"
     depends_on:
       agent-join-token:
         condition: service_completed_successfully
@@ -962,7 +879,6 @@ services:
       args: *lazycloud-build-args
     extra_hosts:
       - "host.docker.internal:host-gateway"
-      - "object-store.localhost:host-gateway"
     # A shell under the shared entrypoint, which is what exports the worker token
     # and rewrites the repository origin before handing off to tini.
     command:
@@ -994,12 +910,6 @@ services:
       WORKER_CONTAINER_SERVICE_PORT: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}"
       WORKER_NETWORK_PREFIX: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_NETWORK_PREFIX:-compose-shared}"
       WORKER_CHECKPOINT_BUCKET: "lazycloud-objects"
-      DATA_STORAGE_BUCKET: "lazycloud-data"
-      DATA_STORAGE_ENDPOINT_URL: "http://object-store:9000"
-      DATA_STORAGE_REGION_NAME: "us-east-1"
-      DATA_STORAGE_ACCESS_KEY_ID: "lazycloud-local"
-      DATA_STORAGE_SECRET_ACCESS_KEY: "${DATA_STORAGE_SECRET_ACCESS_KEY:-lazycloud-local-secret}"
-      DATA_STORAGE_FORCE_PATH_STYLE: "true"
       WORKER_CACHE_ENDPOINT: "http://cache-server:7900"
       LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE: "/var/lib/lazycloud/cache-token/cache-service-token"
     depends_on:
@@ -1120,7 +1030,6 @@ configs:
 volumes:
   postgres-data:
   redis-data:
-  object-store-data:
   lazycloud-files:
   lazycloud-administrator-token:
   lazycloud-cache-token:

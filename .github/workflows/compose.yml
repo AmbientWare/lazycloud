@@ -23,6 +23,13 @@ jobs:
   validate:
     name: Render Compose
     runs-on: ubuntu-latest
+    env:
+      LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: https://storage.example.invalid
+      LAZYCLOUD_OBJECT_STORE_REGION_NAME: us-east-1
+      LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID: render-only
+      LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY: render-only
+      LAZYCLOUD_OBJECT_STORE_BUCKET: lazycloud-render
+      LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX: lazycloud-render-workspace
     steps:
       - name: Checkout
         uses: actions/checkout@v6

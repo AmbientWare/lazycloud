@@ -290,7 +290,7 @@ function ConnectionActions({
   const actionPlan = awsConnectionDialogActionPlan(connection);
   const lastValidatedAt = connection.active_authorization?.last_validated_at;
   const customerAction = connection.customer_action;
-  const customerActionAvailable = Boolean(customerAction?.url);
+  const customerActionAvailable = Boolean(customerAction?.url || customerAction?.stack);
   const pending = pendingAction !== null;
   const showCapacity = connection.hosts_workloads || connection.can_manage_existing_capacity;
   const showActionBar =
@@ -321,6 +321,19 @@ function ConnectionActions({
             value={lastValidatedAt ? <LiveRelativeTime value={lastValidatedAt} /> : "Not yet"}
           />
         </dl>
+      ) : null}
+
+      {customerAction?.stack ? (
+        <div className="space-y-3 border border-border bg-card p-4 text-xs">
+          <p>
+            Use an AWS CLI profile for account {customerAction.stack.account_id}. LazyCloud checks
+            the account before creating the connection stack.
+          </p>
+          <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-muted p-3">
+            lazycloud cloud authorize --profile YOUR_AWS_PROFILE
+          </pre>
+          <p>After CloudFormation finishes, select Validate connection below.</p>
+        </div>
       ) : null}
 
       {customerAction?.url ? (

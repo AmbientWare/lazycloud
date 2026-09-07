@@ -13,7 +13,7 @@ import {
   validateAwsConnection,
 } from "@/lib/queries/compute";
 
-import { type AwsAuthorizationPopup, useAwsConnectionController } from "./controller";
+import { useAwsConnectionController } from "./controller";
 
 vi.mock("@/lib/queries/compute", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/queries/compute")>();
@@ -39,20 +39,18 @@ beforeEach(() => {
 });
 
 describe("AWS connection controller", () => {
-  it("closes failed authorization popups and keeps the error visible for retry", async () => {
+  it("keeps failed authorization visible for retry", async () => {
     const queryClient = testQueryClient();
-    const popup = popupFixture();
     const failure = new Error("AWS is unavailable");
     createMock.mockRejectedValueOnce(failure).mockResolvedValueOnce({
       connection: awsConnection(),
-      authorization: { url: null },
+      authorization: { stack: null, external_id: null },
     });
-    const { result } = renderController(queryClient, vi.fn(), () => popup.value);
+    const { result } = renderController(queryClient, vi.fn());
 
     act(() => result.current.create("123456789012", null, null));
     await waitFor(() => expect(result.current.activeAction).toBeNull());
 
-    expect(popup.close).toHaveBeenCalledOnce();
     expect(result.current.createError).toBe(failure);
     expect(result.current.recoveryError).toBeNull();
 
@@ -60,7 +58,6 @@ describe("AWS connection controller", () => {
     await waitFor(() => expect(result.current.activeAction).toBeNull());
 
     expect(createMock).toHaveBeenCalledTimes(2);
-    expect(popup.close).toHaveBeenCalledTimes(2);
     expect(result.current.createError).toBeNull();
   });
 
@@ -68,8 +65,7 @@ describe("AWS connection controller", () => {
     const pendingValidation = deferred<ReturnType<typeof awsConnection>>();
     validateMock.mockReturnValue(pendingValidation.promise);
     retryMock.mockResolvedValue(awsConnection());
-    const openAuthorizationPopup = vi.fn(() => popupFixture().value);
-    const { result } = renderController(testQueryClient(), vi.fn(), openAuthorizationPopup);
+    const { result } = renderController(testQueryClient(), vi.fn());
 
     act(() => {
       result.current.validate();
@@ -81,7 +77,6 @@ describe("AWS connection controller", () => {
     await waitFor(() => expect(validateMock).toHaveBeenCalledOnce());
     expect(retryMock).not.toHaveBeenCalled();
     expect(reconnectMock).not.toHaveBeenCalled();
-    expect(openAuthorizationPopup).not.toHaveBeenCalled();
 
     pendingValidation.resolve(awsConnection());
     await waitFor(() => expect(result.current.activeAction).toBeNull());
@@ -90,7 +85,7 @@ describe("AWS connection controller", () => {
   it("keeps failed recovery actions retryable and scopes their error", async () => {
     const failure = new Error("validation failed");
     validateMock.mockRejectedValueOnce(failure).mockResolvedValueOnce(awsConnection());
-    const { result } = renderController(testQueryClient(), vi.fn(), () => popupFixture().value);
+    const { result } = renderController(testQueryClient(), vi.fn());
 
     act(() => result.current.validate());
     await waitFor(() => expect(result.current.activeAction).toBeNull());
@@ -118,7 +113,7 @@ describe("AWS connection controller", () => {
       queryClient.setQueryData(queryKey, { stale: true });
     }
     removeMock.mockResolvedValue(awsConnection("disconnect_draining"));
-    const { result } = renderController(queryClient, onClose, () => popupFixture().value);
+    const { result } = renderController(queryClient, onClose);
 
     act(() => result.current.setRemoveOpen(true));
     expect(result.current.removeOpen).toBe(true);
@@ -134,16 +129,11 @@ describe("AWS connection controller", () => {
   });
 });
 
-function renderController(
-  queryClient: QueryClient,
-  onClose: () => void,
-  openAuthorizationPopup: () => AwsAuthorizationPopup,
-) {
+function renderController(queryClient: QueryClient, onClose: () => void) {
   return renderHook(
     () =>
       useAwsConnectionController({
         onClose,
-        openAuthorizationPopup,
       }),
     {
       wrapper: ({ children }: PropsWithChildren) =>
@@ -167,16 +157,6 @@ function testQueryClient() {
       queries: { retry: false },
     },
   });
-}
-
-function popupFixture() {
-  const close = vi.fn();
-  const handoff = vi.fn();
-  return {
-    close,
-    handoff,
-    value: { close, handoff } satisfies AwsAuthorizationPopup,
-  };
 }
 
 function deferred<T>() {

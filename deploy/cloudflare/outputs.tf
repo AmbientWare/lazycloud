@@ -25,3 +25,12 @@ output "records" {
     wildcard = cloudflare_dns_record.wildcard.name
   }
 }
+output "release_bucket" {
+  description = "R2 bucket for immutable public release artifacts."
+  value       = cloudflare_r2_bucket.releases.name
+}
+
+output "release_public_url" {
+  description = "Public origin for release artifacts and manifests."
+  value       = "https://${cloudflare_r2_custom_domain.releases.domain}"
+}

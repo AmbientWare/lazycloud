@@ -40,6 +40,11 @@ jobs:
     outputs:
       manifest_url: ${{ steps.published.outputs.manifest_url }}
     env:
+      LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: ${{ vars.LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL }}
+      LAZYCLOUD_OBJECT_STORE_REGION_NAME: ${{ vars.LAZYCLOUD_OBJECT_STORE_REGION_NAME }}
+      LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: ${{ vars.LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE }}
+      LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID: ${{ secrets.LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID }}
+      LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY: ${{ secrets.LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY }}
       AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
     steps:
       - name: Checkout
@@ -69,7 +74,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          url="https://s3.${AWS_RELEASE_REGION}.amazonaws.com/${{ vars.AWS_RELEASE_ASSET_BUCKET }}/connected-aws/node-images/current.json"
+          url="${{ vars.RELEASE_PUBLIC_BASE_URL }}/connected-aws/node-images/current.json"
           if ! curl -fsS -o node-images.json "${url}"; then
             echo "::error::No current node image catalog. Run the Node Images workflow on main before Ship."
             exit 1
@@ -111,7 +116,7 @@ jobs:
           git fetch --tags --force --quiet
           base=""
           for tag in $(git tag -l 'v*' --sort=-v:refname | grep -vx "v${{ inputs.version }}" | head -5); do
-            url="https://s3.${AWS_RELEASE_REGION}.amazonaws.com/${{ vars.AWS_RELEASE_ASSET_BUCKET }}/connected-aws/releases/${tag#v}/manifest.json"
+            url="${{ vars.RELEASE_PUBLIC_BASE_URL }}/connected-aws/releases/${tag#v}/manifest.json"
             if curl -fsS -o previous-manifest.json "${url}"; then
               base="${tag}"
               echo "baseline ${tag}: ${url}"
@@ -215,13 +220,13 @@ jobs:
 
       - name: Stage immutable connected AWS release bundle
         run: >-
-          uv run --group workspace python deploy/aws-release-assets/release.py stage
+          uv run --group workspace python -m deploy.aws-release-assets.release stage
           --version "${{ inputs.version }}"
           --agent-version-dir
           "dist/agent-binarys/${{ inputs.version }}"
           --worker-image "${{ steps.worker.outputs.image }}"
-          --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}"
-          --region "${AWS_RELEASE_REGION}"
+          --bucket "${{ vars.OBJECT_STORE_RELEASE_BUCKET }}"
+          --public-base-url "${{ vars.RELEASE_PUBLIC_BASE_URL }}"
           --cpu-ami-ids '${{ steps.images.outputs.cpu_ami_ids }}'
           --gpu-ami-ids '${{ steps.images.outputs.gpu_ami_ids }}'
           --source-revision "${{ inputs.commit }}"
@@ -230,7 +235,7 @@ jobs:
 
       - name: Publish and anonymously verify connected AWS release bundle
         run: >-
-          uv run --group workspace python deploy/aws-release-assets/release.py publish
+          uv run --group workspace python -m deploy.aws-release-assets.release publish
           --manifest
           "dist/connected-aws/${{ inputs.version }}/manifest.json"
 
@@ -247,7 +252,7 @@ jobs:
 
       - name: Verify published assets without AWS or registry credentials
         run: >-
-          uv run --group workspace python deploy/aws-release-assets/release.py verify
+          uv run --group workspace python -m deploy.aws-release-assets.release verify
           --manifest
           "dist/connected-aws/${{ inputs.version }}/manifest.json"
 
