@@ -85,9 +85,9 @@ describe("workspace identity controller", () => {
       fireEvent.change(screen.getByRole("textbox", { name: "Workspace name" }), {
         target: { value: "renamed" },
       });
-      expect(screen.getByRole("button", { name: "Rename", exact: true })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Rename" })).toBeEnabled();
       await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Rename", exact: true }));
+        fireEvent.click(screen.getByRole("button", { name: "Rename" }));
       });
 
       const expectedWorkspace = targetName === "acme" ? "renamed" : "acme";
