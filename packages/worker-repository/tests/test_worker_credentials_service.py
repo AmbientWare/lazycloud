@@ -418,6 +418,7 @@ def test_worker_credential_hydrator_applies_credentials_to_execution_context(
             backend="s3",
             bucket="workspace-bucket",
             config={
+                "endpoint_url": "https://s3.local",
                 "access_key": "workspace-ak",
                 "secret_key": "workspace-sk",
             },

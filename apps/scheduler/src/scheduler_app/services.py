@@ -82,7 +82,7 @@ from scheduler.state import (
 from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.checkpoints import checkpoint_recent_stub_key
 from shared.image_building.credentials import parse_ecr_registry, registry_host_for_image
-from storage.image_archive import ImageArchiveSettings, ResolvedImageArchiveSettings
+from storage.image_archive import ImageArchiveSettings
 from storage.retention import (
     RetentionResult,
     RetentionService,
@@ -154,6 +154,8 @@ class SchedulerAppServices:
     tasks: TaskService
     usage: UsageService
     object_storage: ObjectStorage
+    object_store_client: S3ObjectStoreClient
+    volume_filesystem: WorkspaceVolumeFilesystem
     volume_metering: PersistentVolumeMeteringService
     meter_outbox: BillingMeterOutboxService
     email_outbox: EmailOutboxDrain
@@ -178,7 +180,8 @@ class SchedulerAppServices:
         capacity: SchedulerCapacitySettings,
     ) -> SchedulerAppServices:
         context = ServiceContext.create(database, root=root, create_schema=create_schema)
-        image_archive_config = storage.image_archive.resolve(storage.object_store)
+        image_archive_config = storage.image_archive
+        object_client = S3ObjectStoreClient.from_settings(storage.object_store)
         redis = redis_client
         stream_events = RedisEventStreamRepository(redis)
         events = EventService(context, stream_events=stream_events)
@@ -190,6 +193,8 @@ class SchedulerAppServices:
         )
         control_plane = ControlPlaneService(
             context,
+            workspace_storage_client=object_client,
+            public_http_origin=gateway_origin,
             workspace_changes=workspace_changes,
         )
         scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
@@ -204,18 +209,20 @@ class SchedulerAppServices:
             context,
             workspace_changes=workspace_changes,
         )
+        volume_filesystem = WorkspaceVolumeFilesystem(
+            resolve_store=workspace_volume_store_resolver(
+                lambda workspace_id: control_plane.get_workspace(workspace_id).storage,
+                object_store=object_client,
+            )
+        )
         volume_metering = PersistentVolumeMeteringService.from_settings(
             context,
-            filesystem=WorkspaceVolumeFilesystem(
-                resolve_store=workspace_volume_store_resolver(
-                    lambda workspace_id: control_plane.get_workspace(workspace_id).storage,
-                    default_endpoint_url=storage.object_store.endpoint_url,
-                    default_presigned_endpoint_url=storage.object_store.presigned_endpoint_url,
-                )
-            ),
+            filesystem=volume_filesystem,
             interval_seconds=storage.volume_metering.interval_seconds,
         )
-        object_storage = ObjectStorage.from_settings(context, storage.object_store)
+        object_storage = ObjectStorage(
+            context, object_client=object_client, default_bucket=storage.object_store.bucket
+        )
         stripe_settings = StripeSettings()
         meter_outbox = _meter_outbox(context, events, stripe_settings)
         email_outbox = _email_outbox(context)
@@ -262,7 +269,7 @@ class SchedulerAppServices:
                     redis=redis,
                 ),
                 gateway_origin=gateway_origin,
-                presigned_origin=storage.object_store.presigned_endpoint_url or "",
+                presigned_origin=storage.object_store.endpoint_url,
                 backend_route=network.backend_routes,
             )
             if capacity.aws_connections.configured or platform_capacity.hetzner
@@ -399,6 +406,8 @@ class SchedulerAppServices:
             tasks=tasks,
             usage=usage,
             object_storage=object_storage,
+            object_store_client=object_client,
+            volume_filesystem=volume_filesystem,
             volume_metering=volume_metering,
             meter_outbox=meter_outbox,
             email_outbox=email_outbox,
@@ -411,9 +420,15 @@ class SchedulerAppServices:
 
     def close(self) -> None:
         try:
-            self.redis_client.close()
+            self.volume_filesystem.close()
         finally:
-            self.context.database.dispose()
+            try:
+                self.object_store_client.close()
+            finally:
+                try:
+                    self.redis_client.close()
+                finally:
+                    self.context.database.dispose()
 
 
 def _meter_outbox(
@@ -537,7 +552,7 @@ def scheduler_retention(
     object_storage: ObjectStorage,
     cache_storage: CacheStorage,
     settings: RetentionSettings,
-    image_archive_settings: ResolvedImageArchiveSettings,
+    image_archive_settings: ImageArchiveSettings,
     workload_image_registry_repository: str = "",
 ) -> SchedulerRetention | None:
     if not settings.enabled:
@@ -557,7 +572,7 @@ def scheduler_retention(
                 checkpoint_bucket=object_storage.default_bucket,
             ),
             image_archive_settings=image_archive_settings,
-            image_archive_client=S3ObjectStoreClient.from_settings(image_archive_settings.storage),
+            image_archive_client=object_storage.object_client,
             workload_image_registry=workload_registry,
         ),
         deployment_resources=DeploymentResourceService(context),

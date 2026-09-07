@@ -101,6 +101,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     env:
+      LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: ${{ vars.LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL }}
+      LAZYCLOUD_OBJECT_STORE_REGION_NAME: ${{ vars.LAZYCLOUD_OBJECT_STORE_REGION_NAME }}
+      LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: ${{ vars.LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE }}
+      LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID: ${{ secrets.LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID }}
+      LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY: ${{ secrets.LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY }}
       AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
     steps:
       - name: Checkout
@@ -123,8 +128,8 @@ jobs:
           --cpu-ami-ids '${{ needs.cpu.outputs.ami_ids }}'
           --gpu-ami-ids '${{ needs.gpu.outputs.ami_ids }}'
           --source-revision "${GITHUB_SHA}"
-          --bucket "${{ vars.AWS_RELEASE_ASSET_BUCKET }}"
-          --region "${AWS_RELEASE_REGION}"
+          --bucket "${{ vars.OBJECT_STORE_RELEASE_BUCKET }}"
+          --public-base-url "${{ vars.RELEASE_PUBLIC_BASE_URL }}"
           --output node-images.json
 
       - name: Upload catalog evidence

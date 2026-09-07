@@ -60,14 +60,13 @@ use workload identity through the same AWS SDK credential chain.
 Create or resume the public account connection and perform only the
 CloudFormation customer authorization returned by LazyCloud:
 
-The template URL and platform principal are the immutable release values the
-control plane advertises; passing them explicitly is what proves the customer
-action was not substituted. Both are read from the deployment environment:
+The operator command verifies the returned template body against the bundled
+release digest and checks the explicit platform principal before submitting
+the stack. Read the principal from the deployment environment:
 
 ```sh
 uv run python -m tests.e2e.external.aws.account_connection \
   --account-id <12-digit-account-id> \
-  --template-url "$LAZYCLOUD_AWS_CONNECTION_TEMPLATE_URL" \
   --platform-principal-arn "$LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN" \
   --execution-role-arn "$LAZYCLOUD_E2E_AWS_CUSTOMER_STACK_EXECUTION_ROLE_ARN"
 ```

@@ -35,8 +35,6 @@ A deployment sharing an AWS account with another one overrides this, because the
 grant that reaches `workspace-*` cannot otherwise tell two deployments apart.
 """
 DATA_STORAGE_BUCKET = f"{NAME}-data"
-OBJECT_STORE_ACCESS_KEY_ID = NAME
-OBJECT_STORE_SECRET_ACCESS_KEY = f"{NAME}-secret"
 WORKSPACE_OBJECT_BUCKET = "default"
 IMAGE_BUILD_CONTEXT_BUCKET = "build-contexts"
 CLUSTER_NAME_LABEL = f"{_LABEL_NAME}ClusterName"
@@ -107,9 +105,7 @@ __all__ = [
     "METRICS_NAMESPACE",
     "METRICS_SOURCE",
     "NAME",
-    "OBJECT_STORE_ACCESS_KEY_ID",
     "OBJECT_STORE_BUCKET",
-    "OBJECT_STORE_SECRET_ACCESS_KEY",
     "POD_IMAGE",
     "POOL_NAME_LABEL",
     "PRIVATE_RESOURCE_PREFIX",

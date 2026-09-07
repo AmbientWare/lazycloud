@@ -23,7 +23,7 @@ from shared.image_building.records import (
     ImageRecord,
 )
 from shared.timestamps import utc_now
-from storage.image_archive import ResolvedImageArchiveSettings
+from storage.image_archive import ImageArchiveSettings
 
 from images.building import (
     ImageBuildCredentialPlan,
@@ -92,7 +92,7 @@ class ImageBuildService:
     events: EventService | None = None
     publication_publisher: ImageBuildPublicationPublisher | None = None
     cleanup_executor: ImageBuildCleanupExecutor | None = None
-    archive_settings: ResolvedImageArchiveSettings | None = None
+    archive_settings: ImageArchiveSettings | None = None
     archive_store: ImageBuildArchiveObjectStore | None = None
 
     def build(

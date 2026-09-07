@@ -139,6 +139,30 @@ export type AwsComputeConfigurationUpdateRequest = z.infer<
   typeof awsComputeConfigurationUpdateRequestSchema
 >;
 
+const awsConnectionStackActionSchema = z
+  .object({
+    account_id: z.string().regex(/^\d{12}$/),
+    region: z.string(),
+    template_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    request: z
+      .object({
+        StackName: z.string(),
+        TemplateBody: z.string().min(1).max(51200),
+        Parameters: z.array(
+          z
+            .object({
+              ParameterKey: z.string(),
+              ParameterValue: z.string(),
+            })
+            .strict(),
+        ),
+        Capabilities: z.array(z.literal("CAPABILITY_NAMED_IAM")),
+        OnFailure: z.literal("DELETE"),
+      })
+      .strict(),
+  })
+  .strict();
+
 export const awsConnectionSchema = z
   .object({
     id: z.string().uuid(),
@@ -156,6 +180,7 @@ export const awsConnectionSchema = z
     customer_action: z
       .object({
         url: z.string().url().nullable(),
+        stack: awsConnectionStackActionSchema.nullable(),
         label: z.string().min(1).max(128),
       })
       .strict()
@@ -179,7 +204,7 @@ export const awsConnectionAuthorizationSchema = z
     connection: awsConnectionSchema,
     authorization: z
       .object({
-        url: z.string().url().nullable(),
+        stack: awsConnectionStackActionSchema.nullable(),
         external_id: z.string().min(32).max(256).nullable(),
       })
       .strict(),

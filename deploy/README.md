@@ -66,13 +66,11 @@ stack. `connected-aws/customer_stack.py` accepts it as `--execution-role-arn`.
 The acceptance host may run AWS CLI v1: never pass v2-only flags such as
 `--no-cli-pager`. Set `AWS_PAGER=""` in the subprocess environment instead.
 
-Publishing is the exception, and it needs a *newer* CLI than reading does.
-`aws-release-assets/release.py` and `ami/catalog.py` use conditional S3 writes for
-immutable objects, so a retry after a dropped connection cannot overwrite bytes
-that already landed. Conditional writes reached the CLI well after v2.15, and an
-older one fails with `Unknown options: --if-none-match` before uploading. Both
-commands take `--aws-cli`, so point them at a current binary rather than upgrading
-the host.
+Release binaries, templates, catalogs, and deployment descriptors use R2.
+`aws-release-assets/release.py` and `ami/catalog.py` publish through `deploy.object_storage`,
+which uses the canonical object-store credentials, conditional writes, and a
+SHA-256 check of the downloaded object. AWS CLI remains responsible for ECR,
+AMI inspection, and customer CloudFormation operations.
 
 ### Activation
 

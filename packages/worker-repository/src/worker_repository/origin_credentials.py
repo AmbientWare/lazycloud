@@ -14,7 +14,7 @@ from shared.identity import TokenKind
 from shared.image_building.constants import image_archive_object_key
 from shared.image_building.credentials import registry_host_for_image
 from shared.image_building.records import ImageArchiveRecord
-from storage.image_archive import ResolvedImageArchiveSettings
+from storage.image_archive import ImageArchiveSettings
 from worker.credential_payloads import WORKER_TOKEN_KINDS, WorkerCredentialPrincipal
 from worker.image_lifecycle import (
     DEFAULT_IMAGE_ARCHIVE_EXTENSION,
@@ -97,7 +97,7 @@ class WorkerCacheOriginCredentialService:
     services: WorkerOriginCredentialServices | None = None
     config: CacheOriginCredentialConfig = field(default_factory=CacheOriginCredentialConfig)
     object_store_client: PresignedPutClient | None = None
-    archive_settings: ResolvedImageArchiveSettings | None = None
+    archive_settings: ImageArchiveSettings | None = None
     registry_credentials: ImageRegistryCredentialIssuer | None = None
 
     @property

@@ -97,7 +97,7 @@ export type CreateAwsConnectionInput = {
 
 export type AwsConnectionAuthorizationResult = {
   connection: AwsConnection;
-  authorization: { url: string | null };
+  authorization: import("zod").z.infer<typeof awsConnectionAuthorizationSchema>["authorization"];
 };
 
 export async function createAwsConnection(
@@ -110,7 +110,7 @@ export async function createAwsConnection(
   });
   return {
     connection: response.connection,
-    authorization: { url: response.authorization.url },
+    authorization: response.authorization,
   };
 }
 
@@ -125,7 +125,7 @@ export async function reconnectAwsConnection(): Promise<AwsConnectionAuthorizati
   );
   return {
     connection: response.connection,
-    authorization: { url: response.authorization.url },
+    authorization: response.authorization,
   };
 }
 

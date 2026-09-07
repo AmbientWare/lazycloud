@@ -4,6 +4,7 @@
   "additionalProperties": false,
   "required": [
     "image",
+    "aws",
     "runtime",
     "fleet",
     "database",
@@ -11,6 +12,14 @@
     "secrets"
   ],
   "properties": {
+    "aws": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["region"],
+      "properties": {
+        "region": {"type": "string", "minLength": 1}
+      }
+    },
     "controlPlane": {
       "type": "object",
       "properties": {

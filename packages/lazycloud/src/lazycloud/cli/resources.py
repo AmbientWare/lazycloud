@@ -28,6 +28,7 @@ from shared.http.gateway import (
 from shared.tasks import is_terminal_task_status
 
 from lazycloud.cli.apps import resolve_app_id
+from lazycloud.cli.aws_authorization import create_connection_stack
 from lazycloud.cli.components.cards import empty_state, notice_card, result_card
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.formatting import duration, timestamp
@@ -448,10 +449,6 @@ def cloud_connect_aws(
         int | None,
         typer.Option("--max-gpu", min=0, help="Optional GPU instance ceiling."),
     ] = None,
-    open_console: Annotated[
-        bool,
-        typer.Option("--open/--no-open", help="Open AWS authorization in a browser."),
-    ] = False,
 ) -> None:
     """Connect an AWS account, which backs every workspace you own.
 
@@ -471,19 +468,17 @@ def cloud_connect_aws(
         max_cpu_instances=max_cpu_instances,
         max_gpu_instances=max_gpu_instances,
     )
-    if open_console and response.authorization.url is not None:
-        webbrowser.open(response.authorization.url)
-    if response.authorization.url is None and response.authorization.external_id is None:
+    if response.authorization.stack is None and response.authorization.external_id is None:
         raise RuntimeError("existing-role authorization did not return its external ID")
     authorization: dict[str, object] = {
         "account_id": account_id,
         "phase": response.connection.phase.value,
     }
-    if response.authorization.url:
-        authorization["authorization_url"] = response.authorization.url
+    if response.authorization.stack:
+        authorization["authorize"] = "Run `lazycloud cloud authorize --profile YOUR_AWS_PROFILE`."
     if response.authorization.external_id:
         authorization["external_id"] = response.authorization.external_id
-    authorization["next_step"] = "Run `lazycloud cloud validate` after authorization."
+    authorization["next_step"] = "Run `lazycloud cloud validate` after the AWS stack finishes."
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
@@ -502,31 +497,49 @@ def cloud_reconnect(
         str | None,
         typer.Option("--role-arn", help="Connected enterprise role to revalidate."),
     ] = None,
-    open_console: Annotated[
-        bool,
-        typer.Option("--open/--no-open", help="Open AWS authorization in a browser."),
-    ] = False,
 ) -> None:
     """Start replacement authorization for the connected account."""
     response = compute_client().reconnect_account(role_arn=role_arn)
     account_id = response.connection.account_id
-    if open_console and response.authorization.url is not None:
-        webbrowser.open(response.authorization.url)
     authorization: dict[str, object] = {
         "account_id": account_id,
         "phase": response.connection.phase.value,
     }
-    if response.authorization.url:
-        authorization["authorization_url"] = response.authorization.url
+    if response.authorization.stack:
+        authorization["authorize"] = "Run `lazycloud cloud authorize --profile YOUR_AWS_PROFILE`."
     if response.authorization.external_id:
         authorization["external_id"] = response.authorization.external_id
-    authorization["next_step"] = "Run `lazycloud cloud validate` after authorization."
+    authorization["next_step"] = "Run `lazycloud cloud validate` after the AWS stack finishes."
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
         view=result_card(
             "Replacement authorization required",
             json_default(authorization),
+            tone="info",
+        ),
+    )
+
+
+@cloud_app.command("authorize")
+def cloud_authorize(
+    ctx: typer.Context,
+    profile: Annotated[
+        str | None, typer.Option("--profile", help="Customer AWS CLI profile.")
+    ] = None,
+) -> None:
+    """Create the pending IAM connection stack in your AWS account."""
+    connection = compute_client().current_connection()
+    action = connection.customer_action if connection is not None else None
+    if action is None or action.stack is None:
+        raise RuntimeError("there is no pending AWS connection stack to authorize")
+    stack_id = create_connection_stack(action.stack, profile=profile)
+    emit(
+        ctx,
+        payload={"stack_id": stack_id, "status": "CREATE_IN_PROGRESS"},
+        view=result_card(
+            "AWS connection stack submitted",
+            "Run `lazycloud cloud validate` after the stack finishes in CloudFormation.",
             tone="info",
         ),
     )

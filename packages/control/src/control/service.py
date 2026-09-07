@@ -125,6 +125,8 @@ class WorkspaceBucketClient(Protocol):
 
     def validate_bucket_access(self, bucket: str | None = None) -> None: ...
 
+    def configure_workspace_bucket(self, bucket: str, *, public_origin: str) -> None: ...
+
 
 class OwnedWorkspaceBucketClient(WorkspaceBucketClient, Protocol):
     def close(self) -> None: ...
@@ -324,6 +326,7 @@ def _config_object_references(config: Mapping[str, JsonValue]) -> set[str]:
 class ControlPlaneService:
     context: ControlContext
     workspace_storage_client: WorkspaceBucketClient | None = None
+    public_http_origin: str = ""
     workspace_storage_client_factory: (
         Callable[[WorkspaceStorageConfig], OwnedWorkspaceBucketClient] | None
     ) = None
@@ -483,14 +486,7 @@ class ControlPlaneService:
             )
 
     def ensure_workspace_storage(self, workspace: str) -> WorkspaceRecord:
-        """Provision workspace storage once, idempotently.
-
-        Every workspace needs it: neither volumes nor artifacts have a fallback
-        tier, so a workspace without storage cannot run ordinary work. Called by
-        workspace creation, the administrator bootstrap command, and the explicit
-        create-storage route — never as a side effect of serving a request, so a
-        workspace deliberately waiting to attach its own bucket keeps waiting.
-        """
+        """Provision the workspace's platform bucket idempotently."""
         record = self.get_workspace(workspace)
         if record.storage.bucket:
             return record
@@ -500,35 +496,23 @@ class ControlPlaneService:
         self,
         workspace: str,
         *,
-        bucket_prefix: str = "",
-        backend: str = "s3",
-        config: dict[str, JsonValue] | None = None,
         token_id_for_cache_invalidation: str | None = None,
     ) -> WorkspaceRecord:
         workspace_record = self.get_workspace(workspace)
         self._validate_storage_attach_allowed(workspace_record)
         client = self._default_workspace_storage_client()
-        # Deployment-scoped rather than a bare "workspace-": two deployments in
-        # one AWS account share the bucket namespace, and the grant that reaches
-        # `workspace-*` cannot tell theirs from ours.
-        prefix = bucket_prefix or _workspace_bucket_settings(client).workspace_bucket_prefix
+        prefix = _workspace_bucket_settings(client).workspace_bucket_prefix
         bucket = f"{prefix}-{workspace_record.id}".replace("_", "-")
         try:
             client.create_bucket(bucket)
             client.validate_bucket_access(bucket)
+            client.configure_workspace_bucket(bucket, public_origin=self.public_http_origin)
         except Exception as exc:
             msg = f"unable to create workspace storage bucket {bucket!r}: {exc}"
             raise WorkspaceStorageError(msg) from exc
-        # After the bucket exists, because a grant names the bucket it is on.
         storage = self._default_workspace_storage(
             client=client,
-            workspace_id=workspace_record.id,
             bucket=bucket,
-            # The bucket already belongs to one workspace, so no prefix is
-            # needed. It stays meaningful only for a customer-attached bucket.
-            prefix="",
-            backend=backend,
-            config=config,
         )
         updated = self.set_workspace_storage(workspace_record.id, storage)
         self._invalidate_token_cache_if_present(token_id_for_cache_invalidation)
@@ -546,6 +530,10 @@ class ControlPlaneService:
         if not storage.bucket:
             msg = "workspace storage bucket is required"
             raise WorkspaceStorageError(msg)
+        if not (storage.access_key and storage.secret_key and storage.endpoint_url):
+            raise WorkspaceStorageError(
+                "external workspace storage requires its own endpoint, access key, and secret key"
+            )
         client = self._workspace_storage_client_for(storage)
         validation_error: Exception | None = None
         try:
@@ -588,32 +576,18 @@ class ControlPlaneService:
         self,
         *,
         client: WorkspaceBucketClient,
-        workspace_id: str,
         bucket: str,
-        prefix: str,
-        backend: str,
-        config: dict[str, JsonValue] | None,
     ) -> WorkspaceStorageConfig:
-        """Describe a workspace's bucket, and whatever its issuer needs to reach it.
-
-        The platform's own credentials are deliberately not copied here. They open
-        every workspace's bucket, and a worker holding them runs another
-        customer's container; what the issuer puts in their place opens this
-        bucket only. It is also what made the endpoint ambiguous: empty is correct
-        for the control plane's own client, where it resolves the pod's role, and
-        fatal for a worker in an account that role does not reach.
-        """
+        """Persist coordinates only; the issuer supplies temporary workspace credentials."""
         settings = _workspace_bucket_settings(client)
         default_config: dict[str, JsonValue] = {
             "endpoint_url": settings.endpoint_url or "",
             "region": settings.region_name,
             "force_path_style": settings.force_path_style,
         }
-        default_config.update(config or {})
         return WorkspaceStorageConfig(
-            backend=backend,
+            backend="s3",
             bucket=bucket,
-            prefix=prefix,
             config=default_config,
         )
 

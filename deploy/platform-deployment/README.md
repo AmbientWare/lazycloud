@@ -2,7 +2,7 @@
 
 One deployment of the platform: `lazycloud-prod`, and later `lazycloud-staging`
 beside it on the same cluster. This module owns what a deployment cannot share:
-the managed Redis, the S3 buckets, the Secrets Manager documents, the
+the managed Redis, the R2 buckets, the Secrets Manager documents, the
 PlanetScale branch, the fleet network and connection role, the Cloudflare
 tunnel it reads, and every AWS identity its workloads hold. The cluster, the
 image repositories and Argo are `deploy/platform-core`, applied once and read
@@ -13,10 +13,17 @@ See `LIFECYCLE.md` for creation and teardown. The Helm workloads live in
 deployment, from the branch named for it, and the values file Deploy writes
 there.
 
-[R2 image archives](IMAGE_ARCHIVES.md) describes credentials and the scoped
-archive reset before deploying infrastructure descriptor version 3.
-Existing archive data will be discarded at that cutover. This module adds
-the archive destination; source bucket deletion belongs to the reviewed reset.
+[Object storage](OBJECT_STORAGE.md) describes the shared credentials, workspace
+access and storage reset. Infrastructure descriptor version 4 names the
+S3-compatible endpoint, signing settings, application bucket and workspace prefix.
+
+Use the shared [R2 Terraform backend](../terraform-state/README.md):
+
+```sh
+export TF_VAR_terraform_backend_config="$HOME/.lazycloud/operator/terraform-backend.json"
+terraform init -backend-config="$TF_VAR_terraform_backend_config" \
+  -backend-config="key=platform-deployment/lazycloud-prod.tfstate"
+```
 
 [Provider provisioning](../PROVIDERS.md) covers worker capacity. `capacity.tf`
 declares the verified image input; Helm owns the Ashburn warm default and node
@@ -118,10 +125,10 @@ endpoint. Sharding is not implemented by this module yet.
 
 ## Application handoff
 
-Terraform writes `configuration/infrastructure-v1.json` into the deployment
-bucket. Set its `infrastructure_config_uri` output as the GitHub environment
-variable `INFRASTRUCTURE_CONFIG_URI`. Deploy reads only this non-secret document.
-It cannot read Terraform state or write a release pointer.
+Terraform exports `infrastructure_configuration`. Publish that JSON with
+`python -m deploy.object_storage publish` to the `infrastructure_config_uri` output and set
+that URI as the GitHub environment variable `INFRASTRUCTURE_CONFIG_URI`.
+Deploy downloads this descriptor from R2 and records its snapshot in Git.
 
 Prices, Stripe account selection, fleet limits and credential property bindings
 live in Helm. Change them in Git and deploy without applying Terraform.

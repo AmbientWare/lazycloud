@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 _AGENT_BUILD = "deploy/agent-binary/build.py"
-_RELEASE = "deploy/aws-release-assets/release.py"
+_RELEASE = "deploy.aws-release-assets.release"
 
 # The two processes that each compose a pool's launch-template bootstrap.
 _BOOTSTRAP_PROCESSES = ("control-plane", "scheduler")
@@ -156,8 +156,7 @@ def publish_release(
     agent_dir: Path,
     worker_image: str,
     bucket: str,
-    region: str,
-    aws_cli: str,
+    public_base_url: str,
     cpu_ami_ids: dict[str, str],
     gpu_ami_ids: dict[str, str],
 ) -> str:
@@ -168,6 +167,7 @@ def publish_release(
             "uv",
             "run",
             "python",
+            "-m",
             _RELEASE,
             "stage",
             "--version",
@@ -178,8 +178,8 @@ def publish_release(
             worker_image,
             "--bucket",
             bucket,
-            "--region",
-            region,
+            "--public-base-url",
+            public_base_url,
             "--cpu-ami-ids",
             json.dumps(cpu_ami_ids, sort_keys=True, separators=(",", ":")),
             "--gpu-ami-ids",
@@ -190,9 +190,7 @@ def publish_release(
     )
     manifest_path = bundle / version / "manifest.json"
     for command in ("validate-local", "publish", "verify"):
-        argv = ["uv", "run", "python", _RELEASE, command, "--manifest", str(manifest_path)]
-        if command != "validate-local":
-            argv += ["--aws-cli", aws_cli]
+        argv = ["uv", "run", "python", "-m", _RELEASE, command, "--manifest", str(manifest_path)]
         _run(argv)
     manifest = json.loads(manifest_path.read_text())
     published_url = str(manifest["manifest_public_url"])
@@ -486,8 +484,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         required=True,
         help="HTTPS release manifest selecting the host agent and AMIs",
     )
-    parser.add_argument("--region", default="us-east-1")
-    parser.add_argument("--aws-cli", default="aws")
+    parser.add_argument("--public-base-url", required=True)
     parser.add_argument("--arch", action="append", dest="architectures")
     parser.add_argument(
         "--gpu-ami",
@@ -536,8 +533,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             agent_dir=agent_dir,
             worker_image=worker_image,
             bucket=args.bucket,
-            region=args.region,
-            aws_cli=args.aws_cli,
+            public_base_url=args.public_base_url,
             cpu_ami_ids=cpu_ami_ids,
             gpu_ami_ids=gpu_ami_ids,
         )

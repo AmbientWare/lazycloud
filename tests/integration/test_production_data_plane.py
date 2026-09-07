@@ -17,11 +17,7 @@ from shared.app_lifecycle import AppLifecycleState
 from shared.deployment_records import DeploymentSpec
 from sqlalchemy.exc import IntegrityError
 from storage.volume_filesystem import LocalVolumeFilesystem
-from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
-from storage_client.s3 import (
-    _add_delete_objects_content_md5,
-    presign_endpoint_for_storage,
-)
+from storage_client.s3 import _add_delete_objects_content_md5
 from tests.redis_fakes import FakeRedis
 from tests.service_fixtures import owned_workspace
 
@@ -41,7 +37,6 @@ def _services(root: Path) -> ApiServices:
                 application_name=DatabaseApplicationName.Test,
             )
         ),
-        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         root=root,
         redis_client=redis,
         binary_redis_client=redis.with_key_prefix("test"),
@@ -107,28 +102,6 @@ def test_active_app_names_are_unique_per_workspace(tmp_path: Path) -> None:
 
     assert deleted.name == "api"
     assert deleted.deleted_at is not None
-
-
-def test_s3_presign_endpoint_matches_storage_endpoint_policy() -> None:
-    assert (
-        presign_endpoint_for_storage("https://s3.amazonaws.com", None) == "https://s3.amazonaws.com"
-    )
-    assert (
-        presign_endpoint_for_storage("http://object-store:9000", "http://127.0.0.1:9002")
-        == "http://127.0.0.1:9002"
-    )
-    assert (
-        presign_endpoint_for_storage("http://garage:9000", "http://localhost:9002")
-        == "http://localhost:9002"
-    )
-    assert (
-        presign_endpoint_for_storage("https://s3.amazonaws.com", "http://127.0.0.1:9002")
-        == "https://s3.amazonaws.com"
-    )
-    assert (
-        presign_endpoint_for_storage("http://garage.internal:9000", "https://storage.example.com")
-        == "https://storage.example.com"
-    )
 
 
 def test_s3_delete_objects_requests_include_content_md5() -> None:
