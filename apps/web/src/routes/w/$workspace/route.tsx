@@ -3,6 +3,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Trash2, TriangleAlert } from "lucide-react";
 
 import { AppShell } from "@/components/shared/AppShell";
+import { AuthGate } from "@/components/shared/AuthGate";
 import { settingsView, type SettingsView } from "@/components/shared/SettingsDialog/view";
 import { useSession } from "@/components/shared/AuthGate/session";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
@@ -23,7 +24,11 @@ export const Route = createFileRoute("/w/$workspace")({
     const view = settingsView(search.settings);
     return view ? { settings: view } : {};
   },
-  component: WorkspaceLayout,
+  component: () => (
+    <AuthGate>
+      <WorkspaceLayout />
+    </AuthGate>
+  ),
 });
 
 function WorkspaceLayout() {

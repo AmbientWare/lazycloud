@@ -15,7 +15,7 @@ _DEFAULT_STATIC_DIR = Path(__file__).parent / "web_static"
 _BACKEND_PATH_NAMESPACES = frozenset({"api", "auth", "gateway", "webhooks"})
 """Namespaces the SPA never answers for.
 
-A path outside these falls through to `index.html` with a 200, which is right for
+A path outside these falls through to the SPA document with a 200, which is right for
 a client-side route and wrong for anything a machine calls: a payment provider
 posting to a mistyped webhook path would read the dashboard's HTML as a
 successful delivery and stop retrying.
@@ -25,7 +25,7 @@ _SPA_DOCUMENT = "_shell.html"
 
 
 class _SpaStaticFiles(StaticFiles):
-    """Static files with an index.html fallback for non-API SPA routes.
+    """Static files with the SPA document for non-API client routes.
 
     Caching is the load-bearing part. A build names each asset by its content, and a
     deploy replaces the whole set, so the previous build's names stop existing. The
@@ -50,8 +50,7 @@ class _SpaStaticFiles(StaticFiles):
             # failure it then reports names neither the file nor the reason.
             if namespace == _BUILD_ASSET_NAMESPACE:
                 raise
-            fallback = _SPA_DOCUMENT if namespace == "w" else "index.html"
-            response = await super().get_response(fallback, scope)
+            response = await super().get_response(_SPA_DOCUMENT, scope)
         return _with_cache_policy(response, namespace=namespace)
 
 

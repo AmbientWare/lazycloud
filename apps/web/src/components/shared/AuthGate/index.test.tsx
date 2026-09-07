@@ -114,18 +114,19 @@ it("redeems a callback once under StrictMode and clears the previous account cac
 
 async function renderSession(path = "/dashboard?settings=workspace#logs") {
   const root = createRootRoute({
-    component: () => (
-      <AuthGate>
-        <Outlet />
-      </AuthGate>
-    ),
+    component: Outlet,
   });
+  function AccountPage() {
+    return <p>Account {useSession().user.id}</p>;
+  }
   const dashboard = createRoute({
     getParentRoute: () => root,
     path: "/dashboard",
-    component: function AccountPage() {
-      return <p>Account {useSession().user.id}</p>;
-    },
+    component: () => (
+      <AuthGate>
+        <AccountPage />
+      </AuthGate>
+    ),
   });
   const callback = createRoute({
     getParentRoute: () => root,
