@@ -28,6 +28,7 @@ from compute.providers import (
 )
 from compute.reclaim import ComputeReclaimPolicy
 from compute.service import ComputeService
+from compute.supplier_costs import SupplierCostInspectionService
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
@@ -85,6 +86,7 @@ from shared.compute_policy import (
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
 from shared.source_cache_cleanup import WorkerCacheGenerationState
+from shared.supplier_costs import SupplierCostTerms
 from tests.service_fixtures import workspace_owner_user_id
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
@@ -109,7 +111,7 @@ class _PooledProvider:
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
         return self.offer
 
-    def list_offers(self) -> Iterable[ComputeOffer]:
+    def list_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
         if self.catalog_failure is not None:
             raise self.catalog_failure
         return (self.offer,)
@@ -491,6 +493,57 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
     assert restarted.reconcile_pooled_capacity()[0].id == unit.id
     scaled = restarted.scale_internal_unit(workspace_id, unit.id, 3, before_mutation=_allow_scale)
     assert scaled.desired_machines == 3
+
+
+def test_acquired_node_costs_survive_offer_changes_and_catalog_loss(
+    isolated_services: ApiServices,
+) -> None:
+    _seed_connection(isolated_services)
+    original = SupplierCostTerms(
+        compute_hourly_micros=340_000,
+        root_disk_hourly_micros=20_000,
+        public_ipv4_hourly_micros=5_000,
+        setup_micros=0,
+        billing_minimum_seconds=0,
+        billing_quantum_seconds=60,
+    )
+    provider = _PooledProvider(offer=_offer().model_copy(update={"cost_terms": original}))
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider, isolated_services),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    unit = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1000, memory_mb=1024),
+        region="us-east-1",
+        desired_machines=1,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    replacement = original.model_copy(update={"compute_hourly_micros": 680_000})
+    provider.offer = provider.offer.model_copy(update={"cost_terms": replacement})
+    compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1000, memory_mb=1024),
+        region="us-east-1",
+        desired_machines=2,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    provider.catalog_failure = RuntimeError("supplier catalog unavailable")
+    compute.reconcile_pooled_capacity()
+
+    inspection = SupplierCostInspectionService(isolated_services.context.database)
+    report = inspection.inspect(workspace_id=unit.workspace_id, unit_id=unit.id)
+    assert report.offer.terms == replacement
+    assert {node.provider_instance_id: node.costs.terms for node in report.nodes} == {
+        "i-00000000000000000": original,
+        "i-00000000000000001": replacement,
+    }
+    with pytest.raises(NotFoundError):
+        inspection.inspect(workspace_id=str(uuid4()), unit_id=unit.id)
 
 
 def test_internal_pool_lookup_is_workspace_scoped(isolated_services: ApiServices) -> None:
@@ -1990,7 +2043,9 @@ def _offer() -> ComputeOffer:
         cpu_millicores=4_000,
         memory_mb=32 * 1024,
         storage_mb=200 * 1024,
-        hourly_cost_micros=340_000,
+        cost_terms=SupplierCostTerms(
+            compute_hourly_micros=340_000, root_disk_hourly_micros=0, public_ipv4_hourly_micros=0
+        ),
         available=10,
         capacity_mode=ComputeCapacityMode.Pooled,
         capability_key="aws:us-east-1:m7i.xlarge:amd64:runsc",

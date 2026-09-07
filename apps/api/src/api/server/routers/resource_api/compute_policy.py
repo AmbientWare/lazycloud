@@ -125,7 +125,9 @@ def get_workspace_compute_summary(
         ),
         cost=ComputeCostSummaryResponse(
             hourly_micros=summary.hourly_cost_micros,
-            daily_micros=summary.hourly_cost_micros * 24,
+            daily_micros=(
+                summary.hourly_cost_micros * 24 if summary.hourly_cost_micros is not None else None
+            ),
         ),
         workload_count=summary.workload_count,
     )
