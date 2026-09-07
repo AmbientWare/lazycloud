@@ -13,6 +13,11 @@ See `LIFECYCLE.md` for creation and teardown. The Helm workloads live in
 deployment, from the branch named for it, and the values file Deploy writes
 there.
 
+[R2 image archives](IMAGE_ARCHIVES.md) describes credentials, the resumable
+copy command, and the required offline transition to infrastructure descriptor
+version 3. Do not deploy the new archive settings before verified coordinate
+cutover. Existing S3 buckets remain intact.
+
 [Provider provisioning](../PROVIDERS.md) covers worker capacity. `capacity.tf`
 declares the verified image input; Helm owns the Ashburn warm default and node
 sizes. Supply the

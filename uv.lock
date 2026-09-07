@@ -541,6 +541,7 @@ dependencies = [
     { name = "provider-stripe" },
     { name = "pydantic" },
     { name = "rich" },
+    { name = "storage" },
     { name = "storage-client" },
     { name = "typer" },
 ]
@@ -563,6 +564,7 @@ requires-dist = [
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "rich", specifier = ">=15,<16" },
+    { name = "storage", editable = "packages/storage" },
     { name = "storage-client", editable = "packages/storage-client" },
     { name = "typer", specifier = ">=0.26.7" },
 ]
