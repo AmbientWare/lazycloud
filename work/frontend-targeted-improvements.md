@@ -1,6 +1,6 @@
 # Targeted frontend improvements
 
-Planning only. Based on main at `c446ab43`, including the log streaming and retention work in #155. Re-check each issue against current main before implementing it. Do not replay #153 wholesale.
+This draft implements the pricing copy change below. The remaining work is proposed. Based on main at `c446ab43`, including the log streaming and retention work in #155. Re-check each issue against current main before implementing it. Do not replay #153 wholesale.
 
 ## Design constraints
 
@@ -12,7 +12,7 @@ Measure rendering and network costs before optimizing them. Pause unnecessary wo
 
 ## Proposed implementation order
 
-1. **Pricing, one focused change.** Remove the "Compute region" selector and its helper copy. Use the catalog's automatic-placement rates, keep hourly/secondly controls, plan entitlements, log-retention terms from #155, and necessary billing disclosures. Preserve the existing page composition. Keep the heading visible during loading and show an actionable retry on failure. Owner: [pricing page](../apps/web/src/routes/pricing.lazy.tsx). Acceptance: unchanged desktop/mobile composition, correct catalog-derived prices in both units, usable loading and failure states.
+1. **Pricing, one focused change.** This draft removes the "Compute region" selector, its helper copy, the effective-date caption, and region-selection rows in the plan cards. It uses the catalog's automatic-placement rates and links to regional pricing details in the docs. Hourly/secondly controls, other plan entitlements, log-retention terms from #155, and billing disclosures remain. Typography, card styling, and animations stay as they are. Owner: [pricing page](../apps/web/src/routes/pricing.lazy.tsx). Acceptance: desktop/mobile presentation and correct catalog-derived prices in both units. Loading and failure recovery remain a separate proposed change.
 
 2. **Workspace rename.** Fix the idle/editing mismatch that prevents input changes. Renaming a different workspace must not move the current resource into that workspace's URL. Preserve the dialog's appearance. Owner: [WorkspaceRename](../apps/web/src/components/shared/WorkspaceRename/). Acceptance: type, save, cancel, recover from an error, and rename current/other workspaces while viewing a resource.
 
@@ -34,7 +34,7 @@ Measure rendering and network costs before optimizing them. Pause unnecessary wo
 
 ## Delivery and review
 
-Start with pricing alone. Implement the remaining items as focused PRs, one coherent behavior at a time, rather than another combined UI rewrite. This draft records the proposed scope and makes no runtime changes.
+This draft changes pricing alone. Implement the remaining items as focused PRs, one coherent behavior at a time.
 
 Capture the current desktop/mobile presentation before each visible change. Compare the same routes, viewports, scroll positions, and interaction states afterward. Record intentional copy differences; restore any accidental change to scale, spacing, or motion.
 

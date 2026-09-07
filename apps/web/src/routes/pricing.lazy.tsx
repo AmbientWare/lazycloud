@@ -4,6 +4,7 @@ import { createLazyFileRoute } from "@tanstack/react-router";
 
 import type { PricingCatalog, PublishedPlacementRate } from "@/lib/api/schemas";
 import { gpuModelsLabel, limitFigure, memberLimitFigure } from "@/lib/entitlements";
+import { DOCS_URL } from "@/lib/env";
 import { countLabel } from "@/lib/format";
 import { exactDollars } from "@/lib/money";
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
@@ -148,7 +149,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
           /* The compute rates, not every rate above it: volumes and egress are this
            platform's own infrastructure and are charged whole wherever a container
            ran. Saying "the rates above" would quietly include them. */
-          label: "Management fee on Automatic compute rates. Your provider bills the machine.",
+          label: "Management fee on base compute rates. Your provider bills the machine.",
           figure: `${catalog.connected_cloud_management_fee_percent}%`,
           unit: "",
         },
@@ -171,9 +172,7 @@ const sectionTitle =
    twice rather than two units a reader has to hold at once. */
 function MarketingPricing() {
   const [meter, setMeter] = useState<Meter>("hour");
-  const [rateClass, setRateClass] = useState("auto");
   const fleetRatesId = useId();
-  const regionId = useId();
   const pricing = useQuery(pricingCatalogQueryOptions());
   const catalog = pricing.data;
 
@@ -189,9 +188,8 @@ function MarketingPricing() {
     );
   }
 
-  const placement = catalog.placement_rates.find((rate) => rate.rate_class === rateClass);
-  if (!placement) throw new Error("the selected placement has no published compute rates");
-  const hasRegions = catalog.placement_rates.some((rate) => rate.region !== null);
+  const placement = catalog.placement_rates.find((rate) => rate.rate_class === "auto");
+  if (!placement) throw new Error("the pricing catalog has no base compute rates");
 
   return (
     <MarketingLayout>
@@ -224,62 +222,22 @@ function MarketingPricing() {
             </div>
 
             <MarketingCard className="min-w-0 p-5 sm:p-6">
-              {/* The caption sits under the row rather than beside the heading, so
-                  the toggle keeps one position however the line above rewraps. */}
               <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
                 <h2 className="font-serif text-[clamp(1.625rem,3vw,2.125rem)] leading-none font-normal">
                   Resource costs
                 </h2>
                 <MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />
               </div>
-              <p className="mt-3.5 text-[12.5px] leading-snug text-muted-foreground">
-                Rates for machines managed by LazyCloud, effective{" "}
-                <time dateTime={catalog.metered_rates_effective_at}>
-                  {new Date(catalog.metered_rates_effective_at).toLocaleString(undefined, {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                    timeZone: "UTC",
-                  })}{" "}
-                  UTC
-                </time>
-                .
-              </p>
-              <div className="mt-5 space-y-2">
-                <label className="block text-[13px] font-medium" htmlFor={regionId}>
-                  Compute region
-                </label>
-                <select
-                  id={regionId}
-                  aria-describedby={`${regionId}-help`}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
-                  value={rateClass}
-                  onChange={(event) => setRateClass(event.target.value)}
-                  disabled={!hasRegions}
-                >
-                  {catalog.placement_rates.map((rate) => (
-                    <option key={rate.rate_class} value={rate.rate_class}>
-                      {rate.name} · {rate.multiplier}x base compute rate
-                    </option>
-                  ))}
-                </select>
-                <p
-                  id={`${regionId}-help`}
-                  className="text-xs leading-relaxed text-muted-foreground"
-                >
-                  {hasRegions
-                    ? `Automatic lets LazyCloud choose where your code runs. Region selection is available on ${catalog.plans
-                        .filter((plan) => plan.entitlements.region_selection)
-                        .map((plan) => plan.name)
-                        .join(" and ")}. Prices below include the selected region's adjustment.`
-                    : "Automatic lets LazyCloud choose where your code runs. Region selection is not available yet. These are the current base rates."}{" "}
-                  Storage and egress rates do not change with this selection.
-                </p>
-              </div>
-
               <RateList
                 groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
                 id={fleetRatesId}
               />
+              <a
+                className="interactive-link text-[12.5px] text-muted-foreground underline underline-offset-4"
+                href={new URL("/platform/plans#compute-pricing", DOCS_URL).href}
+              >
+                Pricing details
+              </a>
             </MarketingCard>
           </div>
         </section>
@@ -347,16 +305,6 @@ function MarketingPricing() {
                       <PlanLimit
                         label="Log retention"
                         value={`${plan.entitlements.log_retention_days} days`}
-                      />
-                      <PlanLimit
-                        label="Region selection"
-                        value={
-                          plan.entitlements.region_selection
-                            ? hasRegions
-                              ? "Available"
-                              : "Not available yet"
-                            : "Automatic only"
-                        }
                       />
                     </dl>
                     <ul className="mt-4 mb-6 grid list-none gap-2 p-0">
