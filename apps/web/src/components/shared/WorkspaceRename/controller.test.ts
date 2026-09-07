@@ -1,13 +1,29 @@
-import { createElement, type PropsWithChildren } from "react";
+import { createElement, useState, type PropsWithChildren } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CurrentSession, Workspace } from "@/lib/api/schemas";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { updateWorkspace } from "@/lib/queries/workspace";
 
 import { useWorkspaceRenameController } from "./controller";
+import { WorkspaceRenameDialog } from "./Dialog";
 
 vi.mock("@/lib/queries/workspace", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/queries/workspace")>();
@@ -23,7 +39,68 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+afterEach(cleanup);
+
 describe("workspace identity controller", () => {
+  it.each(["acme", "platform"])(
+    "renames %s from the dialog while preserving the viewed resource's workspace",
+    async (targetName) => {
+      const target = workspace("workspace-1", targetName);
+      const accepted = { ...target, name: "renamed" };
+      const queryClient = testQueryClient();
+      updateWorkspaceMock.mockResolvedValue(accepted);
+      const root = createRootRoute();
+      const workspaceRoute = createRoute({
+        getParentRoute: () => root,
+        path: "/w/$workspace",
+      });
+      const resourceRoute = createRoute({
+        getParentRoute: () => workspaceRoute,
+        path: "apps/$appId",
+        component: function ResourcePage() {
+          const [open, setOpen] = useState(true);
+          return open
+            ? createElement(WorkspaceRenameDialog, {
+                workspace: target,
+                onClose: () => setOpen(false),
+              })
+            : null;
+        },
+      });
+      const router = createRouter({
+        routeTree: root.addChildren([workspaceRoute.addChildren([resourceRoute])]),
+        history: createMemoryHistory({
+          initialEntries: ["/w/acme/apps/app-1?settings=workspace#details"],
+        }),
+      });
+      render(
+        createElement(
+          QueryClientProvider,
+          { client: queryClient },
+          createElement(RouterProvider, { router }),
+        ),
+      );
+      await act(() => router.load());
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Workspace name" }), {
+        target: { value: "renamed" },
+      });
+      expect(screen.getByRole("button", { name: "Rename" })).toBeEnabled();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+      });
+
+      const expectedWorkspace = targetName === "acme" ? "renamed" : "acme";
+      expect(router.state.location.href).toBe(
+        `/w/${expectedWorkspace}/apps/app-1?settings=workspace#details`,
+      );
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(updateWorkspaceMock).toHaveBeenCalledWith(target.id, "renamed");
+      router.history.destroy();
+      queryClient.clear();
+    },
+  );
+
   it("normalizes one rename and replaces only the matching directory entry", async () => {
     const target = workspace("workspace-1", "acme");
     const sibling = workspace("workspace-2", "platform");
@@ -37,7 +114,6 @@ describe("workspace identity controller", () => {
     updateWorkspaceMock.mockResolvedValue(accepted);
     const { result } = renderController({ queryClient, workspace: target, onRenamed });
 
-    act(() => result.current.beginEditing());
     act(() => result.current.setDraftName("  platform_team  "));
     act(() => result.current.save());
 
@@ -61,7 +137,6 @@ describe("workspace identity controller", () => {
       onRenamed,
     });
 
-    act(() => result.current.beginEditing());
     act(() => result.current.setDraftName("platform"));
     act(() => result.current.save());
 
@@ -72,7 +147,7 @@ describe("workspace identity controller", () => {
     expect(onRenamed).not.toHaveBeenCalled();
   });
 
-  it("rejects a duplicate submission synchronously and keeps cancel locked while saving", async () => {
+  it("rejects a duplicate submission synchronously", async () => {
     const pending = deferred<Workspace>();
     updateWorkspaceMock.mockReturnValue(pending.promise);
     const { result } = renderController({
@@ -81,7 +156,6 @@ describe("workspace identity controller", () => {
       onRenamed: vi.fn(),
     });
 
-    act(() => result.current.beginEditing());
     act(() => result.current.setDraftName("platform"));
     act(() => {
       result.current.save();
@@ -90,8 +164,6 @@ describe("workspace identity controller", () => {
 
     expect(result.current.mode).toBe("saving");
     await waitFor(() => expect(updateWorkspaceMock).toHaveBeenCalledOnce());
-    act(() => result.current.cancel());
-    expect(result.current.mode).toBe("saving");
 
     pending.resolve(workspace("workspace-1", "platform"));
     await waitFor(() => expect(result.current.mode).toBe("saved"));
@@ -105,7 +177,6 @@ describe("workspace identity controller", () => {
       onRenamed: vi.fn(),
     });
 
-    act(() => result.current.beginEditing());
     expect(result.current.canSave).toBe(false);
     act(() => result.current.save());
 
@@ -137,17 +208,15 @@ describe("workspace identity controller", () => {
         wrapper: controllerWrapper(queryClient),
       },
     );
-    act(() => result.current.beginEditing());
     act(() => result.current.setDraftName("platform"));
     act(() => result.current.save());
     await waitFor(() => expect(result.current.mode).toBe("error"));
 
     rerender({ workspaceValue: workspace("workspace-2", "research") });
 
-    expect(result.current.mode).toBe("idle");
+    expect(result.current.mode).toBe("editing");
     expect(result.current.draftName).toBe("research");
     expect(result.current.error).toBeNull();
-    expect(result.current.isEditing).toBe(false);
   });
 });
 
