@@ -23,6 +23,8 @@ from shared.compute_policy import (
     ComputeUnitProviderState,
     ComputeUnitRecord,
 )
+from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
+from shared.timestamps import utc_now
 
 from .account_connection import AwsAccountConnectionTarget
 from .instance_catalog import (
@@ -68,7 +70,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
             raise ValueError("AWS unit has invalid provider offer identity")
         return recorded_unit_offer(unit, cloud="aws", instance_type=instance_type)
 
-    def list_offers(self) -> Iterable[ComputeOffer]:
+    def list_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
         offers: list[ComputeOffer] = []
         for region, artifacts in sorted(self.binaries_by_region.items()):
             for instance in AWS_INSTANCE_CATALOG:
@@ -104,7 +106,19 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
                         region=region,
                         cpu_millicores=instance.cpu_millicores,
                         memory_mb=instance.memory_mb,
-                        hourly_cost_micros=self.instance_hourly_micros[instance.instance_type],
+                        storage_mb=root_volume_gib * 1024,
+                        cost_terms=SupplierCostTerms(
+                            source="deployment:aws.instance_hourly_micros",
+                            observed_at=utc_now(),
+                            compute_hourly_micros=self.instance_hourly_micros[
+                                instance.instance_type
+                            ],
+                            setup_micros=0,
+                            billing_minimum_seconds=60,
+                            billing_quantum_seconds=1,
+                        ),
+                        supplier_cpu_unit=SupplierCpuUnit.Vcpu,
+                        supplier_cpu_count=instance.cpu_millicores // 1000,
                         capability_key=capability_key,
                         gpu=instance.gpu.value if instance.gpu is not None else None,
                         gpu_count=instance.gpu_count,

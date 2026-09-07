@@ -374,7 +374,8 @@ class ComputeUnitCapacityController:
 
     @property
     def hourly_cost_micros(self) -> int | None:
-        return self.unit.offer_hourly_cost_micros
+        terms = self.unit.offer_cost_terms
+        return terms.known_hourly_cost_micros if terms is not None else None
 
     def operational_health(
         self,

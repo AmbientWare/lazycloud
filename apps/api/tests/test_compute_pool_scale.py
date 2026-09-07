@@ -39,6 +39,7 @@ from shared.compute_policy import (
     ComputeUnitRecord,
 )
 from shared.http.compute import UnitScaleResponse
+from shared.supplier_costs import SupplierCostTerms
 from tests.service_fixtures import (
     administrator_credential,
     owned_workspace,
@@ -85,9 +86,9 @@ class _PooledProvider:
     capacity_calls: list[tuple[int, int]] = field(default_factory=list)
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
-        return next(iter(self.list_offers()))
+        return next(iter(self.list_offers(root_volume_gib=unit.root_volume_gib)))
 
-    def list_offers(self) -> Iterable[ComputeOffer]:
+    def list_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
         return (
             ComputeOffer(
                 id=_OFFER_ID,
@@ -98,7 +99,11 @@ class _PooledProvider:
                 cpu_millicores=2_000,
                 memory_mb=8 * 1_024,
                 storage_mb=200 * 1_024,
-                hourly_cost_micros=170_000,
+                cost_terms=SupplierCostTerms(
+                    compute_hourly_micros=170_000,
+                    root_disk_hourly_micros=0,
+                    public_ipv4_hourly_micros=0,
+                ),
                 available=10,
                 capacity_mode=ComputeCapacityMode.Pooled,
                 capability_key="aws:us-east-1:m7i.large:amd64:runsc",

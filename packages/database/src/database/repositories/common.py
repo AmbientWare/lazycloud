@@ -816,7 +816,6 @@ def _column_values(
         "gpu_count",
         "cpu_millicores",
         "memory_mb",
-        "hourly_cost_micros",
         "committed_micros",
         "max_spend_micros",
         "ttl_seconds",

@@ -90,7 +90,9 @@ class ComputeCapacityPlacementService:
             offer
             for provider in providers
             if provider.pooled is not None and provider.policy is not None
-            for offer in provider.pooled.list_offers()
+            for offer in provider.pooled.list_offers(
+                root_volume_gib=provider.policy.root_volume_gib
+            )
             if provider.policy.accepts(offer)
             and offer.storage_mb >= provider.policy.root_volume_gib * 1024
             and (request.region is None or product_region(offer.region) is request.region)

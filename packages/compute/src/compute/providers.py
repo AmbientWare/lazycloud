@@ -110,8 +110,8 @@ class ProviderUnitInstance(ContractModel):
     # that identifies the release a node is actually on.
     booted_template_version: str = ""
     billing_started_at: datetime | None = None
-    billing_minimum_seconds: int = Field(default=0, ge=0)
-    billing_quantum_seconds: int = Field(default=0, ge=0)
+    billing_minimum_seconds: int | None = Field(default=None, ge=0)
+    billing_quantum_seconds: int | None = Field(default=None, ge=1)
 
 
 class ProviderCapacityPolicy(ContractModel):
@@ -195,7 +195,7 @@ class DirectMachineProviderRegistry(Protocol):
 
 
 class PooledCapacityProvider(Protocol):
-    def list_offers(self) -> Iterable[ComputeOffer]: ...
+    def list_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]: ...
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
         """Resolve owned capacity even when its shape is no longer sold."""
