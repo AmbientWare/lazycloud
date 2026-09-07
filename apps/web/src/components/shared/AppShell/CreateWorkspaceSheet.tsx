@@ -10,11 +10,14 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { createWorkspace } from "@/lib/queries/workspace";
 
+const CREATE_WORKSPACE_MUTATION_KEY = ["workspaces", "create"];
+
 export function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const create = useMutation({
+    mutationKey: CREATE_WORKSPACE_MUTATION_KEY,
     mutationFn: () => createWorkspace(name.trim()),
     onSuccess: async (created) => {
       // The shell resolves a workspace out of the session, so the session has to
@@ -26,7 +29,7 @@ export function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
   });
 
   return (
-    <Sheet open onOpenChange={(next) => (next ? undefined : onClose())}>
+    <Sheet open onOpenChange={(next) => (next || create.isPending ? undefined : onClose())}>
       <SheetContent aria-describedby={undefined} className="gap-0 sm:max-w-md">
         <DrawerHeader>
           <SheetTitle>Create workspace</SheetTitle>
@@ -35,6 +38,11 @@ export function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
           className="flex flex-col gap-3 p-4"
           onSubmit={(event) => {
             event.preventDefault();
+            if (
+              !name.trim() ||
+              queryClient.isMutating({ mutationKey: CREATE_WORKSPACE_MUTATION_KEY, exact: true })
+            )
+              return;
             create.mutate();
           }}
         >
@@ -42,6 +50,7 @@ export function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
             Name
             <Input
               autoFocus
+              disabled={create.isPending}
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder="workspace-name"
@@ -50,14 +59,23 @@ export function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
           </label>
           <div className="flex items-center gap-2">
             <Button type="submit" size="sm" disabled={create.isPending || !name.trim()}>
-              {create.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Create"}
+              {create.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              Create
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={create.isPending}
+              onClick={onClose}
+            >
               Cancel
             </Button>
           </div>
           {create.isError ? (
-            <p className="text-xs text-destructive">{create.error.message}</p>
+            <p role="alert" className="text-xs text-destructive">
+              {create.error.message}
+            </p>
           ) : null}
         </form>
       </SheetContent>
