@@ -10,7 +10,6 @@ import {
 import { AlertTriangle, RotateCcw } from "lucide-react";
 import { Toaster } from "sonner";
 
-import { AuthGate } from "@/components/shared/AuthGate";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
 
@@ -45,9 +44,7 @@ function RootComponent() {
   return (
     <RootDocument>
       <QueryClientProvider client={queryClient}>
-        <AuthGate>
-          <Outlet />
-        </AuthGate>
+        <Outlet />
         <Toaster richColors theme="dark" />
       </QueryClientProvider>
     </RootDocument>

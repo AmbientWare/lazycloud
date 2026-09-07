@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
+import { AuthGate } from "@/components/shared/AuthGate";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,11 @@ export const Route = createFileRoute("/activate")({
   validateSearch: (search: Record<string, unknown>): { code: string } => ({
     code: typeof search.code === "string" ? search.code : "",
   }),
-  component: ActivatePage,
+  component: () => (
+    <AuthGate>
+      <ActivatePage />
+    </AuthGate>
+  ),
 });
 
 /** Normalize a typed user code to the canonical XXXX-XXXX form for lookup. */

@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { AuthGate } from "@/components/shared/AuthGate";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,7 +27,11 @@ import {
  * scanner following the URL cannot join a workspace on somebody's behalf.
  */
 export const Route = createFileRoute("/invitations/$token")({
-  component: InvitationPage,
+  component: () => (
+    <AuthGate>
+      <InvitationPage />
+    </AuthGate>
+  ),
   head: () => ({
     meta: [{ title: "Invitation | LazyCloud" }],
   }),

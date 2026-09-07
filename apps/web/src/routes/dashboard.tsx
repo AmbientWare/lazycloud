@@ -1,10 +1,15 @@
 import { createFileRoute, Navigate } from "@tanstack/react-router";
 
+import { AuthGate } from "@/components/shared/AuthGate";
 import { useSession } from "@/components/shared/AuthGate/session";
 import { useWorkspaceSelection } from "@/lib/workspace-selection";
 
 export const Route = createFileRoute("/dashboard")({
-  component: DashboardEntry,
+  component: () => (
+    <AuthGate>
+      <DashboardEntry />
+    </AuthGate>
+  ),
   head: () => ({
     meta: [{ title: "Dashboard | LazyCloud" }],
   }),
