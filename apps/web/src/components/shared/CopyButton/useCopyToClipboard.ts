@@ -1,39 +1,53 @@
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
-/**
- * How long the control reports a successful copy. Long enough to read, short
- * enough that the reader connects it to the press they just made.
- */
 const COPIED_FEEDBACK_MS = 1_500;
 
-/**
- * Put a value on the clipboard and report, briefly, that it landed.
- *
- * The acknowledgement is time-boxed rather than latched: a check that never
- * clears reads as the state of the control instead of the result of one press,
- * and the next press then looks like it did nothing. The timer is cleared on
- * unmount because the drawer, dialog, or row holding the control can close
- * inside the window.
- *
- * `value` may be a function so a caller whose text is expensive to assemble —
- * a whole log buffer — builds it on the press rather than on every render.
- */
+// A callback builds expensive values such as log buffers only when copied.
 export function useCopyToClipboard(value: string | (() => string)): {
   copied: boolean;
   copy: () => void;
 } {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const attempt = useRef(0);
+  const errorToast = useRef<string | number | undefined>(undefined);
 
-  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(
+    () => () => {
+      attempt.current += 1;
+      clearTimeout(timer.current);
+      if (errorToast.current !== undefined) toast.dismiss(errorToast.current);
+    },
+    [],
+  );
 
   const copy = () => {
-    const text = typeof value === "function" ? value() : value;
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
-    });
+    const currentAttempt = ++attempt.current;
+    clearTimeout(timer.current);
+    setCopied(false);
+    if (errorToast.current !== undefined) toast.dismiss(errorToast.current);
+
+    const write = async () => {
+      try {
+        if (!navigator.clipboard?.writeText) {
+          errorToast.current = toast.error("Clipboard access is unavailable in this browser.");
+          return;
+        }
+        const text = typeof value === "function" ? value() : value;
+        await navigator.clipboard.writeText(text);
+        if (attempt.current !== currentAttempt) return;
+        setCopied(true);
+        timer.current = setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
+      } catch {
+        if (attempt.current !== currentAttempt) return;
+        errorToast.current = toast.error(
+          "Could not copy. Check clipboard permissions and try again.",
+        );
+      }
+    };
+
+    void write();
   };
 
   return { copied, copy };
