@@ -171,7 +171,7 @@ export const workspaceQueryKeys = {
       [...workspaceRoot(workspaceId), "collections", "map", name, "count"] as const,
     mapKeys: (workspaceId: string, name: string) =>
       [...workspaceRoot(workspaceId), "collections", "map", name, "keys"] as const,
-    mapValue: (workspaceId: string, name: string, key: string) =>
+    mapValue: (workspaceId: string, name: string, key: string | null) =>
       [...workspaceRoot(workspaceId), "collections", "map", name, "value", key] as const,
   },
   logs: {

@@ -75,7 +75,7 @@ export function VolumesTab({
         </aside>
         {selectedVolume ? (
           <VolumeBrowser
-            key={selectedVolume.name}
+            key={selectedVolume.id}
             workspaceId={workspaceId}
             volume={selectedVolume}
           />
