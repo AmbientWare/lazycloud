@@ -6,6 +6,7 @@ from database.tables.apps import AppTable, DeploymentTable, StubTable
 from database.tables.execution import TaskTable
 from database.tables.orchestration import ContainerTable
 from pydantic import BaseModel
+from shared.deployments import DeploymentKind
 from shared.http.search import ResourceSearchKind
 from sqlalchemy import String, cast, literal, or_, select, tuple_, union_all
 from sqlalchemy.orm import Session
@@ -16,6 +17,7 @@ class ResourceSearchRecord(BaseModel):
     id: str
     name: str
     app_id: str | None
+    workload_kind: DeploymentKind | None
 
 
 @dataclass(slots=True)
@@ -37,6 +39,7 @@ class ResourceSearchRepository:
             cast(AppTable.id, String).label("id"),
             AppTable.name.label("name"),
             literal(None, String).label("app_id"),
+            literal(None, String).label("workload_kind"),
         ).where(
             AppTable.workspace_id == workspace_id,
             AppTable.deleted_at.is_(None),
@@ -48,11 +51,16 @@ class ResourceSearchRepository:
         workloads = (
             select(
                 literal("workload").label("kind"),
-                (cast(DeploymentTable.app_id, String) + literal("/") + DeploymentTable.name).label(
-                    "id"
-                ),
+                (
+                    cast(DeploymentTable.app_id, String)
+                    + literal("/")
+                    + DeploymentTable.kind
+                    + literal("/")
+                    + DeploymentTable.name
+                ).label("id"),
                 DeploymentTable.name.label("name"),
                 cast(DeploymentTable.app_id, String).label("app_id"),
+                DeploymentTable.kind.label("workload_kind"),
             )
             .join(AppTable, AppTable.id == DeploymentTable.app_id)
             .join(StubTable, StubTable.id == DeploymentTable.stub_id)
@@ -75,6 +83,7 @@ class ResourceSearchRepository:
             cast(TaskTable.id, String).label("id"),
             TaskTable.name.label("name"),
             cast(TaskTable.app_id, String).label("app_id"),
+            literal(None, String).label("workload_kind"),
         ).where(
             TaskTable.workspace_id == workspace_id,
             or_(
@@ -88,6 +97,7 @@ class ResourceSearchRepository:
                 cast(ContainerTable.id, String).label("id"),
                 ContainerTable.name.label("name"),
                 cast(ContainerTable.app_id, String).label("app_id"),
+                literal(None, String).label("workload_kind"),
             )
             .join(StubTable, StubTable.id == ContainerTable.stub_id)
             .where(

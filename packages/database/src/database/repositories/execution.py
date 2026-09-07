@@ -30,7 +30,7 @@ from database.tables.orchestration import ContainerTable
 from pydantic import BaseModel, JsonValue, field_validator
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRun
-from shared.deployments import StubKind
+from shared.deployments import DeploymentKind, StubKind
 from shared.events import Event
 from shared.logs import LogEntry
 from shared.queue_messages import QueueMessage
@@ -669,6 +669,7 @@ class TaskRepository:
         deployment_id: str | None = None,
         app_id: str | None = None,
         workload_name: str | None = None,
+        workload_kind: DeploymentKind | None = None,
         start: datetime | None = None,
         end: datetime | None = None,
         limit: int = DEFAULT_DURATION_SAMPLE_LIMIT,
@@ -700,6 +701,15 @@ class TaskRepository:
                 TaskTable.stub_id.in_(
                     select(StubTable.id).where(
                         StubTable.workspace_id == workspace_id, StubTable.name == workload_name
+                    )
+                )
+            )
+        if workload_kind is not None:
+            statement = statement.where(
+                TaskTable.stub_id.in_(
+                    select(StubTable.id).where(
+                        StubTable.workspace_id == workspace_id,
+                        StubTable.type == workload_kind.value,
                     )
                 )
             )

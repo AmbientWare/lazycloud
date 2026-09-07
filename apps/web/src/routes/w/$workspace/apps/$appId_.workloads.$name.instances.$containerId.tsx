@@ -8,12 +8,16 @@ import { PodInstanceDrawer } from "./-workloads/PodInstanceDrawer";
 export const Route = createFileRoute(
   "/w/$workspace/apps/$appId_/workloads/$name/instances/$containerId",
 )({
+  beforeLoad: ({ search }) => {
+    if (search.kind !== "pod") throw new Error("Instances are available for pod workloads.");
+  },
   component: PodInstanceDrawerRoute,
   errorComponent: RouteErrorFallback,
 });
 
 function PodInstanceDrawerRoute() {
   const { appId, name, containerId } = Route.useParams();
+  const { kind } = Route.useSearch();
   const { workspace } = useWorkspace();
   const navigate = useNavigate();
 
@@ -27,6 +31,7 @@ function PodInstanceDrawerRoute() {
         void navigate({
           to: "/w/$workspace/apps/$appId/workloads/$name",
           params: { workspace: workspace.name, appId, name },
+          search: { kind },
         });
       }}
     />

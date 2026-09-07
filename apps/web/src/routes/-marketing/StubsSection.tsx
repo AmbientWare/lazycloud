@@ -34,14 +34,14 @@ export function StubsSection() {
         <SectionHeading
           title={
             <>
-              Generate a typed client <em>for any deployment.</em>
+              Typed clients, <em>pinned to your deployment.</em>
             </>
           }
-          body="Create a pinned Python package for an app, then call its endpoints and functions from another project."
+          body="Call deployed endpoints and functions from another Python project."
         />
         <div className="grid gap-6 lg:grid-cols-2">
           <div className="min-w-0">
-            <h3 className="mb-3 text-base font-medium">Define your app</h3>
+            <h3 className="mb-3 text-base font-medium">Define</h3>
             <MarketingCard asChild>
               <CodeBlock
                 tone="paper"
@@ -53,7 +53,7 @@ export function StubsSection() {
             </MarketingCard>
           </div>
           <div className="min-w-0">
-            <h3 className="mb-3 text-base font-medium">Generate and import</h3>
+            <h3 className="mb-3 text-base font-medium">Import</h3>
             <MarketingCard>
               <div className="border-b border-border px-4 py-4 font-mono text-xs break-words sm:px-5">
                 lazycloud client get review_app
@@ -66,10 +66,6 @@ export function StubsSection() {
                 {importExample}
               </CodeBlock>
             </MarketingCard>
-            <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
-              The generated package preserves argument types and response models. Its lock file pins
-              the deployed version.
-            </p>
           </div>
         </div>
       </div>

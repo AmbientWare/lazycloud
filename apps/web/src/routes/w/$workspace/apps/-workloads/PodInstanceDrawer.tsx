@@ -38,7 +38,7 @@ export function PodInstanceDrawer({
   onClose: () => void;
 }) {
   const container = useQuery(containerQueryOptions(workspaceId, containerId));
-  const workload = useQuery(workloadQueryOptions(workspaceId, appId, workloadName));
+  const workload = useQuery(workloadQueryOptions(workspaceId, appId, workloadName, "pod"));
   const deployment = workload.data?.deployment;
   const member = Boolean(
     container.data && deployment?.stub_id && container.data.stub_id === deployment.stub_id,

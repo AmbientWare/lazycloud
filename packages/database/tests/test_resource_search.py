@@ -47,7 +47,7 @@ def test_resource_search_pages_all_kinds_without_crossing_workspaces(
                         payload={},
                     )
                 )
-                for version in (1, 2):
+                for version, kind in ((1, "pod"), (2, "pod"), (1, "function")):
                     session.execute(
                         insert(DeploymentTable).values(
                             id=str(uuid4()),
@@ -55,7 +55,7 @@ def test_resource_search_pages_all_kinds_without_crossing_workspaces(
                             app_id=app_id,
                             stub_id=stub_id,
                             name="match-workload",
-                            kind="pod",
+                            kind=kind,
                             version=version,
                             subdomain=uuid4().hex,
                             payload={},
@@ -77,7 +77,8 @@ def test_resource_search_pages_all_kinds_without_crossing_workspaces(
                         {
                             ("app", app_id),
                             ("task", task_id),
-                            ("workload", f"{app_id}/match-workload"),
+                            ("workload", f"{app_id}/pod/match-workload"),
+                            ("workload", f"{app_id}/function/match-workload"),
                         }
                     )
                 for index in range(61):

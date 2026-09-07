@@ -10,18 +10,13 @@ import { cn } from "@/lib/utils";
 import { MarketingLayout } from "./-marketing/MarketingLayout";
 import { StubsSection } from "./-marketing/StubsSection";
 import {
-  FinalCta,
   Glyph,
   GetStartedButton,
   MarketingCard,
   SectionHeading,
   shell,
 } from "./-marketing/MarketingPrimitives";
-import {
-  ComputePlacementPreview,
-  StoryPreview,
-  type StoryVisual,
-} from "./-marketing/ProductPreviews";
+import { StoryPreview, type StoryVisual } from "./-marketing/ProductPreviews";
 import { MarketingExampleImage } from "./-marketing/MarketingExampleImage";
 import { marketingUseCases } from "./-marketing/marketingUseCases";
 import { GpuPlate, LocalPlate, ProductionPlate } from "./-marketing/ParityFigures";
@@ -120,7 +115,6 @@ const heroStories = [
 type PlatformStory = {
   key: string;
   label: string;
-  title: string;
   body: string;
   visual: StoryVisual;
 };
@@ -129,29 +123,25 @@ const platformStories: PlatformStory[] = [
   {
     key: "endpoints",
     label: "APIs",
-    title: "Turn a function into an API.",
-    body: "Add a route and resource limits. LazyCloud handles TLS, scaling, and idle shutdown.",
+    body: "Define a route. LazyCloud handles TLS, scaling, and idle shutdown.",
     visual: "application",
   },
   {
     key: "graphs",
     label: "Jobs and pipelines",
-    title: "Move heavy work off your laptop.",
-    body: "Run tests, evals, data processing, and GPU jobs as tasks with dependencies, logs, and saved results.",
+    body: "Run tasks with dependencies, logs, and saved results.",
     visual: "jobs",
   },
   {
     key: "background",
     label: "Queues and schedules",
-    title: "Keep background work off the request path.",
-    body: "Queue a function or run it on a schedule. Each run has retries, cancellation, and live logs.",
+    body: "Queue or schedule functions with retries, cancellation, and live logs.",
     visual: "background",
   },
   {
     key: "sandboxes",
     label: "Agent sandboxes",
-    title: "Give coding agents a machine they can safely use.",
-    body: "Start an isolated sandbox with files, processes, ports, Docker, snapshots, and an explicit network policy.",
+    body: "Isolate agent code with files, processes, Docker, snapshots, and network policies.",
     visual: "sandbox",
   },
 ];
@@ -166,28 +156,21 @@ const parityModes = [
     Plate: LocalPlate,
     title: "Debug locally",
     call: "embed.local(rows)",
-    body: "Use local data and your usual debugger.",
   },
   {
     key: "gpu",
     Plate: GpuPlate,
     title: "Run remotely",
     call: "embed.remote(rows)",
-    body: "Borrow remote CPU or GPU capacity before you deploy.",
   },
   {
     key: "production",
     Plate: ProductionPlate,
     title: "Deploy a service",
     call: "lazycloud deploy app.py:app",
-    body: "Publish a stable endpoint that scales down when idle.",
   },
 ];
 
-/* Placed after the control-plane rail: the rail establishes that one platform
-   covers every phase, and this is the sharpest instance of it — the same
-   function, unchanged, across all three execution modes. Ahead of the
-   typed-client story, which is a narrower point. */
 function ParitySection() {
   return (
     <section className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
@@ -198,7 +181,6 @@ function ParitySection() {
               One function. <em>Three ways to run it.</em>
             </>
           }
-          body="Call it locally for debugging, remotely for more CPU or a GPU, or deploy it as a stable endpoint."
         />
 
         <div className="max-w-[820px]">
@@ -222,7 +204,6 @@ function ParitySection() {
               <code className="mt-2 block font-mono text-[12px] break-all text-brand">
                 {mode.call}
               </code>
-              <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{mode.body}</p>
             </article>
           ))}
         </div>
@@ -248,8 +229,7 @@ function MarketingHome() {
                 Deploy as fast as you <em>develop.</em>
               </h1>
               <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-                One decorator turns a Python function into a deployed API, job, queue, or GPU
-                workload. The same function still runs on your laptop.
+                Deploy Python APIs, jobs, and GPU workloads. Run the same functions locally.
               </p>
               <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
                 <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
@@ -328,20 +308,7 @@ function MarketingHome() {
 
         <section className="border-t border-input bg-muted py-18 sm:py-22 lg:py-28">
           <div className={shell}>
-            <div className="flex flex-col items-start gap-0 sm:flex-row sm:items-end sm:justify-between sm:gap-10">
-              <SectionHeading title="What will you build?" />
-              {EXAMPLES_URL ? (
-                <div className="-mt-6 mb-10 sm:mt-0 sm:mb-14">
-                  <a
-                    className="inline-flex min-h-11 items-center gap-2.5 text-[13px] font-semibold text-foreground"
-                    href={EXAMPLES_URL}
-                  >
-                    Explore examples
-                    <Glyph>→</Glyph>
-                  </a>
-                </div>
-              ) : null}
-            </div>
+            <SectionHeading title="Examples" />
             <div
               className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5"
               role="region"
@@ -349,10 +316,6 @@ function MarketingHome() {
               aria-label="Runnable examples"
             >
               {marketingUseCases.map((useCase) => (
-                /* A card is a link only when there is a gallery to open. Without
-                   one it still says what you can build, but it stops offering a
-                   press that goes nowhere — and the arrow goes with it, since the
-                   arrow is the promise. */
                 <UseCaseCard key={useCase.id}>
                   <MarketingExampleImage
                     className="absolute inset-x-0 top-0 h-[56%] object-cover object-[center_72%]"
@@ -369,9 +332,6 @@ function MarketingHome() {
                     <h3 className="max-w-[390px] text-[clamp(1.1rem,1.55vw,1.4rem)] leading-[1.12] font-medium">
                       {useCase.title}
                     </h3>
-                    <p className="mt-3 max-w-[390px] text-[12px] leading-[1.5] text-muted-foreground">
-                      {useCase.cardSummary}
-                    </p>
                     {EXAMPLES_URL ? (
                       <span className="mt-auto inline-flex text-muted-foreground/55">
                         <Glyph>↗</Glyph>
@@ -383,15 +343,6 @@ function MarketingHome() {
             </div>
           </div>
         </section>
-
-        <FinalCta
-          title={
-            <>
-              Keep building. <em>Don&apos;t stop for infrastructure.</em>
-            </>
-          }
-          body="Test locally, use remote compute, and deploy APIs or workers without repackaging the workload."
-        />
       </main>
     </MarketingLayout>
   );
@@ -532,14 +483,7 @@ function PlatformStoryRail() {
         )}
       >
         <aside className="min-w-0 lg:sticky lg:top-28 lg:self-start lg:py-16">
-          <SectionHeading
-            title={
-              <>
-                The whole platform, <em>available from code.</em>
-              </>
-            }
-            body="Define APIs, jobs, queues, schedules, and sandboxes in Python. Use the typed SDK or JSON output from the CLI."
-          />
+          <SectionHeading title="Workloads" />
           <nav aria-label="Platform use cases" className="border-t border-border">
             <ol className="m-0 list-none p-0">
               {platformStories.map((story, index) => {
@@ -576,12 +520,11 @@ function PlatformStoryRail() {
               ref={(node) => registerStory(index, node)}
             >
               <div className="mb-6 sm:mb-8">
-                <p className="text-sm font-medium text-brand">{story.label}</p>
                 <h3
-                  className="mt-3 text-2xl leading-tight font-medium sm:text-3xl"
+                  className="text-2xl leading-tight font-medium sm:text-3xl"
                   id={`platform-story-${story.key}-title`}
                 >
-                  {story.title}
+                  {story.label}
                 </h3>
                 <p className="mt-3 max-w-[620px] text-sm leading-relaxed text-muted-foreground sm:text-base">
                   {story.body}
@@ -592,7 +535,7 @@ function PlatformStoryRail() {
                 className="marketing-story-panel min-w-0"
                 role="region"
               >
-                <div className="marketing-story-visual flex min-h-[340px] [&>div]:flex-1">
+                <div className="marketing-story-visual flex [&>div]:flex-1">
                   <StoryPreview visual={story.visual} />
                 </div>
               </div>
@@ -616,8 +559,8 @@ const computePaths = [
     command: "lazycloud cloud connect aws",
   },
   {
-    title: "Supported Linux machines",
-    body: "Join a systemd-based amd64 or arm64 VM, bare-metal server, or on-premises GPU.",
+    title: "Your Linux machines",
+    body: "Join systemd-based amd64 or arm64 machines, including GPU hosts.",
     command: "lazycloud machine join",
   },
 ];
@@ -632,27 +575,21 @@ function ComputeSection() {
               Use our compute, <em>or bring your own.</em>
             </>
           }
-          body="Start with managed capacity. Connect AWS or join a Linux machine when you want workloads to run in your infrastructure."
         />
-        <div className="grid grid-cols-[0.9fr_1.1fr] gap-7 max-lg:grid-cols-1">
-          <div className="flex flex-col gap-4">
-            {computePaths.map((path) => (
-              <MarketingCard asChild key={path.title}>
-                <article className="flex-1 p-5 sm:p-6">
-                  <h3 className="text-lg font-medium tracking-[-0.02em]">{path.title}</h3>
-                  <p className="mt-3 text-[13px] text-muted-foreground">{path.body}</p>
-                  {path.command ? (
-                    <code className="mt-3 inline-flex max-w-full items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1.5 font-mono text-[11px] break-all text-foreground">
-                      <span className="text-brand">$</span> {path.command}
-                    </code>
-                  ) : null}
-                </article>
-              </MarketingCard>
-            ))}
-          </div>
-          <div className="flex [&>div]:flex-1">
-            <ComputePlacementPreview />
-          </div>
+        <div className="grid gap-4 md:grid-cols-3">
+          {computePaths.map((path) => (
+            <MarketingCard asChild key={path.title}>
+              <article className="flex-1 p-5 sm:p-6">
+                <h3 className="text-lg font-medium tracking-[-0.02em]">{path.title}</h3>
+                <p className="mt-3 text-[13px] text-muted-foreground">{path.body}</p>
+                {path.command ? (
+                  <code className="mt-3 inline-flex max-w-full items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1.5 font-mono text-[11px] break-all text-foreground">
+                    <span className="text-brand">$</span> {path.command}
+                  </code>
+                ) : null}
+              </article>
+            </MarketingCard>
+          ))}
         </div>
       </div>
     </section>

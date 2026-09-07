@@ -54,7 +54,7 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
   return (
     <Panel
       title="Domains"
-      description="Available to every workspace in this account"
+      description="Shared across your account"
       action={
         billing.isPending || billing.error ? null : customDomainsEnabled ? (
           <form

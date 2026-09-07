@@ -21,3 +21,4 @@ export * from "./tasks";
 export * from "./usage";
 export * from "./users";
 export * from "./workspaces";
+export * from "./deployments";

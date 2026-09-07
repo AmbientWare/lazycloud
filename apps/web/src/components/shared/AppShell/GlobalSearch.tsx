@@ -105,7 +105,9 @@ export function GlobalSearch({
                 key={`${result.kind}-${result.id}`}
                 id={`${result.kind}-${result.id}`}
                 label={result.name || resourceLabels[result.kind]}
-                detail={resourceLabels[result.kind]}
+                detail={
+                  result.kind === "workload" ? result.workload_kind : resourceLabels[result.kind]
+                }
                 icon={resourceIcons[result.kind]}
                 onSelect={() => openDestination(resourceHref(base, result))}
               />
@@ -166,7 +168,7 @@ function SearchItem({
 function resourceHref(base: string, result: ResourceSearchResult): string {
   if (result.kind === "app") return `${base}/apps/${encodeURIComponent(result.id)}`;
   if (result.kind === "workload")
-    return `${base}/apps/${encodeURIComponent(result.app_id)}/workloads/${encodeURIComponent(result.name)}`;
+    return `${base}/apps/${encodeURIComponent(result.app_id)}/workloads/${encodeURIComponent(result.name)}?kind=${encodeURIComponent(result.workload_kind)}`;
   if (result.kind === "task") return `${base}/tasks/${encodeURIComponent(result.id)}`;
   return `${base}/sandboxes/${encodeURIComponent(result.id)}`;
 }

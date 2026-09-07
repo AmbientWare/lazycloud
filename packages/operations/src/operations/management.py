@@ -675,6 +675,7 @@ class ManagementService:
         active: bool | None = None,
         app_id: str | None = None,
         name: str | None = None,
+        kind: DeploymentKind | None = None,
         limit: int = 100,
         cursor: str | None = None,
     ) -> CursorPage[Deployment]:
@@ -684,6 +685,7 @@ class ManagementService:
                 workspace=workspace,
                 app_id=app_id,
                 name=name,
+                kinds={kind} if kind is not None else None,
                 active=active,
             )
         ]
@@ -712,17 +714,19 @@ class ManagementService:
         *,
         app_id: str | None = None,
         name: str | None = None,
+        kind: DeploymentKind | None = None,
         limit: int = 100,
     ) -> CursorPage[Deployment]:
-        grouped: dict[tuple[str, str], Deployment] = {}
+        grouped: dict[tuple[str, str, str], Deployment] = {}
         for resource in self.services.deployment_resources.list(
             workspace=workspace,
             app_id=app_id,
             name=name,
+            kinds={kind} if kind is not None else None,
             active=True,
         ):
             deployment = resource.deployment
-            key = (deployment.kind.value, deployment.name)
+            key = (resource.app.id, deployment.kind.value, deployment.name)
             existing = grouped.get(key)
             if existing is None or deployment.version > existing.version:
                 grouped[key] = deployment
@@ -923,12 +927,15 @@ class ManagementService:
             )
         return scaling
 
-    def delete_workload(self, workspace: str, *, app_id: str, name: str) -> None:
+    def delete_workload(
+        self, workspace: str, *, app_id: str, name: str, kind: DeploymentKind
+    ) -> None:
         self.services.apps.get(app_id, workspace=workspace)
         resources = self.services.deployment_resources.list(
             workspace=workspace,
             app_id=app_id,
             name=name,
+            kinds={kind},
             active=None,
         )
         for resource in resources:
@@ -1445,6 +1452,7 @@ class ManagementService:
         deployment_id: str | None = None,
         app_id: str | None = None,
         workload_name: str | None = None,
+        workload_kind: DeploymentKind | None = None,
         window_seconds: int = 3600,
         start: datetime | None = None,
         end: datetime | None = None,
@@ -1459,8 +1467,8 @@ class ManagementService:
         if window_seconds <= 0:
             msg = "window_seconds must be greater than zero"
             raise InvalidInputError(msg)
-        if not stub_ids and not (app_id and workload_name):
-            msg = "at least one stub_id is required"
+        if not stub_ids and not (app_id and workload_name and workload_kind):
+            msg = "Supply stub_id or app_id, workload_name, and workload_kind"
             raise InvalidInputError(msg)
         workspace_record = self.control_plane.get_workspace(workspace)
         resolved_end = end or utc_now()
@@ -1471,6 +1479,7 @@ class ManagementService:
                 stub_ids=stub_ids,
                 app_id=app_id,
                 workload_name=workload_name,
+                workload_kind=workload_kind,
                 deployment_id=deployment_id,
                 start=resolved_start,
                 end=resolved_end,
@@ -1480,6 +1489,7 @@ class ManagementService:
                 stub_ids=stub_ids,
                 app_id=app_id,
                 workload_name=workload_name,
+                workload_kind=workload_kind,
                 start=resolved_start,
                 end=resolved_end,
             )

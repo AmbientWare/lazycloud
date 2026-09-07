@@ -5,7 +5,7 @@ import { Menu, X } from "lucide-react";
 import { DOCS_URL, EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
-import { Glyph, GetStartedButton, shell, type MarketingRoute } from "./MarketingPrimitives";
+import { GetStartedButton, shell, type MarketingRoute } from "./MarketingPrimitives";
 
 import "./marketing.css";
 
@@ -222,7 +222,6 @@ function MobileNavigation() {
                   to={entry.to}
                 >
                   <span>{entry.label}</span>
-                  <Glyph>↗</Glyph>
                 </Link>
               ) : (
                 <a
@@ -232,7 +231,6 @@ function MobileNavigation() {
                   onClick={() => setOpen(false)}
                 >
                   <span>{entry.label}</span>
-                  <Glyph>↗</Glyph>
                 </a>
               ),
             )}

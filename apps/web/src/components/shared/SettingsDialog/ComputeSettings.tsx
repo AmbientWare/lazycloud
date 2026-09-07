@@ -157,7 +157,7 @@ function ConnectedCloudsPanel({
   return (
     <Panel
       title="Connected clouds"
-      description="Available to every workspace in this account"
+      description="Shared across your account"
       action={
         <AddCloudMenu
           connection={connection}
@@ -695,7 +695,6 @@ function SelfHostedPanel({
   return (
     <Panel
       title="Self-hosted machines"
-      description="Hosts you connected"
       action={
         <Button size="sm" variant="outline" onClick={onJoin}>
           <Server />

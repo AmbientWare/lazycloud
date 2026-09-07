@@ -26,7 +26,9 @@ def test_workload_current_version_counts_and_filters_are_independent_of_history(
             application_name=DatabaseApplicationName.Test,
         )
     )
-    workspace_id, app_id, old_stub_id, current_stub_id = (str(uuid4()) for _ in range(4))
+    workspace_id, app_id, old_stub_id, current_stub_id, pod_stub_id = (
+        str(uuid4()) for _ in range(5)
+    )
     try:
         with database.session() as session:
             session.execute(
@@ -75,16 +77,26 @@ def test_workload_current_version_counts_and_filters_are_independent_of_history(
                 )
             )
             session.execute(
+                insert(StubTable).values(
+                    id=pod_stub_id,
+                    workspace_id=workspace_id,
+                    app_id=app_id,
+                    name="alpha",
+                    type="pod",
+                    payload={},
+                )
+            )
+            session.execute(
                 insert(DeploymentTable).values(
                     id=str(uuid4()),
                     workspace_id=workspace_id,
                     app_id=app_id,
-                    stub_id=current_stub_id,
-                    name="beta",
+                    stub_id=pod_stub_id,
+                    name="alpha",
                     kind="pod",
                     version=1,
                     subdomain="beta",
-                    payload={"name": "beta"},
+                    payload={"name": "alpha", "kind": "pod"},
                 )
             )
             for status in ("running", "pending", "stopped"):
@@ -109,22 +121,34 @@ def test_workload_current_version_counts_and_filters_are_independent_of_history(
             assert first[0].running_containers == 1
             assert first[0].active_containers == 2
             assert (
-                repository.workloads(workspace_id=workspace_id, app_id=app_id, after="alpha")[
-                    0
-                ].resource.deployment_payload["name"]
-                == "beta"
+                repository.workloads(
+                    workspace_id=workspace_id,
+                    app_id=app_id,
+                    after=("alpha", DeploymentKind.Function),
+                )[0].resource.deployment_payload["kind"]
+                == "pod"
             )
             assert (
                 repository.workloads(
                     workspace_id=workspace_id, app_id=app_id, kind=DeploymentKind.Pod
-                )[0].resource.deployment_payload["name"]
-                == "beta"
+                )[0].resource.deployment_payload["kind"]
+                == "pod"
             )
             assert (
                 repository.workloads(workspace_id=workspace_id, app_id=app_id, name="alpha")[
                     0
                 ].version_count
                 == 302
+            )
+            pod = repository.workloads(
+                workspace_id=workspace_id, app_id=app_id, name="alpha", kind=DeploymentKind.Pod
+            )[0]
+            assert pod.version_count == 1
+            assert pod.running_containers == 0
+            assert pod.active_containers == 0
+            assert (
+                len(repository.workloads(workspace_id=workspace_id, app_id=app_id, name="alpha"))
+                == 2
             )
             assert repository.workloads(workspace_id=str(uuid4()), app_id=app_id) == []
     finally:

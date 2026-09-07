@@ -6,6 +6,7 @@ import {
   deploymentListSchema,
   workloadPageSchema,
   type Deployment,
+  type DeploymentKind,
   type DeploymentList,
 } from "@/lib/api/schemas";
 
@@ -15,6 +16,7 @@ import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 export type DeploymentListOptions = {
   appId?: string;
   name?: string;
+  kind?: DeploymentKind;
   limit?: number;
 };
 
@@ -32,15 +34,21 @@ export function workloadsInfiniteQueryOptions(workspaceId: string, appId: string
       );
     },
     getNextPageParam: (page) => page.next || undefined,
+    maxPages: LIVE_LIST_MAX_PAGES,
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-export function workloadQueryOptions(workspaceId: string, appId: string, name: string) {
+export function workloadQueryOptions(
+  workspaceId: string,
+  appId: string,
+  name: string,
+  kind: DeploymentKind,
+) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.deployments.workloads(workspaceId, appId, name),
+    queryKey: workspaceQueryKeys.deployments.workloads(workspaceId, appId, name, kind),
     queryFn: async () => {
-      const params = new URLSearchParams({ name, limit: "1" });
+      const params = new URLSearchParams({ name, kind, limit: "1" });
       const page = await apiRequest(
         withWorkspace(`/api/v1/apps/${encodeURIComponent(appId)}/workloads?${params}`, workspaceId),
         workloadPageSchema,
@@ -60,6 +68,7 @@ export function deploymentsInfiniteQueryOptions(
       limit: options.limit ?? 100,
       appId: options.appId ?? null,
       name: options.name ?? null,
+      kind: options.kind ?? null,
     }),
     initialPageParam: "",
     queryFn: ({ pageParam }) => {
@@ -96,5 +105,6 @@ function deploymentListParams(options: DeploymentListOptions, cursor: string): U
   if (cursor) params.set("cursor", cursor);
   if (options.appId) params.set("app_id", options.appId);
   if (options.name) params.set("name", options.name);
+  if (options.kind) params.set("kind", options.kind);
   return params;
 }

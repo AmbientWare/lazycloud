@@ -86,12 +86,13 @@ export function AppWorkloadsSection({
             const deployment = workload.deployment;
             return (
               <div
-                key={deployment.name}
+                key={`${deployment.kind}:${deployment.name}`}
                 className="interactive-row flex min-w-0 items-center gap-2 px-3"
               >
                 <Link
                   to="/w/$workspace/apps/$appId/workloads/$name"
                   params={{ workspace: workspaceName, appId, name: deployment.name }}
+                  search={{ kind: deployment.kind }}
                   className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-2 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <span className="flex min-w-0 flex-1 items-center gap-2.5">

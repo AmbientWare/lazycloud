@@ -1032,7 +1032,7 @@ class DeploymentResourceRepository:
         app_id: str,
         name: str | None = None,
         kind: DeploymentKind | None = None,
-        after: str | None = None,
+        after: tuple[str, DeploymentKind] | None = None,
         limit: int = 50,
     ) -> list[WorkloadSummaryRow]:
         versions = (
@@ -1040,7 +1040,7 @@ class DeploymentResourceRepository:
                 DeploymentTable.id,
                 func.row_number()
                 .over(
-                    partition_by=DeploymentTable.name,
+                    partition_by=(DeploymentTable.name, DeploymentTable.kind),
                     order_by=(
                         DeploymentTable.version.desc(),
                         DeploymentTable.created_at.desc(),
@@ -1048,7 +1048,9 @@ class DeploymentResourceRepository:
                     ),
                 )
                 .label("rank"),
-                func.count().over(partition_by=DeploymentTable.name).label("version_count"),
+                func.count()
+                .over(partition_by=(DeploymentTable.name, DeploymentTable.kind))
+                .label("version_count"),
             )
             .where(
                 DeploymentTable.workspace_id == workspace_id,
@@ -1060,6 +1062,7 @@ class DeploymentResourceRepository:
         counts = (
             select(
                 DeploymentTable.name,
+                DeploymentTable.kind,
                 func.count(func.distinct(ContainerTable.id))
                 .filter(ContainerTable.status == ContainerStatus.Running.value)
                 .label("running"),
@@ -1081,7 +1084,7 @@ class DeploymentResourceRepository:
                     [ContainerStatus.Pending.value, ContainerStatus.Running.value]
                 ),
             )
-            .group_by(DeploymentTable.name)
+            .group_by(DeploymentTable.name, DeploymentTable.kind)
             .subquery()
         )
         statement = (
@@ -1096,7 +1099,10 @@ class DeploymentResourceRepository:
             .join(DeploymentTable, DeploymentTable.app_id == AppTable.id)
             .join(StubTable, StubTable.id == DeploymentTable.stub_id)
             .join(versions, and_(versions.c.id == DeploymentTable.id, versions.c.rank == 1))
-            .outerjoin(counts, counts.c.name == DeploymentTable.name)
+            .outerjoin(
+                counts,
+                and_(counts.c.name == DeploymentTable.name, counts.c.kind == DeploymentTable.kind),
+            )
             .where(
                 AppTable.workspace_id == workspace_id,
                 AppTable.id == app_id,
@@ -1104,7 +1110,7 @@ class DeploymentResourceRepository:
                 DeploymentTable.workspace_id == workspace_id,
                 DeploymentTable.deleted_at.is_(None),
             )
-            .order_by(DeploymentTable.name)
+            .order_by(DeploymentTable.name, DeploymentTable.kind)
             .limit(limit)
         )
         if name is not None:
@@ -1112,7 +1118,12 @@ class DeploymentResourceRepository:
         if kind is not None:
             statement = statement.where(DeploymentTable.kind == kind.value)
         if after is not None:
-            statement = statement.where(DeploymentTable.name > after)
+            statement = statement.where(
+                or_(
+                    DeploymentTable.name > after[0],
+                    and_(DeploymentTable.name == after[0], DeploymentTable.kind > after[1].value),
+                )
+            )
         return [
             WorkloadSummaryRow(
                 resource=DeploymentResourceRow(

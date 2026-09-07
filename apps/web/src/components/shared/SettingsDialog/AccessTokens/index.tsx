@@ -71,11 +71,7 @@ export function AccessTokens() {
             retrying={controller.retrying}
           />
         ) : controller.tokens.length === 0 ? (
-          <PanelEmpty
-            message="No tokens yet"
-            detail="Create a token for CLI, CI, or API access."
-            className="min-h-32 p-8"
-          />
+          <PanelEmpty message="No access tokens" className="min-h-32 p-8" />
         ) : (
           <TokenTable controller={controller} tokens={controller.tokens} />
         )}

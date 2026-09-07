@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 
 from database.records.apps import AppRecord, StubRecord
 from database.repositories.apps import DeploymentResourceRepository, DeploymentResourceRow
 from database.types import DatabaseSession
+from pydantic import BaseModel, ValidationError
 from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind
 from shared.errors import InvalidInputError, NotFoundError
@@ -41,6 +44,19 @@ class WorkloadSummary:
     version_count: int
     running_containers: int
     active_containers: int
+
+
+@dataclass(frozen=True, slots=True)
+class WorkloadPage:
+    data: list[WorkloadSummary]
+    next: str
+
+
+class WorkloadCursor(BaseModel):
+    workspace_id: str
+    app_id: str
+    name: str
+    kind: DeploymentKind
 
 
 def client_manifest_resource(
@@ -82,28 +98,48 @@ class DeploymentResourceService:
         app_id: str,
         name: str | None = None,
         kind: DeploymentKind | None = None,
-        after: str | None = None,
+        cursor: str | None = None,
         limit: int = 50,
-    ) -> list[WorkloadSummary]:
+    ) -> WorkloadPage:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
+            after: tuple[str, DeploymentKind] | None = None
+            if cursor:
+                try:
+                    decoded = WorkloadCursor.model_validate_json(base64.urlsafe_b64decode(cursor))
+                except (ValueError, binascii.Error, ValidationError) as exc:
+                    raise InvalidInputError("Invalid workload cursor") from exc
+                if decoded.workspace_id != workspace_id or decoded.app_id != app_id:
+                    raise InvalidInputError("Workload cursor belongs to a different app")
+                after = decoded.name, decoded.kind
             rows = DeploymentResourceRepository(session).workloads(
                 workspace_id=workspace_id,
                 app_id=app_id,
                 name=name,
                 kind=kind,
                 after=after,
-                limit=limit,
+                limit=limit + 1,
             )
-            return [
+            data = [
                 WorkloadSummary(
                     resource=_deployment_resource(row.resource),
                     version_count=row.version_count,
                     running_containers=row.running_containers,
                     active_containers=row.active_containers,
                 )
-                for row in rows
+                for row in rows[:limit]
             ]
+            next_cursor = ""
+            if len(rows) > limit:
+                last = data[-1].resource.deployment
+                next_cursor = base64.urlsafe_b64encode(
+                    WorkloadCursor(
+                        workspace_id=workspace_id, app_id=app_id, name=last.name, kind=last.kind
+                    )
+                    .model_dump_json()
+                    .encode()
+                ).decode()
+            return WorkloadPage(data=data, next=next_cursor)
 
     def list(
         self,

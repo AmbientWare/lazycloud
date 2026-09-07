@@ -11,30 +11,16 @@ function PreviewFrame({ title, children }: { title: string; children: ReactNode 
     <MarketingCard className="marketing-product-frame" data-product-preview="">
       <div className="marketing-product-bar">
         <strong>{title}</strong>
-        <span>Example</span>
       </div>
       {children}
     </MarketingCard>
   );
 }
 
-function PreviewFacts({ facts }: { facts: readonly { label: string; value: string }[] }) {
-  return (
-    <dl className="marketing-preview-facts">
-      {facts.map(({ label, value }) => (
-        <div key={label}>
-          <dt>{label}</dt>
-          <dd>{value}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
 function PreviewChart({ label, path }: { label: string; path: string }) {
   return (
     <figure className="marketing-preview-chart">
-      <figcaption>{label}</figcaption>
+      <figcaption className="sr-only">{label}</figcaption>
       <svg viewBox="0 0 480 160" preserveAspectRatio="none" aria-hidden="true">
         {[30, 80, 130].map((y) => (
           <line className="marketing-preview-grid" key={y} x1="0" x2="480" y1={y} y2={y} />
@@ -70,13 +56,7 @@ $ pytest -q tests/test_auth.py
 export function StoryPreview({ visual }: { visual: StoryVisual }) {
   if (visual === "application") {
     return (
-      <PreviewFrame title="review-api">
-        <PreviewFacts
-          facts={[
-            { label: "Route", value: "/review" },
-            { label: "Containers", value: "3" },
-          ]}
-        />
+      <PreviewFrame title="Example API traffic">
         <PreviewChart
           label="Request load rises and settles as containers serve traffic."
           path="M0 120 H30 V108 H60 V115 H90 V85 H120 V92 H150 V58 H180 V65 H210 V38 H240 V54 H270 V45 H300 V75 H330 V68 H360 V90 H390 V82 H420 V108 H450 V96 H480"
@@ -86,10 +66,10 @@ export function StoryPreview({ visual }: { visual: StoryVisual }) {
   }
   if (visual === "jobs") {
     return (
-      <PreviewFrame title="Release pipeline">
+      <PreviewFrame title="Example pipeline">
         <ol
           className="marketing-preview-timeline"
-          aria-label="Example task sequence, completed in 30 seconds"
+          aria-label="Example pipeline, each task starts after its dependency completes. Total time 30 seconds."
         >
           {pipelineTasks.map((task) => (
             <li key={task.name}>
@@ -106,19 +86,12 @@ export function StoryPreview({ visual }: { visual: StoryVisual }) {
             </li>
           ))}
         </ol>
-        <p className="marketing-preview-note">Each task starts after its dependency completes.</p>
       </PreviewFrame>
     );
   }
   if (visual === "background") {
     return (
-      <PreviewFrame title="Build queue">
-        <PreviewFacts
-          facts={[
-            { label: "Queued tasks", value: "0" },
-            { label: "Workers", value: "2" },
-          ]}
-        />
+      <PreviewFrame title="Example queue backlog">
         <PreviewChart
           label="The queue drains as workers finish the backlog."
           path="M0 115 L30 102 L60 65 L90 40 L120 32 L150 44 L180 57 L210 73 L240 86 L270 98 L300 112 L330 124 L360 136 L390 145 L420 145 L450 145 L480 145"
@@ -127,7 +100,7 @@ export function StoryPreview({ visual }: { visual: StoryVisual }) {
     );
   }
   return (
-    <PreviewFrame title="Agent workspace">
+    <PreviewFrame title="Example agent session">
       <CodeBlock
         className="rounded-none border-0 shadow-none"
         tone="paper"
@@ -135,39 +108,6 @@ export function StoryPreview({ visual }: { visual: StoryVisual }) {
       >
         {sandboxSession}
       </CodeBlock>
-    </PreviewFrame>
-  );
-}
-
-export function ComputePlacementPreview() {
-  return (
-    <PreviewFrame title="Workload placement">
-      <dl className="marketing-placement-list">
-        <div>
-          <dt>LazyCloud</dt>
-          <dd>
-            <code>test-shard</code>
-            <span>Managed CPU</span>
-          </dd>
-        </div>
-        <div>
-          <dt>Your AWS account</dt>
-          <dd>
-            <code>review-api</code>
-            <span>CPU or GPU</span>
-          </dd>
-        </div>
-        <div>
-          <dt>Your Linux machine</dt>
-          <dd>
-            <code>coding-agent</code>
-            <span>Joined compute</span>
-          </dd>
-        </div>
-      </dl>
-      <p className="marketing-preview-note">
-        Use the same SDK to run workloads on each kind of compute.
-      </p>
     </PreviewFrame>
   );
 }

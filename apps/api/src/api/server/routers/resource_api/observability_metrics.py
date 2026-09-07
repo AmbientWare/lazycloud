@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from observability.container_metrics import container_metrics_timeseries
 from observability.stream_state import RedisEventStreamRepository
+from shared.deployments import DeploymentKind
 from shared.http.observability import (
     AccountActivityMeasure,
     AccountActivityResponse,
@@ -33,6 +34,7 @@ def api_v1_task_latency_timeseries(
     stub_id: Annotated[list[str], Query(default_factory=list)],
     app_id: identifier_filter = None,
     workload_name: str | None = None,
+    workload_kind: DeploymentKind | None = None,
     deployment_id: identifier_filter = None,
     window_seconds: int = Query(default=3600, ge=1),
     start: str | None = None,
@@ -48,6 +50,7 @@ def api_v1_task_latency_timeseries(
             deployment_id=deployment_id,
             app_id=app_id,
             workload_name=workload_name,
+            workload_kind=workload_kind,
             window_seconds=window_seconds,
             start=_parsed_time(start),
             end=_parsed_time(end),

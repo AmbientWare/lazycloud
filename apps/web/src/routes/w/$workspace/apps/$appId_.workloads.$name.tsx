@@ -1,3 +1,4 @@
+import { deploymentKindSchema, type DeploymentKind } from "@/lib/api/schemas/deployments";
 import { useState } from "react";
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
@@ -41,6 +42,12 @@ import { WorkloadConfiguration } from "./-workloads/WorkloadConfiguration";
 import { WorkloadOperation } from "./-workloads/WorkloadOperation";
 
 export const Route = createFileRoute("/w/$workspace/apps/$appId_/workloads/$name")({
+  validateSearch: (search) => {
+    const kind = deploymentKindSchema.safeParse(search.kind);
+    if (!kind.success)
+      throw new Error("A workload type is required. Open the workload from its app to continue.");
+    return { kind: kind.data };
+  },
   component: WorkloadDetailRoute,
   errorComponent: RouteErrorFallback,
 });
@@ -49,9 +56,10 @@ const OBSERVABLE_KINDS = new Set(["function", "endpoint", "asgi"]);
 
 function WorkloadDetailRoute() {
   const { appId, name } = Route.useParams();
+  const { kind } = Route.useSearch();
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <WorkloadDetailPage key={`${appId}:${name}`} />
+      <WorkloadDetailPage key={`${appId}:${kind}:${name}`} />
       <Outlet />
     </div>
   );
@@ -59,13 +67,14 @@ function WorkloadDetailRoute() {
 
 function WorkloadDetailPage() {
   const { appId, name } = Route.useParams();
+  const { kind } = Route.useSearch();
   const { workspace } = useWorkspace();
   const [podInstanceStatus, setPodInstanceStatus] = useState<PodInstanceStatusFilter>("active");
   const app = useQuery(appQueryOptions(workspace.id, appId));
   const deployments = useInfiniteQuery(
-    deploymentsInfiniteQueryOptions(workspace.id, { appId, name }),
+    deploymentsInfiniteQueryOptions(workspace.id, { appId, name, kind }),
   );
-  const workload = useQuery(workloadQueryOptions(workspace.id, appId, name));
+  const workload = useQuery(workloadQueryOptions(workspace.id, appId, name, kind));
   const [inspectorTab, setInspectorTab] = useState<string | null>(null);
 
   const deploymentList = selectDeploymentList(deployments.data, deployments.hasNextPage);
@@ -181,6 +190,7 @@ function WorkloadDetailPage() {
                 workspaceName={workspace.name}
                 appId={appId}
                 workloadName={group.name}
+                workloadKind={kind}
                 deploymentId={current.id}
               />
             </PanelErrorBoundary>
@@ -254,6 +264,7 @@ function WorkloadDetailPage() {
             workspaceName={workspace.name}
             appId={appId}
             workloadName={group.name}
+            workloadKind={kind}
           />
         </Panel>
       ) : null}
@@ -272,7 +283,7 @@ function WorkloadLatency({
 }) {
   const observable = OBSERVABLE_KINDS.has(group.kind);
   const latency = useQuery({
-    ...taskLatencyQueryOptions(workspaceId, appId, group.name),
+    ...taskLatencyQueryOptions(workspaceId, appId, group.name, group.kind),
     enabled: observable,
   });
 
@@ -302,13 +313,17 @@ function WorkloadRuns({
   workspaceName,
   appId,
   workloadName,
+  workloadKind,
 }: {
   workspaceId: string;
   workspaceName: string;
   appId: string;
   workloadName: string;
+  workloadKind: DeploymentKind;
 }) {
-  const tasks = useQuery(tasksQueryOptions(workspaceId, { limit: 50, appId, workloadName }));
+  const tasks = useQuery(
+    tasksQueryOptions(workspaceId, { limit: 50, appId, workloadName, kind: workloadKind }),
+  );
   if (tasks.isError) {
     return <PanelError message={tasks.error.message} />;
   }
@@ -320,6 +335,7 @@ function WorkloadRuns({
       taskLink={(taskId) => ({
         to: "/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId",
         params: { workspace: workspaceName, appId, name: workloadName, taskId },
+        search: { kind: workloadKind },
       })}
       emptyMessage="No tasks yet"
       compact

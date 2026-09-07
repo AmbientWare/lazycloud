@@ -49,8 +49,7 @@
   background: var(--accent);
 }
 
-.marketing-grid-field,
-.marketing-cta-grid {
+.marketing-grid-field {
   position: absolute;
   inset: 0;
   background-image:
@@ -84,31 +83,13 @@
 .marketing-product-bar strong {
   font-weight: 500;
 }
-.marketing-product-bar > span,
-.marketing-preview-note,
-.marketing-preview-facts dt,
 .marketing-preview-axis {
   color: var(--muted-foreground);
   font-size: 0.75rem;
 }
 
-.marketing-preview-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1.5rem;
-  padding: 1.25rem;
-}
-.marketing-preview-facts dd {
-  margin-top: 0.25rem;
-  font-family: var(--font-mono);
-  font-size: 1rem;
-}
 .marketing-preview-chart {
   padding: 0 1.25rem 1.25rem;
-}
-.marketing-preview-chart figcaption {
-  font-size: 0.875rem;
-  color: var(--muted-foreground);
 }
 .marketing-preview-chart svg {
   display: block;
@@ -131,11 +112,6 @@
   justify-content: space-between;
   margin-top: 0.5rem;
 }
-.marketing-preview-note {
-  padding: 0 1.25rem 1.25rem;
-  line-height: 1.6;
-}
-
 .marketing-preview-timeline {
   display: grid;
   gap: 1.5rem;
@@ -164,32 +140,6 @@
   background: var(--brand);
   border-radius: inherit;
 }
-.marketing-placement-list {
-  display: grid;
-  padding: 0 1.25rem;
-}
-.marketing-placement-list > div {
-  padding: 1.5rem 0;
-}
-.marketing-placement-list > div + div {
-  border-top: 1px solid var(--border);
-}
-.marketing-placement-list dt {
-  font-size: 0.875rem;
-  font-weight: 500;
-}
-.marketing-placement-list dd {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 0.5rem 1rem;
-  margin-top: 0.75rem;
-  font-size: 0.8125rem;
-  color: var(--muted-foreground);
-}
-.marketing-placement-list code {
-  color: var(--foreground);
-}
 
 @media (max-height: 500px) {
   .marketing-site {
@@ -211,8 +161,7 @@
   .marketing-site > footer,
   .marketing-site > a,
   .marketing-site nav,
-  .marketing-grid-field,
-  .marketing-cta-grid {
+  .marketing-grid-field {
     display: none !important;
   }
   .marketing-site .marketing-home {

@@ -9,7 +9,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { AppSummary } from "@/lib/api/schemas";
 import { countLabel } from "@/lib/format";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
-import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { AppCardActionsTrigger } from "./-components/AppCardActionsTrigger";
@@ -108,16 +107,9 @@ function AppCard({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
               <h3 className="truncate text-base font-semibold text-foreground">{item.app.name}</h3>
-              <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-                <span
-                  className={cn(
-                    "size-1.5 rounded-full",
-                    item.app.active ? "bg-positive" : "bg-muted-foreground",
-                  )}
-                  aria-hidden="true"
-                />
-                {item.app.active ? "Active" : "Inactive"}
-              </span>
+              {!item.app.active ? (
+                <span className="shrink-0 text-xs text-muted-foreground">Inactive</span>
+              ) : null}
             </div>
           </div>
         </header>
@@ -128,14 +120,11 @@ function AppCard({
             <span className="readout text-xl leading-none text-foreground">
               {item.runs_24h.toLocaleString()}
             </span>
-            <span
-              className={cn(
-                "text-xs",
-                item.failed_runs_24h > 0 ? "text-destructive" : "text-muted-foreground",
-              )}
-            >
-              {countLabel(item.failed_runs_24h, "failed", "failed")}
-            </span>
+            {item.failed_runs_24h > 0 ? (
+              <span className="text-xs text-destructive">
+                {countLabel(item.failed_runs_24h, "failed", "failed")}
+              </span>
+            ) : null}
           </div>
           <AppActivityChart
             activity={appRunActivityFromSeries({

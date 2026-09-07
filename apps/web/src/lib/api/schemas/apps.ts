@@ -2,6 +2,7 @@ import { z } from "zod";
 import { cpuRequestSchema, memoryRequestSchema } from "./resources";
 import { productRegionSchema } from "./placement";
 
+import { deploymentKindSchema } from "./deployments";
 import { stubSchema } from "./stubs";
 
 export const appSchema = z.object({
@@ -28,7 +29,7 @@ export type App = z.infer<typeof appSchema>;
 export const deploymentSchema = z.object({
   id: z.string(),
   name: z.string(),
-  kind: z.string(),
+  kind: deploymentKindSchema,
   app_id: z.string().nullish(),
   stub_id: z.string().nullish(),
   version: z.number(),

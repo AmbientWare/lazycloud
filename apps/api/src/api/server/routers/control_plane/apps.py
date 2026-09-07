@@ -202,10 +202,10 @@ def list_app_workloads(
         app_id=resource_identifier(app_id, resource="app"),
         name=name,
         kind=kind,
-        after=cursor,
-        limit=limit + 1,
+        cursor=cursor,
+        limit=limit,
     )
-    page = summaries[:limit]
+    page = summaries.data
     scaling = ManagementService(services).pod_deployment_scaling(
         workspace_id,
         {
@@ -234,7 +234,7 @@ def list_app_workloads(
             )
             for item in page
         ],
-        next=page[-1].resource.deployment.name if len(summaries) > limit else "",
+        next=summaries.next,
     )
 
 
@@ -264,10 +264,13 @@ def get_app(
 def delete_app_workload(
     app_id: str,
     name: str,
+    kind: DeploymentKind,
     workspace_id: write_workspace,
     services: ApiServices = Depends(current_services),
 ) -> None:
-    ManagementService(services).delete_workload(workspace_id, app_id=app_id, name=name)
+    ManagementService(services).delete_workload(
+        workspace_id, app_id=resource_identifier(app_id, resource="app"), name=name, kind=kind
+    )
 
 
 @router.post(

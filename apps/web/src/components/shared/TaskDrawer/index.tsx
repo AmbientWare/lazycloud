@@ -1,3 +1,4 @@
+import { WorkloadLink } from "@/components/shared/WorkloadLink";
 import { Link, useNavigate, type LinkProps } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, RotateCcw } from "lucide-react";
@@ -237,17 +238,15 @@ function TaskDrawerBody({
               <span className="flex items-center gap-1.5">
                 <StubKindIcon kind={kind} className="size-3" />
                 {record.app_id ? (
-                  <Link
-                    to="/w/$workspace/apps/$appId/workloads/$name"
-                    params={{
-                      workspace: workspace.name,
-                      appId: record.app_id,
-                      name: record.workload.name,
-                    }}
+                  <WorkloadLink
+                    workspaceName={workspace.name}
+                    appId={record.app_id}
+                    name={record.workload.name}
+                    kind={record.workload.kind}
                     className="text-brand hover:underline"
                   >
                     {record.workload.name}
-                  </Link>
+                  </WorkloadLink>
                 ) : (
                   record.workload.name
                 )}

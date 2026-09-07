@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { deploymentKindSchema } from "./deployments";
 
 const resourceSearchFields = {
   id: z.string(),
@@ -7,7 +8,12 @@ const resourceSearchFields = {
 };
 export const resourceSearchResultSchema = z.discriminatedUnion("kind", [
   z.object({ ...resourceSearchFields, kind: z.literal("app") }),
-  z.object({ ...resourceSearchFields, kind: z.literal("workload"), app_id: z.string().min(1) }),
+  z.object({
+    ...resourceSearchFields,
+    kind: z.literal("workload"),
+    workload_kind: deploymentKindSchema,
+    app_id: z.string().min(1),
+  }),
   z.object({ ...resourceSearchFields, kind: z.literal("task") }),
   z.object({ ...resourceSearchFields, kind: z.literal("sandbox") }),
 ]);

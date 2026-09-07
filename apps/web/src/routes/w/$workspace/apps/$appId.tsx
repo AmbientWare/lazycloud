@@ -40,7 +40,7 @@ function AppDetailPage() {
   const workloadList = selectInfiniteList(
     workloads.data,
     workloads.hasNextPage,
-    (item) => item.deployment.name,
+    (item) => `${item.deployment.kind}:${item.deployment.name}`,
   );
   const summary = summaries.data?.items.find((item) => item.app.id === appId);
 

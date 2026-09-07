@@ -1,7 +1,11 @@
 import { queryOptions } from "@tanstack/react-query";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
-import { stubListSchema, taskLatencyTimeseriesSchema } from "@/lib/api/schemas";
+import {
+  stubListSchema,
+  taskLatencyTimeseriesSchema,
+  type DeploymentKind,
+} from "@/lib/api/schemas";
 
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
@@ -16,13 +20,24 @@ export function deployedStubsQueryOptions(workspaceId: string, appId?: string) {
   });
 }
 
-export function taskLatencyQueryOptions(workspaceId: string, appId: string, workloadName: string) {
+export function taskLatencyQueryOptions(
+  workspaceId: string,
+  appId: string,
+  workloadName: string,
+  kind: DeploymentKind,
+) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.tasks.latency(workspaceId, `${appId}:${workloadName}`, null, 3600),
+    queryKey: workspaceQueryKeys.tasks.latency(
+      workspaceId,
+      `${appId}:${kind}:${workloadName}`,
+      null,
+      3600,
+    ),
     queryFn: () => {
       const params = new URLSearchParams({
         app_id: appId,
         workload_name: workloadName,
+        workload_kind: kind,
         window_seconds: "3600",
       });
       return apiRequest(

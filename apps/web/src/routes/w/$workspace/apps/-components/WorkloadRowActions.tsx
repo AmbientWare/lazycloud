@@ -38,7 +38,7 @@ export function WorkloadRowActions({
   const queryClient = useQueryClient();
   const deployment = workload.deployment;
   const remove = useMutation({
-    ...deleteWorkloadMutationOptions(workspaceId, appId, deployment.name),
+    ...deleteWorkloadMutationOptions(workspaceId, appId, deployment.name, deployment.kind),
     onSuccess: async () => {
       setConfirmingDelete(false);
       await Promise.all([
