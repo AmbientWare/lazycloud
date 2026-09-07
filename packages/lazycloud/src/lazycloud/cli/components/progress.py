@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from rich.console import Group, RenderableType
+from rich.console import RenderableType
 from rich.live import Live
 from rich.spinner import Spinner
 from rich.style import Style
@@ -14,11 +13,8 @@ from rich.table import Table
 from rich.text import Text
 
 from lazycloud.cli.components import output, theme
-from lazycloud.cli.components.errors import debug_errors_enabled
 from lazycloud.terminal import Terminal, TerminalStep, format_elapsed
 
-TAIL_LINES = 3
-FAILURE_TAIL_LINES = 20
 NAME_WIDTH = 11
 _LOG_INDENT = "    "
 _REMOTE_RAIL = "│ "
@@ -31,7 +27,7 @@ class CliTerminal(Terminal):
     _remote_stream: str = field(default="stdout", init=False)
 
     def write(self, message: str) -> None:
-        if self.quiet or not message:
+        if not self.enabled or not message:
             return
         self.flush_remote_output()
         self._pending += message.replace("\r", "\n")
@@ -40,14 +36,14 @@ class CliTerminal(Terminal):
             self._print_line(line)
 
     def line(self, message: str = "") -> None:
-        if self.quiet:
+        if not self.enabled:
             return
         self.flush_remote_output()
         self._flush_pending()
         self._print_line(message)
 
     def remote_output(self, message: str, *, stream: str = "stdout") -> None:
-        if self.quiet or not message:
+        if not self.enabled or not message:
             return
         self._flush_pending()
         if self._remote_pending and stream != self._remote_stream:
@@ -64,7 +60,7 @@ class CliTerminal(Terminal):
             self._print_remote_line(pending, stream=self._remote_stream)
 
     def error(self, message: str) -> None:
-        if self.quiet:
+        if not self.enabled:
             return
         self.flush_remote_output()
         self._flush_pending()
@@ -77,18 +73,18 @@ class CliTerminal(Terminal):
         self.line(message)
 
     def warn(self, message: str) -> None:
-        if self.quiet:
+        if not self.enabled:
             return
         self.flush_remote_output()
         self._flush_pending()
-        output.console.print(theme.styled(message, theme.WARNING))
+        output.error_console.print(theme.styled(message, theme.WARNING))
 
     def success(self, message: str) -> None:
-        if self.quiet:
+        if not self.enabled:
             return
         self.flush_remote_output()
         self._flush_pending()
-        output.console.print(theme.styled(message, theme.SUCCESS + theme.EMPHASIS))
+        output.error_console.print(theme.styled(message, theme.SUCCESS + theme.EMPHASIS))
 
     def step(self, name: str, summary: str = "") -> TerminalStep:
         self.flush_remote_output()
@@ -101,51 +97,47 @@ class CliTerminal(Terminal):
             self._print_line(pending)
 
     def _print_line(self, message: str) -> None:
-        if not message:
-            output.console.print()
+        if not self.enabled:
             return
-        output.console.print(theme.styled(message, output_style(message)))
+        if not message:
+            output.error_console.print()
+            return
+        output.error_console.print(theme.styled(message, output_style(message)))
 
     def _print_remote_line(self, message: str, *, stream: str) -> None:
+        if not self.enabled:
+            return
         rail_style = theme.ERROR if stream == "stderr" else theme.RUNNING
         message_style = theme.ERROR if stream == "stderr" else theme.MUTED
         line = Text()
         line.append(_REMOTE_RAIL, style=rail_style)
         line.append(message, style=message_style)
-        output.console.print(line)
+        output.error_console.print(line)
 
 
 @dataclass
 class LiveStep(TerminalStep):
-    """A step drawn as a spinner line with a short tail of its output.
+    """A live status line with logs retained above it in terminal history."""
 
-    While the step runs, the line and its tail redraw in place at the bottom of
-    the screen; anything else printed lands above them. Finishing replaces the
-    live line with a permanent one. Without a terminal, or with debug errors on,
-    every logged line prints as it arrives instead of scrolling through the tail.
-    """
-
-    _tail: deque[str] = field(default_factory=lambda: deque(maxlen=TAIL_LINES), init=False)
-    _recent: deque[str] = field(
-        default_factory=lambda: deque(maxlen=FAILURE_TAIL_LINES), init=False
-    )
     _live: Live | None = field(default=None, init=False)
     _spinner: Spinner = field(default_factory=lambda: Spinner("dots", style=theme.RUNNING))
 
     def __post_init__(self) -> None:
-        if self.terminal.quiet:
+        if not self.terminal.enabled:
             return
         if _interactive():
             self._live = Live(
                 self._render_live(),
-                console=output.console,
+                console=output.error_console,
                 refresh_per_second=12,
                 transient=True,
+                redirect_stdout=False,
+                redirect_stderr=False,
             )
             self._live.start()
 
     def update(self, summary: str) -> None:
-        super().update(summary)
+        self.summary = summary
         self._refresh()
 
     def progress(self, completed: int, total: int) -> None:
@@ -156,14 +148,9 @@ class LiveStep(TerminalStep):
 
     def log(self, line: str) -> None:
         text = line.rstrip()
-        if not text:
+        if not self.terminal.enabled or not text:
             return
-        self._recent.append(text)
-        if self._verbose_logs():
-            output.console.print(Text(f"{_LOG_INDENT}{text}", style=theme.MUTED))
-            return
-        self._tail.append(text)
-        self._refresh()
+        output.error_console.print(Text(f"{_LOG_INDENT}{text}", style=theme.MUTED))
 
     def done(self, summary: str = "") -> None:
         self.finished = True
@@ -175,13 +162,7 @@ class LiveStep(TerminalStep):
         self.finished = True
         self.summary = summary or self.summary
         self._stop()
-        if not self._verbose_logs():
-            for text in self._recent:
-                output.console.print(Text(f"{_LOG_INDENT}{text}", style=theme.MUTED))
         self._print_final("✗", theme.ERROR)
-
-    def _verbose_logs(self) -> bool:
-        return self._live is None or debug_errors_enabled()
 
     def _refresh(self) -> None:
         if self._live is not None:
@@ -194,20 +175,14 @@ class LiveStep(TerminalStep):
         self.terminal.flush_remote_output()
 
     def _print_final(self, glyph: str, style: Style) -> None:
-        if self.terminal.quiet:
+        if not self.terminal.enabled:
             return
-        output.console.print(
+        output.error_console.print(
             _step_row(Text(glyph, style=style), self.name, self.summary, self.elapsed)
         )
 
     def _render_live(self) -> RenderableType:
-        row = _step_row(self._spinner, self.name, self.summary, self.elapsed)
-        if not self._tail:
-            return row
-        tail = [
-            Text(f"{_LOG_INDENT}{text}", style=theme.MUTED, no_wrap=True) for text in self._tail
-        ]
-        return Group(row, *tail)
+        return _step_row(self._spinner, self.name, self.summary, self.elapsed)
 
 
 def _interactive() -> bool:
@@ -218,7 +193,7 @@ def _interactive() -> bool:
     """
     if output.json_output_active():
         return False
-    stream = output.console.file
+    stream = output.error_console.file
     isatty = getattr(stream, "isatty", None)
     return bool(isatty and isatty())
 

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import ssl
+import sys
 import urllib.request
 from collections.abc import Iterator
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import Message
@@ -18,7 +20,6 @@ from lazycloud.abstractions.serve import write_serve_preview
 from lazycloud.client_contracts import ClientContractError
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.schema import Integer, Schema
-from lazycloud.terminal import Terminal
 from lazycloud.values import cloudpickle_bytes
 from pydantic import JsonValue
 from shared.containers import ContainerStatus
@@ -56,7 +57,7 @@ from shared.paths import HOME_ENV
 from shared.tasks import TaskPolicy
 from tests.fakes import FakeDeploymentClient
 
-from lazycloud import App
+from lazycloud import App, output
 
 T = TypeVar("T")
 
@@ -106,28 +107,6 @@ class FakeFunctionClient:
             result=FunctionCloudpickleResult.from_bytes(cloudpickle_bytes({"ok": True})),
             done=True,
         )
-
-
-@dataclass
-class RecordingTerminal(Terminal):
-    lines: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    remote_outputs: list[tuple[str, str]] = field(default_factory=list)
-
-    def write(self, message: str) -> None:
-        self.lines.append(message)
-
-    def line(self, message: str = "") -> None:
-        self.lines.append(message)
-
-    def warn(self, message: str) -> None:
-        self.line(f"WARNING: {message}")
-
-    def error(self, message: str) -> None:
-        self.errors.append(message)
-
-    def remote_output(self, message: str, *, stream: str = "stdout") -> None:
-        self.remote_outputs.append((stream, message))
 
 
 @dataclass
@@ -286,6 +265,27 @@ def test_function_remote_stops_reading_after_terminal_stream_response(
     assert terminal_stream.remote() == "complete"
 
 
+@pytest.mark.parametrize("container_id", [None, "ctr-runtime"])
+def test_function_direct_call_runs_in_current_process(
+    monkeypatch: pytest.MonkeyPatch,
+    container_id: str | None,
+) -> None:
+    if container_id is None:
+        monkeypatch.delenv(CONTAINER_ID_ENV, raising=False)
+    else:
+        monkeypatch.setenv(CONTAINER_ID_ENV, container_id)
+
+    @App("test").function()
+    def append(values: list[int], *, value: int) -> list[int]:
+        values.append(value)
+        return values
+
+    values: list[int] = []
+    assert append(values, value=2) is values
+    assert append.local(values, value=3) is values
+    assert values == [2, 3]
+
+
 def test_function_remote_submits_child_task_inside_runtime_container(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -347,8 +347,9 @@ def test_function_import_guard_rejects_every_remote_invocation(
 
     _bind_internal_state(guarded, stub_id="stub-1", client=client)
 
+    assert guarded() == "local"
+    assert guarded.local() == "local"
     for invoke in (
-        guarded,
         guarded.remote,
         guarded.spawn,
         lambda: guarded.spawn_map([]),
@@ -456,7 +457,30 @@ def test_a_function_declares_its_own_schedule(
     assert response.deployment_id == "dep-stub-function"
 
 
-def test_function_remote_streams_status_logs_and_ignores_keepalives() -> None:
+@pytest.mark.parametrize(
+    ("stdout_tty", "stderr_tty", "cloud", "override", "visible"),
+    [
+        (True, True, False, None, False),
+        (True, True, True, None, False),
+        (True, True, False, True, True),
+        (True, True, False, False, False),
+        (False, False, True, True, True),
+    ],
+)
+def test_function_remote_output_policy_preserves_results_and_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    stdout_tty: bool,
+    stderr_tty: bool,
+    cloud: bool,
+    override: bool | None,
+    visible: bool,
+) -> None:
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: stdout_tty)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: stderr_tty)
+    monkeypatch.setenv(CONTAINER_ID_ENV, "cloud-container" if cloud else "")
+    monkeypatch.delenv(IMPORTING_USER_CODE_ENV, raising=False)
+
     class StreamingFunctionClient(FakeFunctionClient):
         def invoke(
             self,
@@ -477,9 +501,10 @@ def test_function_remote_streams_status_logs_and_ignores_keepalives() -> None:
             yield FunctionInvokeResponse.from_result(task_id="task-1")
             yield FunctionInvokeResponse.from_result(
                 task_id="task-1",
-                output="hello\n",
+                output="hel",
                 stream="stdout",
             )
+            yield FunctionInvokeResponse.from_result(task_id="task-1", output="lo\n")
             yield FunctionInvokeResponse.from_result(
                 task_id="task-1",
                 output="careful\n",
@@ -491,7 +516,6 @@ def test_function_remote_streams_status_logs_and_ignores_keepalives() -> None:
                 done=True,
             )
 
-    terminal = RecordingTerminal()
     client = StreamingFunctionClient()
 
     @App("test").function(name="streamer")
@@ -502,16 +526,55 @@ def test_function_remote_streams_status_logs_and_ignores_keepalives() -> None:
         streamer,
         stub_id="stub-1",
         client=client,
-        terminal=terminal,
     )
 
-    assert streamer.remote() == {"ok": True}
-    assert [detached for _, _, detached in client.invocations] == [False]
-    assert terminal.remote_outputs == [
-        ("stdout", "hello\n"),
-        ("stderr", "careful\n"),
-    ]
-    assert any(line.startswith("   Task: task-1 running (") for line in terminal.lines)
+    with output(enabled=override) if override is not None else nullcontext():
+        assert streamer.remote() == {"ok": True}
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    if visible:
+        assert captured.err.count("hello\n") == 1
+        assert captured.err.count("careful\n") == 1
+        assert "running" in captured.err
+    else:
+        assert captured.err == ""
+
+
+def test_function_output_scope_is_nested_exception_safe_and_async_local(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv(IMPORTING_USER_CODE_ENV, raising=False)
+
+    @App("test").function()
+    def failing() -> None:
+        pass
+
+    failing.stub_id = "stub-1"
+    failing.client = FakeFunctionClient(fail=True)
+
+    async def invoke(enabled: bool) -> None:
+        with output(enabled=enabled), pytest.raises(FunctionOperationError, match="failed"):
+            await failing.async_remote()
+
+    async def concurrent_calls() -> None:
+        await asyncio.gather(invoke(True), invoke(False))
+
+    with output(enabled=False):
+        asyncio.run(concurrent_calls())
+        assert capsys.readouterr().err.count("=> Task") == 1
+        with pytest.raises(FunctionOperationError), output():
+            failing.remote()
+        assert capsys.readouterr().err.count("=> Task") == 1
+        with pytest.raises(FunctionOperationError):
+            failing.remote()
+        assert capsys.readouterr().err == ""
+
+    # The failed inner context must not leave output enabled after the outer one exits.
+    with pytest.raises(FunctionOperationError):
+        failing.remote()
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
 
 
 def test_function_remote_distinguishes_none_result_from_incomplete_responses() -> None:

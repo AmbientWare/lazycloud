@@ -34,6 +34,7 @@ from lazycloud.abstractions.volume import CloudBucket, CloudBucketConfig, Volume
 from lazycloud.session import Client
 from lazycloud.session.deployment import Deployment
 from lazycloud.session.task import FunctionCall, Task
+from lazycloud.terminal import output
 
 __all__ = [
     "App",
@@ -76,5 +77,6 @@ __all__ = [
     "current_task_id",
     "env",
     "experimental",
+    "output",
     "schema",
 ]

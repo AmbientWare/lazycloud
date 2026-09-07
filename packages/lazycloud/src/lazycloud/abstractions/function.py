@@ -211,7 +211,9 @@ class Function(Generic[P, R]):
     endpoint: str | None = field(default=None, init=False)
     token: str | None = field(default=None, init=False, repr=False)
     timeout: float = field(default=10.0, init=False)
-    terminal: Terminal | None = field(default=None, init=False, repr=False)
+    terminal: Terminal | None = field(
+        default_factory=lambda: Terminal(default_enabled=False), init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         update_wrapper(self, self.func)
@@ -234,7 +236,7 @@ class Function(Generic[P, R]):
         )
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
-        return self.remote(*args, **kwargs)
+        return self.local(*args, **kwargs)
 
     def local(self, *args: P.args, **kwargs: P.kwargs) -> R:
         return self.func(*args, **kwargs)
