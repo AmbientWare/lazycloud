@@ -104,6 +104,7 @@ from networking.wireguard import (
     validate_wireguard_public_key,
 )
 from observability.events import EventService
+from observability.log_retention import LogRetentionService
 from observability.metrics import MetricsService
 from observability.stream_state import AsyncRedisEventStreamRepository, RedisEventStreamRepository
 from observability.usage import UsageService
@@ -688,7 +689,11 @@ class GatewayControlService:
         if not container.task_id:
             return container, ()
         page = LogRepository(session).page(
-            LogStreamQuery(workspace_id=workspace_id, task_id=container.task_id),
+            LogStreamQuery(
+                workspace_id=workspace_id,
+                task_id=container.task_id,
+                start_time=LogRetentionService.cutoff_in_session(session, workspace_id),
+            ),
             workspace_id=workspace_id,
             limit=CONTAINER_OUTPUT_LOG_LIMIT,
         )

@@ -63,6 +63,26 @@ bootstrap identity through the account owner.
 
 Write it before the first install.
 
+## Log retention
+
+Task log history lives in PostgreSQL. Free accounts retain 1 day; Team and
+complimentary accounts retain 30 days, according to the workspace owner's plan.
+Reads enforce the cutoff immediately. Downgrading applies the shorter window;
+deleted logs cannot be recovered by upgrading later.
+
+The `log-retention` CronJob runs every 15 minutes, outside the scheduler. It runs
+`lazycloud-admin --json maintenance prune-logs` with one database connection and a
+5-second statement timeout. Each transaction deletes at most 1,000 rows; a run
+stops after 100 batches or 4 minutes. Kubernetes prevents overlapping scheduled
+runs and terminates a Job after 5 minutes. The command reports `deleted`,
+`batches`, and `budget_exhausted`; repeated exhausted runs mean cleanup is
+falling behind. Failures exit nonzero and remain visible in Job logs.
+
+Local Compose runs the same command every 15 minutes in the `log-retention`
+service. Inspect it with `docker compose logs log-retention`, or run one pass
+with `docker compose run --rm --no-deps --entrypoint lazycloud-admin log-retention
+--json maintenance prune-logs`.
+
 ## Private network
 
 Each control-plane pod has a `wireguard-platform` sidecar in the same network

@@ -16,8 +16,10 @@ from observability.stream_state import (
 from pydantic import JsonValue
 from shared.deployment_records import DeploymentSpec
 from shared.errors import ExpiredCursorError
+from shared.http.observability import LogRecord
 from shared.realtime.contracts import EventRecordType, create_cloud_event_record
 from shared.realtime.streams import LogStreamQuery
+from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
 from tests.service_fixtures import administrator_credential
 
@@ -90,6 +92,70 @@ async def test_redis_log_stream_resumes_by_sequence_through_skipped_records(
     assert [
         log_record_from_redis(record).message async for record in followed if record is not None
     ] == ["second"]
+
+
+@pytest.mark.anyio
+async def test_log_follow_caps_replay_and_continues_with_new_output(
+    async_io: ApiAsyncIo,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    repo = RedisEventStreamRepository(real_redis_actors.client())
+    repo.append_container_log_batch(
+        container_id="container-1",
+        capture_id="large-output",
+        first_sequence=0,
+        events=tuple(
+            create_cloud_event_record(
+                EventRecordType.ContainerLog,
+                _container_log_data(message=f"line-{index}"),
+                event_id=f"large-{index}",
+            )
+            for index in range(2_000)
+        ),
+    )
+    followed = await AsyncRedisEventStreamRepository(async_io.redis).follow_logs(
+        async_io.realtime,
+        LogStreamQuery(workspace_id="workspace-1", task_id="task-1", limit=200),
+        max_events=201,
+        heartbeat_seconds=0.1,
+    )
+    _append_container_log(repo, message="live")
+    messages = [log_record_from_redis(record).message async for record in followed if record]
+    assert messages == [*(f"line-{index}" for index in range(1_800, 2_000)), "live"]
+
+
+@pytest.mark.anyio
+async def test_task_log_write_reaches_live_stream_with_durable_identity(
+    async_io: ApiAsyncIo,
+    isolated_services: ApiServices,
+) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    task = isolated_services.tasks.create("live-output", workspace_id=workspace_id)
+    followed = await AsyncRedisEventStreamRepository(async_io.redis).follow_logs(
+        async_io.realtime,
+        LogStreamQuery(workspace_id=workspace_id, task_id=task.id),
+        max_events=1,
+        heartbeat_seconds=0.1,
+    )
+    isolated_services.tasks.append_log(task.id, "stdout", "new output\n")
+    query = LogStreamQuery(workspace_id=workspace_id, task_id=task.id)
+    captured = isolated_services.tasks.log_streams.read_logs(query)
+    assert len(captured) == 1
+    live: list[LogRecord] = []
+    try:
+        for _ in range(10):
+            record = await anext(followed)
+            print("task log stream", async_io.realtime.status(), "record", record is not None)
+            if record is not None:
+                live.append(log_record_from_redis(record))
+                break
+    finally:
+        await followed.aclose()
+    stored = isolated_services.tasks.logs(task.id)
+    assert [(record.id, record.message, record.task_id) for record in live] == [
+        (stored[0].id, "new output", task.id)
+    ]
 
 
 def test_redis_log_read_honors_clamp(real_redis_actors: RealRedisActors) -> None:
@@ -314,7 +380,7 @@ def _container_log_data(
         "message": message,
         "stream": "stdout",
         "entry_kind": entry_kind,
-        "timestamp": "2026-06-20T10:00:00Z",
+        "timestamp": utc_now().isoformat(),
     }
 
 

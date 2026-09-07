@@ -155,6 +155,7 @@ class TaskDependencyTable(IdPayloadTable, DatabaseBase):
 class LogTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "logs"
     __table_args__: tuple[SchemaItem, ...] = (
+        Index("ix_logs_created", "created_at", "id"),
         Index("ix_logs_task_created", "task_id", "created_at", "id"),
         Index("ix_logs_workspace_created", "workspace_id", "created_at", "id"),
     )

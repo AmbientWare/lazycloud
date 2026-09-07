@@ -141,6 +141,7 @@ function PlanCard({
         ) : null}
         {offer.entitlements.custom_domains ? <PlanPoint>Custom domains</PlanPoint> : null}
         {offer.entitlements.self_hosted ? <PlanPoint>Self-hosted compute</PlanPoint> : null}
+        <PlanPoint>{offer.entitlements.log_retention_days}-day log retention</PlanPoint>
         {offer.terms.map((term) => (
           <PlanPoint key={term}>{term}</PlanPoint>
         ))}

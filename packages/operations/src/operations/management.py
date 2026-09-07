@@ -45,6 +45,7 @@ from execution.containers.service import ContainerService
 from execution.functions.service import FunctionControlService
 from execution.tasks import TaskService
 from observability.events import EventService
+from observability.log_retention import LogRetentionService
 from observability.metrics import MetricsService
 from observability.usage import UsageService
 from pydantic import Field
@@ -1863,6 +1864,14 @@ class ManagementService:
         decoded_cursor = _decode_log_cursor(cursor)
         with self.services.context.database.session() as session:
             repository = LogRepository(session)
+            cutoff = LogRetentionService.cutoff_in_session(session, workspace_record.id)
+            log_query = log_query.model_copy(
+                update={
+                    "start_time": max(log_query.start_time, cutoff)
+                    if log_query.start_time
+                    else cutoff
+                }
+            )
             if after_cursor:
                 if decoded_cursor is None:
                     raise InvalidInputError("log follow requires a cursor")
