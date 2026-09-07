@@ -88,7 +88,10 @@ function AppDetailPage() {
               deployments={deploymentRows}
               containers={containerList.items.map((item) => item.container)}
               pending={deployments.isPending || containers.isPending}
-              error={queryError(deployments.error) ?? queryError(containers.error)}
+              error={
+                queryError(deployments.isFetchNextPageError ? null : deployments.error) ??
+                queryError(containers.isFetchNextPageError ? null : containers.error)
+              }
               nextCursor={continuationCursor}
               loadingMore={deployments.isFetchingNextPage || containers.isFetchingNextPage}
               loadMoreError={deployments.isFetchNextPageError || containers.isFetchNextPageError}
