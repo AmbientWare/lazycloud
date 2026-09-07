@@ -11,7 +11,7 @@ export function SignInScreen({ error }: { error?: string }) {
   // and a click landing before hydration then returns the person to that fallback
   // instead of where they were going.
   const location = useRouterState({ select: (state) => state.location });
-  const returnTo = `${location.pathname}${location.searchStr}`;
+  const returnTo = `${location.pathname}${location.searchStr}${location.hash ? `#${location.hash}` : ""}`;
   // Arriving on the device-approval URL while signed out: the return path carries
   // the code through GitHub and back, so say why this is showing first.
   const approvingDevice = location.pathname.replace(/\/+$/, "") === "/activate";
@@ -24,10 +24,7 @@ export function SignInScreen({ error }: { error?: string }) {
           <span className="text-xl font-bold text-brand">LazyCloud</span>
         </div>
         <h1 className="mt-3 text-xl font-semibold">Sign in</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Continue with GitHub. The first administrator for a new installation must be created
-          offline.
-        </p>
+        <p className="mt-1 text-sm text-muted-foreground">Use your GitHub account to continue.</p>
       </div>
 
       {approvingDevice ? (
@@ -37,7 +34,10 @@ export function SignInScreen({ error }: { error?: string }) {
       ) : null}
 
       {error ? (
-        <div className="mb-3 rounded border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+        <div
+          role="alert"
+          className="mb-3 rounded border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive"
+        >
           {error}
         </div>
       ) : null}
