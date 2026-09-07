@@ -1,6 +1,6 @@
 import { useCallback, useMemo, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
@@ -12,27 +12,7 @@ import { currentSessionQueryOptions, signOut } from "@/lib/queries/auth";
 import { SessionContext, type SessionContextValue } from "@/components/shared/AuthGate/session";
 import { SignInScreen } from "@/components/shared/AuthGate/SignInScreen";
 
-// The public marketing pages, plus the two routes that run before there is a
-// session to gate on. Gating `/callback` would drop the code it arrived to
-// redeem, and gating `/signin` would hide the reason a sign-in failed behind the
-// screen that failed to explain it.
-const UNAUTHENTICATED_PATHS = new Set([
-  "/",
-  "/pricing",
-  "/legal/privacy",
-  "/legal/terms",
-  "/callback",
-  "/signin",
-]);
-
 export function AuthGate({ children }: { children: ReactNode }) {
-  const unauthenticatedRoute = useRouterState({
-    select: (state) => isUnauthenticatedPath(state.location.pathname),
-  });
-  return unauthenticatedRoute ? children : <AuthenticatedSession>{children}</AuthenticatedSession>;
-}
-
-function AuthenticatedSession({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const token = useAuthToken();
@@ -111,11 +91,6 @@ function AuthenticatedSession({ children }: { children: ReactNode }) {
   }
 
   return <SessionContext.Provider value={contextValue}>{children}</SessionContext.Provider>;
-}
-
-function isUnauthenticatedPath(pathname: string): boolean {
-  const normalized = pathname === "/" ? pathname : pathname.replace(/\/+$/, "");
-  return UNAUTHENTICATED_PATHS.has(normalized);
 }
 
 function LoadingScreen() {

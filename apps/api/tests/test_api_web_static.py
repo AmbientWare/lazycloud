@@ -16,6 +16,7 @@ def test_web_static_serves_spa_without_masking_api_routes(
     static_dir = tmp_path / "web"
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><body>web-shell</body></html>")
+    (static_dir / "_shell.html").write_text("<html><body>spa-shell</body></html>")
     build_dir = static_dir / "_build"
     build_dir.mkdir()
     (build_dir / "app.js").write_text("console.log('ok')")
@@ -24,8 +25,15 @@ def test_web_static_serves_spa_without_masking_api_routes(
     with TestClient(create_app(isolated_services)) as client:
         dashboard = client.get("/dashboard", headers={"accept": "text/html"})
         assert dashboard.status_code == 200
-        assert "web-shell" in dashboard.text
+        assert "spa-shell" in dashboard.text
+        assert "web-shell" not in dashboard.text
         assert dashboard.headers["content-type"].startswith("text/html")
+
+        for route in ("/pricing", "/signin?error=provider_unavailable", "/callback", "/activate"):
+            document = client.get(route, headers={"accept": "text/html"})
+            assert document.status_code == 200
+            assert "spa-shell" in document.text
+            assert "web-shell" not in document.text
 
         asset = client.get("/_build/app.js")
         assert asset.status_code == 200
