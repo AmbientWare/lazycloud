@@ -15,14 +15,13 @@ from database.tables.images import (
     ImageBuildTable,
     ImageTable,
 )
-from psycopg.errors import LockNotAvailable
 from shared.checkpoints import (
     CHECKPOINT_RETENTION_ELIGIBLE_STATUSES,
     CheckpointPruneResult,
     CheckpointRecord,
     CheckpointStatus,
 )
-from shared.errors import ConflictError, NotFoundError
+from shared.errors import NotFoundError
 from shared.image_building.records import (
     BuildStatus,
     ImageArchiveRecord,
@@ -34,7 +33,7 @@ from shared.runtime_paths import archive_path_digest, normalize_runtime_path
 from shared.timestamps import utc_now
 from sqlalchemy import case, delete, exists, func, or_, select, text, tuple_, update
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 
@@ -143,47 +142,6 @@ class ImageArchiveRepository:
     """
 
     session: Session
-
-    def claim_store_migration(self) -> None:
-        claimed = self.session.scalar(
-            text("SELECT pg_try_advisory_xact_lock(hashtext('image-archive-store-migration'))")
-        )
-        if not claimed:
-            raise ConflictError("another image archive store migration is running")
-
-    def lock_for_store_migration(self) -> None:
-        try:
-            self.session.execute(text("LOCK TABLE image_archives IN EXCLUSIVE MODE NOWAIT"))
-        except OperationalError as exc:
-            if isinstance(exc.orig, LockNotAvailable):
-                raise ConflictError("archive writers still hold database locks") from None
-            raise
-
-    def list_for_store_migration(self, *, after: str, limit: int) -> list[ImageArchiveRecord]:
-        rows = self.session.scalars(
-            select(ImageArchiveTable)
-            .where(ImageArchiveTable.image_id > after)
-            .order_by(ImageArchiveTable.image_id)
-            .limit(limit)
-        ).all()
-        return [_image_archive_record(row) for row in rows]
-
-    def move_store(self, archive: ImageArchiveRecord, *, target_bucket: str) -> None:
-        result = self.session.execute(
-            update(ImageArchiveTable)
-            .where(
-                ImageArchiveTable.image_id == archive.image_id,
-                ImageArchiveTable.bucket == archive.bucket,
-                ImageArchiveTable.object_key == archive.object_key,
-                ImageArchiveTable.sha256 == archive.sha256,
-                ImageArchiveTable.size_bytes == archive.size_bytes,
-                ImageArchiveTable.cleanup_claimed_at.is_(None),
-            )
-            .values(bucket=target_bucket)
-            .returning(ImageArchiveTable.image_id)
-        )
-        if result.scalar_one_or_none() is None:
-            raise ConflictError("image archive changed during store migration")
 
     def get(self, image_id: str) -> ImageArchiveRecord | None:
         row = self.session.scalars(
