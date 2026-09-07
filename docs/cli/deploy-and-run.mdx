@@ -44,7 +44,9 @@ failure stops the command without undoing resources already deployed.
 lazycloud run HANDLER [ARGS]... [options]
 ```
 
-Calls a deployed function with the given arguments and prints the result.
+Calls a decorated function through `.remote()` with the given arguments and prints
+the result. This submits a remote task even though calling the same function
+directly in Python runs it in the current process.
 An argument that parses as JSON (a number, `true` or `false`, a list, an
 object) is passed as that value; anything else is passed as a string:
 
@@ -55,6 +57,12 @@ lazycloud run pipeline.py:process 42 '["a", "b"]' '{"dry_run": true}'
 
 Pass a pod to run it once with a command; pass a plain function with a
 `.run()` or `.remote()` method to call that.
+
+Workflow progress and replayed remote logs go to stderr, leaving stdout for
+results. The CLI shows them even when redirected, including with `--json`.
+Build logs remain in terminal history instead of disappearing from the live
+display. Python `.remote()` calls are quiet unless you enable output; see
+[Progress and logs](/concepts/functions#progress-and-logs).
 
 ## lazycloud serve
 
