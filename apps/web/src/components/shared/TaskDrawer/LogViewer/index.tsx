@@ -70,6 +70,7 @@ export function LogViewer({
 
   const getItemKey = useCallback((index: number) => recordKey(visible[index]), [visible]);
   const virtualizer = useVirtualizer({
+    useFlushSync: false,
     count: visible.length,
     getScrollElement: () => scrollRef.current,
     getItemKey,
