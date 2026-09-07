@@ -196,8 +196,8 @@ def map_get(ctx: typer.Context, name: str, key: str) -> None:
 
 
 @map_app.command("keys")
-def map_keys(ctx: typer.Context, name: str, cursor: str = "", search: str = "") -> None:
-    response = _map_client().keys(name, cursor=cursor, search=search)
+def map_keys(ctx: typer.Context, name: str) -> None:
+    response = _map_client().keys(name)
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
@@ -205,12 +205,10 @@ def map_keys(ctx: typer.Context, name: str, cursor: str = "", search: str = "") 
         table(
             "Map keys",
             ["key"],
-            [[key] for key in response.data],
+            [[key] for key in response.keys],
             empty=f"No keys in {name}.",
         )
     )
-    if response.next:
-        console.print(f"More keys available. Continue with --cursor {response.next}")
 
 
 @map_app.command("delete-key")

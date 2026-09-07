@@ -5,34 +5,43 @@ import { Loader2 } from "lucide-react";
 
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
-import { ApiError, setAuthToken } from "@/lib/api/client";
+import { setAuthToken } from "@/lib/api/client";
 import { completeSignInMutationOptions, githubSignInHref } from "@/lib/queries/auth";
 
 export const Route = createFileRoute("/callback")({
   component: SignInCallbackPage,
 });
 
+// Pages that mean "not signed in". Returning to one of them after signing in
+// strands the person on a logged-out page holding a live session, so the product
+// is the destination instead — whatever the return path said.
 const SIGNED_OUT_PATHS = new Set(["", "/", "/signin", "/callback"]);
 
 function signedInDestination(returnTo: string): string {
-  const normalized = returnTo.split(/[?#]/)[0].replace(/\/+$/, "");
+  const normalized = returnTo.split("?")[0].replace(/\/+$/, "");
   return SIGNED_OUT_PATHS.has(normalized) ? "/dashboard" : returnTo;
 }
 
+/**
+ * Where GitHub's callback lands the browser, carrying a single-use code.
+ *
+ * The code arrives in the fragment rather than the query, so it never reaches a
+ * server log or a `Referer` header. It is read once and dropped from the URL, and
+ * the session it buys is minted by the exchange rather than carried here.
+ */
 function SignInCallbackPage() {
   const navigate = useNavigate();
-  // Read before clearing the fragment. Neither the exchange code nor an invitation
-  // path belongs in browser storage or the callback's query string.
-  const [{ code, returnTo }] = useState(() => {
-    const fragment = new URLSearchParams(
-      typeof window === "undefined" ? "" : window.location.hash.replace(/^#/, ""),
-    );
-    return {
-      code: fragment.get("code") ?? "",
-      returnTo: signedInDestination(fragment.get("return_to") ?? ""),
-    };
-  });
-  // StrictMode runs effects twice; redemption consumes the code on its first use.
+  // Read once, before the effect clears the fragment. A lazy initializer only reads,
+  // so re-running it under StrictMode's remount yields the same code. The build
+  // prerenders this route with no `window`, where there is no fragment to read and
+  // the spinner below is the right thing to bake into the static shell.
+  const [code] = useState(() =>
+    typeof window === "undefined"
+      ? ""
+      : (new URLSearchParams(window.location.hash.replace(/^#/, "")).get("code") ?? ""),
+  );
+  // StrictMode mounts twice and the code is spent on first use. Without this guard
+  // the second attempt fails and the person sees a broken sign-in.
   const redeemed = useRef(false);
   const complete = useMutation({
     ...completeSignInMutationOptions(),
@@ -45,46 +54,36 @@ function SignInCallbackPage() {
 
   const { mutate } = complete;
   useEffect(() => {
-    if (redeemed.current) return;
+    if (redeemed.current || !code) return;
     redeemed.current = true;
-    window.history.replaceState(window.history.state, "", window.location.pathname);
-    if (code) mutate({ code });
+    // Drop the code from the address bar so it does not sit in history.
+    window.history.replaceState(null, "", window.location.pathname);
+    mutate({ code });
   }, [code, mutate]);
 
   const failure = complete.isError
-    ? complete.error instanceof ApiError &&
-      complete.error.status >= 400 &&
-      complete.error.status < 500 &&
-      complete.error.status !== 408 &&
-      complete.error.status !== 429
-      ? "This sign-in link could not be verified. Start sign-in again."
-      : "Sign-in is temporarily unavailable. Try again."
-    : // The prerender has no URL fragment and must not bake in a missing-code error.
+    ? "That sign-in link has expired or was already used."
+    : // Only the browser can know the fragment was empty; during the prerender it
+      // always is, and reporting that as a failure would bake it into the page.
       typeof window !== "undefined" && !code
       ? "This sign-in link is missing its code."
       : null;
 
   if (failure) {
     return (
-      <PreShellScreen role="alert">
+      <PreShellScreen>
         <h1 className="text-xl font-semibold">Sign-in did not complete</h1>
         <p className="mt-1 text-sm text-muted-foreground">{failure}</p>
         <Button asChild className="mt-4 w-full">
-          <a href={githubSignInHref(returnTo)}>Start sign-in again</a>
+          <a href={githubSignInHref("/dashboard")}>Try again</a>
         </Button>
       </PreShellScreen>
     );
   }
 
   return (
-    <PreShellScreen>
-      <p
-        role="status"
-        className="flex items-center justify-center gap-2 text-sm text-muted-foreground"
-      >
-        <Loader2 className="size-4 animate-spin text-brand" aria-hidden="true" />
-        Completing sign-in
-      </p>
-    </PreShellScreen>
+    <main className="flex min-h-screen items-center justify-center bg-background">
+      <Loader2 className="size-6 animate-spin text-brand" />
+    </main>
   );
 }

@@ -1,9 +1,6 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createLazyFileRoute } from "@tanstack/react-router";
-
-import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
-import { Skeleton } from "@/components/ui/skeleton";
 
 import type { PricingCatalog, PublishedPlacementRate } from "@/lib/api/schemas";
 import { gpuModelsLabel, limitFigure, memberLimitFigure } from "@/lib/entitlements";
@@ -14,6 +11,8 @@ import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./-marketing/MarketingLayout";
 import {
+  FinalCta,
+  Glyph,
   GetStartedButton,
   MarketingButton,
   MarketingCard,
@@ -51,7 +50,7 @@ const meters = [
 
 /** One priced line: what it is, what it costs, and the unit that price is in. */
 type RateLine = {
-  label?: string;
+  label: string;
   /** A published rate in nanodollars, or a figure that is not money — a share of one. */
   figure: number | string;
   unit: string;
@@ -93,6 +92,7 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
       heading: "CPU",
       lines: [
         {
+          label: "Reserved or used CPU, whichever is greater",
           figure: metered(shape.nanos_per_cpu_core_hour, meter),
           unit: `/ vCPU / ${per}`,
         },
@@ -102,6 +102,7 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
       heading: "Memory",
       lines: [
         {
+          label: "Reserved or used memory, whichever is greater",
           figure: metered(shape.nanos_per_memory_gib_hour, meter),
           unit: `/ GiB / ${per}`,
         },
@@ -120,6 +121,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
       heading: "Volumes",
       lines: [
         {
+          label: "Kept between runs",
           figure: catalog.platform_rate.nanos_per_volume_gib_month,
           /* Thirty days, said rather than implied. Storage meters by the second,
            so a calendar month is charged for the days it actually has — and a
@@ -130,9 +132,10 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
       ],
     },
     {
-      heading: "Outbound data",
+      heading: "Egress",
       lines: [
         {
+          label: "Traffic leaving LazyCloud",
           figure: catalog.platform_rate.nanos_per_egress_gib,
           unit: "/ GiB",
         },
@@ -145,7 +148,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
           /* The compute rates, not every rate above it: volumes and egress are this
            platform's own infrastructure and are charged whole wherever a container
            ran. Saying "the rates above" would quietly include them. */
-          label: "Of base compute rates. Your provider bills the machine separately.",
+          label: "Management fee on Automatic compute rates. Your provider bills the machine.",
           figure: `${catalog.connected_cloud_management_fee_percent}%`,
           unit: "",
         },
@@ -158,7 +161,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
    before they have paid for anything. The rest is disclosure, not pricing. */
 function accountTerm(catalog: PricingCatalog): string {
   const terms = catalog.no_payment_method;
-  return `Start with ${exactDollars(terms.included_nanos)} without a card, up to ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} and ${countLabel(terms.max_concurrent_gpus, "GPU card")} at once. When it runs out, compute and new volume creation stop. Stored volumes remain readable and billable.`;
+  return `Without a card, each plan includes ${exactDollars(terms.included_nanos)} of usage, ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once, and ${countLabel(terms.max_concurrent_gpus, "GPU card")}. Once the included usage is spent, containers stop and new volumes cannot be created. Existing volumes remain readable, and you continue to pay for them.`;
 }
 
 const sectionTitle =
@@ -168,72 +171,123 @@ const sectionTitle =
    twice rather than two units a reader has to hold at once. */
 function MarketingPricing() {
   const [meter, setMeter] = useState<Meter>("hour");
+  const [rateClass, setRateClass] = useState("auto");
   const fleetRatesId = useId();
+  const regionId = useId();
   const pricing = useQuery(pricingCatalogQueryOptions());
   const catalog = pricing.data;
 
   if (!catalog) {
     return (
       <MarketingLayout>
-        <main id="marketing-main">
-          <PricingHero>
-            <ResourceCostsPanel>
-              {pricing.error ? (
-                <ApiErrorNotice
-                  className="mt-6 px-0"
-                  title="Could not load current pricing"
-                  error={pricing.error}
-                  onRetry={() => void pricing.refetch()}
-                  retrying={pricing.isFetching}
-                />
-              ) : (
-                <div className="mt-6" role="status">
-                  <span className="sr-only">Loading current pricing</span>
-                  <div className="space-y-8" aria-hidden="true">
-                    <Skeleton className="h-12 w-full" />
-                    {Array.from({ length: 5 }, (_, index) => (
-                      <div
-                        className="flex justify-between gap-8 border-t border-border pt-5"
-                        key={index}
-                      >
-                        <Skeleton className="h-5 w-1/3" />
-                        <Skeleton className="h-5 w-1/4" />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </ResourceCostsPanel>
-          </PricingHero>
+        <main className={cn(shell, "py-24")} id="marketing-main">
+          <p className={pricing.error ? "text-destructive" : "text-muted-foreground"}>
+            {pricing.error?.message ?? "Loading current pricing…"}
+          </p>
         </main>
       </MarketingLayout>
     );
   }
 
-  const placement = catalog.placement_rates.find((rate) => rate.rate_class === "auto");
-  if (!placement) throw new Error("The pricing catalog has no base compute rates");
+  const placement = catalog.placement_rates.find((rate) => rate.rate_class === rateClass);
+  if (!placement) throw new Error("the selected placement has no published compute rates");
+  const hasRegions = catalog.placement_rates.some((rate) => rate.region !== null);
 
   return (
     <MarketingLayout>
       <main id="marketing-main">
-        <PricingHero plansAvailable>
-          <ResourceCostsPanel
-            controls={<MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />}
+        <section className="border-b border-border bg-background">
+          <div
+            className={cn(
+              shell,
+              "grid grid-cols-[minmax(0,0.68fr)_minmax(0,1fr)] gap-x-14 gap-y-12 pt-12 pb-16 sm:pt-14 lg:gap-x-20 lg:pt-20 lg:pb-24 max-lg:grid-cols-1",
+            )}
           >
-            <RateList
-              groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
-              id={fleetRatesId}
-            />
-            <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
-              CPU and memory are billed on reserved or actual use, whichever is higher.
-            </p>
-          </ResourceCostsPanel>
-        </PricingHero>
+            <div className="flex min-w-0 flex-col">
+              <h1 className="font-serif text-[clamp(2.75rem,6.6vw,4.5rem)] leading-[0.94] font-normal tracking-[-0.01em] text-balance [&_em]:text-brand [&_em]:italic">
+                The meter starts and stops with your <em>code</em>.
+              </h1>
+              <p className="mt-6 max-w-[30rem] text-[15px] leading-[1.6] text-muted-foreground sm:text-base">
+                Compute billing starts with the container and stops with it. You pay by the second.
+              </p>
+              <div className="mt-8 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
+                <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
+                <MarketingButton
+                  className="marketing-action-secondary stamp-quiet border-input"
+                  endGlyph="↓"
+                  hash="plans"
+                  to="/pricing"
+                >
+                  See the plans
+                </MarketingButton>
+              </div>
+            </div>
+
+            <MarketingCard className="min-w-0 p-5 sm:p-6">
+              {/* The caption sits under the row rather than beside the heading, so
+                  the toggle keeps one position however the line above rewraps. */}
+              <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
+                <h2 className="font-serif text-[clamp(1.625rem,3vw,2.125rem)] leading-none font-normal">
+                  Resource costs
+                </h2>
+                <MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />
+              </div>
+              <p className="mt-3.5 text-[12.5px] leading-snug text-muted-foreground">
+                Rates for machines managed by LazyCloud, effective{" "}
+                <time dateTime={catalog.metered_rates_effective_at}>
+                  {new Date(catalog.metered_rates_effective_at).toLocaleString(undefined, {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                    timeZone: "UTC",
+                  })}{" "}
+                  UTC
+                </time>
+                .
+              </p>
+              <div className="mt-5 space-y-2">
+                <label className="block text-[13px] font-medium" htmlFor={regionId}>
+                  Compute region
+                </label>
+                <select
+                  id={regionId}
+                  aria-describedby={`${regionId}-help`}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
+                  value={rateClass}
+                  onChange={(event) => setRateClass(event.target.value)}
+                  disabled={!hasRegions}
+                >
+                  {catalog.placement_rates.map((rate) => (
+                    <option key={rate.rate_class} value={rate.rate_class}>
+                      {rate.name} · {rate.multiplier}x base compute rate
+                    </option>
+                  ))}
+                </select>
+                <p
+                  id={`${regionId}-help`}
+                  className="text-xs leading-relaxed text-muted-foreground"
+                >
+                  {hasRegions
+                    ? `Automatic lets LazyCloud choose where your code runs. Region selection is available on ${catalog.plans
+                        .filter((plan) => plan.entitlements.region_selection)
+                        .map((plan) => plan.name)
+                        .join(" and ")}. Prices below include the selected region's adjustment.`
+                    : "Automatic lets LazyCloud choose where your code runs. Region selection is not available yet. These are the current base rates."}{" "}
+                  Storage and egress rates do not change with this selection.
+                </p>
+              </div>
+
+              <RateList
+                groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
+                id={fleetRatesId}
+              />
+            </MarketingCard>
+          </div>
+        </section>
 
         <section className="border-b border-border bg-muted py-14 sm:py-16 lg:py-20" id="plans">
           <div className={shell}>
             <div className="mb-6 max-w-[44rem]">
-              <h2 className={sectionTitle}>Plans</h2>
+              <h2 className={sectionTitle}>Pricing plans</h2>
             </div>
             <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
               {catalog.plans.map((plan) => (
@@ -250,6 +304,9 @@ function MarketingPricing() {
                         <span className="text-[12px] text-muted-foreground">per month</span>
                       </p>
                     </div>
+                    <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
+                      {plan.summary}
+                    </p>
                     <dl className="mt-4 border-t border-border text-[13px]">
                       <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
                         <dt className="text-muted-foreground">Usage included</dt>
@@ -287,79 +344,53 @@ function MarketingPricing() {
                         included={plan.entitlements.custom_domains}
                       />
                       <PlanFeature label="Self-hosted" included={plan.entitlements.self_hosted} />
+                      <PlanLimit
+                        label="Region selection"
+                        value={
+                          plan.entitlements.region_selection
+                            ? hasRegions
+                              ? "Available"
+                              : "Not available yet"
+                            : "Automatic only"
+                        }
+                      />
                     </dl>
-                    <GetStartedButton className="marketing-action-secondary stamp-quiet mt-6 w-full border-input" />
+                    <ul className="mt-4 mb-6 grid list-none gap-2 p-0">
+                      {plan.terms.map((term) => (
+                        <PlanTerm key={term}>{term}</PlanTerm>
+                      ))}
+                    </ul>
+                    <GetStartedButton className="marketing-action-secondary stamp-quiet mt-auto w-full border-input" />
                   </article>
                 </MarketingCard>
               ))}
             </div>
 
-            <p className="mt-4 max-w-[58rem] text-xs leading-relaxed text-muted-foreground">
-              {accountTerm(catalog)}
+            <p className="mt-4 flex max-w-[58rem] items-start gap-2.5 text-[12.5px] leading-relaxed text-muted-foreground">
+              <span className="mt-0.5 shrink-0 text-brand">
+                <Glyph>↳</Glyph>
+              </span>
+              <span>{accountTerm(catalog)}</span>
             </p>
           </div>
         </section>
+
+        <FinalCta
+          title={
+            <>
+              Pay for the resources <em>that ran.</em>
+            </>
+          }
+          body="Applications, jobs, GPU workloads, and sandboxes use the same meter and draw from one balance."
+        />
       </main>
     </MarketingLayout>
   );
 }
 
-function ResourceCostsPanel({ children, controls }: { children: ReactNode; controls?: ReactNode }) {
-  return (
-    <MarketingCard className="min-h-[36rem] min-w-0 p-5 sm:p-6">
-      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
-        <h2 className="font-serif text-[clamp(1.625rem,3vw,2.125rem)] leading-none font-normal">
-          Base rates
-        </h2>
-        {controls}
-      </div>
-      {children}
-    </MarketingCard>
-  );
-}
-
-function PricingHero({
-  children,
-  plansAvailable = false,
-}: {
-  children: ReactNode;
-  plansAvailable?: boolean;
-}) {
-  return (
-    <section className="border-b border-border bg-background">
-      <div
-        className={cn(
-          shell,
-          "grid grid-cols-[minmax(0,0.68fr)_minmax(0,1fr)] gap-x-14 gap-y-12 pt-12 pb-16 sm:pt-14 lg:gap-x-20 lg:pt-20 lg:pb-24 max-lg:grid-cols-1",
-        )}
-      >
-        <div className="flex min-w-0 flex-col">
-          <h1 className="font-serif text-[clamp(2.75rem,6.6vw,4.5rem)] leading-[0.94] font-normal tracking-[-0.01em] text-balance [&_em]:text-brand [&_em]:italic">
-            The meter starts and stops with your <em>code</em>.
-          </h1>
-          <p className="mt-6 max-w-[30rem] text-[15px] leading-[1.6] text-muted-foreground sm:text-base">
-            Compute is billed by the second.
-          </p>
-          <div className="mt-8 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
-            <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
-            {plansAvailable ? (
-              <MarketingButton
-                className="marketing-action-secondary stamp-quiet border-input"
-                endGlyph="↓"
-                hash="plans"
-                to="/pricing"
-              >
-                View plans
-              </MarketingButton>
-            ) : null}
-          </div>
-        </div>
-        {children}
-      </div>
-    </section>
-  );
-}
-
+/* One term of a plan, read off the catalog. The value column is monospaced
+   whether it holds a figure, a list of models, or a word, so the eye runs down
+   one column rather than two typefaces. */
 function PlanLimit({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
@@ -375,6 +406,17 @@ function PlanFeature({ label, included }: { label: string; included: boolean }) 
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="font-mono font-medium">{included ? "Included" : "—"}</dd>
     </div>
+  );
+}
+
+function PlanTerm({ children }: { children: React.ReactNode }) {
+  return (
+    <li className="flex items-start gap-2.5 text-[13px] leading-relaxed">
+      <span className="mt-0.5 shrink-0 text-brand">
+        <Glyph>↳</Glyph>
+      </span>
+      <span>{children}</span>
+    </li>
   );
 }
 
@@ -394,14 +436,12 @@ function RateList({ groups, id }: { groups: readonly RateGroup[]; id: string }) 
             {group.lines.map((line) => (
               <p
                 className="flex items-baseline justify-between gap-5 py-1.5 first:pt-0"
-                key={line.label ?? group.heading}
+                key={line.label}
               >
-                {line.label ? (
-                  <span className="min-w-0 text-[13px] leading-snug text-muted-foreground">
-                    {line.label}
-                  </span>
-                ) : null}
-                <span className="ml-auto shrink-0 font-mono text-[13px] whitespace-nowrap">
+                <span className="min-w-0 text-[13px] leading-snug text-muted-foreground">
+                  {line.label}
+                </span>
+                <span className="shrink-0 font-mono text-[13px] whitespace-nowrap">
                   {typeof line.figure === "number" ? <Rate nanos={line.figure} /> : line.figure}{" "}
                   <span className="text-muted-foreground">{line.unit}</span>
                 </span>

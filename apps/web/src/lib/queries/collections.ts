@@ -1,7 +1,12 @@
-import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import { queryOptions } from "@tanstack/react-query";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
-import { encodedValueSchema, mapKeysSchema, queueSizeSchema } from "@/lib/api/schemas";
+import {
+  encodedValueSchema,
+  mapCountSchema,
+  mapKeysSchema,
+  queueSizeSchema,
+} from "@/lib/api/schemas";
 
 import { workspaceQueryKeys } from "./workspace-keys";
 
@@ -25,6 +30,18 @@ export function queueSizeQueryOptions(workspaceId: string, name: string) {
   });
 }
 
+export function mapCountQueryOptions(workspaceId: string, name: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.collections.mapCount(workspaceId, name),
+    queryFn: () =>
+      apiRequest(
+        withWorkspace(`/api/v1/maps/${encodePath(name)}/count`, workspaceId),
+        mapCountSchema,
+      ),
+    refetchInterval: LIVE_INTERVAL_MS,
+  });
+}
+
 export function queuePeekQueryOptions(workspaceId: string, name: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.collections.queuePeek(workspaceId, name),
@@ -37,20 +54,15 @@ export function queuePeekQueryOptions(workspaceId: string, name: string) {
   });
 }
 
-export function mapKeysQueryOptions(workspaceId: string, name: string, search: string) {
-  return infiniteQueryOptions({
-    queryKey: workspaceQueryKeys.collections.mapKeys(workspaceId, name, search),
-    initialPageParam: "",
-    queryFn: ({ pageParam, signal }) =>
+export function mapKeysQueryOptions(workspaceId: string, name: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.collections.mapKeys(workspaceId, name),
+    queryFn: () =>
       apiRequest(
-        withWorkspace(
-          `/api/v1/maps/${encodePath(name)}/keys?${new URLSearchParams({ cursor: pageParam, q: search })}`,
-          workspaceId,
-        ),
+        withWorkspace(`/api/v1/maps/${encodePath(name)}/keys`, workspaceId),
         mapKeysSchema,
-        { signal },
       ),
-    getNextPageParam: (page) => page.next || undefined,
+    refetchInterval: LIVE_INTERVAL_MS,
   });
 }
 

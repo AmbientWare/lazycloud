@@ -1,4 +1,3 @@
-import { WorkloadLink } from "@/components/shared/WorkloadLink";
 import type { ReactNode } from "react";
 import { Link, type LinkProps } from "@tanstack/react-router";
 
@@ -88,15 +87,18 @@ export function TaskTable({
                     {task.workload ? (
                       <span className="flex min-w-0 items-center gap-2">
                         <StubKindIcon kind={kind ?? "function"} className="size-3 shrink-0" />
-                        <WorkloadLink
-                          workspaceName={workspace.name}
-                          appId={task.app_id}
-                          name={task.workload.name}
-                          kind={task.workload.kind}
+                        <Link
+                          to="/w/$workspace/apps/$appId/workloads/$name"
+                          params={{
+                            workspace: workspace.name,
+                            appId: task.app_id ?? "",
+                            name: task.workload.name,
+                          }}
+                          disabled={!task.app_id}
                           className="interactive-link min-w-0 truncate text-xs text-foreground disabled:pointer-events-none"
                         >
                           {task.workload.name}
-                        </WorkloadLink>
+                        </Link>
                         <span className="shrink-0 text-[11px] text-muted-foreground">
                           {kind}
                           {task.deployment ? ` · v${task.deployment.version}` : ""}
@@ -123,7 +125,7 @@ export function TaskTable({
                   </TableCell>
                 ) : null}
                 <TableCell>
-                  <StatusChip status={task.status} />
+                  <StatusChip status={task.status} live={task.status === "running"} />
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
                   <LiveRelativeTime value={task.created_at} />

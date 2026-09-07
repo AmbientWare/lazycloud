@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -158,7 +157,6 @@ class MachineJoinCommandRequest(HttpModel):
 
 
 class MachineJoinCommandResponse(HttpModel):
-    id: str
     command: str = ""
     expires_at: datetime
 
@@ -267,13 +265,6 @@ class UnitMachineResponse(HttpModel):
     created_at: datetime | None = None
     agent_version: str = ""
     machine_metrics: UnitMachineMetricsResponse = Field(default_factory=UnitMachineMetricsResponse)
-
-
-class MachineJoinStatusResponse(HttpModel):
-    id: str
-    status: Literal["pending", "joined", "expired", "revoked"]
-    expires_at: datetime
-    machine: UnitMachineResponse | None = None
 
 
 class UnitMachineListResponse(HttpModel):

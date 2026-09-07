@@ -51,7 +51,7 @@ export function AppWorkloadCosts({
   if (costs.isPending) {
     return <RowsSkeleton rows={3} height="h-8" className="px-4 py-3" />;
   }
-  if (costs.isError && !costs.data) {
+  if (costs.isError) {
     return <PanelError message={costs.error.message} />;
   }
   if (rows.length === 0) {
@@ -118,7 +118,7 @@ export function AppWorkloadCosts({
       <InfiniteScrollBoundary
         nextCursor={nextCursor}
         loading={costs.isFetchingNextPage}
-        error={costs.isFetchNextPageError}
+        error={costs.isError}
         onLoadMore={() => void costs.fetchNextPage()}
         resourceLabel="workloads"
       />

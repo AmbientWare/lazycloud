@@ -8,30 +8,12 @@ import {
   customerComputeInstanceListSchema,
   poolJoinCommandResponseSchema,
   unitMachineListSchema,
-  machineJoinStatusSchema,
   type AwsComputeConfigurationUpdateRequest,
   type AwsConnection,
 } from "@/lib/api/schemas";
 import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
 
 export const accountComputeQueryKeys = accountQueryKeys.compute;
-
-export function machineJoinStatusQueryOptions(joinId: string | undefined) {
-  return queryOptions({
-    queryKey: [...accountComputeQueryKeys.machines(), "join", joinId],
-    queryFn: ({ signal }) =>
-      apiRequest(
-        `/api/v1/machines/join-commands/${encodeURIComponent(joinId ?? "")}`,
-        machineJoinStatusSchema,
-        { signal },
-      ),
-    enabled: !!joinId,
-    refetchInterval: (query) =>
-      query.state.data?.status === "expired" || query.state.data?.status === "revoked"
-        ? false
-        : 2_000,
-  });
-}
 
 /**
  * How often capacity is re-read while its panel is open.

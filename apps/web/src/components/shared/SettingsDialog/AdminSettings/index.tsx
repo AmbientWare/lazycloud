@@ -221,7 +221,7 @@ function AccountRow({
         </Select>
       </TableCell>
       <TableCell>
-        <StatusChip status={user.status} />
+        <StatusChip status={user.status} live={active} />
       </TableCell>
       <TableCell className="text-sm">
         <BillingCell account={account} />

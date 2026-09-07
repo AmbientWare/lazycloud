@@ -1,11 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
-import {
-  stubListSchema,
-  taskLatencyTimeseriesSchema,
-  type DeploymentKind,
-} from "@/lib/api/schemas";
+import { stubListSchema, taskLatencyTimeseriesSchema } from "@/lib/api/schemas";
 
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
@@ -20,31 +16,31 @@ export function deployedStubsQueryOptions(workspaceId: string, appId?: string) {
   });
 }
 
+/** Per-stub task-duration percentiles (p50/p95) plus cold starts, bucketed over time. */
 export function taskLatencyQueryOptions(
   workspaceId: string,
-  appId: string,
-  workloadName: string,
-  kind: DeploymentKind,
+  stubIds: string[],
+  options: { deploymentId?: string; windowSeconds?: number } = {},
 ) {
+  const windowSeconds = options.windowSeconds ?? 3600;
   return queryOptions({
     queryKey: workspaceQueryKeys.tasks.latency(
       workspaceId,
-      `${appId}:${kind}:${workloadName}`,
-      null,
-      3600,
+      [...stubIds].sort().join(","),
+      options.deploymentId ?? null,
+      windowSeconds,
     ),
     queryFn: () => {
-      const params = new URLSearchParams({
-        app_id: appId,
-        workload_name: workloadName,
-        workload_kind: kind,
-        window_seconds: "3600",
-      });
+      const params = new URLSearchParams();
+      for (const stubId of stubIds) params.append("stub_id", stubId);
+      params.set("window_seconds", String(windowSeconds));
+      if (options.deploymentId) params.set("deployment_id", options.deploymentId);
       return apiRequest(
-        withWorkspace(`/api/v1/metrics/task-latency?${params}`, workspaceId),
+        withWorkspace(`/api/v1/metrics/task-latency?${params.toString()}`, workspaceId),
         taskLatencyTimeseriesSchema,
       );
     },
+    enabled: stubIds.length > 0,
     meta: workspaceLiveQueryMeta(true),
   });
 }

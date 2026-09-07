@@ -68,19 +68,6 @@ class AppSummaryListResponse(HttpModel):
     items: list[AppSummaryResponse] = Field(default_factory=list)
 
 
-class WorkloadSummaryResponse(HttpModel):
-    deployment: DeploymentResponse
-    public: bool
-    version_count: int
-    running_containers: int
-    active_containers: int
-
-
-class WorkloadPageResponse(HttpModel):
-    data: list[WorkloadSummaryResponse] = Field(default_factory=list)
-    next: str = ""
-
-
 class StubCloneResponse(HttpModel):
     source_stub: StubResponse
     cloned_stub: StubResponse
@@ -97,6 +84,4 @@ __all__ = [
     "AppSummaryListResponse",
     "AppSummaryResponse",
     "StubCloneResponse",
-    "WorkloadPageResponse",
-    "WorkloadSummaryResponse",
 ]

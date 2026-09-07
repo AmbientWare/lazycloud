@@ -279,7 +279,7 @@ class GatewayUnitStateCoordinator:
             }
         )
         self.compute_states.save_join_token_state(token_state, ttl_seconds=plan.ttl_seconds)
-        return plan.model_copy(update={"state": token_state})
+        return plan
 
     def revoke_unit_join_token(self, unit: ComputeUnitRecord, *, workspace_id: str) -> None:
         current_time = utc_now()
