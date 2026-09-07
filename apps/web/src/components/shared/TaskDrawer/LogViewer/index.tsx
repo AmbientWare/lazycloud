@@ -140,7 +140,9 @@ export function LogViewer({
         data-log-scroll=""
         className="min-h-0 flex-1 overflow-auto bg-background/60"
       >
-        {!history.isPending && !history.isError && historyList.nextCursor ? (
+        {!history.isPending &&
+        (!history.isError || history.isFetchNextPageError) &&
+        historyList.nextCursor ? (
           <div className="flex justify-center border-b border-border/60 p-2">
             <Button
               type="button"
@@ -163,7 +165,7 @@ export function LogViewer({
               <Skeleton key={index} className="h-4" style={{ width: `${width}%` }} />
             ))}
           </div>
-        ) : history.isError ? (
+        ) : history.isError && !history.isFetchNextPageError ? (
           <ApiErrorNotice
             error={history.error}
             title="Logs could not be loaded"
