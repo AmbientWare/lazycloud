@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
@@ -45,7 +45,28 @@ export function SandboxFileBrowser({
   const [path, setPath] = useState(ROOT_PATH);
   const [preview, setPreview] = useState<{ path: string; content: string } | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const previewRequest = useRef<{ path: string; controller: AbortController } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+
+  useEffect(() => () => previewRequest.current?.controller.abort(), []);
+
+  const clearPreview = () => {
+    previewRequest.current?.controller.abort();
+    previewRequest.current = null;
+    setPreview(null);
+    setPreviewError(null);
+    setPreviewing(false);
+  };
+
+  const navigateDirectory = (target: string) => {
+    clearPreview();
+    setPath(target);
+    setDeleteTarget(null);
+    setDownloadError(null);
+  };
+
   const query = useQuery(sandboxFilesQueryOptions(workspace.id, containerId, path));
   const invalidateFiles = () =>
     queryClient.invalidateQueries({
@@ -57,43 +78,60 @@ export function SandboxFileBrowser({
   });
   const remove = useMutation({
     ...deleteSandboxFileMutationOptions(workspace.id, containerId),
-    onSuccess: async () => {
+    onMutate: (target) => {
+      if (previewRequest.current?.path === target) clearPreview();
+    },
+    onSuccess: async (_, target) => {
       setDeleteTarget(null);
-      setPreview(null);
+      if (previewRequest.current?.path === target) clearPreview();
       await invalidateFiles();
     },
   });
 
   const openFile = async (file: PodFileInfo) => {
     const target = joinPath(path, file.name);
+    clearPreview();
+    const controller = new AbortController();
+    previewRequest.current = { path: target, controller };
     setPreviewing(true);
-    setPreview(null);
     try {
-      const download = await downloadSandboxFile(workspace.id, containerId, target);
+      const download = await downloadSandboxFile(
+        workspace.id,
+        containerId,
+        target,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
       setPreview({ path: target, content: decodePreview(download.value_base64) });
     } catch (error) {
-      setPreview({
-        path: target,
-        content: error instanceof Error ? error.message : "Failed to read file",
-      });
+      if (controller.signal.aborted) return;
+      setPreviewError(error instanceof Error ? error.message : "Failed to read file");
     } finally {
-      setPreviewing(false);
+      if (!controller.signal.aborted) setPreviewing(false);
     }
   };
 
   const downloadFile = async (file: PodFileInfo) => {
     const target = joinPath(path, file.name);
-    const download = await downloadSandboxFile(workspace.id, containerId, target);
-    const bytes = base64ToBytes(download.value_base64);
-    const buffer = new ArrayBuffer(bytes.byteLength);
-    new Uint8Array(buffer).set(bytes);
-    const blob = new Blob([buffer]);
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = file.name;
-    link.click();
-    URL.revokeObjectURL(url);
+    setDownloadError(null);
+    try {
+      const download = await downloadSandboxFile(workspace.id, containerId, target);
+      const bytes = base64ToBytes(download.value_base64);
+      const buffer = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(buffer).set(bytes);
+      const blob = new Blob([buffer]);
+      const url = URL.createObjectURL(blob);
+      try {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = file.name;
+        link.click();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } catch (error) {
+      setDownloadError(error instanceof Error ? error.message : "Failed to download file");
+    }
   };
 
   return (
@@ -112,10 +150,7 @@ export function SandboxFileBrowser({
                 <button
                   type="button"
                   className="interactive-link mono text-muted-foreground hover:text-foreground"
-                  onClick={() => {
-                    setPath(crumb.path);
-                    setPreview(null);
-                  }}
+                  onClick={() => navigateDirectory(crumb.path)}
                 >
                   {crumb.label}
                 </button>
@@ -149,9 +184,9 @@ export function SandboxFileBrowser({
             </>
           ) : null}
         </div>
-        {upload.isError || remove.isError ? (
-          <p className="border-b border-border px-3 py-2 text-xs text-destructive">
-            {(upload.error || remove.error)?.message}
+        {upload.isError || remove.isError || downloadError ? (
+          <p role="alert" className="border-b border-border px-3 py-2 text-xs text-destructive">
+            {downloadError ?? (upload.error || remove.error)?.message}
           </p>
         ) : null}
         <div className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto">
@@ -169,9 +204,7 @@ export function SandboxFileBrowser({
                   <button
                     type="button"
                     className="interactive-row flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-1.5 text-left text-sm"
-                    onClick={() =>
-                      file.is_dir ? (setPath(target), setPreview(null)) : void openFile(file)
-                    }
+                    onClick={() => (file.is_dir ? navigateDirectory(target) : void openFile(file))}
                   >
                     {file.is_dir ? (
                       <Folder className="size-3.5 shrink-0 text-brand" />
@@ -256,6 +289,8 @@ export function SandboxFileBrowser({
               <Loader2 className="size-4 animate-spin" />
               Reading
             </div>
+          ) : previewError ? (
+            <PanelError message={previewError} />
           ) : preview ? (
             <pre className="mono whitespace-pre-wrap break-words text-xs text-foreground">
               {preview.content}
@@ -303,19 +338,15 @@ function breadcrumbs(path: string): Array<{ label: string; path: string }> {
 }
 
 function decodePreview(valueBase64: string): string {
-  try {
-    const bytes = base64ToBytes(valueBase64);
-    if (bytes.length > PREVIEW_LIMIT_BYTES) {
-      const preview = new TextDecoder("utf-8", { fatal: false }).decode(
-        bytes.subarray(0, PREVIEW_LIMIT_BYTES),
-      );
-      return `[file is ${formatBytes(bytes.length)}; preview truncated]\n${preview}`;
-    }
-    if (isProbablyBinary(bytes)) return `[binary file, ${formatBytes(bytes.length)}]`;
-    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  } catch {
-    return "[unable to decode file]";
+  const bytes = base64ToBytes(valueBase64);
+  if (isProbablyBinary(bytes)) return `[binary file, ${formatBytes(bytes.length)}]`;
+  if (bytes.length > PREVIEW_LIMIT_BYTES) {
+    const preview = new TextDecoder("utf-8", { fatal: false }).decode(
+      bytes.subarray(0, PREVIEW_LIMIT_BYTES),
+    );
+    return `[file is ${formatBytes(bytes.length)}; preview truncated]\n${preview}`;
   }
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
 }
 
 function base64ToBytes(valueBase64: string): Uint8Array {
