@@ -82,6 +82,7 @@ it("keeps authorization failures distinct from an expired session", async () => 
   await renderSession();
   await screen.findByText("Account access is disabled");
   expect(getStoredAuthToken()).toBe("test-session");
+  expect(screen.getByRole("button", { name: "Sign out" })).toBeEnabled();
   expect(screen.queryByRole("link", { name: "Continue with GitHub" })).not.toBeInTheDocument();
 });
 

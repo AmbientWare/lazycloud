@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
+import { Button } from "@/components/ui/button";
 import { ApiError, clearAuthToken } from "@/lib/api/client";
 import { useAuthToken } from "@/hooks/use-auth-token";
 import { currentSessionQueryOptions, signOut } from "@/lib/queries/auth";
@@ -100,6 +101,11 @@ function AuthenticatedSession({ children }: { children: ReactNode }) {
           onRetry={() => void session.refetch()}
           retrying={session.isFetching}
         />
+        {session.error instanceof ApiError && session.error.status === 403 ? (
+          <Button variant="outline" onClick={logout}>
+            Sign out
+          </Button>
+        ) : null}
       </PreShellScreen>
     );
   }
