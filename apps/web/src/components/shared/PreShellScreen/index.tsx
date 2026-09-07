@@ -21,10 +21,13 @@ export function PreShellScreen({
   role?: "alert";
 }) {
   return (
-    <main className="flex h-dvh items-center justify-center overflow-auto bg-background p-4">
+    <main className="flex h-dvh items-start justify-center overflow-auto bg-background p-4">
       <section
         role={role}
-        className={cn("panel w-full rounded-md p-5", width === "lg" ? "max-w-lg" : "max-w-md")}
+        className={cn(
+          "panel my-auto w-full rounded-md p-5",
+          width === "lg" ? "max-w-lg" : "max-w-md",
+        )}
       >
         {children}
       </section>

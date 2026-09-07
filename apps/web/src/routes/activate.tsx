@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
@@ -108,7 +108,7 @@ function DeviceCodePanel({ userCode }: { userCode: string }) {
       />
     );
   }
-  return <DeviceCodeDecision userCode={userCode} deviceCode={deviceCode.data} />;
+  return <DeviceCodeDecision key={userCode} userCode={userCode} deviceCode={deviceCode.data} />;
 }
 
 function DeviceCodeDecision({
@@ -119,8 +119,14 @@ function DeviceCodeDecision({
   deviceCode: DeviceCode;
 }) {
   const { user } = useSession();
-  const approve = useMutation(approveDeviceCodeMutationOptions());
-  const deny = useMutation(denyDeviceCodeMutationOptions());
+  const queryClient = useQueryClient();
+  const mutationKey = ["auth", "device-code", userCode, "decision"];
+  const approve = useMutation({ ...approveDeviceCodeMutationOptions(), mutationKey });
+  const deny = useMutation({ ...denyDeviceCodeMutationOptions(), mutationKey });
+  const decide = (action: "approve" | "deny") => {
+    if (queryClient.isMutating({ mutationKey, exact: true })) return;
+    (action === "approve" ? approve : deny).mutate({ userCode });
+  };
 
   if (approve.isSuccess) {
     return (
@@ -162,7 +168,10 @@ function DeviceCodeDecision({
       </div>
 
       {failure ? (
-        <div className="rounded border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+        <div
+          role="alert"
+          className="rounded border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive"
+        >
           {failure instanceof ApiError && failure.status === 403
             ? "Sign in with an account to approve the CLI. Workspace tokens cannot approve it."
             : failure.message}
@@ -178,17 +187,19 @@ function DeviceCodeDecision({
         <Button
           className="flex-1"
           disabled={approve.isPending || deny.isPending}
-          onClick={() => approve.mutate({ userCode })}
+          onClick={() => decide("approve")}
         >
-          {approve.isPending ? <Loader2 className="size-4 animate-spin" /> : "Approve"}
+          {approve.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
+          Approve
         </Button>
         <Button
           variant="outline"
           className="flex-1"
           disabled={approve.isPending || deny.isPending}
-          onClick={() => deny.mutate({ userCode })}
+          onClick={() => decide("deny")}
         >
-          {deny.isPending ? <Loader2 className="size-4 animate-spin" /> : "Deny"}
+          {deny.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
+          Deny
         </Button>
       </div>
     </div>
