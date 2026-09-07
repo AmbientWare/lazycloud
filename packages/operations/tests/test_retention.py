@@ -39,7 +39,7 @@ from shared.timestamps import utc_now
 from shared.workload_config import StubConfig, StubImageConfig
 from sqlalchemy import event
 from storage.checkpoint_retention import DurableCheckpointRetentionService
-from storage.image_archive import ResolvedImageArchiveSettings
+from storage.image_archive import ImageArchiveSettings
 from storage.retention import RetentionConfig, RetentionService
 from storage.service import (
     OBJECT_SHA256_METADATA_KEY,
@@ -48,7 +48,7 @@ from storage.service import (
     MountedCacheSettings,
     ObjectStorage,
 )
-from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings, S3PresignedUpload
+from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
 from tests.service_fixtures import owned_workspace
 from worker.checkpoints import (
     WorkerCheckpointStatus,
@@ -65,10 +65,9 @@ from worker.retention import (
 from worker_repository.checkpoint_records import CheckpointService
 
 
-def _archive_settings() -> ResolvedImageArchiveSettings:
-    return ResolvedImageArchiveSettings(
-        storage=S3ObjectStoreSettings(bucket="image-archives"),
-        prefix="archives",
+def _archive_settings() -> ImageArchiveSettings:
+    return ImageArchiveSettings(
+        bucket="image-archives",
         presign_seconds=900,
     )
 
@@ -370,8 +369,8 @@ def test_durable_retention_prunes_only_unreferenced_production_artifacts(
         finished_at=now,
     )
     archive_settings = _archive_settings()
-    live_archive_key = "image-live.rclip"
-    stale_archive_key = "image-stale.rclip"
+    live_archive_key = "image-archives/image-live.rclip"
+    stale_archive_key = "image-archives/image-stale.rclip"
     for archive_key in (live_archive_key, stale_archive_key):
         client.put_bytes(
             archive_settings.physical_key(archive_key),
@@ -880,7 +879,7 @@ def test_image_archive_survives_until_the_last_authorized_workspace_is_cleaned(
     second = owned_workspace(control, "second-archive-owner")
     archive_settings = _archive_settings()
     image_id = "img_shared_archive"
-    object_key = f"{image_id}.clip"
+    object_key = f"image-archives/{image_id}.clip"
     physical_key = archive_settings.physical_key(object_key)
     client.put_bytes(physical_key, b"shared-archive", bucket=archive_settings.bucket)
     with isolated_services.context.database.session() as session:

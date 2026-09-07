@@ -162,13 +162,19 @@ jobs:
       - name: Snapshot and validate the target configuration
         env:
           INFRASTRUCTURE_CONFIG_URI: ${{ vars.INFRASTRUCTURE_CONFIG_URI }}
+          LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: ${{ vars.LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL }}
+          LAZYCLOUD_OBJECT_STORE_REGION_NAME: ${{ vars.LAZYCLOUD_OBJECT_STORE_REGION_NAME }}
+          LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: ${{ vars.LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE }}
+          LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID: ${{ secrets.LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID }}
+          LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY: ${{ secrets.LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY }}
           ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
           set -euo pipefail
           test -n "$INFRASTRUCTURE_CONFIG_URI"
           COMMIT="$(git rev-parse HEAD)"
           echo "COMMIT=$COMMIT" >>"$GITHUB_ENV"
-          aws s3 cp "$INFRASTRUCTURE_CONFIG_URI" "$RUNNER_TEMP/infrastructure.json"
+          uv run --frozen --python 3.12 --group workspace python -m deploy.object_storage download \
+            --uri "$INFRASTRUCTURE_CONFIG_URI" --file "$RUNNER_TEMP/infrastructure.json"
           # Capture the compare-and-swap target before validation or builds.
           git ls-remote --heads origin "refs/heads/$BRANCH" >"$RUNNER_TEMP/deployment-ref"
           previous="$(cut -f1 "$RUNNER_TEMP/deployment-ref")"

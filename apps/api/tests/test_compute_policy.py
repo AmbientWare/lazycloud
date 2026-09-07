@@ -74,7 +74,6 @@ from shared.http.compute_policy import (
 from shared.identity import TokenKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.supplier_costs import SupplierCostTerms
-from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.service_fixtures import owned_workspace, workspace_owner_user_id
 from tests.url_constants import EXAMPLE_COM_URL
 
@@ -163,7 +162,6 @@ def _configured_aws_services(
     backend_route_settings = BackendRouteSettings(auth_key=SecretStr(uuid4().hex))
     services = ApiServices.create(
         isolated_services.database,
-        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         root=isolated_services.root,
         create_schema=False,
         gateway_settings=GatewaySettings(

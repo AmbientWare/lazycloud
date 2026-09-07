@@ -67,11 +67,6 @@ data "aws_iam_policy_document" "deploy" {
     resources = local.ecr_repository_arns
   }
 
-  statement {
-    sid       = "ReadInfrastructureDescriptor"
-    actions   = ["s3:GetObject"]
-    resources = [aws_s3_object.infrastructure.arn]
-  }
 }
 
 resource "aws_iam_role_policy" "deploy" {

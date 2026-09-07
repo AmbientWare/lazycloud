@@ -15,9 +15,8 @@ from execution.collections.redis import (
     RedisSimpleQueueService,
 )
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
-from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from tests.real_redis import RealRedisActors
-from tests.service_fixtures import owned_workspace
+from tests.service_fixtures import _InMemoryWorkspaceBuckets, owned_workspace
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
@@ -61,9 +60,9 @@ def isolated_services(
         redis_client=redis,
         binary_redis_client=binary_redis,
         async_io=async_io,
+        workspace_storage_client=_InMemoryWorkspaceBuckets(),
         owns_redis_client=False,
         owns_binary_redis_client=False,
-        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
         agent_binary_settings=AgentBinarySettings(
             binary_dir=tmp_path,
             binary_version="test",

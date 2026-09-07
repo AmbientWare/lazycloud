@@ -11,7 +11,7 @@ from provider_clients.release_manifest import (
     SCHEMA_VERSION,
     AwsReleaseManifest,
     ReleaseObject,
-    s3_public_url,
+    release_public_url,
 )
 from provider_clients.settings import (
     AwsAccountConnectionEnvironmentSettings,
@@ -19,7 +19,7 @@ from provider_clients.settings import (
 )
 
 _BUCKET = "lazycloud-releases"
-_REGION = "us-east-1"
+_PUBLIC_BASE_URL = "https://releases.example.com"
 _PREFIX = "connected-aws"
 _VERSION = "2026.07.14"
 _AGENT_SHA256 = "a" * 64
@@ -33,15 +33,15 @@ def _release_manifest() -> AwsReleaseManifest:
     template_key = f"{_PREFIX}/connection-templates/{identity.sha256}/template.json"
     agent_key = f"{_PREFIX}/agents/{_VERSION}/{_AGENT_SHA256}/{AGENT_AMD64_FILENAME}"
     manifest_key = f"{_PREFIX}/releases/{_VERSION}/manifest.json"
-    template_url = s3_public_url(_BUCKET, _REGION, template_key)
-    agent_url = s3_public_url(_BUCKET, _REGION, agent_key)
+    template_url = release_public_url(_PUBLIC_BASE_URL, template_key)
+    agent_url = release_public_url(_PUBLIC_BASE_URL, agent_key)
     return AwsReleaseManifest(
         schema_version=SCHEMA_VERSION,
         release_version=_VERSION,
         bucket=_BUCKET,
-        region=_REGION,
+        public_base_url=_PUBLIC_BASE_URL,
         manifest_object_key=manifest_key,
-        manifest_public_url=s3_public_url(_BUCKET, _REGION, manifest_key),
+        manifest_public_url=release_public_url(_PUBLIC_BASE_URL, manifest_key),
         connection_template_version=identity.version,
         connection_template_sha256=identity.sha256,
         agent_artifact_version=_VERSION,

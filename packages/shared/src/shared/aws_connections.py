@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import datetime
+from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -177,6 +179,48 @@ class AwsManagedAuthorizationReference(ContractModel):
     shared_ami_ids: tuple[str, ...] = ()
 
 
+class AwsStackParameter(ContractModel):
+    ParameterKey: str
+    ParameterValue: str = Field(repr=False)
+
+
+class AwsStackCreateRequest(ContractModel):
+    StackName: str = Field(pattern=r"^compute-connection-[A-Za-z0-9-]+-g[0-9]+$")
+    TemplateBody: str = Field(min_length=1, max_length=51200, repr=False)
+    Parameters: tuple[AwsStackParameter, ...]
+    Capabilities: tuple[Literal["CAPABILITY_NAMED_IAM"]] = ("CAPABILITY_NAMED_IAM",)
+    OnFailure: Literal["DELETE"] = "DELETE"
+
+
+class AwsConnectionStackAction(ContractModel):
+    account_id: str = Field(pattern=r"^[0-9]{12}$")
+    region: str = Field(pattern=AWS_REGION_PATTERN)
+    template_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request: AwsStackCreateRequest
+
+    @model_validator(mode="after")
+    def validate_request(self) -> AwsConnectionStackAction:
+        if len(self.request.TemplateBody.encode()) > 51200:
+            raise ValueError("AWS connection template exceeds the TemplateBody byte limit")
+        if hashlib.sha256(self.request.TemplateBody.encode()).hexdigest() != self.template_sha256:
+            raise ValueError("AWS connection template body does not match its digest")
+        parameters = {item.ParameterKey: item.ParameterValue for item in self.request.Parameters}
+        if len(parameters) != len(self.request.Parameters) or set(parameters) != {
+            "ConnectionRoleName",
+            "ExternalId",
+            "NodeInstanceProfileName",
+            "NodeRoleName",
+            "PlatformPrincipalArn",
+            "TargetAccountId",
+        }:
+            raise ValueError("AWS connection stack has an unexpected parameter contract")
+        if parameters["TargetAccountId"] != self.account_id:
+            raise ValueError("AWS connection stack targets a different account")
+        if parameters["ConnectionRoleName"] != self.request.StackName:
+            raise ValueError("AWS connection stack has a different role identity")
+        return self
+
+
 class AwsAccountAuthorizationGeneration(ContractModel):
     id: str = Field(pattern=_UUID_PATTERN)
     generation: int = Field(ge=1)
@@ -185,7 +229,7 @@ class AwsAccountAuthorizationGeneration(ContractModel):
     )
     authorization_mode: AwsAccountAuthorizationMode
     managed_authorization: AwsManagedAuthorizationReference | None = None
-    authorization_url: str | None = Field(default=None, pattern=r"^https://[^\s]+$")
+    authorization_stack: AwsConnectionStackAction | None = None
     phase: AwsAccountAuthorizationPhase
     validation_generation: int = Field(default=0, ge=0)
     last_validation_started_at: datetime | None = None
@@ -210,9 +254,11 @@ class AwsAccountAuthorizationGeneration(ContractModel):
         if (
             managed
             and self.phase is AwsAccountAuthorizationPhase.AwaitingAuthorization
-            and self.authorization_url is None
+            and self.authorization_stack is None
         ):
-            raise ValueError("pending managed AWS authorization requires its customer action URL")
+            raise ValueError(
+                "pending managed AWS authorization requires its stack creation request"
+            )
         if (
             self.phase
             in {
@@ -220,11 +266,11 @@ class AwsAccountAuthorizationGeneration(ContractModel):
                 AwsAccountAuthorizationPhase.Retiring,
                 AwsAccountAuthorizationPhase.Retired,
             }
-            and self.authorization_url is not None
+            and self.authorization_stack is not None
         ):
-            raise ValueError("active AWS authorization cannot retain its customer action URL")
-        if not managed and self.authorization_url is not None:
-            raise ValueError("existing-role authorization cannot carry a customer action URL")
+            raise ValueError("active AWS authorization cannot retain its stack creation request")
+        if not managed and self.authorization_stack is not None:
+            raise ValueError("existing-role authorization cannot carry a stack creation request")
         if self.managed_authorization is not None and (
             self.managed_authorization.generation != self.generation
         ):
@@ -340,7 +386,7 @@ class AwsAccountConnection(ContractModel):
         if (self.claim_token is None) != (self.claim_expires_at is None):
             raise ValueError("AWS reconciliation claim token and expiry must be set together")
         if self.customer_action_url is not None and not self.customer_action_label:
-            raise ValueError("AWS customer action URL requires a label")
+            raise ValueError("AWS stack creation request requires a label")
         if self.phase is AwsAccountConnectionPhase.Ready and (
             self.active_authorization is None
             or self.active_authorization.phase is not AwsAccountAuthorizationPhase.Ready
@@ -525,7 +571,7 @@ class AwsAccountAuthorizationPlan(ContractModel):
     role_arn: str = Field(
         pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$"
     )
-    authorization_url: str | None = Field(default=None, pattern=r"^https://[^\s]+$")
+    authorization_stack: AwsConnectionStackAction | None = None
     authorization_mode: AwsAccountAuthorizationMode
     managed_authorization: AwsManagedAuthorizationReference | None = None
     node_role_arn: str = Field(
@@ -546,8 +592,8 @@ class AwsAccountAuthorizationPlan(ContractModel):
         managed = self.authorization_mode is AwsAccountAuthorizationMode.ManagedStack
         if managed != (self.managed_authorization is not None):
             raise ValueError("managed AWS authorization plan requires its stack reference")
-        if managed != (self.authorization_url is not None):
-            raise ValueError("managed AWS authorization plan requires an AWS console action")
+        if managed != (self.authorization_stack is not None):
+            raise ValueError("managed AWS authorization plan requires a stack creation request")
         return self
 
 
@@ -582,5 +628,8 @@ __all__ = [
     "AwsAccountValidationResult",
     "AwsAuthorizationCleanupStatus",
     "AwsAuthorizationCleanupTombstone",
+    "AwsConnectionStackAction",
     "AwsManagedAuthorizationReference",
+    "AwsStackCreateRequest",
+    "AwsStackParameter",
 ]

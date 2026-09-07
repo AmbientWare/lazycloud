@@ -11,11 +11,6 @@ from pydantic_settings import (
     SettingsConfigDict,
     YamlConfigSettingsSource,
 )
-from shared.app_identity import (
-    OBJECT_STORE_ACCESS_KEY_ID,
-    OBJECT_STORE_BUCKET,
-    OBJECT_STORE_SECRET_ACCESS_KEY,
-)
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.env import (
@@ -204,45 +199,6 @@ class WorkerSettings(BaseSettings):
     checkpoint_retention_seconds: int = Field(
         default=7 * 24 * 60 * 60,
         validation_alias="WORKER_CHECKPOINT_RETENTION_SECONDS",
-    )
-    data_storage_bucket: str = Field(
-        default=OBJECT_STORE_BUCKET,
-        validation_alias=AliasChoices("DATA_STORAGE_BUCKET", "LAZYCLOUD_OBJECT_STORE_BUCKET"),
-    )
-    data_storage_endpoint_url: str = Field(
-        default="http://localhost:9000",
-        validation_alias=AliasChoices(
-            "DATA_STORAGE_ENDPOINT_URL",
-            "LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL",
-        ),
-    )
-    data_storage_region_name: str = Field(
-        default="us-east-1",
-        validation_alias=AliasChoices(
-            "DATA_STORAGE_REGION_NAME",
-            "LAZYCLOUD_OBJECT_STORE_REGION_NAME",
-        ),
-    )
-    data_storage_access_key_id: str = Field(
-        default=OBJECT_STORE_ACCESS_KEY_ID,
-        validation_alias=AliasChoices(
-            "DATA_STORAGE_ACCESS_KEY_ID",
-            "LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID",
-        ),
-    )
-    data_storage_secret_access_key: str = Field(
-        default=OBJECT_STORE_SECRET_ACCESS_KEY,
-        validation_alias=AliasChoices(
-            "DATA_STORAGE_SECRET_ACCESS_KEY",
-            "LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY",
-        ),
-    )
-    data_storage_force_path_style: bool = Field(
-        default=True,
-        validation_alias=AliasChoices(
-            "DATA_STORAGE_FORCE_PATH_STYLE",
-            "LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE",
-        ),
     )
     workspace_storage_base_mount_path: str = Field(
         default="/workspace",

@@ -37,9 +37,7 @@ from .capacity_images import (
 )
 from .customer_actions import (
     AwsConnectionStackCleanupAction,
-    AwsConnectionStackCreateAction,
     parse_aws_connection_stack_cleanup_action,
-    parse_aws_connection_stack_create_action,
 )
 from .instance_catalog import (
     AWS_INSTANCE_CATALOG,
@@ -137,7 +135,6 @@ __all__ = [
     "AwsClientOptions",
     "AwsConnectedAccountPooledProvider",
     "AwsConnectionStackCleanupAction",
-    "AwsConnectionStackCreateAction",
     "AwsCredentialSource",
     "AwsDirectInstanceMetadataTransport",
     "AwsEc2ProviderNodeIdentityProofProvider",
@@ -200,7 +197,6 @@ __all__ = [
     "aws_managed_capacity_resource_name",
     "aws_node_bucket_access_policy",
     "parse_aws_connection_stack_cleanup_action",
-    "parse_aws_connection_stack_create_action",
     "plan_aws_account_connection_authorization",
     "require_resolvable_aws_credentials",
     "validate_aws_account_connection_template_policy",

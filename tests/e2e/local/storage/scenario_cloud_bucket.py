@@ -5,10 +5,8 @@ LAZYCLOUD_E2E_STORAGE_OBJECT_ACCESS_KEY and
 LAZYCLOUD_E2E_STORAGE_OBJECT_SECRET_KEY. The scenario publicly deletes its
 unique app and secrets, and removes only its unique external object prefix.
 
-The bucket endpoint given to the Function is the one workers resolve, not the
-Compose service name: worker containers run on the host network, so they reach
-the local object store through the `object-store.localhost` host alias that the
-agent is started with, on the published host port.
+The supplied S3-compatible endpoint must be reachable by both the client and
+worker. Use credentials scoped to this external test bucket.
 """
 
 from __future__ import annotations
@@ -31,17 +29,12 @@ SOURCE_ROOT = Path(__file__).resolve().parent
 def _store() -> S3ObjectStoreClient:
     return S3ObjectStoreClient.from_settings(
         S3ObjectStoreSettings(
-            endpoint_url=os.getenv(
-                "LAZYCLOUD_E2E_STORAGE_OBJECT_ENDPOINT",
-                "http://127.0.0.1:9002",
-            ),
-            presigned_endpoint_url=os.getenv(
-                "LAZYCLOUD_E2E_STORAGE_OBJECT_ENDPOINT",
-                "http://127.0.0.1:9002",
-            ),
-            bucket=os.getenv("LAZYCLOUD_E2E_STORAGE_OBJECT_BUCKET", "lazycloud-data"),
+            endpoint_url=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_ENDPOINT"],
+            bucket=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_BUCKET"],
+            region_name=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_REGION"],
             access_key_id=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_ACCESS_KEY"],
             secret_access_key=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_SECRET_KEY"],
+            session_token="",
             force_path_style=True,
         )
     )
@@ -55,6 +48,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             required_env=(
                 "LAZYCLOUD_E2E_STORAGE_OBJECT_ACCESS_KEY",
                 "LAZYCLOUD_E2E_STORAGE_OBJECT_SECRET_KEY",
+                "LAZYCLOUD_E2E_STORAGE_OBJECT_ENDPOINT",
+                "LAZYCLOUD_E2E_STORAGE_OBJECT_BUCKET",
+                "LAZYCLOUD_E2E_STORAGE_OBJECT_REGION",
             ),
         )
     except LivePrerequisiteError as exc:
@@ -66,20 +62,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     prefix = f"e2e/cloud-bucket/{suffix}"
     access_secret_name = f"CLOUD_BUCKET_ACCESS_{suffix.upper()}"
     key_secret_name = f"CLOUD_BUCKET_SECRET_{suffix.upper()}"
-    bucket_name = os.getenv("LAZYCLOUD_E2E_STORAGE_OBJECT_BUCKET", "lazycloud-data")
+    bucket_name = os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_BUCKET"]
     deployment_environment = {
         "LAZYCLOUD_E2E_ACCESS_SECRET": access_secret_name,
         "LAZYCLOUD_E2E_APP": app_name,
         "LAZYCLOUD_E2E_BUCKET": bucket_name,
-        "LAZYCLOUD_E2E_BUCKET_INTERNAL_ENDPOINT": os.getenv(
-            "LAZYCLOUD_E2E_STORAGE_OBJECT_INTERNAL_ENDPOINT",
-            "http://object-store.localhost:9002",
-        ),
+        "LAZYCLOUD_E2E_BUCKET_INTERNAL_ENDPOINT": os.environ[
+            "LAZYCLOUD_E2E_STORAGE_OBJECT_ENDPOINT"
+        ],
         "LAZYCLOUD_E2E_BUCKET_PREFIX": prefix,
-        "LAZYCLOUD_E2E_BUCKET_REGION": os.getenv(
-            "LAZYCLOUD_E2E_STORAGE_OBJECT_REGION",
-            "us-east-1",
-        ),
+        "LAZYCLOUD_E2E_BUCKET_REGION": os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_REGION"],
         "LAZYCLOUD_E2E_SECRET_SECRET": key_secret_name,
     }
     previous = {name: os.environ.get(name) for name in deployment_environment}

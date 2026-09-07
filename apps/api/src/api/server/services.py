@@ -31,7 +31,6 @@ from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
 from control.routes import RouteService
 from control.service import ControlPlaneService, WorkspaceBucketClient
-from control.workspace_storage_state import ControlPlaneWorkspaceStorageState
 from coordination.event_bus import RedisEventBus
 from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
@@ -138,6 +137,7 @@ from provider_clients.settings import (
 )
 from provider_clients.workspace_compute import configured_platform_compute_providers
 from provider_cloudflare import CloudflareSettings
+from provider_cloudflare.workspace_storage import CloudflareWorkspaceStorageIssuer
 from provider_github import GitHubAppSettings
 from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
@@ -196,23 +196,24 @@ from shared.http.functions import (
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
-from shared.identity import WorkspaceRecord, WorkspaceStorageConfig
+from shared.identity import WorkspaceRecord
 from shared.image_building.credentials import parse_ecr_registry
 from shared.payments import PaymentProvider
 from shared.workspace_storage import WorkspaceStorageIssuer
-from storage.image_archive import (
-    IMAGE_ARCHIVE_EXTENSION,
-    ImageArchiveSettings,
-    ResolvedImageArchiveSettings,
-)
+from storage.image_archive import IMAGE_ARCHIVE_EXTENSION, ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
 from storage.service import CacheStorage, ObjectByteClient, ObjectStorage
 from storage.volume_filesystem import (
     VolumeFilesystem,
     WorkspaceVolumeFilesystem,
+    WorkspaceVolumeObjectClient,
     workspace_volume_store_resolver,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
+from storage.workspace_storage_issuers import (
+    WorkspaceStorageRouter,
+    external_workspace_storage_settings,
+)
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 from worker.container_client.scheduler import (
     SchedulerContainerClientFactory,
@@ -240,10 +241,6 @@ from api.server.provider_compute import (
 from api.server.worker_repository_service import (
     WorkerRepositoryDependencies,
     WorkerRepositoryService,
-)
-from api.server.workspace_storage_composition import (
-    WorkspaceStorageIssuerFactory,
-    WorkspaceStorageIssuerSettings,
 )
 from api.settings import (
     AgentDisconnectReconciliationSettings,
@@ -448,6 +445,8 @@ class _RuntimeWorkspaceBucketClient(Protocol):
 
     def validate_bucket_access(self, bucket: str | None = None) -> None: ...
 
+    def configure_workspace_bucket(self, bucket: str, *, public_origin: str) -> None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ApiServiceCore:
@@ -473,7 +472,7 @@ class ApiServiceCore:
     backend_route_settings: BackendRouteSettings
     object_store_settings: S3ObjectStoreSettings
     workspace_storage_issuer: WorkspaceStorageIssuer
-    image_archive_settings: ResolvedImageArchiveSettings
+    image_archive_settings: ImageArchiveSettings
     image_archive_presigner: PresignedPutClient
     image_build_registry_settings: ImageBuildRegistrySettings
     container_service_settings: ContainerServiceSettings
@@ -590,9 +589,6 @@ class ApiServices(ApiServiceCore):
         object_storage: ObjectStorage | None = None,
         object_store_client: ObjectByteClient | None = None,
         workspace_storage_client: WorkspaceBucketClient | None = None,
-        image_archive_settings: ImageArchiveSettings | None = None,
-        image_archive_store: ImageBuildArchiveObjectStore | None = None,
-        image_archive_presigner: PresignedPutClient | None = None,
         image_build_execution_settings: ImageBuildExecutionSettings | None = None,
         image_build_registry_settings: ImageBuildRegistrySettings | None = None,
         image_build_container_settings: ImageBuildContainerSettings | None = None,
@@ -653,9 +649,7 @@ class ApiServices(ApiServiceCore):
         )
         resolved_backend_route_settings = backend_route_settings or BackendRouteSettings()
         object_store_config = object_store_settings or S3ObjectStoreSettings()
-        image_archive_config = (image_archive_settings or ImageArchiveSettings()).resolve(
-            object_store_config
-        )
+        image_archive_config = ImageArchiveSettings(bucket=object_store_config.bucket)
         image_build_execution_config = (
             image_build_execution_settings or ImageBuildExecutionSettings()
         )
@@ -737,42 +731,23 @@ class ApiServices(ApiServiceCore):
             )
             if isinstance(object_storage_service.object_client, ApiOwnedResource):
                 owned_runtime_resources.append(object_storage_service.object_client)
-        resolved_image_archive_presigner = image_archive_presigner
-        if resolved_image_archive_presigner is None and isinstance(
-            image_archive_store,
-            PresignedPutClient,
-        ):
-            resolved_image_archive_presigner = image_archive_store
-        if (
-            resolved_image_archive_presigner is None
-            and image_archive_config.storage == object_store_config
-            and isinstance(object_storage_service.object_client, PresignedPutClient)
-        ):
-            resolved_image_archive_presigner = object_storage_service.object_client
-        if resolved_image_archive_presigner is None:
-            created_image_archive_presigner = S3ObjectStoreClient.from_settings(
-                image_archive_config.storage
-            )
-            resolved_image_archive_presigner = created_image_archive_presigner
-            owned_runtime_resources.append(created_image_archive_presigner)
+        if not isinstance(object_storage_service.object_client, PresignedPutClient):
+            raise RuntimeError("the primary object store must support signed archive uploads")
+        resolved_image_archive_presigner = object_storage_service.object_client
         control_plane = ControlPlaneService(
             context,
+            public_http_origin=gateway_config.public_http_url,
             workspace_storage_client=(
                 workspace_storage_client
                 or _workspace_bucket_client(object_storage_service.object_client)
             ),
-            workspace_storage_client_factory=_workspace_storage_client,
+            workspace_storage_client_factory=lambda storage: S3ObjectStoreClient.from_settings(
+                external_workspace_storage_settings(storage)
+            ),
             workspace_changes=workspace_changes,
         )
-        # One issuer for the deployment. It mints on first ask and rotates
-        # afterwards, so nothing has to provision a workspace's credential ahead
-        # of the request that needs it.
-        workspace_storage_issuer = (
-            workspace_storage_issuer
-            or WorkspaceStorageIssuerFactory(
-                state=ControlPlaneWorkspaceStorageState(control_plane),
-                settings=WorkspaceStorageIssuerSettings(),
-            ).create()
+        workspace_storage_issuer = workspace_storage_issuer or WorkspaceStorageRouter(
+            managed=CloudflareWorkspaceStorageIssuer(object_store_config)
         )
         payment_provider = stripe_config.provider_factory()
         # No mailer here. Inviting queues a message and returns. The scheduler's
@@ -792,13 +767,18 @@ class ApiServices(ApiServiceCore):
             provision_default_workspace=control_plane.ensure_default_workspace,
             provision_billing_account=_billing_account_provisioner(context, payment_provider),
         )
-        resolved_volume_filesystem = volume_filesystem or WorkspaceVolumeFilesystem(
-            resolve_store=workspace_volume_store_resolver(
-                lambda workspace_id: control_plane.get_workspace(workspace_id).storage,
-                default_endpoint_url=object_store_config.endpoint_url,
-                default_presigned_endpoint_url=object_store_config.presigned_endpoint_url,
+        if volume_filesystem is None:
+            if not isinstance(object_storage_service.object_client, WorkspaceVolumeObjectClient):
+                raise RuntimeError("workspace volumes require the configured object client")
+            resolved_volume_filesystem = WorkspaceVolumeFilesystem(
+                resolve_store=workspace_volume_store_resolver(
+                    lambda workspace_id: control_plane.get_workspace(workspace_id).storage,
+                    object_store=object_storage_service.object_client,
+                )
             )
-        )
+            owned_runtime_resources.append(resolved_volume_filesystem)
+        else:
+            resolved_volume_filesystem = volume_filesystem
         worker_repository = RedisSchedulerWorkerRepository(redis)
         container_repository = RedisSchedulerContainerRepository(redis)
         pool_state_repository = RedisWorkerPoolStateRepository(redis)
@@ -848,7 +828,7 @@ class ApiServices(ApiServiceCore):
                     redis=redis,
                 ),
                 gateway_origin=gateway_config.public_http_url,
-                presigned_origin=object_store_config.presigned_endpoint_url or "",
+                presigned_origin=object_store_config.endpoint_url,
                 backend_route=resolved_backend_route_settings,
             )
             if aws_account_connection_config.configured or platform_capacity_config.hetzner
@@ -973,13 +953,10 @@ class ApiServices(ApiServiceCore):
             workspace_changes=workspace_changes,
             placement_resources=placement_resources,
         )
-        resolved_image_archive_store = image_archive_store
-        if resolved_image_archive_store is None and isinstance(
-            resolved_image_archive_presigner,
-            ImageBuildArchiveObjectStore,
-        ):
-            resolved_image_archive_store = resolved_image_archive_presigner
-        publication_composition = _image_build_publication_publisher(
+        if not isinstance(object_storage_service.object_client, ImageBuildArchiveObjectStore):
+            raise RuntimeError("the primary object store must verify immutable archive candidates")
+        resolved_image_archive_store = object_storage_service.object_client
+        publication_publisher = _image_build_publication_publisher(
             cache_storage,
             image_archive_config,
             image_build_execution_config,
@@ -987,8 +964,6 @@ class ApiServices(ApiServiceCore):
             context=context,
             archive_store=resolved_image_archive_store,
         )
-        if publication_composition.owned_archive_store is not None:
-            owned_runtime_resources.append(publication_composition.owned_archive_store)
         images = ImageBuildService(
             context,
             ImageBuildSubmissionService(
@@ -998,7 +973,7 @@ class ApiServices(ApiServiceCore):
                 ),
             ),
             events,
-            publication_composition.publisher,
+            publication_publisher,
             archive_settings=image_archive_config,
             archive_store=resolved_image_archive_store,
         )
@@ -1441,7 +1416,8 @@ def _compose_api_services(
         signal_service=signal_service or RedisSignalService(RedisSignalRepository(redis)),
         map_service=map_service or RedisMapService(core.binary_redis()),
         simple_queue_service=(simple_queue_service or RedisSimpleQueueService(core.binary_redis())),
-        artifact_service=artifact_service or ArtifactStorageService(core.context),
+        artifact_service=artifact_service
+        or ArtifactStorageService(core.context, object_storage=core.object_storage),
         endpoint_service=endpoint,
         function_service=function,
         gateway_service=gateway,
@@ -1579,10 +1555,6 @@ def _worker_repository_service(
         container_credentials=WorkerCredentialService(
             services=core,
             container_repository=scheduler_containers,
-            platform_storage_endpoint=core.object_store_settings.endpoint_url or "",
-            platform_storage_public_endpoint=(
-                core.object_store_settings.presigned_endpoint_url or ""
-            ),
             storage_issuer=core.workspace_storage_issuer,
         ),
         origin_credentials=WorkerCacheOriginCredentialService(
@@ -1636,19 +1608,6 @@ def _billing_account_provisioner(
     return provision
 
 
-def _workspace_storage_client(storage: WorkspaceStorageConfig) -> S3ObjectStoreClient:
-    return S3ObjectStoreClient.from_settings(
-        S3ObjectStoreSettings(
-            bucket=storage.bucket or "",
-            endpoint_url=storage.endpoint_url or None,
-            region_name=storage.region or "us-east-1",
-            access_key_id=storage.access_key,
-            secret_access_key=storage.secret_key,
-            force_path_style=storage.force_path_style,
-        )
-    )
-
-
 def _workspace_bucket_client(client: ObjectByteClient) -> WorkspaceBucketClient | None:
     if isinstance(client, _RuntimeWorkspaceBucketClient):
         return client
@@ -1679,33 +1638,19 @@ def _workload_registry_credentials(registry: str) -> ImageRegistryCredentials:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class _ImageBuildPublicationComposition:
-    publisher: ImageBuildPublicationPublisher
-    owned_archive_store: ApiOwnedResource | None = None
-
-
 def _image_build_publication_publisher(
     cache_storage: CacheStorage,
-    image_archive_settings: ResolvedImageArchiveSettings,
+    image_archive_settings: ImageArchiveSettings,
     execution_settings: ImageBuildExecutionSettings,
     registry_settings: ImageBuildRegistrySettings,
     *,
     context: ServiceContext,
-    archive_store: ImageBuildArchiveObjectStore | None,
-) -> _ImageBuildPublicationComposition:
+    archive_store: ImageBuildArchiveObjectStore,
+) -> ImageBuildPublicationPublisher:
     publishers: list[ImageBuildPublicationPublisher] = []
-    owned_archive_store: ApiOwnedResource | None = None
-    resolved_archive_store = archive_store
-    if resolved_archive_store is None:
-        created_archive_store = S3ObjectStoreClient.from_settings(image_archive_settings.storage)
-        resolved_archive_store = created_archive_store
-        owned_archive_store = created_archive_store
-    if not isinstance(resolved_archive_store, ImageBuildArchiveObjectStore):
-        raise RuntimeError("image archive object store cannot verify immutable candidates")
     publishers.append(
         ArchiveImageBuildPublicationPublisher(
-            resolved_archive_store,
+            archive_store,
             settings=image_archive_settings,
             context=context,
         )
@@ -1716,11 +1661,4 @@ def _image_build_publication_publisher(
     )
     if registry_publisher is not None:
         publishers.append(registry_publisher)
-    if len(publishers) == 1:
-        publisher = publishers[0]
-    else:
-        publisher = CompositeImageBuildPublicationPublisher(tuple(publishers))
-    return _ImageBuildPublicationComposition(
-        publisher=publisher,
-        owned_archive_store=owned_archive_store,
-    )
+    return CompositeImageBuildPublicationPublisher(tuple(publishers))

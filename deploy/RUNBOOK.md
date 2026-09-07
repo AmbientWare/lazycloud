@@ -70,7 +70,8 @@ For a local connected-AWS stack, explicitly retain its host release:
 
 ```bash
 uv run python deploy/release.py \
-  --bucket "$AWS_RELEASE_ASSET_BUCKET" \
+  --bucket "$OBJECT_STORE_RELEASE_BUCKET" \
+  --public-base-url https://releases.lazycloud.dev \
   --worker-repository <registry>/lazycloud-container-worker \
   --host-manifest-url "$LAZYCLOUD_RELEASE_HOST_MANIFEST_URL" \
   --cpu-ami us-east-1=ami-<id> \
@@ -299,7 +300,7 @@ kubectl -n argocd patch application lazycloud-prod --type merge \
 
 Deploy reads the selected release from the deployment branch and carries it
 forward when no new release is requested. A missing release is an error before
-builds start. There is no mutable S3 release pointer.
+builds start. Release manifests are immutable.
 
 Images are built once per commit into repositories every deployment shares,
 so `Promote` finds every image already published and writes prod's values
@@ -414,7 +415,6 @@ repository is created with immutable tags.
 | Not started | Served instead by |
 | --- | --- |
 | `postgres` | PlanetScale, through `LAZYCLOUD_DATABASE_URL` |
-| `object-store`, `object-store-bucket` | S3, through the platform role |
 | `otel-collector` | whatever `LAZYCLOUD_TELEMETRY_ENDPOINT` names |
 | `container-worker` | the connected-AWS pool the scheduler launches |
 | `agent`, `agent-join-token` | a real joined machine |

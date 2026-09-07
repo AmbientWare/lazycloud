@@ -35,13 +35,7 @@ def test_workspace_created_through_the_api_is_owned_and_reached_by_its_creator(
 
     created = client.post(
         "/api/v1/workspaces",
-        # Naming storage is the branch that attaches a bucket the caller already has,
-        # which is what keeps this case about ownership rather than about provisioning
-        # one against an object store this suite does not run.
-        json={
-            "name": "creator-workspace",
-            "storage": {"backend": "local", "bucket": "creator-workspace", "prefix": ""},
-        },
+        json={"name": "creator-workspace"},
         headers=headers,
     )
     assert created.status_code == 201, created.text

@@ -30,7 +30,10 @@ from shared.aws_connections import (
     AwsAccountNetwork,
     AwsAccountValidationResult,
     AwsAuthorizationCleanupStatus,
+    AwsConnectionStackAction,
     AwsManagedAuthorizationReference,
+    AwsStackCreateRequest,
+    AwsStackParameter,
 )
 from shared.compute_policy import MachinePool
 from shared.errors import ConflictError, UpstreamUnavailableError
@@ -93,8 +96,29 @@ class _Planner:
                 if managed
                 else None
             ),
-            authorization_url=(
-                f"https://console.aws.amazon.com/cloudformation/g{generation}" if managed else None
+            authorization_stack=(
+                AwsConnectionStackAction(
+                    account_id=account_id,
+                    region="us-east-1",
+                    template_sha256="44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                    request=AwsStackCreateRequest(
+                        StackName=f"compute-connection-test-g{generation}",
+                        TemplateBody="{}",
+                        Parameters=tuple(
+                            AwsStackParameter(ParameterKey=key, ParameterValue=value)
+                            for key, value in {
+                                "ConnectionRoleName": f"compute-connection-test-g{generation}",
+                                "ExternalId": "test-external-id-0123456789abcdef",
+                                "NodeInstanceProfileName": "node",
+                                "NodeRoleName": "node",
+                                "PlatformPrincipalArn": "arn:aws:iam::210987654321:role/platform",
+                                "TargetAccountId": account_id,
+                            }.items()
+                        ),
+                    ),
+                )
+                if managed
+                else None
             ),
             network=network,
             node_role_arn=node_role_arn or f"arn:aws:iam::{account_id}:role/node",
@@ -279,8 +303,11 @@ def test_uncompleted_setup_removal_hides_connection_and_reconciles_tombstone(
     created = service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
 
     assert created.connection.phase is AwsAccountConnectionPhase.AwaitingAuthorization
-    assert created.connection.customer_action_url == created.authorization_url
-    assert created.connection.customer_action_label == "Continue in AWS"
+    assert created.connection.pending_authorization is not None
+    assert (
+        created.connection.pending_authorization.authorization_stack == created.authorization_stack
+    )
+    assert created.connection.customer_action_label == "Create the connection stack"
     assert service.remove(user_id=owner) is None
     assert service.current(user_id=owner) is None
     with isolated_services.context.database.session() as session:
@@ -333,7 +360,7 @@ def test_initial_assume_role_miss_remains_authorization_required(
     assert failed.phase is AwsAccountConnectionPhase.AwaitingAuthorization
     assert failed.hosts_workloads is False
     assert failed.pending_authorization is not None
-    assert failed.pending_authorization.authorization_url == created.authorization_url
+    assert failed.pending_authorization.authorization_stack == created.authorization_stack
     assert failed.pending_authorization.error_code is AwsAccountConnectionErrorCode.AssumeRoleDenied
 
 

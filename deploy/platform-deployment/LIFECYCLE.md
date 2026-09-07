@@ -6,7 +6,7 @@ most of operating it.
 | owner | what it owns |
 |---|---|
 | `deploy/platform-core` (Terraform, once) | the VPC, the cluster, the image repositories, the OIDC provider, the storage class, and Argo CD |
-| `deploy/platform-deployment` (Terraform, per deployment) | Redis, S3, secret containers, the PlanetScale branch, the fleet network, and every identity the deployment's workloads hold |
+| `deploy/platform-deployment` (Terraform, per deployment) | Redis, R2, secret containers, the PlanetScale branch, the fleet network, and every identity the deployment's workloads hold |
 | Argo CD, from `main` and from the deployment's branch | everything that runs in the cluster |
 | The scheduler, at runtime | the Auto Scaling group and launch template for each compute unit |
 
@@ -57,12 +57,15 @@ replaced rather than recovered.
 
 ```sh
 source ~/.lazycloud/operator/deploy.env
+export TF_VAR_terraform_backend_config="$HOME/.lazycloud/operator/terraform-backend.json"
 terraform -chdir=deploy/platform-core init \
-  -backend-config="bucket=<state-bucket>" \
-  -backend-config="key=platform-core/lazycloud.tfstate" \
-  -backend-config="region=us-east-1"
+  -backend-config="$TF_VAR_terraform_backend_config" \
+  -backend-config="key=platform-core/lazycloud.tfstate"
 terraform -chdir=deploy/platform-core apply
 ```
+
+Create the shared [R2 state backend](../terraform-state/README.md) first. Existing
+installations transfer their current state before applying these roots.
 
 Its `terraform.tfvars` carries `cluster_api_cidrs`, which must include the
 address this apply runs from: the Kubernetes and Helm providers reach the
@@ -83,15 +86,13 @@ before deploying the updated secret mapping. Preserve all existing credentials.
 ```sh
 DEPLOYMENT=lazycloud-prod
 terraform -chdir=deploy/platform-deployment init \
-  -backend-config="bucket=<state-bucket>" \
-  -backend-config="key=platform-deployment/$DEPLOYMENT.tfstate" \
-  -backend-config="region=us-east-1"
+  -backend-config="$TF_VAR_terraform_backend_config" \
+  -backend-config="key=platform-deployment/$DEPLOYMENT.tfstate"
 terraform -chdir=deploy/platform-deployment apply \
   -var-file=/absolute/path/to/hetzner-images.tfvars.json \
   -var="deployment=$DEPLOYMENT" \
   -var="github_environment=prod" \
-  -var="planetscale_organization=<org>" \
-  -var="state_bucket=<state-bucket>"
+  -var="planetscale_organization=<org>"
 ```
 
 Helm `environments/<environment>.yaml` carries the instance prices, Stripe
@@ -121,6 +122,8 @@ cat > operator.json <<'JSON'
   "LAZYCLOUD_GITHUB_CLIENT_ID": "...",
   "LAZYCLOUD_GITHUB_CLIENT_SECRET": "...",
   "LAZYCLOUD_CLOUDFLARE_API_TOKEN": "...",
+  "LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID": "...",
+  "LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY": "...",
   "LAZYCLOUD_STRIPE_API_KEY": "...",
   "LAZYCLOUD_STRIPE_WEBHOOK_SECRET": "..."
 }
@@ -166,7 +169,15 @@ gh variable set INFRASTRUCTURE_CONFIG_URI --env prod \
 Required reviewers on the `prod` environment are the approval gate for
 `promote.yml`; the run pauses at the deploy job until someone approves.
 
-Nothing else. The workflow pushes to a branch in its own repository with the
+Set repository secrets `LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID` and
+`LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY`. Set the repository variables
+`LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL`, `LAZYCLOUD_OBJECT_STORE_REGION_NAME` and
+`LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE` to the platform store's signing settings.
+Export `infrastructure_configuration` as JSON and publish it with
+`python -m deploy.object_storage publish --uri <infrastructure_config_uri> --file <descriptor>`
+before running Deploy.
+
+The workflow pushes to a branch in its own repository with the
 token GitHub gives it, and the App credential Argo reads with is supplied to
 Terraform rather than to CI. The two go in opposite directions and are not the
 same grant.

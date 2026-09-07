@@ -38,49 +38,6 @@ Conditions:
   GitHubPublisherConfigured: !Not [!Equals [!Ref GitHubOidcProviderArn, ""]]
 
 Resources:
-  ReleaseBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      OwnershipControls:
-        Rules:
-          - ObjectOwnership: BucketOwnerEnforced
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: false
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: false
-      VersioningConfiguration:
-        Status: Enabled
-
-  ReleaseBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref ReleaseBucket
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: ReadImmutableConnectedAwsAssets
-            Effect: Allow
-            Principal: "*"
-            Action: s3:GetObject
-            Resource: !Sub "${ReleaseBucket.Arn}/connected-aws/*"
-          - Sid: RequireTls
-            Effect: Deny
-            Principal: "*"
-            Action: s3:*
-            Resource:
-              - !GetAtt ReleaseBucket.Arn
-              - !Sub "${ReleaseBucket.Arn}/*"
-            Condition:
-              Bool:
-                aws:SecureTransport: "false"
-
   ContainerWorkerRepository:
     Type: AWS::ECR::PublicRepository
     DeletionPolicy: Retain
@@ -115,21 +72,6 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Sid: PublishReleaseObjects
-                Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                Resource: !Sub "${ReleaseBucket.Arn}/connected-aws/*"
-              - Sid: InspectReleaseBucket
-                Effect: Allow
-                Action:
-                  - s3:GetBucketLocation
-                  - s3:ListBucket
-                Resource: !GetAtt ReleaseBucket.Arn
-                Condition:
-                  StringLike:
-                    s3:prefix: connected-aws/*
               - Sid: AuthenticatePublicRegistry
                 Effect: Allow
                 Action:
@@ -223,10 +165,6 @@ Resources:
                     ec2:ResourceTag/cloud-pool:managed-by: control-plane
 
 Outputs:
-  AssetBucket:
-    Value: !Ref ReleaseBucket
-  AssetRegion:
-    Value: !Ref AWS::Region
   ContainerWorkerRepositoryName:
     Value: !Ref ContainerWorkerRepository
   ReleaseRoleArn:
