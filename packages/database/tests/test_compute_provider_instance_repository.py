@@ -15,6 +15,7 @@ from shared.compute_policy import (
     MachinePool,
     UnitName,
 )
+from shared.timestamps import utc_now
 
 
 def test_provider_instance_machine_binding_is_idempotent_and_fenced(
@@ -107,3 +108,65 @@ def test_unbinding_releases_only_the_machine_it_names(
         assert released.machine_id is None
         # Released rows rebind cleanly rather than staying poisoned.
         assert repository.bind_machine(pool.id, instance.instance_id or "", second) is not None
+
+
+def test_reconciliation_preserves_unproved_cleanup_and_reappearing_instances(
+    isolated_services: ApiServices,
+) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        pool = ComputeUnitRecord(
+            id=str(uuid4()),
+            workspace_id=workspace_id,
+            name=UnitName("reconcile-history"),
+            pool=MachinePool("reconcile-history"),
+        )
+        ComputeUnitRepository(session).upsert(pool)
+        repository = ComputeProviderInstanceRepository(session)
+        complete = repository.upsert(
+            ComputeProviderInstanceRecord(
+                id=str(uuid4()),
+                provider="aws",
+                offer_id="m7i.xlarge:us-east-1",
+                instance_id="i-complete",
+                pool_id=pool.id,
+                status="deleted",
+                source="pooled",
+                launch_attempt=7,
+                metadata={
+                    "missing_since": utc_now().isoformat(),
+                    "provider_storage_destroyed_at": utc_now().isoformat(),
+                },
+            )
+        )
+        unproved = repository.upsert(
+            complete.model_copy(
+                update={"id": str(uuid4()), "instance_id": "i-unproved", "metadata": {}}
+            )
+        )
+        active = repository.upsert(
+            complete.model_copy(
+                update={
+                    "id": str(uuid4()),
+                    "instance_id": "i-active",
+                    "status": "active",
+                    "launch_attempt": 1,
+                    "metadata": {},
+                }
+            )
+        )
+        assert {
+            row.id
+            for row in repository.list_for_reconciliation(
+                pool.id, terminal_statuses=("deleted", "failed"), observed_instance_ids=()
+            )
+        } == {unproved.id, active.id}
+        assert {
+            row.id
+            for row in repository.list_for_reconciliation(
+                pool.id,
+                terminal_statuses=("deleted", "failed"),
+                observed_instance_ids=("i-complete",),
+            )
+        } == {complete.id, unproved.id, active.id}
+        assert repository.highest_launch_attempt(pool.id) == 7

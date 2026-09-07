@@ -2009,12 +2009,7 @@ class ComputeService:
         """
         unit = self.get_internal_unit(workspace_id, capacity_owner_id)
         with self.context.database.session() as session:
-            records = ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
-        return {
-            record.instance_id: record.machine_id
-            for record in records
-            if record.instance_id and record.machine_id
-        }
+            return ComputeProviderInstanceRepository(session).machine_bindings_for_pool(unit.id)
 
     def begin_internal_unit_replacement(
         self,
@@ -2437,14 +2432,9 @@ class ComputeService:
                 now=now,
             )
             with self.context.database.session() as session:
-                retiring = [
-                    record
-                    for record in ComputeProviderInstanceRepository(session).list_for_pool(
-                        current.id
-                    )
-                    if record.status == ReservationStatus.Terminating.value
-                    and record.instance_id is not None
-                ]
+                retiring = ComputeProviderInstanceRepository(session).list_for_pool(
+                    current.id, status=ReservationStatus.Terminating.value
+                )
             for record in retiring:
                 if record.instance_id is None:
                     continue
@@ -2644,12 +2634,14 @@ class ComputeService:
             return pool
         to_reclaim: list[tuple[ComputeProviderInstanceRecord, MachineBootstrapFailureReason]] = []
         with self.context.database.session() as session:
-            records = [
-                record
-                for record in ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
-                if _reservation_open(record.status)
-                and record.status != ReservationStatus.Terminating.value
-            ]
+            records = ComputeProviderInstanceRepository(session).list_for_pool(
+                pool.id,
+                excluded_statuses=(
+                    ReservationStatus.Deleted.value,
+                    ReservationStatus.Failed.value,
+                    ReservationStatus.Terminating.value,
+                ),
+            )
             pool_reachable = self._pool_agents_reachable(session, pool, records, now=now)
             containers = ContainerRepository(session)
             for record in records:
@@ -3043,10 +3035,8 @@ class ComputeService:
             # forbidden, which would confirm the id exists.
             if unit is None or unit.workspace_id != workspace_id:
                 raise NotFoundError(f"compute unit {capacity_owner_id!r} not found")
-            machines = ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
-            highest = max(
-                (record.launch_attempt for record in machines),
-                default=unit.provider_state.launch_attempt_baseline,
+            highest = ComputeProviderInstanceRepository(session).highest_launch_attempt(
+                unit.id, default=unit.provider_state.launch_attempt_baseline
             )
             cleared = repository.apply_provider_state(
                 unit.id,
@@ -3096,10 +3086,8 @@ class ComputeService:
             return pool
         with self.context.database.session() as session:
             repository = ComputeUnitRepository(session)
-            machines = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
-            highest = max(
-                (record.launch_attempt for record in machines),
-                default=state.launch_attempt_baseline,
+            highest = ComputeProviderInstanceRepository(session).highest_launch_attempt(
+                pool.id, default=state.launch_attempt_baseline
             )
             cleared = repository.apply_provider_state(
                 pool.id,
@@ -3179,11 +3167,15 @@ class ComputeService:
             return request
         with self.context.database.session() as session:
             surviving = sum(
-                _reservation_open(record.status)
-                and record.status != ReservationStatus.Terminating.value
-                and record.instance_id is not None
-                and "missing_since" not in record.metadata
-                for record in ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+                record.instance_id is not None and "missing_since" not in record.metadata
+                for record in ComputeProviderInstanceRepository(session).list_for_pool(
+                    pool.id,
+                    excluded_statuses=(
+                        ReservationStatus.Deleted.value,
+                        ReservationStatus.Failed.value,
+                        ReservationStatus.Terminating.value,
+                    ),
+                )
             )
         return request.model_copy(
             update={"desired_machines": min(surviving, request.desired_machines)}

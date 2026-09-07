@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -62,7 +62,7 @@ from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 from sqlalchemy.orm.attributes import flag_modified
 
 type DatabaseInsertValue = JsonValue | datetime
@@ -1032,18 +1032,86 @@ class ComputeProviderInstanceRepository:
         pool_id: str,
         *,
         for_update: bool = False,
+        status: str | None = None,
+        excluded_statuses: Collection[str] = (),
     ) -> list[ComputeProviderInstanceRecord]:
         statement = (
             select(ComputeProviderInstanceTable)
+            .options(
+                load_only(
+                    ComputeProviderInstanceTable.payload,
+                    ComputeProviderInstanceTable.machine_id,
+                    raiseload=True,
+                )
+            )
             .where(ComputeProviderInstanceTable.pool_id == pool_id)
             .order_by(
                 ComputeProviderInstanceTable.created_at.desc(),
                 ComputeProviderInstanceTable.id.asc(),
             )
         )
+        if status is not None:
+            statement = statement.where(ComputeProviderInstanceTable.status == status)
+        if excluded_statuses:
+            statement = statement.where(
+                ComputeProviderInstanceTable.status.not_in(excluded_statuses)
+            )
         if for_update:
             statement = statement.with_for_update()
         return [_provider_instance_record(row) for row in self.session.scalars(statement)]
+
+    def list_for_reconciliation(
+        self,
+        pool_id: str,
+        *,
+        terminal_statuses: Collection[str],
+        observed_instance_ids: Collection[str],
+        for_update: bool = False,
+    ) -> list[ComputeProviderInstanceRecord]:
+        table = ComputeProviderInstanceTable
+        metadata = table.payload["metadata"]
+        statement = (
+            select(table)
+            .options(load_only(table.payload, table.machine_id, raiseload=True))
+            .where(
+                table.pool_id == pool_id,
+                or_(
+                    table.status.not_in(terminal_statuses),
+                    table.instance_id.in_(observed_instance_ids),
+                    metadata["missing_since"].as_string().is_(None),
+                    metadata["provider_storage_destroyed_at"].as_string().is_(None),
+                ),
+            )
+            .order_by(table.created_at.desc(), table.id.asc())
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return [_provider_instance_record(row) for row in self.session.scalars(statement)]
+
+    def highest_launch_attempt(self, pool_id: str, *, default: int = 0) -> int:
+        highest = self.session.scalar(
+            select(
+                func.max(ComputeProviderInstanceTable.payload["launch_attempt"].as_integer())
+            ).where(ComputeProviderInstanceTable.pool_id == pool_id)
+        )
+        return highest if highest is not None else default
+
+    def machine_bindings_for_pool(self, pool_id: str) -> dict[str, str]:
+        rows = self.session.execute(
+            select(
+                ComputeProviderInstanceTable.instance_id,
+                ComputeProviderInstanceTable.machine_id,
+            ).where(
+                ComputeProviderInstanceTable.pool_id == pool_id,
+                ComputeProviderInstanceTable.instance_id.is_not(None),
+                ComputeProviderInstanceTable.machine_id.is_not(None),
+            )
+        ).tuples()
+        return {
+            instance_id: machine_id
+            for instance_id, machine_id in rows
+            if instance_id is not None and machine_id is not None
+        }
 
     def list_sizing_for_pool(self, pool_id: str) -> list[ComputeProviderInstanceSizingRecord]:
         rows = self.session.execute(
