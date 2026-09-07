@@ -41,6 +41,7 @@ class PlanEntitlementsResponse(HttpModel):
     connected_cloud: bool
     custom_domains: bool
     self_hosted: bool
+    log_retention_days: int = Field(gt=0)
     region_selection: bool
 
 
@@ -120,6 +121,7 @@ def _entitlements_response(entitlements: PlanEntitlements) -> PlanEntitlementsRe
         connected_cloud=entitlements.connected_cloud,
         custom_domains=entitlements.custom_domains,
         self_hosted=entitlements.self_hosted,
+        log_retention_days=entitlements.log_retention_days,
         region_selection=entitlements.region_selection,
     )
 

@@ -85,7 +85,12 @@ class LogQueryRequest(HttpModel):
     machine_id: str | None = None
     worker_id: str | None = None
     query: str | None = None
-    limit: int = Field(default=100, gt=0, le=1_000)
+    limit: int = Field(
+        default=100,
+        gt=0,
+        le=1_000,
+        description="Maximum records in a history page or the initial replay of a live stream.",
+    )
     start_time: datetime | None = None
     end_time: datetime | None = None
     cursor: str | None = None

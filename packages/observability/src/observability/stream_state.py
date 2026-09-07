@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -455,7 +455,7 @@ class AsyncRedisEventStreamRepository:
         return await self._follow(
             tail,
             plan.initial_streams,
-            start=_stream_start_id(last_event_id=last_event_id, query=None),
+            start=_normalize_entry_id(last_event_id) if last_event_id else None,
             label="events",
             max_events=max_events,
             heartbeat_seconds=heartbeat_seconds,
@@ -470,7 +470,7 @@ class AsyncRedisEventStreamRepository:
         last_event_id: str | None = None,
         max_events: int = 0,
         heartbeat_seconds: float,
-    ) -> AsyncIterator[RedisStreamRecord | None]:
+    ) -> AsyncGenerator[RedisStreamRecord | None, None]:
         plan = self.planner.plan_log_page(query)
         if last_event_id is not None:
             await self._raise_if_cursor_expired(
@@ -480,14 +480,37 @@ class AsyncRedisEventStreamRepository:
             )
         else:
             await self._raise_if_log_cursor_expired(plan.streams, plan.query)
-        return await self._follow(
-            tail,
+        if not plan.streams:
+            return _no_records()
+        subscription = await tail.subscribe(
             plan.streams,
-            start=_stream_start_id(last_event_id=last_event_id, query=plan.query),
+            after=dict.fromkeys(plan.streams, None),
             label="logs",
+        )
+        try:
+            replay_query = plan.query
+            if last_event_id:
+                replay_query = replay_query.model_copy(update={"cursor": last_event_id})
+            initial = await self.read_logs(replay_query)
+        except BaseException:
+            await subscription.close()
+            raise
+        # Subscribe before reading history so writes during the read arrive live.
+        # The overlap is bounded by the page and removed by stream entry identity.
+        replayed: dict[str, tuple[int, int]] = {}
+        for record in initial:
+            replayed[record.stream] = max(
+                replayed.get(record.stream, (0, 0)), _entry_id_parts(record.entry_id)
+            )
+        return _followed_records(
+            subscription,
             max_events=max_events,
             heartbeat_seconds=heartbeat_seconds,
-            skip=lambda item: not _log_record_matches_query(item, plan.query),
+            skip=lambda item: (
+                _entry_id_parts(item.entry_id) <= replayed.get(item.stream, (0, 0))
+                or not _log_record_matches_query(item, replay_query)
+            ),
+            initial=initial,
         )
 
     async def _follow(
@@ -573,9 +596,15 @@ async def _followed_records(
     max_events: int,
     heartbeat_seconds: float,
     skip: Callable[[RedisStreamRecord], bool],
-) -> AsyncIterator[RedisStreamRecord | None]:
+    initial: tuple[RedisStreamRecord, ...] = (),
+) -> AsyncGenerator[RedisStreamRecord | None, None]:
     emitted = 0
     try:
+        for record in initial:
+            yield record
+            emitted += 1
+            if max_events > 0 and emitted >= max_events:
+                return
         async for item in subscription.items(heartbeat_seconds=heartbeat_seconds):
             if item is None:
                 yield None
@@ -592,7 +621,7 @@ async def _followed_records(
         await subscription.close()
 
 
-async def _no_records() -> AsyncIterator[RedisStreamRecord | None]:
+async def _no_records() -> AsyncGenerator[RedisStreamRecord | None, None]:
     return
     yield
 
@@ -816,23 +845,6 @@ def _log_record_matches_query(record: RedisStreamRecord, query: LogStreamQuery) 
     if query.end_time is not None and log_record.timestamp >= query.end_time:
         return False
     return not (query.query and query.query.lower() not in log_record.message.lower())
-
-
-def _stream_start_id(
-    *,
-    last_event_id: str | None,
-    query: LogStreamQuery | None,
-) -> str | None:
-    """Entry ID a follow replays after, or `None` to deliver only new entries."""
-    if query is not None and query.cursor:
-        return _normalize_entry_id(query.cursor)
-    if query is not None and query.seq_num is not None:
-        return f"{max(query.seq_num - 1, 0)}-0"
-    if last_event_id:
-        return _normalize_entry_id(last_event_id)
-    if query is not None and query.start_time is not None:
-        return "0-0"
-    return None
 
 
 def _log_query_cursor(query: LogStreamQuery) -> str | None:

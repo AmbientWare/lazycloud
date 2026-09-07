@@ -177,6 +177,7 @@ function entitlements() {
     custom_domains: false,
     self_hosted: true,
     region_selection: false,
+    log_retention_days: 1,
   };
 }
 
@@ -216,6 +217,7 @@ function pricingCatalog(): PricingCatalog {
           max_members: "unlimited",
           connected_cloud: true,
           region_selection: true,
+          log_retention_days: 30,
           custom_domains: true,
         },
         terms: [],
