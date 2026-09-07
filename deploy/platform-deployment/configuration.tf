@@ -4,7 +4,7 @@ resource "aws_s3_object" "infrastructure" {
   key          = "configuration/infrastructure-v1.json"
   content_type = "application/json"
   content = jsonencode({
-    schema_version    = 2
+    schema_version    = 3
     deployment        = var.deployment
     region            = var.region
     registry          = local.ecr_registry
@@ -16,7 +16,11 @@ resource "aws_s3_object" "infrastructure" {
       secretsReader      = var.secrets_reader_service_account
       wireguardBootstrap = var.wireguard_bootstrap_service_account
     }
-    object_bucket              = aws_s3_bucket.objects["objects"].id
+    object_bucket = aws_s3_bucket.objects["objects"].id
+    image_archive = {
+      bucket       = cloudflare_r2_bucket.image_archives.name
+      endpoint_url = "https://${local.cloudflare_account_id}.r2.cloudflarestorage.com"
+    }
     workspace_bucket_prefix    = local.workspace_bucket_prefix
     workspace_storage_role_arn = aws_iam_role.workspace_storage.arn
     workload_image_repository  = local.workload_image_repository
