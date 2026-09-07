@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, skipToken } from "@tanstack/react-query";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
 import {
@@ -66,16 +66,20 @@ export function mapKeysQueryOptions(workspaceId: string, name: string) {
   });
 }
 
-export function mapValueQueryOptions(workspaceId: string, name: string, key: string) {
-  const params = new URLSearchParams({ key });
+export function mapValueQueryOptions(workspaceId: string, name: string, key: string | null) {
   return queryOptions({
     queryKey: workspaceQueryKeys.collections.mapValue(workspaceId, name, key),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/maps/${encodePath(name)}/get?${params.toString()}`, workspaceId),
-        encodedValueSchema,
-      ),
-    enabled: Boolean(key),
+    queryFn:
+      key === null
+        ? skipToken
+        : () =>
+            apiRequest(
+              withWorkspace(
+                `/api/v1/maps/${encodePath(name)}/get?${new URLSearchParams({ key })}`,
+                workspaceId,
+              ),
+              encodedValueSchema,
+            ),
     refetchInterval: LIVE_INTERVAL_MS,
   });
 }

@@ -84,10 +84,11 @@ export function MapInspector({
 }) {
   const count = useQuery(mapCountQueryOptions(workspaceId, name));
   const keys = useQuery(mapKeysQueryOptions(workspaceId, name));
-  const [selectedKey, setSelectedKey] = useState("");
-  const effectiveSelectedKey = keys.data?.keys.includes(selectedKey)
-    ? selectedKey
-    : (keys.data?.keys[0] ?? "");
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const effectiveSelectedKey =
+    selectedKey !== null && keys.data?.keys.includes(selectedKey)
+      ? selectedKey
+      : (keys.data?.keys[0] ?? null);
   const value = useQuery(mapValueQueryOptions(workspaceId, name, effectiveSelectedKey));
   const error = count.error ?? keys.error;
   if (error) return <PanelError message={error.message} />;
@@ -118,14 +119,17 @@ export function MapInspector({
       {visibleKeys.length ? (
         <>
           <div className="mt-3 border-t border-border/60 pt-3">
-            <Select value={effectiveSelectedKey} onValueChange={setSelectedKey}>
+            <Select
+              value={effectiveSelectedKey === null ? "" : `key:${effectiveSelectedKey}`}
+              onValueChange={(value) => setSelectedKey(value.slice(4))}
+            >
               <SelectTrigger size="sm" aria-label="Map key" className="mono w-full text-xs sm:w-64">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent align="start">
                 {visibleKeys.map((key) => (
-                  <SelectItem key={key} value={key} className="mono text-xs">
-                    {key}
+                  <SelectItem key={key} value={`key:${key}`} className="mono text-xs">
+                    {key === "" ? '""' : key}
                   </SelectItem>
                 ))}
               </SelectContent>
