@@ -144,6 +144,8 @@ class VolumeObjectClient(Protocol):
 
     def delete_prefix(self, prefix: str, *, bucket: str | None = None) -> tuple[str, ...]: ...
 
+    def abort_multipart_uploads(self, prefix: str, *, bucket: str | None = None) -> None: ...
+
     def delete(self, key: str, *, bucket: str | None = None) -> None: ...
 
     def copy(
@@ -328,7 +330,9 @@ class WorkspaceVolumeFilesystem:
 
     def delete_volume(self, namespace: VolumeNamespace) -> None:
         store = self._store(namespace)
-        store.client.delete_prefix(store.prefix_key(namespace), bucket=store.bucket)
+        prefix = store.prefix_key(namespace)
+        store.client.abort_multipart_uploads(prefix, bucket=store.bucket)
+        store.client.delete_prefix(prefix, bucket=store.bucket)
 
     def _store(self, namespace: VolumeNamespace) -> WorkspaceVolumeStore:
         _validate_namespace(namespace)

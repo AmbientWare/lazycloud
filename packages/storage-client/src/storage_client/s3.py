@@ -347,12 +347,15 @@ class _BucketClient(Protocol):
 
 
 @runtime_checkable
-class _RetireBucketClient(Protocol):
-    def delete_bucket(self, *, Bucket: str) -> None: ...
-
+class _ListMultipartUploadsClient(Protocol):
     def list_multipart_uploads(
-        self, *, Bucket: str, KeyMarker: str = "", UploadIdMarker: str = ""
+        self, *, Bucket: str, Prefix: str = "", KeyMarker: str = "", UploadIdMarker: str = ""
     ) -> _ListMultipartUploadsResponse: ...
+
+
+@runtime_checkable
+class _RetireBucketClient(_ListMultipartUploadsClient, Protocol):
+    def delete_bucket(self, *, Bucket: str) -> None: ...
 
 
 class _CorsRule(TypedDict):
@@ -442,6 +445,7 @@ type S3ClientCapabilities = (
     | _DeleteObjectClient
     | _CopyObjectClient
     | _BucketClient
+    | _ListMultipartUploadsClient
     | _RetireBucketClient
     | _BucketPolicyClient
     | _ListObjectsClient
@@ -856,34 +860,46 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         if not isinstance(client, _RetireBucketClient):
             raise TypeError("configured S3 client does not support bucket retirement")
         try:
-            key_marker = ""
-            upload_marker = ""
-            while True:
-                response = client.list_multipart_uploads(
-                    Bucket=bucket, KeyMarker=key_marker, UploadIdMarker=upload_marker
-                )
-                for upload in response.get("Uploads", ()):
-                    try:
-                        self.abort_multipart_upload(
-                            upload["Key"], upload_id=upload["UploadId"], bucket=bucket
-                        )
-                    except ClientError as exc:
-                        code, _ = _client_error_code_and_status(exc)
-                        if code != "NoSuchUpload":
-                            raise
-                if not response.get("IsTruncated"):
-                    break
-                next_key = response.get("NextKeyMarker", "")
-                next_upload = response.get("NextUploadIdMarker", "")
-                if not next_key or (next_key, next_upload) == (key_marker, upload_marker):
-                    raise RuntimeError("multipart listing did not advance during bucket retirement")
-                key_marker, upload_marker = next_key, next_upload
+            self.abort_multipart_uploads("", bucket=bucket)
             self.delete_prefix("", bucket=bucket)
             client.delete_bucket(Bucket=bucket)
         except ClientError as exc:
             code, _ = _client_error_code_and_status(exc)
             if code != "NoSuchBucket":
                 raise
+
+    def abort_multipart_uploads(self, prefix: str, *, bucket: str | None = None) -> None:
+        client = self.client
+        if not isinstance(client, _ListMultipartUploadsClient):
+            raise TypeError("configured S3 client does not support multipart listing")
+        target_bucket = bucket or self.settings.bucket
+        key_marker = ""
+        upload_marker = ""
+        while True:
+            response = client.list_multipart_uploads(
+                Bucket=target_bucket,
+                Prefix=prefix,
+                KeyMarker=key_marker,
+                UploadIdMarker=upload_marker,
+            )
+            for upload in response.get("Uploads", ()):
+                if not upload["Key"].startswith(prefix):
+                    raise RuntimeError("multipart listing returned an upload outside the prefix")
+                try:
+                    self.abort_multipart_upload(
+                        upload["Key"], upload_id=upload["UploadId"], bucket=target_bucket
+                    )
+                except ClientError as exc:
+                    code, _ = _client_error_code_and_status(exc)
+                    if code != "NoSuchUpload":
+                        raise
+            if not response.get("IsTruncated"):
+                return
+            next_key = response.get("NextKeyMarker", "")
+            next_upload = response.get("NextUploadIdMarker", "")
+            if not next_key or (next_key, next_upload) == (key_marker, upload_marker):
+                raise RuntimeError("multipart listing did not advance during upload cleanup")
+            key_marker, upload_marker = next_key, next_upload
 
     def configure_workspace_bucket(self, bucket: str, *, public_origin: str) -> None:
         client = self.client
