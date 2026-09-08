@@ -8,7 +8,6 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from shared.capacity import MachinePool
-from shared.container_requests import CONTAINER_MEMORY_BURST_FLOOR_MIB
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
@@ -86,65 +85,6 @@ class AwsAccountConnectionErrorCode(StringEnum):
     PermissionDrift = "permission_drift"
     StackDrift = "stack_drift"
     UpstreamUnavailable = "upstream_unavailable"
-
-
-class AwsAccountComputeConfiguration(ContractModel):
-    """How capacity is provisioned in one connected AWS account.
-
-    One configuration per account rather than per workspace: the authorization it
-    governs is account-wide, so two workspaces of one owner cannot be allowed to
-    give the same account contradictory answers about where it may be used.
-    """
-
-    revision: int = Field(default=1, ge=1)
-    default_region: str = Field(default="us-east-1", pattern=AWS_REGION_PATTERN)
-    default_instance_type: str = Field(default="m7i.large", min_length=1, max_length=64)
-    initial_cpu_workers: int = Field(default=1, ge=0, le=100)
-    min_cpu_workers: int = Field(default=1, ge=0, le=100)
-    max_cpu_instances: int | None = Field(default=None, ge=0)
-    max_gpu_instances: int | None = Field(default=None, ge=0)
-    min_free_cpu_millicores: int = Field(default=1_000, ge=0)
-    min_free_memory_mib: int = Field(default=CONTAINER_MEMORY_BURST_FLOOR_MIB, ge=0)
-    """Free memory below which the pool adds a machine.
-
-    Accounted memory, not physical: the pool subtracts what its containers
-    reserved, so a container expanding into its burst allowance consumes real
-    memory without moving this figure. It therefore bounds how tightly the pool
-    packs reservations and says nothing about how much room a burst will find.
-    Stated as the smallest burst allowance so the two are at least the same
-    order, but the guarantee a node can absorb a burst is the ceiling's, not this.
-    """
-    allowed_regions: tuple[str, ...] = ("us-east-1",)
-    allowed_instance_types: tuple[str, ...] = ()
-    idle_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
-    root_volume_gib: int = Field(default=200, ge=50, le=2048)
-
-    @model_validator(mode="after")
-    def validate_limits(self) -> AwsAccountComputeConfiguration:
-        if not self.allowed_regions:
-            raise ValueError("AWS compute configuration requires at least one allowed region")
-        if len(set(self.allowed_regions)) != len(self.allowed_regions):
-            raise ValueError("AWS compute configuration allowed regions must be unique")
-        if any(not _matches_aws_region(region) for region in self.allowed_regions):
-            raise ValueError("AWS compute configuration contains an invalid region")
-        if self.default_region not in self.allowed_regions:
-            raise ValueError("AWS default region must be allowed")
-        if self.min_cpu_workers > self.initial_cpu_workers or (
-            self.max_cpu_instances is not None and self.initial_cpu_workers > self.max_cpu_instances
-        ):
-            raise ValueError("AWS CPU worker capacity must satisfy min <= initial <= max")
-        if not self.default_instance_type.strip():
-            raise ValueError("AWS default instance type cannot be empty")
-        if len(set(self.allowed_instance_types)) != len(self.allowed_instance_types):
-            raise ValueError("AWS allowed instance types must be unique")
-        if any(not instance_type.strip() for instance_type in self.allowed_instance_types):
-            raise ValueError("AWS allowed instance types cannot contain empty values")
-        if (
-            self.allowed_instance_types
-            and self.default_instance_type not in self.allowed_instance_types
-        ):
-            raise ValueError("AWS default instance type must be allowed")
-        return self
 
 
 class AwsAccountNetwork(ContractModel):
@@ -309,8 +249,6 @@ class AwsAccountConnection(ContractModel):
     Chosen at connection creation and immutable while its units exist. Workloads
     select this pool explicitly or through their workspace's default pool.
     """
-    compute: AwsAccountComputeConfiguration = Field(default_factory=AwsAccountComputeConfiguration)
-    """Provisioning limits and defaults applied to every workspace this account backs."""
     phase: AwsAccountConnectionPhase
     active_authorization: AwsAccountAuthorizationGeneration | None = None
     pending_authorization: AwsAccountAuthorizationGeneration | None = None
@@ -615,7 +553,6 @@ __all__ = [
     "AwsAccountAuthorizationMode",
     "AwsAccountAuthorizationPhase",
     "AwsAccountAuthorizationPlan",
-    "AwsAccountComputeConfiguration",
     "AwsAccountConnection",
     "AwsAccountConnectionAvailableAction",
     "AwsAccountConnectionErrorCode",

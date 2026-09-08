@@ -17,7 +17,7 @@ them. It registers through the public API rather than against the database, so
 the control plane has to be serving before it can say anything. The others reach
 their own stores directly and go first.
 
-Ensuring compares account, role, external ID and network before applying limits.
+Ensuring compares account, role, external ID and network before validation.
 A mismatch fails the sync without adopting or replacing a connection.
 */}}
 {{- if .Values.fleet }}
@@ -74,9 +74,7 @@ spec:
                 {{- range .Values.fleet.subnet_ids }}
                 --subnet-id {{ . | quote }} \
                 {{- end }}
-                --security-group-id {{ required "fleet.security_group_id is required" .Values.fleet.security_group_id | quote }} \
-                --max-cpu {{ required "fleet.max_cpu_instances is required" .Values.fleet.max_cpu_instances }} \
-                --max-gpu {{ .Values.fleet.max_gpu_instances }}
+                --security-group-id {{ required "fleet.security_group_id is required" .Values.fleet.security_group_id | quote }}
               lazycloud-admin --json cloud validate
           env:
             {{- include "lazycloud.env" (list . "fleetEnsure") | nindent 12 }}

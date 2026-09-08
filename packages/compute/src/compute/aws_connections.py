@@ -20,7 +20,6 @@ from shared.aws_connections import (
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPhase,
     AwsAccountAuthorizationPlan,
-    AwsAccountComputeConfiguration,
     AwsAccountConnection,
     AwsAccountConnectionErrorCode,
     AwsAccountConnectionPhase,
@@ -42,7 +41,6 @@ from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeT
 from shared.timestamps import utc_now
 
 from compute.bucket_access import AwsConnectionBucketAccessReconciler
-from compute.catalog import ComputeCatalogRegion, validate_aws_compute_configuration
 from compute.context import ComputeContext
 
 
@@ -169,7 +167,6 @@ class AwsAccountConnectionService:
     bucket_access_reconciler: AwsConnectionBucketAccessReconciler | None = None
     capacity_baseline: AwsConnectionCapacityBaseline | None = None
     workspace_changes: WorkspaceChangePublisher | None = None
-    available_catalog: tuple[ComputeCatalogRegion, ...] = ()
     external_id_bytes: int = 48
     validation_lease_seconds: float = 300
     reconcile_claim_seconds: float = 120
@@ -247,10 +244,6 @@ class AwsAccountConnectionService:
             node_role_arn=plan.node_role_arn,
             node_instance_profile_arn=plan.node_instance_profile_arn,
             network=plan.network,
-            compute=AwsAccountComputeConfiguration(
-                max_cpu_instances=request.max_cpu_instances,
-                max_gpu_instances=request.max_gpu_instances,
-            ),
             customer_action_url=None,
             customer_action_label=(
                 "Create the connection stack" if plan.authorization_stack else ""
@@ -280,7 +273,7 @@ class AwsAccountConnectionService:
         return connection
 
     def ensure_fleet(self, request: AwsFleetEnsureRequest, *, user_id: str) -> AwsAccountConnection:
-        """Reconcile fleet policy only after its durable infrastructure matches."""
+        """Register or verify the platform account's infrastructure."""
         if self.current(user_id=user_id) is None:
             try:
                 self.connect(request, user_id=user_id, platform_fleet=True)
@@ -324,71 +317,7 @@ class AwsAccountConnectionService:
                 AwsAccountConnectionPhase.Degraded,
             }:
                 raise ConflictError("Fleet authorization transition must finish before deploying")
-            if (
-                current.compute.max_cpu_instances == request.max_cpu_instances
-                and current.compute.max_gpu_instances == request.max_gpu_instances
-            ):
-                return current
-            if request.max_cpu_instances < current.compute.initial_cpu_workers:
-                raise InvalidInputError("Fleet CPU ceiling is below the configured initial workers")
-            configuration = current.compute.model_copy(
-                update={
-                    "max_cpu_instances": request.max_cpu_instances,
-                    "max_gpu_instances": request.max_gpu_instances,
-                    "revision": current.compute.revision + 1,
-                }
-            )
-            validate_aws_compute_configuration(configuration, catalog=self.available_catalog)
-            updated = current.model_copy(
-                update={
-                    "compute": configuration,
-                    "revision": current.revision + 1,
-                    "updated_at": utc_now(),
-                }
-            )
-            repository.save(updated)
-        self._apply_capacity_baseline(updated)
-        self._publish(updated, WorkspaceChangeType.Updated)
-        return updated
-
-    def update_compute_configuration(
-        self,
-        *,
-        user_id: str,
-        expected_revision: int,
-        configuration: AwsAccountComputeConfiguration,
-    ) -> AwsAccountConnection:
-        """Replace how capacity is provisioned in this account.
-
-        The warm baseline is then re-applied to every workspace the account
-        backs, because one set of numbers now describes all of them and applying
-        it to whichever workspace the caller happened to be in would leave the
-        rest holding capacity nobody asked for.
-        """
-        validate_aws_compute_configuration(configuration, catalog=self.available_catalog)
-        now = utc_now()
-        with self.context.database.session() as session:
-            repository = AwsAccountConnectionRepository(session)
-            current = repository.get_for_user(user_id, for_update=True)
-            if current is None:
-                raise NotFoundError("AWS account connection not found")
-            if not current.platform_fleet:
-                self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
-            if current.compute.revision != expected_revision:
-                raise ConflictError("AWS compute configuration revision was superseded")
-            updated = current.model_copy(
-                update={
-                    "compute": configuration.model_copy(
-                        update={"revision": current.compute.revision + 1}
-                    ),
-                    "revision": current.revision + 1,
-                    "updated_at": now,
-                }
-            )
-            repository.save(updated)
-        self._apply_capacity_baseline(updated)
-        self._publish(updated, WorkspaceChangeType.Updated)
-        return updated
+            return current
 
     def validate(self, *, user_id: str) -> AwsAccountConnection:
         started_at = utc_now()
@@ -772,25 +701,7 @@ class AwsAccountConnectionService:
         return self._release_unchanged_claim(claimed, now)
 
     def _apply_capacity_baseline(self, connection: AwsAccountConnection) -> None:
-        """Hold the account's compute configuration in every workspace it backs.
-
-        The configuration decides how much warm capacity each workspace holds.
-        It is applied when the configuration is written, at control-plane
-        startup, and at every moment a connection first becomes able to build
-        capacity at all.
-
-        There are two ways to reach Ready and both call this. A caller asking to
-        validate takes one, the background reconciler takes the other, and
-        neither goes through the other's code. A first connection then settles
-        with `next_reconcile_at` cleared, so a baseline left to a later pass
-        over an already-Ready connection never runs, and the account holds the
-        floor it asked for as a number and no machine until its next
-        configuration write. A reconnect schedules that pass while retiring its
-        predecessor, which is why only a first connection lost its capacity.
-
-        Every workspace the account backs, not one. The connection became usable
-        for all of them at the same instant.
-        """
+        """Apply managed warm capacity to every workspace owned by the account."""
         if self.capacity_baseline is None:
             return
         for workspace_id in self._owned_workspace_ids(connection.user_id):
@@ -1602,8 +1513,6 @@ class AwsAccountConnectionService:
             and pending is not None
             and pending.authorization_mode is mode
             and (request.role_arn is None or pending.role_arn == request.role_arn)
-            and existing.compute.max_cpu_instances == request.max_cpu_instances
-            and existing.compute.max_gpu_instances == request.max_gpu_instances
         )
 
 

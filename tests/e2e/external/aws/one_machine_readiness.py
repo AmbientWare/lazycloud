@@ -1,9 +1,6 @@
-"""Select connected AWS and prove the platform's one-machine warm baseline.
+"""Select connected AWS and prove the managed policy's one-machine warm baseline.
 
-On success the stage emits the exact warm-baseline identity. On timeout it
-still emits the observed public instance state as durable recovery evidence —
-the paid capacity it requested stays owned by the account's compute
-configuration until the cleanup stage restores zero.
+The cleanup stage disconnects the account and removes its managed capacity.
 """
 
 from __future__ import annotations
@@ -12,9 +9,8 @@ import argparse
 from collections.abc import Sequence
 
 from lazycloud.cli.control import compute_client
-from shared.aws_connections import AwsAccountComputeConfiguration, AwsAccountConnectionPhase
+from shared.aws_connections import AwsAccountConnectionPhase
 from shared.compute_enrollment import MachineServiceState
-from shared.http.aws_connections import AwsComputeConfigurationUpdateRequest
 from shared.http.compute_policy import (
     WorkspaceComputeInstanceResponse,
     WorkspaceComputePolicyUpdateRequest,
@@ -36,32 +32,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if connection is None or connection.phase is not AwsAccountConnectionPhase.Ready:
         raise RuntimeError("the public AWS connection is not ready")
 
-    current = connection.compute
-    parity = AwsAccountComputeConfiguration(
-        revision=current.revision,
-        default_region=current.default_region,
-        default_instance_type=current.default_instance_type,
-        initial_cpu_workers=1,
-        min_cpu_workers=1,
-        max_cpu_instances=(
-            None if current.max_cpu_instances is None else max(1, current.max_cpu_instances)
-        ),
-        max_gpu_instances=current.max_gpu_instances,
-        min_free_cpu_millicores=1_000,
-        min_free_memory_mib=1_024,
-        allowed_regions=current.allowed_regions,
-        allowed_instance_types=current.allowed_instance_types,
-        idle_timeout_seconds=current.idle_timeout_seconds,
-        root_volume_gib=current.root_volume_gib,
-    )
-    if current != parity:
-        client.update_compute_configuration(
-            AwsComputeConfigurationUpdateRequest(
-                expected_revision=current.revision,
-                compute=parity,
-            )
-        )
-
     last_observed: list[WorkspaceComputeInstanceResponse] = []
 
     def check() -> WorkspaceComputeInstanceResponse | None:
@@ -70,6 +40,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             item for item in client.instances().data if item.provider == f"aws:{connection.id}"
         ]
         last_observed[:] = connected
+        instance_signals: list[dict[str, str]] = [
+            {"id": item.id, "status": item.status, "bootstrap_phase": item.bootstrap_phase}
+            for item in connected
+        ]
+        _support.emit_evidence(
+            {
+                "connection_id": connection.id,
+                "instances": instance_signals,
+                "ready": summary.instances.ready,
+                "pending": summary.instances.pending,
+                "degraded": summary.instances.degraded,
+            }
+        )
         ready = [
             item
             for item in connected
@@ -105,7 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "connection_id": connection.id,
                 "observed_instances": observed,
                 "ready": 0,
-                "recovery": "run tests.e2e.external.aws.cleanup to restore zero capacity",
+                "recovery": "run tests.e2e.external.aws.cleanup to disconnect the account",
             }
         )
         raise

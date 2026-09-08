@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from agent.binary import AgentBinarySettings
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from compute.agent_control import agent_machine_worker_id
@@ -28,19 +25,13 @@ from database.repositories.compute import (
 )
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from fastapi.testclient import TestClient
-from gateway.settings import GatewaySettings
 from identity.auth import AuthService, TokenIssuer
-from networking.settings import BackendRouteSettings
-from provider_aws import aws_account_connection_template_identity
-from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
-from pydantic import SecretStr
 from scheduler.compute_hooks import SchedulerComputeHooks
 from scheduler.state import RedisSchedulerWorkerRepository
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPhase,
-    AwsAccountComputeConfiguration,
     AwsAccountConnection,
     AwsAccountConnectionPhase,
 )
@@ -65,7 +56,6 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.deployment_records import DeploymentSpec
-from shared.http.aws_connections import AwsConnectionCurrentResponse, AwsConnectionResponse
 from shared.http.compute_policy import (
     MachinePoolListResponse,
     WorkspaceComputeInstanceListResponse,
@@ -75,7 +65,6 @@ from shared.identity import TokenKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.supplier_costs import SupplierCostTerms
 from tests.service_fixtures import owned_workspace, workspace_owner_user_id
-from tests.url_constants import EXAMPLE_COM_URL
 
 
 def _workspace_owner_id(services: ApiServices) -> str:
@@ -107,132 +96,14 @@ def _account_client(
     )
 
 
-@dataclass(frozen=True, slots=True)
-class _AwsCatalogConfiguration:
-    agent_binaries: AgentBinarySettings
-    connection: AwsAccountConnectionSettings
-    capacity: AwsCapacitySettings
-
-
-def _aws_catalog_configuration() -> _AwsCatalogConfiguration:
-    agent_binary_settings = AgentBinarySettings(
-        binary_dir=Path("/tmp/agent-binarys"),
-        binary_version="0.1.0",
-        binary_sha256_by_arch={"amd64": "a" * 64},
-    )
-    template_identity = aws_account_connection_template_identity()
-    aws_account_connection_settings = AwsAccountConnectionSettings(
-        template_url=(
-            "https://assets.s3.us-east-1.amazonaws.com/templates/"
-            f"{template_identity.sha256}/connection.json"
-        ),
-        control_principal_arn="arn:aws:iam::123456789012:role/control-plane",
-    )
-    aws_capacity_settings = AwsCapacitySettings(
-        worker_image_digest=f"worker@sha256:{'b' * 64}",
-        agent_binary_url=(
-            f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'b' * 64}/"
-            "lazycloud-agent-linux-amd64"
-        ),
-        cpu_ami_ids={
-            "us-west-2": "ami-0123456789abcdef0",
-            "us-east-1": "ami-1234567890abcdef0",
-        },
-        gpu_ami_ids={
-            "us-west-2": "ami-2345678901abcdef0",
-        },
-        instance_hourly_micros={
-            "g6.xlarge": 804_000,
-            "m7i.large": 100_800,
-            "m7i.xlarge": 201_600,
-        },
-    )
-    return _AwsCatalogConfiguration(
-        agent_binaries=agent_binary_settings,
-        connection=aws_account_connection_settings,
-        capacity=aws_capacity_settings,
-    )
-
-
-def _configured_aws_services(
-    isolated_services: ApiServices,
-    request: pytest.FixtureRequest,
-) -> ApiServices:
-    configuration = _aws_catalog_configuration()
-    backend_route_settings = BackendRouteSettings(auth_key=SecretStr(uuid4().hex))
-    services = ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        create_schema=False,
-        gateway_settings=GatewaySettings(
-            public_http_url=EXAMPLE_COM_URL,
-            runtime_callback_http_url=EXAMPLE_COM_URL,
-        ),
-        agent_binary_settings=configuration.agent_binaries,
-        aws_account_connection_settings=configuration.connection,
-        aws_capacity_settings=configuration.capacity,
-        backend_route_settings=backend_route_settings,
-        volume_filesystem=isolated_services.volume_filesystem,
-        redis_client=isolated_services.redis_client,
-        binary_redis_client=isolated_services.binary_redis_client,
-        async_io=isolated_services.require_async_io(),
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-    )
-    request.addfinalizer(services.close)
-    return services
-
-
-def test_account_compute_configuration_rejects_unavailable_catalog_selections(
-    isolated_services: ApiServices,
-    request: pytest.FixtureRequest,
-) -> None:
-    owner_id = _seed_ready_aws_connection(isolated_services)
-    services = _configured_aws_services(isolated_services, request)
-    client = _account_client(services, request, user_id=owner_id)
-    current = _current_connection(client)
-
-    unavailable_region = client.put(
-        "/api/v1/aws-connection/compute",
-        json={
-            "expected_revision": current.compute.revision,
-            "compute": {
-                **current.compute.model_dump(mode="json"),
-                "default_region": "eu-west-1",
-                "allowed_regions": ["eu-west-1"],
-            },
-        },
-    )
-    unavailable_type = client.put(
-        "/api/v1/aws-connection/compute",
-        json={
-            "expected_revision": current.compute.revision,
-            "compute": {
-                **current.compute.model_dump(mode="json"),
-                "default_region": "us-west-2",
-                "default_instance_type": "g5.xlarge",
-                "allowed_regions": ["us-west-2"],
-                "allowed_instance_types": ["g5.xlarge"],
-            },
-        },
-    )
-
-    assert unavailable_region.status_code == 400
-    assert unavailable_region.json()["detail"] == (
-        "AWS regions are not available for configured capacity: eu-west-1"
-    )
-    assert unavailable_type.status_code == 400
-    assert unavailable_type.json()["detail"] == (
-        "AWS instance types are not available in allowed regions: g5.xlarge"
-    )
-
-
 def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacity(
     isolated_services: ApiServices,
     request: pytest.FixtureRequest,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    owner_id = _seed_ready_aws_connection(isolated_services)
+    owner_id = _workspace_owner_id(isolated_services)
+    client = _account_client(isolated_services, request, user_id=owner_id)
+    _seed_ready_aws_connection(isolated_services)
     with isolated_services.context.database.session() as session:
         connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(workspace_id)
     assert connection is not None
@@ -338,7 +209,6 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
             status=SchedulerWorkerStatus.Available,
         )
     )
-    client = _account_client(isolated_services, request, user_id=owner_id)
     summary_response = client.get("/api/v1/compute/summary")
     instances_response = client.get("/api/v1/compute/instances")
 
@@ -399,36 +269,6 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     assert zero_summary.instances.total == 0
     assert zero_summary.cost.hourly_micros == 0
     assert zero_inventory.data == []
-
-
-def test_account_compute_configuration_is_editable_during_authorization_replacement(
-    isolated_services: ApiServices,
-    request: pytest.FixtureRequest,
-) -> None:
-    """Replacing authorization must not freeze the limits the running fleet obeys.
-
-    The connection still hosts workloads while a replacement is completed, so an
-    owner who needs to lower a ceiling in that window has to be able to.
-    """
-    owner_id = _seed_ready_aws_connection(isolated_services, reconnecting=True)
-    services = _configured_aws_services(isolated_services, request)
-    client = _account_client(services, request, user_id=owner_id)
-    current = _current_connection(client)
-
-    response = client.put(
-        "/api/v1/aws-connection/compute",
-        json={
-            "expected_revision": current.compute.revision,
-            "compute": {**current.compute.model_dump(mode="json"), "idle_timeout_seconds": 600},
-        },
-    )
-
-    assert response.status_code == 200, response.text
-    updated = AwsConnectionResponse.model_validate_json(response.content)
-    assert updated.hosts_workloads
-    assert updated.compute.idle_timeout_seconds == 600
-    assert updated.compute.revision == current.compute.revision + 1
-    assert _current_connection(client).compute.idle_timeout_seconds == 600
 
 
 def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
@@ -571,14 +411,6 @@ def test_deployment_placement_is_pinned_when_workspace_default_changes(
     assert created_after.pool == "aws"
 
 
-def _current_connection(client: TestClient) -> AwsConnectionResponse:
-    response = client.get("/api/v1/aws-connection")
-    assert response.status_code == 200, response.text
-    current = AwsConnectionCurrentResponse.model_validate_json(response.content)
-    assert current.connection is not None
-    return current.connection
-
-
 def _workspace_id(isolated_services: ApiServices) -> str:
     with isolated_services.context.database.session() as session:
         return isolated_services.context.default_workspace_id(session)
@@ -629,14 +461,6 @@ def _seed_ready_aws_connection(
                 account_id=account_id,
                 external_id="x" * 48,
                 pool=MachinePool("aws"),
-                # No warm baseline: control-plane startup reconciles what every
-                # connected account asks for, and none of these tests are about
-                # provisioning it.
-                compute=AwsAccountComputeConfiguration(
-                    initial_cpu_workers=0,
-                    min_cpu_workers=0,
-                    max_cpu_instances=0,
-                ),
                 phase=(
                     AwsAccountConnectionPhase.ReconnectPending
                     if reconnecting

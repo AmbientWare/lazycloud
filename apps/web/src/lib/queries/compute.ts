@@ -4,11 +4,9 @@ import {
   awsConnectionAuthorizationSchema,
   awsConnectionEnvelopeSchema,
   awsConnectionSchema,
-  customerComputeCatalogSchema,
   customerComputeInstanceListSchema,
   poolJoinCommandResponseSchema,
   unitMachineListSchema,
-  type AwsComputeConfigurationUpdateRequest,
   type AwsConnection,
 } from "@/lib/api/schemas";
 import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
@@ -55,15 +53,6 @@ export function computeInstancesQueryOptions(enabled = true) {
   });
 }
 
-export function computeCatalogQueryOptions(enabled = true) {
-  return queryOptions({
-    queryKey: accountComputeQueryKeys.catalog(),
-    enabled,
-    queryFn: () => apiRequest("/api/v1/compute/catalog", customerComputeCatalogSchema),
-    staleTime: 5 * 60_000,
-  });
-}
-
 export function awsConnectionQueryOptions(enabled = true) {
   return queryOptions({
     queryKey: accountComputeQueryKeys.awsConnection(),
@@ -79,21 +68,9 @@ export async function getAwsConnection(): Promise<AwsConnection | null> {
   return response.connection;
 }
 
-/** Provisioning limits and defaults belong to the account, not to one workspace. */
-export function updateAwsComputeConfiguration(
-  request: AwsComputeConfigurationUpdateRequest,
-): Promise<AwsConnection> {
-  return apiRequest("/api/v1/aws-connection/compute", awsConnectionSchema, {
-    method: "PUT",
-    body: JSON.stringify(request),
-  });
-}
-
 export type CreateAwsConnectionInput = {
   pool?: string;
   accountId: string;
-  maxCpuInstances: number | null;
-  maxGpuInstances: number | null;
 };
 
 export type AwsConnectionAuthorizationResult = {
@@ -107,8 +84,6 @@ export async function createAwsConnection(
   const response = await postJson("/api/v1/aws-connection", awsConnectionAuthorizationSchema, {
     account_id: input.accountId,
     pool: input.pool,
-    max_cpu_instances: input.maxCpuInstances,
-    max_gpu_instances: input.maxGpuInstances,
   });
   return {
     connection: response.connection,

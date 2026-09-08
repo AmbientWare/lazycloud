@@ -232,19 +232,19 @@ run acceptance.
 
 ## Draining capacity
 
-A node whose bootstrap failed keeps running and holds the pool's slot. The
-reclaim path handles the deadline case; to clear a pool by hand, drive the
-connected account's compute configuration to zero rather than terminating
-instances directly — the control plane owns those writes and will otherwise
-relaunch. This zeroes capacity in every workspace that account backs.
+A node whose bootstrap failed holds its pool's slot until the controller
+reclaims it at the bootstrap deadline. Do not terminate managed instances
+directly; the control plane can replace them.
+
+To remove a customer's connected AWS capacity, disconnect the account:
 
 ```bash
-uv run lazycloud cloud compute update \
-  --initial-cpu-workers 0 --min-cpu-workers 0 --max-cpu 0
+uv run lazycloud cloud disconnect --wait
 ```
 
-Expect a `409` while a reconcile is in flight; retry. Watch it drain with
-`uv run lazycloud compute instances`.
+This drains capacity across every workspace the account backs and removes its
+AWS authorization. Provisioning policy is defined in code; it has no customer
+CLI override. Inspect current instances with `uv run lazycloud compute instances`.
 
 ## Public ingress
 

@@ -7,7 +7,6 @@ from pydantic import JsonValue
 from shared.aws_connections import AWS_CONNECTED_MACHINE_POOL, AwsAccountNetwork
 from shared.capacity import MachinePool
 from shared.http.aws_connections import (
-    AwsComputeConfigurationUpdateRequest,
     AwsConnectionAuthorizationResponse,
     AwsConnectionCreateRequest,
     AwsConnectionCurrentResponse,
@@ -84,8 +83,6 @@ class ComputeClient:
         role_arn: str | None = None,
         network: AwsAccountNetwork | None = None,
         external_id: str | None = None,
-        max_cpu_instances: int | None = None,
-        max_gpu_instances: int | None = None,
     ) -> AwsConnectionAuthorizationResponse:
         request = AwsConnectionCreateRequest(
             account_id=account_id,
@@ -93,8 +90,6 @@ class ComputeClient:
             role_arn=role_arn,
             network=network,
             external_id=external_id,
-            max_cpu_instances=max_cpu_instances,
-            max_gpu_instances=max_gpu_instances,
         )
         return AwsConnectionAuthorizationResponse.model_validate(
             self.channel.post(self._aws_path(""), request.model_dump(mode="json"))
@@ -136,18 +131,6 @@ class ComputeClient:
 
     def retry_connection(self) -> AwsConnectionResponse:
         return AwsConnectionResponse.model_validate(self.channel.post(self._aws_path("/retry")))
-
-    def update_compute_configuration(
-        self,
-        request: AwsComputeConfigurationUpdateRequest,
-    ) -> AwsConnectionResponse:
-        return AwsConnectionResponse.model_validate(
-            self.channel.request(
-                "PUT",
-                self._aws_path("/compute"),
-                payload=request.model_dump(mode="json"),
-            )
-        )
 
     def policy(self) -> WorkspaceComputePolicyResponse:
         return WorkspaceComputePolicyResponse.model_validate(

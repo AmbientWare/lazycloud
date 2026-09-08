@@ -20,6 +20,7 @@ from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 from compute.agent_control import hash_compute_token
+from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.offers import ComputeOffer
 from compute.providers import (
     ComputeProviderResolver,
@@ -739,10 +740,10 @@ def _compute(isolated_services: ApiServices, provider: _PooledProvider) -> Compu
                 workspace_id=workspace_id,
                 pool=connection.pool,
                 platform_fleet=connection.platform_fleet,
-                default_region=connection.compute.default_region,
-                allowed_regions=connection.compute.allowed_regions,
-                max_cpu_instances=connection.compute.max_cpu_instances,
-                max_gpu_instances=connection.compute.max_gpu_instances,
+                default_region=AWS_COMPUTE_CONFIGURATION.default_region,
+                allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
+                max_cpu_instances=AWS_COMPUTE_CONFIGURATION.max_cpu_instances,
+                max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
             ),
         ),
         pool_bootstrap_factory=_bootstrap,

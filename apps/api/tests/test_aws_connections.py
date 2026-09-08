@@ -313,15 +313,9 @@ def test_unfinished_setup_can_be_canceled_without_active_authorization(
     client, _aws_connections = _client(isolated_services, request)
     created = client.post(
         "/api/v1/aws-connection",
-        json={
-            "account_id": ACCOUNT_ID,
-            "max_cpu_instances": 500,
-            "max_gpu_instances": 100,
-        },
+        json={"account_id": ACCOUNT_ID},
     )
     assert created.status_code == 201
-    assert created.json()["connection"]["compute"]["max_cpu_instances"] == 500
-    assert created.json()["connection"]["compute"]["max_gpu_instances"] == 100
 
     removed = client.delete("/api/v1/aws-connection")
 
@@ -337,8 +331,6 @@ def test_managed_connection_projects_its_nonsecret_stack_identity(
     client, _aws_connections = _client(isolated_services, request)
     created = client.post("/api/v1/aws-connection", json={"account_id": ACCOUNT_ID})
     assert created.status_code == 201
-    assert created.json()["connection"]["compute"]["max_cpu_instances"] is None
-    assert created.json()["connection"]["compute"]["max_gpu_instances"] is None
 
     validated = client.post("/api/v1/aws-connection/validate")
 
@@ -544,8 +536,6 @@ def test_only_administrators_can_ensure_shared_fleet(
             subnet_ids=("subnet-01234567", "subnet-89abcdef"),
             security_group_id="sg-01234567",
         ),
-        max_cpu_instances=500,
-        max_gpu_instances=0,
     ).model_dump(mode="json")
     refused = client.put("/api/v1/aws-connection/fleet", json=payload)
     assert refused.status_code == 403
@@ -556,4 +546,3 @@ def test_only_administrators_can_ensure_shared_fleet(
     repeated = client.put("/api/v1/aws-connection/fleet", json=payload, headers=headers)
     assert repeated.status_code == 200
     assert repeated.json() == created.json()
-    assert created.json()["compute"]["max_gpu_instances"] == 0

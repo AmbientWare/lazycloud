@@ -8,13 +8,11 @@ from typing import Annotated, Any
 import typer
 from shared.aws_connections import (
     AWS_CONNECTED_MACHINE_POOL,
-    AwsAccountComputeConfiguration,
     AwsAccountConnectionPhase,
     AwsAccountNetwork,
 )
 from shared.compute_policy import MachinePool
 from shared.http.aws_connections import (
-    AwsComputeConfigurationUpdateRequest,
     AwsConnectionResponse,
 )
 from shared.http.compute import (
@@ -58,10 +56,6 @@ machine_app = typer.Typer(help="Manage self-hosted machines.")
 cloud_app = typer.Typer(help="Connect and manage this account's cloud connection.")
 cloud_connect_app = typer.Typer(help="Connect a cloud provider account.")
 cloud_app.add_typer(cloud_connect_app, name="connect")
-cloud_compute_app = typer.Typer(
-    help="Inspect and update how capacity is provisioned in the connected account."
-)
-cloud_app.add_typer(cloud_compute_app, name="compute")
 compute_app = typer.Typer(help="Inspect workspace compute pools and capacity.")
 compute_policy_app = typer.Typer(help="Inspect and update workspace scheduling defaults.")
 compute_app.add_typer(compute_policy_app, name="policy")
@@ -206,187 +200,6 @@ def compute_policy_update(
     )
 
 
-@cloud_compute_app.command("show", help="Show connected-account compute settings.")
-def cloud_compute_show(ctx: typer.Context) -> None:
-    """Show how capacity is provisioned in the connected account."""
-    connection = compute_client().current_connection()
-    if connection is None:
-        raise typer.BadParameter("no cloud account is connected")
-    emit(
-        ctx,
-        payload=connection.compute.model_dump(mode="json"),
-        view=result_card(
-            "Compute settings",
-            json_default(_compute_configuration_summary(connection.compute)),
-        ),
-    )
-
-
-@cloud_compute_app.command("update", help="Update connected-account compute settings.")
-def cloud_compute_update(
-    ctx: typer.Context,
-    default_region: Annotated[str | None, typer.Option("--default-region")] = None,
-    default_instance_type: Annotated[
-        str | None,
-        typer.Option("--default-instance-type"),
-    ] = None,
-    initial_cpu_workers: Annotated[
-        int | None,
-        typer.Option("--initial-cpu-workers", min=0, max=100),
-    ] = None,
-    min_cpu_workers: Annotated[
-        int | None,
-        typer.Option("--min-cpu-workers", min=0, max=100),
-    ] = None,
-    max_cpu_instances: Annotated[int | None, typer.Option("--max-cpu", min=0)] = None,
-    max_gpu_instances: Annotated[int | None, typer.Option("--max-gpu", min=0)] = None,
-    unlimited_cpu: Annotated[
-        bool,
-        typer.Option("--unlimited-cpu", help="Remove the CPU instance ceiling."),
-    ] = False,
-    unlimited_gpu: Annotated[
-        bool,
-        typer.Option("--unlimited-gpu", help="Remove the GPU instance ceiling."),
-    ] = False,
-    min_free_cpu_millicores: Annotated[
-        int | None,
-        typer.Option("--min-free-cpu-millicores", min=0),
-    ] = None,
-    min_free_memory_mib: Annotated[
-        int | None,
-        typer.Option("--min-free-memory-mib", min=0),
-    ] = None,
-    allowed_regions: Annotated[list[str] | None, typer.Option("--allowed-region")] = None,
-    allowed_instance_types: Annotated[
-        list[str] | None,
-        typer.Option("--allowed-instance-type"),
-    ] = None,
-    idle_timeout_seconds: Annotated[
-        int | None,
-        typer.Option("--idle-timeout", min=60, max=86_400),
-    ] = None,
-    root_volume_gib: Annotated[
-        int | None,
-        typer.Option("--root-volume-gib", min=50, max=2048),
-    ] = None,
-) -> None:
-    """Change the connected account's provisioning limits and defaults."""
-    client = compute_client()
-    connection = client.current_connection()
-    if connection is None:
-        raise typer.BadParameter("no cloud account is connected")
-    if max_cpu_instances is not None and unlimited_cpu:
-        raise typer.BadParameter("choose --max-cpu or --unlimited-cpu, not both")
-    if max_gpu_instances is not None and unlimited_gpu:
-        raise typer.BadParameter("choose --max-gpu or --unlimited-gpu, not both")
-    current = connection.compute
-    # An option the caller left out keeps the value the account already carries, so
-    # only the ones actually supplied are sent. Naming each field twice was a field
-    # that silently reset itself the next time one was added.
-    supplied: dict[str, str | int | tuple[str, ...] | None] = {
-        "default_region": default_region,
-        "default_instance_type": default_instance_type,
-        "initial_cpu_workers": initial_cpu_workers,
-        "min_cpu_workers": min_cpu_workers,
-        "min_free_cpu_millicores": min_free_cpu_millicores,
-        "min_free_memory_mib": min_free_memory_mib,
-        "allowed_regions": None if allowed_regions is None else tuple(allowed_regions),
-        "allowed_instance_types": (
-            None if allowed_instance_types is None else tuple(allowed_instance_types)
-        ),
-        "idle_timeout_seconds": idle_timeout_seconds,
-        "root_volume_gib": root_volume_gib,
-    }
-    updates: dict[str, str | int | tuple[str, ...] | None] = {
-        key: value for key, value in supplied.items() if value is not None
-    }
-    if max_cpu_instances is not None or unlimited_cpu:
-        updates["max_cpu_instances"] = max_cpu_instances
-    if max_gpu_instances is not None or unlimited_gpu:
-        updates["max_gpu_instances"] = max_gpu_instances
-    changed_keys = tuple(updates)
-    if not changed_keys:
-        raise typer.BadParameter("provide at least one compute setting to update")
-    response = client.update_compute_configuration(
-        AwsComputeConfigurationUpdateRequest(
-            expected_revision=current.revision,
-            compute=current.model_copy(update=updates),
-        )
-    )
-    emit(
-        ctx,
-        payload=response.compute.model_dump(mode="json"),
-        view=result_card(
-            "Compute settings updated",
-            json_default(
-                _compute_configuration_updates(
-                    response.compute,
-                    keys=changed_keys,
-                )
-            ),
-            tone="success",
-        ),
-    )
-
-
-def _compute_configuration_summary(
-    configuration: AwsAccountComputeConfiguration,
-) -> dict[str, object]:
-    allowed_types: object = configuration.allowed_instance_types or "any"
-    cpu_max: object = (
-        configuration.max_cpu_instances
-        if configuration.max_cpu_instances is not None
-        else "unlimited"
-    )
-    return {
-        "region": configuration.default_region,
-        "instance_type": configuration.default_instance_type,
-        "cpu_workers": (
-            f"{configuration.min_cpu_workers} min, "
-            f"{configuration.initial_cpu_workers} initial, "
-            f"{cpu_max} max"
-        ),
-        "max_gpu_instances": (
-            configuration.max_gpu_instances
-            if configuration.max_gpu_instances is not None
-            else "unlimited"
-        ),
-        "free_capacity": (
-            f"{configuration.min_free_cpu_millicores / 1000:g} CPU, "
-            f"{configuration.min_free_memory_mib} MiB memory"
-        ),
-        "allowed_regions": configuration.allowed_regions,
-        "allowed_instance_types": allowed_types,
-        "idle_timeout": duration(configuration.idle_timeout_seconds),
-        "root_volume": f"{configuration.root_volume_gib} GiB",
-    }
-
-
-def _compute_configuration_updates(
-    configuration: AwsAccountComputeConfiguration,
-    *,
-    keys: tuple[str, ...],
-) -> dict[str, object]:
-    values = configuration.model_dump(mode="python")
-    updates: dict[str, object] = {}
-    for key in keys:
-        value = values[key]
-        if key == "min_free_cpu_millicores":
-            value = f"{configuration.min_free_cpu_millicores / 1000:g} CPU"
-        elif key == "min_free_memory_mib":
-            value = f"{configuration.min_free_memory_mib} MiB"
-        elif key == "idle_timeout_seconds":
-            value = duration(configuration.idle_timeout_seconds)
-        elif key == "root_volume_gib":
-            value = f"{configuration.root_volume_gib} GiB"
-        elif key == "allowed_instance_types" and not value:
-            value = "any"
-        elif key in {"max_cpu_instances", "max_gpu_instances"} and value is None:
-            value = "unlimited"
-        updates[key] = value
-    return updates
-
-
 def _account_network(
     *,
     vpc_id: str | None,
@@ -446,14 +259,6 @@ def cloud_connect_aws(
         str | None,
         typer.Option("--network-security-group-id", help="Security group nodes join."),
     ] = None,
-    max_cpu_instances: Annotated[
-        int | None,
-        typer.Option("--max-cpu", min=1, help="Optional CPU instance ceiling."),
-    ] = None,
-    max_gpu_instances: Annotated[
-        int | None,
-        typer.Option("--max-gpu", min=0, help="Optional GPU instance ceiling."),
-    ] = None,
 ) -> None:
     """Connect an AWS account, which backs every workspace you own.
 
@@ -471,8 +276,6 @@ def cloud_connect_aws(
         pool=pool,
         role_arn=role_arn,
         network=network,
-        max_cpu_instances=max_cpu_instances,
-        max_gpu_instances=max_gpu_instances,
     )
     if response.authorization.stack is None and response.authorization.external_id is None:
         raise RuntimeError("existing-role authorization did not return its external ID")

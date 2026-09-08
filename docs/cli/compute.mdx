@@ -33,8 +33,6 @@ lazycloud cloud reconnect  # start a replacement authorization
 lazycloud cloud cancel-reconnect
 lazycloud cloud retry               # retry the connection's pending action
 lazycloud cloud disconnect [--wait]
-lazycloud cloud compute show
-lazycloud cloud compute update [options]
 ```
 
 For a managed connection, run `cloud authorize` with your AWS CLI profile after
@@ -48,13 +46,8 @@ credentials stay on your machine.
 `disconnect_draining`, `revoking`, `verifying_revocation`, and
 `action_required`.
 
-`cloud compute update` options: `--default-region`,
-`--default-instance-type`, `--initial-cpu-workers`, `--min-cpu-workers`,
-`--max-cpu`, `--max-gpu`, `--min-free-cpu-millicores`,
-`--min-free-memory-mib`, `--allowed-region` (repeatable),
-`--allowed-instance-type` (repeatable), `--idle-timeout` (60 to 86400
-seconds), and `--root-volume-gib` (50 to 2048). An option you leave out keeps
-its current value.
+LazyCloud manages provisioning settings for connected AWS accounts. Workloads
+select their CPU, memory, GPU, and pool.
 
 ## lazycloud machine
 
