@@ -891,8 +891,7 @@ services:
           --machine-id "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}" \
           --pool "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}" \
           --pod-address "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}" \
-          --container-service-port "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}" \
-          --checkpoint-bucket lazycloud-objects
+          --container-service-port "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}"
     environment:
       LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
       LAZYCLOUD_WORKER_CONFIG_PATH: "/etc/lazycloud/worker/worker.yaml"
