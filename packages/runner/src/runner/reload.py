@@ -5,7 +5,9 @@ import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from hashlib import sha256
 from pathlib import Path
+from stat import S_ISREG
 
 from shared.env import (
     HOT_RELOAD_DIR_ENV,
@@ -43,7 +45,7 @@ class SourceChangeWatcher:
         if self._thread is not None:
             return
         self.root = self.root.expanduser().resolve()
-        self._snapshot = _snapshot(self.root)
+        self._snapshot = _snapshot(self.root, {})
         self._thread = threading.Thread(target=self._run, name="runner-hot-reload", daemon=True)
         self._thread.start()
 
@@ -54,10 +56,11 @@ class SourceChangeWatcher:
 
     def _run(self) -> None:
         while not self._stop_event.wait(self.poll_seconds):
-            next_snapshot = _snapshot(self.root)
-            if next_snapshot == self._snapshot:
-                continue
+            next_snapshot = _snapshot(self.root, self._snapshot)
+            changed = next_snapshot != self._snapshot
             self._snapshot = next_snapshot
+            if not changed:
+                continue
             try:
                 self.on_change()
             except Exception as exc:
@@ -66,8 +69,9 @@ class SourceChangeWatcher:
 
 @dataclass(frozen=True, slots=True)
 class FileState:
-    size: int
-    mtime_ns: int
+    size: int = field(compare=False)
+    mtime_ns: int = field(compare=False)
+    content_hash: bytes
 
 
 def hot_reload_enabled(env: dict[str, str] | None = None) -> bool:
@@ -81,7 +85,7 @@ def hot_reload_root(env: dict[str, str] | None = None) -> Path:
     return Path(raw).expanduser() if raw else handler_loading.USER_CODE_DIR
 
 
-def _snapshot(root: Path) -> dict[str, FileState]:
+def _snapshot(root: Path, previous: dict[str, FileState]) -> dict[str, FileState]:
     if not root.exists():
         return {}
     files: dict[str, FileState] = {}
@@ -90,11 +94,26 @@ def _snapshot(root: Path) -> dict[str, FileState]:
             continue
         try:
             stat = path.stat()
+            if not S_ISREG(stat.st_mode):
+                continue
+            relative = path.relative_to(root).as_posix()
+            cached = previous.get(relative)
+            if cached is not None and (cached.size, cached.mtime_ns) == (
+                stat.st_size,
+                stat.st_mtime_ns,
+            ):
+                files[relative] = cached
+                continue
+            digest = sha256()
+            with path.open("rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
         except FileNotFoundError:
             continue
-        files[path.relative_to(root).as_posix()] = FileState(
+        files[relative] = FileState(
             size=stat.st_size,
             mtime_ns=stat.st_mtime_ns,
+            content_hash=digest.digest(),
         )
     return files
 
