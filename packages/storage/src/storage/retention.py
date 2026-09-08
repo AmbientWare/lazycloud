@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
+from database.repositories.artifacts import ArtifactRepository
 from database.repositories.cleanup import (
+    OBJECT_CLEANUP_DELETE,
     OBJECT_CLEANUP_SOURCE,
     CleanupRepository,
     object_location_lock_key,
@@ -36,7 +39,7 @@ from shared.image_building.records import (
 )
 from shared.objects import ObjectRecord
 from shared.runtime_paths import normalize_runtime_path
-from shared.timestamps import utc_now
+from shared.timestamps import to_utc, utc_now
 
 from storage.checkpoint_retention import DurableCheckpointRetentionService
 from storage.context import StorageContext
@@ -79,6 +82,7 @@ class RetentionConfig(ContractModel):
 
 
 class RetentionResult(ContractModel):
+    task_artifacts_removed: int = 0
     source_objects_removed: int = 0
     image_archives_removed: int = 0
     image_records_removed: int = 0
@@ -91,7 +95,8 @@ class RetentionResult(ContractModel):
     @property
     def removed(self) -> int:
         return (
-            self.source_objects_removed
+            self.task_artifacts_removed
+            + self.source_objects_removed
             + self.image_archives_removed
             + self.image_records_removed
             + self.build_records_removed
@@ -123,6 +128,7 @@ class RetentionService:
         now: datetime | None = None,
     ) -> RetentionResult:
         current = now or utc_now()
+        task_artifacts_removed = self._prune_task_artifacts(current)
         self.object_storage.reconcile_operations(
             now=current,
             lease_seconds=self.config.object_operation_lease_seconds,
@@ -157,6 +163,7 @@ class RetentionService:
         )
         cache_reconciliation = self.cache_storage.reconcile(limit=self.config.max_items_per_cycle)
         return RetentionResult(
+            task_artifacts_removed=task_artifacts_removed,
             source_objects_removed=source_removed,
             image_archives_removed=image_archives_removed,
             image_records_removed=image_records_removed,
@@ -171,6 +178,41 @@ class RetentionService:
             cache_objects_removed=cache_reconciliation.objects_removed,
             checkpoints_removed=checkpoint_removed,
         )
+
+    def _prune_task_artifacts(self, now: datetime) -> int:
+        with self.context.database.session() as session:
+            targets = ArtifactRepository(session).expired(
+                now=now, limit=self.config.max_items_per_cycle
+            )
+        removed = 0
+        for workspace_id, identifier in targets:
+            try:
+                with self.context.database.session() as session:
+                    WorkspaceRepository(session).lock_storage_accounting_owner(workspace_id)
+                    record = ArtifactRepository(session).get(
+                        identifier, workspace_id=workspace_id, lock=True
+                    )
+                    if (
+                        record is None
+                        or record.artifact_expires_at is None
+                        or to_utc(record.artifact_expires_at) > to_utc(now)
+                    ):
+                        continue
+                    if record.cleanup_kind != OBJECT_CLEANUP_DELETE:
+                        record = CleanupRepository(session).mark_object_claimed(
+                            identifier, cleanup_kind=OBJECT_CLEANUP_DELETE, claimed_at=now
+                        )
+                removed += int(
+                    self.object_storage.delete_for_workspace(
+                        workspace_id=workspace_id, bucket=record.bucket, key=record.key
+                    )
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "artifact expiration cleanup failed",
+                    extra={"workspace_id": workspace_id, "artifact_id": identifier},
+                )
+        return removed
 
     def _prune_source_objects(
         self,

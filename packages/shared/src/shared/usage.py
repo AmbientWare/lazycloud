@@ -29,6 +29,7 @@ class UsageMetric(StringEnum):
     SchedulerContainerScheduled = "container_scheduled_count"
     TaskCount = "task_count"
     PersistentVolumeByteSeconds = "persistent_volume_byte_seconds"
+    ArtifactStorageByteSeconds = "artifact_storage_byte_seconds"
     ContainerDurationMilliseconds = "container_duration_milliseconds"
     CpuUsedCoreSeconds = "cpu_used_core_seconds"
     MemoryRssByteSeconds = "memory_rss_byte_seconds"
@@ -108,7 +109,10 @@ class UsageRecord(ContractModel):
     def validate_container_duration_allocation(self) -> UsageRecord:
         if not math.isfinite(self.quantity) or self.quantity < 0:
             raise ValueError("usage quantity must be finite and nonnegative")
-        if self.metric is UsageMetric.PersistentVolumeByteSeconds:
+        if self.metric in {
+            UsageMetric.PersistentVolumeByteSeconds,
+            UsageMetric.ArtifactStorageByteSeconds,
+        }:
             if self.unit is not UsageUnit.ByteSeconds:
                 raise ValueError("persistent volume usage must use byte-seconds")
             return self

@@ -15,7 +15,6 @@ from database.tables.observability import (
 )
 from pydantic import BaseModel, JsonValue, TypeAdapter
 from shared.errors import ConflictError
-from shared.identity import WorkspaceStatus
 from shared.usage import (
     UsageAggregation,
     UsageGroupKey,
@@ -120,11 +119,13 @@ class UsageRepository:
             workspace_id=record.workspace_id,
         )
 
-    def append_for_workspace_deletion(self, record: UsageRecord) -> UsageRecord:
-        """Persist final billing evidence for a workspace in Deleting state."""
-        workspace = WorkspaceRepository(self.session).lock_for_deletion(record.workspace_id)
-        if workspace.status is not WorkspaceStatus.Deleting:
-            raise ConflictError(f"workspace cleanup requires deleting state: {record.workspace_id}")
+    def append_storage(self, record: UsageRecord) -> UsageRecord:
+        if record.metric not in (
+            UsageMetric.PersistentVolumeByteSeconds,
+            UsageMetric.ArtifactStorageByteSeconds,
+        ):
+            raise ConflictError("storage accounting requires a storage metric")
+        WorkspaceRepository(self.session).lock_storage_accounting_owner(record.workspace_id)
         row = self.session.get(UsageRecordTable, record.id)
         if row is None:
             row = UsageRecordTable(

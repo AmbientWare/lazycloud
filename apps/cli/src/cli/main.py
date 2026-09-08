@@ -70,6 +70,7 @@ _ADMIN_GROUP_ORDER = (
     "secret",
     "domain",
     "volume",
+    "artifact",
     "container",
     "unit",
     "machine",

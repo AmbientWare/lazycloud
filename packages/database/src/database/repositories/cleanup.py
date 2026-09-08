@@ -237,7 +237,12 @@ class CleanupRepository:
         claimed_at: datetime,
         cleanup_kind: str,
     ) -> ObjectRecord:
-        row = self.session.get(ObjectTable, object_id)
+        row = self.session.scalar(
+            select(ObjectTable)
+            .where(ObjectTable.id == object_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if row is None:
             raise KeyError(object_id)
         if row.write_claimed_at is not None:

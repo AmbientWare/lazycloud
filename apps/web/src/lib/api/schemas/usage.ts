@@ -7,6 +7,7 @@ export const usageMetrics = [
   "container_scheduled_count",
   "task_count",
   "persistent_volume_byte_seconds",
+  "artifact_storage_byte_seconds",
   "container_duration_milliseconds",
   "container_disk_byte_seconds",
   "cpu_used_core_seconds",

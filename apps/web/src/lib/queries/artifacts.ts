@@ -1,21 +1,94 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, infiniteQueryOptions } from "@tanstack/react-query";
+import { z } from "zod";
+import {
+  artifactStorageSummarySchema,
+  artifactSummarySchema,
+  artifactRetentionPolicySchema,
+  artifactRetentionPreviewSchema,
+} from "@/lib/api/schemas/artifacts";
 
 import { apiBlob, apiRequest, withWorkspace } from "@/lib/api/client";
-import { artifactListSchema, type ArtifactList } from "@/lib/api/schemas";
+import { artifactListSchema } from "@/lib/api/schemas";
 
 import { workspaceQueryKeys } from "./workspace-keys";
 
-/** Files a task produced, newest first. */
-export function taskArtifactsQuery(workspaceId: string, taskId: string) {
-  return queryOptions<ArtifactList>({
-    queryKey: workspaceQueryKeys.tasks.artifacts(workspaceId, taskId),
-    queryFn: () =>
+export type ArtifactFilters = {
+  search?: string;
+  task_id?: string;
+  app_id?: string;
+  content_type?: string;
+  created_after?: string;
+  created_before?: string;
+};
+
+export function artifactsQuery(workspaceId: string, filters: ArtifactFilters) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value);
+  return infiniteQueryOptions({
+    queryKey: [...workspaceQueryKeys.storage.artifacts(workspaceId), "list", filters],
+    initialPageParam: "",
+    queryFn: ({ pageParam }) =>
       apiRequest(
-        withWorkspace(`/api/v1/artifacts?task_id=${encodeURIComponent(taskId)}`, workspaceId),
+        withWorkspace(
+          `/api/v1/artifacts?${params}&cursor=${encodeURIComponent(pageParam)}`,
+          workspaceId,
+        ),
         artifactListSchema,
       ),
-    enabled: Boolean(workspaceId && taskId),
+    getNextPageParam: (page) => page.next || undefined,
+    refetchInterval: 15_000,
   });
+}
+export function artifactStorageQuery(workspaceId: string) {
+  return queryOptions({
+    queryKey: [...workspaceQueryKeys.storage.artifacts(workspaceId), "summary"],
+    queryFn: () =>
+      apiRequest(
+        withWorkspace("/api/v1/artifacts/summary", workspaceId),
+        artifactStorageSummarySchema,
+      ),
+    refetchInterval: 15_000,
+  });
+}
+export function deleteArtifact(workspaceId: string, id: string) {
+  return apiRequest(
+    withWorkspace(`/api/v1/artifacts/${encodeURIComponent(id)}`, workspaceId),
+    z.null(),
+    { method: "DELETE" },
+  );
+}
+export function updateArtifactRetention(
+  workspaceId: string,
+  id: string,
+  retention_seconds: number | null,
+) {
+  return apiRequest(
+    withWorkspace(`/api/v1/artifacts/${encodeURIComponent(id)}/retention`, workspaceId),
+    artifactSummarySchema,
+    { method: "PATCH", body: JSON.stringify({ retention_seconds }) },
+  );
+}
+export function updateWorkspaceArtifactRetention(
+  workspaceId: string,
+  retention_seconds: number | null,
+) {
+  return apiRequest(
+    withWorkspace("/api/v1/artifacts/retention", workspaceId),
+    artifactRetentionPolicySchema,
+    { method: "PUT", body: JSON.stringify({ retention_seconds }) },
+  );
+}
+export function applyArtifactRetention(
+  workspaceId: string,
+  ids: string[],
+  retention_seconds: number | null,
+  apply = false,
+) {
+  return apiRequest(
+    withWorkspace(`/api/v1/artifacts/retention/${apply ? "apply" : "preview"}`, workspaceId),
+    artifactRetentionPreviewSchema,
+    { method: "POST", body: JSON.stringify({ ids, retention_seconds }) },
+  );
 }
 
 /**

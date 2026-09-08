@@ -9,6 +9,7 @@ import typer
 from shared.client_version import observe_client_versions, release_is_newer
 
 from lazycloud.cli.apps import app_app
+from lazycloud.cli.artifacts import artifact_app
 from lazycloud.cli.client import client_app
 from lazycloud.cli.components.errors import (
     CLIENT_ERROR_POLICY,
@@ -300,6 +301,7 @@ def _register_public_groups(registry: PublicCliRegistry) -> None:
     registry.add_group("secret", secret_app)
     registry.add_group("domain", domain_app)
     registry.add_group("volume", volume_app)
+    registry.add_group("artifact", artifact_app)
     registry.add_group("example", example_app)
     registry.add_group("workspace", workspace_app)
     registry.add_group("cloud", cloud_app)

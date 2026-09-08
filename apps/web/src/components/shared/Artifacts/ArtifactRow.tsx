@@ -1,4 +1,3 @@
-import { useQuery } from "@tanstack/react-query";
 import { Download, Loader2, Search } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -11,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { fetchArtifactBlob, taskArtifactsQuery } from "@/lib/queries/artifacts";
+import { fetchArtifactBlob } from "@/lib/queries/artifacts";
 import type { ArtifactSummary } from "@/lib/api/schemas";
 
 /** Bytes as something a person reads at a glance. */
@@ -150,7 +149,7 @@ function PreviewBody({
   );
 }
 
-function ArtifactRow({
+export function ArtifactRow({
   artifact,
   workspaceId,
 }: {
@@ -227,34 +226,6 @@ function ArtifactRow({
           {open && <PreviewBody artifact={artifact} workspaceId={workspaceId} kind={kind} />}
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-export function ArtifactsTab({
-  workspaceId,
-  taskId,
-}: {
-  workspaceId: string;
-  taskId: string;
-}): ReactNode {
-  const { data, isLoading, error } = useQuery(taskArtifactsQuery(workspaceId, taskId));
-
-  if (isLoading) {
-    return <div className="px-3 py-2 text-xs text-muted-foreground">Loading artifacts…</div>;
-  }
-  if (error) {
-    return <div className="px-3 py-2 text-xs text-muted-foreground">Could not load artifacts</div>;
-  }
-  const artifacts = data?.data ?? [];
-  if (artifacts.length === 0) {
-    return <div className="px-3 py-2 text-xs text-muted-foreground">No artifacts saved</div>;
-  }
-  return (
-    <div className="flex min-h-full flex-col overflow-auto">
-      {artifacts.map((artifact) => (
-        <ArtifactRow key={artifact.id} artifact={artifact} workspaceId={workspaceId} />
-      ))}
     </div>
   );
 }

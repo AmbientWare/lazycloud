@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { CollectionAccordion } from "./-components/CollectionAccordion";
 import { SecretsTab } from "./-components/SecretsTab";
 import { VolumesTab } from "./-components/VolumesTab";
+import { Artifacts } from "@/components/shared/Artifacts";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { collectionResources } from "@/lib/api/resources";
 import { countLabel } from "@/lib/format";
@@ -19,6 +20,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 
 const STORAGE_TABS = [
   { key: "volumes", title: "Volumes" },
+  { key: "artifacts", title: "Artifacts" },
   { key: "secrets", title: "Secrets" },
   { key: "queues", title: "Queues" },
   { key: "maps", title: "Maps" },
@@ -134,6 +136,9 @@ function StoragePage() {
               <CollectionAccordion config={config} workspaceId={workspace.id} />
             </TabsContent>
           ))}
+          <TabsContent value="artifacts" className="min-h-0 flex-1 overflow-hidden">
+            <Artifacts key={workspace.id} workspaceId={workspace.id} />
+          </TabsContent>
         </Tabs>
       </section>
     </WorkspacePage>

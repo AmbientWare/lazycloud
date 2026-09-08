@@ -100,6 +100,7 @@ def container_resource_mounts(
             RequestMount(
                 local_path=posixpath.join(DEFAULT_ARTIFACTS_PATH, workspace_name, stub_id),
                 mount_path=WORKER_USER_ARTIFACT_VOLUME,
+                read_only=True,
             )
         )
     mounts.extend(
