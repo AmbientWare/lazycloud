@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlencode
 
+from shared.checkpoints import CHECKPOINT_REQUEST_TIMEOUT_SECONDS
 from shared.contracts import ContractModel
 from shared.http.client_manifests import ClientManifestRequest, ClientManifestResponse
 from shared.http.gateway import (
@@ -34,7 +35,13 @@ class GatewayControlChannel(Protocol):
 
     def stream_get(self, path: str) -> Iterator[str]: ...
 
-    def post(self, path: str, payload: dict[str, Any] | None = None) -> Any: ...
+    def post(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> Any: ...
 
 
 @dataclass
@@ -70,7 +77,11 @@ class GatewayControlClient:
         request: CheckpointContainerRequest,
     ) -> CheckpointContainerResponse:
         return CheckpointContainerResponse.model_validate(
-            self.channel.post(self._scoped("/gateway/containers/checkpoint"), _payload(request))
+            self.channel.post(
+                self._scoped("/gateway/containers/checkpoint"),
+                _payload(request),
+                timeout_seconds=CHECKPOINT_REQUEST_TIMEOUT_SECONDS,
+            )
         )
 
     def attach_to_container(self, container_id: str) -> dict[str, Any]:

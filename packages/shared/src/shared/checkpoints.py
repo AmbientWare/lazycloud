@@ -8,6 +8,10 @@ from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.timestamps import utc_now
 
+# Runtime save allows 30 minutes and upload 5; reserve 10 for filesystem/archive work.
+CHECKPOINT_OPERATION_TIMEOUT_SECONDS = 45 * 60.0
+CHECKPOINT_REQUEST_TIMEOUT_SECONDS = CHECKPOINT_OPERATION_TIMEOUT_SECONDS + 30.0
+
 
 class CheckpointStatus(StringEnum):
     Pending = "pending"
