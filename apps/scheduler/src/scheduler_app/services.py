@@ -532,8 +532,7 @@ class SchedulerRetention:
     service: RetentionService
     deployment_resources: DeploymentResourceService
 
-    def protected_checkpoint_stub_keys(self, *, now: datetime | None = None) -> list[str]:
-        del now
+    def protected_checkpoint_stub_keys(self) -> list[str]:
         return sorted(
             checkpoint_recent_stub_key(resource.stub.workspace_id, resource.stub.id)
             for resource in self.deployment_resources.list(workspace=None, active=True)
@@ -541,7 +540,7 @@ class SchedulerRetention:
 
     def reconcile(self, *, now: datetime | None = None) -> RetentionResult:
         return self.service.reconcile(
-            active_recent_stub_keys=self.protected_checkpoint_stub_keys(now=now),
+            active_recent_stub_keys=self.protected_checkpoint_stub_keys(),
             now=now,
         )
 
