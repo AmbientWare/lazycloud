@@ -57,7 +57,6 @@ class _FastApiHttpChannel(HttpChannel):
     def __init__(self, client: TestClient, *, token: str) -> None:
         super().__init__(token=token)
         self.client = client
-        self.requests: list[tuple[str, str]] = []
 
     def request(
         self,
@@ -65,8 +64,10 @@ class _FastApiHttpChannel(HttpChannel):
         path: str,
         *,
         payload: Mapping[str, JsonValue] | None = None,
+        timeout_seconds: float | None = None,
     ) -> JsonValue:
-        self.requests.append((method, path))
+        # TestClient executes in-process and does not support network timeouts.
+        _ = timeout_seconds
         response = self.client.request(
             method,
             path,
