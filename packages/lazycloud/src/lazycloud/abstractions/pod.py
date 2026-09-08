@@ -102,7 +102,6 @@ class PodOptions(TypedDict, total=False):
     preemptible: bool
     region: str | None
     pool: PoolInput
-    provider: str | None
     metadata: dict[str, Any]
 
 
@@ -213,7 +212,6 @@ class Pod(ControlClientConfigMixin):
     preemptible: bool = False
     region: str | None = None
     pool: PoolInput = None
-    provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
     deployment_id: str = field(default="", init=False)
@@ -299,7 +297,6 @@ class Pod(ControlClientConfigMixin):
                 allow_list=self.allow_list,
                 docker_enabled=self.docker_enabled,
                 pool=self.pool,
-                provider=self.provider,
                 extra={
                     **self.metadata,
                     "checkpoint_readiness_path": self.checkpoint_readiness_path or "",

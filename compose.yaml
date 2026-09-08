@@ -961,8 +961,7 @@ services:
           --machine-id "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}" \
           --pool "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}" \
           --pod-address "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}" \
-          --container-service-port "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}" \
-          --checkpoint-bucket "${LAZYCLOUD_OBJECT_STORE_BUCKET}"
+          --container-service-port "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}"
     environment:
       LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
       LAZYCLOUD_WORKER_CONFIG_PATH: "/etc/lazycloud/worker/worker.yaml"
@@ -979,7 +978,6 @@ services:
       WORKER_POD_ADDRESS: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}"
       WORKER_CONTAINER_SERVICE_PORT: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}"
       WORKER_NETWORK_PREFIX: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_NETWORK_PREFIX:-compose-shared}"
-      WORKER_CHECKPOINT_BUCKET: "${LAZYCLOUD_OBJECT_STORE_BUCKET}"
       WORKER_CACHE_ENDPOINT: "http://cache-server:7900"
       LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE: "/var/lib/lazycloud/cache-token/cache-service-token"
     depends_on:

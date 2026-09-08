@@ -16,7 +16,6 @@ from storage.retention import (
 
 DEFAULT_RETENTION_RETRY_INITIAL_SECONDS = 30.0
 DEFAULT_RETENTION_RETRY_MAX_SECONDS = 15 * 60.0
-DEFAULT_ARTIFACT_RECENT_STUB_TTL_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_ARTIFACT_CHECKPOINT_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
 
@@ -32,10 +31,6 @@ class RetentionSettings(BaseSettings):
     )
     retry_max_seconds: float = Field(
         default=DEFAULT_RETENTION_RETRY_MAX_SECONDS,
-        gt=0,
-    )
-    recent_stub_ttl_seconds: int = Field(
-        default=DEFAULT_ARTIFACT_RECENT_STUB_TTL_SECONDS,
         gt=0,
     )
     source_grace_seconds: int = Field(
@@ -89,7 +84,6 @@ class RetentionSettings(BaseSettings):
 
 __all__ = [
     "DEFAULT_ARTIFACT_CHECKPOINT_RETENTION_SECONDS",
-    "DEFAULT_ARTIFACT_RECENT_STUB_TTL_SECONDS",
     "DEFAULT_RETENTION_RETRY_INITIAL_SECONDS",
     "DEFAULT_RETENTION_RETRY_MAX_SECONDS",
     "RetentionSettings",
