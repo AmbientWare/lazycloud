@@ -43,7 +43,7 @@ from .provider_control import (
 
 AWS_CONNECTION_PROFILE_ENV = f"{ENV_PREFIX}_AWS_CONNECTION_PROFILE"
 
-AWS_ACCOUNT_CONNECTION_TEMPLATE_VERSION = "2026-07-24.v12"
+AWS_ACCOUNT_CONNECTION_TEMPLATE_VERSION = "2026-09-08.v13"
 
 _ACCOUNT_ID_PATTERN = re.compile(r"^[0-9]{12}$")
 _ARN_PATTERN = re.compile(
@@ -1424,8 +1424,27 @@ def _connection_template() -> dict[str, object]:
             "ConnectionRoleName": {"Type": "String"},
             "NodeRoleName": {"Type": "String"},
             "NodeInstanceProfileName": {"Type": "String"},
+            "AvailabilityZoneA": {"Type": "AWS::EC2::AvailabilityZone::Name"},
+            "AvailabilityZoneB": {"Type": "AWS::EC2::AvailabilityZone::Name"},
         },
         "Rules": {
+            "AvailabilityZonesMustDiffer": {
+                "Assertions": [
+                    {
+                        "Assert": {
+                            "Fn::Not": [
+                                {
+                                    "Fn::Equals": [
+                                        {"Ref": "AvailabilityZoneA"},
+                                        {"Ref": "AvailabilityZoneB"},
+                                    ]
+                                }
+                            ]
+                        },
+                        "AssertDescription": "Select two different availability zones.",
+                    }
+                ]
+            },
             "TargetAccountMustMatch": {
                 "Assertions": [
                     {
@@ -1435,7 +1454,7 @@ def _connection_template() -> dict[str, object]:
                         "AssertDescription": "Open this authorization in the selected AWS account.",
                     }
                 ]
-            }
+            },
         },
         "Resources": {
             "Vpc": {
@@ -1474,8 +1493,12 @@ def _connection_template() -> dict[str, object]:
                     "GatewayId": {"Ref": "InternetGateway"},
                 },
             },
-            "SubnetA": _public_subnet_resource("subnet-a", cidr="10.86.1.0/24", zone_index=0),
-            "SubnetB": _public_subnet_resource("subnet-b", cidr="10.86.2.0/24", zone_index=1),
+            "SubnetA": _public_subnet_resource(
+                "subnet-a", cidr="10.86.1.0/24", zone="AvailabilityZoneA"
+            ),
+            "SubnetB": _public_subnet_resource(
+                "subnet-b", cidr="10.86.2.0/24", zone="AvailabilityZoneB"
+            ),
             "SubnetARouteTableAssociation": {
                 "Type": "AWS::EC2::SubnetRouteTableAssociation",
                 "Properties": {
@@ -1572,14 +1595,14 @@ def _network_resource_tags(resource: str) -> list[dict[str, object]]:
     ]
 
 
-def _public_subnet_resource(resource: str, *, cidr: str, zone_index: int) -> dict[str, object]:
+def _public_subnet_resource(resource: str, *, cidr: str, zone: str) -> dict[str, object]:
     return {
         "Type": "AWS::EC2::Subnet",
         "Properties": {
             "VpcId": {"Ref": "Vpc"},
             "CidrBlock": cidr,
             "MapPublicIpOnLaunch": True,
-            "AvailabilityZone": {"Fn::Select": [zone_index, {"Fn::GetAZs": ""}]},
+            "AvailabilityZone": {"Ref": zone},
             "Tags": _network_resource_tags(resource),
         },
     }
