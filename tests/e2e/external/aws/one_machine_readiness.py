@@ -36,14 +36,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if connection is None or connection.phase is not AwsAccountConnectionPhase.Ready:
         raise RuntimeError("the public AWS connection is not ready")
 
-    policy = client.policy()
-    if policy.default_pool != "aws":
-        client.update_policy(
-            WorkspaceComputePolicyUpdateRequest(
-                expected_revision=policy.revision,
-                default_pool="aws",
-            )
-        )
     current = connection.compute
     parity = AwsAccountComputeConfiguration(
         revision=current.revision,
@@ -90,7 +82,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             and summary.instances.degraded == 0
             and len(connected) == 1
             and len(ready) == 1
-            and summary.cost.hourly_micros > 0
         ):
             return ready[0]
         return None
@@ -119,6 +110,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         raise
 
+    pools = [pool for pool in client.pools().data if f"aws:{connection.id}" in pool.providers]
+    if len(pools) != 1:
+        raise RuntimeError("the connected AWS warm baseline must identify exactly one public pool")
+    policy = client.policy()
+    if policy.default_pool != pools[0].name:
+        client.update_policy(
+            WorkspaceComputePolicyUpdateRequest(
+                expected_revision=policy.revision,
+                default_pool=pools[0].name,
+            )
+        )
     summary = client.summary()
     _support.emit_evidence(
         {
