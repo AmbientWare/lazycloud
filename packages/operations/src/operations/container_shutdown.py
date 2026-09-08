@@ -10,9 +10,13 @@ from coordination.event_bus import (
     RedisEventBus,
     event_id_for_event,
 )
-from coordination.redis_client import RedisClient, redis_text
+from coordination.redis_client import RedisClient
 from database.context import ServiceContext
-from database.repositories.orchestration import MachineRepository, WorkerRepository
+from database.repositories.orchestration import (
+    ContainerRepository,
+    MachineRepository,
+    WorkerRepository,
+)
 from scheduler.state import RedisSchedulerContainerRepository
 from shared.compute_fleet import ResourceStatus
 from shared.container_requests import ContainerShutdownTarget, StopContainerReason
@@ -26,6 +30,21 @@ class SchedulerWorkerDirectory(Protocol):
 
 class DurableWorkerAbsence(Protocol):
     def is_absent(self, worker_id: str) -> bool: ...
+
+
+class ContainerStorageRelease(Protocol):
+    def is_released(self, container_id: str, *, worker_id: str) -> bool: ...
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseContainerStorageRelease:
+    context: ServiceContext
+
+    def is_released(self, container_id: str, *, worker_id: str) -> bool:
+        with self.context.database.session() as session:
+            return ContainerRepository(session).storage_is_released(
+                container_id, worker_id=worker_id
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +77,7 @@ class ContainerShutdownService:
     containers: RedisSchedulerContainerRepository
     events: RedisEventBus
     redis: RedisClient
+    storage_release: ContainerStorageRelease
     durable_worker_absence: DurableWorkerAbsence | None = None
     poll_interval_seconds: float = 0.05
 
@@ -84,23 +104,14 @@ class ContainerShutdownService:
         self,
         targets: list[ContainerShutdownTarget],
     ) -> tuple[ContainerShutdownDispatch, ...]:
-        terminal = {SchedulerContainerStatus.Complete, SchedulerContainerStatus.Failed}
         dispatches: list[ContainerShutdownDispatch] = []
         for target in targets:
             state = self.containers.get_container_state(target.container_id)
-            if state is not None and state.status in terminal:
-                for worker_id in {target.worker_id, state.worker_id} - {""}:
-                    event = _stop_container_event(target.container_id, worker_id=worker_id)
-                    self._cleanup_dispatch(
-                        ContainerShutdownDispatch(
-                            container_id=target.container_id,
-                            event_id=event_id_for_event(event),
-                            worker_id=worker_id,
-                        )
-                    )
-                continue
             worker_id = target.worker_id or (state.worker_id if state is not None else "")
             if not worker_id:
+                continue
+            if self.storage_release.is_released(target.container_id, worker_id=worker_id):
+                self._cleanup_dispatch(self._dispatch_for(target.container_id, worker_id))
                 continue
             if self._worker_is_durably_absent(worker_id):
                 self._finalize_absent_worker(target.container_id, worker_id)
@@ -137,24 +148,24 @@ class ContainerShutdownService:
             }
             for container_id in tuple(remaining):
                 state = states[container_id]
+                target = remaining[container_id]
+                dispatch = dispatch_by_container.get(container_id)
+                worker_id = (
+                    target.worker_id
+                    or (dispatch.worker_id if dispatch is not None else "")
+                    or (state.worker_id if state is not None else "")
+                )
+                if worker_id:
+                    if self._worker_is_durably_absent(worker_id):
+                        self._finalize_absent_worker(container_id, worker_id)
+                        remaining.pop(container_id)
+                    elif self.storage_release.is_released(container_id, worker_id=worker_id):
+                        remaining.pop(container_id)
+                    continue
                 if state is not None and state.status in terminal:
                     remaining.pop(container_id)
                     continue
-                dispatch = dispatch_by_container.get(container_id)
-                if dispatch is None and self.containers.is_container_cancelled(container_id):
-                    remaining.pop(container_id)
-                    continue
-                if dispatch is not None and self._worker_is_durably_absent(dispatch.worker_id):
-                    self._finalize_absent_worker(container_id, dispatch.worker_id)
-                    remaining.pop(container_id)
-                    continue
-                if state is not None or dispatch is None:
-                    continue
-                acknowledged = {
-                    redis_text(worker_id)
-                    for worker_id in self.redis.set_members(self._event_ack_key(dispatch.event_id))
-                }
-                if dispatch.worker_id in acknowledged:
+                if self.containers.is_container_cancelled(container_id):
                     remaining.pop(container_id)
             if remaining:
                 time.sleep(self.poll_interval_seconds)
@@ -225,6 +236,8 @@ def _stop_container_event(container_id: str, *, worker_id: str) -> EventBusEvent
 __all__ = [
     "ContainerShutdownDispatch",
     "ContainerShutdownService",
+    "ContainerStorageRelease",
+    "DatabaseContainerStorageRelease",
     "DatabaseDurableWorkerAbsence",
     "DurableWorkerAbsence",
 ]

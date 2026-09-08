@@ -1237,8 +1237,9 @@ class OciRuntimeCommandController:
         container_id: str,
         *,
         plan: RuntimeCommandPlan | None = None,
+        runtime_config: RuntimeBinaryConfig | None = None,
     ) -> RuntimeState | None:
-        runtime_config = self._runtime_config(container_id)
+        runtime_config = runtime_config or self._runtime_config(container_id)
         state_plan = plan or plan_runtime_command(
             runtime_config,
             RuntimeCommandRequest(
@@ -1382,6 +1383,15 @@ class OciRuntimeCommandController:
             selected = self.container_runtime(container_id)
             if selected is not None:
                 return _select_runtime_config(selected, self.runtime_configs)
+        owners = [
+            config
+            for config in (self.runtime_configs or {}).values()
+            if self._runtime_state(container_id, runtime_config=config) is not None
+        ]
+        if len(owners) > 1:
+            raise RuntimeError(f"container {container_id} exists in more than one runtime")
+        if owners:
+            return owners[0]
         return self.runtime_config
 
     def _process_spec_dir(self, container_id: str) -> Path:

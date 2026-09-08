@@ -24,3 +24,14 @@ cannot be undone. Validate paths and keys against traversal, verify checksums,
 track multipart state, scope credentials and presigned URLs narrowly and briefly,
 keep concurrent writers from corrupting each other, preserve sibling objects on
 every delete, and clean up what a failed operation left behind.
+
+Volume deletion records intent before calling storage. That instant ends customer
+metering. The volume remains visible and owned until housekeeping finishes cleanup;
+container admission and file writes lock the same volume row as deletion.
+
+Presigned volume writes use multipart uploads whose completion goes through the
+API. Direct PUT requests can finish after their URL expires, so volumes that may
+have issued those URLs retain an unmetered cleanup record for their exact ID.
+Recreating a name gets a different ID. Managed bucket retirement removes those
+records; customer bucket cleanup retains its canonical workspace storage authority
+and remains workspace-owned after public workspace access ends.

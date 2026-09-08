@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import overload
 from uuid import uuid4
 
+from database.records.apps import StubRecord
 from database.repositories.cleanup import (
     CleanupRepository,
     object_location_lock_key,
@@ -14,16 +15,17 @@ from database.repositories.common import (
     WorkspaceTableRepository,
 )
 from database.repositories.identity import WorkspaceRepository
+from database.repositories.orchestration import container_storage_release_pending
 from database.tables.apps import AppTable, DeploymentTable, StubTable
 from database.tables.execution import TaskTable
 from database.tables.identity import WorkspaceTable
 from database.tables.images import ImageBuildTable, ImageTable
 from database.tables.orchestration import ContainerTable
-from database.tables.storage import CacheEntryTable, ObjectTable, VolumeTable
+from database.tables.storage import CacheEntryTable, ObjectTable, VolumeCleanupTable, VolumeTable
 from pydantic import JsonValue
 from shared.cache_records import CacheEntry
-from shared.containers import ContainerStatus
-from shared.errors import ConflictError
+from shared.containers import ContainerRecord, ContainerStatus
+from shared.errors import ConflictError, NotFoundError
 from shared.identity import WorkspaceRecord, WorkspaceStatus
 from shared.image_building.records import BuildStatus, ImageBuildRecord, ImageRecord
 from shared.objects import ObjectRecord, ObjectWriteCommand
@@ -47,7 +49,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import InstrumentedAttribute, Session
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql.elements import ColumnElement
@@ -70,6 +71,7 @@ class VolumeMeteringCheckpoint:
     name: str
     size_bytes: int
     metered_at: datetime
+    deletion_requested_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -867,14 +869,6 @@ class VolumeRepository:
             TableRepositoryConfig(VolumeTable, VolumeRecord, key_field="name"),
         )
 
-    def upsert(self, record: VolumeRecord, *, workspace_id: str) -> VolumeRecord:
-        return self.records.upsert(
-            record,
-            key=record.name,
-            workspace_id=workspace_id,
-            name=record.name,
-        )
-
     def create(self, name: str, *, workspace_id: str) -> tuple[VolumeRecord, bool]:
         """Insert this volume, or return the one that beat us to the name.
 
@@ -898,26 +892,132 @@ class VolumeRepository:
         )
 
     def get(self, name: str, *, workspace_id: str) -> VolumeRecord | None:
-        return self.records.get(name, workspace_id=workspace_id)
-
-    def list(self, *, workspace_id: str) -> list[VolumeRecord]:
-        return self.records.list(workspace_id=workspace_id)
-
-    def delete(self, name: str, *, workspace_id: str) -> bool:
-        return self.records.delete(name, workspace_id=workspace_id)
-
-    def delete_for_workspace_deletion(self, name: str, *, workspace_id: str) -> bool:
-        workspace = WorkspaceRepository(self.session).lock_for_deletion(workspace_id)
-        if workspace.status is not WorkspaceStatus.Deleting:
-            raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
-        result = self.session.execute(
-            delete(VolumeTable).where(
+        row = self.session.scalar(
+            select(VolumeTable).where(
                 VolumeTable.workspace_id == workspace_id,
                 VolumeTable.name == name,
             )
         )
-        self.session.flush()
-        return isinstance(result, CursorResult) and result.rowcount > 0
+        return self._record(row) if row is not None else None
+
+    def list(self, *, workspace_id: str) -> list[VolumeRecord]:
+        return [
+            self._record(row)
+            for row in self.session.scalars(
+                select(VolumeTable).where(VolumeTable.workspace_id == workspace_id)
+            )
+        ]
+
+    @staticmethod
+    def _record(row: VolumeTable) -> VolumeRecord:
+        return VolumeRecord.model_validate(row.payload).model_copy(
+            update={
+                "deletion_requested_at": row.deletion_requested_at,
+                "size_bytes": row.size_bytes,
+            }
+        )
+
+    def lock(self, name: str, *, workspace_id: str, allow_deleting: bool = False) -> VolumeTable:
+        row = self.session.scalar(
+            select(VolumeTable)
+            .where(
+                VolumeTable.workspace_id == workspace_id,
+                VolumeTable.name == name,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if row is None:
+            raise NotFoundError(f"volume not found: {name}")
+        if row.deletion_requested_at is not None and not allow_deleting:
+            raise ConflictError(f"volume {name} is deleting")
+        return row
+
+    def lock_mounts(self, names: set[str], *, workspace_id: str) -> None:
+        expected_ids: set[str] = set()
+        for name in sorted(names):
+            record, _ = self.create(name, workspace_id=workspace_id)
+            if record.deletion_requested_at is not None:
+                raise ConflictError(f"volume {name} is deleting")
+            expected_ids.add(record.id)
+        rows = self.session.scalars(
+            select(VolumeTable)
+            .where(
+                VolumeTable.workspace_id == workspace_id,
+                VolumeTable.name.in_(names),
+            )
+            .order_by(VolumeTable.id)
+            .with_for_update()
+        )
+        locked_ids: set[str] = set()
+        for row in rows:
+            if row.deletion_requested_at is not None:
+                raise ConflictError(f"volume {row.name} is deleting")
+            locked_ids.add(str(row.id))
+        if locked_ids != expected_ids:
+            raise ConflictError("volumes changed during container admission; retry the request")
+
+    def list_deletions(self, *, limit: int) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            self.session.execute(
+                select(VolumeTable.workspace_id, VolumeTable.name)
+                .where(VolumeTable.deletion_requested_at.is_not(None))
+                .order_by(VolumeTable.updated_at, VolumeTable.id)
+                .limit(limit)
+            ).tuples()
+        )
+
+    def unreleased_mounts(self, name: str, *, workspace_id: str) -> tuple[ContainerRecord, ...]:
+        rows = self.session.execute(
+            select(ContainerTable.payload, StubTable.payload)
+            .join(StubTable, StubTable.id == ContainerTable.stub_id)
+            .where(
+                ContainerTable.workspace_id == workspace_id,
+                container_storage_release_pending(),
+            )
+        )
+        records: list[ContainerRecord] = []
+        for container_payload, payload in rows:
+            stub = StubRecord.model_validate(payload)
+            if any((volume.name or volume.id) == name for volume in stub.config.volumes):
+                records.append(ContainerRecord.model_validate(container_payload))
+        return tuple(records)
+
+    def retain_cleanup(self, row: VolumeTable) -> None:
+        if row.unfenced_writes_possible and self.session.get(VolumeCleanupTable, row.id) is None:
+            self.session.add(VolumeCleanupTable(volume_id=row.id, workspace_id=row.workspace_id))
+
+    def list_cleanup(self, *, swept_before: datetime, limit: int) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            self.session.execute(
+                select(VolumeCleanupTable.workspace_id, VolumeCleanupTable.volume_id)
+                .where(VolumeCleanupTable.swept_at <= swept_before)
+                .order_by(VolumeCleanupTable.swept_at, VolumeCleanupTable.volume_id)
+                .limit(limit)
+            ).tuples()
+        )
+
+    def lock_cleanup(self, volume_id: str, *, workspace_id: str) -> VolumeCleanupTable | None:
+        return self.session.scalar(
+            select(VolumeCleanupTable)
+            .where(
+                VolumeCleanupTable.volume_id == volume_id,
+                VolumeCleanupTable.workspace_id == workspace_id,
+            )
+            .with_for_update(skip_locked=True)
+        )
+
+    def has_cleanup(self, workspace_id: str) -> bool:
+        return bool(
+            self.session.scalar(
+                select(exists().where(VolumeCleanupTable.workspace_id == workspace_id))
+            )
+        )
+
+    def retire_cleanup(self, workspace_id: str) -> None:
+        self.session.execute(
+            delete(VolumeCleanupTable).where(VolumeCleanupTable.workspace_id == workspace_id)
+        )
 
     def list_metering_targets(
         self,
@@ -928,7 +1028,10 @@ class VolumeRepository:
         statement = (
             select(VolumeTable, WorkspaceTable)
             .join(WorkspaceTable, WorkspaceTable.id == VolumeTable.workspace_id)
-            .where(VolumeTable.metered_at <= metered_before)
+            .where(
+                VolumeTable.metered_at <= metered_before,
+                VolumeTable.deletion_requested_at.is_(None),
+            )
             .order_by(VolumeTable.metered_at.asc(), VolumeTable.id.asc())
             .limit(limit)
         )
@@ -972,6 +1075,7 @@ class VolumeRepository:
             name=row.name,
             size_bytes=row.size_bytes,
             metered_at=row.metered_at,
+            deletion_requested_at=row.deletion_requested_at,
         )
 
     def advance_metering_checkpoint(

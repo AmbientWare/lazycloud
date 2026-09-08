@@ -26,6 +26,7 @@ from database.repositories.common import (
     names_by_id,
 )
 from database.repositories.identity import WorkspaceRepository
+from database.repositories.orchestration import container_storage_release_pending
 from database.tables.apps import (
     AppContainerShutdownIntentTable,
     AppDeploymentIntentTable,
@@ -377,7 +378,7 @@ class AppDeploymentIntentRepository:
 class AppContainerShutdownIntentRepository:
     session: Session
 
-    def capture_active(
+    def capture_pending_shutdowns(
         self,
         *,
         app_id: str,
@@ -398,9 +399,7 @@ class AppContainerShutdownIntentRepository:
                 select(ContainerTable).where(
                     ContainerTable.workspace_id == workspace_id,
                     ContainerTable.app_id == app_id,
-                    ContainerTable.status.in_(
-                        (ContainerStatus.Pending.value, ContainerStatus.Running.value)
-                    ),
+                    container_storage_release_pending(),
                 )
             )
         ]

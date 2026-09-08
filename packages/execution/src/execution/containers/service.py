@@ -14,6 +14,7 @@ from typing import Protocol
 from uuid import UUID
 
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
+from database.repositories.apps import StubRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.images import ImageArchiveRepository, ImageBuildRepository
 from database.repositories.orchestration import (
@@ -21,6 +22,7 @@ from database.repositories.orchestration import (
     ContainerPageCursor,
     ContainerRepository,
 )
+from database.repositories.storage import VolumeRepository
 from database.types import DatabaseSession
 from foundation.ids import optional_uuid
 from observability.events import EventService
@@ -28,6 +30,7 @@ from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import Field
 from shared.autoscaler_state import autoscaler_target_kind
 from shared.container_requests import (
+    ContainerShutdownTarget,
     OciRuntimeName,
     StopContainerReason,
     WorkerContainerRequestPayload,
@@ -87,6 +90,12 @@ class ContainerEventBus(Protocol):
     def send(self, event: EventBusEvent) -> EventBusSendResult: ...
 
 
+class ContainerStorageShutdown(Protocol):
+    def confirm(
+        self, targets: list[ContainerShutdownTarget], *, timeout_seconds: float = 30.0
+    ) -> None: ...
+
+
 class AppExecutionAdmission(Protocol):
     def assert_active(
         self,
@@ -141,6 +150,7 @@ class ContainerService:
     scheduler_cancellation: SchedulerContainerCancellation
     event_bus: ContainerEventBus
     workspace_changes: WorkspaceChangePublisher
+    container_shutdowns: ContainerStorageShutdown
     runtime_state: ContainerRuntimeStateRepository | None = None
 
     def admit_container_start(
@@ -151,6 +161,7 @@ class ContainerService:
         gpu: Sequence[str],
         gpu_count: int,
         region: ProductRegion | None = None,
+        stub_id: str | None = None,
     ) -> list[str]:
         """Refuse a start the account may not make, before anything exists.
 
@@ -164,13 +175,22 @@ class ContainerService:
         scheduler will hold, so the plan counts what the fleet counts.
         """
 
-        return self.payment_admission.admit_container_start(
+        gpu_models = self.payment_admission.admit_container_start(
             session,
             workspace_id=workspace_id,
             gpu=gpu,
             gpu_count=gpu_count_for_capacity(gpu, gpu_count),
             region=region,
         )
+        if stub_id is not None:
+            stub = StubRepository(session).get(stub_id, workspace_id=workspace_id)
+            if stub is None:
+                raise NotFoundError(f"stub not found: {stub_id}")
+            VolumeRepository(session).lock_mounts(
+                {mount.name or mount.id for mount in stub.config.volumes},
+                workspace_id=workspace_id,
+            )
+        return gpu_models
 
     def reserve_pending(
         self,
@@ -187,6 +207,7 @@ class ContainerService:
             gpu=reservation.gpu,
             gpu_count=reservation.gpu_count,
             region=reservation.region,
+            stub_id=reservation.stub_id,
         )
         app_id = optional_uuid(reservation.app_id, field="app_id")
         if app_id is not None:
@@ -805,6 +826,14 @@ class ContainerService:
             # container silently ends metering while the work goes on running.
             raise ConflictError(
                 f"container {container_id} is {record.status.value}: stop it before deleting"
+            )
+        worker_id = record.runtime_worker_id or record.worker_id or ""
+        if not worker_id:
+            cancellation = self._cancel_scheduler_request(record.id)
+            worker_id = cancellation.worker_id if cancellation.worker_stop_required else ""
+        if worker_id:
+            self.container_shutdowns.confirm(
+                [ContainerShutdownTarget(container_id=record.id, worker_id=worker_id)]
             )
         with self.context.database.session() as session:
             ContainerRepository(session).records.delete(

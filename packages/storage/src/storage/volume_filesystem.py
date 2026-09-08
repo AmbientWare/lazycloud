@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from database.client import DatabaseClient
 from database.repositories.identity import WorkspaceRepository
+from database.repositories.storage import VolumeRepository
 from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.volumes import PresignedUrlMethod
 from shared.identity import WorkspaceStatus
@@ -83,8 +84,6 @@ class VolumeFilesystem(Protocol):
         expires_seconds: int,
         upload_id: str = "",
         part_number: int = 0,
-        content_length: int = 0,
-        content_type: str = "application/octet-stream",
     ) -> str: ...
 
     def create_multipart_upload(
@@ -173,16 +172,6 @@ class VolumeObjectClient(Protocol):
         expires_seconds: int = 3600,
     ) -> str: ...
 
-    def generate_presigned_put_url(
-        self,
-        key: str,
-        *,
-        bucket: str | None = None,
-        expires_seconds: int = 3600,
-        content_length: int = 0,
-        content_type: str = "application/octet-stream",
-    ) -> str: ...
-
     def create_multipart_upload(self, key: str, *, bucket: str | None = None) -> str: ...
 
     def generate_presigned_upload_part_url(
@@ -267,7 +256,10 @@ def workspace_volume_store_resolver(
     def resolve(workspace_id: str) -> WorkspaceVolumeStore:
         with database.session() as session:
             workspace = WorkspaceRepository(session).get(workspace_id)
-        if workspace is None or workspace.status is WorkspaceStatus.Deleted:
+            cleanup_pending = VolumeRepository(session).has_cleanup(workspace_id)
+        if workspace is None or (
+            workspace.status is WorkspaceStatus.Deleted and not cleanup_pending
+        ):
             raise NotFoundError(f"workspace storage not found: {workspace_id}")
         storage = workspace.storage
         if storage.access_key or storage.secret_key:
@@ -460,8 +452,6 @@ class WorkspaceVolumeFilesystem:
         expires_seconds: int,
         upload_id: str = "",
         part_number: int = 0,
-        content_length: int = 0,
-        content_type: str = "application/octet-stream",
     ) -> str:
         store = self._store(namespace)
         key = store.key(namespace, relative_path, require_file=True)
@@ -476,14 +466,6 @@ class WorkspaceVolumeFilesystem:
                 key,
                 bucket=store.bucket,
                 expires_seconds=expires_seconds,
-            )
-        if method is PresignedUrlMethod.PutObject:
-            return store.client.generate_presigned_put_url(
-                key,
-                bucket=store.bucket,
-                expires_seconds=expires_seconds,
-                content_length=content_length,
-                content_type=content_type,
             )
         if not upload_id or part_number <= 0:
             raise InvalidInputError("multipart upload ID and positive part number are required")
@@ -639,10 +621,8 @@ class LocalVolumeFilesystem:
         expires_seconds: int,
         upload_id: str = "",
         part_number: int = 0,
-        content_length: int = 0,
-        content_type: str = "application/octet-stream",
     ) -> str:
-        del expires_seconds, upload_id, part_number, content_length, content_type
+        del expires_seconds, upload_id, part_number
         if method is not PresignedUrlMethod.GetObject:
             raise UpstreamUnavailableError("signed writes require the configured JuiceFS gateway")
         target = self._path(namespace, relative_path, require_file=True)

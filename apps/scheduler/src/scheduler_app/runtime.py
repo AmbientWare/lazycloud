@@ -51,6 +51,7 @@ from scheduler.service import (
     SchedulerPlanChangeService,
     SchedulerRetentionService,
     SchedulerStateStores,
+    SchedulerVolumeDeletionService,
     SchedulerVolumeMeteringService,
     SchedulerWorkloadControls,
 )
@@ -128,6 +129,7 @@ class SchedulerRuntime:
                 image_build_container_settings=image_build_container_settings,
                 retention_settings=storage.retention,
                 volume_metering=app_services.volume_metering,
+                volume_deletion=app_services.volume_deletion,
                 meter_outbox=app_services.meter_outbox,
                 email_outbox=app_services.email_outbox,
                 plan_changes=app_services.plan_changes,
@@ -165,6 +167,7 @@ class SchedulerRuntime:
         image_build_container_settings: ImageBuildContainerSettings,
         retention_settings: RetentionSettings,
         volume_metering: SchedulerVolumeMeteringService,
+        volume_deletion: SchedulerVolumeDeletionService,
         meter_outbox: SchedulerMeterOutboxService,
         email_outbox: SchedulerEmailOutboxService,
         plan_changes: SchedulerPlanChangeService,
@@ -301,6 +304,7 @@ class SchedulerRuntime:
             ),
             maintenance=SchedulerMaintenanceControls(
                 volume_metering=volume_metering,
+                volume_deletion=volume_deletion,
                 meter_outbox=meter_outbox,
                 email_outbox=email_outbox,
                 plan_changes=plan_changes,

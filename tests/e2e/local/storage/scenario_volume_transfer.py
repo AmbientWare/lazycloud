@@ -1,4 +1,4 @@
-"""Transfer one object through presigned and multipart Volume APIs.
+"""Transfer files through the Volume API and multipart uploads.
 
 Requires an authenticated public lazycloud profile targeting the healthy local
 stack. The scenario creates and publicly deletes one uniquely named Volume.
@@ -13,7 +13,6 @@ from collections.abc import Sequence
 import httpx
 from lazycloud.abstractions.volume import CompletedPart
 from lazycloud.cli.control import volume_client
-from shared.http.volumes import PresignedUrlMethod
 from tests.e2e._support.process import LivePrerequisiteError, blocked, require_live
 
 from lazycloud import Volume
@@ -32,22 +31,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         created = control.create(name)
         if created.volume is None or created.volume.name != name:
             raise RuntimeError("Volume transfer scenario did not create its resource")
-        payload = f"presigned-{secrets.token_hex(12)}".encode()
-        put = volume.presigned_url(
-            "presigned/value.txt",
-            method=PresignedUrlMethod.PutObject,
-            content_length=len(payload),
-            content_type="text/plain",
-        )
-        response = httpx.put(
-            put.url,
-            content=payload,
-            headers={"Content-Type": "text/plain"},
-            timeout=60,
-        )
-        response.raise_for_status()
-        if volume.read_bytes("presigned/value.txt") != payload:
-            raise RuntimeError("presigned Volume transfer returned the wrong bytes")
+        payload = f"inline-{secrets.token_hex(12)}".encode()
+        volume.write_bytes("inline/value.txt", payload)
+        if volume.read_bytes("inline/value.txt") != payload:
+            raise RuntimeError("Volume API transfer returned the wrong bytes")
 
         multipart_payload = (b"multipart-volume-transfer-" * 300_000)[: 6 * 1024 * 1024]
         plan = volume.create_multipart_upload(
