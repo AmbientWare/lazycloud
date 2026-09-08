@@ -41,7 +41,7 @@ export function AccountMetricsDrawer({ onClose }: { onClose: () => void }) {
         <DrawerHeader>
           <SheetTitle className="min-w-0 truncate">Account metrics</SheetTitle>
         </DrawerHeader>
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
           <PanelErrorBoundary title="Readings could not be displayed">
             <ReadingStrip />
           </PanelErrorBoundary>
