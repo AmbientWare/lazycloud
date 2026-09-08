@@ -20,6 +20,7 @@ export const volumeSchema = z.object({
   updated_at: z.string(),
   workspace_id: z.string(),
   workspace_name: z.string(),
+  deletion_requested_at: z.string().nullable().default(null),
   workloads: z.array(resourceWorkloadReferenceSchema).default([]),
 });
 export type Volume = z.infer<typeof volumeSchema>;

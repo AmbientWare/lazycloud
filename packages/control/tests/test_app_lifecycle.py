@@ -36,6 +36,7 @@ from shared.http.workspace_changes import (
 )
 from shared.identity import AuthScope, TokenKind
 from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
+from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
 from tests.scheduler_composition import services_with_redis_container_control
 
@@ -437,6 +438,7 @@ def test_disconnected_worker_shutdown_remains_durable_and_retry_cleans_ack_state
         services.scheduler_containers,
         services.container_shutdowns.events,
         redis,
+        storage_release=services.container_shutdowns.storage_release,
         poll_interval_seconds=0.001,
     )
     crashing = replace(
@@ -477,12 +479,17 @@ def test_disconnected_worker_shutdown_remains_durable_and_retry_cleans_ack_state
         services.scheduler_containers,
         services.container_shutdowns.events,
         redis,
+        storage_release=services.container_shutdowns.storage_release,
         poll_interval_seconds=0.001,
     )
     with pytest.raises(UpstreamUnavailableError, match="containers="):
         restarted_shutdown.confirm([target], timeout_seconds=0.1)
     assert redis.set_members(pending_key) == {event_id}
     redis.set_add(ack_key, worker_id)
+    with services.context.database.session() as session:
+        ContainerRepository(session).mark_storage_released(
+            container.id, worker_id=worker_id, now=utc_now()
+        )
     restarted_apps = replace(
         services.apps,
         execution_effects=ProductionAppExecutionLifecycleEffects(
@@ -540,6 +547,7 @@ def test_pause_fences_a_queued_container_no_worker_owns(
         services.scheduler_containers,
         services.container_shutdowns.events,
         redis,
+        storage_release=services.container_shutdowns.storage_release,
         poll_interval_seconds=0.001,
     )
     lifecycle = replace(

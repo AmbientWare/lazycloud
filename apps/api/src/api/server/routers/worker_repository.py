@@ -55,6 +55,8 @@ from worker.repository_payloads import (
     GetWorkerAddressRequest,
     GetWorkerAddressResponse,
     GetWorkerByIdResponse,
+    ListContainerCleanupRequest,
+    ListContainerCleanupResponse,
     MoveContainerIpRequest,
     MoveContainerIpResponse,
     NetworkLockRequest,
@@ -474,6 +476,18 @@ def delete_container_state(
     principal: WorkerPrincipal,
 ) -> DeleteContainerStateResponse:
     return service.delete_container_state(request, principal=principal)
+
+
+@router.post(
+    "/worker-repository/list-container-cleanup",
+    response_model=ListContainerCleanupResponse,
+)
+def list_container_cleanup(
+    request: ListContainerCleanupRequest,
+    service: WorkerRepo,
+    principal: WorkerPrincipal,
+) -> ListContainerCleanupResponse:
+    return service.list_container_cleanup(request, principal=principal)
 
 
 @router.post(

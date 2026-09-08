@@ -128,12 +128,23 @@ function VolumeRow({
   return (
     <div className="interactive-row group px-3 py-2.5" data-selected={selected}>
       <div className="flex min-w-0 items-center gap-2">
-        <button type="button" className="min-w-0 flex-1 text-left" onClick={onSelect}>
+        <button
+          type="button"
+          className="min-w-0 flex-1 text-left"
+          onClick={onSelect}
+          disabled={volume.deletion_requested_at !== null}
+        >
           <span className="mono block truncate text-[13px] font-medium text-foreground">
             {volume.name}
           </span>
           <span className="mt-0.5 block text-[11px] text-muted-foreground">
-            {formatBytes(volume.size)} · updated <LiveRelativeTime value={volume.updated_at} />
+            {volume.deletion_requested_at ? (
+              "Deleting · billing stopped"
+            ) : (
+              <>
+                {formatBytes(volume.size)} · updated <LiveRelativeTime value={volume.updated_at} />
+              </>
+            )}
           </span>
         </button>
         {!confirming ? (
@@ -143,6 +154,7 @@ function VolumeRow({
             className="size-7 opacity-70 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
             aria-label={`Delete volume ${volume.name}`}
             title="Delete volume"
+            disabled={volume.deletion_requested_at !== null}
             onClick={() => setConfirming(true)}
           >
             <Trash2 />

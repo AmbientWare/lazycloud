@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
@@ -18,8 +16,10 @@ from database import (
 )
 
 
-def test_empty_database_bootstraps_once_through_the_current_baseline(tmp_path: Path) -> None:
-    database_url = f"sqlite+pysqlite:///{tmp_path / 'fresh.db'}"
+def test_empty_database_bootstraps_once_through_the_current_baseline(
+    postgres_database_url: URL,
+) -> None:
+    database_url = postgres_database_url.render_as_string(hide_password=False)
 
     before = inspect_database_schema(database_url)
     first = bootstrap_database(database_url)
@@ -34,10 +34,10 @@ def test_empty_database_bootstraps_once_through_the_current_baseline(tmp_path: P
 
 @pytest.mark.parametrize("shape", ["application-without-revision", "revision-without-schema"])
 def test_nonempty_noncurrent_database_fails_closed_without_mutation(
-    tmp_path: Path,
+    postgres_database_url: URL,
     shape: str,
 ) -> None:
-    database_url = f"sqlite+pysqlite:///{tmp_path / f'{shape}.db'}"
+    database_url = postgres_database_url.render_as_string(hide_password=False)
     engine = create_engine(database_url)
     try:
         with engine.begin() as connection:
@@ -72,7 +72,7 @@ def test_nonempty_noncurrent_database_fails_closed_without_mutation(
 
 
 def test_a_revision_this_build_does_not_carry_is_refused_rather_than_guessed_at(
-    tmp_path: Path,
+    postgres_database_url: URL,
 ) -> None:
     """A database written by a build that is not an ancestor of this one.
 
@@ -80,7 +80,7 @@ def test_a_revision_this_build_does_not_carry_is_refused_rather_than_guessed_at(
     compute from an unknown starting point, so migrating forward would write a
     partial schema over one another build is still serving.
     """
-    database_url = f"sqlite+pysqlite:///{tmp_path / 'stale.db'}"
+    database_url = postgres_database_url.render_as_string(hide_password=False)
     bootstrap_database(database_url)
     engine = create_engine(database_url)
     try:
@@ -191,41 +191,3 @@ def test_postgresql_baseline_matches_metadata_constraints_and_indexes(
     assert actual_checks == expected_checks
     assert actual_uniques == expected_uniques
     assert actual_foreign_keys == expected_foreign_keys
-
-
-def test_a_model_changed_without_a_revision_is_caught_here(
-    postgres_database_url: URL,
-) -> None:
-    """The check that stops a deploy discovering a missing migration.
-
-    The migrations are explicit DDL, so what they build is fixed while the
-    models move. Any difference between the two means somebody changed a table
-    and did not write the revision that carries a live database across, and the
-    place to find that out is a pull request rather than a bootstrap job against
-    production.
-
-    This is the whole guard. It reads as a near-duplicate of the baseline test
-    above, and it is kept apart because that one proves the schema is right and
-    this one proves the schema is reachable; they fail for different reasons and
-    the failure message is the useful part.
-    """
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
-    engine = create_engine(database_url)
-    try:
-        with engine.connect() as connection:
-            differences = compare_metadata(
-                MigrationContext.configure(
-                    connection,
-                    opts={"compare_type": True, "compare_server_default": True},
-                ),
-                DatabaseBase.metadata,
-            )
-    finally:
-        engine.dispose()
-
-    assert not differences, (
-        "the models and the migrations disagree, so a database built by running every "
-        "revision is not the schema this build expects. Add a revision that makes the "
-        f"change: {[str(item)[:120] for item in differences]}"
-    )

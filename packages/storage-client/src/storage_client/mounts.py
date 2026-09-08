@@ -14,7 +14,6 @@ from urllib.parse import urlsplit
 
 from foundation.process import (
     ManagedCommandResult,
-    ManagedCommandStillRunning,
     ProcessResult,
     run_command_with_timeout,
     start_managed_command,
@@ -167,11 +166,7 @@ class StorageMountSystem:
 def _terminate_managed_mount(command: StorageManagedCommand | None) -> None:
     if command is None:
         return
-    try:
-        result = command.terminate(timeout_seconds=DEFAULT_UNMOUNT_TIMEOUT_SECONDS)
-    except ManagedCommandStillRunning:
-        LOGGER.warning("storage mount process did not exit before the unmount timeout")
-        return
+    result = command.terminate(timeout_seconds=DEFAULT_UNMOUNT_TIMEOUT_SECONDS)
     if result.exit_code not in {0, None}:
         LOGGER.warning(
             "storage mount process exited %s: %s", result.exit_code, result.output.strip()
@@ -208,6 +203,8 @@ class GeeseFsMountManager(StorageMountManager):
             )
         Path(local_path).mkdir(parents=True, exist_ok=True)
         if self.system.mount_checker(local_path):
+            if self.mount_cmd is None:
+                raise RuntimeError(f"storage mount has no owned process: {local_path}")
             return _status_result(self.mode, local_path, StorageMountStatus.AlreadyMounted)
         # A mount torn down moments earlier can leave a dead FUSE entry behind.
         # Mounting over one times out, so clear it first; this is a no-op when
@@ -451,6 +448,38 @@ def is_mounted(mount_point: str) -> bool:
     if not mountinfo.exists():
         return False
     return mount_info_contains(mountinfo.read_text(encoding="utf-8", errors="replace"), mount_point)
+
+
+def assert_no_untracked_storage_mounts(root: Path, *, tracked_paths: set[str], binary: str) -> None:
+    owned_root = root.resolve()
+    tracked = {Path(path).resolve() for path in tracked_paths}
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        fields = line.split()
+        if len(fields) < 5:
+            raise RuntimeError("cannot verify storage cleanup from invalid mountinfo")
+        mount_path = Path(_unescape_mountinfo_path(fields[4])).resolve()
+        if (
+            mount_path != owned_root
+            and mount_path.is_relative_to(owned_root)
+            and mount_path not in tracked
+        ):
+            raise RuntimeError(f"untracked storage mount prevents cleanup: {mount_path}")
+    for process in Path("/proc").iterdir():
+        if not process.name.isdigit():
+            continue
+        try:
+            arguments = (process / "cmdline").read_bytes().split(b"\0")
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if not arguments or Path(os.fsdecode(arguments[0])).name != Path(binary).name:
+            continue
+        for argument in arguments[1:]:
+            value = os.fsdecode(argument)
+            if not value.startswith("/"):
+                continue
+            mount_path = Path(value).resolve()
+            if mount_path.is_relative_to(owned_root) and mount_path not in tracked:
+                raise RuntimeError(f"untracked storage process prevents cleanup: {mount_path}")
 
 
 def mount_info_contains(text: str, mount_point: str) -> bool:

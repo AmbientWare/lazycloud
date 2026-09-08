@@ -14,6 +14,7 @@ from lazycloud.cli.volumes import parse_remote_path, parse_remote_path_if_scheme
 from lazycloud.cli.workflow_options import DeploymentOverrides
 from shared.http.secrets import GetSecretResponse, SecretWireRecord
 from shared.http.tasks import TaskPageResponse, TaskResponse
+from shared.http.volumes import DeleteVolumeResponse
 from typer.testing import CliRunner
 
 client_cli = build_public_cli()
@@ -239,8 +240,9 @@ def test_volume_remote_path_parser_supports_plain_and_scheme_syntax() -> None:
 class FakeVolumeDeleteClient:
     deleted: list[str] = field(default_factory=list)
 
-    def delete(self, name: str) -> None:
+    def delete(self, name: str) -> DeleteVolumeResponse:
         self.deleted.append(name)
+        return DeleteVolumeResponse(deleted=True)
 
 
 def test_volume_delete_without_tty_requires_yes_flag(
@@ -305,5 +307,5 @@ def test_volume_delete_with_yes_flag_skips_confirmation(
     result = CliRunner().invoke(client_cli, ["--json", "volume", "delete", "vol-a", "--yes"])
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {"name": "vol-a"}
+    assert json.loads(result.output) == {"name": "vol-a", "deleted": True}
     assert volumes.deleted == ["vol-a"]

@@ -50,6 +50,7 @@ from observability.workspace_changes import WorkspaceChangeRepository, Workspace
 from operations.app_lifecycle import ProductionAppExecutionLifecycleEffects
 from operations.container_shutdown import (
     ContainerShutdownService,
+    DatabaseContainerStorageRelease,
     DatabaseDurableWorkerAbsence,
 )
 from provider_aws import AwsEcrImageRegistry
@@ -89,6 +90,7 @@ from storage.retention import (
 )
 from storage.retention_settings import RetentionSettings
 from storage.service import CacheStorage, ObjectStorage
+from storage.volume_deletion import VolumeDeletionService
 from storage.volume_filesystem import (
     WorkspaceVolumeFilesystem,
     workspace_volume_store_resolver,
@@ -157,6 +159,7 @@ class SchedulerAppServices:
     object_store_client: S3ObjectStoreClient
     volume_filesystem: WorkspaceVolumeFilesystem
     volume_metering: PersistentVolumeMeteringService
+    volume_deletion: VolumeDeletionService
     meter_outbox: BillingMeterOutboxService
     email_outbox: EmailOutboxDrain
     plan_changes: BillingPlanChangeService
@@ -329,6 +332,13 @@ class SchedulerAppServices:
             lifecycle_events=stream_events,
             workspace_owners=DatabaseWorkspaceOwners(context),
         )
+        container_shutdowns = ContainerShutdownService(
+            container_repository,
+            RedisEventBus(redis),
+            redis,
+            storage_release=DatabaseContainerStorageRelease(context),
+            durable_worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+        )
         containers = ContainerService(
             context,
             events,
@@ -340,6 +350,7 @@ class SchedulerAppServices:
             event_bus=RedisEventBus(redis),
             workspace_changes=workspace_changes,
             runtime_state=container_runtime_state,
+            container_shutdowns=container_shutdowns,
         )
         container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
             worker_repository, container_repository, containers
@@ -347,12 +358,6 @@ class SchedulerAppServices:
         # After the container service, because stopping containers is the whole
         # of what this sweep does.
         billing_enforcement = _billing_enforcement(context, events, containers)
-        container_shutdowns = ContainerShutdownService(
-            container_repository,
-            RedisEventBus(redis),
-            redis,
-            DatabaseDurableWorkerAbsence(context, worker_repository),
-        )
         deployment_lifecycle = AppDeploymentLifecycleService(
             context,
             workspace_changes=workspace_changes,
@@ -409,6 +414,13 @@ class SchedulerAppServices:
             object_store_client=object_client,
             volume_filesystem=volume_filesystem,
             volume_metering=volume_metering,
+            volume_deletion=VolumeDeletionService(
+                context,
+                volume_filesystem,
+                volume_metering,
+                DatabaseDurableWorkerAbsence(context, worker_repository),
+                workspace_changes,
+            ),
             meter_outbox=meter_outbox,
             email_outbox=email_outbox,
             plan_changes=plan_changes,

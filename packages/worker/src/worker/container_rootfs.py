@@ -486,6 +486,13 @@ class ContainerRootfsOverlayManager:
                 reason="container id is required to release a container rootfs",
             )
         _validate_path_segment(container_id, field="container_id")
+        backing_image = (
+            self.backing_image_path
+            or self.scratch_root.parent / CONTAINER_ROOTFS_BACKING_IMAGE_NAME
+        )
+        if backing_image.exists():
+            with self._prepare_lock:
+                self._prepare_scratch_root()
         container_root = self.scratch_root / container_id
         merged = container_root / CONTAINER_ROOTFS_MERGED_DIR_NAME
 

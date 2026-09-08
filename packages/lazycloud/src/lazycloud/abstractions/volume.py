@@ -205,8 +205,6 @@ class VolumeClient(Protocol):
         expires: int = 0,
         upload_id: str = "",
         part_number: int = 0,
-        content_length: int = 0,
-        content_type: str = "application/octet-stream",
     ) -> CreatePresignedUrlResponse: ...
 
     def create_multipart_upload(
@@ -406,10 +404,10 @@ class Volume:
         return response.deleted
 
     def delete(self) -> bool:
-        self.control_client.delete(self.name)
+        response = self.control_client.delete(self.name)
         self.ready = False
         self.volume_id = None
-        return True
+        return response.deleted
 
     def file_service_info(self) -> VolumeFileServiceInfo:
         response = self.control_client.get_file_service_info()
@@ -426,8 +424,6 @@ class Volume:
         expires_seconds: int = 3600,
         upload_id: str | None = None,
         part_number: int | None = None,
-        content_length: int = 0,
-        content_type: str = "application/octet-stream",
     ) -> PresignedUrl:
         response = self.control_client.presigned_url(
             self.name,
@@ -436,8 +432,6 @@ class Volume:
             expires=expires_seconds,
             upload_id=upload_id or "",
             part_number=part_number or 0,
-            content_length=content_length,
-            content_type=content_type,
         )
         return PresignedUrl(
             method=method,

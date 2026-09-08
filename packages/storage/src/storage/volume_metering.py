@@ -183,6 +183,8 @@ class PersistentVolumeMeteringService:
             checkpoint = volumes.lock_metering_checkpoint(target.id)
             if checkpoint is None:
                 return None
+            if checkpoint.deletion_requested_at is not None:
+                observed_at = min(observed_at, to_utc(checkpoint.deletion_requested_at))
             window_started_at = to_utc(checkpoint.metered_at)
             if window_started_at >= observed_at:
                 return None

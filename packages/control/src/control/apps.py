@@ -590,7 +590,7 @@ class AppService:
         app: AppRecord,
     ) -> list[ContainerShutdownTarget]:
         with self.context.database.session() as session:
-            intents = AppContainerShutdownIntentRepository(session).capture_active(
+            intents = AppContainerShutdownIntentRepository(session).capture_pending_shutdowns(
                 app_id=app.id,
                 workspace_id=app.workspace_id,
                 operation_revision=app.lifecycle_revision,

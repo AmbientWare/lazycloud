@@ -263,6 +263,7 @@ class PodControlService:
                 gpu=plan.gpu,
                 gpu_count=plan.gpu_count,
                 region=config.runtime.region,
+                stub_id=stub.id,
             )
             container = ContainerRecord(
                 id=plan.container_id,

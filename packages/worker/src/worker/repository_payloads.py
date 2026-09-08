@@ -272,8 +272,17 @@ class GetContainerStateResponse(WorkerRepositoryResponse):
     state: WorkerContainerState | None = None
 
 
+class ListContainerCleanupRequest(ContractModel):
+    pass
+
+
+class ListContainerCleanupResponse(WorkerRepositoryResponse):
+    container_ids: list[str]
+
+
 class DeleteContainerStateRequest(ContractModel):
     container_id: str
+    storage_released: bool = False
 
 
 class DeleteContainerStateResponse(WorkerRepositoryResponse):

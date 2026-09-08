@@ -143,6 +143,7 @@ class ShellControlService:
                 gpu=plan.gpu,
                 gpu_count=plan.gpu_count,
                 region=stub.config.runtime.region,
+                stub_id=stub.id,
             )
             record = ContainerRecord(
                 id=plan.container_id,

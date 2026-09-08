@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -17,6 +18,8 @@ from worker.events import (
     normalize_container_exit_code,
 )
 from worker.status import CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ContainerFinalizationStep(StrEnum):
@@ -55,7 +58,9 @@ class ContainerFinalizationRepository(ContainerStatusUpdater, Protocol):
         failure_detail: str = "",
     ) -> None: ...
 
-    def delete_container_state(self, container_id: str) -> bool: ...
+    def delete_container_state(
+        self, container_id: str, *, storage_released: bool = False
+    ) -> bool: ...
 
 
 class ContainerFinalizationCleanup(Protocol):
@@ -99,11 +104,6 @@ class ContainerFinalizationPlan(ContractModel):
     remove_uploads: bool = True
     remove_source_workspace: bool = True
     teardown_network: bool = True
-    force_kill_after_grace: bool = True
-    stop_oom_watcher: bool = True
-    release_container_rootfs: bool = True
-    delete_local_state: bool = True
-    delete_remote_state: bool = True
     stopping_ttl_seconds: int = CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS
 
 
@@ -184,41 +184,52 @@ class WorkerContainerFinalizationService:
         self,
         plan: ContainerFinalizationPlan,
     ) -> ContainerFinalizationResult:
-        steps = [
-            self._run_step(
+        result = ContainerFinalizationResult(
+            plan=plan, steps=self.recover_cleanup(plan.container_id)
+        )
+        if not result.ok:
+            LOGGER.error("container cleanup will retry: %s: %s", plan.container_id, result.errors)
+        return result
+
+    def recover_cleanup(self, container_id: str) -> list[ContainerFinalizationStepResult]:
+        steps: list[ContainerFinalizationStepResult] = []
+        cleanup_steps: tuple[tuple[ContainerFinalizationStep, Callable[[], None]], ...] = (
+            (
                 ContainerFinalizationStep.ForceKillIfRunning,
-                lambda: self.cleanup.force_stop_if_running(plan.container_id),
-                skip=not plan.force_kill_after_grace,
+                lambda: self.cleanup.force_stop_if_running(container_id),
             ),
-            self._run_step(
+            (
                 ContainerFinalizationStep.StopOomWatcher,
-                lambda: self.cleanup.stop_oom_watcher(plan.container_id),
-                skip=not plan.stop_oom_watcher,
+                lambda: self.cleanup.stop_oom_watcher(container_id),
             ),
-            self._run_step(
+            (
                 ContainerFinalizationStep.UnmountRequestMounts,
-                lambda: self.cleanup.unmount_request_mounts(plan.container_id),
+                lambda: self.cleanup.unmount_request_mounts(container_id),
             ),
             # After the request mounts and before local state: the overlay must be
             # unmounted before anything removes paths beneath it, or the removal
             # would delete through the mount into the shared image directory.
-            self._run_step(
+            (
                 ContainerFinalizationStep.ReleaseContainerRootfs,
-                lambda: self.cleanup.release_container_rootfs(plan.container_id),
-                skip=not plan.release_container_rootfs,
+                lambda: self.cleanup.release_container_rootfs(container_id),
             ),
-            self._run_step(
+            (
                 ContainerFinalizationStep.DeleteLocalState,
-                lambda: self.cleanup.delete_local_state(plan.container_id),
-                skip=not plan.delete_local_state,
+                lambda: self.cleanup.delete_local_state(container_id),
             ),
+        )
+        for step, action in cleanup_steps:
+            result = self._run_step(step, action)
+            steps.append(result)
+            if not result.ok:
+                return steps
+        steps.append(
             self._run_step(
                 ContainerFinalizationStep.DeleteRemoteState,
-                lambda: self.repository.delete_container_state(plan.container_id),
-                skip=not plan.delete_remote_state,
-            ),
-        ]
-        return ContainerFinalizationResult(plan=plan, steps=steps)
+                lambda: self.repository.delete_container_state(container_id, storage_released=True),
+            )
+        )
+        return steps
 
     def _run_step[StepResult](
         self,

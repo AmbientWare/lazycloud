@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -592,6 +593,9 @@ class _ContainerRepository:
     ttls: list[int] = field(default_factory=list)
     state_errors: int = 0
 
+    def list_pending_storage_cleanup(self) -> list[str]:
+        return []
+
     def get_container_state(self, container_id: str) -> WorkerContainerState | None:
         if self.state_errors > 0:
             self.state_errors -= 1
@@ -630,7 +634,7 @@ class _ContainerRepository:
         del termination_reason, failed_phase, failure_detail
         self.exit_codes.append((container_id, exit_code))
 
-    def delete_container_state(self, container_id: str) -> bool:
+    def delete_container_state(self, container_id: str, *, storage_released: bool = False) -> bool:
         self.deleted.append(container_id)
         return self.states.pop(container_id, None) is not None
 
@@ -639,6 +643,9 @@ class _ContainerRepository:
 class _ExecutionService:
     result: ContainerExecutionResult = field(default_factory=ContainerExecutionResult)
     contexts: list[ContainerExecutionContext] = field(default_factory=list)
+
+    def recover_cleanup(self, container_ids: Sequence[str]) -> None:
+        pass
 
     def execute(self, context: ContainerExecutionContext) -> ContainerExecutionResult:
         self.contexts.append(context)
@@ -755,6 +762,9 @@ class _BlockingExecutionService:
     stop_requested: threading.Event
     containers: _ContainerRepository
     contexts: list[ContainerExecutionContext] = field(default_factory=list)
+
+    def recover_cleanup(self, container_ids: Sequence[str]) -> None:
+        pass
 
     def execute(self, context: ContainerExecutionContext) -> ContainerExecutionResult:
         self.contexts.append(context)

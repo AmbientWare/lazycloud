@@ -1,36 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from database.tables.storage import VolumeTable
 from execution.volumes.control import VolumeControlService
 from shared.errors import InvalidInputError
 from shared.http.volumes import (
-    CompletedPart,
-    CompleteMultipartUploadRequest,
-    CreateMultipartUploadRequest,
-    CreatePresignedUrlRequest,
     DeleteVolumeRequest,
     GetOrCreateVolumeRequest,
     ListPathRequest,
     MovePathRequest,
     PresignedUrlMethod,
-    PresignedUrlParams,
     StatPathRequest,
 )
-from sqlalchemy import select
 from storage.volume_filesystem import (
     LocalVolumeFilesystem,
     VolumeNamespace,
     WorkspaceVolumeFilesystem,
     WorkspaceVolumeStore,
 )
-from storage.volume_metering import PersistentVolumeMeteringService
 from storage_client.s3 import S3ObjectInfo
 from tests.service_fixtures import owned_workspace
 
@@ -165,65 +157,6 @@ def test_move_path_rejects_an_occupied_destination_without_touching_either_side(
     assert client.objects[("workspace-workspace", "volumes/volume/target.txt")].data == b"target"
 
 
-def test_volume_control_presigned_and_multipart_requests_use_database_identity(
-    isolated_services: ApiServices,
-) -> None:
-    client = _FakeObjectClient()
-    filesystem = _workspace_filesystem(client)
-    service = VolumeControlService(isolated_services, filesystem=filesystem)
-    created = service.get_or_create_volume(GetOrCreateVolumeRequest(name="data"))
-    assert created.volume is not None
-
-    presigned = service.create_presigned_url(
-        CreatePresignedUrlRequest(
-            volume_name="data",
-            volume_path="payload.txt",
-            method=PresignedUrlMethod.PutObject,
-            expires=120,
-            params=PresignedUrlParams(
-                content_length=7,
-                content_type="text/plain",
-            ),
-        )
-    )
-    multipart = service.create_multipart_upload(
-        CreateMultipartUploadRequest(
-            volume_name="data",
-            volume_path="large.bin",
-            file_size=11,
-            chunk_size=5,
-        )
-    )
-    service.complete_multipart_upload(
-        CompleteMultipartUploadRequest(
-            upload_id=multipart.upload_id,
-            volume_name="data",
-            volume_path="large.bin",
-            completed_parts=(CompletedPart(number=1, etag="etag-1"),),
-        )
-    )
-
-    namespace_key = f"volumes/{created.volume.id}"
-    workspace_bucket = f"workspace-{created.volume.workspace_id}"
-    assert presigned.url == (
-        f"https://storage.invalid/{workspace_bucket}/{namespace_key}/payload.txt?put&expires=120"
-    )
-    assert [(part.number, part.start, part.end) for part in multipart.file_upload_parts] == [
-        (1, 0, 5),
-        (2, 5, 10),
-        (3, 10, 11),
-    ]
-    assert all(f"/{namespace_key}/large.bin?" in part.url for part in multipart.file_upload_parts)
-    assert client.completed == [
-        (
-            workspace_bucket,
-            f"{namespace_key}/large.bin",
-            multipart.upload_id,
-            ((1, "etag-1"),),
-        )
-    ]
-
-
 def test_delete_path_does_not_delete_sibling_prefixes() -> None:
     client = _FakeObjectClient()
     filesystem = _workspace_filesystem(client)
@@ -239,63 +172,6 @@ def test_delete_path_does_not_delete_sibling_prefixes() -> None:
         client.objects[("workspace-workspace", "volumes/volume/directory-sibling/file.txt")].data
         == b"keep"
     )
-
-
-def test_storage_delete_failure_keeps_volume_metadata_retriable(
-    isolated_services: ApiServices,
-    request: pytest.FixtureRequest,
-) -> None:
-    filesystem = _FailingDeleteFilesystem(isolated_services.context.paths.root / "failing-volumes")
-    services = _services_with_volume_metering(
-        isolated_services,
-        filesystem,
-        PersistentVolumeMeteringService(
-            isolated_services.context,
-            filesystem,
-        ),
-        request,
-    )
-    service = services.volume_service
-    created = service.get_or_create_volume(GetOrCreateVolumeRequest(name="retry"))
-    assert created.volume is not None
-    service.copy_path("retry/payload.txt", b"payload")
-    _set_volume_checkpoint(services, "retry")
-
-    with pytest.raises(OSError, match="storage delete unavailable"):
-        service.delete_volume(DeleteVolumeRequest(name="retry"))
-
-    assert [item.name for item in service.list_volumes().volumes] == ["retry"]
-    assert filesystem.resolve_path(
-        VolumeNamespace(created.volume.workspace_id, created.volume.id),
-        "payload.txt",
-    ).is_file()
-
-    filesystem.fail_delete = False
-    service.delete_volume(DeleteVolumeRequest(name="retry"))
-
-    assert service.list_volumes().volumes == ()
-
-
-def _services_with_volume_metering(
-    isolated_services: ApiServices,
-    filesystem: LocalVolumeFilesystem,
-    volume_metering: PersistentVolumeMeteringService,
-    request: pytest.FixtureRequest,
-) -> ApiServices:
-    services = ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        create_schema=False,
-        workspace_storage_issuer=isolated_services.workspace_storage_issuer,
-        volume_metering=volume_metering,
-        volume_filesystem=filesystem,
-        redis_client=isolated_services.redis_client,
-        binary_redis_client=isolated_services.binary_redis_client,
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-    )
-    request.addfinalizer(services.close)
-    return services
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,18 +306,6 @@ class _FakeObjectClient:
     ) -> str:
         return self._url(key, bucket=bucket, suffix=f"head&expires={expires_seconds}")
 
-    def generate_presigned_put_url(
-        self,
-        key: str,
-        *,
-        bucket: str | None = None,
-        expires_seconds: int = 3600,
-        content_length: int = 0,
-        content_type: str = "application/octet-stream",
-    ) -> str:
-        del content_length, content_type
-        return self._url(key, bucket=bucket, suffix=f"put&expires={expires_seconds}")
-
     def create_multipart_upload(self, key: str, *, bucket: str | None = None) -> str:
         self._upload_number += 1
         upload_id = f"upload-{self._upload_number}"
@@ -503,21 +367,3 @@ def _workspace_filesystem(client: _FakeObjectClient) -> WorkspaceVolumeFilesyste
             bucket=f"workspace-{workspace_id}",
         )
     )
-
-
-class _FailingDeleteFilesystem(LocalVolumeFilesystem):
-    def __init__(self, root: Path) -> None:
-        super().__init__(root)
-        self.fail_delete = True
-
-    def delete_volume(self, namespace: VolumeNamespace) -> None:
-        if self.fail_delete:
-            raise OSError("storage delete unavailable")
-        super().delete_volume(namespace)
-
-
-def _set_volume_checkpoint(services: ApiServices, name: str) -> None:
-    with services.context.database.session() as session:
-        row = session.scalars(select(VolumeTable).where(VolumeTable.name == name)).one()
-        row.size_bytes = 17
-        row.metered_at = datetime.now(UTC) - timedelta(seconds=5)

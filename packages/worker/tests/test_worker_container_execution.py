@@ -481,7 +481,7 @@ class FinalizationRepository:
             ttl_seconds=ttl_seconds,
         )
 
-    def delete_container_state(self, container_id: str) -> bool:
+    def delete_container_state(self, container_id: str, *, storage_released: bool = False) -> bool:
         self.deleted.append(container_id)
         return True
 

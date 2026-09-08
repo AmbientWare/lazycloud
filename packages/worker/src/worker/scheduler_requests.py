@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum
@@ -100,6 +101,8 @@ class WorkerSchedulerRequestWorkerRepository(Protocol):
 class WorkerSchedulerRequestContainerRepository(ContainerFinalizationRepository, Protocol):
     def get_container_state(self, container_id: str) -> WorkerContainerState | None: ...
 
+    def list_pending_storage_cleanup(self) -> list[str]: ...
+
 
 class WorkerSchedulerRequestLifecycle(Protocol):
     def register_container(
@@ -130,6 +133,8 @@ class WorkerSchedulerRequestImageBuildResultReporter(Protocol):
 
 class WorkerSchedulerRequestExecutionService(Protocol):
     def execute(self, context: ContainerExecutionContext) -> ContainerExecutionResult: ...
+
+    def recover_cleanup(self, container_ids: Sequence[str]) -> None: ...
 
 
 class WorkerSchedulerRequestResult(ContractModel):
@@ -226,8 +231,10 @@ class WorkerSchedulerRequestProcessor:
     )
     _delivery_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _image_build_result_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _cleanup_after: float = field(default=0, init=False)
 
     def run_once(self) -> WorkerSchedulerRequestResult:
+        self._recover_cleanup()
         self._retry_acknowledgements()
         reported = self._retry_image_build_result()
         if reported is not None:
@@ -588,6 +595,21 @@ class WorkerSchedulerRequestProcessor:
             return self.execution.execute(context)
         finally:
             self._release_container(context.request.container_id)
+
+    def _recover_cleanup(self) -> None:
+        now = monotonic()
+        if now < self._cleanup_after:
+            return
+        self._cleanup_after = now + 5
+        try:
+            container_ids = [
+                container_id
+                for container_id in self.containers.list_pending_storage_cleanup()
+                if container_id not in self._background
+            ]
+            self.execution.recover_cleanup(container_ids)
+        except Exception:
+            LOGGER.exception("container storage cleanup recovery failed")
 
     def _pop_completed_background(self) -> WorkerSchedulerRequestResult | None:
         for container_id, active in tuple(self._background.items()):

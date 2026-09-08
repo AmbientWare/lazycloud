@@ -143,6 +143,8 @@ from worker.repository_payloads import (
     GetWorkerAddressRequest,
     GetWorkerAddressResponse,
     GetWorkerByIdResponse,
+    ListContainerCleanupRequest,
+    ListContainerCleanupResponse,
     MoveContainerIpRequest,
     MoveContainerIpResponse,
     NetworkLockRequest,
@@ -1361,6 +1363,23 @@ class WorkerRepositoryService:
             )
         return GetContainerStateResponse(state=state)
 
+    def list_container_cleanup(
+        self,
+        request: ListContainerCleanupRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> ListContainerCleanupResponse:
+        if not principal.worker_id:
+            raise AuthorizationDeniedError("container cleanup requires an assigned worker")
+        if self.services is None:
+            raise UpstreamUnavailableError("container cleanup requires durable state")
+        with self.services.context.database.session() as session:
+            return ListContainerCleanupResponse(
+                container_ids=ContainerRepository(session).list_pending_storage_cleanup(
+                    principal.worker_id
+                )
+            )
+
     def delete_container_state(
         self,
         request: DeleteContainerStateRequest,
@@ -1374,6 +1393,13 @@ class WorkerRepositoryService:
         )
         routes = self._container_agent_routes(request.container_id)
         self._unpublish_agent_routes(routes)
+        if request.storage_released:
+            if self.services is None:
+                raise UpstreamUnavailableError("container storage release requires durable state")
+            with self.services.context.database.session() as session:
+                ContainerRepository(session).mark_storage_released(
+                    request.container_id, worker_id=principal.worker_id, now=utc_now()
+                )
         return DeleteContainerStateResponse(
             deleted=self.containers.delete_container_state(request.container_id)
         )

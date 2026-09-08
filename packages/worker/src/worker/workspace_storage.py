@@ -6,6 +6,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 
 from shared.container_requests import (
     DEFAULT_ARTIFACTS_PATH,
@@ -22,6 +23,7 @@ from storage_client.mounts import (
     StorageMountResult,
     StorageMountStatus,
     StorageMountSystem,
+    assert_no_untracked_storage_mounts,
     geesefs_memory_limit_mb,
 )
 
@@ -127,13 +129,13 @@ class WorkerWorkspaceStorageManager:
             if plan.unmount_existing:
                 self._unmount_existing(workspace_name)
             manager = self._mount_manager(workspace_name, request.workspace_storage_credentials)
-            mounted = self._mount(manager, plan.mount_path)
             self._mounts[workspace_name] = _WorkspaceMountRecord(
                 workspace_name=workspace_name,
                 mount_path=plan.mount_path,
                 manager=manager,
                 credential_window=_credential_window(request.workspace_storage_credentials),
             )
+            mounted = self._mount(manager, plan.mount_path)
             return WorkspaceStorageEnsureResult(
                 workspace_name=workspace_name,
                 mount_path=plan.mount_path,
@@ -151,6 +153,11 @@ class WorkerWorkspaceStorageManager:
         *,
         active_workspace_names: set[str],
     ) -> list[StorageMountResult]:
+        assert_no_untracked_storage_mounts(
+            Path(self.config.base_mount_path),
+            tracked_paths={record.mount_path for record in self._mounts.values()},
+            binary=self.config.geesefs.binary,
+        )
         plan = plan_workspace_mount_cleanup(
             [self._state_from_record(record) for record in self._mounts.values()],
             active_workspace_names=active_workspace_names,
@@ -276,7 +283,7 @@ class WorkerWorkspaceStorageManager:
         self.credential_files(workspace_name).remove()
 
     def _unmount_existing(self, workspace_name: str) -> None:
-        record = self._mounts.pop(workspace_name, None)
+        record = self._mounts.get(workspace_name)
         if record is None:
             return
         result = record.manager.unmount(record.mount_path)
@@ -284,6 +291,7 @@ class WorkerWorkspaceStorageManager:
             raise WorkerWorkspaceStorageError(
                 result.output or result.reason or "workspace storage unmount failed"
             )
+        self._mounts.pop(workspace_name, None)
         shutil.rmtree(record.mount_path, ignore_errors=True)
         self._remove_cache_dir(workspace_name)
 

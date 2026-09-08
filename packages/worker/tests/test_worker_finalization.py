@@ -24,6 +24,7 @@ class FinalizationRepository:
     failure_details: list[tuple[ContainerExecutionPhase | None, str]] = field(default_factory=list)
     status_updates: list[tuple[str, SchedulerContainerStatus, int]] = field(default_factory=list)
     deleted: list[str] = field(default_factory=list)
+    storage_released: bool = False
 
     def set_exit_code(
         self,
@@ -53,7 +54,8 @@ class FinalizationRepository:
             ttl_seconds=ttl_seconds,
         )
 
-    def delete_container_state(self, container_id: str) -> bool:
+    def delete_container_state(self, container_id: str, *, storage_released: bool = False) -> bool:
+        self.storage_released = storage_released
         self.deleted.append(container_id)
         return True
 
@@ -147,6 +149,26 @@ def test_worker_container_finalizer_delayed_cleanup_forces_and_deletes_state() -
         (ContainerFinalizationStep.DeleteLocalState, "ctr-1"),
     ]
     assert repo.deleted == ["ctr-1"]
+    assert repo.storage_released
+
+
+def test_failed_unmount_keeps_storage_owned_until_cleanup_succeeds() -> None:
+    repo = FinalizationRepository()
+    cleanup = FinalizationCleanup(fail_step=ContainerFinalizationStep.UnmountRequestMounts)
+    service = WorkerContainerFinalizationService(repository=repo, cleanup=cleanup)
+    plan = plan_container_finalization(
+        ContainerFinalizationRequest(
+            request=ContainerRequestContext(container_id="ctr-1"), exit_code=0
+        )
+    )
+
+    assert not service.complete_delayed_cleanup(plan).ok
+    assert not repo.storage_released
+    assert not repo.deleted
+
+    cleanup.fail_step = None
+    assert service.complete_delayed_cleanup(plan).ok
+    assert repo.storage_released
 
 
 def test_worker_container_finalizer_uses_stop_reason_exit_code_and_skips_gpu_release() -> None:

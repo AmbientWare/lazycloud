@@ -238,11 +238,23 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    storage_released_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     preemption_settled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
     gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+Index(
+    "ix_containers_pending_storage_worker",
+    ContainerTable.payload.op("->>")("runtime_worker_id"),
+    ContainerTable.id,
+    postgresql_where=ContainerTable.storage_released_at.is_(None),
+    sqlite_where=ContainerTable.storage_released_at.is_(None),
+)
 
 
 class RouteTable(IdPayloadTable, DatabaseBase):

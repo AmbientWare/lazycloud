@@ -154,6 +154,8 @@ class _RuntimeController:
 
     def kill_container(self, container_id: str, *, signal: int, force_delete: bool) -> None:
         self.kill_calls.append((container_id, signal, force_delete))
+        if force_delete:
+            self.status_value = RuntimeContainerStatus.Stopped.value
 
 
 @dataclass(slots=True)

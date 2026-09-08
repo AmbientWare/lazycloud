@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import threading
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack
 from dataclasses import replace
@@ -61,7 +60,7 @@ from gateway.http import (
 from gateway.service import GatewayControlService
 from identity.auth import AuthorizationDeniedError, AuthService
 from images.building import build_image_plan
-from operations.container_shutdown import ContainerShutdownService
+from operations.container_shutdown import ContainerShutdownService, DatabaseContainerStorageRelease
 from pydantic import JsonValue, TypeAdapter
 from scheduler.containers import SchedulerContainerDispatchStatus
 from scheduler.fleet import SchedulerContainerStatus, SchedulerWorkerStatus
@@ -1601,107 +1600,91 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
     assert accepted.status_code == 200
 
 
-def test_container_shutdown_owner_confirms_targeted_worker_ack(
+def test_container_shutdown_requires_assigned_worker_storage_release(
+    isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
     containers = RedisSchedulerContainerRepository(redis)
-    containers.set_container_state(
-        SchedulerContainerState(
-            container_id="ctr-1",
-            workspace_id="workspace-a",
-            stub_id="stub-1",
-            worker_id="worker-1",
-            status=SchedulerContainerStatus.Running,
-        )
+    workspace = owned_workspace(
+        ControlPlaneService(isolated_services.context), "shutdown-storage-release"
     )
-    service = ContainerShutdownService(
-        containers,
-        RedisEventBus(redis),
-        redis,
-        poll_interval_seconds=0.001,
-    )
-    event_id = event_id_for_event(
-        EventBusEvent(
-            type=EventBusEventType.StopContainer,
-            args={
-                "container_id": "ctr-1",
-                "force": False,
-                "reason": StopContainerReason.User.value,
-                "worker_id": "worker-1",
-            },
-            retries=3,
-        )
-    )
-
-    def acknowledge() -> None:
-        containers.delete_container_state("ctr-1")
-        redis.set_add(redis.key("worker-events", "ack", event_id), "worker-1")
-
-    timer = threading.Timer(0.01, acknowledge)
-    timer.start()
-    service.confirm(
-        [ContainerShutdownTarget(container_id="ctr-1", worker_id="worker-1")],
-        timeout_seconds=0.5,
-    )
-    timer.join()
-
-    assert redis.set_members(redis.key("worker-events", "pending", "worker-1")) == set()
-    assert redis.set_members(redis.key("worker-events", "ack", event_id)) == set()
-    assert redis.exists(redis.key("event", event_id)) == 0
-
-
-def test_container_shutdown_owner_accepts_concurrent_scheduler_completion(
-    real_redis_actors: RealRedisActors,
-) -> None:
-    redis = real_redis_actors.client()
-    containers = RedisSchedulerContainerRepository(redis)
-    containers.set_container_state(
-        SchedulerContainerState(
-            container_id="ctr-concurrent-complete",
-            workspace_id="workspace-a",
-            stub_id="stub-1",
-            worker_id="worker-1",
-            status=SchedulerContainerStatus.Running,
-        )
-    )
-    service = ContainerShutdownService(
-        containers,
-        RedisEventBus(redis),
-        redis,
-        poll_interval_seconds=0.001,
-    )
-    event_id = event_id_for_event(
-        EventBusEvent(
-            type=EventBusEventType.StopContainer,
-            args={
-                "container_id": "ctr-concurrent-complete",
-                "force": False,
-                "reason": StopContainerReason.User.value,
-                "worker_id": "worker-1",
-            },
-            retries=3,
-        )
-    )
-
-    timer = threading.Timer(
-        0.01,
-        lambda: containers.update_container_status(
-            "ctr-concurrent-complete",
-            SchedulerContainerStatus.Complete,
-        ),
-    )
-    timer.start()
-    service.confirm(
-        [
-            ContainerShutdownTarget(
-                container_id="ctr-concurrent-complete",
-                worker_id="worker-1",
+    container_id = str(uuid4())
+    with isolated_services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=container_id,
+                name="finalized",
+                image="",
+                command=[],
+                workspace_id=workspace.id,
+                runtime_worker_id="worker-1",
+                status=ContainerStatus.Stopped,
             )
-        ],
-        timeout_seconds=0.5,
+        )
+    containers.set_container_state(
+        SchedulerContainerState(
+            container_id=container_id,
+            workspace_id=workspace.id,
+            stub_id="stub-1",
+            worker_id="worker-1",
+            status=SchedulerContainerStatus.Complete,
+        )
     )
-    timer.join()
+    service = ContainerShutdownService(
+        containers,
+        RedisEventBus(redis),
+        redis,
+        storage_release=DatabaseContainerStorageRelease(isolated_services.context),
+        poll_interval_seconds=0.001,
+    )
+    targets = [ContainerShutdownTarget(container_id=container_id, worker_id="worker-1")]
+
+    with isolated_services.context.database.session() as session:
+        pending = ContainerRepository(session).list_pending_storage_cleanup("worker-1")
+        assert pending == [container_id]
+        assert (
+            ContainerRepository(session).list_shutdown_targets(workspace_id=workspace.id) == targets
+        )
+        assert not ContainerRepository(session).list_pending_storage_cleanup("worker-2")
+
+    with pytest.raises(UpstreamUnavailableError, match="workers=worker-1"):
+        service.confirm(targets, timeout_seconds=0.05)
+
+    event_id = event_id_for_event(
+        EventBusEvent(
+            type=EventBusEventType.StopContainer,
+            args={
+                "container_id": container_id,
+                "force": False,
+                "reason": StopContainerReason.User.value,
+                "worker_id": "worker-1",
+            },
+            retries=3,
+        )
+    )
+    containers.delete_container_state(container_id)
+    redis.set_add(redis.key("worker-events", "ack", event_id), "worker-1")
+    with pytest.raises(UpstreamUnavailableError, match="workers=worker-1"):
+        service.confirm(targets, timeout_seconds=0.05)
+
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(ConflictError, match="another worker"),
+    ):
+        ContainerRepository(session).mark_storage_released(
+            container_id, worker_id="worker-2", now=utc_now()
+        )
+    with isolated_services.context.database.session() as session:
+        ContainerRepository(session).mark_storage_released(
+            container_id, worker_id="worker-1", now=utc_now()
+        )
+
+    service.confirm(targets, timeout_seconds=0.05)
+
+    with isolated_services.context.database.session() as session:
+        assert not ContainerRepository(session).list_pending_storage_cleanup("worker-1")
+        assert not ContainerRepository(session).list_shutdown_targets(workspace_id=workspace.id)
 
     assert redis.set_members(redis.key("worker-events", "pending", "worker-1")) == set()
     assert redis.set_members(redis.key("worker-events", "ack", event_id)) == set()
@@ -1709,6 +1692,7 @@ def test_container_shutdown_owner_accepts_concurrent_scheduler_completion(
 
 
 def test_container_shutdown_owner_accepts_unassigned_pending_cancellation(
+    isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
@@ -1726,6 +1710,7 @@ def test_container_shutdown_owner_accepts_unassigned_pending_cancellation(
         containers,
         RedisEventBus(redis),
         redis,
+        storage_release=DatabaseContainerStorageRelease(isolated_services.context),
         poll_interval_seconds=0.001,
     )
 
@@ -1737,129 +1722,6 @@ def test_container_shutdown_owner_accepts_unassigned_pending_cancellation(
     assert redis.scan(redis.key("event", "*")) == []
     assert redis.scan(redis.key("worker-events", "pending", "*")) == []
     assert redis.scan(redis.key("worker-events", "ack", "*")) == []
-
-
-def test_container_shutdown_owner_rejects_optimistic_database_terminal_state(
-    isolated_services: ApiServices,
-    real_redis_actors: RealRedisActors,
-) -> None:
-    redis = real_redis_actors.client()
-    containers = RedisSchedulerContainerRepository(redis)
-    container_id = str(uuid4())
-    workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context), "shutdown-finalization"
-    )
-    containers.set_container_state(
-        SchedulerContainerState(
-            container_id=container_id,
-            workspace_id=workspace.id,
-            stub_id="stub-1",
-            worker_id="worker-1",
-            status=SchedulerContainerStatus.Running,
-        )
-    )
-    with isolated_services.context.database.session() as session:
-        ContainerRepository(session).upsert(
-            ContainerRecord(
-                id=container_id,
-                name="finalized",
-                image="",
-                command=[],
-                workspace_id=workspace.id,
-                status=ContainerStatus.Running,
-            )
-        )
-    service = ContainerShutdownService(
-        containers,
-        RedisEventBus(redis),
-        redis,
-        poll_interval_seconds=0.001,
-    )
-    event_id = event_id_for_event(
-        EventBusEvent(
-            type=EventBusEventType.StopContainer,
-            args={
-                "container_id": container_id,
-                "force": False,
-                "reason": StopContainerReason.User.value,
-                "worker_id": "worker-1",
-            },
-            retries=3,
-        )
-    )
-
-    def finalize_without_acknowledgement() -> None:
-        with isolated_services.context.database.session() as session:
-            ContainerRepository(session).upsert(
-                ContainerRecord(
-                    id=container_id,
-                    name="finalized",
-                    image="",
-                    command=[],
-                    workspace_id=workspace.id,
-                    status=ContainerStatus.Stopped,
-                )
-            )
-        containers.delete_container_state(container_id)
-
-    timer = threading.Timer(0.01, finalize_without_acknowledgement)
-    timer.start()
-    with pytest.raises(UpstreamUnavailableError, match="workers=worker-1"):
-        service.confirm(
-            [ContainerShutdownTarget(container_id=container_id, worker_id="worker-1")],
-            timeout_seconds=0.05,
-        )
-    timer.join()
-
-    assert redis.set_members(redis.key("worker-events", "pending", "worker-1")) == {event_id}
-    assert redis.set_members(redis.key("worker-events", "ack", event_id)) == set()
-    assert redis.exists(redis.key("event", event_id)) == 1
-
-
-def test_container_shutdown_owner_rejects_cross_worker_shutdown_ack(
-    real_redis_actors: RealRedisActors,
-) -> None:
-    redis = real_redis_actors.client()
-    containers = RedisSchedulerContainerRepository(redis)
-    containers.set_container_state(
-        SchedulerContainerState(
-            container_id="ctr-1",
-            workspace_id="workspace-a",
-            stub_id="stub-1",
-            worker_id="worker-1",
-            status=SchedulerContainerStatus.Running,
-        )
-    )
-    service = ContainerShutdownService(
-        containers,
-        RedisEventBus(redis),
-        redis,
-        poll_interval_seconds=0.001,
-    )
-    event_id = event_id_for_event(
-        EventBusEvent(
-            type=EventBusEventType.StopContainer,
-            args={
-                "container_id": "ctr-1",
-                "force": False,
-                "reason": StopContainerReason.User.value,
-                "worker_id": "worker-1",
-            },
-            retries=3,
-        )
-    )
-
-    def acknowledge_as_other_worker() -> None:
-        redis.set_add(redis.key("worker-events", "ack", event_id), "worker-2")
-
-    timer = threading.Timer(0.01, acknowledge_as_other_worker)
-    timer.start()
-    with pytest.raises(UpstreamUnavailableError, match="workers=worker-1"):
-        service.confirm(
-            [ContainerShutdownTarget(container_id="ctr-1", worker_id="worker-1")],
-            timeout_seconds=0.05,
-        )
-    timer.join()
 
 
 def test_worker_repository_filters_targeted_stop_events_by_assigned_worker(

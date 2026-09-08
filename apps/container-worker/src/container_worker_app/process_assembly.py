@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
+from shared.app_identity import WORKER_BUNDLE_ROOT
 from shared.scheduling import (
     SchedulerWorkerRecord,
 )
@@ -163,6 +165,7 @@ class WorkerProcessContainerServiceDependencies:
 
 @dataclass(frozen=True, slots=True)
 class WorkerProcessFinalizationDependencies:
+    bundle_root: Path = Path(WORKER_BUNDLE_ROOT)
     container_ips: ContainerIpResolver | None = None
     gpu: WorkerGpuReleaser | None = None
     network: WorkerNetworkTeardown | None = None
@@ -266,6 +269,7 @@ def assemble_worker_process_services(
             source_workspaces=finalization_dependencies.source_workspaces,
             workspace_storage=dependencies.workspace_storage_mounter,
             container_rootfs=dependencies.rootfs_preparer,
+            bundle_root=finalization_dependencies.bundle_root,
         ),
     )
     execution = WorkerContainerExecutionService(
@@ -322,12 +326,20 @@ def assemble_worker_process_services(
         ),
     )
     transport = WorkerContainerServiceTransport(container_service)
+
+    def validate_readiness() -> None:
+        if readiness_validator is not None:
+            readiness_validator()
+        execution.recover_cleanup(container_repository.list_pending_storage_cleanup())
+        if container_repository.list_pending_storage_cleanup():
+            raise RuntimeError("container storage cleanup remains pending before worker readiness")
+
     lifecycle = WorkerLifecycleOrchestrator(
         worker_id=identity.worker_id,
         repository=worker_repository,
         stopper=runtime_stopper,
         registration=registration,
-        readiness_validator=readiness_validator,
+        readiness_validator=validate_readiness,
         cleanup_actions=[
             *(cleanup_actions or []),
             *(

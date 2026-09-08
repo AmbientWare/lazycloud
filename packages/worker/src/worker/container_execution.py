@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
 from foundation.process import ProcessOutputSink
 from pydantic import Field
-from shared.container_requests import CONTAINER_INNER_PORT, WorkerStartupKind
+from shared.container_requests import (
+    CONTAINER_INNER_PORT,
+    WorkerStartupKind,
+)
 from shared.contracts import ContractModel
 from shared.env import GATEWAY_TOKEN_ENV
 from shared.image_building.authoring import LinuxArchitecture
@@ -457,6 +460,19 @@ class WorkerContainerExecutionService:
                 "container %s is running without cgroup settings: %s",
                 context.request.container_id,
                 ", ".join(missing),
+            )
+
+    def recover_cleanup(self, container_ids: Sequence[str]) -> None:
+        failures: list[str] = []
+        for container_id in container_ids:
+            steps = self.finalizer.recover_cleanup(container_id)
+            errors = {step.step.value: step.error_message for step in steps if not step.ok}
+            if errors:
+                LOGGER.error("container cleanup will retry: %s: %s", container_id, errors)
+                failures.append(container_id)
+        if failures:
+            raise RuntimeError(
+                "container storage cleanup remains incomplete: " + ",".join(failures)
             )
 
     def execute(self, context: ContainerExecutionContext) -> ContainerExecutionResult:

@@ -13,7 +13,6 @@ from shared.http.storage import ResourceWorkloadReference
 
 class PresignedUrlMethod(StringEnum):
     GetObject = "get-object"
-    PutObject = "put-object"
     HeadObject = "head-object"
     UploadPart = "upload-part"
 
@@ -42,6 +41,7 @@ class VolumeInstance(HttpModel):
     updated_at: datetime
     workspace_id: str
     workspace_name: str
+    deletion_requested_at: datetime | None = None
     workloads: list[ResourceWorkloadReference] = Field(default_factory=list)
 
 
@@ -58,7 +58,7 @@ class DeleteVolumeRequest(HttpModel):
 
 
 class DeleteVolumeResponse(HttpModel):
-    pass
+    deleted: bool = True
 
 
 class PathInfo(HttpModel):
@@ -120,8 +120,6 @@ class StatPathResponse(HttpModel):
 class PresignedUrlParams(HttpModel):
     upload_id: str = ""
     part_number: int = Field(default=0, ge=0)
-    content_length: int = Field(default=0, ge=0)
-    content_type: str = "application/octet-stream"
 
 
 class GetFileServiceInfoRequest(HttpModel):

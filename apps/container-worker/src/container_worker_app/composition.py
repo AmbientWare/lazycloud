@@ -393,6 +393,7 @@ def build_worker_process_services(
         port_exposer=network_backend,
     )
     finalization_dependencies = WorkerProcessFinalizationDependencies(
+        bundle_root=paths.bundle_root,
         container_ips=network_backend,
         gpu=gpu_assigner,
         network=network_backend,
