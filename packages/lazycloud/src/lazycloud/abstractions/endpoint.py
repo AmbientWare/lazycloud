@@ -150,7 +150,6 @@ class EndpointOptions(TypedDict, total=False):
     preemptible: bool
     region: str | None
     pool: PoolInput
-    provider: str | None
     metadata: dict[str, Any] | None
 
 
@@ -180,7 +179,6 @@ class ASGIOptions(TypedDict, total=False):
     checkpoint_enabled: bool
     region: str | None
     pool: PoolInput
-    provider: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,7 +233,6 @@ class Endpoint(Generic[P, R]):
     preemptible: bool = False
     region: str | None = None
     pool: PoolInput = None
-    provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
     deployment_client: DeploymentControlClient | None = field(
@@ -307,7 +304,6 @@ class Endpoint(Generic[P, R]):
                 app=self._app_slug,
                 workers=self.workers,
                 max_pending_tasks=self.max_pending_tasks,
-                retries=self.retries,
                 callback_url=self.callback_url,
                 authorized=self.authorized,
                 autoscaler=self.autoscaler,
@@ -325,7 +321,6 @@ class Endpoint(Generic[P, R]):
                 ),
                 docker_enabled=self.docker_enabled,
                 pool=self.pool,
-                provider=self.provider,
                 extra=self.metadata,
             ),
             client_contract=client_contract,
@@ -466,7 +461,6 @@ def _endpoint(
     preemptible: bool = False,
     region: str | None = None,
     pool: PoolInput = None,
-    provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Endpoint[P, R]: ...
 
@@ -509,7 +503,6 @@ def _endpoint(
     preemptible: bool = False,
     region: str | None = None,
     pool: PoolInput = None,
-    provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Endpoint[P, R]]: ...
 
@@ -551,7 +544,6 @@ def _endpoint(
     preemptible: bool = False,
     region: str | None = None,
     pool: PoolInput = None,
-    provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Endpoint[P, R]] | Endpoint[P, R]:
     def decorate(target: Callable[P, R]) -> Endpoint[P, R]:
@@ -588,7 +580,6 @@ def _endpoint(
             preemptible=preemptible,
             region=region,
             pool=pool,
-            provider=provider,
             metadata=metadata or {},
             route=route,
             domain=domain,
@@ -629,7 +620,6 @@ class ASGI:
     checkpoint_enabled: bool = False
     region: str | None = None
     pool: PoolInput = None
-    provider: str | None = None
     deployment_client: DeploymentControlClient | None = field(
         default=None,
         init=False,
@@ -697,7 +687,6 @@ class ASGI:
                 task_policy=self.task_policy,
                 checkpoint_enabled=self.checkpoint_enabled,
                 pool=self.pool,
-                provider=self.provider,
             ),
             client_contract=asgi_client_contract(),
         )
@@ -829,7 +818,6 @@ def _asgi(
     checkpoint_enabled: bool = False,
     region: str | None = None,
     pool: PoolInput = None,
-    provider: str | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]] | Callable[..., Any]], ASGI]:
     def decorate(target: Callable[..., Awaitable[Any]] | Callable[..., Any]) -> ASGI:
         return ASGI(
@@ -860,7 +848,6 @@ def _asgi(
             checkpoint_enabled=checkpoint_enabled,
             region=region,
             pool=pool,
-            provider=provider,
         )
 
     return decorate
@@ -894,7 +881,6 @@ def _realtime(
     checkpoint_enabled: bool = False,
     region: str | None = None,
     pool: PoolInput = None,
-    provider: str | None = None,
 ) -> Callable[[Callable[..., Any]], RealtimeASGI]:
     def decorate(target: Callable[..., Any]) -> RealtimeASGI:
         return RealtimeASGI(
@@ -925,7 +911,6 @@ def _realtime(
             checkpoint_enabled=checkpoint_enabled,
             region=region,
             pool=pool,
-            provider=provider,
         )
 
     return decorate
