@@ -71,74 +71,6 @@ export const awsAuthorizationGenerationSchema = z
   .strict();
 export type AwsAuthorizationGeneration = z.infer<typeof awsAuthorizationGenerationSchema>;
 
-const awsInstanceTypeSchema = z
-  .string()
-  .min(1)
-  .refine((value) => value.trim().length > 0, "Instance type cannot be empty");
-const awsDefaultInstanceTypeSchema = z
-  .string()
-  .min(1)
-  .max(64)
-  .refine((value) => value.trim().length > 0, "Instance type cannot be empty");
-
-/** How capacity is provisioned in the connected account, for every workspace it backs. */
-export const awsComputeConfigurationSchema = z
-  .object({
-    revision: z.number().int().positive(),
-    default_region: awsRegionSchema,
-    default_instance_type: awsDefaultInstanceTypeSchema,
-    initial_cpu_workers: z.number().int().min(0).max(100),
-    min_cpu_workers: z.number().int().min(0).max(100),
-    max_cpu_instances: z.number().int().min(0).nullable(),
-    max_gpu_instances: z.number().int().min(0).nullable(),
-    min_free_cpu_millicores: z.number().int().min(0),
-    min_free_memory_mib: z.number().int().min(0),
-    allowed_regions: z.array(z.string()).min(1),
-    allowed_instance_types: z
-      .array(awsInstanceTypeSchema)
-      .refine(
-        (instanceTypes) => new Set(instanceTypes).size === instanceTypes.length,
-        "Allowed instance types must be unique",
-      ),
-    idle_timeout_seconds: z.number().int().min(60).max(86_400),
-    root_volume_gib: z.number().int().min(50).max(2048),
-  })
-  .strict()
-  .superRefine((configuration, context) => {
-    if (
-      configuration.min_cpu_workers > configuration.initial_cpu_workers ||
-      (configuration.max_cpu_instances !== null &&
-        configuration.initial_cpu_workers > configuration.max_cpu_instances)
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "CPU worker capacity must satisfy min <= initial <= max",
-        path: ["initial_cpu_workers"],
-      });
-    }
-    if (
-      configuration.allowed_instance_types.length > 0 &&
-      !configuration.allowed_instance_types.includes(configuration.default_instance_type)
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Default instance type must be allowed",
-        path: ["default_instance_type"],
-      });
-    }
-  });
-export type AwsComputeConfiguration = z.infer<typeof awsComputeConfigurationSchema>;
-
-export const awsComputeConfigurationUpdateRequestSchema = z
-  .object({
-    expected_revision: z.number().int().positive(),
-    compute: awsComputeConfigurationSchema,
-  })
-  .strict();
-export type AwsComputeConfigurationUpdateRequest = z.infer<
-  typeof awsComputeConfigurationUpdateRequestSchema
->;
-
 const awsConnectionStackActionSchema = z
   .object({
     account_id: z.string().regex(/^\d{12}$/),
@@ -173,7 +105,6 @@ export const awsConnectionSchema = z
     pending_authorization: awsAuthorizationGenerationSchema.nullable(),
     retiring_authorization: awsAuthorizationGenerationSchema.nullable(),
     revision: z.number().int().positive(),
-    compute: awsComputeConfigurationSchema,
     hosts_workloads: z.boolean(),
     can_manage_existing_capacity: z.boolean(),
     available_actions: z.array(awsConnectionActionSchema),

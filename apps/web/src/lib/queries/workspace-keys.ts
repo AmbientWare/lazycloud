@@ -214,7 +214,6 @@ export const accountQueryKeys = {
   root: () => accountRoot,
   compute: {
     root: () => [...accountRoot, "compute"] as const,
-    catalog: () => [...accountRoot, "compute", "catalog"] as const,
     awsConnection: () => [...accountRoot, "compute", "aws-connection"] as const,
     instances: () => [...accountRoot, "compute", "instances"] as const,
     machines: () => [...accountRoot, "compute", "machines"] as const,

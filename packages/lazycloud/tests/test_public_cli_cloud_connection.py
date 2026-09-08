@@ -40,7 +40,6 @@ def _connection(
             "pool": "aws",
             "phase": phase,
             "revision": 2,
-            "compute": {},
             "hosts_workloads": phase == "ready",
             "can_manage_existing_capacity": phase == "ready",
             "available_actions": ["retry"] if phase == "action_required" else [],
@@ -200,10 +199,8 @@ class _ConnectClient:
         pool: str = "aws",
         role_arn: str | None = None,
         network: AwsAccountNetwork | None = None,
-        max_cpu_instances: int | None = None,
-        max_gpu_instances: int | None = None,
     ) -> AwsConnectionAuthorizationResponse:
-        del pool, max_cpu_instances, max_gpu_instances
+        del pool
         self.requests.append((account_id, role_arn))
         self.networks.append(network)
         return AwsConnectionAuthorizationResponse(

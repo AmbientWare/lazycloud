@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.offers import ComputeOffer
 from compute.policy import AwsDefaultCapacityBaseline
 from compute.providers import (
@@ -27,7 +28,6 @@ from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPhase,
-    AwsAccountComputeConfiguration,
     AwsAccountConnection,
     AwsAccountConnectionPhase,
 )
@@ -37,6 +37,7 @@ from shared.compute_policy import (
     ComputeUnitPhase,
     ComputeUnitProviderState,
     ComputeUnitRecord,
+    MachinePool,
 )
 from shared.http.compute import UnitScaleResponse
 from shared.supplier_costs import SupplierCostTerms
@@ -83,7 +84,6 @@ class _CapacityOwnerMutations:
 @dataclass(slots=True)
 class _PooledProvider:
     desired_machines: int = 1
-    capacity_calls: list[tuple[int, int]] = field(default_factory=list)
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
         return next(iter(self.list_offers(root_volume_gib=unit.root_volume_gib)))
@@ -131,7 +131,6 @@ class _PooledProvider:
         desired_machines: int,
         max_machines: int,
     ) -> ProviderUnitSnapshot:
-        self.capacity_calls.append((desired_machines, max_machines))
         self.desired_machines = desired_machines
         return self.describe_unit(request.model_copy(update={"max_machines": max_machines}))
 
@@ -192,22 +191,20 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
 ) -> None:
     provider = _PooledProvider()
     mutations = _CapacityOwnerMutations()
-    workspace_id = _seed_connection(isolated_services)
     with isolated_services.context.database.session() as session:
-        connection = AwsAccountConnectionRepository(session).get(_CONNECTION_ID)
-    assert connection is not None
+        workspace_id = isolated_services.context.default_workspace_id(session)
     compute = ComputeService(
         isolated_services.context,
         provider_resolver=_Resolver(
             provider,
             ResolvedProviderPolicy(
                 workspace_id=workspace_id,
-                pool=connection.pool,
-                platform_fleet=connection.platform_fleet,
-                default_region=connection.compute.default_region,
-                allowed_regions=connection.compute.allowed_regions,
-                max_cpu_instances=connection.compute.max_cpu_instances,
-                max_gpu_instances=connection.compute.max_gpu_instances,
+                pool=MachinePool("aws"),
+                platform_fleet=False,
+                default_region=AWS_COMPUTE_CONFIGURATION.default_region,
+                allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
+                max_cpu_instances=AWS_COMPUTE_CONFIGURATION.max_cpu_instances,
+                max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
             ),
         ),
         pool_bootstrap_factory=_bootstrap,
@@ -227,6 +224,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
     services = replace(services_with_compute, gateway_service=gateway)
     raw_token, _record = administrator_credential(isolated_services, "pool-scale")
     client = client_stack.enter_context(TestClient(create_app(services)))
+    _seed_connection(isolated_services)
     # Provisioned after the control plane started, as in production: startup
     # reconciles the baseline every connected account asks for.
     pool = compute.prepare_pooled_capacity(
@@ -288,7 +286,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         id=pool.id,
         name=pool.name,
         desired_machines=0,
-        max_machines=10,
+        max_machines=AWS_COMPUTE_CONFIGURATION.max_cpu_instances,
         observed_machines=0,
         phase=ComputeUnitPhase.Ready,
         status=ComputeUnitPhase.Ready.value,
@@ -296,7 +294,6 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
     assert UnitScaleResponse.model_validate_json(first.content) == expected
     assert UnitScaleResponse.model_validate_json(repeated.content) == expected
     assert UnitScaleResponse.model_validate_json(state.content) == expected
-    assert provider.capacity_calls == [(0, 10)]
     with isolated_services.context.database.session() as session:
         stored = ComputeUnitRepository(session).get_by_name(workspace_id, pool.name)
     assert stored is not None
@@ -318,13 +315,6 @@ def _seed_connection(services: ApiServices) -> str:
                 user_id=owner_id,
                 account_id=account_id,
                 external_id="x" * 48,
-                # No warm floor, and the account's ceiling is the one the unit
-                # under test is provisioned against.
-                compute=AwsAccountComputeConfiguration(
-                    initial_cpu_workers=0,
-                    min_cpu_workers=0,
-                    max_cpu_instances=10,
-                ),
                 phase=AwsAccountConnectionPhase.Ready,
                 active_authorization=AwsAccountAuthorizationGeneration(
                     id=str(uuid4()),

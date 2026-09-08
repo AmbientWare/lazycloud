@@ -30,6 +30,7 @@ from .account_connection import AwsAccountConnectionTarget
 from .instance_catalog import (
     AWS_INSTANCE_CATALOG,
     AwsInstanceCategory,
+    aws_instance_catalog_entry,
 )
 from .managed_pool import (
     AwsManagedPoolBinaries,
@@ -56,7 +57,6 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     connection: AwsAccountConnectionTarget
     binaries_by_region: Mapping[str, AwsManagedPoolBinaries]
     instance_hourly_micros: Mapping[str, int]
-    allowed_instance_types: frozenset[str]
     client_provider: AwsManagedPoolClientProvider
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
@@ -74,11 +74,6 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         offers: list[ComputeOffer] = []
         for region, artifacts in sorted(self.binaries_by_region.items()):
             for instance in AWS_INSTANCE_CATALOG:
-                if (
-                    self.allowed_instance_types
-                    and instance.instance_type not in self.allowed_instance_types
-                ):
-                    continue
                 if instance.instance_type not in self.instance_hourly_micros:
                     continue
                 ami_id = (
@@ -127,6 +122,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         return offers
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        aws_instance_catalog_entry(request.offer.instance_type)
         provisioner = self._provisioner(request.offer.region)
         snapshot = provisioner.ensure(
             self._spec(request),

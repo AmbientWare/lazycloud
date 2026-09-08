@@ -162,7 +162,6 @@ def test_observation_does_not_mutate_and_ensure_recovers_unbound_nodes(
             SecretStr("test-token"), RedisRequestCooldown(services.redis_client, pool.provider_ref)
         ),
         images_by_location={"ash": HetznerNodeImage(image_id=1, recipe_sha256="a" * 64)},
-        allowed_server_types=frozenset({"ccx13"}),
         usd_per_currency_unit=Decimal(1),
         primary_ipv4_hourly_micros=1,
         launch_credentials=services.provider_node_launches,

@@ -1,10 +1,8 @@
 """Remove connected AWS through LazyCloud and corroborate scoped zero capacity.
 
-The stage zeroes the account's AWS compute configuration, removes the public connection,
-applies any required customer cleanup action through the deployment-owned
-operator command, and then corroborates — read-only, tag-scoped — that every
-region capacity could have launched in reports zero LazyCloud EC2, EBS, and
-Auto Scaling capacity for the workspace.
+The stage removes the public connection and applies any required customer cleanup
+action through the deployment-owned operator command. It then checks workspace
+resource tags in every managed region for remaining EC2, EBS and Auto Scaling capacity.
 """
 
 from __future__ import annotations
@@ -19,14 +17,10 @@ from lazycloud.cli.control import compute_client, control_config
 from lazycloud.clients.compute.control import ComputeClient
 from lazycloud.clients.workspace.control import WorkspaceControlClient
 from shared.aws_connections import (
-    AwsAccountComputeConfiguration,
     AwsAccountConnectionAvailableAction,
     AwsAccountConnectionPhase,
 )
-from shared.http.aws_connections import (
-    AwsComputeConfigurationUpdateRequest,
-    AwsConnectionResponse,
-)
+from shared.http.aws_connections import AwsConnectionResponse
 from shared.http.errors import HttpApiError
 from tests.e2e.external import _support
 
@@ -46,76 +40,6 @@ def _managed_stacks(connection: AwsConnectionResponse) -> dict[str, str]:
         if managed is not None:
             stacks[managed.stack_name] = managed.region
     return stacks
-
-
-def _zero_compute_configuration(
-    client: ComputeClient,
-    deadline: _support.Deadline,
-) -> AwsAccountComputeConfiguration:
-    """Zero the account's compute configuration, waiting out an in-flight reconcile.
-
-    The owner rejects a configuration write while it is reconciling capacity,
-    which is exactly when a cleanup runs. Treating that as terminal aborts the
-    stage and leaves the capacity it was asked to release still running.
-    """
-
-    def attempt() -> AwsAccountComputeConfiguration | None:
-        try:
-            return _apply_zero_compute_configuration(client)
-        except HttpApiError as exc:
-            if exc.status_code in {409, 503}:
-                return None
-            raise
-
-    return _support.poll_until(deadline, "the AWS compute configuration to zero", attempt)
-
-
-def _apply_zero_compute_configuration(client: ComputeClient) -> AwsAccountComputeConfiguration:
-    connection = client.current_connection()
-    if connection is None:
-        raise RuntimeError("no AWS account is connected")
-    current = connection.compute
-    zero = AwsAccountComputeConfiguration(
-        revision=current.revision,
-        default_region=current.default_region,
-        default_instance_type=current.default_instance_type,
-        initial_cpu_workers=0,
-        min_cpu_workers=0,
-        max_cpu_instances=0,
-        max_gpu_instances=0,
-        min_free_cpu_millicores=0,
-        min_free_memory_mib=0,
-        allowed_regions=current.allowed_regions,
-        allowed_instance_types=current.allowed_instance_types,
-        idle_timeout_seconds=current.idle_timeout_seconds,
-        root_volume_gib=current.root_volume_gib,
-    )
-    # Zero under the pool the account already has. Flipping to another first
-    # would release capacity through a different branch than the one a user
-    # takes, and zeroing the configuration is the only control they are given.
-    if current != zero:
-        client.update_compute_configuration(
-            AwsComputeConfigurationUpdateRequest(
-                expected_revision=current.revision,
-                compute=zero,
-            )
-        )
-    return zero
-
-
-def _wait_public_zero(client: ComputeClient, deadline: _support.Deadline) -> None:
-    def check() -> bool | None:
-        summary = client.summary()
-        converged = (
-            summary.instances.total == 0
-            and summary.instances.ready == 0
-            and summary.instances.pending == 0
-            and summary.instances.degraded == 0
-            and summary.cost.hourly_micros == 0
-        )
-        return True if converged else None
-
-    _support.poll_until(deadline, "public compute to reach zero AWS capacity", check)
 
 
 def _remove_customer_stacks(
@@ -157,6 +81,7 @@ def _remove_customer_stacks(
 
 def _wait_disconnected(
     client: ComputeClient,
+    connection_id: str,
     stacks: dict[str, str],
     args: argparse.Namespace,
     deadline: _support.Deadline,
@@ -167,14 +92,35 @@ def _wait_disconnected(
     def check() -> bool | None:
         nonlocal removal_requested, stacks_removed
         connection = client.current_connection()
+        instances = [
+            {"id": item.id, "status": item.status, "region": item.region}
+            for item in client.instances().data
+            if item.provider == f"aws:{connection_id}"
+        ]
+        _support.emit_evidence(
+            {
+                "connection_id": connection_id,
+                "phase": connection.phase if connection is not None else None,
+                "instances": instances,
+                "managed_stacks": stacks,
+            }
+        )
         if connection is None:
             return True
+        if connection.id != connection_id or connection.account_id != args.account_id:
+            raise RuntimeError("the AWS connection changed during cleanup")
         stacks.update(_managed_stacks(connection))
         if (
             not removal_requested
             and AwsAccountConnectionAvailableAction.Remove in connection.available_actions
         ):
-            client.remove_account()
+            try:
+                client.remove_account()
+            except HttpApiError as exc:
+                if exc.status_code not in {409, 503}:
+                    raise
+                _support.emit_evidence({"disconnect_retry_status": exc.status_code})
+                return None
             removal_requested = True
             return None
         if connection.phase is AwsAccountConnectionPhase.ActionRequired and not stacks_removed:
@@ -266,6 +212,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ).current
         )
         connection = _support.first_public_call(client.current_connection)
+        catalog = _support.first_public_call(client.catalog)
     except _support.MissingPrerequisite as exc:
         return _support.skip("AWS cleanup", exc)
     if ambient_account_id != args.account_id:
@@ -274,13 +221,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError("the workspace is connected to a different AWS account")
 
     stacks = _managed_stacks(connection) if connection is not None else {}
-    zero = _zero_compute_configuration(client, deadline)
-    _wait_public_zero(client, deadline)
+    regions = {
+        *(item.region for item in catalog.data if item.provider == "aws"),
+        *stacks.values(),
+        *(
+            item.region
+            for item in client.instances().data
+            if connection is not None and item.provider == f"aws:{connection.id}"
+        ),
+    }
+    if not regions:
+        raise RuntimeError("no managed AWS region is available to verify scoped cleanup")
     if connection is not None:
-        _wait_disconnected(client, stacks, args, deadline)
+        _wait_disconnected(client, connection.id, stacks, args, deadline)
 
-    regions = sorted({zero.default_region, *zero.allowed_regions, *stacks.values()})
-    _corroborate_aws_zero(regions, workspace.id)
+    checked_regions = sorted(regions | set(stacks.values()))
+    _corroborate_aws_zero(checked_regions, workspace.id)
     _support.emit_evidence(
         {
             "account_id": args.account_id,
@@ -288,7 +244,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "connection": None,
             "hourly_micros": 0,
             "instances": 0,
-            "regions": regions,
+            "regions": checked_regions,
             "workspace_id": workspace.id,
         }
     )

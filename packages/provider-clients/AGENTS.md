@@ -7,7 +7,8 @@ This package owns construction and nothing else: not provider workflows, billing
 capacity reconciliation, API or CLI behavior, persistence tables, or process
 entrypoints.
 
-Deployment settings carry non-secret capacity policy and image catalogs; separate
+Managed capacity policy and supported types are defined in code. Deployment
+settings carry image catalogs, supplier prices, and provider bindings; separate
 secret settings carry credentials. Resolve bootstrap-created workspace identities
 when capacity is used, not while constructing the services bootstrap itself needs.
 

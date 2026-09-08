@@ -6,8 +6,8 @@ their own scheduler loops, worker agent, billing flow, or application release.
 
 ## Ownership
 
-Terraform owns persistent infrastructure and image identities. Helm owns capacity
-policy, prices, and secret property bindings. Packer owns prepared host images.
+Terraform owns persistent infrastructure and image identities. Code owns capacity
+policy. Helm owns supplier prices and secret property bindings. Packer owns prepared host images.
 The normal deployment supplies
 configuration and credentials to the application. The compute service owns
 durable units, desired capacity, mutation fencing, retries, and drain decisions.
@@ -31,10 +31,18 @@ its capacity implements the same provider interface as platform capacity.
 4. Verify the real workload path, billing, scaling, and cleanup. An image build
    or healthy control plane alone is not provider acceptance.
 
-AWS infrastructure comes from Terraform and fleet policy comes from Helm.
+AWS infrastructure comes from Terraform. Provisioning policy is defined in
+`compute/aws_configuration.py`; the AWS instance catalog and Hetzner capacity
+policy live in their provider packages. These policies govern both platform and
+connected customer capacity. Change them through a reviewed PR. Customers select
+workload resources, while LazyCloud manages node selection and lifecycle.
+Before deploying a catalog removal, list the affected units and drain their work,
+then delete those units through the existing compute owner. Verify their AWS auto
+scaling groups and instances are gone before deploying. Catalog filtering alone
+does not stop an existing AWS group from replacing instances on its own.
 `fleet-ensure` registers and validates the cloud account through the API.
-Hetzner follows the same path. The values renderer combines its Terraform image
-catalog with Helm policy, and composition resolves the provider registry.
+The values renderer combines Hetzner's Terraform image catalog with deployment
+credentials and supplier prices, and composition resolves the provider registry.
 It needs no separate
 capacity-configuration command or manually copied workspace UUID. The bootstrap
 workspace reference resolves only when capacity is used, after administrator

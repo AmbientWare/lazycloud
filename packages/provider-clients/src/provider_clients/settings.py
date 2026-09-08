@@ -6,9 +6,9 @@ from decimal import Decimal
 from urllib.parse import urlparse
 
 from agent.binary import AgentBinarySettings
-from compute.providers import ProviderCapacityPolicy
 from provider_aws import AwsManagedPoolBinaries
 from provider_hetzner import HetznerNodeImage
+from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
@@ -271,16 +271,13 @@ class HetznerCapacityBinding(BaseModel):
 
     ref: str = Field(pattern=r"^hetzner:[a-z0-9][a-z0-9-]{0,119}$")
     workspace: str = Field(default="default", min_length=1)
-    policy: ProviderCapacityPolicy
     images_by_location: dict[str, HetznerNodeImage]
     usd_per_currency_unit: Decimal = Field(gt=0)
     primary_ipv4_hourly_micros: int = Field(ge=0)
 
     @model_validator(mode="after")
     def validate_binding(self) -> HetznerCapacityBinding:
-        if not self.policy.allowed_instance_types:
-            raise ValueError(f"{self.ref} requires allowed server types")
-        if not set(self.policy.allowed_regions) <= self.images_by_location.keys():
+        if not set(HETZNER_CAPACITY_POLICY.allowed_regions) <= self.images_by_location.keys():
             raise ValueError(f"{self.ref} requires a release image for every allowed location")
         return self
 
@@ -305,7 +302,7 @@ class PlatformCapacitySettings(BaseSettings):
             token = self.hetzner_tokens.get(binding.ref)
             if token is None or not token.get_secret_value().strip():
                 raise ValueError(f"{binding.ref} requires a provider token")
-        if sum(binding.policy.warm_cpu_min > 0 for binding in self.hetzner) > 1:
+        if HETZNER_CAPACITY_POLICY.warm_cpu_min > 0 and len(self.hetzner) > 1:
             raise ValueError("only one platform provider may own the automatic warm floor")
         return self
 
