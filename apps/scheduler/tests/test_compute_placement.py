@@ -122,6 +122,9 @@ class _RecordingCapacity:
         self.requests.append(request)
         return ComputeCapacityPlacementResult(pool=MachinePool("aws"))
 
+    def prepare_capacity(self, request: ComputeCapacityPlacementRequest) -> None:
+        raise AssertionError("pool selection must not prepare capacity")
+
 
 @dataclass(slots=True)
 class _RequestedComputeCapacity:

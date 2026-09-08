@@ -60,6 +60,9 @@ class _IdentityPlacement:
     def place(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest:
         return request
 
+    def prepare_capacity(self, request: SchedulerWorkerRequest) -> None:
+        pass
+
 
 class _Scheduler:
     def __init__(self) -> None:

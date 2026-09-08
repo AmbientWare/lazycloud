@@ -54,6 +54,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.container_requests import StopContainerReason
+from shared.errors import UpstreamUnavailableError
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
     SchedulerContainerState,
@@ -289,6 +290,9 @@ def _managed_pool() -> ComputeUnitRecord:
 class _IdentityPlacement:
     def place(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest:
         return request
+
+    def prepare_capacity(self, request: SchedulerWorkerRequest) -> None:
+        pass
 
 
 class _FailureHandler:
@@ -610,6 +614,135 @@ def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
     updated = workers.get_worker(worker.worker_id)
     assert updated is not None
     assert updated.free_cpu_millicores == 3_000
+
+
+@pytest.mark.parametrize("cpu_pending", [False, True])
+def test_ready_gpu_backfill_dispatches_without_supplier_acquisition(
+    real_redis_actors: RealRedisActors,
+    cpu_pending: bool,
+) -> None:
+    redis = real_redis_actors.client()
+    workers = RedisSchedulerWorkerRepository(redis)
+    containers = RedisSchedulerContainerRepository(redis)
+    now = datetime.now(UTC)
+    gpu = workers.add_worker(
+        _worker(OWNER_ID, created_at=now).model_copy(
+            update={"gpu_type": "L4", "total_gpu_count": 1, "free_gpu_count": 0}
+        ),
+        now=now,
+    )
+    cpu = None
+    if cpu_pending:
+        cpu = workers.add_worker(
+            _worker(OTHER_OWNER_ID, created_at=now).model_copy(
+                update={"status": SchedulerWorkerStatus.Pending}
+            ),
+            now=now,
+        )
+
+    def unavailable_controllers() -> Sequence[ComputeUnitCapacityController]:
+        raise UpstreamUnavailableError("supplier inventory unavailable")
+
+    class Stopper:
+        def stop(self, container_id: str, *, reason: StopContainerReason) -> None:
+            containers.cancel_container_request(container_id)
+
+    capacity = CapacityReservationService(
+        RedisCapacityReservationRepository(redis), unavailable_controllers
+    )
+    requests = SchedulerContainerRequestService(
+        workers=workers,
+        containers=containers,
+        placement=_IdentityPlacement(),
+        failure_handler=_FailureHandler(),
+        assignments=_Assignments(),
+        dispatch_wake=_Wake(),
+        lifecycle_events=_Events(),
+        workspace_owners=_UnownedWorkspaces(),
+        capacity_reservations=capacity,
+        backfill_preemption=SchedulerGpuBackfillPreemptionService(workers, containers, Stopper()),
+    )
+    request = _request("backfill-before-capacity").model_copy(
+        update={"preemptible": True, "timestamp": now}
+    )
+    assert requests.submit(request, ready_at=now).accepted
+    if cpu_pending:
+        assert requests.submit(
+            _request("ordinary-cpu", cpu=4_000).model_copy(update={"timestamp": now}), ready_at=now
+        ).accepted
+
+    outcomes = requests.dispatch_ready(now=now, limit=2)
+    result = next(item for item in outcomes if item.container_id == request.container_id)
+
+    assert result.status is SchedulerContainerDispatchStatus.Dispatched
+    assert result.worker_id == gpu.worker_id
+    placed = containers.get_container_state(request.container_id)
+    assert placed is not None and placed.backfill and placed.preemptible
+    assert capacity.reservations.list_all() == []
+    remaining = workers.get_worker(gpu.worker_id)
+    assert remaining is not None and remaining.free_cpu_millicores == 3_000
+    if cpu_pending:
+        ordinary = next(item for item in outcomes if item.container_id == "ordinary-cpu")
+        assert ordinary.status is SchedulerContainerDispatchStatus.Waiting
+        assert cpu is not None
+        assert ordinary.worker_id == cpu.worker_id
+
+
+@pytest.mark.parametrize("shared_cpu_reservation", [False, True])
+def test_gpu_backfill_releases_only_its_pending_cpu_allocation(
+    real_redis_actors: RealRedisActors,
+    shared_cpu_reservation: bool,
+) -> None:
+    redis = real_redis_actors.client()
+    workers = RedisSchedulerWorkerRepository(redis)
+    containers = RedisSchedulerContainerRepository(redis)
+    repository = RedisCapacityReservationRepository(redis)
+    controller = _Controller(release_status=CapacityAcquisitionStatus.TemporarilyUnavailable)
+    capacity = CapacityReservationService(repository, lambda: [controller])
+    now = datetime.now(UTC)
+    gpu = workers.add_worker(
+        _worker(OTHER_OWNER_ID, created_at=now).model_copy(
+            update={"gpu_type": "L4", "total_gpu_count": 1, "free_gpu_count": 0}
+        ),
+        now=now,
+    )
+
+    class Stopper:
+        def stop(self, container_id: str, *, reason: StopContainerReason) -> None:
+            containers.cancel_container_request(container_id)
+
+    requests = SchedulerContainerRequestService(
+        workers=workers,
+        containers=containers,
+        placement=_IdentityPlacement(),
+        failure_handler=_FailureHandler(),
+        assignments=_Assignments(),
+        dispatch_wake=_Wake(),
+        lifecycle_events=_Events(),
+        workspace_owners=_UnownedWorkspaces(),
+        capacity_reservations=capacity,
+        backfill_preemption=SchedulerGpuBackfillPreemptionService(workers, containers, Stopper()),
+    )
+    request = _request("move-to-gpu").model_copy(update={"preemptible": True})
+    assert requests.submit(request, ready_at=now).accepted
+    acquired = capacity.acquire(request, now=now)
+    if shared_cpu_reservation:
+        sibling = capacity.acquire(_request("keep-cpu"), now=now)
+        assert sibling.reservation_id == acquired.reservation_id
+
+    [result] = requests.dispatch_ready(now=now)
+
+    assert result.status is SchedulerContainerDispatchStatus.Dispatched
+    assert result.worker_id == gpu.worker_id
+    assert repository.allocation_for_request(request.container_id) is None
+    reservation = repository.get(acquired.reservation_id)
+    assert reservation is not None and reservation.open
+    if shared_cpu_reservation:
+        assert {a.container_id for a in repository.allocations_for(reservation.id)} == {"keep-cpu"}
+        assert not reservation.release_requested
+    else:
+        assert repository.allocations_for(reservation.id) == []
+        assert reservation.release_requested and reservation.acquisition_created
 
 
 def test_registered_gpu_reservation_recovers_cpu_backfill_before_dispatch(

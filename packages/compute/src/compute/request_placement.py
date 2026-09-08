@@ -55,7 +55,10 @@ class ComputeCapacityPlacementService:
     compute: PooledCapacityOwner
 
     def place(self, request: ComputeCapacityPlacementRequest) -> ComputeCapacityPlacementResult:
-        """Resolve compatible capacity inside the requested pool and region."""
+        return ComputeCapacityPlacementResult(pool=MachinePool(self._machine_pool_for(request)))
+
+    def prepare_capacity(self, request: ComputeCapacityPlacementRequest) -> None:
+        """Prepare acquisition only after existing workers cannot serve the request."""
         pool = self._machine_pool_for(request)
         providers = tuple(
             provider
@@ -83,9 +86,9 @@ class ComputeCapacityPlacementService:
             and (not unit.provider_ref or unit.observed_machines > 0)
             for unit in units
         ):
-            return ComputeCapacityPlacementResult(pool=MachinePool(pool))
+            return
         if not providers:
-            return ComputeCapacityPlacementResult(pool=MachinePool(pool))
+            return
         offers = [
             offer
             for provider in providers
@@ -106,7 +109,7 @@ class ComputeCapacityPlacementService:
             )
             for unit in units
         ):
-            return ComputeCapacityPlacementResult(pool=MachinePool(pool))
+            return
         requirements = request.requirements
         try:
             offer = choose_offer(
@@ -139,7 +142,6 @@ class ComputeCapacityPlacementService:
             allowed_instance_types=configuration.allowed_instance_types,
             provider_ref=selected.ref,
         )
-        return ComputeCapacityPlacementResult(pool=MachinePool(pool))
 
     def _machine_pool_for(self, request: ComputeCapacityPlacementRequest) -> str:
         if request.requested_pool:

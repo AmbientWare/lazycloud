@@ -64,7 +64,6 @@ from scheduler.tools import (
     WorkerCapacity,
     gpu_request_matches_worker,
     plan_scheduling_batch,
-    select_backfill_worker,
 )
 
 DEFAULT_SCHEDULER_REQUEUE_DELAY_SECONDS = 1.0
@@ -197,6 +196,8 @@ class SchedulerContainerWorkerRepository(Protocol):
 class SchedulerContainerPlacement(Protocol):
     def place(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest: ...
 
+    def prepare_capacity(self, request: SchedulerWorkerRequest) -> None: ...
+
 
 class SchedulerContainerFailureHandler(Protocol):
     def mark_scheduling_failed(
@@ -254,8 +255,6 @@ class SchedulerCapacityReservations(Protocol):
         self,
         capacity_owner_id: str,
     ) -> AbstractContextManager[None]: ...
-
-    def can_acquire(self, request: SchedulerWorkerRequest) -> bool: ...
 
     def acquire(
         self,
@@ -549,11 +548,7 @@ class SchedulerContainerRequestService:
                     _scheduling_request(
                         request,
                         owner_user_id=owners_by_workspace_id[request.workspace_id],
-                        provisionable=(
-                            self.capacity_reservations.can_acquire(request)
-                            if self.capacity_reservations is not None
-                            else False
-                        ),
+                        provisionable=self.capacity_reservations is not None,
                     )
                     for request in requests
                 ],
@@ -564,6 +559,13 @@ class SchedulerContainerRequestService:
                     )
                     for worker in schedulable_workers
                 ],
+                queued_gpu_requests=[
+                    _scheduling_request(
+                        queued,
+                        owner_user_id=self.workspace_owners.owner_user_id(queued.workspace_id),
+                    )
+                    for queued in self.workers.pending_gpu_requests()
+                ],
                 allow_provisioning=self.capacity_reservations is not None,
                 worker_wait_delay=timedelta(seconds=self.requeue_delay_seconds),
             ).outcomes
@@ -572,6 +574,15 @@ class SchedulerContainerRequestService:
             claim = claims_by_request_id[request.container_id]
             outcome = outcomes[request.container_id]
             if outcome.decision is SchedulingDecision.Dispatch and outcome.worker_id:
+                if outcome.backfill:
+                    results.append(
+                        self._dispatch_backfill(
+                            claim,
+                            workers_by_id[outcome.worker_id],
+                            now=current_time,
+                        )
+                    )
+                    continue
                 results.append(
                     self._dispatch(
                         claim,
@@ -589,15 +600,6 @@ class SchedulerContainerRequestService:
                 )
                 if recovered is not None:
                     results.append(recovered)
-                    continue
-                backfill = self._dispatch_backfill(
-                    claim,
-                    schedulable_workers,
-                    owner_user_id=owners_by_workspace_id[request.workspace_id],
-                    now=current_time,
-                )
-                if backfill is not None:
-                    results.append(backfill)
                     continue
             if outcome.decision is SchedulingDecision.ProvisionWorker:
                 results.append(self._acquire_capacity(claim, current_time))
@@ -647,41 +649,20 @@ class SchedulerContainerRequestService:
     def _dispatch_backfill(
         self,
         claim: SchedulerContainerRequestClaim,
-        workers: list[SchedulerWorkerRecord],
+        worker: SchedulerWorkerRecord,
         *,
-        owner_user_id: str,
         now: datetime,
-    ) -> SchedulerContainerDispatchResult | None:
+    ) -> SchedulerContainerDispatchResult:
         request = claim.request
-        if request.gpu_count or request.gpu or not request.preemptible:
-            return None
-        reservations = self.capacity_reservations
-        reserved = reservations.reserved_worker_capacity() if reservations is not None else {}
-        selected = select_backfill_worker(
-            _scheduling_request(request, owner_user_id=owner_user_id),
-            [
-                _worker_capacity(worker, reserved_capacity=reserved.get(worker.worker_id))
-                for worker in workers
-            ],
-            [
-                _scheduling_request(
-                    queued, owner_user_id=self.workspace_owners.owner_user_id(queued.workspace_id)
-                )
-                for queued in self.workers.pending_gpu_requests()
-            ],
-        )
-        if selected is None:
-            return None
         if self.backfill_preemption is None:
             return self._requeue_capacity_owner_dispatch(
                 claim,
-                worker_id=selected.worker_id,
+                worker_id=worker.worker_id,
                 now=now,
                 reason="GPU backfill preemption service is not configured",
             )
-        worker = self.workers.get_worker(selected.worker_id)
-        if worker is None:
-            return None
+        # Release first so a crash after GPU dispatch cannot retain a CPU allocation.
+        self._release_capacity_reservation(request.container_id, now=now)
         backfill_claim = SchedulerContainerRequestClaim(
             request=request.model_copy(update={"backfill": True}),
             token=claim.token,
@@ -775,6 +756,7 @@ class SchedulerContainerRequestService:
             raise RuntimeError("scheduler capacity reservation service was not injected")
         request = claim.request
         try:
+            self.placement.prepare_capacity(request)
             result = self.capacity_reservations.acquire(request, now=current_time)
         except CapacityReservationConflictError as exc:
             result = CapacityAcquisitionResult(

@@ -223,6 +223,7 @@ class SchedulingOutcome(ContractModel):
     request_id: str
     decision: SchedulingDecision
     worker_id: str | None = None
+    backfill: bool = False
     reason: str = ""
     requeue_delay_seconds: float = 0
 
@@ -298,6 +299,7 @@ def plan_scheduling_batch(
     requests: Iterable[SchedulingRequest],
     workers: Iterable[WorkerCapacity],
     *,
+    queued_gpu_requests: Iterable[SchedulingRequest],
     allow_provisioning: bool = True,
     worker_wait_delay: timedelta = timedelta(seconds=1),
 ) -> SchedulingBatchPlan:
@@ -307,8 +309,13 @@ def plan_scheduling_batch(
     # unit's priority is a property of the capacity rather than of the work, so
     # it ranks workers below and not requests here.
     ordered_requests = sorted(requests, key=lambda item: (item.created_at, item.id))
+    pending_gpu = tuple(queued_gpu_requests)
     for request in ordered_requests:
         worker = select_worker_for_request(request, remaining.values())
+        backfill = False
+        if worker is None:
+            worker = select_backfill_worker(request, remaining.values(), pending_gpu)
+            backfill = worker is not None
         if worker is not None:
             remaining[worker.worker_id] = worker.reserve(request)
             plan.dispatches.append(
@@ -332,6 +339,7 @@ def plan_scheduling_batch(
                     request_id=request.id,
                     decision=SchedulingDecision.Dispatch,
                     worker_id=worker.worker_id,
+                    backfill=backfill,
                     reason="reserved existing worker capacity",
                 )
             )

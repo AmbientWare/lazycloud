@@ -234,6 +234,9 @@ class _IdentityPlacement:
     def place(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest:
         return request
 
+    def prepare_capacity(self, request: SchedulerWorkerRequest) -> None:
+        pass
+
 
 class _DiscardFailureHandler:
     def mark_scheduling_failed(
