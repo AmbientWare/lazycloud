@@ -53,6 +53,11 @@ draining preserves the runtime while its existing work finishes. Revoking a
 machine or removing a slot is a lifecycle operation, not a consequence of a
 placement status.
 
+A connected cloud account's provisioning policy is defined in code. Customers
+choose workload resources, not node types, warm floors, or acquisition limits.
+Provider catalogs define the supported machine types. Removing a type must stop
+new purchases while preserving observation, draining, and deletion of owned nodes.
+
 A connected cloud account belongs to a user, not a workspace, and backs every
 workspace that user owns. Runtime lookups therefore resolve
 `workspace -> owner -> connection` through `get_for_workspace_owner`, and anything

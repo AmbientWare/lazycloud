@@ -11,11 +11,8 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
+from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.offers import ComputeOffer
-from compute.policy import (
-    AwsDefaultCapacityBaseline,
-    WorkspaceComputePolicyService,
-)
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
@@ -275,10 +272,11 @@ class _MutationLeases:
             self.dispatch_held.remove(capacity_owner_id)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _Resolver(ComputeProviderResolver):
     provider: _PooledProvider
     services: ApiServices
+    max_cpu_instances: int = AWS_COMPUTE_CONFIGURATION.max_cpu_instances
 
     def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
         return ()
@@ -307,10 +305,10 @@ class _Resolver(ComputeProviderResolver):
                 workspace_id=workspace_id,
                 pool=connection.pool,
                 platform_fleet=connection.platform_fleet,
-                default_region=connection.compute.default_region,
-                allowed_regions=connection.compute.allowed_regions,
-                max_cpu_instances=connection.compute.max_cpu_instances,
-                max_gpu_instances=connection.compute.max_gpu_instances,
+                default_region=AWS_COMPUTE_CONFIGURATION.default_region,
+                allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
+                max_cpu_instances=self.max_cpu_instances,
+                max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
             ),
         )
 
@@ -358,13 +356,12 @@ class _SchedulerHooks:
         "requested_desired",
         "expected_desired",
         "expected_max",
-        "expected_capacity_calls",
         "expect_capacity_conflict",
     ),
     [
-        (0, 20, 15, 15, 16, [(15, 16)], False),
-        (5, 3, 3, 3, 3, [(3, 3)], False),
-        (0, 0, 1, 0, 0, [], True),
+        (0, 20, 15, 15, 16, False),
+        (5, 3, 3, 3, 3, False),
+        (0, 0, 1, 0, 0, True),
     ],
 )
 def test_internal_pool_scale_enforces_connection_capacity_limit(
@@ -374,14 +371,14 @@ def test_internal_pool_scale_enforces_connection_capacity_limit(
     requested_desired: int,
     expected_desired: int,
     expected_max: int,
-    expected_capacity_calls: list[tuple[int, int]],
     expect_capacity_conflict: bool,
 ) -> None:
     _seed_connection(isolated_services)
     provider = _PooledProvider()
+    resolver = _Resolver(provider, isolated_services)
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        provider_resolver=resolver,
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -412,11 +409,7 @@ def test_internal_pool_scale_enforces_connection_capacity_limit(
                     }
                 )
             )
-    _set_cpu_limit(
-        isolated_services,
-        workspace_id=pool.workspace_id,
-        limit=workspace_limit,
-    )
+    resolver.max_cpu_instances = workspace_limit
 
     if expect_capacity_conflict:
         with pytest.raises(ConflictError, match="capacity limit"):
@@ -437,7 +430,6 @@ def test_internal_pool_scale_enforces_connection_capacity_limit(
         assert scaled.max_machines == expected_max
 
     assert provider.desired == expected_desired
-    assert provider.capacity_calls == expected_capacity_calls
 
 
 def test_platform_capacity_reconciles_without_an_aws_connection(
@@ -464,7 +456,6 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
         instance_hourly_micros={},
-        allowed_instance_types=frozenset(),
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
         platform_providers=lambda: (resolved,),
     )
@@ -764,7 +755,7 @@ def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
         before_mutation=_allow_scale,
     )
 
-    assert provider.capacity_calls == [(0, 1), (0, 1)]
+    assert provider.desired == 0
     assert repaired.desired_machines == 0
     assert repaired.observed_machines == 0
     assert repaired.phase is ComputeUnitPhase.Ready
@@ -888,7 +879,7 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
         before_mutation=_allow_scale,
     )
 
-    assert provider.capacity_calls == [(0, 1)]
+    assert provider.desired == 0
     assert repaired.generation == converged.generation + 1
     assert repaired.desired_machines == 0
     assert repaired.observed_machines == 0
@@ -925,6 +916,52 @@ def test_zero_capacity_reconciliation_releases_drift_without_a_supplier_catalog(
     assert reconciled.desired_machines == 0
     assert reconciled.observed_machines == 0
     assert provider.desired == 0
+
+
+def test_partial_scale_down_releases_capacity_without_a_supplier_catalog(
+    isolated_services: ApiServices,
+) -> None:
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider, isolated_services),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=3,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    assert provider.desired == 3
+    provider.catalog_failure = RuntimeError("supplier catalog unavailable")
+
+    reduced = compute.scale_internal_unit(
+        pool.workspace_id,
+        pool.capacity_owner_id,
+        2,
+        before_mutation=_allow_scale,
+    )
+
+    assert reduced.desired_machines == 2
+    assert reduced.observed_machines == 2
+    assert provider.desired == 2
+    assert compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id) == reduced
+
+    with pytest.raises(UpstreamUnavailableError):
+        compute.scale_internal_unit(
+            pool.workspace_id,
+            pool.capacity_owner_id,
+            3,
+            before_mutation=_allow_scale,
+        )
+
+    assert provider.desired == 2
+    assert compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id) == reduced
 
 
 def test_scale_zero_terminalizes_missing_provider_instance_projections(
@@ -1060,7 +1097,7 @@ def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
 
     reconciler.reconcile_pooled_capacity()
 
-    assert provider.capacity_calls == [(0, 1)]
+    assert provider.desired == 0
     durable = reconciler.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
     assert durable.desired_machines == 0
     assert durable.observed_machines == 0
@@ -1182,7 +1219,6 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
     assert provider.desired == 1 + int(replacement)
     durable = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
     assert durable.desired_machines == 1
-    assert durable.max_machines == 2
     with isolated_services.context.database.session() as session:
         operations = ComputeCapacityOperationRepository(session).list_for_owner(
             pool.capacity_owner_id
@@ -1279,7 +1315,7 @@ def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
 
     assert requested.status is CapacityAcquisitionStatus.Requested
     assert concurrent_results == [CapacityAcquisitionStatus.ExistingPending]
-    assert provider.capacity_calls == [(1, 1)]
+    assert provider.desired == 1
     with isolated_services.context.database.session() as session:
         operations = ComputeCapacityOperationRepository(session).list_for_owner(
             pool.capacity_owner_id
@@ -1831,7 +1867,7 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
     assert provider.desired == 1
 
 
-def test_zero_capacity_policy_update_drives_internal_pool_desired_to_zero(
+def test_clearing_warm_capacity_releases_internal_pool_machines(
     isolated_services: ApiServices,
 ) -> None:
     _seed_connection(isolated_services)
@@ -1857,13 +1893,7 @@ def test_zero_capacity_policy_update_drives_internal_pool_desired_to_zero(
     assert baseline.desired_machines == 1
     assert provider.desired == 1
 
-    # AWS stays the default placement: zeroing the account's configuration is the
-    # only control the user is given, and it has to release the machine on its own.
-    _zero_account_capacity(isolated_services, workspace_id=baseline.workspace_id)
-    WorkspaceComputePolicyService(
-        isolated_services.context,
-        aws_default_capacity=AwsDefaultCapacityBaseline(capacity=compute),
-    ).reconcile_workspace_baseline(baseline.workspace_id)
+    compute.clear_aws_default_capacity(workspace=baseline.workspace_id, release_capacity=True)
 
     with isolated_services.context.database.session() as session:
         drained = ComputeUnitRepository(session).get(baseline.id)
@@ -1871,9 +1901,6 @@ def test_zero_capacity_policy_update_drives_internal_pool_desired_to_zero(
     assert drained.min_machines == 0
     assert drained.desired_machines == 0
     assert provider.desired == 0
-    # Proves the guarded scale owner ran rather than a bare zero record being
-    # written, which leaves the sizing state to raise the machine straight back.
-    assert (0, 1) in provider.capacity_calls
 
 
 def test_policy_owned_capacity_tracks_lowered_and_raised_bounds(
@@ -1881,21 +1908,16 @@ def test_policy_owned_capacity_tracks_lowered_and_raised_bounds(
 ) -> None:
     _seed_connection(isolated_services)
     provider = _PooledProvider()
+    resolver = _Resolver(provider, isolated_services)
     compute = ComputeService(
         isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        provider_resolver=resolver,
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
 
     def reconcile(*, floor: int, ceiling: int) -> ComputeUnitRecord:
-        with isolated_services.context.database.session() as session:
-            workspace_id = isolated_services.context.default_workspace_id(session)
-        _set_cpu_limit(
-            isolated_services,
-            workspace_id=workspace_id,
-            limit=ceiling,
-        )
+        resolver.max_cpu_instances = ceiling
         return compute.reconcile_aws_default_capacity(
             workspace="default",
             region="us-east-1",
@@ -1927,7 +1949,7 @@ def test_policy_owned_capacity_tracks_lowered_and_raised_bounds(
     assert reconcile(floor=3, ceiling=10).desired_machines == 3
 
 
-def test_lowered_policy_floor_preserves_work_from_another_workspace(
+def test_clearing_warm_capacity_preserves_work_from_another_workspace(
     isolated_services: ApiServices,
 ) -> None:
     _seed_connection(isolated_services)
@@ -1982,11 +2004,7 @@ def test_lowered_policy_floor_preserves_work_from_another_workspace(
             )
         )
 
-    _zero_account_capacity(isolated_services, workspace_id=pool.workspace_id)
-    WorkspaceComputePolicyService(
-        isolated_services.context,
-        aws_default_capacity=AwsDefaultCapacityBaseline(capacity=compute),
-    ).reconcile_workspace_baseline(pool.workspace_id)
+    compute.clear_aws_default_capacity(workspace=pool.workspace_id, release_capacity=True)
 
     with isolated_services.context.database.session() as session:
         held = ComputeUnitRepository(session).get(pool.id)
@@ -2085,59 +2103,6 @@ _bootstrap = _Bootstrap()
 
 def _allow_scale(pool: ComputeUnitRecord) -> None:
     del pool
-
-
-def _set_cpu_limit(
-    isolated_services: ApiServices,
-    *,
-    workspace_id: str,
-    limit: int,
-) -> None:
-    with isolated_services.context.database.session() as session:
-        connections = AwsAccountConnectionRepository(session)
-        connection = connections.get_for_workspace_owner(workspace_id, for_update=True)
-        assert connection is not None
-        current = connection.compute
-        connections.save(
-            connection.model_copy(
-                update={
-                    "compute": current.model_copy(
-                        update={
-                            "revision": current.revision + 1,
-                            "initial_cpu_workers": min(current.initial_cpu_workers, limit),
-                            "min_cpu_workers": min(current.min_cpu_workers, limit),
-                            "max_cpu_instances": limit,
-                        }
-                    ),
-                    "revision": connection.revision + 1,
-                    "updated_at": datetime.now(UTC),
-                }
-            )
-        )
-
-
-def _zero_account_capacity(isolated_services: ApiServices, *, workspace_id: str) -> None:
-    with isolated_services.context.database.session() as session:
-        connections = AwsAccountConnectionRepository(session)
-        connection = connections.get_for_workspace_owner(workspace_id, for_update=True)
-        assert connection is not None
-        connections.save(
-            connection.model_copy(
-                update={
-                    "compute": connection.compute.model_copy(
-                        update={
-                            "revision": connection.compute.revision + 1,
-                            "initial_cpu_workers": 0,
-                            "min_cpu_workers": 0,
-                            "max_cpu_instances": 0,
-                            "max_gpu_instances": 0,
-                        }
-                    ),
-                    "revision": connection.revision + 1,
-                    "updated_at": datetime.now(UTC),
-                }
-            )
-        )
 
 
 def _seed_connection(isolated_services: ApiServices) -> None:

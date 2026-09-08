@@ -766,9 +766,6 @@ class ComputeService:
             current_pool = locked_pool
         provider_request = self._provider_unit_request(current_pool, offer)
         try:
-            if provider_request.desired_machines > 0:
-                offer = self._available_unit_offer(provider, current_pool)
-                provider_request = self._provider_unit_request(current_pool, offer)
             snapshot = provider.pooled.set_unit_capacity(
                 provider_request,
                 desired_machines=provider_request.desired_machines,
@@ -1857,7 +1854,7 @@ class ComputeService:
                 session, pool_id=unit.id
             ):
                 raise ConflictError("compute pool still has active workloads")
-            if desired_machines > unit.desired_machines:
+            if desired_machines > 0 and desired_machines >= unit.desired_machines:
                 offer = self._available_unit_offer(provider, unit)
                 if not provider.policy.accepts(offer):
                     raise ConflictError(
@@ -1955,7 +1952,7 @@ class ComputeService:
                     observed=observed,
                 )
             provider_request = self._provider_unit_request(intent, offer)
-            if provider_request.desired_machines > 0:
+            if desired_machines > 0 and desired_machines >= unit.desired_machines:
                 offer = self._available_unit_offer(provider, intent)
                 provider_request = self._provider_unit_request(intent, offer)
             snapshot = provider.pooled.set_unit_capacity(

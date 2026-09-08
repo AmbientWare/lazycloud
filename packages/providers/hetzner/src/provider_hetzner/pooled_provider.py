@@ -24,6 +24,7 @@ from shared.compute_policy import ComputeUnitProviderState, ComputeUnitRecord
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit, SupplierNetworkTerms
 from shared.timestamps import utc_now
 
+from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
 from provider_hetzner.client import HetznerClient, HetznerError, Server
 from provider_hetzner.identity import provider_label
 
@@ -48,7 +49,6 @@ class HetznerPooledProvider:
     provider_ref: str
     client: HetznerClient
     images_by_location: Mapping[str, HetznerNodeImage]
-    allowed_server_types: frozenset[str]
     usd_per_currency_unit: Decimal
     primary_ipv4_hourly_micros: int
     launch_credentials: ProviderNodeLaunchCredentials
@@ -68,7 +68,10 @@ class HetznerPooledProvider:
         if self.usd_per_currency_unit <= 0:
             raise ValueError("Hetzner supplier currency conversion must be positive")
         for shape in self.client.server_types():
-            if shape.name not in self.allowed_server_types or shape.architecture != "x86":
+            if (
+                shape.name not in HETZNER_CAPACITY_POLICY.allowed_instance_types
+                or shape.architecture != "x86"
+            ):
                 continue
             if shape.cpu_type != "dedicated":
                 continue

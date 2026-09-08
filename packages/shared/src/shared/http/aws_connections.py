@@ -9,7 +9,6 @@ from shared.aws_connections import (
     AWS_REGION_PATTERN,
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPhase,
-    AwsAccountComputeConfiguration,
     AwsAccountConnectionAvailableAction,
     AwsAccountConnectionErrorCode,
     AwsAccountConnectionPhase,
@@ -31,8 +30,6 @@ class AwsConnectionCreateRequest(HttpModel):
     )
     role_arn: str | None = Field(default=None, pattern=_AWS_ROLE_ARN_PATTERN)
     network: AwsAccountNetwork | None = None
-    max_cpu_instances: int | None = Field(default=None, gt=0)
-    max_gpu_instances: int | None = Field(default=None, ge=0)
     # The external ID a role that already exists enforces.
     #
     # Only with a role, because the two modes differ in who the value belongs
@@ -65,8 +62,6 @@ class AwsFleetEnsureRequest(HttpModel):
     external_id: str = Field(
         min_length=32, max_length=256, pattern=r"^[A-Za-z0-9+=,.@:_/-]+$", repr=False
     )
-    max_cpu_instances: int = Field(gt=0)
-    max_gpu_instances: int = Field(ge=0)
 
     @model_validator(mode="after")
     def validate_role_account(self) -> AwsFleetEnsureRequest:
@@ -77,11 +72,6 @@ class AwsFleetEnsureRequest(HttpModel):
 
 class AwsConnectionReconnectRequest(HttpModel):
     role_arn: str | None = Field(default=None, pattern=_AWS_ROLE_ARN_PATTERN)
-
-
-class AwsComputeConfigurationUpdateRequest(HttpModel):
-    expected_revision: int = Field(ge=1)
-    compute: AwsAccountComputeConfiguration
 
 
 class AwsManagedAuthorizationResponse(HttpModel):
@@ -118,7 +108,6 @@ class AwsConnectionResponse(HttpModel):
     pool: MachinePool = Field(min_length=1, max_length=240)
     phase: AwsAccountConnectionPhase
     revision: int = Field(ge=1)
-    compute: AwsAccountComputeConfiguration
     hosts_workloads: bool
     can_manage_existing_capacity: bool
     available_actions: tuple[AwsAccountConnectionAvailableAction, ...] = ()
@@ -148,7 +137,6 @@ class AwsConnectionAuthorizationResponse(HttpModel):
 
 __all__ = [
     "AwsAuthorizationGenerationResponse",
-    "AwsComputeConfigurationUpdateRequest",
     "AwsConnectionAuthorization",
     "AwsConnectionAuthorizationResponse",
     "AwsConnectionCreateRequest",

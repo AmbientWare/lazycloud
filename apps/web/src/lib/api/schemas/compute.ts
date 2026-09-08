@@ -62,33 +62,6 @@ export const containerWithAppPageSchema = z.object({
 });
 export type ContainerWithAppPage = z.infer<typeof containerWithAppPageSchema>;
 
-export const customerComputeInstanceOptionSchema = z
-  .object({
-    instance_type: z.string(),
-    kind: z.enum(["cpu", "nvidia_gpu"]),
-    gpu: z.string().nullable(),
-    gpu_count: z.number().int().nonnegative(),
-    cpu_millicores: z.number().int().positive(),
-    memory_mb: z.number().int().positive(),
-  })
-  .strict();
-export type CustomerComputeInstanceOption = z.infer<typeof customerComputeInstanceOptionSchema>;
-
-export const customerComputeCatalogSchema = z
-  .object({
-    data: z.array(
-      z
-        .object({
-          provider: z.literal("aws"),
-          region: z.string(),
-          instances: z.array(customerComputeInstanceOptionSchema),
-        })
-        .strict(),
-    ),
-    next: z.string(),
-  })
-  .strict();
-
 export const poolJoinCommandResponseSchema = z
   .object({
     command: z.string(),

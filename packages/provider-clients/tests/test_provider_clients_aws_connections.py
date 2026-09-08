@@ -26,7 +26,6 @@ from provider_aws import (
 from provider_clients import (
     AwsAccountConnectionComponents,
     configured_aws_account_connection_components,
-    configured_aws_compute_catalog,
 )
 from provider_clients.aws_connections import (
     _AwsAccountAuthorizationLifecycle,
@@ -113,37 +112,6 @@ def test_aws_connection_composition_rejects_non_content_addressed_template_url()
 
     with pytest.raises(ValueError, match="does not identify the bundled template digest"):
         _connection_components(settings)
-
-
-def test_aws_compute_catalog_only_includes_launchable_priced_region_types() -> None:
-    settings = _enabled_settings()
-    capacity = settings.capacity.model_copy(
-        update={
-            "cpu_ami_ids": {
-                "us-west-2": "ami-1234567890abcdef0",
-                "us-east-1": "ami-0123456789abcdef0",
-            },
-            "gpu_ami_ids": {
-                "us-west-2": "ami-2345678901abcdef0",
-            },
-            "instance_hourly_micros": {
-                "g6.xlarge": 804_000,
-                "m7i.xlarge": 340_000,
-            },
-        }
-    )
-
-    catalog = configured_aws_compute_catalog(
-        capacity,
-        settings.artifact,
-    )
-
-    assert [region.region for region in catalog] == ["us-east-1", "us-west-2"]
-    assert [instance.instance_type for instance in catalog[0].instances] == ["m7i.xlarge"]
-    assert [instance.instance_type for instance in catalog[1].instances] == [
-        "m7i.xlarge",
-        "g6.xlarge",
-    ]
 
 
 class _CleanupControl:

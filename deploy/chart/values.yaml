@@ -266,6 +266,4 @@ tunnel:
   # The tunnel credentials arrive in the same Secret as everything else.
   credentialsKey: LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS
 
-fleet:
-  max_cpu_instances: 500
-  max_gpu_instances: 100
+fleet: {}

@@ -13,7 +13,6 @@ from compute.aws_connections import (
     ConnectedCloudAdmission,
 )
 from compute.bucket_access import AwsDeploymentBucketAccessService
-from compute.catalog import ComputeCatalogRegion
 from compute.context import ComputeContext
 from coordination.redis_client import RedisClient
 from networking.settings import (
@@ -142,7 +141,6 @@ def aws_account_connection_composition_from_settings(
     backend_route: BackendRouteSettings,
     workspace_changes: WorkspaceChangePublisher,
     capacity_baseline: AwsConnectionCapacityBaseline,
-    available_catalog: tuple[ComputeCatalogRegion, ...],
     admission: ConnectedCloudAdmission,
 ) -> AwsAccountConnectionComposition | None:
     # Connected AWS is an optional deployment shape, but a half-configured one is not:
@@ -169,7 +167,6 @@ def aws_account_connection_composition_from_settings(
         bucket_access_reconciler=bucket_access,
         capacity_baseline=capacity_baseline,
         workspace_changes=workspace_changes,
-        available_catalog=available_catalog,
         external_id_bytes=connection_settings.external_id_bytes,
         draft_ttl_seconds=connection_settings.draft_ttl_seconds,
         cleanup_tombstone_ttl_seconds=connection_settings.cleanup_tombstone_ttl_seconds,

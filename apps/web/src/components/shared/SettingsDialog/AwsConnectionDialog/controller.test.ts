@@ -48,13 +48,13 @@ describe("AWS connection controller", () => {
     });
     const { result } = renderController(queryClient, vi.fn());
 
-    act(() => result.current.create("123456789012", null, null));
+    act(() => result.current.create("123456789012"));
     await waitFor(() => expect(result.current.activeAction).toBeNull());
 
     expect(result.current.createError).toBe(failure);
     expect(result.current.recoveryError).toBeNull();
 
-    act(() => result.current.create("123456789012", null, null));
+    act(() => result.current.create("123456789012"));
     await waitFor(() => expect(result.current.activeAction).toBeNull());
 
     expect(createMock).toHaveBeenCalledTimes(2);
@@ -173,21 +173,6 @@ function awsConnection(phase: "ready" | "disconnect_draining" = "ready"): AwsCon
     account_id: "123456789012",
     pool: "aws",
     phase,
-    compute: {
-      revision: 1,
-      default_region: "us-east-1",
-      default_instance_type: "m7i.xlarge",
-      initial_cpu_workers: 1,
-      min_cpu_workers: 1,
-      max_cpu_instances: 10,
-      max_gpu_instances: 2,
-      min_free_cpu_millicores: 1_000,
-      min_free_memory_mib: 1_024,
-      allowed_regions: ["us-east-1"],
-      allowed_instance_types: [],
-      idle_timeout_seconds: 300,
-      root_volume_gib: 200,
-    },
     active_authorization: {
       generation: 1,
       authorization_mode: "managed_stack",

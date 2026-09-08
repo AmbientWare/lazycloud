@@ -60,31 +60,21 @@ The connection belongs to your account and serves every workspace you own.
 lazycloud cloud connect aws --account-id 123456789012
 ```
 
-The command prints an AWS authorization link (`--open` launches it in a
-browser). Approving it creates a management role in your account. Then:
+Authorize the connection with your AWS profile. The command submits a
+CloudFormation stack that creates the management role and network:
 
 ```bash
+lazycloud cloud authorize --profile YOUR_AWS_PROFILE
+lazycloud cloud validate
 lazycloud cloud status --watch --until ready
 ```
 
 The dashboard shows the same connection under Settings, then Compute. Once it
 is ready, name the pool on a workload or make it the workspace default.
 
-Limits on what LazyCloud may launch live with the connection, so one set of
-limits applies to every workspace it backs:
-
-```bash
-lazycloud cloud compute show
-lazycloud cloud compute update \
-  --default-region us-east-1 \
-  --max-cpu 20 --max-gpu 4 \
-  --allowed-region us-east-1 --allowed-region us-west-2 \
-  --idle-timeout 600
-```
-
-You can cap CPU and GPU instance counts, restrict regions and instance types,
-set the idle timeout before an instance is shut down, and set the root disk
-size. Options you leave out keep their current values.
+LazyCloud manages instance selection, regions, capacity limits, warm workers,
+idle shutdown, and root disks. These settings apply to every workspace the
+connection backs. Choose CPU, memory, GPU, and pool on each workload.
 
 If the authorization stops working, for example after a role change in AWS,
 `lazycloud cloud status` says so. `lazycloud cloud reconnect` starts a

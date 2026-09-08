@@ -13,7 +13,6 @@ from compute.aws_connections import (
     AwsAuthorizationCleanupResult,
 )
 from compute.bucket_access import AwsConnectionBucketAccessReconciler
-from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.policy import WorkspaceComputePolicyService
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
@@ -571,20 +570,10 @@ def test_a_workspace_without_its_own_account_still_reaches_the_shared_fleet(
     )
 
 
-def test_fleet_ensure_preserves_authorization_and_reconciles_limits(
+def test_fleet_ensure_preserves_authorization_on_retry(
     isolated_services: ApiServices,
 ) -> None:
     service = _service(isolated_services)
-    service.available_catalog = (
-        ComputeCatalogRegion(
-            region="us-east-1",
-            instances=(
-                ComputeCatalogInstance(
-                    instance_type="m7i.large", kind="cpu", cpu_millicores=2000, memory_mb=8192
-                ),
-            ),
-        ),
-    )
     owner = _owner(isolated_services)
     request = AwsFleetEnsureRequest(
         account_id=ACCOUNT_ID,
@@ -595,23 +584,12 @@ def test_fleet_ensure_preserves_authorization_and_reconciles_limits(
             subnet_ids=("subnet-01234567", "subnet-89abcdef"),
             security_group_id="sg-01234567",
         ),
-        max_cpu_instances=500,
-        max_gpu_instances=100,
     )
     created = service.ensure_fleet(request, user_id=owner)
     assert service.ensure_fleet(request, user_id=owner) == created
-    configured = service.ensure_fleet(
-        request.model_copy(update={"max_cpu_instances": 200, "max_gpu_instances": 0}),
-        user_id=owner,
-    )
-    assert configured.compute.max_cpu_instances == 200
-    assert configured.compute.max_gpu_instances == 0
-    assert configured.compute.revision == created.compute.revision + 1
-    assert configured.pending_authorization == created.pending_authorization
-    assert configured.external_id == created.external_id
 
 
-def test_fleet_ensure_rejects_changed_infrastructure_without_changing_policy(
+def test_fleet_ensure_rejects_changed_infrastructure_without_changing_connection(
     isolated_services: ApiServices,
 ) -> None:
     service = _service(isolated_services)
@@ -625,14 +603,11 @@ def test_fleet_ensure_rejects_changed_infrastructure_without_changing_policy(
             subnet_ids=("subnet-01234567", "subnet-89abcdef"),
             security_group_id="sg-01234567",
         ),
-        max_cpu_instances=500,
-        max_gpu_instances=100,
     )
     created = service.ensure_fleet(request, user_id=owner)
     changed = request.model_copy(
         update={
             "network": request.network.model_copy(update={"vpc_id": "vpc-ffffffff"}),
-            "max_cpu_instances": 200,
         }
     )
     with pytest.raises(ConflictError, match="infrastructure"):

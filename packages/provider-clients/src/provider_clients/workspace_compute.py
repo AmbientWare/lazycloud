@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 from agent.binary import AgentBinarySettings
+from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.provider_launches import ProviderNodeLaunchCredentials
 from compute.providers import (
@@ -25,6 +26,7 @@ from provider_aws import (
     AwsManagedPoolBinaries,
     Boto3AwsManagedPoolClientProvider,
 )
+from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
 from provider_hetzner.client import HetznerClient
 from provider_hetzner.pooled_provider import HetznerPooledProvider
 from pydantic import SecretStr
@@ -55,7 +57,6 @@ def configured_platform_compute_providers(
                 cooldown=RedisRequestCooldown(redis, binding.ref),
             ),
             images_by_location=binding.images_by_location,
-            allowed_server_types=frozenset(binding.policy.allowed_instance_types),
             usd_per_currency_unit=binding.usd_per_currency_unit,
             primary_ipv4_hourly_micros=binding.primary_ipv4_hourly_micros,
             launch_credentials=launch_credentials,
@@ -71,7 +72,7 @@ def configured_platform_compute_providers(
                 ref=binding.ref,
                 capacity_mode=ComputeCapacityMode.Pooled,
                 policy=ResolvedProviderPolicy(
-                    **binding.policy.model_dump(),
+                    **HETZNER_CAPACITY_POLICY.model_dump(),
                     workspace_id=capacity_workspace(binding.workspace),
                     pool=MachinePool(LAZYCLOUD_MACHINE_POOL),
                     platform_fleet=True,
@@ -99,6 +100,8 @@ def configured_aws_compute_catalog(
     regions = sorted(capacity_settings.cpu_ami_ids.keys() | capacity_settings.gpu_ami_ids.keys())
     catalog: list[ComputeCatalogRegion] = []
     for region in regions:
+        if region not in AWS_COMPUTE_CONFIGURATION.allowed_regions:
+            continue
         cpu_available = region in capacity_settings.cpu_ami_ids
         gpu_available = region in capacity_settings.gpu_ami_ids
         instances_by_type: dict[str, ComputeCatalogInstance] = {}
@@ -130,7 +133,6 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
     connections: AwsConnectionLoader
     binaries_by_region: Mapping[str, AwsManagedPoolBinaries]
     instance_hourly_micros: Mapping[str, int]
-    allowed_instance_types: frozenset[str]
     client_provider: Boto3AwsManagedPoolClientProvider
     capacity_workspace: Callable[[AwsAccountConnection], str]
     platform_providers: PlatformProviderLoader = tuple
@@ -193,20 +195,21 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
                 workspace_id=self.capacity_workspace(connection),
                 pool=connection.pool,
                 platform_fleet=connection.platform_fleet,
-                default_region=connection.compute.default_region,
-                allowed_regions=connection.compute.allowed_regions,
-                max_cpu_instances=connection.compute.max_cpu_instances,
-                max_gpu_instances=connection.compute.max_gpu_instances,
-                root_volume_gib=connection.compute.root_volume_gib,
-                idle_timeout_seconds=connection.compute.idle_timeout_seconds,
-                allowed_instance_types=connection.compute.allowed_instance_types,
+                default_region=AWS_COMPUTE_CONFIGURATION.default_region,
+                allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
+                max_cpu_instances=AWS_COMPUTE_CONFIGURATION.max_cpu_instances,
+                max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
+                root_volume_gib=AWS_COMPUTE_CONFIGURATION.root_volume_gib,
+                idle_timeout_seconds=AWS_COMPUTE_CONFIGURATION.idle_timeout_seconds,
+                allowed_instance_types=tuple(
+                    instance.instance_type for instance in AWS_INSTANCE_CATALOG
+                ),
             ),
             pooled=AwsConnectedAccountPooledProvider(
                 provider_ref=provider_ref,
                 connection=target,
                 binaries_by_region=self.binaries_by_region,
                 instance_hourly_micros=self.instance_hourly_micros,
-                allowed_instance_types=self.allowed_instance_types,
                 client_provider=self.client_provider,
             ),
         )
@@ -239,7 +242,6 @@ def workspace_compute_provider_resolver(
         platform_providers=platform_providers,
         binaries_by_region=artifacts,
         instance_hourly_micros=capacity_settings.instance_hourly_micros,
-        allowed_instance_types=frozenset(),
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
     )
 

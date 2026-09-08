@@ -1,15 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  ChevronDown,
-  ChevronRight,
-  Cloud,
-  CloudCog,
-  Loader2,
-  Plus,
-  Save,
-  Server,
-} from "lucide-react";
+import { ChevronRight, Cloud, CloudCog, Plus, Server } from "lucide-react";
 
 import {
   awsConnectionIsRemoving,
@@ -25,24 +16,14 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AwsConnection, CustomerComputeInstance, UnitMachine } from "@/lib/api/schemas";
 import {
   awsConnectionQueryOptions,
-  computeCatalogQueryOptions,
   computeInstancesQueryOptions,
   machinesQueryOptions,
 } from "@/lib/queries/compute";
@@ -51,8 +32,6 @@ import { cn } from "@/lib/utils";
 
 import { AwsConnectionDialog } from "./AwsConnectionDialog";
 import { JoinMachineDialog } from "./JoinMachineDialog";
-import { useAwsComputeController } from "./AwsComputeForm/controller";
-import { regionOptions, toggleAllowedRegion } from "./region-selection";
 
 export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const connection = useQuery(awsConnectionQueryOptions());
@@ -62,7 +41,6 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const [expandedProvider, setExpandedProvider] = useState<"aws" | null>(null);
   const [awsDialogOpen, setAwsDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
-  const catalog = useQuery(computeCatalogQueryOptions(expandedProvider === "aws"));
   const loadError = connection.error ?? instances.error;
 
   if (connection.isPending || instances.isPending || billing.isPending) {
@@ -88,9 +66,6 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
         connection={connection.data ?? null}
         instances={awsInstances}
         expanded={expandedProvider === "aws"}
-        catalogRegions={catalog.data?.data.map((item) => item.region) ?? []}
-        catalogLoading={catalog.isPending && expandedProvider === "aws"}
-        catalogError={catalog.error}
         onToggle={() => setExpandedProvider((current) => (current === "aws" ? null : "aws"))}
         onManageAws={() => setAwsDialogOpen(true)}
         connectedCloudEnabled={billing.data?.entitlements?.connected_cloud ?? false}
@@ -117,9 +92,6 @@ function ConnectedCloudsPanel({
   connection,
   instances,
   expanded,
-  catalogRegions,
-  catalogLoading,
-  catalogError,
   onToggle,
   onManageAws,
   connectedCloudEnabled,
@@ -129,9 +101,6 @@ function ConnectedCloudsPanel({
   connection: AwsConnection | null;
   instances: CustomerComputeInstance[];
   expanded: boolean;
-  catalogRegions: string[];
-  catalogLoading: boolean;
-  catalogError: Error | null;
   onToggle: () => void;
   onManageAws: () => void;
   connectedCloudEnabled: boolean;
@@ -183,26 +152,7 @@ function ConnectedCloudsPanel({
               aria-label="AWS connection details"
               className="border-t border-border bg-background/35"
             >
-              <div className="grid min-h-0 lg:grid-cols-[minmax(22rem,0.9fr)_minmax(0,1.1fr)]">
-                <section className="min-w-0 p-4 lg:border-r lg:border-border">
-                  <div className="mb-4">
-                    <h3 className="text-sm font-medium">Provisioning</h3>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      Instance limits and defaults
-                    </p>
-                  </div>
-                  {catalogLoading ? (
-                    <ProvisioningSkeleton />
-                  ) : catalogError ? (
-                    <p className="text-sm text-destructive" role="alert">
-                      {catalogError.message}
-                    </p>
-                  ) : (
-                    <AwsComputeForm regions={catalogRegions} />
-                  )}
-                </section>
-                <CloudInstances instances={instances} />
-              </div>
+              <CloudInstances instances={instances} />
             </div>
           ) : null}
         </div>
@@ -349,211 +299,6 @@ function CloudProviderRow({
   );
 }
 
-function AwsComputeForm({ regions }: { regions: string[] }) {
-  const controller = useAwsComputeController();
-  const [advanced, setAdvanced] = useState(false);
-
-  if (controller.isLoading) return <ProvisioningSkeleton />;
-
-  if (controller.loadError || !controller.draft) {
-    return (
-      <div className="space-y-3" role="alert">
-        <p className="text-sm text-destructive">
-          {controller.loadError?.message ?? "AWS provisioning settings are unavailable"}
-        </p>
-        <Button type="button" size="sm" variant="outline" onClick={controller.retryLoad}>
-          Retry loading settings
-        </Button>
-      </div>
-    );
-  }
-
-  const draft = controller.draft;
-
-  return (
-    <form
-      className="space-y-4"
-      onSubmit={(event) => {
-        event.preventDefault();
-        controller.save();
-      }}
-    >
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Field label="Default region" htmlFor="compute-default-region">
-          <Select
-            value={draft.defaultRegion}
-            onValueChange={(value) => controller.updateField({ field: "defaultRegion", value })}
-          >
-            <SelectTrigger id="compute-default-region" className="w-full font-mono">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="start">
-              {draft.allowedRegions.map((item) => (
-                <SelectItem key={item} value={item}>
-                  <span className="font-mono">{item}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-        <OptionalNumberField
-          id="compute-max-cpu"
-          label="CPU limit"
-          value={draft.maxCpuInstances}
-          min={draft.initialCpuWorkers}
-          onChange={(value) => controller.updateField({ field: "maxCpuInstances", value })}
-        />
-        <OptionalNumberField
-          id="compute-max-gpu"
-          label="GPU limit"
-          value={draft.maxGpuInstances}
-          min={0}
-          onChange={(value) => controller.updateField({ field: "maxGpuInstances", value })}
-        />
-      </div>
-
-      <button
-        type="button"
-        className="flex w-full items-center justify-between border-y border-border py-2 text-left text-xs font-medium outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-        aria-expanded={advanced}
-        onClick={() => setAdvanced((value) => !value)}
-      >
-        Advanced AWS defaults
-        <ChevronDown
-          className={cn(
-            "size-4 text-muted-foreground transition-transform",
-            advanced && "rotate-180",
-          )}
-        />
-      </button>
-
-      {advanced ? (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Default instance type" htmlFor="compute-default-instance-type">
-            <Input
-              id="compute-default-instance-type"
-              value={draft.defaultInstanceType}
-              onChange={(event) =>
-                controller.updateField({
-                  field: "defaultInstanceType",
-                  value: event.target.value,
-                })
-              }
-              className="font-mono"
-            />
-          </Field>
-          <NumberField
-            id="compute-initial-cpu-workers"
-            label="Initial CPU workers"
-            value={draft.initialCpuWorkers}
-            min={draft.minCpuWorkers}
-            max={draft.maxCpuInstances ?? undefined}
-            onChange={(value) => controller.updateField({ field: "initialCpuWorkers", value })}
-          />
-          <NumberField
-            id="compute-min-cpu-workers"
-            label="Minimum CPU workers"
-            value={draft.minCpuWorkers}
-            min={0}
-            max={draft.initialCpuWorkers}
-            onChange={(value) => controller.updateField({ field: "minCpuWorkers", value })}
-          />
-          <NumberField
-            id="compute-min-free-cpu"
-            label="Reserved free CPU"
-            value={draft.minFreeCpuMillicores}
-            min={0}
-            suffix="millicores"
-            onChange={(value) => controller.updateField({ field: "minFreeCpuMillicores", value })}
-          />
-          <NumberField
-            id="compute-min-free-memory"
-            label="Reserved free memory"
-            value={draft.minFreeMemoryMib}
-            min={0}
-            suffix="MiB"
-            onChange={(value) => controller.updateField({ field: "minFreeMemoryMib", value })}
-          />
-          <NumberField
-            id="compute-idle-timeout"
-            label="Idle timeout"
-            value={draft.idleTimeoutSeconds}
-            min={60}
-            max={86_400}
-            suffix="seconds"
-            onChange={(value) => controller.updateField({ field: "idleTimeoutSeconds", value })}
-          />
-          <NumberField
-            id="compute-root-volume"
-            label="Root disk"
-            value={draft.rootVolumeGib}
-            min={50}
-            max={2048}
-            suffix="GiB"
-            onChange={(value) => controller.updateField({ field: "rootVolumeGib", value })}
-          />
-          <Field label="Allowed regions" htmlFor="compute-allowed-regions">
-            <RegionMultiSelect
-              id="compute-allowed-regions"
-              options={regionOptions(regions, draft.allowedRegions)}
-              value={draft.allowedRegions}
-              defaultRegion={draft.defaultRegion}
-              onValueChange={(value) => controller.updateField({ field: "allowedRegions", value })}
-            />
-          </Field>
-          <Field label="Allowed instance types" htmlFor="compute-allowed-types">
-            <Input
-              id="compute-allowed-types"
-              value={draft.allowedInstanceTypes}
-              onChange={(event) =>
-                controller.updateField({
-                  field: "allowedInstanceTypes",
-                  value: event.target.value,
-                })
-              }
-              placeholder="Automatic selection"
-              className="font-mono"
-            />
-          </Field>
-        </div>
-      ) : null}
-
-      <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border pt-3">
-        {controller.requiresReview ? (
-          <div className="mr-auto space-y-2" role="alert">
-            <p className="text-xs text-warning">
-              Settings changed on the server. Review the merged fields before retrying.
-            </p>
-            <Button type="button" size="sm" variant="outline" onClick={controller.review}>
-              Review changes
-            </Button>
-          </div>
-        ) : controller.recoveryFailed ? (
-          <div className="mr-auto space-y-2" role="alert">
-            <p className="text-xs text-destructive">
-              {controller.saveError?.message ?? "Could not reload the current settings"}
-            </p>
-            <Button type="button" size="sm" variant="outline" onClick={controller.retryLoad}>
-              Retry loading settings
-            </Button>
-          </div>
-        ) : controller.saveError ? (
-          <p className="mr-auto text-xs text-destructive" role="alert">
-            {controller.saveError.message}
-          </p>
-        ) : null}
-        {controller.isSaved && !controller.isDirty ? (
-          <p className="mr-auto text-xs text-success">Settings saved</p>
-        ) : null}
-        <Button type="submit" size="sm" disabled={!controller.canSave}>
-          {controller.isSaving ? <Loader2 className="animate-spin" /> : <Save />}
-          Save settings
-        </Button>
-      </div>
-    </form>
-  );
-}
-
 function CloudInstances({ instances }: { instances: CustomerComputeInstance[] }) {
   return (
     <section className="min-w-0 p-4">
@@ -568,7 +313,7 @@ function CloudInstances({ instances }: { instances: CustomerComputeInstance[] })
         <div className="border-y border-border px-4 py-8 text-center">
           <p className="text-sm font-medium">No AWS instances running</p>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            The first workload placed on AWS will provision capacity within these limits.
+            LazyCloud provisions capacity when a workload uses AWS.
           </p>
         </div>
       ) : (
@@ -609,61 +354,6 @@ function CloudInstances({ instances }: { instances: CustomerComputeInstance[] })
         </ul>
       )}
     </section>
-  );
-}
-
-function RegionMultiSelect({
-  id,
-  options,
-  value,
-  defaultRegion,
-  onValueChange,
-}: {
-  id: string;
-  options: string[];
-  value: string[];
-  defaultRegion: string;
-  onValueChange: (value: string[]) => void;
-}) {
-  const summary = value.length === 1 ? value[0] : `${value.length} regions`;
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          id={id}
-          type="button"
-          variant="outline"
-          className="h-9 w-full justify-between px-3 font-normal"
-        >
-          <span className="mono min-w-0 truncate text-left">{summary}</span>
-          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64 max-w-[calc(100vw-2rem)]">
-        {options.map((option) => {
-          const selected = value.includes(option);
-          const isDefault = option === defaultRegion;
-          return (
-            <DropdownMenuCheckboxItem
-              key={option}
-              checked={selected}
-              disabled={isDefault}
-              onCheckedChange={() =>
-                onValueChange(toggleAllowedRegion(value, option, defaultRegion))
-              }
-              onSelect={(event) => event.preventDefault()}
-              className="h-9 gap-3"
-            >
-              <span className="mono min-w-0 flex-1 truncate">{option}</span>
-              {isDefault ? (
-                <span className="shrink-0 text-[10px] text-muted-foreground">Default</span>
-              ) : null}
-            </DropdownMenuCheckboxItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
@@ -725,110 +415,11 @@ function SelfHostedPanel({
   );
 }
 
-function Field({
-  label,
-  htmlFor,
-  children,
-}: {
-  label: string;
-  htmlFor: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label htmlFor={htmlFor} className="grid content-start gap-1.5">
-      <span className="micro-label">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function NumberField({
-  id,
-  label,
-  value,
-  min,
-  max,
-  suffix,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: number;
-  min: number;
-  max?: number;
-  suffix?: string;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <Field label={label} htmlFor={id}>
-      <div className="relative">
-        <Input
-          id={id}
-          type="number"
-          min={min}
-          max={max}
-          value={value}
-          onChange={(event) => onChange(clamp(Number(event.target.value), min, max))}
-          className={cn("font-mono", suffix && "pr-16")}
-        />
-        {suffix ? (
-          <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[11px] text-muted-foreground">
-            {suffix}
-          </span>
-        ) : null}
-      </div>
-    </Field>
-  );
-}
-
-function OptionalNumberField({
-  id,
-  label,
-  value,
-  min,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: number | null;
-  min: number;
-  onChange: (value: number | null) => void;
-}) {
-  return (
-    <Field label={label} htmlFor={id}>
-      <Input
-        id={id}
-        type="number"
-        min={min}
-        value={value ?? ""}
-        placeholder="Unlimited"
-        onChange={(event) =>
-          onChange(event.target.value === "" ? null : Math.max(Number(event.target.value), min))
-        }
-        className="font-mono"
-      />
-    </Field>
-  );
-}
-
 function SettingsSkeleton() {
   return (
     <div className="flex min-h-full flex-col gap-3 lg:h-full">
       <Skeleton className="min-h-80 flex-1" />
       <Skeleton className="h-36 shrink-0" />
-    </div>
-  );
-}
-
-function ProvisioningSkeleton() {
-  return (
-    <div className="space-y-3" aria-hidden="true">
-      <div className="grid grid-cols-3 gap-3">
-        <Skeleton className="h-14" />
-        <Skeleton className="h-14" />
-        <Skeleton className="h-14" />
-      </div>
-      <Skeleton className="h-9 w-full" />
     </div>
   );
 }
@@ -866,10 +457,4 @@ function formatCpu(millicores: number): string {
 function formatMemory(mebibytes: number): string {
   if (mebibytes < 1024) return `${mebibytes} MiB`;
   return `${(mebibytes / 1024).toFixed(1)} GiB`;
-}
-
-function clamp(value: number, min: number, max?: number): number {
-  if (!Number.isFinite(value)) return min;
-  const bounded = Math.max(min, Math.round(value));
-  return max === undefined ? bounded : Math.min(max, bounded);
 }

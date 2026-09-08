@@ -76,16 +76,8 @@ def fleet_ensure(
             envvar="LAZYCLOUD_FLEET_EXTERNAL_ID",
         ),
     ],
-    max_cpu_instances: Annotated[
-        int,
-        typer.Option("--max-cpu", min=1, help="Shared-fleet CPU instance ceiling."),
-    ],
-    max_gpu_instances: Annotated[
-        int,
-        typer.Option("--max-gpu", min=0, help="Shared-fleet GPU instance ceiling."),
-    ],
 ) -> None:
-    """Ensure the fleet's infrastructure matches and apply its capacity ceilings."""
+    """Ensure the fleet uses the registered AWS infrastructure."""
     if len(subnet_id) != 2:
         raise typer.BadParameter("exactly two --subnet-id are required")
     connection = compute_client().ensure_fleet_account(
@@ -98,8 +90,6 @@ def fleet_ensure(
                 subnet_ids=(subnet_id[0], subnet_id[1]),
                 security_group_id=security_group_id,
             ),
-            max_cpu_instances=max_cpu_instances,
-            max_gpu_instances=max_gpu_instances,
         )
     )
     emit_result(

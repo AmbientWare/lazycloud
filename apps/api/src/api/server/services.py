@@ -889,7 +889,6 @@ class ApiServices(ApiServiceCore):
             backend_route=resolved_backend_route_settings,
             workspace_changes=workspace_changes,
             capacity_baseline=compute_policies,
-            available_catalog=aws_compute_catalog,
             admission=DatabaseBillingAdmission(),
         )
         placement_resources = (

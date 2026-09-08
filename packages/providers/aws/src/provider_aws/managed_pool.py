@@ -33,7 +33,7 @@ from shared.urls import normalize_http_origin
 
 from .account_connection import AwsAccountConnectionTarget, connection_profile_name
 from .boto3_clients import has_operations, is_boto3_client_factory
-from .instance_catalog import aws_instance_catalog_entry, aws_managed_capacity_resource_name
+from .instance_catalog import aws_managed_capacity_resource_name
 from .provider_control import (
     AwsProviderControlError,
     AwsProviderControlErrorCode,
@@ -103,7 +103,7 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
     workspace_id: str = Field(min_length=1, max_length=128)
     unit_name: UnitName = Field(pattern=r"^[a-z][a-z0-9_-]{0,62}$")
     region: str = Field(pattern=_REGION_PATTERN.pattern)
-    instance_type: str
+    instance_type: str = Field(pattern=r"^[a-z0-9-]+\.[a-z0-9]+$")
     ami_id: str = Field(pattern=_AMI_PATTERN.pattern)
     desired_nodes: int = Field(ge=0)
     max_nodes: int = Field(ge=1)
@@ -113,13 +113,6 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
     subnet_ids: tuple[str, str]
     security_group_id: str = Field(min_length=1)
     bootstrap: AwsManagedPoolBootstrap
-
-    @field_validator("instance_type")
-    @classmethod
-    def validate_instance_type(cls, value: str) -> str:
-        instance_type = value.strip().lower()
-        aws_instance_catalog_entry(instance_type)
-        return instance_type
 
     @model_validator(mode="after")
     def validate_capacity_and_profile(self) -> AwsManagedPoolSpec:

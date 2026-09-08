@@ -20,8 +20,6 @@ type AuthorizationCommand =
   | {
       action: "create";
       accountId: string;
-      maxCpuInstances: number | null;
-      maxGpuInstances: number | null;
     }
   | { action: "reconnect" };
 
@@ -40,11 +38,7 @@ export type AwsConnectionController = {
   removalError: Error | null;
   removeOpen: boolean;
   setRemoveOpen: (open: boolean) => void;
-  create: (
-    accountId: string,
-    maxCpuInstances: number | null,
-    maxGpuInstances: number | null,
-  ) => void;
+  create: (accountId: string) => void;
   validate: () => void;
   reconnect: () => void;
   cancelReconnect: () => void;
@@ -69,8 +63,6 @@ export function useAwsConnectionController({
         case "create": {
           const result = await createAwsConnection({
             accountId: command.accountId,
-            maxCpuInstances: command.maxCpuInstances,
-            maxGpuInstances: command.maxGpuInstances,
           });
           return {
             action: command.action,
@@ -121,17 +113,11 @@ export function useAwsConnectionController({
     mutation.mutate(command);
   };
 
-  const runCreate = (
-    accountId: string,
-    maxCpuInstances: number | null,
-    maxGpuInstances: number | null,
-  ) => {
+  const runCreate = (accountId: string) => {
     if (activeActionRef.current !== null) return;
     run({
       action: "create",
       accountId,
-      maxCpuInstances,
-      maxGpuInstances,
     });
   };
 
@@ -152,8 +138,7 @@ export function useAwsConnectionController({
     removalError: lastAction === "remove" ? mutation.error : null,
     removeOpen,
     setRemoveOpen,
-    create: (accountId, maxCpuInstances, maxGpuInstances) =>
-      runCreate(accountId.trim(), maxCpuInstances, maxGpuInstances),
+    create: (accountId) => runCreate(accountId.trim()),
     validate: () => run({ action: "validate" }),
     reconnect: runReconnect,
     cancelReconnect: () => run({ action: "cancel_reconnect" }),

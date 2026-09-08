@@ -263,9 +263,7 @@
         "role_arn",
         "vpc_id",
         "subnet_ids",
-        "security_group_id",
-        "max_cpu_instances",
-        "max_gpu_instances"
+        "security_group_id"
       ],
       "properties": {
         "account_id": {
@@ -293,14 +291,6 @@
         "security_group_id": {
           "type": "string",
           "minLength": 1
-        },
-        "max_cpu_instances": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "max_gpu_instances": {
-          "type": "integer",
-          "minimum": 0
         }
       }
     },

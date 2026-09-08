@@ -20,7 +20,7 @@ from database.repositories.compute import (
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.types import DatabaseSession
 from pydantic import ConfigDict, Field, JsonValue
-from shared.aws_connections import AwsAccountComputeConfiguration, AwsAccountConnection
+from shared.aws_connections import AwsAccountConnection
 from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
@@ -46,6 +46,7 @@ from compute.agent_control import (
     MachineWorkerState,
     machine_serves_workloads,
 )
+from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION, AwsComputeConfiguration
 from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.context import ComputeContext
 from compute.offers import ReservationStatus
@@ -123,15 +124,8 @@ class AwsDefaultCapacityOwner(Protocol):
     def clear_aws_default_capacity(self, *, workspace: str, release_capacity: bool) -> None: ...
 
 
-def _aws_capacity_is_zero(configuration: AwsAccountComputeConfiguration) -> bool:
-    """Whether this baseline should hold no machines.
-
-    Only the CPU knobs answer that. This owner provisions CPU machines and
-    nothing else — `reconcile_aws_default_capacity` takes no GPU argument — and
-    `max_gpu_instances` is a placement ceiling, not a floor, so an account that
-    zeroed every control it was given kept paying while that ceiling sat at its
-    default.
-    """
+def _aws_capacity_is_zero(configuration: AwsComputeConfiguration) -> bool:
+    """Whether managed policy disables AWS CPU capacity."""
     return (
         configuration.min_cpu_workers == 0
         and configuration.initial_cpu_workers == 0
@@ -147,18 +141,9 @@ class AwsDefaultCapacityBaseline:
         self,
         *,
         workspace_id: str,
-        configuration: AwsAccountComputeConfiguration,
+        configuration: AwsComputeConfiguration,
     ) -> ComputeUnitRecord | None:
-        """Hold the warm baseline the connected account asks for in one workspace.
-
-        Capacity is still provisioned per workspace; only the configuration it
-        reads belongs to the account, so one account's numbers are applied to
-        each workspace it backs. Two preconditions gate it: a workspace with no
-        ready connection has no account to build in, and an account that zeroed
-        every capacity control it was given wants no machines. Clearing floors
-        without releasing would leave durable desired capacity, and its billing,
-        behind.
-        """
+        """Apply the managed AWS warm baseline to a connected workspace."""
         if not self.capacity.workspace_has_ready_connection(workspace_id):
             LOGGER.info(
                 "warm baseline for workspace %s declined: no connection hosting workloads",
@@ -270,25 +255,19 @@ class WorkspaceComputePolicyService:
         LOGGER.info(
             "warm baseline for workspace %s: %d initial, %d minimum",
             workspace_id,
-            connection.compute.initial_cpu_workers,
-            connection.compute.min_cpu_workers,
+            AWS_COMPUTE_CONFIGURATION.initial_cpu_workers,
+            AWS_COMPUTE_CONFIGURATION.min_cpu_workers,
         )
         self.aws_default_capacity.reconcile(
             workspace_id=workspace_id,
-            configuration=connection.compute,
+            configuration=AWS_COMPUTE_CONFIGURATION,
         )
 
     async def reconcile_capacity_at_startup(
         self,
         database: AsyncDatabaseClient,
     ) -> tuple[ComputeUnitRecord, ...]:
-        """Rebuild every warm baseline the connected accounts still ask for.
-
-        Iterating connections rather than workspaces is what the configuration's
-        ownership now dictates: one account's numbers apply to every active
-        workspace its owner holds, and a workspace whose owner connected nothing
-        has no baseline to restore.
-        """
+        """Restore managed warm capacity for active connected workspaces."""
         baseline = self.aws_default_capacity
         if baseline is None:
             return ()
@@ -307,7 +286,7 @@ class WorkspaceComputePolicyService:
     @staticmethod
     def _startup_capacity_targets(
         session: DatabaseSession,
-    ) -> list[tuple[str, AwsAccountComputeConfiguration]]:
+    ) -> list[tuple[str, AwsComputeConfiguration]]:
         active_workspace_ids = {
             workspace.id
             for workspace in WorkspaceRepository(session).list()
@@ -315,7 +294,7 @@ class WorkspaceComputePolicyService:
         }
         members = WorkspaceMemberRepository(session)
         return [
-            (workspace_id, connection.compute)
+            (workspace_id, AWS_COMPUTE_CONFIGURATION)
             for connection in AwsAccountConnectionRepository(session).list_all()
             for workspace_id in members.owned_workspace_ids(connection.user_id)
             if workspace_id in active_workspace_ids
