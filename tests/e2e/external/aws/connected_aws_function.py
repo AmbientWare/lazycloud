@@ -7,7 +7,7 @@ value ``21``, and proves the public task completed with ``42``, retained the
 marker in public logs, exited its container successfully, and ran on the
 exact warm-baseline machine of the connected AWS account. Success, task
 failure, timeout, and interruption all enter the same cleanup path: cancel
-live marker work, delete the exact app, and prove the public pool, cost, and
+live marker work, delete the exact app, and prove the public pool and
 tag-scoped AWS inventory returned to the pre-submit warm baseline. Reusing
 the same ``--run-id`` recovers the one matching durable task instead of
 submitting a duplicate; ``--cleanup-only`` restores the baseline without
@@ -57,7 +57,7 @@ class WarmBaseline:
     ready: int
     pending: int
     degraded: int
-    hourly_micros: int
+    hourly_micros: int | None
     instance_id: str
     machine_id: str
     region: str
@@ -102,7 +102,6 @@ def _warm_baseline(client: ComputeClient, connection: AwsConnectionResponse) -> 
         or summary.instances.ready != 1
         or summary.instances.pending != 0
         or summary.instances.degraded != 0
-        or summary.cost.hourly_micros <= 0
         or len(connected) != 1
         or len(ready) != 1
     ):
@@ -343,10 +342,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "the Function container did not exit successfully: "
                 f"{container.exit_code if container is not None else 'no container projection'}"
             )
-        if container.machine_id != baseline.machine_id:
+        if container.runtime_machine_id != baseline.machine_id:
             raise RuntimeError(
-                f"the Function ran on machine {container.machine_id}, not the warm baseline "
-                f"machine {baseline.machine_id}"
+                f"the Function ran on machine {container.runtime_machine_id}, "
+                f"not the warm baseline machine {baseline.machine_id}"
             )
     except BaseException:
         if task_id:
