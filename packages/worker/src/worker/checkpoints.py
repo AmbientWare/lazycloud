@@ -167,7 +167,6 @@ class CheckpointArchiveValidation(ContractModel):
 class CheckpointPersistenceRequest(ContractModel):
     checkpoint_id: str
     checkpoint_root: str
-    origin_storage_available: bool
     content_cache_available: bool
     cache_hash: str = ""
     cache_size_bytes: int = 0
@@ -604,15 +603,6 @@ def plan_checkpoint_persistence(
             archive_path=archive_path,
             origin_key=origin_key,
             error_message="cache is required for checkpoint persistence",
-        )
-    if not request.origin_storage_available:
-        return CheckpointPersistencePlan(
-            action=CheckpointPersistenceAction.Reject,
-            checkpoint_id=request.checkpoint_id,
-            checkpoint_path=checkpoint_path,
-            archive_path=archive_path,
-            origin_key=origin_key,
-            error_message="origin storage is required for checkpoint persistence",
         )
 
     metadata = None

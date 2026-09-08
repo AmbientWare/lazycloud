@@ -80,7 +80,6 @@ class ContainerWorkerArguments(argparse.Namespace):
     network_prefix: str | None = None
     route_local_target_host: str | None = None
     image_archive_extension: str | None = None
-    checkpoint_bucket: str | None = None
     workspace_storage_base_mount_path: str | None = None
     workspace_storage_mountpoint_binary: str | None = None
 
@@ -697,7 +696,6 @@ def _settings_from_args(args: ContainerWorkerArguments) -> WorkerSettings:
             args.image_archive_extension,
             loaded.image_archive_extension,
         ),
-        checkpoint_bucket=_override(args.checkpoint_bucket, loaded.checkpoint_bucket),
         workspace_storage_base_mount_path=_override(
             args.workspace_storage_base_mount_path,
             loaded.workspace_storage_base_mount_path,

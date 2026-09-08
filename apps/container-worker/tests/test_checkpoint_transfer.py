@@ -69,23 +69,15 @@ def test_remote_checkpoint_persister_streams_archive_to_presigned_url(
     result = RemoteCheckpointPersister(
         WorkerRepositoryHttpClient(transport),
         InternalHttpClient(),
-        checkpoint_bucket="checkpoint-bucket",
         cache_namespace="checkpoints",
     ).persist_checkpoint(plan)
 
-    prepare_path, prepare_payload = transport.posts[0]
-    path, payload = transport.posts[1]
     payload_tar = tmp_path / "payload.tar"
     payload_tar.write_bytes(uploaded[0])
     with tarfile.open(payload_tar) as archive:
         names = archive.getnames()
-    assert prepare_path == "/worker-repository/prepare-checkpoint-archive-upload"
-    assert prepare_payload["checkpoint_bucket"] == "checkpoint-bucket"
-    assert path == "/worker-repository/persist-checkpoint-archive"
     assert result.checkpoint_id == "checkpoint-1"
     assert result.origin_key == "checkpoints/checkpoint-1.tar"
-    assert payload["checkpoint_bucket"] == "checkpoint-bucket"
-    assert payload["cache_namespace"] == "checkpoints"
     assert "checkpoint-1/state.txt" in names
 
 

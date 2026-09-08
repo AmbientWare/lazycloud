@@ -28,7 +28,6 @@ PRESIGNED_DOWNLOAD_CHUNK_SIZE_BYTES = 1024 * 1024
 class RemoteCheckpointPersister:
     repository: WorkerRepositoryHttpClient
     internal_http: InternalHttpClient
-    checkpoint_bucket: str
     cache_namespace: str
     cache: WorkerContentCache | None = None
 
@@ -38,9 +37,6 @@ class RemoteCheckpointPersister:
     ) -> WorkerCheckpointPersistenceResult:
         if plan.error_message:
             raise RuntimeError(plan.error_message)
-        if not self.checkpoint_bucket:
-            msg = "checkpoint object bucket is required"
-            raise RuntimeError(msg)
         archive_path = Path(plan.archive_path)
         checkpoint_path = Path(plan.checkpoint_path)
         if plan.remove_existing_archive:
@@ -55,7 +51,6 @@ class RemoteCheckpointPersister:
                     origin_key=plan.origin_key,
                     cache_hash=cache_hash,
                     cache_size_bytes=size_bytes,
-                    checkpoint_bucket=self.checkpoint_bucket,
                 )
             )
             if not prepared.upload_url:
@@ -81,7 +76,6 @@ class RemoteCheckpointPersister:
                     origin_key=plan.origin_key,
                     cache_hash=cache_hash,
                     cache_size_bytes=size_bytes,
-                    checkpoint_bucket=self.checkpoint_bucket,
                     cache_namespace=self.cache_namespace,
                     locality=plan.metadata.locality if plan.metadata is not None else "",
                     accelerator=(plan.metadata.accelerator if plan.metadata is not None else ""),
@@ -105,7 +99,6 @@ class RemoteCheckpointPersister:
 class RemoteCheckpointRestoreSource:
     repository: WorkerRepositoryHttpClient
     internal_http: InternalHttpClient
-    checkpoint_bucket: str
     timeout_seconds: float = 300.0
     download_urls: dict[str, str] = field(default_factory=dict)
 
@@ -114,7 +107,6 @@ class RemoteCheckpointRestoreSource:
             GetCheckpointRestoreRequest(
                 checkpoint_id=checkpoint_id,
                 workspace_id=workspace_id,
-                checkpoint_bucket=self.checkpoint_bucket,
             )
         )
         if response.checkpoint is None or not response.download_url:
