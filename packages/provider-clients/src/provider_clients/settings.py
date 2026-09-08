@@ -22,8 +22,6 @@ _AWS_PRINCIPAL_PATTERN = re.compile(
 )
 _AWS_REGION_PATTERN = re.compile(r"(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+")
 RELEASE_MANIFEST_URL_ENV = f"{ENV_PREFIX}_RELEASE_MANIFEST_URL"
-_GPU_AMI_IDS_ENV = f"{ENV_PREFIX}_AWS_CAPACITY_GPU_AMI_IDS"
-_INSTANCE_PRICES_ENV = f"{ENV_PREFIX}_AWS_CAPACITY_INSTANCE_HOURLY_MICROS"
 AWS_CONNECTION_CONTROL_PRINCIPAL_ENV = f"{ENV_PREFIX}_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN"
 
 
@@ -229,23 +227,12 @@ class AwsCapacitySettings(BaseModel):
             )
             if not value
         ]
-        missing_from_deployment = [
-            name
-            for name, value in (
-                (f"instance price estimates ({_INSTANCE_PRICES_ENV})", self.instance_hourly_micros),
-            )
-            if not value
-        ]
-        problems: list[str] = []
         if missing_from_release:
-            problems.append(
+            raise ValueError(
+                "AWS capacity configuration is incomplete: "
                 f"the release at {RELEASE_MANIFEST_URL_ENV} published no "
                 + ", ".join(missing_from_release)
             )
-        if missing_from_deployment:
-            problems.append("this deployment authored no " + ", ".join(missing_from_deployment))
-        if problems:
-            raise ValueError("AWS capacity configuration is incomplete: " + "; ".join(problems))
         return self
 
     def binaries_by_region(

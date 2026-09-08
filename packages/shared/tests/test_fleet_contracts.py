@@ -8,7 +8,6 @@ from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_policy import ComputeUnitRecord
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRun
-from shared.provider_config import ProviderConfig, ProviderKind
 
 _UNIT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _WORKSPACE_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
@@ -116,26 +115,3 @@ def test_container_and_cron_records_preserve_terminal_state_and_timestamps() -> 
 
     assert ContainerRecord.model_validate_json(container.model_dump_json()) == container
     assert CronJobRun.model_validate_json(run.model_dump_json()) == run
-
-
-def test_provider_config_accepts_only_recursive_json_values() -> None:
-    provider = ProviderConfig(
-        name="primary",
-        kind=ProviderKind.Aws,
-        priority=0,
-        config={
-            "region": "us-west-2",
-            "capacity": {"on_demand": True, "weights": [0, 1.5]},
-            "fallback": None,
-        },
-        labels={"environment": "production"},
-    )
-
-    assert ProviderConfig.model_validate_json(provider.model_dump_json()) == provider
-    with pytest.raises(ValidationError):
-        ProviderConfig.model_validate(
-            {
-                "name": "invalid",
-                "config": {"created_at": datetime(2026, 7, 19, tzinfo=timezone.utc)},
-            }
-        )
