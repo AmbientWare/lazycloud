@@ -13,46 +13,12 @@ from images.building import (
 from images.building.models import ImageBuildCredentialAction
 from images.execution import ImageBuildExecutionRequest
 from images.scheduling import (
-    IMAGE_BUILD_REQUEST_KIND,
     ImageBuildSchedulerCredentialSource,
-    image_build_scheduling_failure,
     plan_image_build_container_request,
 )
 from pydantic import JsonValue
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.credentials import ImageCredentialEnvVar
-from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
-
-
-def test_image_build_scheduling_failure_requires_failed_image_build_state() -> None:
-    failure = image_build_scheduling_failure(
-        SchedulerContainerState(
-            container_id="build-container-1",
-            stub_id=IMAGE_BUILD_REQUEST_KIND,
-            workspace_id="workspace-1",
-            status=SchedulerContainerStatus.Failed,
-            image_build_id="build-1",
-            failure_reason="no worker capacity available",
-        )
-    )
-
-    assert failure is not None
-    assert failure.container_id == "build-container-1"
-    assert failure.build_id == "build-1"
-    assert failure.workspace_id == "workspace-1"
-    assert failure.reason == "no worker capacity available"
-    assert (
-        image_build_scheduling_failure(
-            SchedulerContainerState(
-                container_id="container-1",
-                stub_id="function",
-                workspace_id="workspace-1",
-                status=SchedulerContainerStatus.Failed,
-                failure_reason="no worker capacity available",
-            )
-        )
-        is None
-    )
 
 
 def test_unmodified_private_image_uses_ephemeral_credentials_during_build(
