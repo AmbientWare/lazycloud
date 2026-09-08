@@ -100,10 +100,6 @@ class S3ObjectStoreSettings(S3Credentials):
             expiration = self.credential_expires_at
             if expiration.tzinfo is None or expiration.utcoffset() is None:
                 raise ValueError("object-store credential expiration must include a timezone")
-            if not self.session_token:
-                raise ValueError(
-                    "object-store credential expiration requires a temporary session token"
-                )
         return self
 
 

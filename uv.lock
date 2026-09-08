@@ -30,6 +30,7 @@ members = [
     "provider-aws",
     "provider-clients",
     "provider-cloudflare",
+    "provider-garage",
     "provider-github",
     "provider-hetzner",
     "provider-resend",
@@ -185,6 +186,7 @@ dependencies = [
     { name = "provider-aws" },
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
+    { name = "provider-garage" },
     { name = "provider-github" },
     { name = "provider-resend" },
     { name = "provider-stripe" },
@@ -224,6 +226,7 @@ requires-dist = [
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
+    { name = "provider-garage", editable = "packages/providers/garage" },
     { name = "provider-github", editable = "packages/providers/github" },
     { name = "provider-resend", editable = "packages/providers/resend" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
@@ -1668,6 +1671,25 @@ requires-dist = [
 ]
 
 [[package]]
+name = "provider-garage"
+version = "0.1.0"
+source = { editable = "packages/providers/garage" }
+dependencies = [
+    { name = "httpx" },
+    { name = "lazycloud-shared" },
+    { name = "pydantic-settings" },
+    { name = "storage-client" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "pydantic-settings", specifier = ">=2.5,<3" },
+    { name = "storage-client", editable = "packages/storage-client" },
+]
+
+[[package]]
 name = "provider-github"
 version = "0.1.0"
 source = { editable = "packages/providers/github" }
@@ -2634,6 +2656,7 @@ dev = [
     { name = "provider-aws" },
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
+    { name = "provider-garage" },
     { name = "provider-github" },
     { name = "provider-hetzner" },
     { name = "provider-resend" },
@@ -2677,6 +2700,7 @@ workspace = [
     { name = "provider-aws" },
     { name = "provider-clients" },
     { name = "provider-cloudflare" },
+    { name = "provider-garage" },
     { name = "provider-github" },
     { name = "provider-hetzner" },
     { name = "provider-resend" },
@@ -2727,6 +2751,7 @@ dev = [
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
+    { name = "provider-garage", editable = "packages/providers/garage" },
     { name = "provider-github", editable = "packages/providers/github" },
     { name = "provider-hetzner", editable = "packages/providers/hetzner" },
     { name = "provider-resend", editable = "packages/providers/resend" },
@@ -2770,6 +2795,7 @@ workspace = [
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-clients", editable = "packages/provider-clients" },
     { name = "provider-cloudflare", editable = "packages/providers/cloudflare" },
+    { name = "provider-garage", editable = "packages/providers/garage" },
     { name = "provider-github", editable = "packages/providers/github" },
     { name = "provider-hetzner", editable = "packages/providers/hetzner" },
     { name = "provider-resend", editable = "packages/providers/resend" },

@@ -137,7 +137,6 @@ from provider_clients.settings import (
 )
 from provider_clients.workspace_compute import configured_platform_compute_providers
 from provider_cloudflare import CloudflareSettings
-from provider_cloudflare.workspace_storage import CloudflareWorkspaceStorageIssuer
 from provider_github import GitHubAppSettings
 from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
@@ -243,6 +242,7 @@ from api.server.worker_repository_service import (
     WorkerRepositoryDependencies,
     WorkerRepositoryService,
 )
+from api.server.workspace_storage_composition import managed_workspace_storage_issuer
 from api.settings import (
     AgentDisconnectReconciliationSettings,
     AgentRouteReconciliationSettings,
@@ -766,7 +766,7 @@ class ApiServices(ApiServiceCore):
             workspace_changes=workspace_changes,
         )
         workspace_storage_issuer = workspace_storage_issuer or WorkspaceStorageRouter(
-            managed=CloudflareWorkspaceStorageIssuer(object_store_config)
+            managed=managed_workspace_storage_issuer(object_store_config)
         )
         payment_provider = stripe_config.provider_factory()
         # No mailer here. Inviting queues a message and returns. The scheduler's
