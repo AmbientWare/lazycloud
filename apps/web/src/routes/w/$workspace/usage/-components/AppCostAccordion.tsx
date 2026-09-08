@@ -13,6 +13,7 @@ import { accountCostsQueryOptions, type UsageCostWindow } from "@/lib/queries/us
 import { cn } from "@/lib/utils";
 
 import { AppWorkloadCosts } from "./AppWorkloadCosts";
+import { CostComponents } from "./CostComponents";
 import { RowFigures } from "./RowFigures";
 
 /**
@@ -153,12 +154,6 @@ function AppRow({
   );
 }
 
-/**
- * Usage that reached no app: an image build, or work started before an app owned
- * it. It has a cost and nothing beneath it to open, so the row does not pretend
- * to — and it cannot be resolved to one workspace's workloads either, since the
- * empty app id is the same key in every workspace the account holds.
- */
 function UnattributedRow({
   row,
   share,
@@ -169,19 +164,24 @@ function UnattributedRow({
   currency: string;
 }) {
   return (
-    <div className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5">
-      <span className="size-3.5 shrink-0" aria-hidden="true" />
-      {row.category === "image-build" ? (
-        <RowIdentity name="Image builds" detail={`Builds · ${workspaceLabel(row)}`} />
-      ) : (
-        <RowIdentity name="Unattributed" detail={`No app · ${workspaceLabel(row)}`} />
-      )}
-      <RowFigures
-        share={share}
-        label={`${shareLabel(share)} of spend over this range`}
-        costNanos={row.cost_nanos}
-        currency={currency}
-      />
+    <div className="flex min-w-0 flex-col gap-1.5 px-3 py-2.5">
+      <div className="flex w-full min-w-0 items-center gap-3">
+        <span className="size-3.5 shrink-0" aria-hidden="true" />
+        {row.category === "image-build" ? (
+          <RowIdentity name="Image builds" detail={`Builds · ${workspaceLabel(row)}`} />
+        ) : (
+          <RowIdentity name="Unattributed" detail={`No app · ${workspaceLabel(row)}`} />
+        )}
+        <RowFigures
+          share={share}
+          label={`${shareLabel(share)} of spend over this range`}
+          costNanos={row.cost_nanos}
+          currency={currency}
+        />
+      </div>
+      <div className="pl-6.5">
+        <CostComponents components={row.components} currency={currency} />
+      </div>
     </div>
   );
 }

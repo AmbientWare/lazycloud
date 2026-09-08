@@ -3,54 +3,36 @@ import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
-import {
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-  type ChartConfig,
-} from "@/components/ui/chart";
+import { ChartContainer, ChartTooltip, type ChartConfig } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { BilledDimension, UsageCostBucket } from "@/lib/api/schemas";
+import { billedDimensions, type BilledDimension, type UsageCostBucket } from "@/lib/api/schemas";
 import { exactDollars, formatCostNanos } from "@/lib/money";
 import { accountCostSeriesQueryOptions, type UsageCostWindow } from "@/lib/queries/usage";
 
 import { intervalLabel } from "./ranges";
-
-const DIMENSION_LABELS: Record<BilledDimension, string> = {
-  compute_runtime: "Compute",
-  network_egress: "Egress",
-  volume_storage: "Volume storage",
-};
+import { COST_DIMENSIONS } from "./cost-colors";
 
 const CHART_CONFIG: ChartConfig = {
   cost: { label: "Cost", color: "var(--brand)" },
+  ...COST_DIMENSIONS,
 };
 
-type Interval = {
-  label: string;
+type Interval = Record<BilledDimension, number> & {
+  started_at: string;
   cost: number;
   dimensions: { dimension: BilledDimension; cost_nanos: number }[];
 };
 
-/**
- * What the account spent, interval by interval, over the range the page is set
- * to.
- *
- * One series rather than a bar stacked by invoice line: the page already answers
- * what the money went on, per app and per workload, in the region below this
- * one. Here the question is when, and a three-colour stack would spend the
- * page's only accent on a distinction it is not being read for — most of which
- * is one colour anyway on an account whose spend is compute. The composition is
- * still a hover away.
- */
 export function SpendChart({
   window,
   bucket,
   caption,
+  byCategory,
 }: {
   window: UsageCostWindow;
   bucket: UsageCostBucket;
   caption: string;
+  byCategory: boolean;
 }) {
   const series = useQuery(accountCostSeriesQueryOptions(window, bucket));
 
@@ -71,18 +53,30 @@ export function SpendChart({
   }
 
   const currency = series.data.currency;
-  const data: Interval[] = series.data.data.map((interval) => ({
-    label: intervalLabel(interval.started_at, bucket),
-    cost: interval.cost_nanos,
-    dimensions: interval.dimensions,
-  }));
+  const data: Interval[] = series.data.data.map((interval) => {
+    const row: Interval = {
+      started_at: interval.started_at,
+      cost: interval.cost_nanos,
+      dimensions: interval.dimensions,
+      compute_runtime: 0,
+      volume_storage: 0,
+      network_egress: 0,
+    };
+    for (const total of interval.dimensions) row[total.dimension] = total.cost_nanos;
+    return row;
+  });
 
   return (
-    <ChartContainer config={CHART_CONFIG} className="aspect-auto h-full w-full">
+    <ChartContainer
+      config={CHART_CONFIG}
+      className="aspect-auto h-full w-full"
+      aria-label={byCategory ? "Spend over time by category" : "Total spend over time"}
+    >
       <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
         <CartesianGrid stroke="var(--border)" vertical={false} />
         <XAxis
-          dataKey="label"
+          dataKey="started_at"
+          tickFormatter={(value: string) => intervalLabel(value, bucket)}
           stroke="var(--muted-foreground)"
           tickLine={false}
           axisLine={false}
@@ -100,27 +94,45 @@ export function SpendChart({
         />
         <ChartTooltip
           cursor={{ fill: "var(--accent)", opacity: 0.5 }}
-          content={
-            <ChartTooltipContent
-              labelClassName="text-muted-foreground"
-              formatter={(value, _name, item) => (
+          content={({ active, label }) => {
+            const interval = data.find((row) => row.started_at === label);
+            if (!active || !interval) return null;
+            return (
+              <div className="grid min-w-48 gap-2 rounded-lg border border-border/50 bg-background px-2.5 py-2 text-xs shadow-xl">
+                <p className="text-muted-foreground">
+                  {intervalLabel(interval.started_at, bucket)}
+                </p>
                 <IntervalBreakdown
-                  cost={Number(value) || 0}
-                  dimensions={(item.payload as Interval | undefined)?.dimensions ?? []}
+                  cost={interval.cost}
+                  dimensions={interval.dimensions}
                   currency={currency}
                 />
-              )}
+              </div>
+            );
+          }}
+        />
+        {byCategory ? (
+          billedDimensions.map((dimension) => (
+            <Bar
+              key={dimension}
+              dataKey={dimension}
+              name={COST_DIMENSIONS[dimension].label}
+              stackId="spend"
+              fill={`var(--color-${dimension})`}
+              maxBarSize={26}
+              isAnimationActive={false}
             />
-          }
-        />
-        <Bar
-          dataKey="cost"
-          name="Cost"
-          fill="var(--color-cost)"
-          radius={[3, 3, 0, 0]}
-          maxBarSize={26}
-          isAnimationActive={false}
-        />
+          ))
+        ) : (
+          <Bar
+            dataKey="cost"
+            name="Cost"
+            fill="var(--color-cost)"
+            radius={[3, 3, 0, 0]}
+            maxBarSize={26}
+            isAnimationActive={false}
+          />
+        )}
       </BarChart>
     </ChartContainer>
   );
@@ -149,7 +161,14 @@ function IntervalBreakdown({
           key={total.dimension}
           className="flex items-center justify-between gap-6 leading-none text-muted-foreground"
         >
-          <span>{DIMENSION_LABELS[total.dimension]}</span>
+          <span className="flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="size-2 shrink-0 rounded-[2px]"
+              style={{ backgroundColor: COST_DIMENSIONS[total.dimension].color }}
+            />
+            {COST_DIMENSIONS[total.dimension].label}
+          </span>
           <span className="mono tabular-nums">{formatCostNanos(total.cost_nanos, currency)}</span>
         </div>
       ))}

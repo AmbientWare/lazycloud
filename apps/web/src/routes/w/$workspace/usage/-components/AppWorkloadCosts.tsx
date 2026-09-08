@@ -5,22 +5,13 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
-import type { LedgerComponent, UsageCostRow } from "@/lib/api/schemas";
+import type { UsageCostRow } from "@/lib/api/schemas";
 import { formatDuration, shareLabel } from "@/lib/format";
-import { formatCostNanos } from "@/lib/money";
 import { selectInfiniteList } from "@/lib/queries/infinite-list";
 import { accountCostsQueryOptions, type UsageCostWindow } from "@/lib/queries/usage";
 
+import { CostComponents } from "./CostComponents";
 import { RowFigures } from "./RowFigures";
-
-const COMPONENT_LABELS: Record<LedgerComponent, string> = {
-  container_time: "Container",
-  cpu: "CPU",
-  memory: "Memory",
-  gpu: "GPU",
-  egress: "Egress",
-  volume_storage: "Volume storage",
-};
 
 /**
  * What one app's workloads cost over the same range, and what each was charged
@@ -94,23 +85,7 @@ export function AppWorkloadCosts({
                   compact
                 />
               </div>
-              {/* What the row was charged for, straight from the ledger. A
-                  component priced at zero is kept where something was measured —
-                  egress at $0.00 says the traffic was counted and is free — and
-                  dropped where nothing was: a GPU line on a workload that asked
-                  for none is a resource named, not a resource measured. */}
-              <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-                {row.components
-                  .filter((component) => component.quantity > 0)
-                  .map((component) => (
-                    <li key={component.component}>
-                      {COMPONENT_LABELS[component.component]}{" "}
-                      <span className="mono tabular-nums text-foreground">
-                        {formatCostNanos(component.cost_nanos, currency)}
-                      </span>
-                    </li>
-                  ))}
-              </ul>
+              <CostComponents components={row.components} currency={currency} />
             </li>
           );
         })}
