@@ -199,6 +199,7 @@ from shared.http.functions import (
 from shared.identity import WorkspaceRecord
 from shared.image_building.credentials import parse_ecr_registry
 from shared.payments import PaymentProvider
+from shared.scheduling import SchedulerWorkerRequest
 from shared.workspace_storage import WorkspaceStorageIssuer
 from storage.image_archive import IMAGE_ARCHIVE_EXTENSION, ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
@@ -250,6 +251,24 @@ from api.settings import (
 )
 from billing import BillingAccountService, DatabaseBillingAdmission
 from database import AsyncDatabaseClient, DatabaseClient
+
+
+@dataclass(frozen=True, slots=True)
+class ApiContainerSchedulingFailureHandler:
+    containers: ContainerSchedulingPersistenceService
+    images: ImageBuildService
+
+    def mark_scheduling_failed(
+        self,
+        request: SchedulerWorkerRequest,
+        reason: str,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        self.containers.mark_scheduling_failed(request, reason, now=now)
+        self.images.fail_container_build(
+            request.container_id, reason, workspace_id=request.workspace_id
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -976,6 +995,9 @@ class ApiServices(ApiServiceCore):
             publication_publisher,
             archive_settings=image_archive_config,
             archive_store=resolved_image_archive_store,
+        )
+        container_scheduler.failure_handler = ApiContainerSchedulingFailureHandler(
+            scheduling_persistence, images
         )
         deployment_resources = DeploymentResourceService(context)
         custom_domains = CustomDomainService(
