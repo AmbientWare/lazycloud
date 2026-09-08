@@ -280,9 +280,6 @@ class StubConfig(ContractModel):
     python_version: str | None = None
     handler: str | None = None
     status: str | None = None
-    on_start: str = ""
-    on_deploy: str = ""
-    on_deploy_stub_id: str = ""
 
     @field_validator("callback_url", mode="before")
     @classmethod
