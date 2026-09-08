@@ -139,6 +139,10 @@ BILLED_METRICS: Mapping[UsageMetric, BilledUsage] = {
         basis=LedgerBasis.Measured,
         components=(LedgerComponent.VolumeStorage,),
     ),
+    UsageMetric.ArtifactStorageByteSeconds: BilledUsage(
+        basis=LedgerBasis.Measured,
+        components=(LedgerComponent.VolumeStorage,),
+    ),
 }
 """Every metric that produces money, and what each one produces it for.
 

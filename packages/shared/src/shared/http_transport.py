@@ -162,6 +162,9 @@ class HttpChannel:
     def patch(self, path: str, payload: Mapping[str, JsonValue] | None = None) -> JsonValue:
         return self.request("PATCH", path, payload=payload)
 
+    def put(self, path: str, payload: Mapping[str, JsonValue] | None = None) -> JsonValue:
+        return self.request("PUT", path, payload=payload)
+
     def delete(self, path: str) -> JsonValue:
         return self.request("DELETE", path)
 

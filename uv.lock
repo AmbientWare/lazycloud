@@ -2267,6 +2267,7 @@ name = "storage"
 version = "0.1.0"
 source = { editable = "packages/storage" }
 dependencies = [
+    { name = "billing" },
     { name = "database" },
     { name = "lazycloud-shared" },
     { name = "observability" },
@@ -2277,6 +2278,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "billing", editable = "packages/billing" },
     { name = "database", editable = "packages/database" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "observability", editable = "packages/observability" },

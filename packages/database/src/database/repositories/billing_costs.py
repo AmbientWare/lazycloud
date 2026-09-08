@@ -9,6 +9,7 @@ from database.repositories.common import bucket_index, names_by_id
 from database.tables.apps import AppTable, StubTable
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.identity import WorkspaceTable
+from shared.artifacts import ARTIFACT_STORAGE_SUBJECT
 from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.errors import InvalidInputError
 from shared.http.usage import UsageCostGroupKey
@@ -660,6 +661,8 @@ def _cost_row(
         workspace_id, app_id, workload_id, task_id = (*key, "")[:4]
         category = IMAGE_BUILD_WORKLOAD_ID if workload_id == IMAGE_BUILD_WORKLOAD_ID else ""
     workload_name, workload_kind = names.workloads.get(workload_id, ("", ""))
+    if workload_id == ARTIFACT_STORAGE_SUBJECT:
+        workload_name = "Artifacts"
     return LedgerCostRow(
         workspace_id=workspace_id,
         workspace_name=names.workspaces.get(workspace_id, ""),

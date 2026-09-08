@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.observability import UsageRepository
 from database.repositories.storage import VolumeMeteringTarget, VolumeRepository
 from observability.usage_pricing import MeteredUsagePricer
@@ -22,6 +23,7 @@ from shared.usage import (
     usage_record_id,
 )
 
+from storage.artifact_metering import meter_due_artifacts
 from storage.context import StorageContext
 from storage.volume_filesystem import VolumeFilesystem, VolumeNamespace
 
@@ -89,8 +91,9 @@ class PersistentVolumeMeteringService:
                 metered_before=observed_at - self.interval,
                 limit=limit,
             )
-        metered_count = 0
-        failure_count = 0
+        metered_count, failure_count = meter_due_artifacts(
+            self.context, now=observed_at, limit=limit
+        )
         for target in targets:
             try:
                 observed_size = self._occupancy_bytes(target)
@@ -135,35 +138,6 @@ class PersistentVolumeMeteringService:
         workspace_id: str,
         now: datetime | None = None,
     ) -> PersistentVolumeMeteringResult | None:
-        return self._finalize_volume_deletion(
-            name,
-            workspace_id=workspace_id,
-            now=now,
-            deletion_authority=False,
-        )
-
-    def finalize_volume_deletion_for_workspace_deletion(
-        self,
-        name: str,
-        *,
-        workspace_id: str,
-        now: datetime | None = None,
-    ) -> PersistentVolumeMeteringResult | None:
-        return self._finalize_volume_deletion(
-            name,
-            workspace_id=workspace_id,
-            now=now,
-            deletion_authority=True,
-        )
-
-    def _finalize_volume_deletion(
-        self,
-        name: str,
-        *,
-        workspace_id: str,
-        now: datetime | None,
-        deletion_authority: bool,
-    ) -> PersistentVolumeMeteringResult | None:
         requested_observed_at = to_utc(now) if now is not None else None
         with self.context.database.session() as session:
             target = VolumeRepository(session).get_metering_target(
@@ -185,13 +159,11 @@ class PersistentVolumeMeteringService:
                 requested_observed_at or to_utc(utc_now()),
                 observation_quality=MeteringObservationQuality.CheckpointEstimate,
                 observation_error_type=type(exc).__name__,
-                deletion_authority=deletion_authority,
             )
         return self._record_observation(
             target,
             observed_size_bytes,
             requested_observed_at or to_utc(utc_now()),
-            deletion_authority=deletion_authority,
         )
 
     def _record_observation(
@@ -204,9 +176,9 @@ class PersistentVolumeMeteringService:
             MeteringObservationQuality.Authoritative
         ),
         observation_error_type: str = "",
-        deletion_authority: bool = False,
     ) -> PersistentVolumeMeteringResult | None:
         with self.context.database.session() as session:
+            WorkspaceRepository(session).lock_storage_accounting_owner(target.workspace_id)
             volumes = VolumeRepository(session)
             checkpoint = volumes.lock_metering_checkpoint(target.id)
             if checkpoint is None:
@@ -252,11 +224,7 @@ class PersistentVolumeMeteringService:
                 metadata=metadata,
             )
             usage = UsageRepository(session)
-            record = (
-                usage.append_for_workspace_deletion(record)
-                if deletion_authority
-                else usage.append(record)
-            )
+            record = usage.append_storage(record)
             # In the transaction that wrote the record, never after it. Volume
             # storage is a billed dimension, and a window recorded without its
             # cost is money this platform measured and can no longer charge for.

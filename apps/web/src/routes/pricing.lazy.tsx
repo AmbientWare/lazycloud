@@ -119,10 +119,10 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
 function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
   return [
     {
-      heading: "Volumes",
+      heading: "Volume storage",
       lines: [
         {
-          label: "Kept between runs",
+          label: "Volumes and artifacts",
           figure: catalog.platform_rate.nanos_per_volume_gib_month,
           /* Thirty days, said rather than implied. Storage meters by the second,
            so a calendar month is charged for the days it actually has — and a

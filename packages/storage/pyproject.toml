@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "lazycloud-shared==0.1.0",
     "database",
+    "billing",
     "observability",
     "pydantic>=2.8,<3",
     "pydantic-settings>=2.4,<3",

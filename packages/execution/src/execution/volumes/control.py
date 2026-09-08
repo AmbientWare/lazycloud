@@ -137,7 +137,7 @@ class VolumeControlService:
             request.name,
             workspace_id=workspace_id,
         )
-        self.volume_metering.finalize_volume_deletion_for_workspace_deletion(
+        self.volume_metering.finalize_volume_deletion(
             request.name,
             workspace_id=resolved.workspace.id,
         )

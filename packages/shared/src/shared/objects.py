@@ -4,11 +4,11 @@ from datetime import datetime
 
 from pydantic import ConfigDict, Field
 
-from shared.contracts import ContractModel
+from shared.artifacts import ArtifactObjectFields
 from shared.timestamps import utc_now
 
 
-class ObjectWriteCommand(ContractModel):
+class ObjectWriteCommand(ArtifactObjectFields):
     """Validated immutable intent for one object location write."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -22,7 +22,7 @@ class ObjectWriteCommand(ContractModel):
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
-class ObjectRecord(ContractModel):
+class ObjectRecord(ArtifactObjectFields):
     id: str
     bucket: str
     key: str
