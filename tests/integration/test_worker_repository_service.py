@@ -1643,6 +1643,9 @@ def test_container_shutdown_requires_assigned_worker_storage_release(
     with isolated_services.context.database.session() as session:
         pending = ContainerRepository(session).list_pending_storage_cleanup("worker-1")
         assert pending == [container_id]
+        assert (
+            ContainerRepository(session).list_shutdown_targets(workspace_id=workspace.id) == targets
+        )
         assert not ContainerRepository(session).list_pending_storage_cleanup("worker-2")
 
     with pytest.raises(UpstreamUnavailableError, match="workers=worker-1"):
@@ -1681,6 +1684,7 @@ def test_container_shutdown_requires_assigned_worker_storage_release(
 
     with isolated_services.context.database.session() as session:
         assert not ContainerRepository(session).list_pending_storage_cleanup("worker-1")
+        assert not ContainerRepository(session).list_shutdown_targets(workspace_id=workspace.id)
 
     assert redis.set_members(redis.key("worker-events", "pending", "worker-1")) == set()
     assert redis.set_members(redis.key("worker-events", "ack", event_id)) == set()

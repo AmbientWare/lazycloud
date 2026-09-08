@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -24,8 +23,10 @@ from database import (
 )
 
 
-def test_pod_url_upsert_preserves_identity_timestamps_port_and_cascade(tmp_path: Path) -> None:
-    database_url = f"sqlite+pysqlite:///{tmp_path / 'pod-urls.db'}"
+def test_pod_url_upsert_preserves_identity_timestamps_port_and_cascade(
+    postgres_database_url: URL,
+) -> None:
+    database_url = postgres_database_url.render_as_string(hide_password=False)
     bootstrap_database(database_url)
     database = _client(database_url)
     try:

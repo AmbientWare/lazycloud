@@ -19,8 +19,9 @@ the live metadata always agrees with it, which sounds like safety and is the
 opposite: nothing could detect a model that changed without a revision to carry
 a live database across. Explicit DDL is the fixed thing the metadata is compared
 against, and
-`test_a_model_changed_without_a_revision_is_caught_here` is that comparison. It
-fails in a pull request rather than in a bootstrap job against production.
+`test_postgresql_baseline_matches_metadata_constraints_and_indexes` is that
+comparison. It fails in a pull request rather than in a bootstrap job against
+production.
 
 A PostgreSQL extension the schema needs is declared twice, with the metadata in
 `tables/base.py` and again in the initial revision. The metadata installs them
