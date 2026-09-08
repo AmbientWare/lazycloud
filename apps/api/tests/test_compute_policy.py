@@ -9,10 +9,12 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from compute.agent_control import agent_machine_worker_id
 from compute.policy import WorkspaceComputePolicyService
+from compute.providers import ResolvedComputeProvider
 from compute.request_placement import (
     ComputeCapacityPlacementRequest,
     ComputeCapacityPlacementService,
 )
+from compute.service import ComputeService
 from control.service import ControlPlaneService
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.compute import (
@@ -56,6 +58,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.deployment_records import DeploymentSpec
+from shared.errors import UpstreamUnavailableError
 from shared.http.compute_policy import (
     MachinePoolListResponse,
     WorkspaceComputeInstanceListResponse,
@@ -309,6 +312,30 @@ def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
     )
 
     assert result.pool == "shared-pool"
+
+
+def test_pool_selection_survives_supplier_failure_until_capacity_is_needed(
+    isolated_services: ApiServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unavailable_providers(
+        self: ComputeService, workspace_id: str
+    ) -> tuple[ResolvedComputeProvider, ...]:
+        raise UpstreamUnavailableError("supplier unavailable")
+
+    monkeypatch.setattr(ComputeService, "pooled_providers", unavailable_providers)
+    placement = ComputeCapacityPlacementService(
+        isolated_services.context,
+        WorkspaceComputePolicyService(isolated_services.context),
+        isolated_services.compute,
+    )
+    request = ComputeCapacityPlacementRequest(
+        workspace_id=_workspace_id(isolated_services),
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+    )
+
+    assert placement.place(request).pool == LAZYCLOUD_MACHINE_POOL
+    with pytest.raises(UpstreamUnavailableError, match="supplier unavailable"):
+        placement.prepare_capacity(request)
 
 
 def test_placement_defaults_to_the_platform_pool_without_a_connection(

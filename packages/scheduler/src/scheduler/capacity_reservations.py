@@ -1087,9 +1087,6 @@ class CapacityReservationService:
         with self.reservations.dispatch_lock(capacity_owner_id):
             yield
 
-    def can_acquire(self, request: SchedulerWorkerRequest) -> bool:
-        return self._controller_for_request(request) is not None
-
     def acquire(
         self,
         request: SchedulerWorkerRequest,
@@ -1644,13 +1641,6 @@ class CapacityReservationService:
             expected_resource_version=reservation.resource_version,
             now=now,
         )
-
-    def _controller_for_request(
-        self,
-        request: SchedulerWorkerRequest,
-    ) -> CapacityAcquisitionController | None:
-        candidates = self._controllers_for_request(request)
-        return candidates[0] if candidates else None
 
     def _controllers_for_request(
         self,
