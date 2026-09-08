@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const productRegionSchema = z.enum([
   "us-east",
+  "us-central",
   "us-west",
   "eu-central",
   "eu-north",

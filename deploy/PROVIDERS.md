@@ -6,8 +6,10 @@ their own scheduler loops, worker agent, billing flow, or application release.
 
 ## Ownership
 
-Terraform owns persistent infrastructure and image identities. Code owns capacity
-policy. Helm owns supplier prices and secret property bindings. Packer owns prepared host images.
+Terraform owns persistent platform infrastructure. Deployment image builders
+publish host images, and deployment configuration records their verified identities.
+Code owns capacity policy. Helm owns configured supplier prices and secret
+property bindings. Providers with price APIs supply current quotes.
 The normal deployment supplies
 configuration and credentials to the application. The compute service owns
 durable units, desired capacity, mutation fencing, retries, and drain decisions.
@@ -66,9 +68,45 @@ concurrent operator changes before publication. Ship reads the non-secret
 infrastructure descriptor published by Terraform;
 it does not apply infrastructure changes for you.
 
-For the first Hetzner activation, explicitly advance the host release pin to a
-release containing provider-token enrollment. Routine Ship retains the existing
-host pin. Reusing a pre-Hetzner agent would leave a valid image unable to enroll.
+This release requires advancing the host manifest pin to an agent containing
+the shared `provider-bootstrap` enrollment mode. It changes enrollment for
+Hetzner as well as adding Hyperstack and OVH. Routine Ship retains the existing
+host pin, so select the new host manifest explicitly when deploying this feature.
+
+## Hyperstack and OVH deployment inputs
+
+Keep operator credentials in `~/.lazycloud/operator/deploy.env` with mode `0600`.
+The application reads two JSON credential maps, indexed by provider reference:
+
+- `LAZYCLOUD_PLATFORM_CAPACITY_HYPERSTACK_TOKENS`: `hyperstack:us` maps to its API key.
+- `LAZYCLOUD_PLATFORM_CAPACITY_OVH_CREDENTIALS`: `ovh:us` maps to an object containing
+  `application_key`, `application_secret` and `consumer_key`.
+
+Publish the same named properties to the deployment's operator secret before
+enabling the corresponding provider. Preserve the other secret properties.
+Only the API and scheduler receive these credentials. Helm requires a provider's
+secret when its binding list is nonempty; an unconfigured provider needs no
+placeholder secret.
+
+The non-secret binding lists belong in the deployment environment's `runtime`:
+
+- `LAZYCLOUD_PLATFORM_CAPACITY_HYPERSTACK`: each entry has `ref`, `workspace`, and
+  `deployments_by_region`. The `US-1` entry names `environment_name`, `keypair_name`,
+  `image_name` and the verified `recipe_sha256` from image publication.
+- `LAZYCLOUD_PLATFORM_CAPACITY_OVH`: each entry has `ref`, `workspace`, `project_id`,
+  and `images_by_region`. Each enabled Virginia or Oregon region names its
+  published `image_id` and `recipe_sha256`.
+
+All platform bindings use the same capacity workspace, normally `default`.
+Keep provider references stable because durable units and launch records use them.
+Publish and verify the node images before adding the binding lists. Funding,
+quota and stock remain prerequisites for live purchases.
+
+Hyperstack uses on-demand eight-GPU A100 or H100 nodes in US-1, Texas. OVH uses
+hourly Public Cloud CPU instances in Virginia and Oregon. Neither adapter
+purchases a reservation or monthly plan. See the provider setup instructions for
+[Hyperstack](../packages/providers/hyperstack/README.md) and
+[OVH](../packages/providers/ovh/README.md).
 
 ## Scheduler and adapter boundary
 
@@ -109,7 +147,8 @@ retryable; retries must not create duplicate billable resources.
 
 AWS uses IAM roles, its VPC/subnets, AMIs, and Auto Scaling groups. Hetzner uses a
 project token, snapshots, and labeled server groups. AWS can verify signed
-instance identity; Hetzner uses launch-scoped single-use enrollment credentials.
+instance identity; Hetzner, Hyperstack and OVH use launch-scoped single-use
+enrollment credentials verified against provider inventory and durable launches.
 These differences stay in adapters and composition. All enrolled nodes use the
 same agent, runtime, WireGuard control path, worker protocol, and metering.
 

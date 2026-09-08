@@ -65,7 +65,7 @@ build {
   }
 
   provisioner "shell" {
-    script = "${path.root}/prepare-host.sh"
+    script = "${path.root}/../node-images/prepare-ubuntu-host.sh"
   }
 
   post-processor "manifest" {

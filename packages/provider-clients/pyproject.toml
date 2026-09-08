@@ -11,6 +11,8 @@ dependencies = [
     "lazycloud-shared==0.1.0",
     "provider-aws",
     "provider-hetzner",
+    "provider-hyperstack",
+    "provider-ovh",
     "images",
     "pydantic>=2.8,<3",
     "pydantic-settings>=2.4,<3",

@@ -33,6 +33,8 @@ members = [
     "provider-garage",
     "provider-github",
     "provider-hetzner",
+    "provider-hyperstack",
+    "provider-ovh",
     "provider-resend",
     "provider-stripe",
     "runner",
@@ -1631,6 +1633,8 @@ dependencies = [
     { name = "networking" },
     { name = "provider-aws" },
     { name = "provider-hetzner" },
+    { name = "provider-hyperstack" },
+    { name = "provider-ovh" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
 ]
@@ -1645,6 +1649,8 @@ requires-dist = [
     { name = "networking", editable = "packages/networking" },
     { name = "provider-aws", editable = "packages/providers/aws" },
     { name = "provider-hetzner", editable = "packages/providers/hetzner" },
+    { name = "provider-hyperstack", editable = "packages/providers/hyperstack" },
+    { name = "provider-ovh", editable = "packages/providers/ovh" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
 ]
@@ -1721,6 +1727,40 @@ dependencies = [
 requires-dist = [
     { name = "compute", editable = "packages/compute" },
     { name = "coordination", editable = "packages/coordination" },
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "lazycloud-shared", editable = "packages/shared" },
+]
+
+[[package]]
+name = "provider-hyperstack"
+version = "0.1.0"
+source = { editable = "packages/providers/hyperstack" }
+dependencies = [
+    { name = "compute" },
+    { name = "httpx" },
+    { name = "lazycloud-shared" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "compute", editable = "packages/compute" },
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "lazycloud-shared", editable = "packages/shared" },
+]
+
+[[package]]
+name = "provider-ovh"
+version = "0.1.0"
+source = { editable = "packages/providers/ovh" }
+dependencies = [
+    { name = "compute" },
+    { name = "httpx" },
+    { name = "lazycloud-shared" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "compute", editable = "packages/compute" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "lazycloud-shared", editable = "packages/shared" },
 ]
@@ -2659,6 +2699,8 @@ dev = [
     { name = "provider-garage" },
     { name = "provider-github" },
     { name = "provider-hetzner" },
+    { name = "provider-hyperstack" },
+    { name = "provider-ovh" },
     { name = "provider-resend" },
     { name = "provider-stripe" },
     { name = "pytest" },
@@ -2703,6 +2745,8 @@ workspace = [
     { name = "provider-garage" },
     { name = "provider-github" },
     { name = "provider-hetzner" },
+    { name = "provider-hyperstack" },
+    { name = "provider-ovh" },
     { name = "provider-resend" },
     { name = "provider-stripe" },
     { name = "runner" },
@@ -2754,6 +2798,8 @@ dev = [
     { name = "provider-garage", editable = "packages/providers/garage" },
     { name = "provider-github", editable = "packages/providers/github" },
     { name = "provider-hetzner", editable = "packages/providers/hetzner" },
+    { name = "provider-hyperstack", editable = "packages/providers/hyperstack" },
+    { name = "provider-ovh", editable = "packages/providers/ovh" },
     { name = "provider-resend", editable = "packages/providers/resend" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "pytest", specifier = ">=9,<10" },
@@ -2798,6 +2844,8 @@ workspace = [
     { name = "provider-garage", editable = "packages/providers/garage" },
     { name = "provider-github", editable = "packages/providers/github" },
     { name = "provider-hetzner", editable = "packages/providers/hetzner" },
+    { name = "provider-hyperstack", editable = "packages/providers/hyperstack" },
+    { name = "provider-ovh", editable = "packages/providers/ovh" },
     { name = "provider-resend", editable = "packages/providers/resend" },
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "runner", editable = "packages/runner" },

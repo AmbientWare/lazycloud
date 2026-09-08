@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from provider_clients.settings import HetznerCapacityBinding
+from provider_clients.settings import (
+    HetznerCapacityBinding,
+    HyperstackCapacityBinding,
+    OvhCapacityBinding,
+)
 from provider_hetzner import HetznerNodeImage
 from pydantic import (
     BaseModel,
@@ -247,6 +251,15 @@ def render(
     authored_runtime["LAZYCLOUD_PLATFORM_CAPACITY_HETZNER"] = (
         TypeAdapter(list[HetznerCapacityBinding]).dump_json(resolved_bindings).decode()
     )
+    for name, model in (
+        ("LAZYCLOUD_PLATFORM_CAPACITY_HYPERSTACK", HyperstackCapacityBinding),
+        ("LAZYCLOUD_PLATFORM_CAPACITY_OVH", OvhCapacityBinding),
+    ):
+        if name in authored_runtime:
+            for binding in TypeAdapter(list[dict[str, JsonValue]]).validate_json(
+                authored_runtime[name]
+            ):
+                model.model_validate(binding)
     values = dict(environment)
     values["runtime"] = {**runtime, **authored_runtime}
     generated: dict[str, dict[str, JsonValue]] = {

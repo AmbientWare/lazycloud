@@ -161,12 +161,14 @@ type AgentCapacityInterruptionDetector = Callable[[], AgentCapacityInterruptionN
 
 class ProviderInstanceIdentityMode(StrEnum):
     ImdsV2 = "imds-v2"
-    HetznerBootstrap = "hetzner-bootstrap"
+    Bootstrap = "provider-bootstrap"
 
 
 _PROVIDER_IDENTITY_MODES = {
     ProviderKind.Aws: ProviderInstanceIdentityMode.ImdsV2,
-    ProviderKind.Hetzner: ProviderInstanceIdentityMode.HetznerBootstrap,
+    ProviderKind.Hetzner: ProviderInstanceIdentityMode.Bootstrap,
+    ProviderKind.Hyperstack: ProviderInstanceIdentityMode.Bootstrap,
+    ProviderKind.Ovh: ProviderInstanceIdentityMode.Bootstrap,
 }
 
 
@@ -243,10 +245,10 @@ class AgentDaemonOptions(ContractModel):
             raise ValueError("join credentials and provider enrollment cannot be combined")
         if self.provider is not None:
             if (
-                self.provider is ProviderKind.Hetzner
+                self.provider is not ProviderKind.Aws
                 and urlparse(self.gateway_url).scheme != "https"
             ):
-                raise ValueError("Hetzner host enrollment requires an HTTPS gateway")
+                raise ValueError("provider bootstrap enrollment requires an HTTPS gateway")
             expected = _PROVIDER_IDENTITY_MODES.get(self.provider)
             if expected is None:
                 raise ValueError(f"provider node identity {self.provider.value!r} is not supported")

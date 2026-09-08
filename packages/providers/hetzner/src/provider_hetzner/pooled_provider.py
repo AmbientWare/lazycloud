@@ -3,12 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, Decimal
-from urllib.parse import urlparse
 
 from compute.node_bootstrap import (
-    NodeBootstrapProfile,
     NodeBootstrapSettings,
-    node_bootstrap_script,
+    provider_bootstrap_script,
 )
 from compute.offers import ComputeOffer, pooled_cloud_offer, recorded_unit_offer
 from compute.provider_launches import ProviderNodeLaunchCredential, ProviderNodeLaunchCredentials
@@ -21,6 +19,7 @@ from compute.providers import (
 )
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from shared.compute_policy import ComputeUnitProviderState, ComputeUnitRecord
+from shared.provider_config import ProviderKind
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit, SupplierNetworkTerms
 from shared.timestamps import utc_now
 
@@ -398,62 +397,26 @@ def _status(status: str) -> str:
 
 
 def bootstrap_script(request: ProviderUnitRequest, launch: ProviderNodeLaunchCredential) -> str:
-    if urlparse(request.bootstrap.control_plane_url).scheme != "https":
-        raise ValueError("Hetzner bootstrap credentials require an HTTPS control-plane origin")
-    return node_bootstrap_script(
+    return provider_bootstrap_script(
         NodeBootstrapSettings(
             control_plane_url=request.bootstrap.control_plane_url,
             enrollment_request_id=request.bootstrap.enrollment_request_id,
             agent_binary_url=request.bootstrap.agent_binary_url,
             agent_sha256=request.bootstrap.agent_sha256,
         ),
-        NodeBootstrapProfile(
-            provider="hetzner",
-            identity_shell=_IDENTITY_SHELL,
-            values={
-                "__HETZNER_LOCATION__": request.offer.region,
-                "__HETZNER_LAUNCH_ID__": launch.launch_id,
-                "__HETZNER_BOOTSTRAP_TOKEN__": launch.bootstrap_token.get_secret_value(),
-            },
-        ),
+        provider=ProviderKind.Hetzner,
+        region=request.offer.region,
+        launch_id=launch.launch_id,
+        bootstrap_token=launch.bootstrap_token,
+        instance_identity_shell=_IDENTITY_SHELL,
+        values={},
     )
 
 
 _IDENTITY_SHELL = r"""
-HETZNER_LOCATION=__HETZNER_LOCATION__
-resolve_node_identity() {
-  umask 077
-  if [ -f "$AGENT_STATE_DIR/provider-launch-id" ]; then
-    [ "$(< "$AGENT_STATE_DIR/provider-launch-id")" = __HETZNER_LAUNCH_ID__ ]
-  else
-    printf '%s' __HETZNER_LAUNCH_ID__ > "$AGENT_STATE_DIR/provider-launch-id"
-  fi
-  if [ ! -f "$AGENT_STATE_DIR/provider-node-token" ]; then
-    credential_tmp=$(mktemp "$AGENT_STATE_DIR/.provider-node-token.XXXXXX")
-    head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n' \
-      > "$credential_tmp"
-    sync -f "$credential_tmp"
-    printf '%s' __HETZNER_BOOTSTRAP_TOKEN__ > "$AGENT_STATE_DIR/provider-bootstrap-token"
-    if ! ln "$credential_tmp" "$AGENT_STATE_DIR/provider-node-token"; then
-      [ -f "$AGENT_STATE_DIR/provider-node-token" ]
-    fi
-    rm -f "$credential_tmp"
-    sync -f "$AGENT_STATE_DIR"
-  fi
+resolve_provider_instance_id() {
   HETZNER_SERVER_ID=$(curl --noproxy '*' -fsS --connect-timeout 2 --max-time 5 http://169.254.169.254/hetzner/v1/metadata/instance-id)
   [[ "$HETZNER_SERVER_ID" =~ ^[0-9]+$ ]]
+  printf '%s' "$HETZNER_SERVER_ID"
 }
-report_identity_fields() {
-  printf ',"provider":"hetzner","region":"%s"' "$HETZNER_LOCATION"
-  printf ',"provider_instance_id":"%s"' "$HETZNER_SERVER_ID"
-  printf ',"identity_proof_url":"hetzner-bootstrap"'
-  printf ',"launch_id":"%s"' "$(< "$AGENT_STATE_DIR/provider-launch-id")"
-  printf ',"node_agent_token":"%s"' "$(< "$AGENT_STATE_DIR/provider-node-token")"
-  if [ -f "$AGENT_STATE_DIR/provider-bootstrap-token" ]; then
-    printf ',"bootstrap_token":"%s"' "$(< "$AGENT_STATE_DIR/provider-bootstrap-token")"
-  fi
-}
-node_fingerprint() { printf 'hetzner:%s' "$HETZNER_SERVER_ID"; }
-node_hostname() { hostname; }
-PROVIDER_INSTALL_FLAGS=(--provider hetzner --provider-instance-identity hetzner-bootstrap)
 """

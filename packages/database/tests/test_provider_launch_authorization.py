@@ -17,6 +17,7 @@ from execution.secrets.crypto import WorkspaceSecretCipher
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_policy import (
     ComputeCapacityMode,
+    ComputeUnitPhase,
     ComputeUnitRecord,
     ComputeUnitVisibility,
     MachinePool,
@@ -117,7 +118,7 @@ def test_one_redemption_wins_and_consumed_token_cannot_take_over_node(
         provider=ProviderKind.Hetzner,
         region=owner.unit.region,
         provider_instance_id="123",
-        identity_proof_url="hetzner-bootstrap",
+        identity_proof_url="provider-bootstrap",
         launch_id=launch.launch_id,
         bootstrap_token=launch.bootstrap_token.get_secret_value(),
         node_agent_token=token_urlsafe(32),
@@ -215,7 +216,7 @@ def test_expired_unredeemed_launch_cannot_be_reused_or_silently_rotated(
         provider=ProviderKind.Hetzner,
         region=owner.unit.region,
         provider_instance_id="123",
-        identity_proof_url="hetzner-bootstrap",
+        identity_proof_url="provider-bootstrap",
         launch_id=launch.launch_id,
         bootstrap_token=launch.bootstrap_token.get_secret_value(),
         node_agent_token=token_urlsafe(32),
@@ -225,6 +226,74 @@ def test_expired_unredeemed_launch_cannot_be_reused_or_silently_rotated(
     owner.service.revoke(launch.launch_id)
     replacement = owner.service.prepare(owner.request, "expired-slot")
     assert replacement.launch_id != launch.launch_id
+
+
+def test_only_one_creation_attempt_survives_concurrent_reconciliation(
+    launch_owner: LaunchOwner,
+) -> None:
+    owner = launch_owner
+    launch = owner.service.prepare(owner.request, "create-slot")
+    barrier = Barrier(2)
+
+    def attempt() -> bool:
+        barrier.wait()
+        try:
+            return owner.service.mark_creation_attempt(launch.launch_id)
+        except UpstreamUnavailableError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        attempts = [executor.submit(attempt) for _ in range(2)]
+        assert sum(attempt.result(timeout=2) for attempt in attempts) == 1
+    status = owner.service.for_server(owner.request, "create-slot")
+    assert status is not None and status.creation_attempted
+    restarted = ProviderNodeLaunchService(owner.database, owner.service.cipher_for_workspace)
+    assert not restarted.mark_creation_attempt(launch.launch_id)
+    assert restarted.prepare(owner.request, "create-slot").launch_id == launch.launch_id
+
+
+def test_creation_operation_cannot_be_reassigned_to_another_launch(
+    launch_owner: LaunchOwner,
+) -> None:
+    owner = launch_owner
+    first = owner.service.prepare(owner.request, "first-slot")
+    second = owner.service.prepare(owner.request, "second-slot")
+    operation_id = str(uuid4())
+    with pytest.raises(InvalidInputError):
+        owner.service.record_creation_operation(first.launch_id, operation_id)
+    assert owner.service.mark_creation_attempt(first.launch_id)
+    assert owner.service.mark_creation_attempt(second.launch_id)
+    owner.service.record_creation_operation(first.launch_id, operation_id)
+    owner.service.record_creation_operation(first.launch_id, operation_id)
+    with pytest.raises(ConflictError):
+        owner.service.record_creation_operation(first.launch_id, str(uuid4()))
+    with pytest.raises(ConflictError):
+        owner.service.record_creation_operation(second.launch_id, operation_id)
+    status = owner.service.for_server(owner.request, "first-slot")
+    assert status is not None and status.provider_operation_id == operation_id
+
+
+@pytest.mark.parametrize("deleting", [False, True])
+def test_stale_launch_cannot_purchase_after_unit_generation_or_lifecycle_changes(
+    launch_owner: LaunchOwner,
+    deleting: bool,
+) -> None:
+    owner = launch_owner
+    launch = owner.service.prepare(owner.request, "stale-slot")
+    updated = owner.unit.model_copy(
+        update={
+            "phase": ComputeUnitPhase.Deleting if deleting else owner.unit.phase,
+            "generation": owner.unit.generation if deleting else owner.unit.generation + 1,
+        }
+    )
+    with owner.database.session() as session:
+        ComputeUnitRepository(session).upsert(updated)
+    with pytest.raises(InvalidInputError, match="creation authorization is unavailable"):
+        owner.service.mark_creation_attempt(launch.launch_id)
+    with pytest.raises(InvalidInputError, match="active platform unit"):
+        owner.service.prepare(owner.request, "another-slot")
+    status = owner.service.for_server(owner.request, "stale-slot")
+    assert status is not None and not status.creation_attempted
 
 
 def test_enrollment_launch_contention_fails_without_waiting_for_the_owner(
@@ -246,7 +315,7 @@ def test_enrollment_launch_contention_fails_without_waiting_for_the_owner(
         provider=ProviderKind.Hetzner,
         region=owner.unit.region,
         provider_instance_id="123",
-        identity_proof_url="hetzner-bootstrap",
+        identity_proof_url="provider-bootstrap",
         launch_id=launch.launch_id,
         bootstrap_token=launch.bootstrap_token.get_secret_value(),
         node_agent_token=token_urlsafe(32),

@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from functools import partial
 from itertools import count
 from pathlib import Path
 from secrets import token_urlsafe
@@ -50,7 +51,7 @@ from provider_aws import AWS_STS_PROOF_NONCE_KEY
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
 from provider_clients.provider_nodes import ProviderNodeIdentityRegistry
 from provider_hetzner.client import HetznerClient
-from provider_hetzner.identity import provider_label
+from provider_hetzner.identity import provider_label, verify_node
 from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
@@ -559,7 +560,11 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
                         aws=AwsProviderNodeIdentityAdapter(
                             http_client=_IdentityHttpClient(), replay_guard=_ReplayGuard()
                         ),
-                        hetzner_clients={pool.provider_ref: HetznerClient(SecretStr("test-token"))},
+                        bootstrap_nodes={
+                            pool.provider_ref: partial(
+                                verify_node, HetznerClient(SecretStr("test-token"))
+                            )
+                        },
                     ),
                     launches=services.provider_node_launches,
                     rate_limiter=services.redis(),
@@ -569,7 +574,7 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
                     provider=ProviderKind.Hetzner,
                     region=pool.region,
                     provider_instance_id="123",
-                    identity_proof_url="hetzner-bootstrap",
+                    identity_proof_url="provider-bootstrap",
                     launch_id=launch.launch_id,
                     bootstrap_token=launch.bootstrap_token.get_secret_value(),
                     node_agent_token=token_urlsafe(32),

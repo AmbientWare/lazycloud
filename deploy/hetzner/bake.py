@@ -19,7 +19,7 @@ _DIRECTORY = Path(__file__).resolve().parent
 def host_recipe_sha256(base_image_id: int) -> str:
     return sha256(
         build_agent_install_script().encode()
-        + (_DIRECTORY / "prepare-host.sh").read_bytes()
+        + (_DIRECTORY.parent / "node-images/prepare-ubuntu-host.sh").read_bytes()
         + (_DIRECTORY / "node.pkr.hcl").read_bytes()
         + str(base_image_id).encode()
     ).hexdigest()

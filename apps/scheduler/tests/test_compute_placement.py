@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from compute.request_placement import (
     ComputeCapacityPlacementRequest,
     ComputeCapacityPlacementResult,
+    ComputeCapacityPurchase,
 )
 from scheduler.capacity_reservations import (
     CapacityAcquisitionStatus,
@@ -122,7 +123,9 @@ class _RecordingCapacity:
         self.requests.append(request)
         return ComputeCapacityPlacementResult(pool=MachinePool("aws"))
 
-    def prepare_capacity(self, request: ComputeCapacityPlacementRequest) -> None:
+    def purchase_candidates(
+        self, request: ComputeCapacityPlacementRequest
+    ) -> tuple[ComputeCapacityPurchase, ...]:
         raise AssertionError("pool selection must not prepare capacity")
 
 

@@ -15,9 +15,10 @@ coordination package.
 - A credential never travels in machine configuration that provisioning can read
   back. Prefer a single-use credential vended at the moment of use over a
   reusable one embedded where every instance from that configuration can read it.
-  Hetzner enrollment has one owner-approved exception: a unique, short-lived
-  bootstrap token may travel in one node's user-data. Bind it to that launch,
-  consume it atomically before tenant work starts, and reject reuse or expiry.
+  Hetzner, Hyperstack, and OVH enrollment use one owner-approved exception: a
+  unique, short-lived bootstrap token may travel in one node's user-data. Bind it
+  to that launch, consume it atomically before tenant work starts, and reject
+  reuse or expiry.
   Keep tokens out of source, images, logs, and shared launch templates. This does
   not permit a provider API key or reusable join credential on a node.
 - A bootstrap script owns provider identity and nothing else. Everything it
