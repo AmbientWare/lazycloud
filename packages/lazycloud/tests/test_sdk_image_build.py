@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-import sys
 from collections.abc import Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from lazycloud.cli.components.progress import CliTerminal
 from lazycloud.terminal import Terminal
 from shared.http.images import (
     BuildImageRequest,
@@ -21,16 +19,12 @@ from shared.image_building.credentials import ImageCredentialLookupError
 from lazycloud import Image, output
 
 
-@pytest.mark.parametrize("cli", [False, True])
 @pytest.mark.parametrize("success", [False, True])
-def test_build_output_retains_logs_on_stderr_and_can_be_silenced(
+def test_sdk_build_output_is_opt_in_and_uses_stderr(
     capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-    cli: bool,
     success: bool,
 ) -> None:
-    monkeypatch.setattr(sys.stderr, "isatty", lambda: cli)
-    terminal = CliTerminal() if cli else Terminal(default_enabled=False)
+    terminal = Terminal(default_enabled=False)
     lines = [f"build-line-{index}" for index in range(6)]
     responses = [BuildImageResponse(msg=f"{line}\n") for line in lines]
     responses.append(
@@ -52,7 +46,7 @@ def test_build_output_retains_logs_on_stderr_and_can_be_silenced(
         assert result.error == ("" if success else "build failed")
         captured = capsys.readouterr()
         assert captured.out == ""
-        visible = cli if enabled is None else enabled
+        visible = enabled is True
         if visible:
             for line in lines:
                 assert captured.err.count(line) == 1

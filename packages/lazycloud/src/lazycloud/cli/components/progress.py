@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from rich.console import RenderableType
+from rich.console import Group, RenderableType
 from rich.live import Live
 from rich.spinner import Spinner
 from rich.style import Style
@@ -13,9 +14,12 @@ from rich.table import Table
 from rich.text import Text
 
 from lazycloud.cli.components import output, theme
+from lazycloud.cli.components.errors import debug_errors_enabled
 from lazycloud.terminal import Terminal, TerminalStep, format_elapsed
 
 NAME_WIDTH = 11
+TAIL_LINES = 3
+FAILURE_TAIL_LINES = 20
 _LOG_INDENT = "    "
 _REMOTE_RAIL = "│ "
 
@@ -117,8 +121,11 @@ class CliTerminal(Terminal):
 
 @dataclass
 class LiveStep(TerminalStep):
-    """A live status line with logs retained above it in terminal history."""
+    """A live status line with a rolling log preview and a retained failure tail."""
 
+    _recent: deque[str] = field(
+        default_factory=lambda: deque(maxlen=FAILURE_TAIL_LINES), init=False
+    )
     _live: Live | None = field(default=None, init=False)
     _spinner: Spinner = field(default_factory=lambda: Spinner("dots", style=theme.RUNNING))
 
@@ -150,7 +157,11 @@ class LiveStep(TerminalStep):
         text = line.rstrip()
         if not self.terminal.enabled or not text:
             return
-        output.error_console.print(Text(f"{_LOG_INDENT}{text}", style=theme.MUTED))
+        self._recent.append(text)
+        if self._live is None or debug_errors_enabled():
+            output.error_console.print(Text(f"{_LOG_INDENT}{text}", style=theme.MUTED))
+        else:
+            self._refresh()
 
     def done(self, summary: str = "") -> None:
         self.finished = True
@@ -161,7 +172,11 @@ class LiveStep(TerminalStep):
     def fail(self, summary: str = "") -> None:
         self.finished = True
         self.summary = summary or self.summary
+        show_tail = self._live is not None and not debug_errors_enabled()
         self._stop()
+        if self.terminal.enabled and show_tail:
+            for text in self._recent:
+                output.error_console.print(Text(f"{_LOG_INDENT}{text}", style=theme.MUTED))
         self._print_final("✗", theme.ERROR)
 
     def _refresh(self) -> None:
@@ -182,7 +197,16 @@ class LiveStep(TerminalStep):
         )
 
     def _render_live(self) -> RenderableType:
-        return _step_row(self._spinner, self.name, self.summary, self.elapsed)
+        row = _step_row(self._spinner, self.name, self.summary, self.elapsed)
+        if debug_errors_enabled() or not self._recent:
+            return row
+        return Group(
+            row,
+            *(
+                Text(f"{_LOG_INDENT}{text}", style=theme.MUTED, no_wrap=True)
+                for text in list(self._recent)[-TAIL_LINES:]
+            ),
+        )
 
 
 def _interactive() -> bool:
