@@ -17,11 +17,11 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from collections.abc import Sequence
 from pathlib import Path
 
+from lazycloud.clients.aws import create_connection_stack
 from provider_aws import (
     aws_account_connection_template_identity,
     parse_aws_connection_stack_cleanup_action,
@@ -147,21 +147,15 @@ def _apply(args: argparse.Namespace, deadline: float) -> dict[str, str]:
     if parameters["PlatformPrincipalArn"] != args.platform_principal_arn:
         raise CustomerStackError("stack creation request targets a different platform principal")
     if _stack_status(args.aws_cli, args.region, action.request.StackName) is None:
-        create: list[str] = [
-            "cloudformation",
-            "create-stack",
-            "--region",
-            args.region,
-            "--output",
-            "json",
-        ]
-        if args.execution_role_arn is not None:
-            create.extend(["--role-arn", args.execution_role_arn])
-        with tempfile.TemporaryDirectory(prefix="lazycloud-customer-stack-") as directory:
-            request_file = Path(directory) / "request.json"
-            request_file.write_text(action.request.model_dump_json(), encoding="utf-8")
-            request_file.chmod(0o600)
-            _run_aws(args.aws_cli, [*create, "--cli-input-json", f"file://{request_file}"])
+        try:
+            create_connection_stack(
+                action,
+                profile=None,
+                execution_role_arn=args.execution_role_arn,
+                aws_cli=args.aws_cli,
+            )
+        except RuntimeError as exc:
+            raise CustomerStackError(str(exc)) from exc
     _wait_stack(
         args.aws_cli,
         args.region,

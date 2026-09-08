@@ -72,6 +72,13 @@ which uses the canonical object-store credentials, conditional writes, and a
 SHA-256 check of the downloaded object. AWS CLI remains responsible for ECR,
 AMI inspection, and customer CloudFormation operations.
 
+Customer authorization discovers two enabled standard availability zones through
+the customer's AWS credentials and supplies them to the connection template.
+The customer profile needs `ec2:DescribeAvailabilityZones`. Default VPC subnets
+are not required; authorization stops before creating a stack if fewer than two
+zones are available. The public CLI and `connected-aws/customer_stack.py` use the
+same SDK transport for discovery and stack creation.
+
 ### Activation
 
 `docker compose up` is the only activation path. The control plane and scheduler

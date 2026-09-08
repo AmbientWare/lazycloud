@@ -28,7 +28,6 @@ from shared.http.gateway import (
 from shared.tasks import is_terminal_task_status
 
 from lazycloud.cli.apps import resolve_app_id
-from lazycloud.cli.aws_authorization import create_connection_stack
 from lazycloud.cli.components.cards import empty_state, notice_card, result_card
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.formatting import duration, timestamp
@@ -50,6 +49,7 @@ from lazycloud.cli.control import (
 )
 from lazycloud.cli.pool_join import agent_join_interrupted, build_pool_join_command
 from lazycloud.cli.task_results import task_result_human_value
+from lazycloud.clients.aws import create_connection_stack
 
 task_app = typer.Typer(help="Inspect and manage tasks.")
 container_app = typer.Typer(help="Inspect and manage containers.")
