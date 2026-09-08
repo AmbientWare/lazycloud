@@ -37,11 +37,3 @@ export const artifactStorageSummarySchema = z.object({
   retention_seconds: z.number().int().positive().nullable(),
 });
 export type ArtifactStorageSummary = z.infer<typeof artifactStorageSummarySchema>;
-export const artifactRetentionPolicySchema = z.object({
-  retention_seconds: z.number().int().positive().nullable(),
-});
-export const artifactRetentionPreviewSchema = z.object({
-  data: z.array(artifactSummarySchema),
-  total_bytes: z.number().nonnegative(),
-});
-export type ArtifactRetentionPreview = z.infer<typeof artifactRetentionPreviewSchema>;

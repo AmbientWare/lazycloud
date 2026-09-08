@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clock3, File, RefreshCw, Search, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { File, RefreshCw, Search, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -24,25 +24,16 @@ import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBounda
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { countLabel, formatBytes } from "@/lib/format";
 import { useWorkspace } from "@/lib/workspace-context";
-import type { ArtifactSummary, ArtifactRetentionPreview } from "@/lib/api/schemas/artifacts";
+import type { ArtifactSummary } from "@/lib/api/schemas/artifacts";
 import {
   artifactsQuery,
   artifactStorageQuery,
   deleteArtifact,
-  updateArtifactRetention,
-  updateWorkspaceArtifactRetention,
-  applyArtifactRetention,
   type ArtifactFilters,
 } from "@/lib/queries/artifacts";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import { workspaceQueryKeys, accountQueryKeys } from "@/lib/queries/workspace-keys";
 import { ArtifactRow } from "./ArtifactRow";
-
-type Action =
-  | { kind: "delete"; artifacts: ArtifactSummary[] }
-  | { kind: "retention"; artifact: ArtifactSummary }
-  | { kind: "workspace"; seconds: number | null }
-  | { kind: "apply"; seconds: number | null; preview: ArtifactRetentionPreview };
 
 const money = (nanos: number) =>
   nanos > 0 && nanos < 1e7
@@ -54,8 +45,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
   const client = useQueryClient();
   const [filters, setFilters] = useState<ArtifactFilters>({});
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [action, setAction] = useState<Action | null>(null);
-  const [previewing, setPreviewing] = useState(false);
+  const [deleting, setDeleting] = useState<ArtifactSummary[] | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const query = useInfiniteQuery(
     artifactsQuery(workspaceId, { ...filters, ...(taskId ? { task_id: taskId } : {}) }),
@@ -83,23 +73,6 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
       client.invalidateQueries({ queryKey: accountQueryKeys.usage.root() }),
     ]);
   };
-  async function previewRetention() {
-    if (!summary.data) return;
-    setPreviewing(true);
-    try {
-      const seconds = summary.data.retention_seconds;
-      const preview = await applyArtifactRetention(
-        workspaceId,
-        selected.map((item) => item.id),
-        seconds,
-      );
-      setAction({ kind: "apply", seconds, preview });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not preview retention");
-    } finally {
-      setPreviewing(false);
-    }
-  }
   const fileRow = (artifact: ArtifactSummary, compact = false) => (
     <ArtifactRow
       key={artifact.id}
@@ -107,8 +80,8 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
       workspaceId={workspaceId}
       workspaceName={workspace.name}
       compact={compact}
-      onDelete={() => setAction({ kind: "delete", artifacts: [artifact] })}
-      onRetention={() => setAction({ kind: "retention", artifact })}
+      showSource={!taskId}
+      onDelete={() => setDeleting([artifact])}
       selection={
         !taskId && (
           <Checkbox
@@ -198,20 +171,6 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
           </Button>
         )}
         <div className="ml-auto flex items-center gap-1">
-          {!taskId && (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={!summary.data}
-              onClick={() =>
-                summary.data &&
-                setAction({ kind: "workspace", seconds: summary.data.retention_seconds })
-              }
-            >
-              <Clock3 className="size-3.5" />
-              Retention
-            </Button>
-          )}
           <Button
             size="icon"
             variant="ghost"
@@ -280,16 +239,8 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
           <Button
             size="sm"
             variant="ghost"
-            disabled={!summary.data || previewing}
-            onClick={() => void previewRetention()}
-          >
-            Apply default retention
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
             className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-            onClick={() => setAction({ kind: "delete", artifacts: selected })}
+            onClick={() => setDeleting(selected)}
           >
             <Trash2 className="size-3.5" />
             Delete
@@ -354,8 +305,8 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
                     />
                   </TableHead>
                   <TableHead className="normal-case tracking-normal">File</TableHead>
-                  <TableHead className="hidden w-32 normal-case tracking-normal @3xl:table-cell">
-                    App
+                  <TableHead className="hidden w-40 normal-case tracking-normal @3xl:table-cell">
+                    App and task
                   </TableHead>
                   <TableHead className="hidden w-20 text-right normal-case tracking-normal @xl:table-cell">
                     Size
@@ -363,8 +314,8 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
                   <TableHead className="hidden w-32 normal-case tracking-normal @4xl:table-cell">
                     Saved
                   </TableHead>
-                  <TableHead className="w-44 normal-case tracking-normal">Deletion</TableHead>
-                  <TableHead className="w-28">
+                  <TableHead className="w-44 normal-case tracking-normal">Retention</TableHead>
+                  <TableHead className="w-20">
                     <span className="sr-only">Actions</span>
                   </TableHead>
                 </TableRow>
@@ -403,14 +354,14 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
           )}
         </div>
       )}
-      {action && (
-        <ArtifactActionDialog
-          action={action}
+      {deleting && (
+        <ArtifactDeleteDialog
+          artifacts={deleting}
           workspaceId={workspaceId}
-          onClose={() => setAction(null)}
+          onClose={() => setDeleting(null)}
           onComplete={() => {
             setSelectedIds([]);
-            setAction(null);
+            setDeleting(null);
           }}
           invalidate={invalidate}
         />
@@ -419,61 +370,29 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
   );
 }
 
-function ArtifactActionDialog({
-  action,
+function ArtifactDeleteDialog({
+  artifacts,
   workspaceId,
   onClose,
   onComplete,
   invalidate,
 }: {
-  action: Action;
+  artifacts: ArtifactSummary[];
   workspaceId: string;
   onClose: () => void;
   onComplete: () => void;
   invalidate: () => Promise<void>;
 }) {
-  const initial =
-    action.kind === "retention"
-      ? action.artifact.retention_seconds
-      : action.kind === "workspace"
-        ? action.seconds
-        : null;
-  const [mode, setMode] = useState(initial === null ? "keep" : "delete");
-  const [days, setDays] = useState(initial === null ? "30" : String(initial / 86400));
-  const seconds = mode === "keep" ? null : Number(days) * 86400;
-  const valid = seconds === null || (Number.isSafeInteger(seconds) && seconds > 0);
   const mutation = useMutation({
     mutationFn: async () => {
-      if (action.kind === "delete") {
-        for (const artifact of action.artifacts) await deleteArtifact(workspaceId, artifact.id);
-      } else if (action.kind === "retention")
-        await updateArtifactRetention(workspaceId, action.artifact.id, seconds);
-      else if (action.kind === "workspace")
-        await updateWorkspaceArtifactRetention(workspaceId, seconds);
-      else
-        await applyArtifactRetention(
-          workspaceId,
-          action.preview.data.map((item) => item.id),
-          action.seconds,
-          true,
-        );
+      for (const artifact of artifacts) await deleteArtifact(workspaceId, artifact.id);
     },
     onSuccess: () => {
-      toast.success(action.kind === "delete" ? "Deletion requested" : "Retention saved");
+      toast.success("Deletion requested");
       onComplete();
     },
     onSettled: invalidate,
   });
-  const title =
-    action.kind === "delete"
-      ? action.artifacts.length === 1
-        ? "Delete file?"
-        : `Delete ${action.artifacts.length} files?`
-      : action.kind === "workspace"
-        ? "Default retention"
-        : action.kind === "apply"
-          ? "Apply default retention"
-          : "Change retention";
   return (
     <Dialog
       open
@@ -483,86 +402,27 @@ function ArtifactActionDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle>
+            {artifacts.length === 1 ? "Delete file?" : `Delete ${artifacts.length} files?`}
+          </DialogTitle>
           <DialogDescription>
-            {action.kind === "delete"
-              ? "This permanently removes the selected files. This cannot be undone."
-              : action.kind === "workspace"
-                ? "Applies to future artifacts. Existing files keep their retention."
-                : "The duration starts when the file was saved. Older files are deleted immediately."}
+            This permanently removes the selected files. This cannot be undone.
           </DialogDescription>
         </DialogHeader>
-        {action.kind === "delete" && (
-          <div className="max-h-60 divide-y overflow-auto rounded-md border text-sm">
-            {action.artifacts.map((item) => (
-              <div key={item.id} className="flex items-center gap-3 px-3 py-2.5">
-                <File className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{item.filename}</span>
-                <span className="shrink-0 text-xs text-muted-foreground">
-                  {formatBytes(item.size)}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-        {action.kind === "apply" && (
-          <div className="max-h-60 overflow-auto text-sm">
-            <p>
-              {countLabel(action.preview.data.length, "file")} will change. Files with their own
-              retention are excluded.
-            </p>
-            {action.preview.data.map((item) => (
-              <p key={item.id} className="mt-2 flex justify-between gap-3 text-xs">
-                <span className="truncate">{item.filename}</span>
-                <span className="shrink-0 text-muted-foreground">
-                  {item.expires_at
-                    ? `Deletes ${new Date(item.expires_at).toLocaleString()}`
-                    : "Keep until deleted"}
-                </span>
-              </p>
-            ))}
-          </div>
-        )}
-        {(action.kind === "workspace" || action.kind === "retention") && (
-          <div className="space-y-3">
-            {action.kind === "retention" && (
-              <p className="truncate text-sm" title={action.artifact.filename}>
-                {action.artifact.filename}
-              </p>
-            )}
-            <Select value={mode} onValueChange={setMode}>
-              <SelectTrigger className="w-full" aria-label="Retention policy">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="keep">Keep until deleted</SelectItem>
-                <SelectItem value="delete">Delete after</SelectItem>
-              </SelectContent>
-            </Select>
-            {mode === "delete" && (
-              <label className="flex items-center gap-3 text-sm">
-                <Input
-                  className="w-28"
-                  aria-label="Retention days"
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={days}
-                  onChange={(event) => setDays(event.target.value)}
-                />
-                days
-              </label>
-            )}
-          </div>
-        )}
+        <div className="max-h-60 divide-y overflow-auto rounded-md border text-sm">
+          {artifacts.map((item) => (
+            <div key={item.id} className="flex items-center gap-3 px-3 py-2.5">
+              <File className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate">{item.filename}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {formatBytes(item.size)}
+              </span>
+            </div>
+          ))}
+        </div>
         {mutation.error && (
           <p role="alert" className="text-sm text-destructive">
             {mutation.error.message}
-          </p>
-        )}
-        {!valid && (
-          <p role="alert" className="text-sm text-destructive">
-            Enter a duration of at least one second, expressed in days.
           </p>
         )}
         <div className="flex justify-end gap-2">
@@ -570,21 +430,11 @@ function ArtifactActionDialog({
             Cancel
           </Button>
           <Button
-            variant={action.kind === "delete" ? "destructive" : "default"}
-            disabled={
-              !valid ||
-              mutation.isPending ||
-              (action.kind === "apply" && action.preview.data.length === 0)
-            }
+            variant="destructive"
+            disabled={mutation.isPending}
             onClick={() => mutation.mutate()}
           >
-            {mutation.isPending
-              ? action.kind === "delete"
-                ? "Deleting…"
-                : "Saving…"
-              : action.kind === "delete"
-                ? "Delete permanently"
-                : "Save retention"}
+            {mutation.isPending ? "Deleting…" : "Delete permanently"}
           </Button>
         </div>
       </DialogContent>

@@ -1,26 +1,10 @@
-import {
-  Clock3,
-  Download,
-  File,
-  FileImage,
-  FileText,
-  Loader2,
-  MoreHorizontal,
-  Search,
-  Trash2,
-} from "lucide-react";
+import { Download, File, FileImage, FileText, Loader2, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { TableRow, TableCell } from "@/components/ui/table";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { exactTime, formatBytes } from "@/lib/format";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { useLiveNow } from "@/hooks/use-live-now";
@@ -177,17 +161,17 @@ export function ArtifactRow({
   workspaceId,
   workspaceName,
   compact = false,
+  showSource = true,
   selection,
   onDelete,
-  onRetention,
 }: {
   artifact: ArtifactSummary;
   workspaceId: string;
   workspaceName: string;
   compact?: boolean;
+  showSource?: boolean;
   selection?: ReactNode;
   onDelete: () => void;
-  onRetention: () => void;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -217,6 +201,31 @@ export function ArtifactRow({
     }
   }
 
+  const source = (
+    <>
+      {artifact.app_id ? (
+        <Link
+          className="interactive-link max-w-full truncate"
+          to="/w/$workspace/apps/$appId"
+          params={{ workspace: workspaceName, appId: artifact.app_id }}
+        >
+          {artifact.app_name || "App"}
+        </Link>
+      ) : (
+        <span className="truncate">{artifact.app_name || "Unknown app"}</span>
+      )}
+      {artifact.task_id && (
+        <Link
+          className="interactive-link shrink-0"
+          to="/w/$workspace/tasks/$taskId"
+          params={{ workspace: workspaceName, taskId: artifact.task_id }}
+          aria-label={`View task for ${artifact.filename}`}
+        >
+          View task
+        </Link>
+      )}
+    </>
+  );
   const filename = (
     <div className="flex min-w-0 items-center gap-2.5">
       <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -260,40 +269,6 @@ export function ArtifactRow({
       >
         <Trash2 className="size-3.5" />
       </Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground"
-            aria-label={`More actions for ${artifact.filename}`}
-          >
-            <MoreHorizontal className="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          {kind !== "none" && (
-            <DropdownMenuItem disabled={unavailable} onSelect={() => setOpen(true)}>
-              <Search />
-              Preview
-            </DropdownMenuItem>
-          )}
-          <DropdownMenuItem disabled={artifact.deleting} onSelect={onRetention}>
-            <Clock3 />
-            Change retention
-          </DropdownMenuItem>
-          {artifact.task_id && (
-            <DropdownMenuItem asChild>
-              <Link
-                to="/w/$workspace/tasks/$taskId"
-                params={{ workspace: workspaceName, taskId: artifact.task_id }}
-              >
-                View task
-              </Link>
-            </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
     </div>
   );
   return (
@@ -306,6 +281,7 @@ export function ArtifactRow({
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 pl-6.5 text-xs text-muted-foreground">
               <span>{formatBytes(artifact.size)}</span>
               <ArtifactDeletionTime artifact={artifact} />
+              {showSource && source}
             </div>
           </div>
           {actions}
@@ -313,19 +289,16 @@ export function ArtifactRow({
       ) : (
         <TableRow>
           <TableCell className="w-10 pr-0">{selection}</TableCell>
-          <TableCell className="max-w-0 py-3">{filename}</TableCell>
-          <TableCell className="hidden max-w-32 truncate text-xs text-muted-foreground @3xl:table-cell">
-            {artifact.app_id ? (
-              <Link
-                className="hover:text-foreground hover:underline"
-                to="/w/$workspace/apps/$appId"
-                params={{ workspace: workspaceName, appId: artifact.app_id }}
-              >
-                {artifact.app_name || "App"}
-              </Link>
-            ) : (
-              <span>None</span>
+          <TableCell className="max-w-0 py-3">
+            {filename}
+            {showSource && (
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 pl-6.5 text-xs text-muted-foreground @3xl:hidden">
+                {source}
+              </div>
             )}
+          </TableCell>
+          <TableCell className="hidden max-w-40 text-xs text-muted-foreground @3xl:table-cell">
+            <div className="flex flex-col items-start gap-1">{source}</div>
           </TableCell>
           <TableCell
             className="hidden whitespace-nowrap text-right text-xs text-muted-foreground @xl:table-cell"
@@ -339,7 +312,7 @@ export function ArtifactRow({
           <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground @lg:table-cell">
             <ArtifactDeletionTime artifact={artifact} />
           </TableCell>
-          <TableCell className="w-28 pl-0">{actions}</TableCell>
+          <TableCell className="w-20 pl-0">{actions}</TableCell>
         </TableRow>
       )}
       <Dialog open={open} onOpenChange={setOpen}>
