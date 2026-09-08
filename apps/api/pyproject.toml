@@ -27,6 +27,7 @@ dependencies = [
     "provider-clients",
     "provider-aws",
     "provider-cloudflare",
+    "provider-garage",
     "provider-github",
     "provider-resend",
     "provider-stripe",

@@ -54,6 +54,7 @@ COPY packages/worker/pyproject.toml ./packages/worker/pyproject.toml
 COPY packages/worker-repository/pyproject.toml ./packages/worker-repository/pyproject.toml
 COPY packages/providers/aws/pyproject.toml ./packages/providers/aws/pyproject.toml
 COPY packages/providers/cloudflare/pyproject.toml ./packages/providers/cloudflare/pyproject.toml
+COPY packages/providers/garage/pyproject.toml ./packages/providers/garage/pyproject.toml
 COPY packages/providers/github/pyproject.toml ./packages/providers/github/pyproject.toml
 COPY packages/providers/stripe/pyproject.toml ./packages/providers/stripe/pyproject.toml
 COPY apps/agent/pyproject.toml ./apps/agent/pyproject.toml

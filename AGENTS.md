@@ -232,6 +232,14 @@ the current run.
 
 ## Product phase and destructive work
 
+Local deployments use local databases and queues, a development GitHub App, and
+provider test credentials wherever available. Run the same implementation and
+contracts as production with those endpoints and credentials. Use real external
+provider resources, such as Cloudflare, when the task calls for them, with cleanup
+scoped to resources created for the run. A local frontend pointed at the production
+API is an explicit exception for production-data review; it does not authorize
+loading production operator credentials into local backend services.
+
 For owner-authorized deployments of our platform, use the AWS `default` profile.
 `default-test` is for customer BYO-cloud acceptance deployments, not a prerequisite
 for deploying our platform. GitHub deployments use their configured OIDC role.

@@ -1,0 +1,15 @@
+#!/bin/sh
+# LazyCloud local environment: share the main checkout's private .env.
+set -eu
+
+checkout=$(git rev-parse --show-toplevel)
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+source=$(dirname "$common")/.env
+target=$checkout/.env
+
+[ -f "$source" ] || exit 0
+[ "$source" != "$target" ] || exit 0
+if [ -e "$target" ] || [ -L "$target" ]; then
+    exit 0
+fi
+ln -s "$source" "$target"

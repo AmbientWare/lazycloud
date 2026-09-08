@@ -58,6 +58,12 @@ task and the production boundaries changed since the previous release.
 
 ## Local CLI examples
 
+Run `bash deploy/setup-local-env.sh` once per clone, then fill the private `.env`
+in the main checkout using development credentials. Existing and future worktrees
+link to that file; an existing worktree-specific `.env` is preserved. PostgreSQL
+and Redis stay local, Stripe uses test mode, and GitHub uses the development App.
+See [local deployment](deploy/README.md#local-environment) for startup.
+
 ```bash
 uv run lazycloud-admin login --profile local
 uv run lazycloud-admin quickstart
@@ -69,7 +75,7 @@ uv run lazycloud-admin task logs <run-id>
 ```
 
 `lazycloud-admin` loads the repository's `.env`. The example configuration points
-it at the Compose control plane, stores its profile under `.lazycloud/local`, and
+it at the Compose control plane, stores its profile under `~/.lazycloud/local`, and
 uses the administrator token that bootstrapped the stack. The command validates
 that token before saving the `local` profile.
 

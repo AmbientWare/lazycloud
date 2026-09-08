@@ -1,14 +1,4 @@
-"""What a long-running process writes about itself.
-
-Python's own default is WARNING to standard error, which for a service means
-every deliberate `LOGGER.info` in this repository was discarded and the only
-things that reached an operator were unhandled exceptions and whatever the web
-server printed about requests. A reconciliation that declined, a pool that came
-back unchanged, a step that skipped: all of them wrote a line, and none of them
-were read.
-
-`LAZYCLOUD_LOG_LEVEL` already existed and nothing consumed it. It does now.
-"""
+"""Configure application logs on standard error."""
 
 from __future__ import annotations
 
@@ -59,6 +49,10 @@ def configure_process_logging(settings: ProcessLogSettings | None = None) -> int
     resolved = (settings or ProcessLogSettings()).resolved_level()
     root = logging.getLogger()
     root.setLevel(resolved)
+    # HTTP transport logs include credential-bearing URLs and headers. Provider
+    # adapters report failures without copying those requests into the log.
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     if not any(
         isinstance(handler, _TextStreamHandler) and handler.stream is sys.stderr
         for handler in root.handlers

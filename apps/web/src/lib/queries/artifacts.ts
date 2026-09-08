@@ -1,11 +1,6 @@
 import { queryOptions, infiniteQueryOptions } from "@tanstack/react-query";
 import { z } from "zod";
-import {
-  artifactStorageSummarySchema,
-  artifactSummarySchema,
-  artifactRetentionPolicySchema,
-  artifactRetentionPreviewSchema,
-} from "@/lib/api/schemas/artifacts";
+import { artifactStorageSummarySchema } from "@/lib/api/schemas/artifacts";
 
 import { apiBlob, apiRequest, withWorkspace } from "@/lib/api/client";
 import { artifactListSchema } from "@/lib/api/schemas";
@@ -57,40 +52,6 @@ export function deleteArtifact(workspaceId: string, id: string) {
     { method: "DELETE" },
   );
 }
-export function updateArtifactRetention(
-  workspaceId: string,
-  id: string,
-  retention_seconds: number | null,
-) {
-  return apiRequest(
-    withWorkspace(`/api/v1/artifacts/${encodeURIComponent(id)}/retention`, workspaceId),
-    artifactSummarySchema,
-    { method: "PATCH", body: JSON.stringify({ retention_seconds }) },
-  );
-}
-export function updateWorkspaceArtifactRetention(
-  workspaceId: string,
-  retention_seconds: number | null,
-) {
-  return apiRequest(
-    withWorkspace("/api/v1/artifacts/retention", workspaceId),
-    artifactRetentionPolicySchema,
-    { method: "PUT", body: JSON.stringify({ retention_seconds }) },
-  );
-}
-export function applyArtifactRetention(
-  workspaceId: string,
-  ids: string[],
-  retention_seconds: number | null,
-  apply = false,
-) {
-  return apiRequest(
-    withWorkspace(`/api/v1/artifacts/retention/${apply ? "apply" : "preview"}`, workspaceId),
-    artifactRetentionPreviewSchema,
-    { method: "POST", body: JSON.stringify({ ids, retention_seconds }) },
-  );
-}
-
 /**
  * Fetch an artifact's bytes from the control plane.
  *

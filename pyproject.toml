@@ -42,6 +42,7 @@ workspace = [
     "provider-aws",
     "provider-hetzner",
     "provider-cloudflare",
+    "provider-garage",
     "provider-github",
     "provider-resend",
     "provider-stripe",
@@ -99,6 +100,7 @@ members = [
     "packages/providers/aws",
     "packages/providers/hetzner",
     "packages/providers/cloudflare",
+    "packages/providers/garage",
     "packages/providers/github",
     "packages/providers/resend",
     "packages/providers/stripe",
@@ -129,6 +131,7 @@ observability = { workspace = true }
 operations = { workspace = true }
 provider-clients = { workspace = true }
 provider-cloudflare = { workspace = true }
+provider-garage = { workspace = true }
 provider-github = { workspace = true }
 provider-resend = { workspace = true }
 provider-stripe = { workspace = true }
