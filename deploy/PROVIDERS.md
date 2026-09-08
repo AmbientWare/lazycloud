@@ -40,6 +40,13 @@ Before deploying a catalog removal, list the affected units and drain their work
 then delete those units through the existing compute owner. Verify their AWS auto
 scaling groups and instances are gone before deploying. Catalog filtering alone
 does not stop an existing AWS group from replacing instances on its own.
+
+Migration `0017_managed_compute_policy` requires stopping the old control-plane
+and scheduler processes before it runs. Old processes can restore the removed
+settings when saving a connection. Pause Argo automatic sync while building the
+release, stop those processes, then sync the new deployment. Restore automatic
+sync after the migration and new application processes are healthy.
+
 `fleet-ensure` registers and validates the cloud account through the API.
 The values renderer combines Hetzner's Terraform image catalog with deployment
 credentials and supplier prices, and composition resolves the provider registry.
