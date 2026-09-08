@@ -16,6 +16,7 @@ from shared.checkpoints import CheckpointRecord
 from shared.container_requests import WorkerStartupKind
 
 from worker.checkpoint_activity import CheckpointLeaseRegistry
+from worker.checkpoint_filesystem import copy_checkpoint_filesystem
 from worker.checkpoints import (
     CheckpointArchiveMaterializationRequest,
     CheckpointLifecycleAction,
@@ -337,7 +338,7 @@ class RuntimeCheckpointRestorer:
         staged_rootfs = Path(container_spec.bundle_path) / "checkpoint-rootfs"
         shutil.rmtree(staged_rootfs, ignore_errors=True)
         try:
-            shutil.copytree(source, staged_rootfs, symlinks=True)
+            copy_checkpoint_filesystem(source, staged_rootfs)
             config.root.path = str(staged_rootfs)
             config_path.write_text(
                 config.model_dump_json(indent=2),
@@ -364,7 +365,7 @@ def _extract_checkpoint_archive(
     shutil.rmtree(temporary_root, ignore_errors=True)
     temporary_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
-        with tarfile.open(archive_path) as archive:
+        with tarfile.open(archive_path, errorlevel=2) as archive:
             members = _checkpoint_archive_members(archive, checkpoint_id)
             archive.extractall(
                 temporary_root,

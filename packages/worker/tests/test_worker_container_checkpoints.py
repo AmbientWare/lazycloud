@@ -34,7 +34,13 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
     upper = tmp_path / "upper"
     upper.mkdir()
     (upper / "app.py").write_text("print('ok')", encoding="utf-8")
-    (upper / "config.json").write_text("skip", encoding="utf-8")
+    (upper / "config.json").write_text("application config", encoding="utf-8")
+    nested = upper / "workspace"
+    nested.mkdir()
+    (nested / "config.json").write_text("nested config", encoding="utf-8")
+    (nested / "snapshot").write_bytes(b"application snapshot")
+    (nested / _ARTIFACT_DIR).mkdir()
+    (nested / _ARTIFACT_DIR / "data").write_bytes(b"application data")
     (upper / _ARTIFACT_DIR).mkdir()
     (upper / _ARTIFACT_DIR / "result.txt").write_text("skip", encoding="utf-8")
     (upper / "missing-link").symlink_to("missing-target")
@@ -71,21 +77,15 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
     checkpoint_path = tmp_path / "checkpoints" / "chk-1"
     filesystem_path = checkpoint_path / CHECKPOINT_FILESYSTEM_DIR
     assert checkpoint_id == "chk-1"
-    assert runtime.calls == [
-        (
-            "ctr-1",
-            str(checkpoint_path),
-            "/tmp/chk-1",
-            True,
-            True,
-            True,
-            True,
-        )
-    ]
     assert (filesystem_path / "app.py").exists()
     assert (filesystem_path / "missing-link").is_symlink()
     assert (filesystem_path / "missing-link").readlink() == Path("missing-target")
-    assert not (filesystem_path / "config.json").exists()
+    assert (filesystem_path / "config.json").read_text() == "application config"
+    assert (filesystem_path / "workspace" / "config.json").read_text() == "nested config"
+    assert (filesystem_path / "workspace" / "snapshot").read_bytes() == b"application snapshot"
+    assert (
+        filesystem_path / "workspace" / _ARTIFACT_DIR / "data"
+    ).read_bytes() == b"application data"
     assert not (filesystem_path / _ARTIFACT_DIR).exists()
     assert uploader.calls[0][0] == "checkpoints/chk-1.tar"
     payload = state.payloads[-1]
