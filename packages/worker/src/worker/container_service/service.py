@@ -10,6 +10,8 @@ from pathlib import Path
 from threading import Thread
 from uuid import uuid4
 
+from shared.deployments import StubKind
+
 from worker.container_client.models import (
     ContainerArchiveRequest,
     ContainerArchiveResponse,
@@ -204,7 +206,7 @@ class WorkerContainerService:
             )
         streams_suspended = False
         try:
-            if self.process_managers is not None:
+            if instance.stub_type == StubKind.Sandbox and self.process_managers is not None:
                 streams_suspended = True
                 self.process_managers.suspend_process_streams(instance)
             checkpoint_id = self.checkpoints.create_checkpoint(

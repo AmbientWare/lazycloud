@@ -7,7 +7,9 @@ from threading import Event
 
 import pytest
 from shared.compute_policy import MachinePool
+from shared.deployments import StubKind
 from worker.container_client.models import (
+    ContainerCheckpointRequest,
     ContainerExecRequest,
     ContainerExecResponse,
     ContainerKillRequest,
@@ -45,6 +47,7 @@ from worker.container_service.service import WorkerContainerService
 from worker.container_service.state import LocalWorkerContainerInstanceStore
 from worker.container_service.supervisor_process_manager import (
     SupervisorRequest,
+    SupervisorSandboxProcessManagerFactory,
     _SupervisorConnectionCoordinator,
     _SupervisorTransport,
 )
@@ -198,6 +201,30 @@ class NetworkPolicyUpdater:
         self.calls.append((container_id, block_network, allow_list))
         if self.error:
             raise RuntimeError(self.error)
+
+
+@pytest.mark.parametrize("kind", [StubKind.Endpoint, StubKind.Sandbox])
+def test_checkpoint_requires_supervisor_credentials_only_for_sandboxes(
+    tmp_path: Path,
+    kind: StubKind,
+) -> None:
+    instance = _instance(tmp_path, runtime=OciRuntimeName.Runsc)
+    instance.stub_type = kind.value
+    instance.container_ip = "127.0.0.1"
+    service = WorkerContainerService(
+        instances=_store(instance),
+        process_managers=SupervisorSandboxProcessManagerFactory(),
+        checkpoints=CheckpointCreator(),
+    )
+
+    response = service.container_checkpoint(ContainerCheckpointRequest(container_id="ctr-1"))
+
+    if kind is StubKind.Sandbox:
+        assert not response.ok
+        assert response.error_msg == "sandbox supervisor credential is unavailable"
+    else:
+        assert response.ok, response.error_msg
+        assert response.checkpoint_id == "checkpoint-1"
 
 
 def test_worker_container_service_exec_persists_sandbox_process_logs(tmp_path: Path) -> None:
