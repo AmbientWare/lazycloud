@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import os
 import shutil
+import stat
 import tarfile
 import threading
 from collections.abc import Callable
@@ -15,8 +18,12 @@ from pydantic import JsonValue, TypeAdapter
 from shared.checkpoints import CheckpointRecord, CheckpointStatus
 from shared.container_requests import WorkerStartupKind
 from worker.checkpoint_activity import CheckpointLeaseRegistry
-from worker.checkpoint_restore import RuntimeCheckpointRestorer
-from worker.checkpoints import CheckpointStatePayload, WorkerCheckpointStatus
+from worker.checkpoint_restore import RuntimeCheckpointRestorer, _extract_checkpoint_archive
+from worker.checkpoints import (
+    CheckpointStatePayload,
+    WorkerCheckpointStatus,
+    create_checkpoint_archive,
+)
 from worker.container_execution import (
     ContainerExecutionContext,
     ContainerRuntimeRunResult,
@@ -28,6 +35,108 @@ from worker.runtime_config import OciRuntimeName, RuntimeBinaryConfig
 type JsonObject = dict[str, JsonValue]
 
 _JSON_OBJECT: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
+
+
+def test_checkpoint_archive_preserves_container_links_and_permissions(tmp_path: Path) -> None:
+    source = tmp_path / "source" / "checkpoint-1"
+    filesystem = source / "filesystem"
+    filesystem.mkdir(parents=True)
+    executable = filesystem / "tool"
+    executable.write_bytes(b"container executable")
+    executable.chmod(0o775)
+    (filesystem / "absolute").symlink_to("/usr/bin/tool")
+    (filesystem / "relative").symlink_to("../tool")
+    (filesystem / "hardlink").hardlink_to(executable)
+    (source / "state").write_bytes(b"runtime-state")
+    archive = tmp_path / "checkpoint.tar"
+    create_checkpoint_archive(source, archive, checkpoint_id="checkpoint-1")
+    destination = tmp_path / "checkpoints" / "checkpoint-1"
+
+    _extract_checkpoint_archive(
+        archive,
+        checkpoint_path=destination,
+        temporary_root=tmp_path / "extract",
+        checkpoint_id="checkpoint-1",
+    )
+
+    restored = destination / "filesystem"
+    assert (restored / "absolute").readlink() == Path("/usr/bin/tool")
+    assert (restored / "relative").readlink() == Path("../tool")
+    assert (restored / "tool").read_bytes() == b"container executable"
+    assert (restored / "hardlink").stat().st_ino == (restored / "tool").stat().st_ino
+    assert stat.S_IMODE((restored / "tool").stat().st_mode) == 0o775
+    assert (restored / "tool").stat().st_uid == os.getuid()
+    assert (restored / "tool").stat().st_gid == os.getgid()
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o700
+    assert (destination / "state").read_bytes() == b"runtime-state"
+    assert not (tmp_path / "extract").exists()
+
+
+@pytest.mark.parametrize(
+    ("member_name", "member_type", "link_target"),
+    [
+        ("checkpoint-1/../outside/untouched", tarfile.REGTYPE, ""),
+        ("/outside/untouched", tarfile.REGTYPE, ""),
+        ("checkpoint-2/untouched", tarfile.REGTYPE, ""),
+        ("checkpoint-1/filesystem/link/untouched", tarfile.REGTYPE, ""),
+        ("checkpoint-1/filesystem/link", tarfile.REGTYPE, ""),
+        ("checkpoint-1/filesystem/hardlink", tarfile.LNKTYPE, "../outside/untouched"),
+        ("checkpoint-1/filesystem/hardlink", tarfile.LNKTYPE, "checkpoint-1/filesystem/link"),
+        ("checkpoint-1/filesystem/pipe", tarfile.FIFOTYPE, ""),
+        ("checkpoint-1/state", tarfile.SYMTYPE, "/outside/untouched"),
+    ],
+    ids=[
+        "traversal",
+        "absolute-path",
+        "sibling-checkpoint",
+        "write-through-symlink",
+        "duplicate-member",
+        "outside-hardlink",
+        "hardlink-to-symlink",
+        "special-file",
+        "runtime-state-symlink",
+    ],
+)
+def test_checkpoint_archive_rejects_host_writes_and_cleans_partial_extraction(
+    tmp_path: Path, member_name: str, member_type: bytes, link_target: str
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "untouched").write_bytes(b"host data")
+    if member_name.startswith("/"):
+        member_name = str(outside / "untouched")
+    archive = tmp_path / "checkpoint.tar"
+    with tarfile.open(archive, "w") as target:
+        for name in ("checkpoint-1", "checkpoint-1/filesystem"):
+            directory = tarfile.TarInfo(name)
+            directory.type = tarfile.DIRTYPE
+            target.addfile(directory)
+        member = tarfile.TarInfo(member_name)
+        member.type = member_type
+        member.linkname = link_target
+        if member.isreg():
+            member.size = len(b"overwritten")
+        target.addfile(member, io.BytesIO(b"overwritten") if member.isreg() else None)
+        symlink = tarfile.TarInfo("checkpoint-1/filesystem/link")
+        symlink.type = tarfile.SYMTYPE
+        symlink.linkname = str(outside)
+        target.addfile(symlink)
+    destination = tmp_path / "checkpoints" / "checkpoint-1"
+    destination.mkdir(parents=True)
+    (destination / "existing").write_bytes(b"existing checkpoint")
+
+    with pytest.raises(tarfile.FilterError):
+        _extract_checkpoint_archive(
+            archive,
+            checkpoint_path=destination,
+            temporary_root=tmp_path / "extract",
+            checkpoint_id="checkpoint-1",
+        )
+
+    assert (outside / "untouched").read_bytes() == b"host data"
+    assert (destination / "existing").read_bytes() == b"existing checkpoint"
+    assert not (tmp_path / "extract").exists()
+    assert not (tmp_path / "checkpoints" / "checkpoint-2").exists()
 
 
 def test_runtime_checkpoint_restorer_reuses_owned_rootfs_after_source_image_eviction(
@@ -173,13 +282,16 @@ def test_runtime_checkpoint_restorer_keeps_checkpoint_available_after_started_ex
 
 def test_runtime_checkpoint_restorer_preserves_fresh_rootfs_for_deployment_fallback(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     checkpoint, archive = _checkpoint_archive(tmp_path)
     states = _StateSink()
     restorer = RuntimeCheckpointRestorer(
         source=_Source(checkpoint=checkpoint, archive=archive),
         state_sink=states,
-        runtime=_Runtime(error_before_started="restore rejected"),
+        runtime=_Runtime(
+            error_before_started="restore rejected https://storage.invalid/?signature=private-value"
+        ),
         checkpoint_root=str(tmp_path / "checkpoints"),
     )
     bundle = tmp_path / "bundle"
@@ -204,6 +316,9 @@ def test_runtime_checkpoint_restorer_preserves_fresh_rootfs_for_deployment_fallb
     assert config_path.read_text(encoding="utf-8") == original_config
     assert (fresh_rootfs / "fresh.txt").read_text(encoding="utf-8") == "fresh-image"
     assert not (bundle / "checkpoint-rootfs").exists()
+    assert "stage=runtime" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "private-value" not in caplog.text
 
 
 def test_concurrent_restores_materialize_once_then_run_independently(
