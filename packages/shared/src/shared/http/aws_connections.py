@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import Field, model_validator
 
 from shared.aws_connections import (
+    AWS_CONNECTED_MACHINE_POOL,
     AWS_REGION_PATTERN,
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPhase,
@@ -15,6 +16,7 @@ from shared.aws_connections import (
     AwsAccountNetwork,
     AwsConnectionStackAction,
 )
+from shared.capacity import MachinePool
 from shared.http.base import HttpModel
 
 _AWS_ROLE_ARN_PATTERN = (
@@ -24,6 +26,9 @@ _AWS_ROLE_ARN_PATTERN = (
 
 class AwsConnectionCreateRequest(HttpModel):
     account_id: str = Field(pattern=r"^[0-9]{12}$")
+    pool: MachinePool = Field(
+        default=MachinePool(AWS_CONNECTED_MACHINE_POOL), min_length=1, max_length=240
+    )
     role_arn: str | None = Field(default=None, pattern=_AWS_ROLE_ARN_PATTERN)
     network: AwsAccountNetwork | None = None
     max_cpu_instances: int | None = Field(default=None, gt=0)
@@ -110,6 +115,7 @@ class AwsConnectionCustomerAction(HttpModel):
 class AwsConnectionResponse(HttpModel):
     id: str
     account_id: str
+    pool: MachinePool = Field(min_length=1, max_length=240)
     phase: AwsAccountConnectionPhase
     revision: int = Field(ge=1)
     compute: AwsAccountComputeConfiguration

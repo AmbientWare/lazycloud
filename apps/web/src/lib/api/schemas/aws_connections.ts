@@ -167,6 +167,7 @@ export const awsConnectionSchema = z
   .object({
     id: z.string().uuid(),
     account_id: z.string().regex(/^\d{12}$/),
+    pool: z.string().min(1).max(240),
     phase: awsConnectionPhaseSchema,
     active_authorization: awsAuthorizationGenerationSchema.nullable(),
     pending_authorization: awsAuthorizationGenerationSchema.nullable(),

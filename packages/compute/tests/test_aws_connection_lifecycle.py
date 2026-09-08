@@ -251,6 +251,32 @@ def _service(
     )
 
 
+def test_customer_pool_survives_retries_and_cannot_change_during_authorization(
+    isolated_services: ApiServices,
+) -> None:
+    owner = _owner(isolated_services)
+    service = _service(isolated_services)
+    request = AwsConnectionCreateRequest(account_id=ACCOUNT_ID, pool=MachinePool("training"))
+
+    created = service.connect(request, user_id=owner)
+    retried = service.connect(request, user_id=owner)
+
+    assert retried.connection.id == created.connection.id
+    assert service.get(user_id=owner).pool == "training"
+    with pytest.raises(ConflictError, match="already has"):
+        service.connect(
+            AwsConnectionCreateRequest(account_id=ACCOUNT_ID, pool=MachinePool("other")),
+            user_id=owner,
+        )
+    ready = service.validate(user_id=owner)
+    policies = WorkspaceComputePolicyService(isolated_services.context)
+    assert policies.connection_for_machine_pool(workspace="default", pool=ready.pool) == ready
+    assert (
+        policies.connection_for_machine_pool(workspace="default", pool=MachinePool("lazycloud"))
+        is None
+    )
+
+
 def test_bucket_access_reconciliation_retries_through_durable_connection_claim(
     isolated_services: ApiServices,
 ) -> None:
@@ -498,6 +524,7 @@ def test_first_connection_reaching_ready_holds_the_accounts_warm_baseline(
 
     assert ready.phase is AwsAccountConnectionPhase.Ready
     assert ready.next_reconcile_at is None
+    assert ready.pool == "aws"
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.workspace(session, "default").id
     assert baseline.workspaces == [workspace_id]
@@ -526,6 +553,7 @@ def test_a_workspace_without_its_own_account_still_reaches_the_shared_fleet(
     fleet = service.validate(user_id=owner)
     assert fleet.hosts_workloads is True
     assert fleet.platform_fleet is True
+    assert fleet.pool == "lazycloud"
 
     # A separate account, holding no connection of its own.
     customer = owned_workspace(isolated_services.control_plane_service, "customer")

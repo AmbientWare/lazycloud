@@ -35,6 +35,7 @@ def _connection() -> AwsConnectionResponse:
         {
             "id": "11111111-1111-4111-8111-111111111111",
             "account_id": "123456789012",
+            "pool": "aws",
             "phase": "ready",
             "revision": 7,
             "compute": {
