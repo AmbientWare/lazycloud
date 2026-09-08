@@ -7,8 +7,8 @@ import sqlalchemy as sa
 from alembic import op
 from pydantic import JsonValue, TypeAdapter
 
-revision = "0012_artifact_storage"
-down_revision = "0011_supplier_cost_terms"
+revision = "0013_artifact_storage"
+down_revision = "0012_aws_stack_actions"
 branch_labels = None
 depends_on = None
 

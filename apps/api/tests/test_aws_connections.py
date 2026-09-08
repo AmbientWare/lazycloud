@@ -27,7 +27,10 @@ from shared.aws_connections import (
     AwsAccountNetwork,
     AwsAccountValidationResult,
     AwsAuthorizationCleanupStatus,
+    AwsConnectionStackAction,
     AwsManagedAuthorizationReference,
+    AwsStackCreateRequest,
+    AwsStackParameter,
 )
 from shared.http.aws_connections import (
     AwsConnectionCurrentResponse,
@@ -99,8 +102,29 @@ class _AuthorizationPlanner:
                 if managed
                 else None
             ),
-            authorization_url=(
-                f"https://console.aws.amazon.com/cloudformation/g{generation}" if managed else None
+            authorization_stack=(
+                AwsConnectionStackAction(
+                    account_id=account_id,
+                    region="us-east-1",
+                    template_sha256="44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                    request=AwsStackCreateRequest(
+                        StackName=f"compute-connection-test-g{generation}",
+                        TemplateBody="{}",
+                        Parameters=tuple(
+                            AwsStackParameter(ParameterKey=key, ParameterValue=value)
+                            for key, value in {
+                                "ConnectionRoleName": f"compute-connection-test-g{generation}",
+                                "ExternalId": "test-external-id-0123456789abcdef",
+                                "NodeInstanceProfileName": "node",
+                                "NodeRoleName": "node",
+                                "PlatformPrincipalArn": "arn:aws:iam::210987654321:role/platform",
+                                "TargetAccountId": account_id,
+                            }.items()
+                        ),
+                    ),
+                )
+                if managed
+                else None
             ),
             network=network,
             node_role_arn=node_role,
@@ -419,7 +443,7 @@ def test_validation_failure_distinguishes_active_health_from_pending_reconnect(
         "/api/v1/aws-connection",
         json={"account_id": ACCOUNT_ID, "role_arn": existing_role},
     )
-    assert created.json()["authorization"]["url"] is None
+    assert created.json()["authorization"]["stack"] is None
     assert created.json()["authorization"]["external_id"]
     initial_validation = client.post("/api/v1/aws-connection/validate")
     assert initial_validation.status_code == 200, initial_validation.text

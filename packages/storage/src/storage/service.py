@@ -26,6 +26,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import (
     ENV_PREFIX,
     IMAGE_BUILD_CONTEXT_BUCKET,
+    OBJECT_STORE_BUCKET,
     SOURCE_PACKAGE_BUCKET,
     WORKSPACE_OBJECT_BUCKET,
 )
@@ -45,7 +46,6 @@ from storage_client.s3 import (
     S3ObjectStoreClient,
     S3ObjectStoreSettings,
     S3PresignedUpload,
-    default_s3_object_store_client,
 )
 
 from database import AsyncDatabaseClient
@@ -297,13 +297,13 @@ class ObjectStorage:
         self,
         context: StorageContext,
         *,
-        object_client: ObjectByteClient | None = None,
+        object_client: ObjectByteClient,
         default_bucket: str | None = None,
         allowed_buckets: Collection[str] | None = None,
     ) -> None:
         self.context = context
-        self.object_client = object_client or default_s3_object_store_client()
-        self.default_bucket = default_bucket or S3ObjectStoreSettings().bucket
+        self.object_client = object_client
+        self.default_bucket = default_bucket or OBJECT_STORE_BUCKET
         self.allowed_buckets = frozenset(
             {
                 WORKSPACE_OBJECT_BUCKET,
@@ -318,15 +318,14 @@ class ObjectStorage:
     def from_settings(
         cls,
         context: StorageContext,
-        settings: S3ObjectStoreSettings | None = None,
+        settings: S3ObjectStoreSettings,
         *,
         allowed_buckets: Collection[str] | None = None,
     ) -> ObjectStorage:
-        config = settings or S3ObjectStoreSettings()
         return cls(
             context,
-            object_client=S3ObjectStoreClient.from_settings(config),
-            default_bucket=config.bucket,
+            object_client=S3ObjectStoreClient.from_settings(settings),
+            default_bucket=settings.bucket,
             allowed_buckets=allowed_buckets,
         )
 

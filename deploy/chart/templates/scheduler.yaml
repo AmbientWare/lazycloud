@@ -97,7 +97,7 @@ spec:
           # while one of its loops is wedged, which is the failure this exists to
           # catch, so the oldest file decides and a missing one fails outright.
           # The threshold is sized against the slowest loop: housekeeping waits
-          # on Stripe and S3, so it beats far less often than placement does.
+          # on Stripe and R2, so it beats far less often than placement does.
           readinessProbe:
             exec:
               command:

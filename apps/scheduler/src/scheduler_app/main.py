@@ -308,6 +308,7 @@ def build_scheduler_runtime(
     # different one shows up as launch templates alternating between versions.
     release = resolve_deployment_release()
     print(f"scheduler {release.describe()}", file=sys.stderr, flush=True)
+    object_store_settings = S3ObjectStoreSettings()
     return SchedulerRuntime.create(
         public_gateway_http_url=public_gateway_http_url,
         runtime_callback_http_url=runtime_callback_http_url,
@@ -315,8 +316,8 @@ def build_scheduler_runtime(
             workspace_changes=WorkspaceChangeStreamSettings(),
         ),
         storage=SchedulerStorageSettings(
-            object_store=S3ObjectStoreSettings(),
-            image_archive=ImageArchiveSettings(),
+            object_store=object_store_settings,
+            image_archive=ImageArchiveSettings(bucket=object_store_settings.bucket),
             retention=RetentionSettings(),
             volume_metering=VolumeMeteringSettings(),
             workload_image_registry_repository=(

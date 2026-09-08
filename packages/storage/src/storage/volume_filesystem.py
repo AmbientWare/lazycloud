@@ -8,13 +8,15 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.volumes import PresignedUrlMethod
 from shared.identity import WorkspaceStorageConfig
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreClient, S3ObjectStoreSettings
+
+from storage.workspace_storage_issuers import external_workspace_storage_settings
 
 VOLUME_NAMESPACE_PREFIX = "volumes"
 
@@ -242,6 +244,17 @@ class WorkspaceVolumeStoreResolver(Protocol):
     def __call__(self, workspace_id: str) -> WorkspaceVolumeStore: ...
 
 
+@runtime_checkable
+class WorkspaceVolumeObjectClient(VolumeObjectClient, Protocol):
+    @property
+    def settings(self) -> S3ObjectStoreSettings: ...
+
+
+@runtime_checkable
+class _ClosableVolumeClient(Protocol):
+    def close(self) -> None: ...
+
+
 class WorkspaceStorageLookup(Protocol):
     def __call__(self, workspace_id: str) -> WorkspaceStorageConfig: ...
 
@@ -249,69 +262,32 @@ class WorkspaceStorageLookup(Protocol):
 def workspace_volume_store_resolver(
     lookup: WorkspaceStorageLookup,
     *,
-    default_endpoint_url: str | None,
-    default_presigned_endpoint_url: str | None,
+    object_store: WorkspaceVolumeObjectClient,
 ) -> WorkspaceVolumeStoreResolver:
     def resolve(workspace_id: str) -> WorkspaceVolumeStore:
         storage = lookup(workspace_id)
-        return workspace_volume_store(
-            storage,
-            presigned_endpoint_url=workspace_presign_endpoint(
-                storage,
-                default_endpoint_url=default_endpoint_url,
-                default_presigned_endpoint_url=default_presigned_endpoint_url,
-            ),
+        if storage.access_key or storage.secret_key:
+            return WorkspaceVolumeStore(
+                client=S3ObjectStoreClient.from_settings(
+                    external_workspace_storage_settings(storage)
+                ),
+                bucket=storage.bucket or "",
+                prefix=storage.key_prefix,
+            )
+        expected_bucket = f"{object_store.settings.workspace_bucket_prefix}-{workspace_id}".replace(
+            "_", "-"
         )
+        if (
+            storage.bucket != expected_bucket
+            or storage.endpoint_url != object_store.settings.endpoint_url
+            or storage.key_prefix
+        ):
+            raise UpstreamUnavailableError(
+                "workspace storage without customer credentials must belong to this deployment"
+            )
+        return WorkspaceVolumeStore(client=object_store, bucket=expected_bucket, prefix="")
 
     return resolve
-
-
-def workspace_volume_store(
-    storage: WorkspaceStorageConfig,
-    *,
-    presigned_endpoint_url: str | None = None,
-) -> WorkspaceVolumeStore:
-    bucket = storage.bucket or ""
-    if not bucket:
-        raise UpstreamUnavailableError("workspace storage is not configured for this workspace")
-    return WorkspaceVolumeStore(
-        client=S3ObjectStoreClient.from_settings(
-            S3ObjectStoreSettings(
-                bucket=bucket,
-                endpoint_url=storage.endpoint_url or None,
-                presigned_endpoint_url=presigned_endpoint_url,
-                region_name=storage.region or "us-east-1",
-                access_key_id=storage.access_key,
-                secret_access_key=storage.secret_key,
-                force_path_style=storage.force_path_style,
-            )
-        ),
-        bucket=bucket,
-        prefix=storage.key_prefix,
-    )
-
-
-def workspace_presign_endpoint(
-    storage: WorkspaceStorageConfig,
-    *,
-    default_endpoint_url: str | None,
-    default_presigned_endpoint_url: str | None,
-) -> str | None:
-    """Presign a workspace bucket held on platform storage through the reachable host.
-
-    The stored endpoint is the one workers use from inside the deployment; a
-    client resolving that name would fail. Storage attached by the customer keeps
-    its own endpoint, which is already reachable.
-    """
-    if not default_presigned_endpoint_url:
-        return None
-    if _same_endpoint(storage.endpoint_url, default_endpoint_url or ""):
-        return default_presigned_endpoint_url
-    return None
-
-
-def _same_endpoint(left: str, right: str) -> bool:
-    return left.strip().rstrip("/") == right.strip().rstrip("/")
 
 
 @dataclass(slots=True)
@@ -325,6 +301,25 @@ class WorkspaceVolumeFilesystem:
     resolve_store: WorkspaceVolumeStoreResolver
     _stores: dict[str, WorkspaceVolumeStore] = field(default_factory=dict)
     _stores_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def close(self) -> None:
+        with self._stores_lock:
+            stores = tuple(self._stores.values())
+            self._stores.clear()
+        clients: list[_ClosableVolumeClient] = []
+        for store in stores:
+            if isinstance(store.client, _ClosableVolumeClient) and all(
+                store.client is not client for client in clients
+            ):
+                clients.append(store.client)
+        failures: list[Exception] = []
+        for client in clients:
+            try:
+                client.close()
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            raise ExceptionGroup("workspace storage clients failed to close", failures)
 
     def ensure_volume(self, namespace: VolumeNamespace) -> None:
         self._store(namespace)
@@ -342,7 +337,14 @@ class WorkspaceVolumeFilesystem:
             return cached
         resolved = self.resolve_store(workspace_id)
         with self._stores_lock:
-            return self._stores.setdefault(workspace_id, resolved)
+            stored = self._stores.setdefault(workspace_id, resolved)
+        if (
+            stored is not resolved
+            and stored.client is not resolved.client
+            and isinstance(resolved.client, _ClosableVolumeClient)
+        ):
+            resolved.client.close()
+        return stored
 
     def write_path(
         self,
@@ -758,9 +760,8 @@ __all__ = [
     "VolumeObjectClient",
     "WorkspaceStorageLookup",
     "WorkspaceVolumeFilesystem",
+    "WorkspaceVolumeObjectClient",
     "WorkspaceVolumeStore",
     "WorkspaceVolumeStoreResolver",
-    "workspace_presign_endpoint",
-    "workspace_volume_store",
     "workspace_volume_store_resolver",
 ]

@@ -43,7 +43,7 @@ from shared.timestamps import to_utc, utc_now
 
 from storage.checkpoint_retention import DurableCheckpointRetentionService
 from storage.context import StorageContext
-from storage.image_archive import ResolvedImageArchiveSettings
+from storage.image_archive import ImageArchiveSettings
 from storage.service import CacheStorage, ObjectByteClient, ObjectStorage
 
 DEFAULT_RETENTION_INTERVAL_SECONDS = 60 * 60
@@ -117,7 +117,7 @@ class RetentionService:
     object_storage: ObjectStorage
     cache_storage: CacheStorage
     config: RetentionConfig
-    image_archive_settings: ResolvedImageArchiveSettings
+    image_archive_settings: ImageArchiveSettings
     image_archive_client: ObjectByteClient | None = None
     workload_image_registry: WorkloadImageRegistry | None = None
 

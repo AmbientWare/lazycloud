@@ -18,16 +18,12 @@ class WorkspaceStorageCredentials(ContractModel):
     region: str = ""
     bucket_name: str = ""
     prefix: str = ""
-    access_key: str = ""
-    secret_key: str = ""
-    session_token: str = ""
+    access_key: str = Field(default="", repr=False)
+    secret_key: str = Field(default="", repr=False)
+    session_token: str = Field(default="", repr=False)
     force_path_style: bool = False
     expires_at: datetime | None = None
-    """When this credential stops working, or `None` for a store that cannot say.
-
-    The mount outlives the container that caused it, so this is what the worker
-    refreshes against. Absent means nothing to refresh, not "already expired".
-    """
+    """The worker refreshes this before the running mount loses access."""
 
 
 class ContainerMount(ContractModel):

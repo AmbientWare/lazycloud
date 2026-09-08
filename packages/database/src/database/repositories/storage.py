@@ -168,8 +168,9 @@ class ObjectRepository:
             }
         )
         self.records.upsert(claimed, workspace_id=workspace_id)
-        target = existing.model_copy(
-            update={
+        target = ObjectRecord.model_validate(
+            {
+                **existing.model_dump(),
                 **payload,
                 "write_claim_id": claim_id,
                 "write_claimed_at": claimed_at,
@@ -335,7 +336,10 @@ class ObjectRepository:
         payload = _object_write_payload(command)
         if existing is None:
             return self.records.create(payload, workspace_id=workspace_id)
-        return self.records.upsert(existing.model_copy(update=payload), workspace_id=workspace_id)
+        return self.records.upsert(
+            ObjectRecord.model_validate({**existing.model_dump(), **payload}),
+            workspace_id=workspace_id,
+        )
 
     def claim_delete(
         self,

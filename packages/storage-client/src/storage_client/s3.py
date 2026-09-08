@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ipaddress
 import threading
 from base64 import b64decode, b64encode
 from binascii import Error as BinasciiError
@@ -10,8 +9,16 @@ from datetime import UTC, datetime
 from hashlib import md5
 from pathlib import Path
 from types import ModuleType
-from typing import Generic, Literal, NotRequired, Protocol, TypedDict, TypeGuard, runtime_checkable
-from urllib.parse import urlparse
+from typing import (
+    Generic,
+    Literal,
+    NotRequired,
+    Protocol,
+    TypedDict,
+    TypeGuard,
+    Unpack,
+    runtime_checkable,
+)
 from uuid import uuid4
 
 import boto3
@@ -32,62 +39,50 @@ from shared.deployment_settings import MissingDeploymentSettingError
 from typing_extensions import TypeVar
 
 
-class S3ObjectStoreSettings(BaseSettings):
-    bucket: str = OBJECT_STORE_BUCKET
-    workspace_bucket_prefix: str = WORKSPACE_BUCKET_PREFIX
-    """Prefix of the bucket each workspace gets.
-
-    A bucket name is global to the object store, and two deployments sharing one
-    AWS account share its namespace. Without a prefix per deployment, the grant
-    that lets a control plane reach `workspace-*` reaches every deployment's
-    workspaces in that account, and no policy written against the default name
-    can separate them.
-    """
-    # Which store this talks to is a deployment fact, so absence is rejected
-    # rather than defaulted. A caller whose store is AWS itself says so by
-    # passing `None`; that is a statement, and silence is not.
-    endpoint_url: str | None = None
-    presigned_endpoint_url: str | None = None
+class S3Credentials(BaseSettings):
+    endpoint_url: str = ""
     region_name: str = "us-east-1"
     access_key_id: str = Field(default="", repr=False)
     secret_access_key: str = Field(default="", repr=False)
     session_token: str = Field(default="", repr=False)
-    credential_expires_at: datetime | None = None
     force_path_style: bool = True
+
+    model_config = SettingsConfigDict(
+        env_prefix=f"{ENV_PREFIX}_OBJECT_STORE_", extra="ignore", hide_input_in_errors=True
+    )
+
+    @model_validator(mode="after")
+    def require_credentials(self) -> S3Credentials:
+        if not self.endpoint_url:
+            raise MissingDeploymentSettingError(
+                f"{ENV_PREFIX}_OBJECT_STORE_ENDPOINT_URL", purpose="the object storage endpoint"
+            )
+        if not self.access_key_id or not self.secret_access_key:
+            raise ValueError("object-store credentials require both access and secret keys")
+        return self
+
+    def transport_settings(
+        self, *, bucket: str, workspace_bucket_prefix: str = ""
+    ) -> S3ObjectStoreSettings:
+        return S3ObjectStoreSettings(
+            endpoint_url=self.endpoint_url,
+            region_name=self.region_name,
+            access_key_id=self.access_key_id,
+            secret_access_key=self.secret_access_key,
+            session_token=self.session_token,
+            force_path_style=self.force_path_style,
+            bucket=bucket,
+            workspace_bucket_prefix=workspace_bucket_prefix,
+        )
+
+
+class S3ObjectStoreSettings(S3Credentials):
+    bucket: str = OBJECT_STORE_BUCKET
+    workspace_bucket_prefix: str = WORKSPACE_BUCKET_PREFIX
+    credential_expires_at: datetime | None = None
     transfer_multipart_threshold_bytes: int = 64 * 1024 * 1024
     transfer_multipart_chunk_size_bytes: int = 64 * 1024 * 1024
     transfer_max_concurrency: int = 2
-
-    model_config = SettingsConfigDict(
-        env_prefix=f"{ENV_PREFIX}_OBJECT_STORE_",
-        extra="ignore",
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def require_endpoint_url(cls, values: dict[str, object]) -> dict[str, object]:
-        # Presence, not truth: the declared `None` is unreachable by omission,
-        # and only a caller that names it gets it.
-        if "endpoint_url" not in values:
-            raise MissingDeploymentSettingError(
-                f"{ENV_PREFIX}_OBJECT_STORE_ENDPOINT_URL",
-                purpose="the object store this process reads and writes objects through",
-            )
-        return values
-
-    @field_validator("endpoint_url", "presigned_endpoint_url", mode="before")
-    @classmethod
-    def empty_endpoint_means_aws(cls, value: object) -> object:
-        """An empty endpoint names AWS itself, which boto3 spells as `None`.
-
-        A deployment says "this store is S3" by setting the variable to the empty
-        string: the value has to be present, because absence is rejected, and there
-        is no address to give. Passed through, boto3 reads the empty string as an
-        address and fails with `Invalid endpoint:` naming nothing at all.
-        """
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
 
     @field_validator("credential_expires_at", mode="before")
     @classmethod
@@ -101,12 +96,6 @@ class S3ObjectStoreSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_credentials(self) -> S3ObjectStoreSettings:
-        has_access_key = bool(self.access_key_id)
-        has_secret_key = bool(self.secret_access_key)
-        if has_access_key != has_secret_key:
-            raise ValueError("object-store credentials require both access and secret keys")
-        if self.session_token and not has_access_key:
-            raise ValueError("object-store session token requires explicit credentials")
         if self.credential_expires_at is not None:
             expiration = self.credential_expires_at
             if expiration.tzinfo is None or expiration.utcoffset() is None:
@@ -233,6 +222,11 @@ class _ClientWithMeta(Protocol):
     meta: _S3ClientMeta
 
 
+class _PutObjectOptions(TypedDict, total=False):
+    CacheControl: str
+    IfNoneMatch: Literal["*"]
+
+
 @runtime_checkable
 class _PutObjectClient(Protocol):
     def put_object(
@@ -243,6 +237,7 @@ class _PutObjectClient(Protocol):
         Body: bytes,
         ContentType: str,
         Metadata: dict[str, str],
+        **options: Unpack[_PutObjectOptions],
     ) -> None: ...
 
 
@@ -334,6 +329,41 @@ class _BucketClient(Protocol):
     def head_bucket(self, *, Bucket: str) -> None: ...
 
 
+class _CorsRule(TypedDict):
+    AllowedOrigins: list[str]
+    AllowedMethods: list[str]
+    AllowedHeaders: list[str]
+    ExposeHeaders: list[str]
+
+
+class _CorsConfiguration(TypedDict):
+    CORSRules: list[_CorsRule]
+
+
+class _AbortMultipartRule(TypedDict):
+    DaysAfterInitiation: int
+
+
+class _LifecycleRule(TypedDict):
+    ID: str
+    Status: str
+    Filter: dict[str, str]
+    AbortIncompleteMultipartUpload: _AbortMultipartRule
+
+
+class _LifecycleConfiguration(TypedDict):
+    Rules: list[_LifecycleRule]
+
+
+@runtime_checkable
+class _BucketPolicyClient(Protocol):
+    def put_bucket_cors(self, *, Bucket: str, CORSConfiguration: _CorsConfiguration) -> None: ...
+
+    def put_bucket_lifecycle_configuration(
+        self, *, Bucket: str, LifecycleConfiguration: _LifecycleConfiguration
+    ) -> None: ...
+
+
 @runtime_checkable
 class _ListObjectsClient(Protocol):
     def list_objects_v2(
@@ -365,6 +395,7 @@ class _FullS3Client(
     _DeleteObjectClient,
     _CopyObjectClient,
     _BucketClient,
+    _BucketPolicyClient,
     _ListObjectsClient,
     _DeleteObjectsClient,
     Protocol,
@@ -384,6 +415,7 @@ type S3ClientCapabilities = (
     | _DeleteObjectClient
     | _CopyObjectClient
     | _BucketClient
+    | _BucketPolicyClient
     | _ListObjectsClient
     | _DeleteObjectsClient
 )
@@ -417,65 +449,25 @@ class _Boto3S3ClientFactory(Protocol):
 class S3ObjectStoreClient(Generic[S3ClientT]):
     settings: S3ObjectStoreSettings
     client: S3ClientT
-    presign_client: _PresignClient | BaseClient | None = None
     _close_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
 
     @staticmethod
     def from_settings(
-        settings: S3ObjectStoreSettings | None = None,
+        settings: S3ObjectStoreSettings,
     ) -> S3ObjectStoreClient[S3ClientCapabilities]:
-        config = settings or S3ObjectStoreSettings()
-        client = _new_s3_client(config, config.endpoint_url)
-        try:
-            presign_client = _new_s3_client(
-                config,
-                presign_endpoint_for_storage(
-                    config.endpoint_url,
-                    config.presigned_endpoint_url,
-                ),
-            )
-        except Exception as acquisition_error:
-            try:
-                client.close()
-            except Exception as close_error:
-                raise ExceptionGroup(
-                    "S3 presign-client acquisition and primary-client rollback failed",
-                    [acquisition_error, close_error],
-                ) from None
-            raise
         return S3ObjectStoreClient[S3ClientCapabilities](
-            settings=config,
-            client=client,
-            presign_client=presign_client,
+            settings=settings,
+            client=_new_s3_client(settings, settings.endpoint_url),
         )
 
     def close(self) -> None:
-        """Close every distinct botocore client exactly once.
-
-        Shutdown remains best-effort: a primary-client failure cannot skip the
-        presign client, and all failures are returned together in acquisition
-        order after every client has been attempted.
-        """
         with self._close_lock:
             if self._closed:
                 return
             self._closed = True
-            clients: list[_ClosableClient] = []
             if isinstance(self.client, _ClosableClient):
-                clients.append(self.client)
-            if isinstance(self.presign_client, _ClosableClient) and all(
-                self.presign_client is not client for client in clients
-            ):
-                clients.append(self.presign_client)
-            failures: list[Exception] = []
-            for client in clients:
-                try:
-                    client.close()
-                except Exception as error:
-                    failures.append(error)
-            if failures:
-                raise ExceptionGroup("failed to close S3 object-store clients", failures)
+                self.client.close()
 
     def put_bytes(
         self,
@@ -485,17 +477,25 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         bucket: str | None = None,
         content_type: str = "application/octet-stream",
         metadata: dict[str, str] | None = None,
+        cache_control: str | None = None,
+        if_absent: bool = False,
     ) -> S3ObjectInfo:
         target_bucket = bucket or self.settings.bucket
         client = self.client
         if not isinstance(client, _PutObjectClient):
             raise TypeError("configured S3 client does not support object uploads")
+        options: _PutObjectOptions = {}
+        if cache_control is not None:
+            options["CacheControl"] = cache_control
+        if if_absent:
+            options["IfNoneMatch"] = "*"
         client.put_object(
             Bucket=target_bucket,
             Key=key,
             Body=data,
             ContentType=content_type,
             Metadata=metadata or {},
+            **options,
         )
         return S3ObjectInfo(
             bucket=target_bucket,
@@ -820,6 +820,39 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
             raise TypeError("configured S3 client does not support bucket management")
         client.head_bucket(Bucket=bucket or self.settings.bucket)
 
+    def configure_workspace_bucket(self, bucket: str, *, public_origin: str) -> None:
+        client = self.client
+        if not isinstance(client, _BucketPolicyClient):
+            raise TypeError("configured S3 client does not support bucket CORS and lifecycle")
+        if not public_origin:
+            raise ValueError("workspace bucket CORS requires the public gateway origin")
+        client.put_bucket_cors(
+            Bucket=bucket,
+            CORSConfiguration={
+                "CORSRules": [
+                    {
+                        "AllowedOrigins": [public_origin],
+                        "AllowedMethods": ["GET", "HEAD", "PUT"],
+                        "AllowedHeaders": ["*"],
+                        "ExposeHeaders": ["ETag", "x-amz-checksum-sha256"],
+                    }
+                ]
+            },
+        )
+        client.put_bucket_lifecycle_configuration(
+            Bucket=bucket,
+            LifecycleConfiguration={
+                "Rules": [
+                    {
+                        "ID": "abort-incomplete-uploads",
+                        "Status": "Enabled",
+                        "Filter": {"Prefix": ""},
+                        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1},
+                    }
+                ]
+            },
+        )
+
     def list_directory(self, prefix: str, *, bucket: str | None = None) -> tuple[S3ObjectInfo, ...]:
         target_bucket = bucket or self.settings.bucket
         directory = prefix if prefix.endswith("/") else f"{prefix}/"
@@ -947,7 +980,7 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
 
     @property
     def _presigner(self) -> _PresignClient:
-        client = self.presign_client or self.client
+        client = self.client
         if not isinstance(client, _PresignClient):
             raise TypeError("configured S3 client does not support presigned URLs")
         return client
@@ -975,23 +1008,15 @@ def _new_s3_client(settings: S3ObjectStoreSettings, endpoint_url: str | None) ->
     boto3_module: ModuleType = boto3
     if not _is_boto3_s3_client_factory(boto3_module):
         raise TypeError("boto3 module is missing the client factory operation")
-    if settings.access_key_id:
-        base_client = boto3_module.client(
-            "s3",
-            endpoint_url=endpoint_url,
-            region_name=settings.region_name,
-            aws_access_key_id=settings.access_key_id,
-            aws_secret_access_key=settings.secret_access_key,
-            aws_session_token=settings.session_token or None,
-            config=s3_config,
-        )
-    else:
-        base_client = boto3_module.client(
-            "s3",
-            endpoint_url=endpoint_url,
-            region_name=settings.region_name,
-            config=s3_config,
-        )
+    base_client = boto3_module.client(
+        "s3",
+        endpoint_url=endpoint_url,
+        region_name=settings.region_name,
+        aws_access_key_id=settings.access_key_id,
+        aws_secret_access_key=settings.secret_access_key,
+        aws_session_token=settings.session_token or None,
+        config=s3_config,
+    )
     candidate = base_client
     if not _is_full_s3_client(candidate):
         raise TypeError("boto3 S3 client is missing required object-store operations")
@@ -1019,6 +1044,8 @@ def _is_full_s3_client(value: BaseClient) -> TypeGuard[_FullS3Client]:
             "delete_object",
             "create_bucket",
             "head_bucket",
+            "put_bucket_cors",
+            "put_bucket_lifecycle_configuration",
             "list_objects_v2",
             "delete_objects",
             "copy_object",
@@ -1118,80 +1145,3 @@ def _validated_presign_checksum_sha256(checksum_sha256: str) -> str:
     if len(raw) != 32 or b64encode(raw).decode() != value:
         raise ValueError("presigned upload checksum must be base64-encoded sha256")
     return value
-
-
-def presign_endpoint_for_storage(
-    storage_endpoint_url: str | None,
-    presigned_endpoint_url: str | None,
-) -> str | None:
-    return presign_endpoint_override(
-        storage_endpoint_url, presigned_endpoint_url
-    ) or _clean_endpoint(storage_endpoint_url)
-
-
-def presign_endpoint_override(
-    storage_endpoint_url: str | None,
-    presigned_endpoint_url: str | None,
-) -> str | None:
-    endpoint = _clean_endpoint(presigned_endpoint_url)
-    if not endpoint:
-        return None
-    if is_loopback_endpoint(endpoint) and not is_local_s3_dev_endpoint(storage_endpoint_url):
-        return None
-    return endpoint
-
-
-def is_local_s3_dev_endpoint(endpoint_url: str | None) -> bool:
-    host = endpoint_hostname(endpoint_url)
-    if not host:
-        return False
-    return (
-        is_loopback_host(host)
-        or _is_named_local_s3_host(host, "garage")
-        or _is_named_local_s3_host(host, "localstack")
-        or _is_named_local_s3_host(host, "object-store")
-    )
-
-
-def is_loopback_endpoint(endpoint_url: str | None) -> bool:
-    host = endpoint_hostname(endpoint_url)
-    return bool(host) and is_loopback_host(host)
-
-
-def is_loopback_host(host: str) -> bool:
-    normalized = host.strip().lower()
-    if normalized == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(normalized).is_loopback
-    except ValueError:
-        return False
-
-
-def endpoint_hostname(endpoint_url: str | None) -> str:
-    endpoint = _clean_endpoint(endpoint_url)
-    if not endpoint:
-        return ""
-    parsed = urlparse(endpoint)
-    if parsed.hostname:
-        return parsed.hostname.lower()
-    if "://" not in endpoint:
-        parsed = urlparse(f"//{endpoint}")
-        if parsed.hostname:
-            return parsed.hostname.lower()
-    return ""
-
-
-def _clean_endpoint(endpoint_url: str | None) -> str | None:
-    if endpoint_url is None:
-        return None
-    endpoint = endpoint_url.strip()
-    return endpoint or None
-
-
-def _is_named_local_s3_host(host: str, name: str) -> bool:
-    return host == name or host.startswith(f"{name}.")
-
-
-def default_s3_object_store_client() -> S3ObjectStoreClient[S3ClientCapabilities]:
-    return S3ObjectStoreClient.from_settings()

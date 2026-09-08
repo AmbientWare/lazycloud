@@ -23,17 +23,16 @@ from shared.http.images import (
 )
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import ImageBuildRecord
-from storage.image_archive import ResolvedImageArchiveSettings
-from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings
+from storage.image_archive import ImageArchiveSettings
+from storage_client.s3 import S3ObjectInfo
 
 _TEST_BASE_IMAGE_DIGEST = f"sha256:{'a' * 64}"
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
-def _archive_settings() -> ResolvedImageArchiveSettings:
-    return ResolvedImageArchiveSettings(
-        storage=S3ObjectStoreSettings(bucket="image-archives"),
-        prefix="",
+def _archive_settings() -> ImageArchiveSettings:
+    return ImageArchiveSettings(
+        bucket="image-archives",
         presign_seconds=900,
     )
 

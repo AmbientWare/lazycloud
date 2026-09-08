@@ -9,72 +9,12 @@ from .instance_catalog import aws_console_host, aws_partition_for_region
 _ACCOUNT_PATTERN = re.compile(r"^[0-9]{12}$")
 _REGION_PATTERN = re.compile(r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
 _STACK_PATTERN = re.compile(r"^compute-connection-[A-Za-z0-9-]+-g[0-9]+$")
-_REQUIRED_PARAMETERS = {
-    "ConnectionRoleName",
-    "ExternalId",
-    "NodeInstanceProfileName",
-    "NodeRoleName",
-    "PlatformPrincipalArn",
-    "TargetAccountId",
-}
-
-
-@dataclass(frozen=True, slots=True)
-class AwsConnectionStackCreateAction:
-    name: str
-    template_url: str
-    parameters: dict[str, str]
 
 
 @dataclass(frozen=True, slots=True)
 class AwsConnectionStackCleanupAction:
     name: str
     stack_id: str
-
-
-def parse_aws_connection_stack_create_action(
-    action_url: str,
-    *,
-    account_id: str,
-    region: str,
-    expected_template_url: str,
-    expected_platform_principal_arn: str,
-) -> AwsConnectionStackCreateAction:
-    _validate_target(account_id=account_id, region=region)
-    parsed = _console_action(
-        action_url,
-        region=region,
-        route="/stacks/create/review",
-    )
-    query = _fragment_query(parsed)
-    if {key for key in query if not key.startswith("param_")} != {
-        "stackName",
-        "templateURL",
-    }:
-        raise ValueError("CloudFormation action contains an unsupported operation")
-    parameters = {
-        key.removeprefix("param_"): _one(query, key) for key in query if key.startswith("param_")
-    }
-    if set(parameters) != _REQUIRED_PARAMETERS:
-        raise ValueError("CloudFormation action has an unexpected parameter contract")
-    name = _one(query, "stackName")
-    if _STACK_PATTERN.fullmatch(name) is None or parameters["ConnectionRoleName"] != name:
-        raise ValueError("CloudFormation action has an invalid managed stack identity")
-    if parameters["TargetAccountId"] != account_id:
-        raise ValueError("CloudFormation action targets a different AWS account")
-    if parameters["PlatformPrincipalArn"] != expected_platform_principal_arn:
-        raise ValueError("CloudFormation action targets a different platform principal")
-    template_url = _one(query, "templateURL")
-    template = urlparse(template_url)
-    if template.scheme != "https" or not template.netloc or template.username or template.password:
-        raise ValueError("CloudFormation action has an invalid template URL")
-    if template_url != expected_template_url:
-        raise ValueError("CloudFormation action targets a different immutable template")
-    return AwsConnectionStackCreateAction(
-        name=name,
-        template_url=template_url,
-        parameters=parameters,
-    )
 
 
 def parse_aws_connection_stack_cleanup_action(
@@ -164,7 +104,5 @@ def _one(query: dict[str, list[str]], key: str) -> str:
 
 __all__ = [
     "AwsConnectionStackCleanupAction",
-    "AwsConnectionStackCreateAction",
     "parse_aws_connection_stack_cleanup_action",
-    "parse_aws_connection_stack_create_action",
 ]

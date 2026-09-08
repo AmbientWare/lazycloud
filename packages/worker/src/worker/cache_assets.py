@@ -60,19 +60,12 @@ class WorkspaceStorageCleanupPlan(ContractModel):
 def validate_workspace_storage(
     credentials: WorkspaceStorageCredentials | None,
 ) -> tuple[bool, str]:
-    """Decide whether these credentials can mount anything.
-
-    The endpoint is deliberately not required: empty means the store's own public
-    address, which is how every deployment against real S3 is configured, and
-    demanding it refused exactly the mounts that were correct.
-
-    What is required is the bucket, a region to sign in, and a credential. The
-    last is either a key pair or the file the mount refreshes through, and naming
-    which one is missing matters because the two are fixed in different places.
-    """
+    """Require the explicit endpoint and credentials supplied by the control plane."""
     if credentials is None:
         return (False, "workspace storage metadata is required")
-    missing = [name for name in ("bucket_name", "region") if not getattr(credentials, name)]
+    missing = [
+        name for name in ("bucket_name", "region", "endpoint_url") if not getattr(credentials, name)
+    ]
     if missing:
         return (False, f"workspace storage metadata is incomplete: {', '.join(missing)}")
     if not (credentials.access_key and credentials.secret_key):

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from urllib.parse import parse_qs, urlsplit
 
-import pytest
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings, _PresignParams
 
 
@@ -42,58 +40,6 @@ def _settings() -> S3ObjectStoreSettings:
     )
 
 
-def test_close_is_idempotent_and_closes_primary_and_presign_clients() -> None:
-    primary = _ClosingClient()
-    presign = _ClosingPresignClient()
-    client = S3ObjectStoreClient[_ClosingClient](
-        settings=_settings(),
-        client=primary,
-        presign_client=presign,
-    )
-
-    client.close()
-    client.close()
-
-    assert primary.close_calls == 1
-    assert presign.close_calls == 1
-
-
-def test_close_attempts_every_client_and_aggregates_failures_in_order() -> None:
-    primary_failure = RuntimeError("primary close failed")
-    presign_failure = RuntimeError("presign close failed")
-    primary = _ClosingClient(close_error=primary_failure)
-    presign = _ClosingPresignClient(close_error=presign_failure)
-    client = S3ObjectStoreClient[_ClosingClient](
-        settings=_settings(),
-        client=primary,
-        presign_client=presign,
-    )
-
-    with pytest.raises(ExceptionGroup) as captured:
-        client.close()
-
-    assert captured.value.exceptions == (primary_failure, presign_failure)
-    assert primary.close_calls == 1
-    assert presign.close_calls == 1
-
-    client.close()
-    assert primary.close_calls == 1
-    assert presign.close_calls == 1
-
-
-def test_close_closes_a_shared_primary_and_presign_client_once() -> None:
-    shared = _ClosingPresignClient()
-    client = S3ObjectStoreClient[_ClosingPresignClient](
-        settings=_settings(),
-        client=shared,
-        presign_client=shared,
-    )
-
-    client.close()
-
-    assert shared.close_calls == 1
-
-
 def test_presigned_upload_binds_exact_headers_and_temporary_session_lifetime() -> None:
     presign = _ClosingPresignClient()
     settings = _settings().model_copy(
@@ -102,10 +48,9 @@ def test_presigned_upload_binds_exact_headers_and_temporary_session_lifetime() -
             "credential_expires_at": datetime.now(UTC) + timedelta(minutes=5),
         }
     )
-    client = S3ObjectStoreClient[_ClosingClient](
+    client = S3ObjectStoreClient[_ClosingPresignClient](
         settings=settings,
-        client=_ClosingClient(),
-        presign_client=presign,
+        client=presign,
     )
 
     upload = client.generate_presigned_put(
@@ -136,6 +81,7 @@ def test_presigned_upload_binds_exact_headers_and_temporary_session_lifetime() -
 
 def test_object_store_settings_repr_never_contains_credentials() -> None:
     settings = S3ObjectStoreSettings(
+        endpoint_url="https://objects.example",
         access_key_id="temporary-access-key",
         secret_access_key="temporary-secret-key",
         session_token="temporary-session-token",
@@ -146,52 +92,3 @@ def test_object_store_settings_repr_never_contains_credentials() -> None:
     assert "temporary-access-key" not in representation
     assert "temporary-secret-key" not in representation
     assert "temporary-session-token" not in representation
-
-
-def test_native_s3_presign_uses_explicit_session_token() -> None:
-    client = S3ObjectStoreClient.from_settings(
-        S3ObjectStoreSettings(
-            bucket="lazycloud-connected-object-store",
-            endpoint_url="https://s3.us-east-1.amazonaws.com",
-            presigned_endpoint_url="https://s3.us-east-1.amazonaws.com",
-            region_name="us-east-1",
-            access_key_id="temporary-access-key",
-            secret_access_key="temporary-secret-key",
-            session_token="temporary-session-token",
-            force_path_style=False,
-        )
-    )
-    try:
-        query = parse_qs(urlsplit(client.generate_presigned_get_url("objects/item")).query)
-    finally:
-        client.close()
-
-    assert query["X-Amz-Security-Token"] == ["temporary-session-token"]
-
-
-def test_native_s3_presign_uses_ambient_session_credentials_by_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    for name in (
-        "LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID",
-        "LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY",
-        "LAZYCLOUD_OBJECT_STORE_PRESIGNED_ENDPOINT_URL",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ambient-access-key")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ambient-secret-key")
-    monkeypatch.setenv("AWS_SESSION_TOKEN", "ambient-session-token")
-    client = S3ObjectStoreClient.from_settings(
-        S3ObjectStoreSettings(
-            bucket="lazycloud-connected-object-store",
-            endpoint_url="",
-            region_name="us-east-1",
-            force_path_style=False,
-        )
-    )
-    try:
-        query = parse_qs(urlsplit(client.generate_presigned_get_url("objects/item")).query)
-    finally:
-        client.close()
-
-    assert query["X-Amz-Security-Token"] == ["ambient-session-token"]

@@ -110,6 +110,11 @@ def _response(connection: AwsAccountConnection) -> AwsConnectionResponse:
         customer_action=(
             AwsConnectionCustomerAction(
                 url=connection.customer_action_url,
+                stack=(
+                    connection.pending_authorization.authorization_stack
+                    if connection.pending_authorization is not None
+                    else None
+                ),
                 label=connection.customer_action_label,
             )
             if connection.customer_action_label
@@ -130,7 +135,7 @@ def _authorization_response(
     return AwsConnectionAuthorizationResponse(
         connection=_response(result.connection),
         authorization=AwsConnectionAuthorization(
-            url=result.authorization_url,
+            stack=result.authorization_stack,
             external_id=result.external_id,
         ),
     )

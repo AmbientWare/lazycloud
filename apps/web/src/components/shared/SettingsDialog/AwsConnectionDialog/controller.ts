@@ -16,17 +16,14 @@ import type { AwsConnectionDialogRecoveryAction } from "./lifecycle";
 
 export type AwsConnectionDialogAction = "create" | AwsConnectionDialogRecoveryAction | "remove";
 
-type AuthorizationCommand = {
-  authorizationPopup: AwsAuthorizationPopup;
-} & (
+type AuthorizationCommand =
   | {
       action: "create";
       accountId: string;
       maxCpuInstances: number | null;
       maxGpuInstances: number | null;
     }
-  | { action: "reconnect" }
-);
+  | { action: "reconnect" };
 
 type AwsConnectionCommand =
   AuthorizationCommand | { action: "validate" | "cancel_reconnect" | "retry" | "remove" };
@@ -34,13 +31,6 @@ type AwsConnectionCommand =
 type AwsConnectionMutationOutcome = {
   action: AwsConnectionDialogAction;
   connection: AwsConnection | null;
-  authorizationPopup: AwsAuthorizationPopup | null;
-  authorizationUrl: string | null;
-};
-
-export type AwsAuthorizationPopup = {
-  close: () => void;
-  handoff: (authorizationUrl: string) => void;
 };
 
 export type AwsConnectionController = {
@@ -64,10 +54,8 @@ export type AwsConnectionController = {
 
 export function useAwsConnectionController({
   onClose,
-  openAuthorizationPopup = openAwsAuthorizationPopup,
 }: {
   onClose: () => void;
-  openAuthorizationPopup?: () => AwsAuthorizationPopup;
 }): AwsConnectionController {
   const queryClient = useQueryClient();
   const activeActionRef = useRef<AwsConnectionDialogAction | null>(null);
@@ -87,8 +75,6 @@ export function useAwsConnectionController({
           return {
             action: command.action,
             connection: result.connection,
-            authorizationPopup: command.authorizationPopup,
-            authorizationUrl: result.authorization.url,
           };
         }
         case "validate":
@@ -98,8 +84,6 @@ export function useAwsConnectionController({
           return {
             action: command.action,
             connection: result.connection,
-            authorizationPopup: command.authorizationPopup,
-            authorizationUrl: result.authorization.url,
           };
         }
         case "cancel_reconnect":
@@ -113,10 +97,6 @@ export function useAwsConnectionController({
     onSuccess: (outcome) => {
       queryClient.setQueryData(accountComputeQueryKeys.awsConnection(), outcome.connection);
 
-      if (outcome.action === "create" || outcome.action === "reconnect") {
-        completeAwsAuthorizationHandoff(outcome.authorizationPopup, outcome.authorizationUrl);
-      }
-
       if (outcome.action === "remove") {
         setRemoveOpen(false);
         // The whole account-level compute root: the connection is gone, and so is
@@ -124,12 +104,7 @@ export function useAwsConnectionController({
         void queryClient.invalidateQueries({ queryKey: accountComputeQueryKeys.root() });
       }
 
-      onClose();
-    },
-    onError: (_error, command) => {
-      if (command.action === "create" || command.action === "reconnect") {
-        command.authorizationPopup.close();
-      }
+      if (outcome.action !== "create" && outcome.action !== "reconnect") onClose();
     },
     onSettled: () => {
       activeActionRef.current = null;
@@ -157,7 +132,6 @@ export function useAwsConnectionController({
       accountId,
       maxCpuInstances,
       maxGpuInstances,
-      authorizationPopup: openAuthorizationPopup(),
     });
   };
 
@@ -165,7 +139,6 @@ export function useAwsConnectionController({
     if (activeActionRef.current !== null) return;
     run({
       action: "reconnect",
-      authorizationPopup: openAuthorizationPopup(),
     });
   };
 
@@ -196,33 +169,5 @@ function connectionOutcome(
   return {
     action,
     connection,
-    authorizationPopup: null,
-    authorizationUrl: null,
   };
-}
-
-function openAwsAuthorizationPopup(): AwsAuthorizationPopup {
-  const authorizationWindow = globalThis.open("about:blank", "_blank");
-  return {
-    close: () => authorizationWindow?.close(),
-    handoff: (authorizationUrl) => {
-      if (authorizationWindow) {
-        authorizationWindow.opener = null;
-        authorizationWindow.location.replace(authorizationUrl);
-        return;
-      }
-      globalThis.open(authorizationUrl, "_blank", "noopener,noreferrer");
-    },
-  };
-}
-
-function completeAwsAuthorizationHandoff(
-  authorizationPopup: AwsAuthorizationPopup | null,
-  authorizationUrl: string | null,
-) {
-  if (!authorizationUrl) {
-    authorizationPopup?.close();
-    return;
-  }
-  authorizationPopup?.handoff(authorizationUrl);
 }
