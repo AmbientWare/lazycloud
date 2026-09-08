@@ -194,12 +194,17 @@ class AwsAccountConnectionService:
         request contract: a customer who could set it would be declaring their own
         hardware to be ours. Only the administrator route passes it.
         """
+        pool = (
+            request.pool
+            if isinstance(request, AwsConnectionCreateRequest) and not platform_fleet
+            else MachinePool(LAZYCLOUD_MACHINE_POOL)
+        )
         with self.context.database.session() as session:
             if not platform_fleet:
                 self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
             existing = AwsAccountConnectionRepository(session).get_for_user(user_id)
             if existing is not None:
-                if self._matches_existing_draft(existing, request):
+                if self._matches_existing_draft(existing, request, pool=pool):
                     pending = existing.pending_authorization
                     if pending is None:
                         raise ConflictError("AWS account connection setup was superseded")
@@ -234,6 +239,7 @@ class AwsAccountConnectionService:
             id=connection_id,
             user_id=user_id,
             platform_fleet=platform_fleet,
+            pool=pool,
             account_id=request.account_id,
             external_id=external_id,
             phase=AwsAccountConnectionPhase.AwaitingAuthorization,
@@ -1580,6 +1586,8 @@ class AwsAccountConnectionService:
     def _matches_existing_draft(
         existing: AwsAccountConnection,
         request: AwsConnectionCreateRequest | AwsFleetEnsureRequest,
+        *,
+        pool: MachinePool,
     ) -> bool:
         pending = existing.pending_authorization
         mode = (
@@ -1589,6 +1597,7 @@ class AwsAccountConnectionService:
         )
         return (
             existing.account_id == request.account_id
+            and existing.pool == pool
             and existing.active_authorization is None
             and pending is not None
             and pending.authorization_mode is mode
