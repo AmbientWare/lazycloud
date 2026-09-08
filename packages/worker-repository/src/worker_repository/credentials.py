@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from control.service import ControlPlaneService
+from database.repositories.identity import WorkspaceRepository
 from database.types import DatabaseSession
 from execution.mounts import volume_container_mount_paths
 from identity.auth import AuthError, AuthService
@@ -267,15 +268,17 @@ class WorkerCredentialService:
                 del self._gateway_token_leases[workspace_id]
 
     def _workspace_storage_credentials(self, workspace_id: str) -> WorkspaceStorageCredentials:
-        workspace = ControlPlaneService(self._services().context).get_workspace(workspace_id)
-        storage = workspace.storage
-        if not storage.bucket:
-            msg = f"workspace storage is unavailable for {workspace_id!r}"
-            raise WorkerCredentialError(msg)
         if self.storage_issuer is None:
             msg = "workspace storage issuer is required to vend workspace credentials"
             raise WorkerCredentialError(msg)
-        grant = self.storage_issuer.issue(workspace_id=workspace_id, storage=storage)
+        with self._services().context.database.session() as session:
+            # Deletion must see every admitted grant before it retires the bucket's keys.
+            workspace = WorkspaceRepository(session).lock_active_owner(workspace_id)
+            storage = workspace.storage
+            if not storage.bucket:
+                msg = f"workspace storage is unavailable for {workspace_id!r}"
+                raise WorkerCredentialError(msg)
+            grant = self.storage_issuer.issue(workspace_id=workspace_id, storage=storage)
         return workspace_storage_credentials(grant)
 
     def _mount_credentials(
