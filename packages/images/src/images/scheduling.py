@@ -7,11 +7,7 @@ from uuid import uuid4
 from pydantic import Field, JsonValue
 from shared.contracts import ContractModel
 from shared.image_building.authoring import LinuxArchitecture
-from shared.scheduling import (
-    SchedulerContainerState,
-    SchedulerContainerStatus,
-    SchedulerWorkerRequest,
-)
+from shared.scheduling import SchedulerWorkerRequest
 from shared.usage import IMAGE_BUILD_WORKLOAD_ID
 
 from images.building.models import (
@@ -68,13 +64,6 @@ class ImageBuildContainerRequestPlan(ContractModel):
     build_options: ImageBuildContainerBuildOptions
     credential_metadata: ImageBuildContainerCredentialMetadata
     reason: str = ""
-
-
-class ImageBuildSchedulingFailureEvidence(ContractModel):
-    container_id: str
-    build_id: str
-    workspace_id: str
-    reason: str
 
 
 def plan_image_build_container_request(
@@ -148,23 +137,6 @@ def plan_image_build_container_request(
         build_options=build_options,
         credential_metadata=credential_metadata,
         reason="image build container worker request planned",
-    )
-
-
-def image_build_scheduling_failure(
-    state: SchedulerContainerState | None,
-) -> ImageBuildSchedulingFailureEvidence | None:
-    if (
-        state is None
-        or state.status is not SchedulerContainerStatus.Failed
-        or not state.image_build_id
-    ):
-        return None
-    return ImageBuildSchedulingFailureEvidence(
-        container_id=state.container_id,
-        build_id=state.image_build_id,
-        workspace_id=state.workspace_id,
-        reason=state.failure_reason or "image build container scheduling failed",
     )
 
 

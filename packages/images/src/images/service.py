@@ -286,6 +286,12 @@ class ImageBuildService:
                     build_id, workspace_id=workspace_id, claim_id=claim_id
                 )
 
+    def fail_container_build(self, container_id: str, error: str, *, workspace_id: str) -> None:
+        with self.context.database.session() as session:
+            record = ImageBuildRepository(session).get(container_id, workspace_id=workspace_id)
+        if record is not None:
+            self.fail(record.id, error, workspace_id=workspace_id)
+
     def fail(
         self,
         build_id: str,
@@ -822,6 +828,10 @@ class ImageBuildService:
             if event.done:
                 current.finished_at = utc_now()
             saved = repository.upsert(current, workspace_id=workspace_id)
+            if event.done and current.status is not BuildStatus.Complete:
+                ImageBuildDispatchRepository(session).schedule_cleanup(
+                    current.id, after=current.finished_at
+                )
         self._emit(
             event.kind.value,
             saved,
