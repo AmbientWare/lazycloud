@@ -202,7 +202,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--network-prefix")
     parser.add_argument("--route-target", dest="route_local_target_host")
     parser.add_argument("--image-archive-extension")
-    parser.add_argument("--data-storage-bucket")
     parser.add_argument("--workspace-storage-base-mount-path")
     parser.add_argument("--workspace-storage-mountpoint-binary")
     return parser
