@@ -195,7 +195,6 @@ class RuntimeCheckpointCreator:
     state_sink: CheckpointStateSink
     persister: WorkerCheckpointPersister
     checkpoint_root: str
-    origin_storage_available: bool
     content_cache_available: bool
     id_factory: Callable[[], str] = field(default_factory=lambda: lambda: str(uuid4()))
     nvidia_driver_major: int | None = None
@@ -227,7 +226,6 @@ class RuntimeCheckpointCreator:
                 CheckpointPersistenceRequest(
                     checkpoint_id=checkpoint_id,
                     checkpoint_root=self.checkpoint_root,
-                    origin_storage_available=self.origin_storage_available,
                     content_cache_available=self.content_cache_available,
                     locality=instance.pool,
                     gpu=instance.gpu,

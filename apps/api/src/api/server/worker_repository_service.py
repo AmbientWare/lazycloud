@@ -250,6 +250,9 @@ hours nobody ran."""
 
 
 class WorkerRepositoryObjectStorage(Protocol):
+    @property
+    def default_bucket(self) -> str: ...
+
     def put_file(self, bucket: str, key: str, source: str | Path) -> ObjectRecord: ...
 
     def get(self, bucket: str, key: str) -> ObjectRecord: ...
@@ -1956,8 +1959,6 @@ class WorkerRepositoryService:
             raise UpstreamUnavailableError(
                 "service dependencies are required for checkpoint restore"
             )
-        if not request.checkpoint_bucket:
-            raise InvalidInputError("checkpoint bucket is required")
         checkpoint = self.services.checkpoints.get_for_restore(
             request.checkpoint_id,
             workspace_id=request.workspace_id,
@@ -1968,14 +1969,14 @@ class WorkerRepositoryService:
         try:
             object_storage.get_for_workspace(
                 workspace_id=request.workspace_id,
-                bucket=request.checkpoint_bucket,
+                bucket=object_storage.default_bucket,
                 key=checkpoint.origin_key,
             )
         except NotFoundError as exc:
             raise NotFoundError("checkpoint archive is unavailable") from exc
         download_url = object_storage.generate_presigned_get_url_for_workspace(
             workspace_id=request.workspace_id,
-            bucket=request.checkpoint_bucket,
+            bucket=object_storage.default_bucket,
             key=checkpoint.origin_key,
             expires_seconds=900,
         )
@@ -1992,8 +1993,6 @@ class WorkerRepositoryService:
             raise UpstreamUnavailableError(
                 "service dependencies are required for checkpoint archive persistence"
             )
-        if not request.checkpoint_bucket:
-            raise InvalidInputError("checkpoint bucket is required")
         object_storage = self.object_storage or self.services.object_storage
         checkpoint = self.services.checkpoints.get(request.checkpoint_id)
         if checkpoint is None or not checkpoint.workspace_id:
@@ -2002,7 +2001,7 @@ class WorkerRepositoryService:
             source = Path(temp.name)
             object_storage.download_file_for_workspace(
                 workspace_id=checkpoint.workspace_id,
-                bucket=request.checkpoint_bucket,
+                bucket=object_storage.default_bucket,
                 key=request.origin_key,
                 target=source,
             )
@@ -2033,8 +2032,6 @@ class WorkerRepositoryService:
             raise UpstreamUnavailableError(
                 "service dependencies are required for checkpoint archive upload"
             )
-        if not request.checkpoint_bucket:
-            raise InvalidInputError("checkpoint bucket is required")
         if not request.origin_key or not request.cache_hash or request.cache_size_bytes <= 0:
             raise InvalidInputError("checkpoint archive metadata is incomplete")
         object_storage = self.object_storage or self.services.object_storage
@@ -2043,7 +2040,7 @@ class WorkerRepositoryService:
             raise NotFoundError(f"checkpoint not found: {request.checkpoint_id}")
         object_storage.reserve_for_workspace(
             workspace_id=checkpoint.workspace_id,
-            bucket=request.checkpoint_bucket,
+            bucket=object_storage.default_bucket,
             key=request.origin_key,
             size=request.cache_size_bytes,
             sha256=request.cache_hash,
@@ -2054,7 +2051,7 @@ class WorkerRepositoryService:
         return PrepareCheckpointArchiveUploadResponse(
             upload_url=object_storage.generate_presigned_put_url_for_workspace(
                 workspace_id=checkpoint.workspace_id,
-                bucket=request.checkpoint_bucket,
+                bucket=object_storage.default_bucket,
                 key=request.origin_key,
                 expires_seconds=900,
                 content_length=request.cache_size_bytes,

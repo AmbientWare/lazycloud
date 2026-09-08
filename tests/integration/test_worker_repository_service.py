@@ -1929,7 +1929,6 @@ def test_worker_repository_service_persists_checkpoint_archive_and_state(
             origin_key="checkpoints/checkpoint-1.tar",
             cache_hash=archive_hash,
             cache_size_bytes=len(archive),
-            checkpoint_bucket="checkpoint-bucket",
         )
     )
     object_storage.files[("checkpoint-bucket", "checkpoints/checkpoint-1.tar")] = archive
@@ -1939,7 +1938,6 @@ def test_worker_repository_service_persists_checkpoint_archive_and_state(
             origin_key="checkpoints/checkpoint-1.tar",
             cache_hash=archive_hash,
             cache_size_bytes=len(archive),
-            checkpoint_bucket="checkpoint-bucket",
             cache_namespace="checkpoints",
             locality="pool-a",
             accelerator="gpu-a",
@@ -1966,7 +1964,6 @@ def test_worker_repository_service_persists_checkpoint_archive_and_state(
         GetCheckpointRestoreRequest(
             checkpoint_id="checkpoint-1",
             workspace_id=workspace.id,
-            checkpoint_bucket="checkpoint-bucket",
         )
     )
 
@@ -2882,6 +2879,8 @@ def _archive_settings() -> ImageArchiveSettings:
 
 
 class _FakeObjectStorage:
+    default_bucket = "checkpoint-bucket"
+
     def __init__(self) -> None:
         self.files: dict[tuple[str, str], bytes] = {}
         self.workspace_get_urls: list[tuple[str, str, str]] = []

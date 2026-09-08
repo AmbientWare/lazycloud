@@ -155,10 +155,6 @@ class WorkerSettings(BaseSettings):
         default=None,
         validation_alias="LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE",
     )
-    checkpoint_bucket: str = Field(
-        default="",
-        validation_alias="WORKER_CHECKPOINT_BUCKET",
-    )
     checkpoint_cache_namespace: str = Field(
         default=DEFAULT_CHECKPOINT_CACHE_NAMESPACE,
         validation_alias="WORKER_CHECKPOINT_CACHE_NAMESPACE",

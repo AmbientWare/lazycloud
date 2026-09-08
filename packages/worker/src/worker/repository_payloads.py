@@ -494,7 +494,6 @@ class ReleaseAutomaticCheckpointLeaseResponse(WorkerRepositoryResponse):
 class GetCheckpointRestoreRequest(ContractModel):
     checkpoint_id: str
     workspace_id: str
-    checkpoint_bucket: str
 
 
 class GetCheckpointRestoreResponse(WorkerRepositoryResponse):
@@ -507,7 +506,6 @@ class PrepareCheckpointArchiveUploadRequest(ContractModel):
     origin_key: str
     cache_hash: str
     cache_size_bytes: int
-    checkpoint_bucket: str
 
 
 class PrepareCheckpointArchiveUploadResponse(WorkerRepositoryResponse):
@@ -519,7 +517,6 @@ class PersistCheckpointArchiveRequest(ContractModel):
     origin_key: str
     cache_hash: str
     cache_size_bytes: int
-    checkpoint_bucket: str
     cache_namespace: str
     locality: str = ""
     accelerator: str = ""
