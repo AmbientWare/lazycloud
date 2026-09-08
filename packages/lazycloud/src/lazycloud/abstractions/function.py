@@ -153,7 +153,6 @@ class FunctionOptions(TypedDict, total=False):
     preemptible: bool
     region: str | None
     pool: PoolInput
-    provider: str | None
     metadata: dict[str, Any] | None
 
 
@@ -199,7 +198,6 @@ class Function(Generic[P, R]):
     preemptible: bool = False
     region: str | None = None
     pool: PoolInput = None
-    provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
     client: _FunctionClient | None = field(default=None, init=False, repr=False)
@@ -328,7 +326,6 @@ class Function(Generic[P, R]):
                 app=self._app_slug,
                 autoscaler=self.autoscaler,
                 max_pending_tasks=self.max_pending_tasks,
-                retries=self.retries,
                 callback_url=self.callback_url,
                 authorized=self.authorized,
                 in_process=self.in_process,
@@ -345,7 +342,6 @@ class Function(Generic[P, R]):
                 ),
                 docker_enabled=self.docker_enabled,
                 pool=self.pool,
-                provider=self.provider,
                 extra=self.metadata,
             ),
             client_contract=client_contract,
@@ -788,7 +784,6 @@ def _function(
     preemptible: bool = False,
     region: str | None = None,
     pool: PoolInput = None,
-    provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Function[P, R]: ...
 
@@ -836,7 +831,6 @@ def _function(
     preemptible: bool = False,
     region: str | None = None,
     pool: PoolInput = None,
-    provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Function[P, R]]: ...
 
@@ -883,7 +877,6 @@ def _function(
     preemptible: bool = False,
     region: str | None = None,
     pool: PoolInput = None,
-    provider: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Function[P, R]] | Function[P, R]:
     def decorate(target: Callable[P, R]) -> Function[P, R]:
@@ -928,7 +921,6 @@ def _function(
             preemptible=preemptible,
             region=region,
             pool=pool,
-            provider=provider,
             metadata=metadata or {},
         )
 

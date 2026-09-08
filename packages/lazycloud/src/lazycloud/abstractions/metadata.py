@@ -138,19 +138,11 @@ def autoscaler_metadata(
     return QueueDepthAutoscaler.model_validate(raw).model_dump(mode="json")
 
 
-def pool_metadata(value: PoolInput, *, provider: str | None = None) -> dict[str, JsonValue]:
-    payload: dict[str, JsonValue] = {} if value is None else {"name": value}
-    if provider:
-        payload["provider"] = provider
-    return payload
-
-
 def build_resource_metadata(
     *,
     app: str | None = None,
     workers: int | None = None,
     max_pending_tasks: int | None = None,
-    retries: int | None = None,
     callback_url: str | None = None,
     authorized: bool | None = None,
     autoscaler: QueueDepthAutoscaler | Mapping[str, JsonValue] | None = None,
@@ -164,7 +156,6 @@ def build_resource_metadata(
     allow_list: list[str] | None = None,
     docker_enabled: bool | None = None,
     pool: PoolInput = None,
-    provider: str | None = None,
     extra: Mapping[str, JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
     metadata: dict[str, JsonValue] = dict(extra or {})
@@ -188,8 +179,8 @@ def build_resource_metadata(
         metadata["inputs"] = schema_metadata(inputs)
     if outputs is not None:
         metadata["outputs"] = schema_metadata(outputs)
-    if pool is not None or provider:
-        metadata["pool"] = pool_metadata(pool, provider=provider)
+    if pool is not None:
+        metadata["pool"] = {"name": pool}
     return metadata
 
 
@@ -233,7 +224,6 @@ __all__ = [
     "callback_reference",
     "lifecycle_hook_references",
     "lifecycle_hooks",
-    "pool_metadata",
     "retry_policy_config",
     "schema_metadata",
     "task_policy_metadata",

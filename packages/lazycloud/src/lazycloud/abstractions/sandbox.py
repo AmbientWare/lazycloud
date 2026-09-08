@@ -237,7 +237,6 @@ class SandboxOptions(TypedDict, total=False):
     ports: Iterable[int] | None
     region: str | None
     pool: PoolInput
-    provider: str | None
     metadata: Mapping[str, Any] | None
     command: Iterable[str] | None
 
@@ -1543,7 +1542,6 @@ class Sandbox(ControlClientConfigMixin):
     preemptible: bool = False
     region: str | None = None
     pool: PoolInput = None
-    provider: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = ""
     image_id: str | None = None
@@ -1580,7 +1578,6 @@ class Sandbox(ControlClientConfigMixin):
         ports: Iterable[int] | None = None,
         region: str | None = None,
         pool: PoolInput = None,
-        provider: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         command: Iterable[str] | None = None,
         timeout_seconds: float = SANDBOX_CONTROL_TIMEOUT_SECONDS,
@@ -1608,7 +1605,6 @@ class Sandbox(ControlClientConfigMixin):
         self.preemptible = preemptible
         self.pool = pool
         self.region = region
-        self.provider = provider
         self.metadata = dict(metadata or {})
         self.stub_id = ""
         self.image_id = None
@@ -1657,7 +1653,6 @@ class Sandbox(ControlClientConfigMixin):
                 allow_list=self.allow_list,
                 docker_enabled=self.docker_enabled,
                 pool=self.pool,
-                provider=self.provider,
                 extra={
                     **self.metadata,
                     "sync_local_dir": self.sync_local_dir,

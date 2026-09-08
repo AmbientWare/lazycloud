@@ -142,7 +142,6 @@ class App:
         preemptible: bool = False,
         region: str | None = None,
         pool: PoolInput = None,
-        provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Function[P, R]: ...
 
@@ -189,7 +188,6 @@ class App:
         preemptible: bool = False,
         region: str | None = None,
         pool: PoolInput = None,
-        provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Callable[[Callable[P, R]], Function[P, R]]: ...
 
@@ -235,7 +233,6 @@ class App:
         preemptible: bool = False,
         region: str | None = None,
         pool: PoolInput = None,
-        provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Function[P, R] | Callable[[Callable[P, R]], Function[P, R]]:
         """Register a Python callable as an app-owned remote function.
@@ -268,7 +265,7 @@ class App:
             task_policy: Scheduling policy for invocation retries and timeouts.
             inputs, outputs: Optional schema metadata for clients and validation.
             docker_enabled: Whether the execution container needs an isolated Docker daemon.
-            pool, provider, metadata: Scheduling group and custom metadata.
+            pool, metadata: Scheduling group and custom metadata.
         """
         kwargs = _function_options(
             image=image,
@@ -309,7 +306,6 @@ class App:
             preemptible=preemptible,
             region=region,
             pool=pool,
-            provider=provider,
             metadata=metadata,
         )
 
@@ -356,7 +352,6 @@ class App:
         preemptible: bool = False,
         region: str | None = None,
         pool: PoolInput = None,
-        provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Endpoint[P, R]: ...
 
@@ -398,7 +393,6 @@ class App:
         preemptible: bool = False,
         region: str | None = None,
         pool: PoolInput = None,
-        provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Callable[[Callable[P, R]], Endpoint[P, R]]: ...
 
@@ -439,7 +433,6 @@ class App:
         preemptible: bool = False,
         region: str | None = None,
         pool: PoolInput = None,
-        provider: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Endpoint[P, R] | Callable[[Callable[P, R]], Endpoint[P, R]]:
         """Register a typed Python callable as an HTTP endpoint.
@@ -467,7 +460,7 @@ class App:
             autoscaler, task_policy: Scheduling policies.
             inputs, outputs: Optional schema metadata for clients and validation.
             docker_enabled: Whether the execution container needs an isolated Docker daemon.
-            pool, provider, metadata: Scheduling group and custom metadata.
+            pool, metadata: Scheduling group and custom metadata.
         """
         kwargs = _endpoint_options(
             image=image,
@@ -503,7 +496,6 @@ class App:
             preemptible=preemptible,
             region=region,
             pool=pool,
-            provider=provider,
             metadata=metadata,
         )
 
@@ -540,7 +532,6 @@ class App:
         checkpoint_enabled: bool = False,
         region: str | None = None,
         pool: PoolInput = None,
-        provider: str | None = None,
     ) -> Callable[[Callable[..., Awaitable[Any]] | Callable[..., Any]], ASGI]:
         """Register an ASGI application owned by this app.
 
@@ -562,7 +553,7 @@ class App:
             env, secrets, volumes: Runtime configuration injected into workers.
             on_start: Startup hook invoked by the workload runner.
             autoscaler, task_policy: Scheduling policies.
-            pool, provider: Scheduling group options.
+            pool: Scheduling group name.
         """
         kwargs = _asgi_options(
             name=name,
@@ -590,7 +581,6 @@ class App:
             checkpoint_enabled=checkpoint_enabled,
             region=region,
             pool=pool,
-            provider=provider,
         )
         factory = asgi_decorator(_app_slug=self.slug, **kwargs)
 
@@ -629,7 +619,6 @@ class App:
         checkpoint_enabled: bool = False,
         region: str | None = None,
         pool: PoolInput = None,
-        provider: str | None = None,
     ) -> Callable[[Callable[..., Any]], RealtimeASGI]:
         """Register a realtime WebSocket-style handler owned by this app.
 
@@ -650,7 +639,7 @@ class App:
             env, secrets, volumes: Runtime configuration injected into workers.
             on_start: Startup hook invoked by the workload runner.
             autoscaler, task_policy: Scheduling policies.
-            pool, provider: Scheduling group options.
+            pool: Scheduling group name.
         """
         kwargs = _asgi_options(
             name=name,
@@ -678,7 +667,6 @@ class App:
             checkpoint_enabled=checkpoint_enabled,
             region=region,
             pool=pool,
-            provider=provider,
         )
         factory = realtime_decorator(_app_slug=self.slug, **kwargs)
 
@@ -718,7 +706,6 @@ class App:
         preemptible: bool = False,
         region: str | None = None,
         pool: PoolInput = None,
-        provider: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> Pod:
         """Create an app-owned long-running pod resource.
@@ -744,7 +731,7 @@ class App:
                 to a container. Unset, it connects to the port instead, which proves only
                 that something is listening.
             tcp, block_network, allow_list, docker_enabled: Network and Docker policy.
-            pool, provider, metadata: Placement and custom metadata.
+            pool, metadata: Placement and custom metadata.
         """
         kwargs = _pod_options(
             name=name,
@@ -775,7 +762,6 @@ class App:
             preemptible=preemptible,
             region=region,
             pool=pool,
-            provider=provider,
             metadata=dict(metadata or {}),
         )
         return self._register(Pod(_app_slug=self.slug, **kwargs))
@@ -803,7 +789,6 @@ class App:
         ports: Iterable[int] | None = None,
         region: str | None = None,
         pool: PoolInput = None,
-        provider: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         command: Iterable[str] | None = None,
     ) -> Sandbox:
@@ -823,7 +808,7 @@ class App:
             sync_local_dir: Sync the local working directory into the sandbox.
             block_network, allow_list, docker_enabled: Network and Docker policy.
             ports: Container ports exposed from the sandbox.
-            pool, provider, metadata: Placement and custom metadata.
+            pool, metadata: Placement and custom metadata.
             command: Optional initial command run by the sandbox container.
         """
         kwargs = _sandbox_options(
@@ -847,7 +832,6 @@ class App:
             ports=ports,
             region=region,
             pool=pool,
-            provider=provider,
             metadata=metadata,
             command=command,
         )
@@ -1251,7 +1235,6 @@ def _function_options(
     preemptible: bool,
     region: str | None,
     pool: PoolInput,
-    provider: str | None,
     metadata: dict[str, Any] | None,
 ) -> FunctionOptions:
     return {
@@ -1293,7 +1276,6 @@ def _function_options(
         "preemptible": preemptible,
         "region": region,
         "pool": pool,
-        "provider": provider,
         "metadata": metadata,
     }
 
@@ -1333,7 +1315,6 @@ def _endpoint_options(
     preemptible: bool,
     region: str | None,
     pool: PoolInput,
-    provider: str | None,
     metadata: dict[str, Any] | None,
 ) -> EndpointOptions:
     return {
@@ -1370,7 +1351,6 @@ def _endpoint_options(
         "preemptible": preemptible,
         "region": region,
         "pool": pool,
-        "provider": provider,
         "metadata": metadata,
     }
 
@@ -1402,7 +1382,6 @@ def _asgi_options(
     checkpoint_enabled: bool,
     region: str | None,
     pool: PoolInput,
-    provider: str | None,
 ) -> ASGIOptions:
     return {
         "name": name,
@@ -1430,7 +1409,6 @@ def _asgi_options(
         "checkpoint_enabled": checkpoint_enabled,
         "region": region,
         "pool": pool,
-        "provider": provider,
     }
 
 
@@ -1464,7 +1442,6 @@ def _pod_options(
     preemptible: bool,
     region: str | None,
     pool: PoolInput,
-    provider: str | None,
     metadata: dict[str, Any],
 ) -> PodOptions:
     return {
@@ -1496,7 +1473,6 @@ def _pod_options(
         "preemptible": preemptible,
         "region": region,
         "pool": pool,
-        "provider": provider,
         "metadata": metadata,
     }
 
@@ -1523,7 +1499,6 @@ def _sandbox_options(
     ports: Iterable[int] | None,
     region: str | None,
     pool: PoolInput,
-    provider: str | None,
     metadata: Mapping[str, Any] | None,
     command: Iterable[str] | None,
 ) -> SandboxOptions:
@@ -1548,7 +1523,6 @@ def _sandbox_options(
         "ports": ports,
         "region": region,
         "pool": pool,
-        "provider": provider,
         "metadata": metadata,
         "command": command,
     }
