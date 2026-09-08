@@ -17,6 +17,7 @@ from shared.container_requests import WORKER_USER_ARTIFACT_VOLUME
 from shared.contracts import ContractModel
 
 from worker.checkpoint_activity import CheckpointLeaseRegistry
+from worker.checkpoint_filesystem import copy_checkpoint_filesystem
 from worker.checkpoints import (
     CheckpointPersistencePlan,
     CheckpointPersistenceRequest,
@@ -41,14 +42,6 @@ from worker.oci_runtime import OCI_CONFIG_FILE_NAME
 from worker.runtime_config import build_base_oci_config, runtime_capabilities
 
 ARCHIVE_INITIAL_CONFIG_FILE_NAME = "initial_config.json"
-# Derived from the mount constant rather than written out: a checkpoint that
-# stops excluding the user artifact mount silently copies a task's saved files
-# into the image, and a hand-written copy of the directory name is exactly what
-# stops matching when the mount is renamed.
-CHECKPOINT_COPY_EXCLUDES = frozenset(
-    {OCI_CONFIG_FILE_NAME, WORKER_USER_ARTIFACT_VOLUME.strip("/"), "snapshot"}
-)
-
 type JsonObject = dict[str, JsonValue]
 
 _JSON_OBJECT: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
@@ -509,12 +502,10 @@ def _copy_checkpoint_filesystem(
     if destination.exists():
         shutil.rmtree(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(
+    copy_checkpoint_filesystem(
         source,
         destination,
-        symlinks=True,
-        ignore=shutil.ignore_patterns(*CHECKPOINT_COPY_EXCLUDES),
-        dirs_exist_ok=True,
+        excluded_root_entries=(WORKER_USER_ARTIFACT_VOLUME.strip("/"),),
     )
 
 
