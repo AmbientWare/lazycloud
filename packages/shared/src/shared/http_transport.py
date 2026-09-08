@@ -66,6 +66,7 @@ class HttpChannel:
         path: str,
         *,
         payload: Mapping[str, JsonValue] | None = None,
+        timeout_seconds: float | None = None,
     ) -> JsonValue:
         data = _encode_payload(payload)
         headers = _request_headers(
@@ -81,7 +82,7 @@ class HttpChannel:
         try:
             opened: _HttpResponse = urllib.request.urlopen(
                 request,
-                timeout=self.timeout_seconds,
+                timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
                 context=self.ssl_context,
             )
             with opened as response:
@@ -119,8 +120,14 @@ class HttpChannel:
         except (OSError, http.client.HTTPException) as exc:
             raise _transport_error("GET", request.full_url, exc) from exc
 
-    def post(self, path: str, payload: Mapping[str, JsonValue] | None = None) -> JsonValue:
-        return self.request("POST", path, payload=payload)
+    def post(
+        self,
+        path: str,
+        payload: Mapping[str, JsonValue] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> JsonValue:
+        return self.request("POST", path, payload=payload, timeout_seconds=timeout_seconds)
 
     def stream_post(
         self,

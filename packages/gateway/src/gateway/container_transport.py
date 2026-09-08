@@ -178,6 +178,7 @@ class _ExistingSocketHttpConnection(http.client.HTTPConnection):
 
     def connect(self) -> None:
         self.sock = self._socket
+        self.sock.settimeout(self.timeout)
 
 
 def _parse_service_url(options: ContainerClientConnectionOptions) -> ParseResult:
