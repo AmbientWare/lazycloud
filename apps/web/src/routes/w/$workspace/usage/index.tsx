@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
@@ -10,11 +10,13 @@ import { countLabel } from "@/lib/format";
 import { formatCostNanos } from "@/lib/money";
 import { accountCostSeriesQueryOptions } from "@/lib/queries/usage";
 import { useWorkspace } from "@/lib/workspace-context";
+import { cn } from "@/lib/utils";
 
 import { AccountCeilingLine } from "./-components/AccountCeilingLine";
 import { AppCostAccordion } from "./-components/AppCostAccordion";
 import { usageRange, usageRangeKeys, type UsageRangeKey } from "./-components/ranges";
 import { SpendChart } from "./-components/SpendChart";
+import { SpendTotals } from "./-components/SpendTotals";
 import { UsageRangeControl } from "./-components/UsageRangeControl";
 
 type UsageSearch = {
@@ -31,24 +33,12 @@ export const Route = createFileRoute("/w/$workspace/usage/")({
   errorComponent: RouteErrorFallback,
 });
 
-/**
- * What this account is spending, when it spent it, and which app it went to.
- *
- * Account-wide rather than scoped to the workspace in the sidebar: the provider
- * invoices an account, so somebody running dev, staging and prod wants one
- * figure covering the three. Every row therefore names the workspace it was
- * incurred in.
- *
- * Two regions, one window. The chart answers when, the list answers who, and
- * the range control above both is what keeps a total from sitting beside a
- * shape it does not add up to.
- */
 function UsagePage() {
   const { workspaces } = useWorkspace();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  // Fixed at the range rather than at the clock, so paging through the list and
-  // the total above it cannot straddle a boundary crossed mid-session.
+  const [byCategory, setByCategory] = useState(false);
+  // Keep the window fixed while paging so every section reads the same interval.
   const range = useMemo(() => usageRange(search.range, new Date()), [search.range]);
   const series = useQuery(accountCostSeriesQueryOptions(range.window, range.bucket));
 
@@ -78,18 +68,47 @@ function UsagePage() {
       <Panel
         title="Spend over time"
         description={`${range.bucket === "hour" ? "Hourly" : "Daily"}, UTC`}
-        // The height belongs to the panel rather than to its content: the content
-        // is a flex child with a zero basis, so a height set on it contributes
-        // nothing to the panel's own size and the chart collapses to a strip.
+        action={
+          <div
+            role="group"
+            aria-label="Chart breakdown"
+            className="flex shrink-0 gap-0.5 rounded-md border border-input bg-card p-0.5"
+          >
+            {[false, true].map((category) => (
+              <button
+                key={String(category)}
+                type="button"
+                aria-pressed={byCategory === category}
+                onClick={() => setByCategory(category)}
+                className={cn(
+                  "h-6 rounded-[3px] px-2 text-xs whitespace-nowrap outline-none transition-colors",
+                  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                  byCategory === category
+                    ? "bg-accent font-medium text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {category ? "By category" : "Total"}
+              </button>
+            ))}
+          </div>
+        }
+        // The chart's flex content needs an explicit height on its parent.
         className="h-60 shrink-0 sm:h-72"
         contentClassName="overflow-hidden p-3"
       >
-        <SpendChart window={range.window} bucket={range.bucket} caption={range.caption} />
+        <SpendChart
+          window={range.window}
+          bucket={range.bucket}
+          caption={range.caption}
+          byCategory={byCategory}
+        />
       </Panel>
+      <SpendTotals series={series.data} error={series.error} />
       <Panel
         title="Apps"
         description="Open an app to see its workloads"
-        className="min-h-[22rem] flex-1"
+        className="min-h-[22rem] flex-1 lg:min-h-0"
         contentClassName="flex min-h-0 flex-col overflow-hidden"
       >
         <AppCostAccordion window={range.window} caption={range.caption} />

@@ -83,8 +83,11 @@ export function ActivityPanel() {
   );
 
   return (
-    <section aria-label="Account activity" className="panel shrink-0 overflow-hidden rounded-md">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border/80 px-3 py-2">
+    <section
+      aria-label="Account activity"
+      className="panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-md"
+    >
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border/80 px-3 py-2">
         <span className="micro-label">Resource</span>
         <Select
           value={measure}
@@ -121,15 +124,17 @@ export function ActivityPanel() {
         <WindowSummary activity={activity.data} />
       </div>
 
-      {activity.isPending ? (
-        <ActivitySkeleton />
-      ) : activity.isError ? (
-        <div className="flex min-h-40 items-center justify-center">
-          <PanelError message={activity.error.message} />
-        </div>
-      ) : (
-        <ActivityReading activity={activity.data} measure={measure} range={range} />
-      )}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {activity.isPending ? (
+          <ActivitySkeleton />
+        ) : activity.isError ? (
+          <div className="flex h-full min-h-40 items-center justify-center">
+            <PanelError message={activity.error.message} />
+          </div>
+        ) : (
+          <ActivityReading activity={activity.data} measure={measure} range={range} />
+        )}
+      </div>
     </section>
   );
 }
@@ -165,7 +170,7 @@ function ActivityReading({
       <PanelEmpty
         message={emptyWindowMessage(measure, accountActivityRanges[range].label)}
         detail="Deploy a workload or run a task, and its share of the account shows up here."
-        className="min-h-40 py-8"
+        className="h-full min-h-40 py-8"
       />
     );
   }
