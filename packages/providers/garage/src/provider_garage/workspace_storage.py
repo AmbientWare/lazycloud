@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.identity import WorkspaceStorageConfig
 from shared.timestamps import utc_now
 from shared.workspace_storage import WorkspaceStorageGrant
-from storage_client.s3 import S3ObjectStoreSettings
+from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
 
 class GarageSettings(BaseSettings):
@@ -62,7 +62,7 @@ def _request(
         response = client.request(method, f"/v2/{operation}", params=params, json=body)
     except httpx.TransportError:
         raise RuntimeError(f"Garage {operation} could not reach the Admin API") from None
-    if response.status_code == 404 and operation in {"GetKeyInfo", "DeleteKey"}:
+    if response.status_code == 404 and operation in {"GetKeyInfo", "DeleteKey", "GetBucketInfo"}:
         return response
     if response.is_error:
         raise RuntimeError(f"Garage {operation} failed with HTTP {response.status_code}")
@@ -75,7 +75,9 @@ class GarageWorkspaceStorageIssuer:
     admin: GarageSettings
     credential_lifetime: timedelta = timedelta(minutes=15)
 
-    def issue(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> WorkspaceStorageGrant:
+    def _bucket(self, workspace_id: str, storage: WorkspaceStorageConfig) -> str:
+        if storage.access_key or storage.secret_key:
+            raise ValueError("managed workspace storage cannot use customer credentials")
         expected_bucket = f"{self.settings.workspace_bucket_prefix}-{workspace_id}".replace(
             "_", "-"
         )
@@ -83,6 +85,47 @@ class GarageWorkspaceStorageIssuer:
             raise ValueError("workspace storage does not name its deployment-owned Garage bucket")
         if storage.key_prefix:
             raise ValueError("a workspace Garage bucket cannot carry an alternate storage prefix")
+        return expected_bucket
+
+    def _lookup_bucket(self, client: httpx.Client, name: str) -> _Bucket | None:
+        parent = _Key.model_validate_json(
+            _request(
+                client, "GET", "GetKeyInfo", params={"id": self.settings.access_key_id}
+            ).content
+        )
+        owned_buckets = [
+            bucket
+            for bucket in parent.buckets
+            if name in bucket.local_aliases or name in bucket.global_aliases
+        ]
+        if not owned_buckets:
+            return None
+        if len(owned_buckets) != 1:
+            raise ValueError("Garage platform key does not identify exactly one workspace bucket")
+        response = _request(client, "GET", "GetBucketInfo", params={"id": owned_buckets[0].id})
+        if response.status_code == 404:
+            return None
+        return _Bucket.model_validate_json(response.content)
+
+    def _workspace_key(
+        self, client: httpx.Client, candidate: _BucketKey, *, bucket_id: str, name: str
+    ) -> _Key | None:
+        if candidate.name != name or candidate.access_key_id == self.settings.access_key_id:
+            return None
+        response = _request(client, "GET", "GetKeyInfo", params={"id": candidate.access_key_id})
+        if response.status_code == 404:
+            return None
+        key = _Key.model_validate_json(response.content)
+        if (
+            key.access_key_id != candidate.access_key_id
+            or key.name != name
+            or {bucket.id for bucket in key.buckets} != {bucket_id}
+        ):
+            return None
+        return key
+
+    def issue(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> WorkspaceStorageGrant:
+        expected_bucket = self._bucket(workspace_id, storage)
         if self.credential_lifetime <= timedelta(0):
             raise ValueError("workspace credentials require a positive lifetime")
         name = f"lazycloud-workspace:{expected_bucket}"
@@ -92,36 +135,16 @@ class GarageWorkspaceStorageIssuer:
             headers={"Authorization": f"Bearer {self.admin.admin_token.get_secret_value()}"},
             timeout=15,
         ) as client:
-            parent = _Key.model_validate_json(
-                _request(
-                    client, "GET", "GetKeyInfo", params={"id": self.settings.access_key_id}
-                ).content
-            )
-            owned_buckets = [
-                bucket
-                for bucket in parent.buckets
-                if expected_bucket in bucket.local_aliases
-                or expected_bucket in bucket.global_aliases
-            ]
-            if len(owned_buckets) != 1:
+            bucket = self._lookup_bucket(client, expected_bucket)
+            if bucket is None:
                 raise ValueError(
                     "Garage platform key does not identify exactly one workspace bucket"
                 )
-            bucket = _Bucket.model_validate_json(
-                _request(client, "GET", "GetBucketInfo", params={"id": owned_buckets[0].id}).content
-            )
             for candidate in bucket.keys:
-                if candidate.name != name:
-                    continue
-                response = _request(
-                    client, "GET", "GetKeyInfo", params={"id": candidate.access_key_id}
-                )
-                if response.status_code == 404:
-                    continue
-                key = _Key.model_validate_json(response.content)
+                key = self._workspace_key(client, candidate, bucket_id=bucket.id, name=name)
                 # Expiration is enforced by Garage. Cleanup only removes spent keys
                 # belonging exclusively to this workspace, never a live mount's key.
-                if key.expired and key.name == name and {b.id for b in key.buckets} == {bucket.id}:
+                if key is not None and key.expired:
                     _request(client, "POST", "DeleteKey", params={"id": key.access_key_id})
             key = _Key.model_validate_json(
                 _request(
@@ -166,6 +189,26 @@ class GarageWorkspaceStorageIssuer:
             except Exception:
                 _request(client, "POST", "DeleteKey", params={"id": key.access_key_id})
                 raise
+
+    def retire(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> None:
+        expected_bucket = self._bucket(workspace_id, storage)
+        with httpx.Client(
+            base_url=self.admin.admin_endpoint_url,
+            headers={"Authorization": f"Bearer {self.admin.admin_token.get_secret_value()}"},
+            timeout=15,
+        ) as client:
+            bucket = self._lookup_bucket(client, expected_bucket)
+            if bucket is not None:
+                name = f"lazycloud-workspace:{expected_bucket}"
+                for candidate in bucket.keys:
+                    key = self._workspace_key(client, candidate, bucket_id=bucket.id, name=name)
+                    if key is not None:
+                        _request(client, "POST", "DeleteKey", params={"id": key.access_key_id})
+        object_store = S3ObjectStoreClient.from_settings(self.settings)
+        try:
+            object_store.retire_bucket(expected_bucket)
+        finally:
+            object_store.close()
 
 
 __all__ = ["GarageSettings", "GarageWorkspaceStorageIssuer"]

@@ -11,6 +11,9 @@ from storage_client.s3 import S3ObjectStoreSettings
 class StoredWorkspaceStorageIssuer:
     """Use only credentials supplied for the customer's own bucket."""
 
+    def retire(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> None:
+        """Customer-owned buckets outlive the workspace that used them."""
+
     def issue(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> WorkspaceStorageGrant:
         if not storage.access_key or not storage.secret_key or not storage.endpoint_url:
             raise ValueError("external workspace storage requires its own endpoint and key pair")
@@ -28,6 +31,11 @@ class StoredWorkspaceStorageIssuer:
 @dataclass(frozen=True, slots=True)
 class WorkspaceStorageRouter:
     managed: WorkspaceStorageIssuer
+
+    def retire(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> None:
+        if not storage.bucket or storage.access_key or storage.secret_key:
+            return
+        self.managed.retire(workspace_id=workspace_id, storage=storage)
 
     def issue(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> WorkspaceStorageGrant:
         if storage.access_key or storage.secret_key:

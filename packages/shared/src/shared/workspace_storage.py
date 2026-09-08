@@ -41,16 +41,14 @@ class WorkspaceStorageGrant(ContractModel):
 
 
 class WorkspaceStorageIssuer(Protocol):
-    """The authority that decides what a worker may reach in a workspace's bucket.
-
-    One call, because a store that needs durable state can create it the first
-    time it is asked and must already be able to replace it when it ages. Asking
-    at bucket creation instead would put the same requirement on every process
-    that can create a workspace, including the bootstrap CLI, for no gain.
-    """
+    """The authority for workspace storage grants and their retirement."""
 
     def issue(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> WorkspaceStorageGrant:
         """Vend a credential for this workspace's bucket, and no other."""
+        ...
+
+    def retire(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> None:
+        """Retire platform-owned storage after workspace writers have stopped."""
         ...
 
 

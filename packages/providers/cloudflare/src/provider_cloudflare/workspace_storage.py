@@ -10,7 +10,7 @@ import jwt
 from shared.identity import WorkspaceStorageConfig
 from shared.timestamps import utc_now
 from shared.workspace_storage import WorkspaceStorageGrant
-from storage_client.s3 import S3ObjectStoreSettings
+from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
 WORKSPACE_CREDENTIAL_SECONDS = 900
 
@@ -39,7 +39,9 @@ class CloudflareWorkspaceStorageIssuer:
             raise ValueError("managed workspace credentials require a Cloudflare R2 endpoint")
         return account_id
 
-    def issue(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> WorkspaceStorageGrant:
+    def _bucket(self, workspace_id: str, storage: WorkspaceStorageConfig) -> str:
+        if storage.access_key or storage.secret_key:
+            raise ValueError("managed workspace storage cannot use customer credentials")
         expected_bucket = f"{self.settings.workspace_bucket_prefix}-{workspace_id}".replace(
             "_", "-"
         )
@@ -47,6 +49,10 @@ class CloudflareWorkspaceStorageIssuer:
             raise ValueError("workspace storage does not name its deployment-owned R2 bucket")
         if storage.key_prefix:
             raise ValueError("a workspace R2 bucket cannot carry an alternate storage prefix")
+        return expected_bucket
+
+    def issue(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> WorkspaceStorageGrant:
+        expected_bucket = self._bucket(workspace_id, storage)
         now = utc_now()
         expires_at = now + timedelta(seconds=WORKSPACE_CREDENTIAL_SECONDS)
         signed = jwt.encode(
@@ -72,6 +78,14 @@ class CloudflareWorkspaceStorageIssuer:
             session_token=b64encode(f"jwt/{signed}".encode()).decode(),
             expires_at=expires_at,
         )
+
+    def retire(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> None:
+        bucket = self._bucket(workspace_id, storage)
+        client = S3ObjectStoreClient.from_settings(self.settings)
+        try:
+            client.retire_bucket(bucket)
+        finally:
+            client.close()
 
 
 __all__ = ["CloudflareWorkspaceStorageIssuer"]

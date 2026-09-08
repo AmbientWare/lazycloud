@@ -64,6 +64,16 @@ class WorkspaceDeletionService:
             self.services.auth.credentials_revoked()
             self._wake_source_cache_cleanup(workspace.id)
             self._delete_external_and_ephemeral_state(workspace)
+            with self.services.database.session() as session:
+                self._assert_storage_drained(session, workspace.id)
+            try:
+                self.services.workspace_storage_issuer.retire(
+                    workspace_id=workspace.id, storage=workspace.storage
+                )
+            except Exception as exc:
+                raise UpstreamUnavailableError(
+                    "workspace storage retirement is incomplete"
+                ) from exc
             deleted = self._finalize(identity, workspace.id, audit_actor=audit_actor)
         return deleted
 
@@ -178,14 +188,18 @@ class WorkspaceDeletionService:
             )
             if workspace.status is WorkspaceStatus.Deleted:
                 return workspace
-            objects = ObjectRepository(session)
-            if objects.workspace_has_write_claims(workspace.id):
-                raise ConflictError("workspace object writes are still active")
-            if objects.workspace_has_objects(workspace.id):
-                raise UpstreamUnavailableError("workspace object deletion is incomplete")
-            if VolumeRepository(session).list(workspace_id=workspace.id):
-                raise UpstreamUnavailableError("workspace volume deletion is incomplete")
+            self._assert_storage_drained(session, workspace.id)
             return identity.finalize(session, workspace.id, actor=audit_actor)
+
+    @staticmethod
+    def _assert_storage_drained(session: DatabaseSession, workspace_id: str) -> None:
+        objects = ObjectRepository(session)
+        if objects.workspace_has_write_claims(workspace_id):
+            raise ConflictError("workspace object writes are still active")
+        if objects.workspace_has_objects(workspace_id):
+            raise UpstreamUnavailableError("workspace object deletion is incomplete")
+        if VolumeRepository(session).list(workspace_id=workspace_id):
+            raise UpstreamUnavailableError("workspace volume deletion is incomplete")
 
 
 __all__ = ["WorkspaceDeletionService"]

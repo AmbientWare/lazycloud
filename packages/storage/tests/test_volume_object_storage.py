@@ -309,6 +309,7 @@ class _FakeObjectClient:
         self.objects: dict[tuple[str, str], _FakeObject] = {}
         self.completed: list[tuple[str, str, str, tuple[tuple[int, str], ...]]] = []
         self.aborted: list[tuple[str, str, str]] = []
+        self.uploads: dict[tuple[str, str, str], None] = {}
         self.deleted_prefixes: list[str] = []
         self._upload_number = 0
 
@@ -442,9 +443,10 @@ class _FakeObjectClient:
         return self._url(key, bucket=bucket, suffix=f"put&expires={expires_seconds}")
 
     def create_multipart_upload(self, key: str, *, bucket: str | None = None) -> str:
-        del key, bucket
         self._upload_number += 1
-        return f"upload-{self._upload_number}"
+        upload_id = f"upload-{self._upload_number}"
+        self.uploads[(bucket or "default", key, upload_id)] = None
+        return upload_id
 
     def generate_presigned_upload_part_url(
         self,
@@ -470,6 +472,7 @@ class _FakeObjectClient:
         bucket: str | None = None,
     ) -> None:
         self.completed.append((bucket or "default", key, upload_id, completed_parts))
+        self.uploads.pop((bucket or "default", key, upload_id), None)
 
     def abort_multipart_upload(
         self,
@@ -479,6 +482,12 @@ class _FakeObjectClient:
         bucket: str | None = None,
     ) -> None:
         self.aborted.append((bucket or "default", key, upload_id))
+        self.uploads.pop((bucket or "default", key, upload_id), None)
+
+    def abort_multipart_uploads(self, prefix: str, *, bucket: str | None = None) -> None:
+        for target_bucket, key, upload_id in tuple(self.uploads):
+            if target_bucket == (bucket or "default") and key.startswith(prefix):
+                self.abort_multipart_upload(key, bucket=target_bucket, upload_id=upload_id)
 
     @staticmethod
     def _url(key: str, *, bucket: str | None, suffix: str) -> str:
