@@ -244,7 +244,6 @@ def build_worker_process_services(
     checkpoint_restore_source = RemoteCheckpointRestoreSource(
         repository,
         internal_http,
-        checkpoint_bucket=config.checkpoint_bucket,
     )
     checkpoints = RuntimeCheckpointCreator(
         runtime=runtime,
@@ -252,12 +251,10 @@ def build_worker_process_services(
         persister=RemoteCheckpointPersister(
             repository,
             internal_http,
-            checkpoint_bucket=config.checkpoint_bucket,
             cache_namespace=config.checkpoint_cache_namespace,
             cache=cache_server,
         ),
         checkpoint_root=paths.checkpoint_root,
-        origin_storage_available=bool(config.checkpoint_bucket),
         content_cache_available=True,
         checkpoint_activity=checkpoint_activity,
     )

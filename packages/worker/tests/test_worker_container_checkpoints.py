@@ -48,7 +48,6 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
         state_sink=state,
         persister=FilesystemCheckpointPersister(uploader=uploader, cache_store=cache),
         checkpoint_root=str(tmp_path / "checkpoints"),
-        origin_storage_available=True,
         content_cache_available=True,
         id_factory=lambda: "chk-1",
         checkpoint_activity=checkpoint_activity,
@@ -121,7 +120,6 @@ def test_runtime_checkpoint_creator_records_failed_state_on_runtime_error(
             cache_store=CheckpointCache(),
         ),
         checkpoint_root=str(tmp_path / "checkpoints"),
-        origin_storage_available=True,
         content_cache_available=True,
         id_factory=lambda: "chk-1",
     )
