@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
+import os
 import shutil
 import tarfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from cache.protocol import CacheContentReadRequest, CacheContentReadStatus
@@ -14,6 +16,7 @@ from shared.checkpoints import CheckpointRecord
 from shared.container_requests import WorkerStartupKind
 
 from worker.checkpoint_activity import CheckpointLeaseRegistry
+from worker.checkpoint_filesystem import copy_checkpoint_filesystem
 from worker.checkpoints import (
     CheckpointArchiveMaterializationRequest,
     CheckpointLifecycleAction,
@@ -37,6 +40,7 @@ from worker.oci_spec import OciRuntimeContainerSpec
 from worker.runtime_config import runtime_capabilities
 
 CHECKPOINT_CACHE_READ_CHUNK_BYTES = 8 * 1024 * 1024
+LOGGER = logging.getLogger(__name__)
 
 
 class _OciRootConfig(BaseModel):
@@ -149,11 +153,13 @@ class RuntimeCheckpointRestorer:
         checkpoint: CheckpointRecord | None = None
         prepared_filesystem: _PreparedRestoreFilesystem | None = None
         restore_started = False
+        stage = "lookup"
         try:
             checkpoint = self.source.get_checkpoint(
                 context.checkpoint_id,
                 workspace_id=context.request.workspace_id,
             )
+            stage = "planning"
             materialized = self._materialized(checkpoint.checkpoint_id)
             decision = plan_checkpoint_restore(
                 CheckpointRestoreRequest(
@@ -170,10 +176,12 @@ class RuntimeCheckpointRestorer:
                 )
             )
             if decision.action is CheckpointLifecycleAction.Materialize:
+                stage = "materialization"
                 self._ensure_materialized(checkpoint)
             elif decision.action is not CheckpointLifecycleAction.Restore:
                 raise RuntimeError(decision.reason)
 
+            stage = "filesystem"
             prepared_filesystem = self._restore_filesystem(
                 checkpoint.checkpoint_id,
                 spec,
@@ -200,6 +208,7 @@ class RuntimeCheckpointRestorer:
                 on_started(pid)
                 checkpoint_lease.close()
 
+            stage = "runtime"
             result = self.runtime.restore_container(
                 context.request.container_id,
                 image_path=restore.image_path,
@@ -211,6 +220,16 @@ class RuntimeCheckpointRestorer:
             )
             return result
         except Exception as exc:
+            if not restore_started:
+                # Transport exceptions can contain signed download URLs.
+                LOGGER.warning(
+                    "Checkpoint restore failed checkpoint_id=%s container_id=%s "
+                    "stage=%s error_type=%s",
+                    context.checkpoint_id,
+                    context.request.container_id,
+                    stage,
+                    type(exc).__name__,
+                )
             if not restore_started and prepared_filesystem is not None:
                 prepared_filesystem.reset()
             if checkpoint is not None and not restore_started:
@@ -319,7 +338,7 @@ class RuntimeCheckpointRestorer:
         staged_rootfs = Path(container_spec.bundle_path) / "checkpoint-rootfs"
         shutil.rmtree(staged_rootfs, ignore_errors=True)
         try:
-            shutil.copytree(source, staged_rootfs, symlinks=True)
+            copy_checkpoint_filesystem(source, staged_rootfs)
             config.root.path = str(staged_rootfs)
             config_path.write_text(
                 config.model_dump_json(indent=2),
@@ -344,10 +363,16 @@ def _extract_checkpoint_archive(
     checkpoint_id: str,
 ) -> None:
     shutil.rmtree(temporary_root, ignore_errors=True)
-    temporary_root.mkdir(parents=True, exist_ok=True)
+    temporary_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
-        with tarfile.open(archive_path) as archive:
-            archive.extractall(temporary_root, filter="data")
+        with tarfile.open(archive_path, errorlevel=2) as archive:
+            members = _checkpoint_archive_members(archive, checkpoint_id)
+            archive.extractall(
+                temporary_root,
+                members=members,
+                numeric_owner=True,
+                filter=_checkpoint_archive_filter,
+            )
         extracted = temporary_root / checkpoint_id
         if not (extracted / CHECKPOINT_FILESYSTEM_DIR).is_dir():
             raise RuntimeError("checkpoint archive is missing its filesystem payload")
@@ -356,3 +381,55 @@ def _extract_checkpoint_archive(
         extracted.replace(checkpoint_path)
     finally:
         shutil.rmtree(temporary_root, ignore_errors=True)
+
+
+def _checkpoint_member_path(name: str, checkpoint_id: str) -> PurePosixPath:
+    parts = name.rstrip("/").split("/")
+    if parts[0] != checkpoint_id or any(part in {"", ".", ".."} for part in parts):
+        raise tarfile.FilterError("checkpoint archive member is outside its checkpoint")
+    return PurePosixPath(*parts)
+
+
+def _checkpoint_archive_members(
+    archive: tarfile.TarFile, checkpoint_id: str
+) -> list[tarfile.TarInfo]:
+    members: dict[PurePosixPath, tarfile.TarInfo] = {}
+    filesystem = PurePosixPath(checkpoint_id, CHECKPOINT_FILESYSTEM_DIR)
+    for member in archive.getmembers():
+        path = _checkpoint_member_path(member.name, checkpoint_id)
+        if path in members:
+            raise tarfile.FilterError("checkpoint archive has duplicate members")
+        if not (member.isdir() or member.isreg() or member.issym() or member.islnk()):
+            raise tarfile.SpecialFileError(member)
+        if member.issym() and (filesystem not in path.parents):
+            raise tarfile.FilterError("checkpoint archive symlink is outside its filesystem")
+        members[path] = member
+
+    for directory in (PurePosixPath(checkpoint_id), filesystem):
+        member = members.get(directory)
+        if member is None or not member.isdir():
+            raise tarfile.FilterError("checkpoint archive is missing a required directory")
+    for path, member in members.items():
+        for parent in path.parents:
+            ancestor = members.get(parent)
+            if ancestor is not None and not ancestor.isdir():
+                raise tarfile.FilterError("checkpoint archive member is beneath a non-directory")
+        if member.islnk():
+            target = members.get(_checkpoint_member_path(member.linkname, checkpoint_id))
+            if target is None or not target.isreg():
+                raise tarfile.FilterError(
+                    "checkpoint archive hardlink does not target a regular file"
+                )
+
+    # No archive write may traverse a link, including a link defined later in the tar.
+    # Hardlinks target already extracted regular files; symlinks are created last.
+    return sorted(members.values(), key=lambda member: (member.issym(), member.islnk()))
+
+
+def _checkpoint_archive_filter(member: tarfile.TarInfo, destination: str) -> tarfile.TarInfo:
+    filtered = tarfile.tar_filter(member, destination)
+    if len(PurePosixPath(member.name).parts) == 1:
+        return filtered.replace(mode=0o700, uid=os.geteuid(), gid=os.getegid(), uname="", gname="")
+    # Rootfs permissions belong to the container. The private checkpoint directory
+    # prevents other host users from accessing files with those permissions.
+    return filtered.replace(mode=member.mode)
