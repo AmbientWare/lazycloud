@@ -1,8 +1,8 @@
 # Agent Artifacts
 
 This build produces standalone Linux `amd64` and `arm64` agent executables.
-It uses Python 3.12 on glibc 2.31 so the artifacts run on Amazon Linux 2023
-without a host Python installation.
+It uses uv-managed Python 3.12 on AlmaLinux 8 with glibc 2.28 so the artifacts
+run on Amazon Linux 2023 without a host Python installation.
 
 Build and stage both architectures from the repository root:
 
