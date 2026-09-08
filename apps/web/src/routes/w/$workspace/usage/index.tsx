@@ -38,8 +38,7 @@ function UsagePage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   const [byCategory, setByCategory] = useState(false);
-  // Fixed at the range rather than at the clock, so paging through the list and
-  // the total above it cannot straddle a boundary crossed mid-session.
+  // Keep the window fixed while paging so every section reads the same interval.
   const range = useMemo(() => usageRange(search.range, new Date()), [search.range]);
   const series = useQuery(accountCostSeriesQueryOptions(range.window, range.bucket));
 
@@ -94,9 +93,7 @@ function UsagePage() {
             ))}
           </div>
         }
-        // The height belongs to the panel rather than to its content: the content
-        // is a flex child with a zero basis, so a height set on it contributes
-        // nothing to the panel's own size and the chart collapses to a strip.
+        // The chart's flex content needs an explicit height on its parent.
         className="h-60 shrink-0 sm:h-72"
         contentClassName="overflow-hidden p-3"
       >
@@ -111,7 +108,7 @@ function UsagePage() {
       <Panel
         title="Apps"
         description="Open an app to see its workloads"
-        className="min-h-[22rem] flex-1"
+        className="min-h-[22rem] flex-1 lg:min-h-0"
         contentClassName="flex min-h-0 flex-col overflow-hidden"
       >
         <AppCostAccordion window={range.window} caption={range.caption} />
