@@ -52,6 +52,7 @@ class ExecutionContainerService(Protocol):
         gpu: Sequence[str],
         gpu_count: int,
         region: ProductRegion | None = None,
+        stub_id: str | None = None,
     ) -> list[str]: ...
 
     def get(self, container_id: str) -> ContainerRecord: ...

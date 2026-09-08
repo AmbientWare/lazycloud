@@ -55,6 +55,7 @@ from database.tables.source_cache import (
     SourceCacheCleanupTargetTable,
     WorkerCacheGenerationTable,
 )
+from database.tables.storage import VolumeCleanupTable
 from pydantic import Field, JsonValue, TypeAdapter
 from shared.contracts import ContractModel
 from shared.errors import ConflictError, NotFoundError
@@ -1136,7 +1137,10 @@ class WorkspaceRepository:
         workspace.signing_key_prefix = None
         workspace.primary_token_id = None
         workspace.concurrency_limit_id = None
-        workspace.storage = WorkspaceStorageConfig()
+        if not self.session.scalar(
+            select(exists().where(VolumeCleanupTable.workspace_id == workspace.id))
+        ):
+            workspace.storage = WorkspaceStorageConfig()
         workspace.labels.clear()
         workspace.metadata.clear()
         workspace.updated_at = utc_now()
@@ -1161,9 +1165,16 @@ class WorkspaceRepository:
         for table in (
             TokenTable,
             ConcurrencyLimitTable,
-            WorkspaceStorageTable,
         ):
             self.session.execute(delete(table).where(table.workspace_id == workspace_id))
+        if not self.session.scalar(
+            select(exists().where(VolumeCleanupTable.workspace_id == workspace_id))
+        ):
+            self.session.execute(
+                delete(WorkspaceStorageTable).where(
+                    WorkspaceStorageTable.workspace_id == workspace_id
+                )
+            )
         self.session.execute(
             delete(WorkspaceMemberTable).where(WorkspaceMemberTable.workspace_id == workspace_id)
         )
@@ -1201,6 +1212,7 @@ def _workspace_purge_excluded_tables() -> set[str]:
         _mapped_table_name(ContainerBillingShapeTable),
         _mapped_table_name(BillingLedgerSegmentTable),
         _mapped_table_name(BillingMeterOutboxTable),
+        _mapped_table_name(VolumeCleanupTable),
     }
 
 

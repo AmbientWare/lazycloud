@@ -93,9 +93,12 @@ export function createVolume(workspaceId: string, name: string): Promise<Volume 
   }).then((response) => response.volume ?? null);
 }
 
-const deleteVolumeResponseSchema = z.object({}).passthrough();
+const deleteVolumeResponseSchema = z.object({ deleted: z.boolean() });
 
-export function deleteVolume(workspaceId: string, name: string): Promise<unknown> {
+export function deleteVolume(
+  workspaceId: string,
+  name: string,
+): Promise<z.infer<typeof deleteVolumeResponseSchema>> {
   return postJson(
     withWorkspace(`/api/v1/volumes/${encodeURIComponent(name)}/delete`, workspaceId),
     deleteVolumeResponseSchema,

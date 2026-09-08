@@ -38,12 +38,13 @@ def volume_list(
     rows = [
         [
             item.name,
+            "deleting" if item.deletion_requested_at is not None else "active",
             bytes_count(item.size),
             timestamp(item.updated_at),
         ]
         for item in response.volumes
     ]
-    console.print(table("Volumes", ["name", "size", "updated"], rows))
+    console.print(table("Volumes", ["name", "status", "size", "updated"], rows))
 
 
 @volume_app.command("create", help="Create a volume.")
@@ -79,11 +80,15 @@ def volume_delete(
         consequence="Deleting this volume also removes its files.",
         yes=yes,
     )
-    volume_client(workspace=workspace).delete(name)
+    response = volume_client(workspace=workspace).delete(name)
     emit(
         ctx,
-        payload={"name": name},
-        view=notice_card("Volume deleted", f"Deleted {name}.", tone="success"),
+        payload={"name": name, "deleted": response.deleted},
+        view=notice_card(
+            "Volume deleted" if response.deleted else "Volume deletion queued",
+            f"Deleted {name}." if response.deleted else f"Deleting {name}. Billing has stopped.",
+            tone="success",
+        ),
     )
 
 

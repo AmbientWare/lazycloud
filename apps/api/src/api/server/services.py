@@ -118,6 +118,7 @@ from observability.workspace_changes import (
 from operations.app_lifecycle import ProductionAppExecutionLifecycleEffects
 from operations.container_shutdown import (
     ContainerShutdownService,
+    DatabaseContainerStorageRelease,
     DatabaseDurableWorkerAbsence,
 )
 from operations.management import ManagementService
@@ -919,6 +920,13 @@ class ApiServices(ApiServiceCore):
             workspace_owners=DatabaseWorkspaceOwners(context),
         )
         payment_admission = DatabaseBillingAdmission()
+        container_shutdowns = ContainerShutdownService(
+            container_repository,
+            RedisEventBus(redis),
+            redis,
+            storage_release=DatabaseContainerStorageRelease(context),
+            durable_worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+        )
         containers = ContainerService(
             context,
             events,
@@ -930,15 +938,10 @@ class ApiServices(ApiServiceCore):
             event_bus=RedisEventBus(redis),
             workspace_changes=workspace_changes,
             runtime_state=container_runtime_state,
+            container_shutdowns=container_shutdowns,
         )
         container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
             worker_repository, container_repository, containers
-        )
-        container_shutdowns = ContainerShutdownService(
-            container_repository,
-            RedisEventBus(redis),
-            redis,
-            DatabaseDurableWorkerAbsence(context, worker_repository),
         )
         deployment_lifecycle = AppDeploymentLifecycleService(
             context,

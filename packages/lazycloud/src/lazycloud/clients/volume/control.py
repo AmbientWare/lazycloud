@@ -92,8 +92,6 @@ class VolumeControlClient:
         expires: int = 0,
         upload_id: str = "",
         part_number: int = 0,
-        content_length: int = 0,
-        content_type: str = "application/octet-stream",
     ) -> CreatePresignedUrlResponse:
         return self.create_presigned_url(
             CreatePresignedUrlRequest(
@@ -104,8 +102,6 @@ class VolumeControlClient:
                 params=PresignedUrlParams(
                     upload_id=upload_id,
                     part_number=part_number,
-                    content_length=content_length,
-                    content_type=content_type,
                 ),
             )
         )

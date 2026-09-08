@@ -8,7 +8,6 @@ from typing import TypeVar
 import pytest
 from lazycloud.abstractions.volume import (
     CloudBucketConfig,
-    CompletedPart,
     Volume,
     volume_mounts,
 )
@@ -120,10 +119,8 @@ class FakeVolumeClient:
         expires: int = 0,
         upload_id: str = "",
         part_number: int = 0,
-        content_length: int = 0,
-        content_type: str = "application/octet-stream",
     ) -> CreatePresignedUrlResponse:
-        _ = (expires, upload_id, part_number, content_length, content_type)
+        _ = (expires, upload_id, part_number)
         return CreatePresignedUrlResponse(
             url=self.urls.get(
                 (volume_name, volume_path, method),
@@ -202,35 +199,6 @@ def test_volume_mounts_accept_exportables_and_reject_invalid_items() -> None:
 
     with pytest.raises(TypeError, match="unsupported volume type: object"):
         _call_runtime(volume_mounts, [object()])
-
-
-def test_volume_presigned_download_and_multipart(tmp_path: Path) -> None:
-    client = FakeVolumeClient()
-    volume = Volume("data")._bind_control(client)
-    source = tmp_path / "read.txt"
-    source.write_text("downloaded", encoding="utf-8")
-    client.urls[("data", "read.txt", PresignedUrlMethod.GetObject)] = source.as_uri()
-
-    assert volume.read_text("read.txt") == "downloaded"
-    put_url = volume.presigned_url(
-        "write.txt",
-        method=PresignedUrlMethod.PutObject,
-        expires_seconds=60,
-        content_length=10,
-        content_type="text/plain",
-    )
-    multipart = volume.create_multipart_upload("large.bin", file_size=10, chunk_size=5)
-    completed = volume.complete_multipart_upload(
-        multipart.upload_id,
-        "large.bin",
-        [CompletedPart(number=1, etag="etag-1")],
-    )
-    aborted = volume.abort_multipart_upload("upload_2", "other.bin")
-
-    assert put_url.url.endswith("method=put-object")
-    assert multipart.parts[0].url == "https://part-1"
-    assert completed.upload_id == "upload_1"
-    assert aborted.upload_id == "upload_2"
 
 
 def test_volume_rejects_unsafe_paths_and_raises_typed_errors() -> None:

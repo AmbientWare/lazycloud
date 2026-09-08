@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -39,6 +40,7 @@ from shared.http.volumes import (
 )
 from shared.identity import WorkspaceRecord, WorkspaceStatus
 from shared.volumes import VolumeRecord
+from storage.volume_deletion import VolumeContainerShutdowns, VolumeDeletionService
 from storage.volume_filesystem import (
     VolumeFilesystem,
     VolumeFilesystemEntry,
@@ -71,6 +73,9 @@ class VolumeControlDependencies(Protocol):
     @property
     def payment_admission(self) -> PaymentAdmission: ...
 
+    @property
+    def container_shutdowns(self) -> VolumeContainerShutdowns: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedVolume:
@@ -90,6 +95,16 @@ class VolumeControlService:
         self.control_plane = ControlPlaneService(services.context)
         self.filesystem = filesystem
         self.volume_metering = services.volume_metering
+        worker_absence = services.container_shutdowns.durable_worker_absence
+        if worker_absence is None:
+            raise ValueError("volume deletion requires durable worker absence checks")
+        self.deletion = VolumeDeletionService(
+            services.context,
+            filesystem,
+            self.volume_metering,
+            worker_absence,
+            services.volumes.workspace_changes,
+        )
 
     def get_or_create_volume(
         self,
@@ -108,7 +123,8 @@ class VolumeControlService:
             admit=self.services.payment_admission,
         )
         namespace = VolumeNamespace(workspace_id=workspace.id, volume_id=record.id)
-        self.filesystem.ensure_volume(namespace)
+        with self._write_volume(record.name, workspace_id=workspace.id, volume_id=record.id):
+            self.filesystem.ensure_volume(namespace)
         return GetOrCreateVolumeResponse(volume=self._volume_instance(record, workspace))
 
     def delete_volume(
@@ -117,14 +133,10 @@ class VolumeControlService:
         *,
         workspace_id: str = "default",
     ) -> DeleteVolumeResponse:
-        resolved = self._resolve_volume(request.name, workspace_id=workspace_id)
-        self.volume_metering.finalize_volume_deletion(
-            request.name,
-            workspace_id=resolved.workspace.id,
+        workspace = self.control_plane.get_workspace(workspace_id)
+        return DeleteVolumeResponse(
+            deleted=self.deletion.request(request.name, workspace_id=workspace.id)
         )
-        self.filesystem.delete_volume(resolved.namespace)
-        self.services.volumes.delete(request.name, workspace=resolved.workspace.id)
-        return DeleteVolumeResponse()
 
     def delete_volume_for_workspace_deletion(
         self,
@@ -137,16 +149,9 @@ class VolumeControlService:
             request.name,
             workspace_id=workspace_id,
         )
-        self.volume_metering.finalize_volume_deletion(
-            request.name,
-            workspace_id=resolved.workspace.id,
+        return DeleteVolumeResponse(
+            deleted=self.deletion.request(request.name, workspace_id=resolved.workspace.id)
         )
-        self.filesystem.delete_volume(resolved.namespace)
-        self.services.volumes.delete_for_workspace_deletion(
-            request.name,
-            workspace_id=resolved.workspace.id,
-        )
-        return DeleteVolumeResponse()
 
     def list_volumes(self, *, workspace_id: str = "default") -> ListVolumesResponse:
         workspace = self.control_plane.get_workspace(workspace_id)
@@ -206,9 +211,12 @@ class VolumeControlService:
             workspace_id=workspace_id,
             require_file=True,
         )
-        return DeletePathResponse(
-            deleted=self.filesystem.delete_path(resolved.namespace, relative_path)
-        )
+        with self._write_volume(
+            resolved.record.name, workspace_id=resolved.workspace.id, volume_id=resolved.record.id
+        ):
+            return DeletePathResponse(
+                deleted=self.filesystem.delete_path(resolved.namespace, relative_path)
+            )
 
     def copy_path(
         self,
@@ -231,7 +239,10 @@ class VolumeControlService:
             workspace_id=workspace_id,
             require_file=True,
         )
-        self.filesystem.write_path(resolved.namespace, relative_path, chunks)
+        with self._write_volume(
+            resolved.record.name, workspace_id=resolved.workspace.id, volume_id=resolved.record.id
+        ):
+            self.filesystem.write_path(resolved.namespace, relative_path, chunks)
         return CopyPathResponse()
 
     def move_path(
@@ -252,7 +263,10 @@ class VolumeControlService:
         )
         if source.record.id != destination.record.id:
             raise InvalidInputError("moving across different volumes is not supported")
-        self.filesystem.move_path(source.namespace, source_path, destination_path)
+        with self._write_volume(
+            source.record.name, workspace_id=source.workspace.id, volume_id=source.record.id
+        ):
+            self.filesystem.move_path(source.namespace, source_path, destination_path)
         return MovePathResponse(new_path=request.new_path)
 
     def get_file_service_info(self) -> GetFileServiceInfoResponse:
@@ -266,18 +280,19 @@ class VolumeControlService:
     ) -> CreatePresignedUrlResponse:
         resolved = self._resolve_volume(request.volume_name, workspace_id=workspace_id)
         relative_path = self._validated_relative_path(request.volume_path, require_file=True)
-        return CreatePresignedUrlResponse(
-            url=self.filesystem.create_presigned_url(
-                resolved.namespace,
-                relative_path,
-                method=request.method,
-                expires_seconds=clamp_presigned_url_expires(request.expires),
-                upload_id=request.params.upload_id,
-                part_number=request.params.part_number,
-                content_length=request.params.content_length,
-                content_type=request.params.content_type,
+        with self._write_volume(
+            resolved.record.name, workspace_id=resolved.workspace.id, volume_id=resolved.record.id
+        ):
+            return CreatePresignedUrlResponse(
+                url=self.filesystem.create_presigned_url(
+                    resolved.namespace,
+                    relative_path,
+                    method=request.method,
+                    expires_seconds=clamp_presigned_url_expires(request.expires),
+                    upload_id=request.params.upload_id,
+                    part_number=request.params.part_number,
+                )
             )
-        )
 
     def create_multipart_upload(
         self,
@@ -296,31 +311,30 @@ class VolumeControlService:
         )
         if not validation.ok:
             raise InvalidInputError(validation.error_message)
-        upload_id = self.filesystem.create_multipart_upload(
-            resolved.namespace,
-            relative_path,
-        )
-        plan = validation.model_copy(update={"upload_id": upload_id})
-        return CreateMultipartUploadResponse(
-            upload_id=upload_id,
-            file_upload_parts=tuple(
-                FileUploadPart(
-                    number=part.number,
-                    start=part.start,
-                    end=part.end,
-                    url=self.filesystem.create_presigned_url(
-                        resolved.namespace,
-                        relative_path,
-                        method=PresignedUrlMethod.UploadPart,
-                        expires_seconds=VOLUME_PRESIGNED_URL_MAX_EXPIRES_SECONDS,
-                        upload_id=upload_id,
-                        part_number=part.number,
-                        content_length=part.end - part.start,
-                    ),
-                )
-                for part in plan.parts
-            ),
-        )
+        with self._write_volume(
+            resolved.record.name, workspace_id=resolved.workspace.id, volume_id=resolved.record.id
+        ):
+            upload_id = self.filesystem.create_multipart_upload(resolved.namespace, relative_path)
+            plan = validation.model_copy(update={"upload_id": upload_id})
+            return CreateMultipartUploadResponse(
+                upload_id=upload_id,
+                file_upload_parts=tuple(
+                    FileUploadPart(
+                        number=part.number,
+                        start=part.start,
+                        end=part.end,
+                        url=self.filesystem.create_presigned_url(
+                            resolved.namespace,
+                            relative_path,
+                            method=PresignedUrlMethod.UploadPart,
+                            expires_seconds=VOLUME_PRESIGNED_URL_MAX_EXPIRES_SECONDS,
+                            upload_id=upload_id,
+                            part_number=part.number,
+                        ),
+                    )
+                    for part in plan.parts
+                ),
+            )
 
     def complete_multipart_upload(
         self,
@@ -330,12 +344,15 @@ class VolumeControlService:
     ) -> CompleteMultipartUploadResponse:
         resolved = self._resolve_volume(request.volume_name, workspace_id=workspace_id)
         relative_path = self._validated_relative_path(request.volume_path, require_file=True)
-        self.filesystem.complete_multipart_upload(
-            resolved.namespace,
-            relative_path,
-            upload_id=request.upload_id,
-            completed_parts=tuple((part.number, part.etag) for part in request.completed_parts),
-        )
+        with self._write_volume(
+            resolved.record.name, workspace_id=resolved.workspace.id, volume_id=resolved.record.id
+        ):
+            self.filesystem.complete_multipart_upload(
+                resolved.namespace,
+                relative_path,
+                upload_id=request.upload_id,
+                completed_parts=tuple((part.number, part.etag) for part in request.completed_parts),
+            )
         return CompleteMultipartUploadResponse()
 
     def abort_multipart_upload(
@@ -346,11 +363,12 @@ class VolumeControlService:
     ) -> AbortMultipartUploadResponse:
         resolved = self._resolve_volume(request.volume_name, workspace_id=workspace_id)
         relative_path = self._validated_relative_path(request.volume_path, require_file=True)
-        self.filesystem.abort_multipart_upload(
-            resolved.namespace,
-            relative_path,
-            upload_id=request.upload_id,
-        )
+        with self._write_volume(
+            resolved.record.name, workspace_id=resolved.workspace.id, volume_id=resolved.record.id
+        ):
+            self.filesystem.abort_multipart_upload(
+                resolved.namespace, relative_path, upload_id=request.upload_id
+            )
         return AbortMultipartUploadResponse()
 
     def _volume_instance(
@@ -362,11 +380,14 @@ class VolumeControlService:
         return VolumeInstance(
             id=record.id,
             name=record.name,
-            size=self.filesystem.occupancy_bytes(namespace),
+            size=record.size_bytes
+            if record.deletion_requested_at is not None
+            else self.filesystem.occupancy_bytes(namespace),
             created_at=record.created_at,
             updated_at=record.created_at,
             workspace_id=workspace.id,
             workspace_name=workspace.name,
+            deletion_requested_at=record.deletion_requested_at,
         )
 
     def _resolve_volume(
@@ -380,6 +401,8 @@ class VolumeControlService:
             record = VolumeRepository(session).get(name, workspace_id=workspace.id)
         if record is None:
             raise NotFoundError("unable to find volume")
+        if record.deletion_requested_at is not None:
+            raise ConflictError(f"volume {name} is deleting")
         return ResolvedVolume(
             workspace=workspace,
             record=record,
@@ -404,6 +427,15 @@ class VolumeControlService:
             record=record,
             namespace=VolumeNamespace(workspace_id=workspace.id, volume_id=record.id),
         )
+
+    @contextmanager
+    def _write_volume(self, name: str, *, workspace_id: str, volume_id: str) -> Iterator[None]:
+        with self.services.context.database.session() as session:
+            WorkspaceRepository(session).lock_active_owner(workspace_id)
+            row = VolumeRepository(session).lock(name, workspace_id=workspace_id)
+            if str(row.id) != volume_id:
+                raise NotFoundError(f"volume not found: {name}")
+            yield
 
     def _resolve_path(
         self,

@@ -74,6 +74,9 @@ class WorkspaceDeletionService:
                 raise UpstreamUnavailableError(
                     "workspace storage retirement is incomplete"
                 ) from exc
+            if not workspace.storage.access_key and not workspace.storage.secret_key:
+                with self.services.database.session() as session:
+                    VolumeRepository(session).retire_cleanup(workspace.id)
             deleted = self._finalize(identity, workspace.id, audit_actor=audit_actor)
         return deleted
 
@@ -135,10 +138,8 @@ class WorkspaceDeletionService:
 
     def _delete_external_and_ephemeral_state(self, workspace: WorkspaceRecord) -> None:
         management = self.gateway.management
-        container_targets = (
-            management.capture_active_container_shutdown_targets_for_workspace_deletion(
-                workspace.id
-            )
+        container_targets = management.capture_container_shutdown_targets_for_workspace_deletion(
+            workspace.id
         )
         containers = management.list_containers_for_workspace_deletion(workspace.id)
         container_ids = [container.id for container in containers]

@@ -81,7 +81,8 @@ def test_cross_workspace_reads_and_deletes_are_denied_by_construction(
 
         volumes = VolumeRepository(session)
         assert volumes.get("owned-volume", workspace_id=intruder.id) is None
-        assert volumes.delete("owned-volume", workspace_id=intruder.id) is False
+        with pytest.raises(NotFoundError, match="volume not found"):
+            volumes.lock("owned-volume", workspace_id=intruder.id, allow_deleting=True)
         assert volumes.get("owned-volume", workspace_id=owner.id) is not None
 
         containers = ContainerRepository(session)
@@ -213,10 +214,13 @@ def test_container_shutdown_targets_include_only_active_workspace_rows(
             )
         )
 
-        targets = repository.list_active_shutdown_targets(workspace_id=workspace.id)
+        targets = repository.list_shutdown_targets(workspace_id=workspace.id)
 
     assert {target.container_id: target.worker_id for target in targets} == {
         ids_by_name["pending"]: "",
         ids_by_name["running-runtime"]: "runtime-worker",
         ids_by_name["running-compute"]: compute_worker_id,
+        ids_by_name["exited"]: "stale-worker",
+        ids_by_name["failed"]: "stale-worker",
+        ids_by_name["stopped"]: "stale-worker",
     }

@@ -28,6 +28,7 @@ from database.tables.orchestration import (
     RouteTable,
     WorkerTable,
 )
+from foundation.ids import try_uuid
 from pydantic import JsonValue, TypeAdapter
 from shared.autoscaler_state import (
     AutoscalerStateRecord,
@@ -35,7 +36,10 @@ from shared.autoscaler_state import (
     autoscaler_state_name,
 )
 from shared.compute_fleet import AgentLease, AgentRecord, Machine, ResourceStatus, Worker
-from shared.container_requests import ContainerShutdownTarget, StopContainerReason
+from shared.container_requests import (
+    ContainerShutdownTarget,
+    StopContainerReason,
+)
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
@@ -45,8 +49,22 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.sql.elements import ColumnElement
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
+
+
+def container_storage_release_pending() -> ColumnElement[bool]:
+    return or_(
+        ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+        and_(
+            ContainerTable.storage_released_at.is_(None),
+            or_(
+                ContainerTable.worker_id.is_not(None),
+                ContainerTable.payload["runtime_worker_id"].as_string() != "",
+            ),
+        ),
+    )
 
 
 @dataclass(slots=True)
@@ -404,6 +422,50 @@ class ContainerPage:
 class ContainerRepository:
     session: Session
 
+    def list_pending_storage_cleanup(self, worker_id: str) -> list[str]:
+        runtime_worker_id = ContainerTable.payload.op("->>")("runtime_worker_id")
+        assigned_worker = runtime_worker_id == worker_id
+        physical_worker_id = try_uuid(worker_id)
+        if physical_worker_id is not None:
+            assigned_worker = or_(
+                assigned_worker,
+                and_(
+                    or_(runtime_worker_id.is_(None), runtime_worker_id == ""),
+                    ContainerTable.worker_id == physical_worker_id,
+                ),
+            )
+        rows = self.session.scalars(
+            select(ContainerTable.id)
+            .where(
+                ContainerTable.storage_released_at.is_(None),
+                ContainerTable.status.not_in([status.value for status in LIVE_CONTAINER_STATUSES]),
+                assigned_worker,
+            )
+            .order_by(ContainerTable.id)
+        )
+        return list(rows)
+
+    def mark_storage_released(self, container_id: str, *, worker_id: str, now: datetime) -> None:
+        row = self.session.scalar(
+            select(ContainerTable).where(ContainerTable.id == container_id).with_for_update()
+        )
+        if row is None:
+            return
+        assigned_worker = ContainerRecord.model_validate(row.payload).runtime_worker_id
+        if assigned_worker and assigned_worker != worker_id:
+            raise ConflictError("container storage release belongs to another worker")
+        if row.status in {status.value for status in LIVE_CONTAINER_STATUSES}:
+            raise ConflictError("container must be stopped before releasing its storage")
+        if row.storage_released_at is None:
+            row.storage_released_at = now
+
+    def storage_is_released(self, container_id: str, *, worker_id: str) -> bool:
+        row = self.session.get(ContainerTable, container_id)
+        if row is None or row.storage_released_at is None:
+            return False
+        record = ContainerRecord.model_validate(row.payload)
+        return (record.runtime_worker_id or record.worker_id or "") == worker_id
+
     def lock_reservation(self, container_id: str) -> None:
         self.session.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
@@ -739,21 +801,25 @@ class ContainerRepository:
         ).all()
         return [str(row) for row in rows]
 
-    def list_active_shutdown_targets(
+    def list_shutdown_targets(
         self,
         *,
         workspace_id: str,
     ) -> list[ContainerShutdownTarget]:
-        active = self.list(
-            workspace_id=workspace_id,
-            statuses=tuple(status.value for status in LIVE_CONTAINER_STATUSES),
-        )
+        containers = [
+            ContainerRecord.model_validate(row.payload)
+            for row in self.session.scalars(
+                select(ContainerTable).where(
+                    ContainerTable.workspace_id == workspace_id, container_storage_release_pending()
+                )
+            )
+        ]
         return [
             ContainerShutdownTarget(
                 container_id=container.id,
                 worker_id=container.runtime_worker_id or container.worker_id or "",
             )
-            for container in active
+            for container in containers
         ]
 
     def _list(

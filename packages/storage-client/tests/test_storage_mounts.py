@@ -1,10 +1,47 @@
 from __future__ import annotations
 
+import sys
+
+import pytest
+from foundation.process import (
+    ManagedCommandResult,
+    ManagedCommandStillRunning,
+    start_managed_command,
+)
 from storage_client.mounts import (
+    GeeseFsMountConfig,
+    GeeseFsMountManager,
     MountPointConfig,
     MountPointMountManager,
     StorageMountStatus,
+    StorageMountSystem,
 )
+
+
+def test_mount_cleanup_retries_a_process_that_did_not_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command = start_managed_command([sys.executable, "-c", "import time; time.sleep(60)"])
+    manager = GeeseFsMountManager(
+        config=GeeseFsMountConfig(bucket_name="workspace", endpoint_url="http://localhost"),
+        system=StorageMountSystem(mount_checker=lambda _: False),
+        mount_cmd=command,
+    )
+
+    def cannot_stop(*, timeout_seconds: float) -> ManagedCommandResult:
+        raise ManagedCommandStillRunning("mount process is still running")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(command, "terminate", cannot_stop)
+            with pytest.raises(ManagedCommandStillRunning):
+                manager.unmount("/already-detached-mount")
+        assert command.poll() is None
+
+        assert manager.unmount("/already-detached-mount").ok
+        assert command.poll() is not None
+    finally:
+        command.terminate(timeout_seconds=1)
 
 
 def test_mount_fails_immediately_when_the_endpoint_host_does_not_resolve() -> None:

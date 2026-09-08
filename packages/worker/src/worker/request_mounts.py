@@ -12,6 +12,7 @@ from storage_client.mounts import (
     StorageMountManager,
     StorageMountStatus,
     StorageMountSystem,
+    assert_no_untracked_storage_mounts,
 )
 
 from worker.container_startup import (
@@ -96,6 +97,7 @@ class WorkerRequestMountManager:
                 ),
                 system=self.system,
             )
+            records[local_path] = _RequestMountRecord(mount=mount, manager=manager)
             mounted = manager.mount(str(local_path))
             if not mounted.ok:
                 return self._failed(
@@ -103,7 +105,6 @@ class WorkerRequestMountManager:
                     _mount_failure_detail(mounted.reason, mounted.output),
                     local_path=local_path,
                 )
-            records[local_path] = _RequestMountRecord(mount=mount, manager=manager)
             return WorkerMountPointResult(
                 status=WorkerMountPointStatus.Mounted,
                 local_path=str(local_path),
@@ -113,6 +114,11 @@ class WorkerRequestMountManager:
 
     def unmount_request_mounts(self, container_id: str) -> None:
         with self._lock(container_id):
+            assert_no_untracked_storage_mounts(
+                self.mount_root,
+                tracked_paths={str(path) for mounts in self._mounts.values() for path in mounts},
+                binary=self.mountpoint_binary,
+            )
             records = self._mounts.get(container_id, {})
             failures: list[str] = []
             for local_path, record in list(records.items()):

@@ -10,6 +10,7 @@ from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from pydantic import Field, field_validator
+from shared.app_identity import WORKER_BUNDLE_ROOT
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
@@ -451,6 +452,7 @@ class WorkerFinalizationCleanup:
     workspace_storage: ContainerWorkspaceStorageMounter | None = None
     container_rootfs: ContainerRootfsReleaser | None = None
     upload_root: Path = Path(DEFAULT_WORKER_UPLOAD_ROOT)
+    bundle_root: Path = Path(WORKER_BUNDLE_ROOT)
 
     def release_gpu(self, container_id: str) -> None:
         if self.gpu is not None:
@@ -469,30 +471,19 @@ class WorkerFinalizationCleanup:
 
     def force_stop_if_running(self, container_id: str) -> None:
         if self.sandbox_docker is not None:
-            with suppress(Exception):
-                self.sandbox_docker.stop(container_id)
+            self.sandbox_docker.stop(container_id)
         if self.runtime is None:
             return
-        try:
-            live = _runtime_status_is_live(self.runtime.status(container_id))
-        except Exception:
-            LOGGER.warning(
-                "could not read runtime status for %s; leaving it running",
-                container_id,
-                exc_info=True,
-            )
-            return
+        live = _runtime_status_is_live(self.runtime.status(container_id))
         if not live:
             return
-        try:
-            self.runtime.kill_container(
-                container_id,
-                signal=FORCE_KILL_SIGNAL,
-                force_delete=True,
-            )
-        except Exception:
-            LOGGER.warning("force kill of %s failed", container_id, exc_info=True)
-            return
+        self.runtime.kill_container(
+            container_id,
+            signal=FORCE_KILL_SIGNAL,
+            force_delete=True,
+        )
+        if _runtime_status_is_live(self.runtime.status(container_id)):
+            raise RuntimeError(f"container {container_id} is still running after force stop")
 
     def stop_oom_watcher(self, container_id: str) -> None:
         if self.oom_watchers is not None:
@@ -512,6 +503,12 @@ class WorkerFinalizationCleanup:
             raise RuntimeError(result.reason)
 
     def delete_local_state(self, container_id: str) -> None:
+        if (
+            not container_id
+            or container_id in {".", ".."}
+            or Path(container_id).name != container_id
+        ):
+            raise ValueError("container cleanup requires an owned path segment")
         instance = (
             self.instances.get_container_instance(container_id)
             if self.instances is not None
@@ -519,29 +516,25 @@ class WorkerFinalizationCleanup:
         )
         if self.checkpoint_signals is not None:
             self.checkpoint_signals.cleanup(container_id)
-        if instance is not None and instance.bundle_path:
-            bundle_path = Path(instance.bundle_path)
-            if bundle_path.name != container_id:
-                raise RuntimeError(
-                    f"container bundle path does not belong to {container_id}: {bundle_path}"
-                )
-            if bundle_path.is_symlink():
-                bundle_path.unlink()
-            elif bundle_path.exists():
-                shutil.rmtree(bundle_path)
-        if isinstance(self.instances, WorkerContainerInstanceDeleter):
-            self.instances.delete_container_instance(container_id)
+        bundle_path = self.bundle_root / container_id
         if (
-            self.workspace_storage is None
-            or self.instances is None
-            or instance is None
-            or not instance.workspace_name
+            instance is not None
+            and instance.bundle_path
+            and Path(instance.bundle_path) != bundle_path
         ):
+            raise RuntimeError(f"container bundle path does not belong to {container_id}")
+        if bundle_path.is_symlink():
+            bundle_path.unlink()
+        elif bundle_path.exists():
+            shutil.rmtree(bundle_path)
+        if self.workspace_storage is None or self.instances is None:
+            if isinstance(self.instances, WorkerContainerInstanceDeleter):
+                self.instances.delete_container_instance(container_id)
             return
         active_workspace_names = {
             active.workspace_name
             for active in self.instances.list_container_instances()
-            if active.workspace_name
+            if active.workspace_name and active.container_id != container_id
         }
         results = self.workspace_storage.cleanup_unused(
             active_workspace_names=active_workspace_names,
@@ -553,6 +546,8 @@ class WorkerFinalizationCleanup:
         ]
         if failures:
             raise RuntimeError("; ".join(failures))
+        if isinstance(self.instances, WorkerContainerInstanceDeleter):
+            self.instances.delete_container_instance(container_id)
 
 
 @dataclass(slots=True)

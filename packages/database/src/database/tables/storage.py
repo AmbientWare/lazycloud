@@ -4,6 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -88,14 +89,30 @@ class VolumeTable(NamedWorkspacePayloadTable, DatabaseBase):
         UniqueConstraint("workspace_id", "name", name="uq_volumes_workspace_name"),
         Index("ix_volumes_workspace", "workspace_id"),
         Index("ix_volumes_metered_at", "metered_at", "id"),
+        Index("ix_volumes_deletion_requested_at", "deletion_requested_at", "id"),
         CheckConstraint("size_bytes >= 0", name="ck_volumes_size_bytes_nonnegative"),
     )
 
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    unfenced_writes_possible: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     metered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=utc_now,
+    )
+
+
+class VolumeCleanupTable(DatabaseBase):
+    __tablename__ = "volume_cleanup"
+    __table_args__ = (Index("ix_volume_cleanup_swept_at", "swept_at", "volume_id"),)
+
+    volume_id: Mapped[str] = mapped_column(uuid_type, primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        uuid_type, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    swept_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
     )
 
 

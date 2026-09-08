@@ -90,6 +90,8 @@ from worker.repository_payloads import (
     GetWorkerAddressRequest,
     GetWorkerAddressResponse,
     GetWorkerByIdResponse,
+    ListContainerCleanupRequest,
+    ListContainerCleanupResponse,
     MoveContainerIpRequest,
     MoveContainerIpResponse,
     NetworkLockRequest,
@@ -486,6 +488,13 @@ class WorkerRepositoryHttpClient:
             "/worker-repository/get-container-state",
             request,
             GetContainerStateResponse,
+        )
+
+    def list_container_cleanup(self) -> ListContainerCleanupResponse:
+        return self._post_model(
+            "/worker-repository/list-container-cleanup",
+            ListContainerCleanupRequest(),
+            ListContainerCleanupResponse,
         )
 
     def delete_container_state(
@@ -1135,6 +1144,9 @@ class RemoteSchedulerContainerRepository:
     client: WorkerRepositoryHttpClient
     state: RemoteWorkerRepositoryState
 
+    def list_pending_storage_cleanup(self) -> list[str]:
+        return self.client.list_container_cleanup().container_ids
+
     def get_container_state(self, container_id: str) -> WorkerContainerState | None:
         response = self.client.get_container_state(
             GetContainerStateRequest(container_id=container_id)
@@ -1183,9 +1195,11 @@ class RemoteSchedulerContainerRepository:
             )
         )
 
-    def delete_container_state(self, container_id: str) -> bool:
+    def delete_container_state(self, container_id: str, *, storage_released: bool = False) -> bool:
         response = self.client.delete_container_state(
-            DeleteContainerStateRequest(container_id=container_id)
+            DeleteContainerStateRequest(
+                container_id=container_id, storage_released=storage_released
+            )
         )
         self.state.deleted_container_ids.add(container_id)
         self.state.container_states.pop(container_id, None)
