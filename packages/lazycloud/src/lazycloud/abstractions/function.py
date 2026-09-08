@@ -143,8 +143,6 @@ class FunctionOptions(TypedDict, total=False):
     on_error: LifecycleHookInput
     on_retry: LifecycleHookInput
     on_failure: LifecycleHookInput
-    on_cancelled: LifecycleHookInput
-    on_timeout: LifecycleHookInput
     on_finish: LifecycleHookInput
     task_policy: TaskPolicy | Mapping[str, Any] | None
     inputs: SchemaInput
@@ -188,8 +186,6 @@ class Function(Generic[P, R]):
     on_error: LifecycleHookInput = None
     on_retry: LifecycleHookInput = None
     on_failure: LifecycleHookInput = None
-    on_cancelled: LifecycleHookInput = None
-    on_timeout: LifecycleHookInput = None
     on_finish: LifecycleHookInput = None
     task_policy: TaskPolicy | None = None
     inputs: SchemaInput = None
@@ -318,8 +314,6 @@ class Function(Generic[P, R]):
                 on_error=self.on_error,
                 on_retry=self.on_retry,
                 on_failure=self.on_failure,
-                on_cancelled=self.on_cancelled,
-                on_timeout=self.on_timeout,
                 on_finish=self.on_finish,
             ),
             metadata=build_resource_metadata(
@@ -774,8 +768,6 @@ def _function(
     on_error: LifecycleHookInput = None,
     on_retry: LifecycleHookInput = None,
     on_failure: LifecycleHookInput = None,
-    on_cancelled: LifecycleHookInput = None,
-    on_timeout: LifecycleHookInput = None,
     on_finish: LifecycleHookInput = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     inputs: SchemaInput = None,
@@ -821,8 +813,6 @@ def _function(
     on_error: LifecycleHookInput = None,
     on_retry: LifecycleHookInput = None,
     on_failure: LifecycleHookInput = None,
-    on_cancelled: LifecycleHookInput = None,
-    on_timeout: LifecycleHookInput = None,
     on_finish: LifecycleHookInput = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     inputs: SchemaInput = None,
@@ -867,8 +857,6 @@ def _function(
     on_error: LifecycleHookInput = None,
     on_retry: LifecycleHookInput = None,
     on_failure: LifecycleHookInput = None,
-    on_cancelled: LifecycleHookInput = None,
-    on_timeout: LifecycleHookInput = None,
     on_finish: LifecycleHookInput = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     inputs: SchemaInput = None,
@@ -911,8 +899,6 @@ def _function(
             on_error=on_error,
             on_retry=on_retry,
             on_failure=on_failure,
-            on_cancelled=on_cancelled,
-            on_timeout=on_timeout,
             on_finish=on_finish,
             task_policy=_normalized_task_policy(task_policy),
             inputs=inputs,

@@ -15,8 +15,6 @@ class LifecycleHookName(StringEnum):
     Error = "on_error"
     Retry = "on_retry"
     Failure = "on_failure"
-    Cancelled = "on_cancelled"
-    Timeout = "on_timeout"
     Finish = "on_finish"
 
 
@@ -27,8 +25,6 @@ class LifecycleHooks(ContractModel):
     on_error: tuple[str, ...] = Field(default_factory=tuple)
     on_retry: tuple[str, ...] = Field(default_factory=tuple)
     on_failure: tuple[str, ...] = Field(default_factory=tuple)
-    on_cancelled: tuple[str, ...] = Field(default_factory=tuple)
-    on_timeout: tuple[str, ...] = Field(default_factory=tuple)
     on_finish: tuple[str, ...] = Field(default_factory=tuple)
 
     @field_validator("*", mode="before")
@@ -51,8 +47,6 @@ class LifecycleHooks(ContractModel):
             LifecycleHookName.Error: self.on_error,
             LifecycleHookName.Retry: self.on_retry,
             LifecycleHookName.Failure: self.on_failure,
-            LifecycleHookName.Cancelled: self.on_cancelled,
-            LifecycleHookName.Timeout: self.on_timeout,
             LifecycleHookName.Finish: self.on_finish,
         }[hook]
 

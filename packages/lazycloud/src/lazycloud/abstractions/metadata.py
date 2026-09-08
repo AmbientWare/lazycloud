@@ -72,8 +72,6 @@ def lifecycle_hooks(
     on_error: LifecycleHookInput = None,
     on_retry: LifecycleHookInput = None,
     on_failure: LifecycleHookInput = None,
-    on_cancelled: LifecycleHookInput = None,
-    on_timeout: LifecycleHookInput = None,
     on_finish: LifecycleHookInput = None,
 ) -> LifecycleHooks:
     return LifecycleHooks(
@@ -83,8 +81,6 @@ def lifecycle_hooks(
         on_error=lifecycle_hook_references(on_error),
         on_retry=lifecycle_hook_references(on_retry),
         on_failure=lifecycle_hook_references(on_failure),
-        on_cancelled=lifecycle_hook_references(on_cancelled),
-        on_timeout=lifecycle_hook_references(on_timeout),
         on_finish=lifecycle_hook_references(on_finish),
     )
 
