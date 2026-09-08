@@ -187,10 +187,10 @@ def load_model(name: str) -> str: ...
 
 `on_start` runs once when a container boots, before its first call. Load
 models and warm caches there. The other hooks run at each stage of a task:
-`on_running`, `on_success`, `on_error`, `on_retry`, `on_failure`,
-`on_cancelled`, `on_timeout`, and `on_finish`. A hook is a callable, a
-decorated function, or a dotted import string, and each option also takes a
-list.
+`on_running`, `on_success`, `on_error`, `on_retry`, `on_failure`, and
+`on_finish`. A hook is a callable, a decorated function, or a dotted import
+string, and each option also takes a list. `on_finish` runs after a reported
+success or error.
 
 ```python
 def notify_failure() -> None:
