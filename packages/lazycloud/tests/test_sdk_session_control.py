@@ -297,7 +297,13 @@ def test_gateway_control_client_streams_attach_events() -> None:
         def get(self, path: str) -> object:
             raise AssertionError(path)
 
-        def post(self, path: str, payload: dict[str, object] | None = None) -> object:
+        def post(
+            self,
+            path: str,
+            payload: dict[str, object] | None = None,
+            *,
+            timeout_seconds: float | None = None,
+        ) -> object:
             raise AssertionError(path)
 
     channel = FakeChannel()

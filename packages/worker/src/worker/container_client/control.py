@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol, TypeVar
 
 from foundation.io_utils import OutputMessage
+from shared.checkpoints import CHECKPOINT_OPERATION_TIMEOUT_SECONDS
 from shared.contracts import ContractModel
 
 from .models import (
@@ -424,6 +425,7 @@ class ContainerServiceClient:
                 checkpoint_id=checkpoint_id,
             ),
             ContainerCheckpointResponse,
+            timeout_seconds=CHECKPOINT_OPERATION_TIMEOUT_SECONDS,
         )
 
     def archive(self, container_id: str, image_id: str, output: OutputCallback) -> None:
