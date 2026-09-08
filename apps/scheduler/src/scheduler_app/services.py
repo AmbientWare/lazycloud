@@ -211,7 +211,7 @@ class SchedulerAppServices:
         )
         volume_filesystem = WorkspaceVolumeFilesystem(
             resolve_store=workspace_volume_store_resolver(
-                lambda workspace_id: control_plane.get_workspace(workspace_id).storage,
+                context.database,
                 object_store=object_client,
             )
         )

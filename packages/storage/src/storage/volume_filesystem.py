@@ -11,9 +11,11 @@ from tempfile import TemporaryDirectory
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
+from database.client import DatabaseClient
+from database.repositories.identity import WorkspaceRepository
 from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.volumes import PresignedUrlMethod
-from shared.identity import WorkspaceStorageConfig
+from shared.identity import WorkspaceStatus
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreClient, S3ObjectStoreSettings
 
 from storage.workspace_storage_issuers import external_workspace_storage_settings
@@ -255,17 +257,17 @@ class _ClosableVolumeClient(Protocol):
     def close(self) -> None: ...
 
 
-class WorkspaceStorageLookup(Protocol):
-    def __call__(self, workspace_id: str) -> WorkspaceStorageConfig: ...
-
-
 def workspace_volume_store_resolver(
-    lookup: WorkspaceStorageLookup,
+    database: DatabaseClient,
     *,
     object_store: WorkspaceVolumeObjectClient,
 ) -> WorkspaceVolumeStoreResolver:
     def resolve(workspace_id: str) -> WorkspaceVolumeStore:
-        storage = lookup(workspace_id)
+        with database.session() as session:
+            workspace = WorkspaceRepository(session).get(workspace_id)
+        if workspace is None or workspace.status is WorkspaceStatus.Deleted:
+            raise NotFoundError(f"workspace storage not found: {workspace_id}")
+        storage = workspace.storage
         if storage.access_key or storage.secret_key:
             return WorkspaceVolumeStore(
                 client=S3ObjectStoreClient.from_settings(
@@ -758,7 +760,6 @@ __all__ = [
     "VolumeFilesystemEntry",
     "VolumeNamespace",
     "VolumeObjectClient",
-    "WorkspaceStorageLookup",
     "WorkspaceVolumeFilesystem",
     "WorkspaceVolumeObjectClient",
     "WorkspaceVolumeStore",

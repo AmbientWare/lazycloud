@@ -136,6 +136,18 @@ class _CreateMultipartUploadResponse(TypedDict):
     UploadId: str
 
 
+class _ListedMultipartUpload(TypedDict):
+    Key: str
+    UploadId: str
+
+
+class _ListMultipartUploadsResponse(TypedDict, total=False):
+    Uploads: list[_ListedMultipartUpload]
+    IsTruncated: bool
+    NextKeyMarker: str
+    NextUploadIdMarker: str
+
+
 class _ListedObject(TypedDict, total=False):
     Key: str
     Size: int
@@ -190,6 +202,15 @@ class _DeleteTarget(TypedDict):
 class _DeleteRequest(TypedDict):
     Objects: list[_DeleteTarget]
     Quiet: bool
+
+
+class _DeleteError(TypedDict):
+    Key: str
+    Code: str
+
+
+class _DeleteObjectsResponse(TypedDict, total=False):
+    Errors: list[_DeleteError]
 
 
 class _CreateBucketConfiguration(TypedDict):
@@ -325,6 +346,15 @@ class _BucketClient(Protocol):
     def head_bucket(self, *, Bucket: str) -> None: ...
 
 
+@runtime_checkable
+class _RetireBucketClient(Protocol):
+    def delete_bucket(self, *, Bucket: str) -> None: ...
+
+    def list_multipart_uploads(
+        self, *, Bucket: str, KeyMarker: str = "", UploadIdMarker: str = ""
+    ) -> _ListMultipartUploadsResponse: ...
+
+
 class _CorsRule(TypedDict):
     AllowedOrigins: list[str]
     AllowedMethods: list[str]
@@ -374,7 +404,7 @@ class _ListObjectsClient(Protocol):
 
 @runtime_checkable
 class _DeleteObjectsClient(Protocol):
-    def delete_objects(self, *, Bucket: str, Delete: _DeleteRequest) -> None: ...
+    def delete_objects(self, *, Bucket: str, Delete: _DeleteRequest) -> _DeleteObjectsResponse: ...
 
 
 @runtime_checkable
@@ -391,6 +421,7 @@ class _FullS3Client(
     _DeleteObjectClient,
     _CopyObjectClient,
     _BucketClient,
+    _RetireBucketClient,
     _BucketPolicyClient,
     _ListObjectsClient,
     _DeleteObjectsClient,
@@ -411,6 +442,7 @@ type S3ClientCapabilities = (
     | _DeleteObjectClient
     | _CopyObjectClient
     | _BucketClient
+    | _RetireBucketClient
     | _BucketPolicyClient
     | _ListObjectsClient
     | _DeleteObjectsClient
@@ -816,6 +848,43 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
             raise TypeError("configured S3 client does not support bucket management")
         client.head_bucket(Bucket=bucket or self.settings.bucket)
 
+    def retire_bucket(self, bucket: str) -> None:
+        """Purge an exclusively owned bucket after its writers have stopped."""
+        if not bucket or bucket == self.settings.bucket:
+            raise ValueError("cannot retire the shared platform object bucket")
+        client = self.client
+        if not isinstance(client, _RetireBucketClient):
+            raise TypeError("configured S3 client does not support bucket retirement")
+        try:
+            key_marker = ""
+            upload_marker = ""
+            while True:
+                response = client.list_multipart_uploads(
+                    Bucket=bucket, KeyMarker=key_marker, UploadIdMarker=upload_marker
+                )
+                for upload in response.get("Uploads", ()):
+                    try:
+                        self.abort_multipart_upload(
+                            upload["Key"], upload_id=upload["UploadId"], bucket=bucket
+                        )
+                    except ClientError as exc:
+                        code, _ = _client_error_code_and_status(exc)
+                        if code != "NoSuchUpload":
+                            raise
+                if not response.get("IsTruncated"):
+                    break
+                next_key = response.get("NextKeyMarker", "")
+                next_upload = response.get("NextUploadIdMarker", "")
+                if not next_key or (next_key, next_upload) == (key_marker, upload_marker):
+                    raise RuntimeError("multipart listing did not advance during bucket retirement")
+                key_marker, upload_marker = next_key, next_upload
+            self.delete_prefix("", bucket=bucket)
+            client.delete_bucket(Bucket=bucket)
+        except ClientError as exc:
+            code, _ = _client_error_code_and_status(exc)
+            if code != "NoSuchBucket":
+                raise
+
     def configure_workspace_bucket(self, bucket: str, *, public_origin: str) -> None:
         client = self.client
         if not isinstance(client, _BucketPolicyClient):
@@ -960,13 +1029,15 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
             keys = tuple(key_list)
             for index in range(0, len(keys), 1000):
                 batch = keys[index : index + 1000]
-                client.delete_objects(
+                result = client.delete_objects(
                     Bucket=target_bucket,
                     Delete=_DeleteRequest(
                         Objects=[_DeleteTarget(Key=key) for key in batch],
                         Quiet=True,
                     ),
                 )
+                if result.get("Errors"):
+                    raise RuntimeError("object store did not delete every requested object")
             deleted.extend(keys)
             if not response.get("IsTruncated"):
                 return tuple(deleted)
@@ -1040,6 +1111,8 @@ def _is_full_s3_client(value: BaseClient) -> TypeGuard[_FullS3Client]:
             "delete_object",
             "create_bucket",
             "head_bucket",
+            "delete_bucket",
+            "list_multipart_uploads",
             "put_bucket_cors",
             "put_bucket_lifecycle_configuration",
             "list_objects_v2",

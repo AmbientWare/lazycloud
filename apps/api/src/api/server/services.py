@@ -791,7 +791,7 @@ class ApiServices(ApiServiceCore):
                 raise RuntimeError("workspace volumes require the configured object client")
             resolved_volume_filesystem = WorkspaceVolumeFilesystem(
                 resolve_store=workspace_volume_store_resolver(
-                    lambda workspace_id: control_plane.get_workspace(workspace_id).storage,
+                    context.database,
                     object_store=object_storage_service.object_client,
                 )
             )
