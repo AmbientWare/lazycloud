@@ -74,6 +74,11 @@ x-object-store-env: &object-store-env
   LAZYCLOUD_OBJECT_STORE_BUCKET: "${LAZYCLOUD_OBJECT_STORE_BUCKET:?Set the application bucket}"
   LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX: "${LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX:?Set a unique workspace bucket prefix}"
 
+x-workspace-storage-issuer-env: &workspace-storage-issuer-env
+  LAZYCLOUD_WORKSPACE_STORAGE_ISSUER: "${LAZYCLOUD_WORKSPACE_STORAGE_ISSUER:?Select the workspace credential issuer}"
+  LAZYCLOUD_GARAGE_ADMIN_ENDPOINT_URL: "http://object-store:3903"
+  LAZYCLOUD_GARAGE_ADMIN_TOKEN: "${LAZYCLOUD_GARAGE_ADMIN_TOKEN:?Run local environment setup}"
+
 x-image-build-env: &image-build-env
   LAZYCLOUD_IMAGE_BUILD_CONTAINER_ADDRESS_WAIT_TIMEOUT_SECONDS: "120"
   LAZYCLOUD_IMAGE_BUILD_CONTAINER_ADDRESS_POLL_INTERVAL_SECONDS: "0.5"
@@ -219,6 +224,10 @@ x-container-worker-healthcheck: &container-worker-healthcheck
   start_period: 120s
 
 x-lazycloud-depends: &lazycloud-depends
+  object-store-bootstrap:
+    condition: service_completed_successfully
+  billing-rates:
+    condition: service_completed_successfully
   pgbouncer:
     condition: service_healthy
   database-bootstrap:
@@ -231,6 +240,43 @@ x-lazycloud-role-depends: &lazycloud-role-depends
     condition: service_healthy
 
 services:
+  object-store:
+    image: dxflrs/garage:v2.3.0
+    restart: unless-stopped
+    environment:
+      GARAGE_RPC_SECRET: "${LAZYCLOUD_GARAGE_RPC_SECRET:?Run local environment setup}"
+      GARAGE_ADMIN_TOKEN: "${LAZYCLOUD_GARAGE_ADMIN_TOKEN:?Run local environment setup}"
+    volumes:
+      - ./deploy/garage/garage.toml:/etc/garage.toml:ro
+      - garage-data:/var/lib/garage
+    networks:
+      default:
+        aliases: [object-store.localhost]
+    ports:
+      - "${LAZYCLOUD_COMPOSE_OBJECT_STORE_PORT:-3900}:3900"
+      - "127.0.0.1:${LAZYCLOUD_COMPOSE_OBJECT_STORE_ADMIN_PORT:-3903}:3903"
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  object-store-bootstrap:
+    image: database-bootstrap:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.control-plane
+      target: database-bootstrap
+      args: *lazycloud-build-args
+    entrypoint: ["python", "/bootstrap.py"]
+    environment:
+      <<: [*object-store-env, *workspace-storage-issuer-env]
+    volumes:
+      - ./deploy/garage/bootstrap.py:/bootstrap.py:ro
+    depends_on:
+      object-store:
+        condition: service_healthy
+
   # No health check: the image carries no shell and no HTTP client, so there is
   # nothing to exec. Nothing depends on this service either — a process whose
   # exporter cannot reach a receiver drops the batch and keeps serving.
@@ -311,6 +357,27 @@ services:
       pgbouncer:
         condition: service_healthy
 
+  billing-rates:
+    image: cli:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.control-plane
+      target: cli
+      args: *lazycloud-build-args
+    entrypoint: ["python", "-c"]
+    command:
+      - |
+        import subprocess
+        from shared.billing_rate_card import METERED_RATES_EFFECTIVE_AT
+        subprocess.run([
+            "lazycloud-admin", "--json", "billing", "publish-rates",
+            "--effective-at", METERED_RATES_EFFECTIVE_AT.isoformat(), "--confirm",
+        ], check=True)
+    environment: *database-bootstrap-env
+    depends_on:
+      database-bootstrap:
+        condition: service_completed_successfully
+
   log-retention:
     image: cli:local
     build:
@@ -363,6 +430,8 @@ services:
       <<: [*database-bootstrap-env, *object-store-env, *gateway-env]
       LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID: "${LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID:-}"
     depends_on:
+      object-store-bootstrap:
+        condition: service_completed_successfully
       database-bootstrap:
         condition: service_completed_successfully
     volumes:
@@ -485,6 +554,7 @@ services:
           *github-env,
           *api-env,
           *object-store-env,
+          *workspace-storage-issuer-env,
           *image-build-env,
           *release-env,
           *agent-binary-env,
@@ -892,7 +962,7 @@ services:
           --pool "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}" \
           --pod-address "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}" \
           --container-service-port "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}" \
-          --checkpoint-bucket lazycloud-objects
+          --checkpoint-bucket "${LAZYCLOUD_OBJECT_STORE_BUCKET}"
     environment:
       LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
       LAZYCLOUD_WORKER_CONFIG_PATH: "/etc/lazycloud/worker/worker.yaml"
@@ -909,7 +979,7 @@ services:
       WORKER_POD_ADDRESS: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}"
       WORKER_CONTAINER_SERVICE_PORT: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}"
       WORKER_NETWORK_PREFIX: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_NETWORK_PREFIX:-compose-shared}"
-      WORKER_CHECKPOINT_BUCKET: "lazycloud-objects"
+      WORKER_CHECKPOINT_BUCKET: "${LAZYCLOUD_OBJECT_STORE_BUCKET}"
       WORKER_CACHE_ENDPOINT: "http://cache-server:7900"
       LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE: "/var/lib/lazycloud/cache-token/cache-service-token"
     depends_on:
@@ -1028,6 +1098,7 @@ configs:
           metrics_interval_seconds: 5
 
 volumes:
+  garage-data:
   postgres-data:
   redis-data:
   lazycloud-files:

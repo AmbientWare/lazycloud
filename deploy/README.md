@@ -19,6 +19,56 @@ For cloud capacity, start with [Provider provisioning](PROVIDERS.md). It names
 the shared AWS/Hetzner deployment flow, ownership boundaries, required inputs,
 and the contract another provider must implement.
 
+## Local environment
+
+Run `bash deploy/setup-local-env.sh` from a checkout. It creates `.env` from
+`.env.example` when needed and installs the repository's post-checkout hook.
+The main checkout owns the private file; worktrees link to it. Existing `.env`
+files and unrelated Git hooks are preserved. Setup generates missing local
+infrastructure credentials and keeps existing values. Fill the GitHub App and
+Stripe fields with development credentials.
+
+Start the local platform with:
+
+```sh
+docker compose up -d --build control-plane scheduler container-worker wireguard-platform otel-collector
+```
+
+Inspect `docker compose ps`
+and the service logs to confirm startup. The API serves the built dashboard at
+`http://lazycloud.localhost:8000`. For frontend edits, run `bun run dev` from
+`apps/web`; its default API target is `http://127.0.0.1:8000`.
+
+Compose initializes Garage 2.3, publishes the reviewed billing rates, and
+creates the local administrator. Garage's S3 endpoint is
+`http://object-store.localhost:3900`; the Admin API binds only to loopback on
+port 3903. Application and workspace buckets use the configured platform key.
+The worker receives a separate bucket key with a fifteen-minute expiration.
+It refreshes through the same credential interface used by R2. Garage enforces
+expiration; the issuer removes expired workspace keys on subsequent issuance.
+The S3 client, volume mount, artifact and billing implementations are shared.
+
+Keep the object-store endpoint reachable from the host, API and worker. Compose
+resolves `object-store.localhost` to Garage inside containers; the host resolves
+it to loopback. A browser on another machine also needs access to that endpoint
+for signed storage transfers.
+
+Use the public SDK against this deployment by exporting `LAZYCLOUD_ENDPOINT` and
+the local `LAZYCLOUD_TOKEN`. `examples/artifacts/app.py` writes through a volume
+and saves an artifact with seven-day retention. A token-only administrator can
+provision its Stripe test subscription through `/api/v1/billing/card-session`
+before running workloads, just as an account does when adding a card. An existing
+Stripe test catalog must contain the current plans; `lazycloud-admin billing
+publish-catalog` reports missing entries before publishing with `--confirm`.
+
+An explicit `VITE_API_TARGET` override can point a web preview at a remote API.
+That override does not change local backend credentials or configure GitHub's
+callback. Browser sign-in must return to an origin that serves the callback and
+retains the sign-in cookie.
+
+Cloud capacity and public ingress are opt-in. Keep provider acceptance settings
+out of the default startup configuration unless that is the run being performed.
+
 ## Local database connections
 
 `docker compose up` builds PgBouncer and starts it after PostgreSQL is healthy.
