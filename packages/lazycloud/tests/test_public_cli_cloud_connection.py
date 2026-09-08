@@ -37,6 +37,7 @@ def _connection(
         {
             "id": "11111111-1111-4111-8111-111111111111",
             "account_id": "123456789012",
+            "pool": "aws",
             "phase": phase,
             "revision": 2,
             "compute": {},
@@ -196,12 +197,13 @@ class _ConnectClient:
         self,
         *,
         account_id: str,
+        pool: str = "aws",
         role_arn: str | None = None,
         network: AwsAccountNetwork | None = None,
         max_cpu_instances: int | None = None,
         max_gpu_instances: int | None = None,
     ) -> AwsConnectionAuthorizationResponse:
-        del max_cpu_instances, max_gpu_instances
+        del pool, max_cpu_instances, max_gpu_instances
         self.requests.append((account_id, role_arn))
         self.networks.append(network)
         return AwsConnectionAuthorizationResponse(

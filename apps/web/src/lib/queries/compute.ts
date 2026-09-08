@@ -90,6 +90,7 @@ export function updateAwsComputeConfiguration(
 }
 
 export type CreateAwsConnectionInput = {
+  pool?: string;
   accountId: string;
   maxCpuInstances: number | null;
   maxGpuInstances: number | null;
@@ -105,6 +106,7 @@ export async function createAwsConnection(
 ): Promise<AwsConnectionAuthorizationResult> {
   const response = await postJson("/api/v1/aws-connection", awsConnectionAuthorizationSchema, {
     account_id: input.accountId,
+    pool: input.pool,
     max_cpu_instances: input.maxCpuInstances,
     max_gpu_instances: input.maxGpuInstances,
   });

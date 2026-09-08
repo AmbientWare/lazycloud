@@ -8,12 +8,12 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from shared.capacity import MachinePool
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL
 from shared.container_requests import CONTAINER_MEMORY_BURST_FLOOR_MIB
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
 AUTHORIZATION_ERROR_MESSAGE_MAX_LENGTH = 2048
+AWS_CONNECTED_MACHINE_POOL = "aws"
 
 
 def _bounded_authorization_error_message(value: object) -> object:
@@ -302,17 +302,12 @@ class AwsAccountConnection(ContractModel):
     unless the connection says which it is.
     """
     pool: MachinePool = Field(
-        default=MachinePool(LAZYCLOUD_MACHINE_POOL), min_length=1, max_length=240
+        default=MachinePool(AWS_CONNECTED_MACHINE_POOL), min_length=1, max_length=240
     )
     """Pool every unit provisioned on this connection stamps.
 
-    The customer's override point: units are created on demand per capability
-    key, so the pool they belong to cannot live on any one of them.
-
-    Defaulted to the same constant a workload defaults to, because these two are
-    the ends of one match: capacity is stamped with this and a request carries
-    the other, and a bare string on either side names a pool the other has never
-    heard of. Placement then refuses every request with a pool no worker is in.
+    Chosen at connection creation and immutable while its units exist. Workloads
+    select this pool explicitly or through their workspace's default pool.
     """
     compute: AwsAccountComputeConfiguration = Field(default_factory=AwsAccountComputeConfiguration)
     """Provisioning limits and defaults applied to every workspace this account backs."""
@@ -614,6 +609,7 @@ class AwsAccountValidationResult(ContractModel):
 
 
 __all__ = [
+    "AWS_CONNECTED_MACHINE_POOL",
     "AWS_REGION_PATTERN",
     "AwsAccountAuthorizationGeneration",
     "AwsAccountAuthorizationMode",

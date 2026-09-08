@@ -100,6 +100,7 @@ def _response(connection: AwsAccountConnection) -> AwsConnectionResponse:
     return AwsConnectionResponse(
         id=connection.id,
         account_id=connection.account_id,
+        pool=connection.pool,
         phase=connection.phase,
         revision=connection.revision,
         compute=connection.compute,

@@ -7,6 +7,7 @@ from typing import Annotated, Any
 
 import typer
 from shared.aws_connections import (
+    AWS_CONNECTED_MACHINE_POOL,
     AwsAccountComputeConfiguration,
     AwsAccountConnectionPhase,
     AwsAccountNetwork,
@@ -422,6 +423,10 @@ def _account_network(
 def cloud_connect_aws(
     ctx: typer.Context,
     account_id: Annotated[str, typer.Option("--account-id", help="AWS account ID.")],
+    pool: Annotated[
+        str,
+        typer.Option("--pool", help="Pool workloads select to use this account's capacity."),
+    ] = AWS_CONNECTED_MACHINE_POOL,
     role_arn: Annotated[
         str | None,
         typer.Option("--role-arn", help="Existing cross-account management role."),
@@ -463,6 +468,7 @@ def cloud_connect_aws(
     )
     response = compute_client().connect_account(
         account_id=account_id,
+        pool=pool,
         role_arn=role_arn,
         network=network,
         max_cpu_instances=max_cpu_instances,
@@ -472,6 +478,7 @@ def cloud_connect_aws(
         raise RuntimeError("existing-role authorization did not return its external ID")
     authorization: dict[str, object] = {
         "account_id": account_id,
+        "pool": response.connection.pool,
         "phase": response.connection.phase.value,
     }
     if response.authorization.stack:
