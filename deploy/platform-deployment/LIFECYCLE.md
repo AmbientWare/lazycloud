@@ -6,7 +6,7 @@ most of operating it.
 | owner | what it owns |
 |---|---|
 | `deploy/platform-core` (Terraform, once) | the VPC, the cluster, the image repositories, the OIDC provider, the storage class, and Argo CD |
-| `deploy/platform-deployment` (Terraform, per deployment) | Redis, R2, secret containers, the PlanetScale branch, the fleet network, and every identity the deployment's workloads hold |
+| `deploy/platform-deployment` (Terraform, per deployment) | Redis, S3, secret containers, the PlanetScale branch, the fleet network, and every identity the deployment's workloads hold |
 | Argo CD, from `main` and from the deployment's branch | everything that runs in the cluster |
 | The scheduler, at runtime | the Auto Scaling group and launch template for each compute unit |
 
@@ -122,8 +122,6 @@ cat > operator.json <<'JSON'
   "LAZYCLOUD_GITHUB_CLIENT_ID": "...",
   "LAZYCLOUD_GITHUB_CLIENT_SECRET": "...",
   "LAZYCLOUD_CLOUDFLARE_API_TOKEN": "...",
-  "LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID": "...",
-  "LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY": "...",
   "LAZYCLOUD_STRIPE_API_KEY": "...",
   "LAZYCLOUD_STRIPE_WEBHOOK_SECRET": "..."
 }

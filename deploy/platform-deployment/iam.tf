@@ -31,6 +31,37 @@ resource "aws_iam_role" "control_plane" {
 
 data "aws_iam_policy_document" "control_plane" {
   statement {
+    sid       = "IssueWorkspaceStorageCredentials"
+    actions   = ["sts:AssumeRole", "sts:TagSession"]
+    resources = [aws_iam_role.workspace_storage.arn]
+  }
+
+  statement {
+    sid = "ManageWorkspaceBuckets"
+    actions = [
+      "s3:CreateBucket", "s3:DeleteBucket", "s3:GetBucketLocation", "s3:ListBucket",
+      "s3:ListBucketMultipartUploads", "s3:GetBucketPolicy", "s3:PutBucketPolicy",
+      "s3:PutBucketCORS", "s3:PutLifecycleConfiguration",
+    ]
+    resources = [local.workspace_bucket_arn]
+  }
+
+  statement {
+    sid       = "ReadApplicationBucket"
+    actions   = ["s3:GetBucketLocation", "s3:ListBucket", "s3:ListBucketMultipartUploads"]
+    resources = [aws_s3_bucket.storage["objects"].arn]
+  }
+
+  statement {
+    sid = "ManageApplicationAndWorkspaceObjects"
+    actions = [
+      "s3:GetObject", "s3:PutObject", "s3:DeleteObject",
+      "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts",
+    ]
+    resources = ["${aws_s3_bucket.storage["objects"].arn}/*", "${local.workspace_bucket_arn}/*"]
+  }
+
+  statement {
     sid       = "PullControlPlaneImages"
     actions   = ["ecr:GetAuthorizationToken"]
     resources = ["*"]

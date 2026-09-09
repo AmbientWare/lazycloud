@@ -12,9 +12,9 @@ deploy. No infrastructure apply is needed for those changes. Runtime processes
 receive environment variables and mounted files, never Terraform output files.
 
 The chart supplies one S3-compatible endpoint, signing configuration,
-application bucket, workspace bucket prefix and credential pair.
+application bucket, workspace bucket prefix and workspace grant role.
 Archives share the application bucket. Workspace mounts receive temporary,
-bucket-scoped credentials signed by the configured provider. Customer-owned
+bucket-scoped STS credentials. Platform pods use AWS Pod Identity. Customer-owned
 storage uses customer credentials through the same storage contracts.
 
 Postgres owns customer configuration and workload state. Redis owns coordination.

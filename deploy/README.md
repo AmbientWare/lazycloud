@@ -44,7 +44,7 @@ creates the local administrator. Garage's S3 endpoint is
 `http://object-store.localhost:3900`; the Admin API binds only to loopback on
 port 3903. Application and workspace buckets use the configured platform key.
 The worker receives a separate bucket key with a fifteen-minute expiration.
-It refreshes through the same credential interface used by R2. Garage enforces
+It refreshes through the same credential interface used by AWS STS. Garage enforces
 expiration; the issuer removes expired workspace keys on subsequent issuance.
 The S3 client, volume mount, artifact and billing implementations are shared.
 

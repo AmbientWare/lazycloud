@@ -2,7 +2,7 @@
 
 One deployment of the platform: `lazycloud-prod`, and later `lazycloud-staging`
 beside it on the same cluster. This module owns what a deployment cannot share:
-the managed Redis, the R2 buckets, the Secrets Manager documents, the
+the managed Redis, the S3 buckets, the Secrets Manager documents, the
 PlanetScale branch, the fleet network and connection role, the Cloudflare
 tunnel it reads, and every AWS identity its workloads hold. The cluster, the
 image repositories and Argo are `deploy/platform-core`, applied once and read
@@ -13,9 +13,9 @@ See `LIFECYCLE.md` for creation and teardown. The Helm workloads live in
 deployment, from the branch named for it, and the values file Deploy writes
 there.
 
-[Object storage](OBJECT_STORAGE.md) describes the shared credentials, workspace
-access and storage reset. Infrastructure descriptor version 4 names the
-S3-compatible endpoint, signing settings, application bucket and workspace prefix.
+[Object storage](OBJECT_STORAGE.md) describes workload identity, scoped workspace
+access and data-preserving migration. Infrastructure descriptor version 5 names
+the S3 endpoint, bucket identities and workspace grant role.
 
 Use the shared [R2 Terraform backend](../terraform-state/README.md):
 

@@ -114,6 +114,12 @@ class S3ObjectInfo(ContractModel):
     etag: str | None = None
     last_modified: datetime | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
+    content_type: str = "application/octet-stream"
+    cache_control: str | None = None
+    content_disposition: str | None = None
+    content_encoding: str | None = None
+    content_language: str | None = None
+    expires: datetime | None = None
 
 
 class S3PresignedUpload(ContractModel):
@@ -134,6 +140,12 @@ class _HeadObjectResponse(TypedDict, total=False):
     ETag: str
     LastModified: datetime
     Metadata: dict[str, str]
+    ContentType: str
+    CacheControl: str
+    ContentDisposition: str
+    ContentEncoding: str
+    ContentLanguage: str
+    Expires: datetime
 
 
 class _CreateMultipartUploadResponse(TypedDict):
@@ -183,6 +195,11 @@ class _PresignParams(TypedDict):
 class _S3UploadExtraArgs(TypedDict):
     ContentType: str
     Metadata: dict[str, str]
+    CacheControl: NotRequired[str]
+    ContentDisposition: NotRequired[str]
+    ContentEncoding: NotRequired[str]
+    ContentLanguage: NotRequired[str]
+    Expires: NotRequired[datetime]
 
 
 class _CompletedPart(TypedDict):
@@ -548,6 +565,11 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         bucket: str | None = None,
         content_type: str = "application/octet-stream",
         metadata: dict[str, str] | None = None,
+        cache_control: str | None = None,
+        content_disposition: str | None = None,
+        content_encoding: str | None = None,
+        content_language: str | None = None,
+        expires: datetime | None = None,
     ) -> S3ObjectInfo:
         target_bucket = bucket or self.settings.bucket
         source_path = Path(source).expanduser().resolve()
@@ -555,6 +577,16 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
             ContentType=content_type,
             Metadata=metadata or {},
         )
+        if cache_control is not None:
+            extra_args["CacheControl"] = cache_control
+        if content_disposition is not None:
+            extra_args["ContentDisposition"] = content_disposition
+        if content_encoding is not None:
+            extra_args["ContentEncoding"] = content_encoding
+        if content_language is not None:
+            extra_args["ContentLanguage"] = content_language
+        if expires is not None:
+            extra_args["Expires"] = expires
         client = self.client
         if not isinstance(client, _UploadFileClient):
             raise TypeError("configured S3 client does not support managed file uploads")
@@ -620,7 +652,20 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
             etag=response.get("ETag"),
             last_modified=response.get("LastModified"),
             metadata=response.get("Metadata", {}),
+            content_type=response.get("ContentType", "application/octet-stream"),
+            cache_control=response.get("CacheControl"),
+            content_disposition=response.get("ContentDisposition"),
+            content_encoding=response.get("ContentEncoding"),
+            content_language=response.get("ContentLanguage"),
+            expires=response.get("Expires"),
         )
+
+    def has_multipart_uploads(self, *, bucket: str | None = None) -> bool:
+        client = self.client
+        if not isinstance(client, _ListMultipartUploadsClient):
+            raise TypeError("configured S3 client does not support multipart listing")
+        response = client.list_multipart_uploads(Bucket=bucket or self.settings.bucket)
+        return bool(response.get("Uploads") or response.get("IsTruncated"))
 
     def exists(self, key: str, *, bucket: str | None = None) -> bool:
         target_bucket = bucket or self.settings.bucket

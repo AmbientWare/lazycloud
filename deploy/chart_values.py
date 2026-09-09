@@ -70,7 +70,7 @@ class ObjectStoreInfrastructure(Contract):
 
 
 class Infrastructure(Contract):
-    schema_version: Literal[4]
+    schema_version: Literal[5]
     deployment: Name
     region: Name
     registry: Name
@@ -78,6 +78,9 @@ class Infrastructure(Contract):
     storage_class: Name
     service_accounts: ServiceAccounts
     object_store: ObjectStoreInfrastructure
+    workspace_storage_role_arn: Annotated[
+        str, Field(pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::\d{12}:role/[A-Za-z0-9+=,.@_/-]+$")
+    ]
     workload_image_repository: Name
     control_principal_arn: Name
     public_origin: Annotated[str, Field(pattern=r"^https://[a-zA-Z0-9.-]+$")]
@@ -89,6 +92,20 @@ class Infrastructure(Contract):
     cloudflare_tunnel_id: Name
     database_max_connections: Annotated[int, Field(gt=0)]
     database_pooler_max_connections: Annotated[int, Field(gt=0)]
+
+    @model_validator(mode="after")
+    def validate_workspace_storage(self) -> Infrastructure:
+        role_parts = self.workspace_storage_role_arn.split(":")
+        partition = role_parts[1]
+        account = role_parts[4]
+        suffix = "amazonaws.com.cn" if partition == "aws-cn" else "amazonaws.com"
+        if (
+            self.object_store.region_name != self.region
+            or self.object_store.endpoint_url != f"https://s3.{self.region}.{suffix}"
+            or account != self.fleet.account_id
+        ):
+            raise ValueError("Workspace storage must use the deployment's AWS account and region")
+        return self
 
 
 _VALUES = TypeAdapter(dict[str, JsonValue])
@@ -209,6 +226,8 @@ def render(
             raise ValueError(f"Environment values cannot override infrastructure-owned {key}")
     object_store = infrastructure.object_store
     runtime: dict[str, JsonValue] = {
+        "LAZYCLOUD_WORKSPACE_STORAGE_ISSUER": "aws",
+        "LAZYCLOUD_AWS_WORKSPACE_STORAGE_ROLE_ARN": infrastructure.workspace_storage_role_arn,
         "LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL": object_store.endpoint_url,
         "LAZYCLOUD_OBJECT_STORE_REGION_NAME": object_store.region_name,
         "LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE": str(object_store.force_path_style).lower(),

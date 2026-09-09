@@ -20,7 +20,7 @@ output "secrets_reader_role_arn" {
 
 output "deploy_bucket" {
   description = "Non-secret infrastructure descriptor storage."
-  value       = cloudflare_r2_bucket.storage["deploy"].name
+  value       = aws_s3_bucket.storage["deploy"].id
 }
 
 output "ecr_registry" {

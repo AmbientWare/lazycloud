@@ -3,11 +3,11 @@
 The control plane, the scheduler, the cache, the tunnel, and the bootstrap that
 has to run before any of them.
 
-Image archive storage uses R2 through a separate backend. Its bucket and endpoint
-come from infrastructure descriptor version 3; its two credential properties
-come from the operator secret. Only the control plane and scheduler receive them.
-Follow the [archive cutover](../platform-deployment/IMAGE_ARCHIVES.md) before
-deploying these settings to an existing installation.
+Image archives share the application S3 bucket and workload identity.
+Infrastructure descriptor version 5 supplies its endpoint and bucket identities,
+plus the role that issues temporary workspace credentials. Follow the
+[storage migration](../platform-deployment/OBJECT_STORAGE.md) before deploying
+these settings to an existing installation.
 
 Helm owns application defaults in `values.yaml` and environment policy in
 `environments/<environment>.yaml`. Terraform owns resource identities and publishes
