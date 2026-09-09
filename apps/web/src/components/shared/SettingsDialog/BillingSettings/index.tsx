@@ -14,6 +14,7 @@ import { useBillingSettingsController, type PlanOffer } from "./controller";
 import { PlanDialog } from "./PlanDialog";
 import { PrepaidCredit } from "./PrepaidCredit";
 import { UsageBudget } from "./UsageBudget";
+import { AutomaticReload } from "./AutomaticReload";
 
 /**
  * What this account is on, what it has left to spend, and how to change either.
@@ -145,6 +146,7 @@ export function BillingSettings({
         </div>
       </Panel>
       {summary && !complimentary ? <PrepaidCredit /> : null}
+      {summary && !complimentary ? <AutomaticReload /> : null}
       {summary && !complimentary ? <UsageBudget /> : null}
       <PlanDialog controller={controller} />
     </>

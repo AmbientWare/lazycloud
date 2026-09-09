@@ -1,7 +1,13 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from shared.enums import StringEnum
 from shared.timestamps import to_utc
+
+
+class AutomaticReloadPauseReason(StringEnum):
+    Declined = "declined"
+    ActionRequired = "action_required"
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,4 +30,4 @@ def usage_budget_month(at: datetime) -> tuple[datetime, datetime]:
     return start, end
 
 
-__all__ = ["UsageBudget", "usage_budget_month"]
+__all__ = ["AutomaticReloadPauseReason", "UsageBudget", "usage_budget_month"]

@@ -4,6 +4,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 from uuid import UUID
 
+from billing.automatic_reload import AutomaticReloadService
 from billing.costs import (
     MAX_COST_PAGE,
     BillingStanding,
@@ -36,7 +37,7 @@ from shared.http.billing import (
     CreditSummaryResponse,
     UsageBudgetResponse,
 )
-from shared.http.billing_preferences import BillingPreferences
+from shared.http.billing_preferences import AutomaticReloadStatus, BillingPreferences
 from shared.http.pricing import PlanEntitlementsResponse
 from shared.http.usage import (
     UsageCostBucket,
@@ -67,6 +68,32 @@ from billing import (
 )
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
+
+
+@router.get(
+    "/automatic-reload", response_model=AutomaticReloadStatus, operation_id="get_automatic_reload"
+)
+def get_automatic_reload(
+    user_id: read_user,
+    services: ApiServices = Depends(current_services),
+) -> AutomaticReloadStatus:
+    return AutomaticReloadService(services.context.database, services.payment_provider).status(
+        user_id=user_id
+    )
+
+
+@router.post(
+    "/automatic-reload/resume",
+    response_model=AutomaticReloadStatus,
+    operation_id="resume_automatic_reload",
+)
+def resume_automatic_reload(
+    user_id: write_user,
+    services: ApiServices = Depends(current_services),
+) -> AutomaticReloadStatus:
+    return AutomaticReloadService(services.context.database, services.payment_provider).resume(
+        user_id=user_id
+    )
 
 
 @router.get(

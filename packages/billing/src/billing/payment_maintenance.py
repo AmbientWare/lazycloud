@@ -5,6 +5,7 @@ from datetime import datetime
 from database.client import DatabaseClient
 from shared.payments import CreditPurchasePaymentProvider
 
+from billing.automatic_reload import AutomaticReloadService
 from billing.purchases import CreditPurchaseService
 
 
@@ -15,6 +16,7 @@ class BillingPaymentMaintenance:
 
     def maintain(self, *, now: datetime | None = None) -> None:
         CreditPurchaseService(self.database, self.payments).sweep(limit=20)
+        AutomaticReloadService(self.database, self.payments).sweep(limit=20, now=now)
 
 
 __all__ = ["BillingPaymentMaintenance"]

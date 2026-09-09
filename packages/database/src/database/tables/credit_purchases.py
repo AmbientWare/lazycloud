@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
@@ -36,6 +37,15 @@ class CreditPurchaseTable(TimestampMixin, DatabaseBase):
             name="ck_credit_purchases_reversal",
         ),
         Index("ix_credit_purchases_reconciliation", "status", "updated_at"),
+        Index(
+            "uq_credit_purchases_pending_automatic",
+            "user_id",
+            unique=True,
+            postgresql_where=text(
+                "kind = 'automatic' AND status IN ('pending', 'action_required')"
+            ),
+            sqlite_where=text("kind = 'automatic' AND status IN ('pending', 'action_required')"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(uuid_type, primary_key=True)

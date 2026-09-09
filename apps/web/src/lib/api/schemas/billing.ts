@@ -53,10 +53,30 @@ export type CreditSummary = z.infer<typeof creditSummarySchema>;
 
 export const billingPreferencesSchema = z
   .object({
-    monthly_usage_limit_nanos: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+    monthly_usage_limit_nanos: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .nullable(),
+    reload_enabled: z.boolean(),
+    reload_threshold_cents: z.number().int().nonnegative(),
+    reload_amount_cents: z.number().int().positive(),
+    reload_monthly_payment_limit_cents: z.number().int().nonnegative().nullable(),
   })
   .strict();
 export type BillingPreferences = z.infer<typeof billingPreferencesSchema>;
+
+export const automaticReloadStatusSchema = z
+  .object({
+    paused_purchase_id: z.string().uuid().nullable(),
+    pause_reason: z.enum(["declined", "action_required"]).nullable(),
+    pending_purchase_id: z.string().uuid().nullable(),
+    month_started_at: timestampSchema,
+    month_ended_at: timestampSchema,
+    monthly_payment_committed_cents: z.number().int().nonnegative(),
+  })
+  .strict();
 
 export const usageBudgetSchema = z
   .object({

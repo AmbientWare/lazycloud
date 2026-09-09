@@ -450,6 +450,22 @@ class StripeBilling:
             return result
         return self.credit_purchase_payment(provider_payment_id=provider_payment_id)
 
+    def cancel_credit_purchase_payment(self, *, provider_payment_id: str) -> CreditPayment:
+        try:
+            send(
+                self.client,
+                "POST",
+                f"/payment_intents/{provider_payment_id}/cancel",
+                data=[("cancellation_reason", "abandoned")],
+                idempotency_key=f"credit-cancel-{provider_payment_id}",
+            )
+        except InvalidInputError:
+            result = self.credit_purchase_payment(provider_payment_id=provider_payment_id)
+            if result.status not in {CreditPaymentStatus.Cancelled, CreditPaymentStatus.Succeeded}:
+                raise
+            return result
+        return self.credit_purchase_payment(provider_payment_id=provider_payment_id)
+
     def credit_purchase_payment(self, *, provider_payment_id: str) -> CreditPayment:
         intent = read(
             _CreditIntent,

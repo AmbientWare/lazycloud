@@ -20,11 +20,19 @@ from shared.credit_payments import (
     CreditPaymentStatus,
     CreditPurchaseKind,
 )
-from shared.errors import ConflictError, DomainError, InvalidInputError, NotFoundError
+from shared.errors import (
+    ConflictError,
+    DomainError,
+    InvalidInputError,
+    NotFoundError,
+    PaymentRequiredError,
+)
 from shared.http.billing import CreditPurchaseResponse
 from shared.payments import CreditPurchasePaymentProvider, PaymentEvent
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy.orm import Session
+
+from billing.automatic_reload_policy import AutomaticPurchaseDecision, authorize_automatic_purchase
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,49 +52,85 @@ class CreditPurchaseService:
         success_url: str = "",
         cancel_url: str = "",
     ) -> CreditPurchaseResponse:
+        with self.database.session() as session:
+            purchase = self.prepare_in_session(
+                session,
+                user_id=user_id,
+                request_key=request_key,
+                amount_cents=amount_cents,
+                kind=kind,
+                success_url=success_url,
+                cancel_url=cancel_url,
+            )
+        return self.reconcile(user_id=user_id, purchase_id=str(purchase.id))
+
+    def prepare_in_session(
+        self,
+        session: Session,
+        *,
+        user_id: str,
+        request_key: str,
+        amount_cents: int,
+        kind: CreditPurchaseKind,
+        success_url: str = "",
+        cancel_url: str = "",
+    ) -> CreditPurchaseResponse:
         if not MIN_CREDIT_PURCHASE_CENTS <= amount_cents <= MAX_CREDIT_PURCHASE_CENTS:
             raise InvalidInputError("credit purchase amount is outside the published limits")
         request_key = str(UUID(request_key))
         amount = amount_cents * (NANOS_PER_USD // 100)
-        with self.database.session() as session:
-            account = BillingAccountRepository(session).get_by_user(user_id, for_update=True)
-            if account is None or not account.provider_customer_id:
-                raise ConflictError("billing registration must finish before buying credit")
-            cutover = BillingCreditRepository(session).cutover(user_id=user_id)
-            if cutover is None or cutover.completed_at is None:
-                raise ConflictError("billing credit migration must finish before buying credit")
-            purchases = CreditPurchaseRepository(session)
-            row = purchases.by_request(user_id=user_id, request_key=request_key)
-            if row is not None:
-                if (row.amount_nanos, row.kind, row.success_url, row.cancel_url) != (
-                    amount,
-                    kind.value,
-                    success_url,
-                    cancel_url,
-                ):
-                    raise ConflictError("a purchase request cannot be reused with different terms")
-            else:
-                row = CreditPurchaseTable(
-                    id=str(uuid4()),
-                    user_id=user_id,
-                    request_key=request_key,
-                    kind=kind.value,
-                    amount_nanos=amount,
-                    status=CreditPaymentStatus.Pending.value,
-                    provider_customer_id=account.provider_customer_id,
-                    success_url=success_url,
-                    cancel_url=cancel_url,
-                    creation_started_at=utc_now(),
-                )
-                purchases.add(row)
-            purchase_id = row.id
-        return self.reconcile(user_id=user_id, purchase_id=purchase_id)
+        account = BillingAccountRepository(session).get_by_user(user_id, for_update=True)
+        if account is None or not account.provider_customer_id:
+            raise ConflictError("billing registration must finish before buying credit")
+        cutover = BillingCreditRepository(session).cutover(user_id=user_id)
+        if cutover is None or cutover.completed_at is None:
+            raise ConflictError("billing credit migration must finish before buying credit")
+        purchases = CreditPurchaseRepository(session)
+        row = purchases.by_request(user_id=user_id, request_key=request_key)
+        if row is not None:
+            if (row.amount_nanos, row.kind, row.success_url, row.cancel_url) != (
+                amount,
+                kind.value,
+                success_url,
+                cancel_url,
+            ):
+                raise ConflictError("a purchase request cannot be reused with different terms")
+        else:
+            row = CreditPurchaseTable(
+                id=str(uuid4()),
+                user_id=user_id,
+                request_key=request_key,
+                kind=kind.value,
+                amount_nanos=amount,
+                status=CreditPaymentStatus.Pending.value,
+                provider_customer_id=account.provider_customer_id,
+                success_url=success_url,
+                cancel_url=cancel_url,
+                creation_started_at=utc_now(),
+            )
+            purchases.add(row)
+        return _response(row)
 
     def get(self, *, user_id: str, purchase_id: str) -> CreditPurchaseResponse:
         with self.database.session() as session:
             row = CreditPurchaseRepository(session).get(purchase_id=purchase_id, user_id=user_id)
             if row is None:
                 raise NotFoundError("credit purchase not found")
+            return _response(row)
+
+    def cancel_automatic(self, *, user_id: str, purchase_id: str) -> CreditPurchaseResponse:
+        with self.database.session() as session:
+            row = self._locked(session, user_id=user_id, purchase_id=purchase_id)
+            if row.kind != CreditPurchaseKind.Automatic.value:
+                raise ConflictError("only an automatic reload can be cancelled here")
+            if row.provider_payment_id is None:
+                row.status = CreditPaymentStatus.Cancelled.value
+            else:
+                payment = self.payments().cancel_credit_purchase_payment(
+                    provider_payment_id=row.provider_payment_id
+                )
+                self._settle(session, row, payment)
+            row.updated_at = utc_now()
             return _response(row)
 
     def reconcile(self, *, user_id: str, purchase_id: str) -> CreditPurchaseResponse:
@@ -111,11 +155,23 @@ class CreditPurchaseService:
                             "payment creation needs reconciliation before it can be retried"
                         )
                     if row.kind == CreditPurchaseKind.Automatic.value:
-                        payment = payments.create_credit_purchase_payment(
-                            provider_customer_id=row.provider_customer_id,
-                            purchase_id=row.id,
-                            amount_nanos=row.amount_nanos,
+                        decision = authorize_automatic_purchase(
+                            session, purchase=row, now=utc_now()
                         )
+                        if decision is not AutomaticPurchaseDecision.Allowed:
+                            row.status = CreditPaymentStatus.Cancelled.value
+                            row.updated_at = utc_now()
+                            return _response(row)
+                        try:
+                            payment = payments.create_credit_purchase_payment(
+                                provider_customer_id=row.provider_customer_id,
+                                purchase_id=row.id,
+                                amount_nanos=row.amount_nanos,
+                            )
+                        except PaymentRequiredError:
+                            row.status = CreditPaymentStatus.Declined.value
+                            row.updated_at = utc_now()
+                            return _response(row)
                         self._validate_payment(row, payment)
                         row.provider_payment_id = payment.provider_payment_id
                         checkout = None
@@ -154,9 +210,15 @@ class CreditPurchaseService:
                 and payment.status is CreditPaymentStatus.Pending
                 and payment.confirmation_required
             ):
-                payment = payments.confirm_credit_purchase_payment(
-                    provider_payment_id=row.provider_payment_id
-                )
+                decision = authorize_automatic_purchase(session, purchase=row, now=utc_now())
+                if decision is AutomaticPurchaseDecision.Allowed:
+                    payment = payments.confirm_credit_purchase_payment(
+                        provider_payment_id=row.provider_payment_id
+                    )
+                else:
+                    payment = payments.cancel_credit_purchase_payment(
+                        provider_payment_id=row.provider_payment_id
+                    )
             self._settle(session, row, payment)
             row.updated_at = utc_now()
             row.last_error = ""

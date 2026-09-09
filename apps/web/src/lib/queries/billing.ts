@@ -8,6 +8,7 @@ import {
   creditSummarySchema,
   billingPreferencesSchema,
   usageBudgetSchema,
+  automaticReloadStatusSchema,
   type BillingPreferences,
   type BillingPlanId,
   type BillingSummary,
@@ -73,6 +74,20 @@ export function saveBillingPreferences(preferences: BillingPreferences) {
   return apiRequest("/api/v1/billing/preferences", billingPreferencesSchema, {
     method: "PUT",
     body: JSON.stringify(preferences),
+  });
+}
+
+export function automaticReloadStatusQueryOptions() {
+  return queryOptions({
+    queryKey: [...accountQueryKeys.billing(), "automatic-reload"],
+    queryFn: () => apiRequest("/api/v1/billing/automatic-reload", automaticReloadStatusSchema),
+    refetchInterval: 5_000,
+  });
+}
+
+export function resumeAutomaticReload() {
+  return apiRequest("/api/v1/billing/automatic-reload/resume", automaticReloadStatusSchema, {
+    method: "POST",
   });
 }
 
