@@ -6,7 +6,7 @@ has to run before any of them.
 Image archives share the application S3 bucket and workload identity.
 Infrastructure descriptor version 5 supplies its endpoint and bucket identities,
 plus the role that issues temporary workspace credentials. Follow the
-[storage migration](../platform-deployment/OBJECT_STORAGE.md) before deploying
+[S3 cutover steps](../platform-deployment/OBJECT_STORAGE.md) before deploying
 these settings to an existing installation.
 
 Helm owns application defaults in `values.yaml` and environment policy in

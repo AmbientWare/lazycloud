@@ -3,26 +3,6 @@ locals {
   workspace_bucket_arn    = "${local.arn_prefix}:s3:::${local.workspace_bucket_prefix}-*"
 }
 
-removed {
-  from = cloudflare_r2_bucket.storage
-  lifecycle { destroy = false }
-}
-
-removed {
-  from = cloudflare_r2_bucket_lifecycle.storage
-  lifecycle { destroy = false }
-}
-
-removed {
-  from = cloudflare_r2_managed_domain.storage
-  lifecycle { destroy = false }
-}
-
-removed {
-  from = cloudflare_r2_bucket_cors.objects
-  lifecycle { destroy = false }
-}
-
 resource "aws_s3_bucket" "storage" {
   for_each = toset(["objects", "deploy", "releases"])
   bucket   = "${var.deployment}-${each.key}-${data.aws_caller_identity.current.account_id}"

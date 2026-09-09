@@ -14,7 +14,7 @@ deployment, from the branch named for it, and the values file Deploy writes
 there.
 
 [Object storage](OBJECT_STORAGE.md) describes workload identity, scoped workspace
-access and data-preserving migration. Infrastructure descriptor version 5 names
+access and the application data cutover. Infrastructure descriptor version 5 names
 the S3 endpoint, bucket identities and workspace grant role.
 
 Use the shared [S3 Terraform backend](../terraform-state/README.md):
