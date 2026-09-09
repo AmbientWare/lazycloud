@@ -12,6 +12,16 @@
     "secrets"
   ],
   "properties": {
+    "capacityProviders": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^LAZYCLOUD_PLATFORM_CAPACITY_[A-Z]+$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^LAZYCLOUD_PLATFORM_CAPACITY_[A-Z_]+$"
+      }
+    },
     "aws": {
       "type": "object",
       "additionalProperties": false,

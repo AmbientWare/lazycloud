@@ -14,7 +14,7 @@ from database.tables.provider_launches import ProviderNodeLaunchTable
 from database.types import DatabaseSession
 from pydantic import SecretStr
 from shared.compute_enrollment import ComputeMachineEnrollmentStatus
-from shared.compute_policy import ComputeUnitRecord
+from shared.compute_policy import ENDED_UNIT_PHASES, ComputeUnitRecord
 from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
 from shared.http.provider_nodes import ProviderNodeIdentityRequest
 from shared.timestamps import to_utc, utc_now
@@ -106,6 +106,7 @@ class ProviderNodeLaunchService:
                 or pool.provider_ref != request.provider_ref
                 or pool.region != request.offer.region
                 or pool.generation != request.generation
+                or pool.phase in ENDED_UNIT_PHASES
                 or not pool.platform_fleet
                 or not pool.provider_ref.startswith("hetzner:")
             ):

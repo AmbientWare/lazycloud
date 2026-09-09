@@ -20,12 +20,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from shared.app_identity import (
     AGENT_NAME,
     AGENT_STATE_DIR,
 )
 from shared.contracts import ContractModel
+from shared.provider_config import ProviderKind
 from shared.urls import normalize_http_origin
 
 AGENT_BIN_PATH = f"/usr/local/bin/{AGENT_NAME}"
@@ -245,11 +246,88 @@ def node_bootstrap_script(
     return script
 
 
+def provider_bootstrap_script(
+    settings: NodeBootstrapSettings,
+    *,
+    provider: ProviderKind,
+    region: str,
+    launch_id: str,
+    bootstrap_token: SecretStr,
+    instance_identity_shell: str,
+    values: Mapping[str, str],
+) -> str:
+    if provider is ProviderKind.Aws:
+        raise NodeBootstrapError("AWS requires signed instance identity")
+    if urlparse(settings.control_plane_url).scheme != "https":
+        raise NodeBootstrapError("provider bootstrap credentials require an HTTPS origin")
+    if "resolve_provider_instance_id()" not in instance_identity_shell:
+        raise NodeBootstrapError("provider identity must resolve its instance ID")
+    identity_values = {
+        "__BOOTSTRAP_PROVIDER__": provider.value,
+        "__BOOTSTRAP_REGION__": region,
+        "__BOOTSTRAP_LAUNCH_ID__": launch_id,
+        "__BOOTSTRAP_TOKEN__": bootstrap_token.get_secret_value(),
+    }
+    if identity_values.keys() & values.keys():
+        raise NodeBootstrapError("provider identity overrides shared enrollment values")
+    return node_bootstrap_script(
+        settings,
+        NodeBootstrapProfile(
+            provider=provider.value,
+            identity_shell=instance_identity_shell + _PROVIDER_BOOTSTRAP_IDENTITY,
+            values={**identity_values, **values},
+        ),
+    )
+
+
+_PROVIDER_BOOTSTRAP_IDENTITY = r"""
+resolve_node_identity() {
+  umask 077
+  PROVIDER_INSTANCE_ID=$(resolve_provider_instance_id)
+  test -n "$PROVIDER_INSTANCE_ID"
+  printf '%s' "$PROVIDER_INSTANCE_ID" > "$AGENT_STATE_DIR/provider-instance-id"
+  printf '%s' __BOOTSTRAP_REGION__ > "$AGENT_STATE_DIR/provider-region"
+  if [ -f "$AGENT_STATE_DIR/provider-launch-id" ]; then
+    [ "$(< "$AGENT_STATE_DIR/provider-launch-id")" = __BOOTSTRAP_LAUNCH_ID__ ]
+  else
+    printf '%s' __BOOTSTRAP_LAUNCH_ID__ > "$AGENT_STATE_DIR/provider-launch-id"
+  fi
+  if [ ! -f "$AGENT_STATE_DIR/provider-node-token" ]; then
+    credential_tmp=$(mktemp "$AGENT_STATE_DIR/.provider-node-token.XXXXXX")
+    head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n' > "$credential_tmp"
+    sync -f "$credential_tmp"
+    printf '%s' __BOOTSTRAP_TOKEN__ > "$AGENT_STATE_DIR/provider-bootstrap-token"
+    if ! ln "$credential_tmp" "$AGENT_STATE_DIR/provider-node-token"; then
+      [ -f "$AGENT_STATE_DIR/provider-node-token" ]
+    fi
+    rm -f "$credential_tmp"
+    sync -f "$AGENT_STATE_DIR"
+  fi
+}
+report_identity_fields() {
+  printf ',"provider":"%s","region":"%s"' __BOOTSTRAP_PROVIDER__ __BOOTSTRAP_REGION__
+  printf ',"provider_instance_id":"%s"' "$PROVIDER_INSTANCE_ID"
+  printf ',"identity_proof_url":"provider-bootstrap"'
+  printf ',"launch_id":"%s"' "$(< "$AGENT_STATE_DIR/provider-launch-id")"
+  printf ',"node_agent_token":"%s"' "$(< "$AGENT_STATE_DIR/provider-node-token")"
+  if [ -f "$AGENT_STATE_DIR/provider-bootstrap-token" ]; then
+    printf ',"bootstrap_token":"%s"' "$(< "$AGENT_STATE_DIR/provider-bootstrap-token")"
+  fi
+}
+node_fingerprint() { printf '%s:%s' __BOOTSTRAP_PROVIDER__ "$PROVIDER_INSTANCE_ID"; }
+node_hostname() { hostname; }
+PROVIDER_INSTALL_FLAGS=(
+  --provider __BOOTSTRAP_PROVIDER__ --provider-instance-identity provider-bootstrap
+)
+"""
+
+
 __all__ = [
     "AGENT_BIN_PATH",
     "NodeBootstrapError",
     "NodeBootstrapProfile",
     "NodeBootstrapSettings",
     "node_bootstrap_script",
+    "provider_bootstrap_script",
     "validate_agent_binary_url",
 ]

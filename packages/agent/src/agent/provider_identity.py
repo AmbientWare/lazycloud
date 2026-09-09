@@ -48,6 +48,18 @@ class ProviderHostCredentials:
     def launch_id(self) -> str:
         return str(UUID(self._read(PROVIDER_LAUNCH_ID_FILE)))
 
+    def instance_id(self) -> str:
+        value = self._read("provider-instance-id")
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value) is None:
+            raise ValueError("invalid provider instance identity")
+        return value
+
+    def region(self) -> str:
+        value = self._read("provider-region")
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value) is None:
+            raise ValueError("invalid provider region")
+        return value
+
     def node_token(self) -> SecretStr:
         self._validate_directory()
         if os.geteuid() != 0:

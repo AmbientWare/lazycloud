@@ -96,6 +96,7 @@ def test_observation_does_not_mutate_and_ensure_recovers_unbound_nodes(
                     "lazycloud-provider": provider_label(pool.provider_ref),
                     "lazycloud-launch": launch.launch_id,
                     "lazycloud-generation": str(pool.generation),
+                    "lazycloud-release": "a" * 63,
                 },
                 "location": {"name": "ash", "description": "Ashburn", "network_zone": "us-east"},
                 "server_type": {
@@ -166,7 +167,17 @@ def test_observation_does_not_mutate_and_ensure_recovers_unbound_nodes(
         primary_ipv4_hourly_micros=1,
         launch_credentials=services.provider_node_launches,
     )
-    assert adapter.describe_unit(request).observed_machines == 2
+    observed = adapter.describe_unit(request)
+    assert observed.observed_machines == 2
+    assert all(item.booted_template_version == "a" * 63 for item in observed.instances)
+    assert observed.current_template_version != "a" * 63
+    upgraded = adapter.describe_unit(
+        request.model_copy(
+            update={"bootstrap": request.bootstrap.model_copy(update={"agent_sha256": "b" * 64})}
+        )
+    )
+    assert upgraded.current_template_version != observed.current_template_version
+    assert upgraded.instances == observed.instances
     with services.context.database.session() as session:
         for launch in launches:
             recorded = ProviderNodeLaunchRepository(session).get(launch.launch_id)

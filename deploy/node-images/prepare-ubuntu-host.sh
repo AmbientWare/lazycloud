@@ -40,7 +40,11 @@ grep -q '^/dev/zram0 ' /proc/swaps
 
 # The snapshot must contain no join credential or reusable SSH identity.
 test ! -d /var/lib/lazycloud/agent
-truncate -s 0 /root/.ssh/authorized_keys
+for authorized_keys in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
+  if test -f "$authorized_keys"; then
+    truncate -s 0 "$authorized_keys"
+  fi
+done
 rm -f /etc/ssh/ssh_host_rsa_key /etc/ssh/ssh_host_rsa_key.pub \
   /etc/ssh/ssh_host_ecdsa_key /etc/ssh/ssh_host_ecdsa_key.pub \
   /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_ed25519_key.pub

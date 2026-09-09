@@ -399,8 +399,8 @@ class _IdentityPlacement:
     def place(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest:
         return request
 
-    def prepare_capacity(self, request: SchedulerWorkerRequest) -> None:
-        pass
+    def purchase_candidates(self, request: SchedulerWorkerRequest) -> tuple[()]:
+        return ()
 
 
 def _scheduler_request_service(

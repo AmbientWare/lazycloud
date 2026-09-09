@@ -215,30 +215,28 @@ def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[Com
 
 
 def choose_offer(offers: list[ComputeOffer], request: OfferRequest) -> ComputeOffer:
-    candidates = filter_offers(offers, request)
+    candidates = [
+        offer
+        for offer in filter_offers(offers, request)
+        if offer.cost_terms.complete_hourly_cost_micros is not None
+    ]
     if not candidates:
         msg = "no compute offers match request"
         raise ValueError(msg)
 
-    # Preference outranks price. "Cheapest of everything acceptable" is a set
-    # rather than an order, and would send every `["h100", "t4"]` to the T4,
-    # which is the behaviour a chain exists to replace. Cost still decides
-    # within a tier, where one model spans many instance sizes and regions.
-    def preference_rank(offer: ComputeOffer) -> int:
-        # Unaccepted sorts last rather than first. `filter_offers` has already
-        # dropped those, so this is unreachable, and a rank of 0 is falsy: the
-        # obvious `or 0` would quietly promote a card the author refused to the
-        # front the moment that filtering changed.
-        rank = gpu_preference_rank(request.gpu, offer.gpu or "")
-        return len(request.gpu) if rank is None else rank
+    return min(candidates, key=lambda item: offer_selection_key(item, request))
 
-    return min(
-        candidates,
-        key=lambda item: (
-            preference_rank(item),
-            offer_cost_per_node(item),
-            -item.reliability,
-        ),
+
+def offer_selection_key(
+    offer: ComputeOffer, request: OfferRequest
+) -> tuple[int, float, float, str, str]:
+    rank = gpu_preference_rank(request.gpu, offer.gpu or "")
+    return (
+        len(request.gpu) if rank is None else rank,
+        offer_cost_per_node(offer),
+        -offer.reliability,
+        offer.provider,
+        offer.id,
     )
 
 
@@ -252,9 +250,10 @@ def offer_node_capacity(offer: ComputeOffer) -> int:
 
 def offer_cost_per_node(offer: ComputeOffer) -> float:
     capacity = offer_node_capacity(offer)
-    if capacity <= 0 or offer.hourly_cost_micros is None:
+    cost = offer.cost_terms.complete_hourly_cost_micros
+    if capacity <= 0 or cost is None:
         return float("inf")
-    return offer.hourly_cost_micros / capacity
+    return cost / capacity
 
 
 __all__ = [
@@ -263,4 +262,5 @@ __all__ = [
     "ReservationStatus",
     "choose_offer",
     "filter_offers",
+    "offer_selection_key",
 ]

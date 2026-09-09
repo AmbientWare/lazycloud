@@ -90,8 +90,8 @@ def capacity_pool_selection_key(
     health: CapacityPoolOperationalHealth,
     priority: int,
     capacity_owner_id: str,
-    hourly_cost_micros: int | None = None,
-) -> tuple[int, int, bool, int, str]:
+    purchase_order: int,
+) -> tuple[int, int, int, str]:
     health_order = {
         CapacityPoolOperationalHealth.Healthy: 0,
         CapacityPoolOperationalHealth.Degraded: 1,
@@ -100,8 +100,7 @@ def capacity_pool_selection_key(
     return (
         health_order[health],
         -priority,
-        hourly_cost_micros is None,
-        hourly_cost_micros or 0,
+        purchase_order,
         capacity_owner_id,
     )
 

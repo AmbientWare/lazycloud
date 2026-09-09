@@ -13,6 +13,7 @@ from api.server.services import ApiServices
 from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.offers import ComputeOffer
+from compute.policy import WorkspaceComputePolicyService
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
@@ -24,6 +25,10 @@ from compute.providers import (
     ResolvedProviderPolicy,
 )
 from compute.reclaim import ComputeReclaimPolicy
+from compute.request_placement import (
+    ComputeCapacityPlacementRequest,
+    ComputeCapacityPlacementService,
+)
 from compute.service import ComputeService
 from compute.supplier_costs import SupplierCostInspectionService
 from database.repositories.compute import (
@@ -430,6 +435,83 @@ def test_internal_pool_scale_enforces_connection_capacity_limit(
         assert scaled.max_machines == expected_max
 
     assert provider.desired == expected_desired
+
+
+def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
+    isolated_services: ApiServices,
+) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.workspace(session, "default").id
+    providers: list[ResolvedComputeProvider] = []
+    for name, cost in (
+        ("existing", 400_000),
+        ("unused", 300_000),
+        ("cheap", 200_000),
+        ("unknown", None),
+    ):
+        offer = _offer().model_copy(
+            update={
+                "provider": f"hetzner:{name}",
+                "cost_terms": SupplierCostTerms(
+                    compute_hourly_micros=cost,
+                    root_disk_hourly_micros=0,
+                    public_ipv4_hourly_micros=0,
+                ),
+            }
+        )
+        providers.append(
+            ResolvedComputeProvider(
+                ref=offer.provider,
+                capacity_mode=ComputeCapacityMode.Pooled,
+                pooled=_PooledProvider(offer=offer),
+                policy=ResolvedProviderPolicy(
+                    workspace_id=workspace_id,
+                    pool=MachinePool("lazycloud"),
+                    platform_fleet=True,
+                    default_region=offer.region,
+                    allowed_regions=(offer.region,),
+                ),
+            )
+        )
+    resolver = WorkspaceComputeProviderResolver(
+        connections=lambda _workspace: (),
+        capacity_workspace=lambda _connection: workspace_id,
+        binaries_by_region={},
+        instance_hourly_micros={},
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+        platform_providers=lambda: tuple(providers),
+    )
+    compute = ComputeService(isolated_services.context, provider_resolver=resolver)
+    requirements = ComputeResourceRequirements(cpu_millicores=1000, memory_mb=1024)
+    existing = providers[0]
+    assert existing.pooled is not None
+    existing_offer = next(iter(existing.pooled.list_offers(root_volume_gib=200)))
+    unit = compute.prepare_pooled_offer(
+        provider=existing, offer=existing_offer, requirements=requirements
+    )
+    placement = ComputeCapacityPlacementService(
+        isolated_services.context,
+        WorkspaceComputePolicyService(isolated_services.context),
+        compute,
+    )
+    candidates = placement.purchase_candidates(
+        ComputeCapacityPlacementRequest(
+            workspace_id=workspace_id,
+            requested_pool="lazycloud",
+            requirements=requirements,
+        )
+    )
+    with isolated_services.context.database.session() as session:
+        assert [
+            item.id
+            for item in ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
+        ] == [unit.id]
+    candidates[0].prepare()
+    with isolated_services.context.database.session() as session:
+        units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
+    assert {item.provider_ref for item in units} == {"hetzner:existing", "hetzner:cheap"}
+    assert len(candidates) == 3
+    assert candidates[-1].capacity_owner_id == unit.capacity_owner_id
 
 
 def test_platform_capacity_reconciles_without_an_aws_connection(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from compute.offers import (
     ComputeOffer,
     OfferRequest,
@@ -20,7 +21,9 @@ def _offer(instance_type: str, cpu_millicores: int, memory_mb: int) -> ComputeOf
         region="us-east-1",
         cpu_millicores=cpu_millicores,
         memory_mb=memory_mb,
-        cost_terms=SupplierCostTerms(compute_hourly_micros=100_000),
+        cost_terms=SupplierCostTerms(
+            compute_hourly_micros=100_000, root_disk_hourly_micros=0, public_ipv4_hourly_micros=0
+        ),
         capability_key=f"aws:us-east-1:{instance_type}:amd64:runsc",
     )
 
@@ -56,7 +59,11 @@ def _gpu_offer(instance_type: str, gpu: str, hourly_cost_micros: int) -> Compute
         region="us-east-1",
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
-        cost_terms=SupplierCostTerms(compute_hourly_micros=hourly_cost_micros),
+        cost_terms=SupplierCostTerms(
+            compute_hourly_micros=hourly_cost_micros,
+            root_disk_hourly_micros=0,
+            public_ipv4_hourly_micros=0,
+        ),
         capability_key=f"aws:us-east-1:{instance_type}:amd64:runsc",
         gpu=gpu,
         gpu_count=1,
@@ -109,7 +116,9 @@ def test_the_order_an_author_wrote_outranks_the_cheaper_card() -> None:
 
 
 def test_unknown_additional_costs_cannot_satisfy_a_purchase_price_cap() -> None:
-    partial = _offer("partial", 4_000, 8 * 1024)
+    partial = _offer("partial", 4_000, 8 * 1024).model_copy(
+        update={"cost_terms": SupplierCostTerms(compute_hourly_micros=100_000)}
+    )
     unknown = partial.model_copy(update={"cost_terms": SupplierCostTerms()})
     complete = partial.model_copy(
         update={
@@ -131,3 +140,5 @@ def test_an_unknown_supplier_price_does_not_outrank_known_costs() -> None:
     unknown = known.model_copy(update={"cost_terms": SupplierCostTerms()})
 
     assert choose_offer([unknown, known], OfferRequest()) is known
+    with pytest.raises(ValueError, match="no compute offers"):
+        choose_offer([unknown], OfferRequest())

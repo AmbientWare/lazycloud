@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
+from functools import partial
 from typing import Protocol
 
+from compute.request_placement import ComputeCapacityPurchase
 from coordination.wake_signal import WakeSignalPublisher
 from pydantic import JsonValue
 from shared.billing_quotes import ContainerShape
@@ -196,7 +198,9 @@ class SchedulerContainerWorkerRepository(Protocol):
 class SchedulerContainerPlacement(Protocol):
     def place(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest: ...
 
-    def prepare_capacity(self, request: SchedulerWorkerRequest) -> None: ...
+    def purchase_candidates(
+        self, request: SchedulerWorkerRequest
+    ) -> tuple[ComputeCapacityPurchase, ...]: ...
 
 
 class SchedulerContainerFailureHandler(Protocol):
@@ -260,6 +264,7 @@ class SchedulerCapacityReservations(Protocol):
         self,
         request: SchedulerWorkerRequest,
         *,
+        purchases: Callable[[], Sequence[ComputeCapacityPurchase]],
         now: datetime | None = None,
     ) -> CapacityAcquisitionResult: ...
 
@@ -756,8 +761,11 @@ class SchedulerContainerRequestService:
             raise RuntimeError("scheduler capacity reservation service was not injected")
         request = claim.request
         try:
-            self.placement.prepare_capacity(request)
-            result = self.capacity_reservations.acquire(request, now=current_time)
+            result = self.capacity_reservations.acquire(
+                request,
+                purchases=partial(self.placement.purchase_candidates, request),
+                now=current_time,
+            )
         except CapacityReservationConflictError as exc:
             result = CapacityAcquisitionResult(
                 status=CapacityAcquisitionStatus.ExistingPending,

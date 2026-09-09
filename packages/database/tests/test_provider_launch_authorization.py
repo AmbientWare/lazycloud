@@ -17,6 +17,7 @@ from execution.secrets.crypto import WorkspaceSecretCipher
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_policy import (
     ComputeCapacityMode,
+    ComputeUnitPhase,
     ComputeUnitRecord,
     ComputeUnitVisibility,
     MachinePool,
@@ -117,7 +118,7 @@ def test_one_redemption_wins_and_consumed_token_cannot_take_over_node(
         provider=ProviderKind.Hetzner,
         region=owner.unit.region,
         provider_instance_id="123",
-        identity_proof_url="hetzner-bootstrap",
+        identity_proof_url="provider-bootstrap",
         launch_id=launch.launch_id,
         bootstrap_token=launch.bootstrap_token.get_secret_value(),
         node_agent_token=token_urlsafe(32),
@@ -215,7 +216,7 @@ def test_expired_unredeemed_launch_cannot_be_reused_or_silently_rotated(
         provider=ProviderKind.Hetzner,
         region=owner.unit.region,
         provider_instance_id="123",
-        identity_proof_url="hetzner-bootstrap",
+        identity_proof_url="provider-bootstrap",
         launch_id=launch.launch_id,
         bootstrap_token=launch.bootstrap_token.get_secret_value(),
         node_agent_token=token_urlsafe(32),
@@ -225,6 +226,17 @@ def test_expired_unredeemed_launch_cannot_be_reused_or_silently_rotated(
     owner.service.revoke(launch.launch_id)
     replacement = owner.service.prepare(owner.request, "expired-slot")
     assert replacement.launch_id != launch.launch_id
+
+
+def test_ended_unit_cannot_issue_new_launch_credentials(launch_owner: LaunchOwner) -> None:
+    owner = launch_owner
+    with owner.database.session() as session:
+        repository = ComputeUnitRepository(session)
+        unit = repository.get(owner.unit.id)
+        assert unit is not None
+        repository.upsert(unit.model_copy(update={"phase": ComputeUnitPhase.Deleting}))
+    with pytest.raises(InvalidInputError, match="active platform unit"):
+        owner.service.prepare(owner.request, "ended-slot")
 
 
 def test_enrollment_launch_contention_fails_without_waiting_for_the_owner(
@@ -246,7 +258,7 @@ def test_enrollment_launch_contention_fails_without_waiting_for_the_owner(
         provider=ProviderKind.Hetzner,
         region=owner.unit.region,
         provider_instance_id="123",
-        identity_proof_url="hetzner-bootstrap",
+        identity_proof_url="provider-bootstrap",
         launch_id=launch.launch_id,
         bootstrap_token=launch.bootstrap_token.get_secret_value(),
         node_agent_token=token_urlsafe(32),

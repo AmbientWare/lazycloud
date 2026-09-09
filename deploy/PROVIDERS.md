@@ -6,8 +6,10 @@ their own scheduler loops, worker agent, billing flow, or application release.
 
 ## Ownership
 
-Terraform owns persistent infrastructure and image identities. Code owns capacity
-policy. Helm owns supplier prices and secret property bindings. Packer owns prepared host images.
+Terraform owns persistent platform infrastructure. Deployment image builders
+publish host images, and deployment configuration records their verified identities.
+Code owns capacity policy. Helm owns configured supplier prices and secret
+property bindings. Providers with price APIs supply current quotes.
 The normal deployment supplies
 configuration and credentials to the application. The compute service owns
 durable units, desired capacity, mutation fencing, retries, and drain decisions.
@@ -66,9 +68,9 @@ concurrent operator changes before publication. Ship reads the non-secret
 infrastructure descriptor published by Terraform;
 it does not apply infrastructure changes for you.
 
-For the first Hetzner activation, explicitly advance the host release pin to a
-release containing provider-token enrollment. Routine Ship retains the existing
-host pin. Reusing a pre-Hetzner agent would leave a valid image unable to enroll.
+Hetzner requires a host manifest whose agent supports `provider-bootstrap`
+enrollment. Routine Ship retains the existing host pin. When changing the host
+agent protocol, explicitly select a compatible host manifest during deployment.
 
 ## Scheduler and adapter boundary
 
@@ -109,7 +111,8 @@ retryable; retries must not create duplicate billable resources.
 
 AWS uses IAM roles, its VPC/subnets, AMIs, and Auto Scaling groups. Hetzner uses a
 project token, snapshots, and labeled server groups. AWS can verify signed
-instance identity; Hetzner uses launch-scoped single-use enrollment credentials.
+instance identity; Hetzner uses launch-scoped single-use
+enrollment credentials verified against provider inventory and durable launches.
 These differences stay in adapters and composition. All enrolled nodes use the
 same agent, runtime, WireGuard control path, worker protocol, and metering.
 

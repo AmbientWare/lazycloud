@@ -6,6 +6,7 @@ from typing import Protocol
 from compute.request_placement import (
     ComputeCapacityPlacementRequest,
     ComputeCapacityPlacementResult,
+    ComputeCapacityPurchase,
 )
 from shared.compute_policy import ComputeResourceRequirements
 from shared.scheduling import SchedulerWorkerRequest, gpu_count_for_capacity
@@ -14,7 +15,9 @@ from shared.scheduling import SchedulerWorkerRequest, gpu_count_for_capacity
 class SchedulerCapacityPlacement(Protocol):
     def place(self, request: ComputeCapacityPlacementRequest) -> ComputeCapacityPlacementResult: ...
 
-    def prepare_capacity(self, request: ComputeCapacityPlacementRequest) -> None: ...
+    def purchase_candidates(
+        self, request: ComputeCapacityPlacementRequest
+    ) -> tuple[ComputeCapacityPurchase, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,8 +29,10 @@ class SchedulerComputePlacement:
         result = self.capacity.place(_capacity_request(request))
         return request.model_copy(update={"pool_selector": result.pool})
 
-    def prepare_capacity(self, request: SchedulerWorkerRequest) -> None:
-        self.capacity.prepare_capacity(_capacity_request(request))
+    def purchase_candidates(
+        self, request: SchedulerWorkerRequest
+    ) -> tuple[ComputeCapacityPurchase, ...]:
+        return self.capacity.purchase_candidates(_capacity_request(request))
 
 
 def _capacity_request(request: SchedulerWorkerRequest) -> ComputeCapacityPlacementRequest:

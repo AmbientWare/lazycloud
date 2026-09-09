@@ -1,26 +1,14 @@
 from __future__ import annotations
 
-import http.client
-from dataclasses import dataclass
 from hashlib import sha256
 
 from shared.errors import InvalidInputError, UpstreamUnavailableError
+from shared.provider_identity import (
+    ProviderBootstrapNodeEvidence,
+    ProviderBootstrapNodeIdentityTarget,
+)
 
-from provider_hetzner.client import HetznerClient
-
-
-@dataclass(frozen=True, slots=True)
-class HetznerNodeEvidence:
-    instance_id: str
-    location: str
-
-
-@dataclass(frozen=True, slots=True)
-class HetznerNodeIdentityTarget:
-    provider_ref: str
-    unit_id: str
-    launch_id: str
-    region: str
+from provider_hetzner.client import HetznerClient, HetznerError
 
 
 def provider_label(provider_ref: str) -> str:
@@ -28,11 +16,14 @@ def provider_label(provider_ref: str) -> str:
 
 
 def verify_node(
-    client: HetznerClient, *, instance_id: str, target: HetznerNodeIdentityTarget
-) -> HetznerNodeEvidence:
+    client: HetznerClient, *, instance_id: str, target: ProviderBootstrapNodeIdentityTarget
+) -> ProviderBootstrapNodeEvidence:
     if not target.launch_id or not instance_id.isdecimal() or int(instance_id) <= 0:
         raise InvalidInputError("invalid Hetzner host identity")
-    server = client.server(int(instance_id))
+    try:
+        server = client.server(int(instance_id))
+    except HetznerError:
+        raise UpstreamUnavailableError("Hetzner host identity is unavailable") from None
     if server is None:
         raise UpstreamUnavailableError("Hetzner host no longer exists")
     if (
@@ -43,28 +34,4 @@ def verify_node(
         or server.location.name != target.region
     ):
         raise InvalidInputError("Hetzner host does not match the enrolled launch")
-    return HetznerNodeEvidence(str(server.id), server.location.name)
-
-
-def node_evidence() -> HetznerNodeEvidence:
-    values: list[str] = []
-    for field in ("instance-id", "availability-zone"):
-        connection = http.client.HTTPConnection("169.254.169.254", timeout=2)
-        try:
-            connection.request("GET", f"/hetzner/v1/metadata/{field}")
-            response = connection.getresponse()
-            body = response.read(257)
-            if response.status != 200 or len(body) > 256:
-                raise UpstreamUnavailableError("Hetzner metadata is unavailable")
-            values.append(body.decode("ascii").strip())
-        except (OSError, http.client.HTTPException, UnicodeError) as exc:
-            raise UpstreamUnavailableError("Hetzner metadata is unavailable") from exc
-        finally:
-            connection.close()
-    instance_id, zone = values
-    location = zone.rsplit("-dc", 1)[0]
-    if not instance_id.isdecimal() or int(instance_id) <= 0:
-        raise InvalidInputError("Hetzner metadata contains an invalid instance ID")
-    if location not in {"ash", "hil", "fsn1", "nbg1", "hel1", "sin"}:
-        raise InvalidInputError("Hetzner metadata contains an unknown location")
-    return HetznerNodeEvidence(instance_id, location)
+    return ProviderBootstrapNodeEvidence(str(server.id), server.location.name)

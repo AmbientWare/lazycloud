@@ -35,7 +35,7 @@ class ProviderNodeIdentityRequest(HttpModel):
     )
     provider: ProviderKind
     region: str = Field(min_length=1, max_length=64)
-    provider_instance_id: str = Field(min_length=1, max_length=64)
+    provider_instance_id: str = Field(min_length=1, max_length=128)
     identity_proof_url: str = Field(min_length=1, max_length=8192, repr=False)
 
     @model_validator(mode="after")
@@ -47,10 +47,9 @@ class ProviderNodeIdentityRequest(HttpModel):
             valid = valid and not (self.launch_id or self.bootstrap_token or self.node_agent_token)
         else:
             valid = (
-                self.region in {"ash", "hil", "fsn1", "nbg1", "hel1", "sin"}
-                and self.provider_instance_id.isdecimal()
-                and int(self.provider_instance_id) > 0
-                and self.identity_proof_url == "hetzner-bootstrap"
+                re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.region)
+                and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", self.provider_instance_id)
+                and self.identity_proof_url == "provider-bootstrap"
                 and re.fullmatch(
                     r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
                     self.launch_id,

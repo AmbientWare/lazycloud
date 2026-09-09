@@ -116,7 +116,7 @@ class ProviderNodeEnrollmentService:
                 self._require_launches().lock_enrollment(
                     session, request, pool, machine_fingerprint=request.machine_fingerprint
                 )
-                if request.provider is ProviderKind.Hetzner
+                if request.provider is not ProviderKind.Aws
                 else None
             )
             result = None
@@ -172,7 +172,7 @@ class ProviderNodeEnrollmentService:
             join_request,
             node_agent_token=(
                 SecretStr(request.node_agent_token)
-                if request.provider is ProviderKind.Hetzner
+                if request.provider is not ProviderKind.Aws
                 else None
             ),
         )
@@ -225,7 +225,7 @@ class ProviderNodeEnrollmentService:
             launch_id=request.launch_id,
         )
         excerpt = _sanitized_excerpt(request.diagnostic_excerpt)
-        if request.provider is ProviderKind.Hetzner:
+        if request.provider is not ProviderKind.Aws:
             for credential in (request.bootstrap_token, request.node_agent_token):
                 if credential:
                     excerpt = excerpt.replace(credential, "[redacted]")
@@ -351,7 +351,7 @@ class ProviderNodeEnrollmentService:
         ),
         pool: ComputeUnitRecord,
     ) -> None:
-        if request.provider is ProviderKind.Hetzner:
+        if request.provider is not ProviderKind.Aws:
             self._require_launches().authorize(request, pool)
 
     @contextmanager
@@ -439,9 +439,9 @@ class ProviderNodeEnrollmentService:
             or pool.region != request.region
         ):
             raise InvalidInputError("provider node enrollment request is not active")
-        if request.provider is ProviderKind.Hetzner:
+        if request.provider is not ProviderKind.Aws:
             if not pool.platform_fleet or pool.provider_connection_id is not None:
-                raise InvalidInputError("Hetzner provider binding is not platform capacity")
+                raise InvalidInputError("bootstrap provider binding is not platform capacity")
             return pool, None
         if pool.provider_connection_id is None:
             raise InvalidInputError("AWS provider connection is unavailable")

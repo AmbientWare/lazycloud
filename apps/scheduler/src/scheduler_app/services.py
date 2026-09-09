@@ -275,7 +275,7 @@ class SchedulerAppServices:
                 presigned_origin=storage.object_store.endpoint_url,
                 backend_route=network.backend_routes,
             )
-            if capacity.aws_connections.configured or platform_capacity.hetzner
+            if capacity.aws_connections.configured or platform_capacity.configured
             else None
         )
         agent_version, agent_sha256 = (
