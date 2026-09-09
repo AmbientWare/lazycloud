@@ -15,7 +15,7 @@ from shared.usage import (
     UsageRecord,
     UsageUnit,
 )
-from tests.service_fixtures import legacy_billing_account
+from tests.service_fixtures import unfunded_billing_account
 
 
 def test_monthly_budget_counts_recorded_usage_across_rollover_and_saved_edits(
@@ -23,7 +23,7 @@ def test_monthly_budget_counts_recorded_usage_across_rollover_and_saved_edits(
 ) -> None:
     start = datetime(2026, 9, 30, 23, 59, 50, tzinfo=UTC)
     end = start + timedelta(seconds=20)
-    user_id, workspace_id = legacy_billing_account(
+    user_id, workspace_id = unfunded_billing_account(
         postgres_services.context,
         period_started_at=start,
         period_ended_at=start + timedelta(days=30),

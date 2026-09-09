@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from threading import RLock
 from uuid import uuid4
 
+from anyio import CancelScope
+from anyio.lowlevel import checkpoint_if_cancelled
 from psycopg import Capabilities
 from shared.errors import UpstreamUnavailableError
 from sqlalchemy import Connection, Engine, create_engine, event, literal, select, text
@@ -168,15 +170,27 @@ class AsyncDatabaseClient:
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
-        session = await self._checkout()
+        await checkpoint_if_cancelled()
+        session = self.sessions()
+        with CancelScope(shield=True):
+            await self._checkout(session)
         try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
+            await checkpoint_if_cancelled()
+            # Level cancellation can interrupt the driver's own cancellation cleanup.
+            # Finish the protocol exchange, then honor cancellation before committing.
+            with CancelScope(shield=True):
+                yield session
+            await checkpoint_if_cancelled()
+            with CancelScope(shield=True):
+                await session.commit()
+        except BaseException:
+            with CancelScope(shield=True):
+                await session.rollback()
             raise
         finally:
-            await session.close()
+            with CancelScope(shield=True):
+                await session.close()
+        await checkpoint_if_cancelled()
 
     async def run_transaction[ResultT](
         self,
@@ -185,8 +199,7 @@ class AsyncDatabaseClient:
         async with self.session() as session:
             return await session.run_sync(operation)
 
-    async def _checkout(self) -> AsyncSession:
-        session = self.sessions()
+    async def _checkout(self, session: AsyncSession) -> None:
         try:
             await session.connection()
         except PoolTimeout as exc:
@@ -195,7 +208,6 @@ class AsyncDatabaseClient:
         except BaseException:
             await session.close()
             raise
-        return session
 
     def _pool_exhausted(self, exc: BaseException) -> UpstreamUnavailableError:
         self._pool_exhaustions += 1
@@ -208,11 +220,7 @@ class AsyncDatabaseClient:
             await connection.run_sync(DatabaseBase.metadata.create_all)
 
     async def ping(self) -> bool:
-        try:
-            async with self.engine.connect() as connection:
-                return await connection.scalar(select(literal(1))) == 1
-        except PoolTimeout as exc:
-            raise self._pool_exhausted(exc) from exc
+        return await self.run_transaction(lambda session: session.scalar(select(literal(1))) == 1)
 
     async def dispose(self) -> None:
         try:
@@ -226,17 +234,23 @@ class AsyncDatabaseClient:
         self.settings.direct()
         if self._direct_engine is None:
             raise RuntimeError("direct database engine is not configured")
+        await checkpoint_if_cancelled()
+        connection = self._direct_engine.connect()
         try:
-            connection = await self._direct_engine.connect()
+            with CancelScope(shield=True):
+                await connection.start()
         except PoolTimeout as exc:
             raise UpstreamUnavailableError("direct database session capacity is busy") from exc
         try:
+            await checkpoint_if_cancelled()
             yield connection
         finally:
-            try:
-                await connection.invalidate()
-            finally:
-                await connection.close()
+            with CancelScope(shield=True):
+                try:
+                    await connection.invalidate()
+                finally:
+                    await connection.close()
+        await checkpoint_if_cancelled()
 
     def pool_status(self) -> DatabasePoolStatus | None:
         return _pool_status(self.engine.sync_engine.pool, self.settings, self._pool_exhaustions)

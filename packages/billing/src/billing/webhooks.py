@@ -61,10 +61,8 @@ account is on. A row that kept its plan would show a customer the terms of a
 subscription that no longer exists, offer them no way back onto one, and satisfy
 an admission check asking whether their usage has anywhere to land.
 
-The standing stands, because a subscription ending says nothing about whether the
-money already owed was collected. So does the grant, which is what funds the
-final invoice the provider is about to raise. A row left naming no subscription
-is a row the next billing surface provisions again.
+Account standing survives because ending a subscription does not settle debt.
+The next billing access provisions a replacement subscription.
 """
 
 
@@ -191,7 +189,6 @@ class BillingWebhookService:
                 status=BillingAccountStatus.PastDue,
                 provider_customer_id=account.provider_customer_id,
                 provider_subscription_id=account.provider_subscription_id,
-                provider_credit_grant_id=account.provider_credit_grant_id,
                 plan=account.plan,
                 subscription_terms_version=account.subscription_terms_version,
                 scheduled_terms_version=account.scheduled_terms_version,
@@ -207,9 +204,6 @@ class BillingWebhookService:
                 status=account.status,
                 provider_customer_id=account.provider_customer_id,
                 provider_subscription_id="",
-                # Left naming the grant, which funds the final invoice the
-                # provider raises for the part-cycle this ends.
-                provider_credit_grant_id=account.provider_credit_grant_id,
                 plan=None,
                 subscription_terms_version=None,
                 scheduled_terms_version=None,
@@ -240,20 +234,11 @@ class BillingWebhookService:
         transaction died after the swap — reaches the row and the period it
         decides the terms of.
 
-        Which of those a delivery is carrying decides what happens to the grant
-        the account already holds, and `carry_plan_into_cycle` reads that off the
-        period rather than off the delivery. A renewal opens a cycle and leaves
-        the outgoing grant to fund the invoice finalizing at that moment; a plan
-        change re-terms the cycle in progress, and leaving its grant alone would
-        put two allowances on one cycle.
+        Local credit is funded once from the matching paid invoice.
         """
 
         if subscription.plan is None:
-            # A licensed price this platform did not publish. What the period is
-            # worth and what the grant is sized to are both the plan's, so there
-            # is nothing here to decide — and leaving the account as it was keeps
-            # somebody else's subscription on this provider account from being
-            # given terms of ours.
+            # An unpublished price cannot grant our subscription terms.
             LOGGER.info(
                 "billing: subscription for %s carries no plan this platform published",
                 account.user_id,
@@ -273,23 +258,19 @@ class BillingWebhookService:
                 account.user_id,
                 "has" if has_card else "has no",
             )
-        grant_id = carry_plan_into_cycle(
+        carry_plan_into_cycle(
             self.session,
             payments,
             account_id=account.user_id,
             provider_customer_id=account.provider_customer_id,
-            provider_credit_grant_id=account.provider_credit_grant_id,
             subscription=subscription,
             plan=subscription.plan,
         )
-        if grant_id != account.provider_credit_grant_id:
-            LOGGER.info("billing: %s starts a new subscription period", account.user_id)
         BillingAccountRepository(self.session).upsert(
             user_id=account.user_id,
             status=BillingAccountStatus.Active,
             provider_customer_id=account.provider_customer_id,
             provider_subscription_id=subscription.provider_subscription_id,
-            provider_credit_grant_id=grant_id,
             plan=subscription.plan,
             subscription_terms_version=subscription.terms_version,
             scheduled_terms_version=subscription.scheduled_terms_version,

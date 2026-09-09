@@ -18,7 +18,11 @@ from shared.http.billing_preferences import BillingPreferences
 from shared.identity import TokenKind
 from shared.tasks import Task
 from shared.timestamps import utc_now
-from tests.service_fixtures import legacy_billing_account, postgres_database_url, postgres_services
+from tests.service_fixtures import (
+    postgres_database_url,
+    postgres_services,
+    unfunded_billing_account,
+)
 
 __all__ = ["postgres_database_url", "postgres_services"]
 
@@ -28,15 +32,13 @@ def test_empty_credit_blocks_new_transfers_but_preserves_management_and_top_up_r
 ) -> None:
     services = postgres_services
     now = utc_now()
-    user_id, workspace_id = legacy_billing_account(
+    user_id, workspace_id = unfunded_billing_account(
         services.context, period_started_at=now, period_ended_at=now + timedelta(days=30)
     )
     task_id = str(uuid4())
     with services.context.database.session() as session:
         other_workspace_id = services.context.default_workspace_id(session)
         credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=now)
-        credits.complete_cutover(user_id=user_id, at=now)
         lot_id = credits.issue(
             user_id=user_id,
             grant=CreditGrant("payment:transfer", CreditKind.Purchased, 10**9, now),

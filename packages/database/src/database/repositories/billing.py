@@ -74,7 +74,6 @@ class BillingAccountRepository:
                 status=BillingAccountStatus.Active.value,
                 provider_customer_id="",
                 provider_subscription_id="",
-                provider_credit_grant_id="",
                 plan="",
             ).on_conflict_do_nothing(index_elements=[BillingAccountTable.user_id])
         )
@@ -172,7 +171,6 @@ class BillingAccountRepository:
         status: BillingAccountStatus,
         provider_customer_id: str,
         provider_subscription_id: str,
-        provider_credit_grant_id: str,
         plan: BillingPlanId | None,
         subscription_terms_version: SubscriptionTermsVersion | None,
         scheduled_terms_version: SubscriptionTermsVersion | None,
@@ -188,14 +186,10 @@ class BillingAccountRepository:
         row that already had a different one, and every later read would return
         an id naming no row.
 
-        Every column is stated, and none of them has a value that means "leave
-        this alone". A caller reaching here has read the row under the lock it
-        holds, so it knows all of them; a parameter that could be omitted is one
-        a caller omits by accident, and the value it then keeps is a subscription
-        that ended or a grant that was expired — both of which read as live to
-        everything downstream. `plan` is `None` for an account on no plan, which
-        is what an account holds before it is provisioned and again once its
-        subscription ends.
+        The caller reads the row under a lock and supplies every subscription
+        field. No parameter means "leave this alone", which would let an ended
+        subscription remain recorded as active. `plan` is `None` when the
+        account has no recorded plan.
 
         `payment_method_attached_at` and `complimentary_since` are deliberately
         not among them; `set_payment_method_present` and `set_complimentary`
@@ -217,7 +211,6 @@ class BillingAccountRepository:
         row.status = status.value
         row.provider_customer_id = provider_customer_id
         row.provider_subscription_id = provider_subscription_id
-        row.provider_credit_grant_id = provider_credit_grant_id
         row.plan = plan.value if plan is not None else ""
         row.subscription_terms_version = (
             subscription_terms_version.value if subscription_terms_version is not None else None
@@ -307,7 +300,6 @@ def _account(row: BillingAccountTable) -> BillingAccount:
         status=BillingAccountStatus(row.status),
         provider_customer_id=row.provider_customer_id,
         provider_subscription_id=row.provider_subscription_id,
-        provider_credit_grant_id=row.provider_credit_grant_id,
         plan=BillingPlanId(row.plan) if row.plan else None,
         subscription_terms_version=(
             SubscriptionTermsVersion(row.subscription_terms_version)

@@ -101,7 +101,6 @@ class BillingEnforcementService:
             return ()
         with self.database.session() as session:
             credits = BillingCreditRepository(session)
-            cutover = credits.cutover(user_id=account.user_id)
             preferences = BillingPreferencesService(session)
             limit = preferences.get(user_id=account.user_id).monthly_usage_limit_nanos
             over_budget = False
@@ -113,8 +112,6 @@ class BillingEnforcementService:
                 or account.plan is None
                 or not account.provider_subscription_id
                 or credits.balance(user_id=account.user_id, at=now) <= 0
-                or cutover is None
-                or cutover.completed_at is None
                 or over_budget
             ):
                 return tuple(

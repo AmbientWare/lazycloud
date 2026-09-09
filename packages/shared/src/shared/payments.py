@@ -111,47 +111,6 @@ class ProviderSubscription(ContractModel):
     """
 
 
-class ProviderCreditGrant(ContractModel):
-    """An allowance the provider applies before it charges for usage."""
-
-    provider_credit_grant_id: str = Field(min_length=1, max_length=255)
-    amount_nanos: int = Field(ge=0)
-    """Nanodollars, like every other figure this platform counts money in.
-
-    A provider that grants in a coarser unit converts at its own boundary and
-    refuses a figure it cannot express exactly, so nothing here has to hold two
-    units and decide which one a number is in.
-    """
-
-    expires_at: datetime
-    """Read back from the provider rather than echoed from the request.
-
-    A grant that outlives its period would fund the next one, so what the
-    provider recorded is the only version of this worth storing.
-    """
-
-
-class ProviderCreditApplicability(StringEnum):
-    AllMetered = "all_metered"
-    Restricted = "restricted"
-    Unknown = "unknown"
-
-
-class ProviderCreditGrantBalance(ContractModel):
-    provider_credit_grant_id: str = Field(min_length=1)
-    amount_nanos: int = Field(ge=0)
-    available_balance_nanos: int
-    ledger_balance_nanos: int
-    created_at: datetime
-    effective_at: datetime | None
-    expires_at: datetime | None
-    voided_at: datetime | None
-    category: str
-    name: str
-    applicability: ProviderCreditApplicability
-    metadata: dict[str, str] = Field(default_factory=dict)
-
-
 class ProviderPaidSubscriptionPeriod(ContractModel):
     provider_invoice_id: str = Field(min_length=1)
     provider_invoice_line_id: str = Field(min_length=1)
@@ -384,52 +343,6 @@ class SubscriptionPaymentProvider(Protocol):
         """
         ...
 
-    def create_credit_grant(
-        self,
-        *,
-        account_id: str,
-        provider_customer_id: str,
-        amount_nanos: int,
-        period_ended_at: datetime,
-        previous_period_ended_at: datetime | None,
-    ) -> ProviderCreditGrant:
-        """Give a customer the usage their plan includes, for one period.
-
-        Spent against metered usage before anything is charged. Cycle boundaries
-        are stated rather than the window the allowance applies in, because when
-        a provider actually applies a grant is the provider's own timing: an
-        allowance has to reach the invoice its own cycle raises without reaching
-        the one the cycle before it raises, and only the adapter knows how far
-        either sits from the boundary.
-
-        `previous_period_ended_at` is the cycle this one follows, and `None`
-        means none does. An allowance nothing precedes is spendable the moment it
-        is bought — an account's first three days are not free of charge because
-        an allowance was held back from them — while one that follows another
-        must stay out of reach until the invoice that cycle raises has been
-        settled, or an overrun there is paid out of this cycle's allowance.
-
-        `account_id` names who it is for, and the provider is asked under a key
-        derived from it together with the period and the amount — a grant is
-        money given away, so a retry after an answer that never arrived must be
-        answered with the same grant rather than a second one.
-        """
-        ...
-
-    def expire_credit_grant(self, *, provider_credit_grant_id: str) -> None:
-        """End an allowance before its expiry, so nothing further is spent on it.
-
-        What a plan change does with the grant it is replacing: two live grants
-        would be two allowances for one cycle. Tolerates a grant that has already
-        expired or been voided, because a retry of the change that expired it has
-        to converge rather than fail on work it already did, and one the provider
-        will not let end early — an allowance bought for a cycle still waiting on
-        the one before it — by invalidating it instead. Ending an allowance is
-        never allowed to fail on a plan change the customer has already paid the
-        difference for.
-        """
-        ...
-
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         """What the provider billed as usage, keyed by meter event name.
 
@@ -444,12 +357,6 @@ class SubscriptionPaymentProvider(Protocol):
         self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
         """Customer invoices since an instant; None exhausts every page in the window."""
-        ...
-
-    def credit_grants_for(
-        self, *, provider_customer_id: str
-    ) -> Sequence[ProviderCreditGrantBalance]:
-        """All customer grants with provider balances and applicability evidence."""
         ...
 
     def paid_subscription_periods(
@@ -475,9 +382,6 @@ __all__ = [
     "PaymentCustomer",
     "PaymentEvent",
     "PaymentProvider",
-    "ProviderCreditApplicability",
-    "ProviderCreditGrant",
-    "ProviderCreditGrantBalance",
     "ProviderInvoice",
     "ProviderPaidSubscriptionPeriod",
     "ProviderSubscription",

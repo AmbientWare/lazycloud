@@ -14,15 +14,14 @@ import {
 } from "@/lib/queries/billing";
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 
-import { AutomaticReload } from "./AutomaticReload";
-import { UsageBudget } from "./UsageBudget";
+import { BillingPreferences as BillingPreferencesForm } from "./BillingPreferences";
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
-it("preserves the saved spending limit when reload settings are saved next", async () => {
+it("saves reload and usage limits together and preserves untouched settings", async () => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -38,7 +37,7 @@ it("preserves the saved spending limit when reload settings are saved next", asy
     monthly_usage_limit_nanos: null,
     reload_enabled: false,
     reload_threshold_cents: 500,
-    reload_amount_cents: 2000,
+    reload_amount_cents: 500,
     reload_monthly_payment_limit_cents: null,
   };
   client.setQueryData(billingPreferencesQueryOptions().queryKey, stored);
@@ -47,7 +46,7 @@ it("preserves the saved spending limit when reload settings are saved next", asy
     metered_rates_effective_at: "2026-09-01T00:00:00Z",
     currency: "USD",
     connected_cloud_management_fee_percent: 8,
-    credit_purchase: { minimum_cents: 2000, maximum_cents: 100000 },
+    credit_purchase: { minimum_cents: 500, maximum_cents: 100000 },
     trial: { amount_nanos: 5_000_000_000, duration_days: 30, one_time: true },
     no_payment_method: { max_concurrent_cpu_containers: 10, max_concurrent_gpus: 1 },
     plans: [],
@@ -90,24 +89,24 @@ it("preserves the saved spending limit when reload settings are saved next", asy
   });
   render(
     <QueryClientProvider client={client}>
-      <UsageBudget />
-      <AutomaticReload />
+      <BillingPreferencesForm />
     </QueryClientProvider>,
   );
-  fireEvent.change(screen.getByLabelText("Limit in USD"), { target: { value: "50" } });
-  fireEvent.click(screen.getByLabelText("Enable automatic reload"));
-  fireEvent.click(screen.getByRole("button", { name: "Save limit" }));
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Save reload settings" })).toBeDisabled(),
-  );
+  fireEvent.change(screen.getByLabelText("Monthly usage limit, USD"), { target: { value: "50" } });
+  fireEvent.click(screen.getByLabelText("Automatic reload"));
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(screen.getByLabelText("Monthly usage limit, USD")).toBeDisabled());
   holdSave = false;
   await act(async () => resolveSave?.(Response.json(stored)));
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Save reload settings" })).toBeEnabled(),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Save reload settings" }));
-  await screen.findByText("Reload settings saved.");
+  await waitFor(() => expect(screen.getByLabelText("Monthly usage limit, USD")).toBeEnabled());
+  await screen.findByText("Changes saved.");
+  expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  expect(stored.reload_amount_cents).toBe(500);
+  fireEvent.change(screen.getByLabelText("Monthly reload limit, USD"), { target: { value: "25" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await screen.findByText("Changes saved.");
   expect(stored.reload_enabled).toBe(true);
   expect(stored.monthly_usage_limit_nanos).toBe(50_000_000_000);
+  expect(stored.reload_monthly_payment_limit_cents).toBe(2500);
   client.clear();
 });

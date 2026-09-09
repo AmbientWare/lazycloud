@@ -237,71 +237,6 @@ class InvoiceList(StripeObject):
     data: list[Invoice] = Field(default_factory=list)
 
 
-class Grant(StripeObject):
-    id: str = ""
-    effective_at: int | None = None
-    """When the allowance becomes spendable, which is not when it was bought: a
-    grant must not be effective while the previous period's invoice is still
-    finalizing, or an overrun there is paid out of this period's allowance."""
-
-    expires_at: int | None = None
-    voided_at: int | None = None
-
-    @property
-    def settled(self) -> bool:
-        if self.voided_at is not None:
-            return True
-        return self.expires_at is not None and self.expires_at <= int(utc_now().timestamp())
-
-    def payload(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "effective_at": moment(self.effective_at),
-            "expires_at": moment(self.expires_at),
-            "voided_at": moment(self.voided_at),
-        }
-
-
-class GrantList(StripeObject):
-    data: list[Grant] = Field(default_factory=list)
-
-
-class _Monetary(StripeObject):
-    value: int = 0
-
-
-class _TransactionAmount(StripeObject):
-    monetary: _Monetary | None = None
-
-
-class _CreditsApplied(StripeObject):
-    invoice: str = ""
-
-
-class _Debit(StripeObject):
-    type: str = ""
-    amount: _TransactionAmount = Field(default_factory=_TransactionAmount)
-    credits_applied: _CreditsApplied | None = None
-
-
-class CreditTransaction(StripeObject):
-    id: str = ""
-    type: str = ""
-    credit_grant: str = ""
-    debit: _Debit | None = None
-
-    def applied_to(self, invoice_id: str) -> int:
-        if self.debit is None or self.debit.credits_applied is None:
-            return 0
-        if self.debit.credits_applied.invoice != invoice_id:
-            return 0
-        return self.debit.amount.monetary.value if self.debit.amount.monetary else 0
-
-
-class CreditTransactionList(StripeObject):
-    data: list[CreditTransaction] = Field(default_factory=list)
-
-
 class EventObject(StripeObject):
     id: str = ""
     customer: str | None = None
@@ -354,40 +289,6 @@ def customer_invoices(gate: BillingGate, provider_customer_id: str) -> tuple[Inv
         ],
     )
     return tuple(listed.data)
-
-
-def customer_grants(gate: BillingGate, provider_customer_id: str) -> tuple[Grant, ...]:
-    listed = read(
-        GrantList,
-        gate.client,
-        "GET",
-        "/billing/credit_grants",
-        params=[("customer", provider_customer_id), ("limit", "100")],
-    )
-    return tuple(listed.data)
-
-
-def credits_applied(
-    gate: BillingGate, *, provider_customer_id: str, invoice_id: str
-) -> list[dict[str, Any]]:
-    """What the customer's own credit ledger says was spent on one invoice."""
-
-    listed = read(
-        CreditTransactionList,
-        gate.client,
-        "GET",
-        "/billing/credit_balance_transactions",
-        params=[("customer", provider_customer_id), ("limit", "100")],
-    )
-    return [
-        {
-            "id": transaction.id,
-            "credit_grant": transaction.credit_grant,
-            "amount_cents": transaction.applied_to(invoice_id),
-        }
-        for transaction in listed.data
-        if transaction.applied_to(invoice_id)
-    ]
 
 
 def event_for_object(
@@ -669,11 +570,9 @@ def _closed(ledger: RunLedger, totals: Mapping[str, int], owed: int) -> bool:
 __all__ = [
     "COMPUTE_METER",
     "ZERO_RATED_METERS",
-    "CreditTransaction",
     "Customer",
     "Event",
     "EventList",
-    "Grant",
     "Invoice",
     "MeteredUsage",
     "OutboxRow",
@@ -683,9 +582,7 @@ __all__ = [
     "Subscription",
     "SubscriptionItem",
     "claims",
-    "credits_applied",
     "customer",
-    "customer_grants",
     "customer_invoices",
     "drain_metered_usage",
     "event_for_object",

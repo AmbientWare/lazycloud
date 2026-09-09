@@ -13,15 +13,6 @@ import { ComputeSettings } from "./ComputeSettings";
 import { DomainSettings } from "./DomainSettings";
 import { settingsView, type SettingsView } from "./view";
 
-/**
- * Settings, as a near-full-screen layer over whatever you were looking at.
- *
- * Nothing in here is addressed by the workspace in the URL — the connected clouds,
- * the machines, the domains, and the access tokens belong to the account. A page
- * under `/w/<workspace>/` would have claimed otherwise in its address. Renaming
- * and deleting a workspace live in the workspace menu instead, next to the act of
- * choosing one.
- */
 export function SettingsDialog({
   view,
   onViewChange,
@@ -48,12 +39,9 @@ export function SettingsDialog({
 
   return (
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
-      <DialogContent className="flex h-[calc(100dvh-3rem)] w-[calc(100vw-3rem)] max-w-[76rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-[76rem]">
+      <DialogContent className="flex h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[76rem] flex-col gap-0 overflow-hidden p-0 sm:h-[min(48rem,calc(100dvh-3rem))] sm:w-[calc(100vw-3rem)] sm:max-w-[76rem]">
         <header className="shrink-0 border-b border-border px-5 py-3.5 pr-12">
           <DialogTitle className="text-base">Settings</DialogTitle>
-          {/* Named for the dialog's accessible description and hidden, because
-              the General tab renders the same person as its own heading a couple
-              of inches below. */}
           <DialogDescription className="sr-only">
             Signed in as {user.display_name}
           </DialogDescription>
@@ -75,7 +63,7 @@ export function SettingsDialog({
           </div>
 
           <TabsContent value="general" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            <div className="space-y-5">
+            <div className="mx-auto max-w-4xl space-y-4">
               <AccountSettings />
               <BillingSettings planOpen={planOpen} onPlanOpenChange={setPlanOpen} />
             </div>
