@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import TypedDict
 
 import pytest
 from botocore.exceptions import ClientError
-from compute.offers import ComputeOffer
+from compute.offers import ComputeOffer, OfferRequest, choose_offer
 from compute.providers import (
     ProviderCapacityPhase,
     ProviderMachineStatus,
@@ -26,6 +27,7 @@ from provider_aws import (
     AwsManagedPoolSpec,
     AwsProviderControlError,
     AwsProviderControlErrorCode,
+    AwsRegionalPrices,
 )
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from shared.aws_connections import AwsAccountNetwork
@@ -442,6 +444,37 @@ def _pool_request(provider_ref: str) -> ProviderUnitRequest:
         ),
         provider_state=ComputeUnitProviderState(),
     )
+
+
+def test_real_aws_offers_include_storage_and_ipv4_before_purchase() -> None:
+    provider = AwsConnectedAccountPooledProvider(
+        provider_ref="aws:12345678-1234-4123-8123-123456789abc",
+        connection=_connection_target(),
+        binaries_by_region={
+            "us-east-1": AwsManagedPoolBinaries(
+                agent_version="0.1.0",
+                agent_sha256="a" * 64,
+                cpu_ami_id="ami-0123456789abcdef0",
+            )
+        },
+        instance_hourly_micros={"m7i.2xlarge": 340_000},
+        regional_prices={
+            "us-east-1": AwsRegionalPrices(
+                gp3_gib_monthly_micros=80_000, public_ipv4_hourly_micros=5_000
+            )
+        },
+        client_provider=_ClientProvider(
+            AwsManagedPoolClients(ec2=_Ec2(), autoscaling=_AutoScaling())
+        ),
+    )
+    selected = choose_offer(list(provider.list_offers(root_volume_gib=200)), OfferRequest(nodes=1))
+    assert selected.cost_terms.root_disk_hourly_micros == 22_223
+    assert selected.cost_terms.complete_hourly_cost_micros == 367_223
+    larger = choose_offer(list(provider.list_offers(root_volume_gib=400)), OfferRequest(nodes=1))
+    assert larger.cost_terms.root_disk_hourly_micros == 44_445
+    unpriced = replace(provider, regional_prices={})
+    with pytest.raises(ValueError, match="no compute offers"):
+        choose_offer(list(unpriced.list_offers(root_volume_gib=200)), OfferRequest(nodes=1))
 
 
 def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> None:

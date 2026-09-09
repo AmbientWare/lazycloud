@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
+from provider_aws import AwsRegionalPrices
 from provider_clients.settings import HetznerCapacityBinding
 from provider_hetzner import HetznerNodeImage
 from pydantic import (
@@ -230,6 +231,13 @@ def render(
     )
     if not rates:
         raise ValueError("Managed fleet requires nonempty instance prices")
+    regional_prices = TypeAdapter(dict[str, AwsRegionalPrices]).validate_json(
+        authored_runtime.get("LAZYCLOUD_AWS_CAPACITY_REGIONAL_PRICES", "{}")
+    )
+    if infrastructure.region not in regional_prices:
+        raise ValueError(
+            f"Managed fleet requires AWS gp3 and public IPv4 prices for {infrastructure.region}"
+        )
     bindings = TypeAdapter(list[dict[str, JsonValue]]).validate_json(
         authored_runtime.get("LAZYCLOUD_PLATFORM_CAPACITY_HETZNER", "")
     )
