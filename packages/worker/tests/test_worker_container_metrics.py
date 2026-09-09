@@ -24,6 +24,7 @@ from worker.events import (
     plan_worker_usage_metrics,
 )
 from worker.monitoring import ContainerRuntimeMonitorSettings, WorkerContainerRuntimeMonitor
+from worker.network_egress import NetworkEgressCounterSample
 from worker.status import CONTAINER_STATE_TTL_SECONDS
 from worker.supervision import WorkerUsageEmissionResult
 from worker.tools import NetworkIoCounters, ProcessIoCounters
@@ -35,6 +36,40 @@ class MetricsSink:
 
     def publish_container_metrics(self, payload: ContainerMetricsPayload) -> None:
         self.payloads.append(payload)
+
+
+def test_egress_billing_discards_intervals_without_continuous_route_evidence() -> None:
+    @dataclass
+    class EgressSource:
+        reading: NetworkEgressCounterSample | None
+
+        def sample(self, container_id: str) -> NetworkEgressCounterSample:
+            if self.reading is None:
+                raise RuntimeError("provider route inspection unavailable")
+            return self.reading
+
+    source = EgressSource(NetworkEgressCounterSample(total_bytes=100, policy_digest="a"))
+    service = WorkerContainerMetricsService(
+        worker_id="worker-1", sink=MetricsSink(), network_egress=source
+    )
+    request = ContainerRequestContext(container_id="ctr-egress")
+    previous = None
+    charged: list[int] = []
+    for reading in (
+        source.reading,
+        NetworkEgressCounterSample(total_bytes=200, policy_digest="a"),
+        None,
+        NetworkEgressCounterSample(total_bytes=500, policy_digest="a"),
+        NetworkEgressCounterSample(total_bytes=550, policy_digest="b"),
+        NetworkEgressCounterSample(total_bytes=600, policy_digest="b"),
+    ):
+        source.reading = reading
+        result = service.publish_sample(
+            request, ContainerMetricsRawSample(), previous=previous, sample_interval_ms=1000
+        )
+        previous = result.next_state
+        charged.append(result.network_egress_bytes)
+    assert charged == [0, 100, 0, 0, 0, 50]
 
 
 @dataclass(slots=True)

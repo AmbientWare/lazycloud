@@ -1590,6 +1590,7 @@ def _worker_repository_service(
         ),
         source_cache=WorkerSourceCacheService(core.context),
         dependencies=WorkerRepositoryDependencies(
+            compute=core.compute,
             context=core.context,
             auth=core.auth,
             deployment_resources=core.deployment_resources,

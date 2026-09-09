@@ -36,6 +36,7 @@ from shared.urls import normalize_http_origin
 from .account_connection import AwsAccountConnectionTarget, connection_profile_name
 from .boto3_clients import has_operations, is_boto3_client_factory
 from .instance_catalog import aws_managed_capacity_resource_name
+from .network_egress import AwsNetworkEvidenceClient
 from .provider_control import (
     AwsProviderControlError,
     AwsProviderControlErrorCode,
@@ -271,7 +272,7 @@ class _LaunchTemplateData(TypedDict):
     InstanceMarketOptions: NotRequired[_InstanceMarketOptions]
 
 
-class AwsManagedPoolEc2Client(AwsSpotPriceClient, Protocol):
+class AwsManagedPoolEc2Client(AwsSpotPriceClient, AwsNetworkEvidenceClient, Protocol):
     def describe_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]: ...
     def describe_images(self, *, ImageIds: list[str]) -> Mapping[str, object]: ...
     def describe_subnets(self, *, SubnetIds: list[str]) -> Mapping[str, object]: ...
@@ -434,6 +435,10 @@ def _is_ec2_client(value: object) -> TypeGuard[AwsManagedPoolEc2Client]:
             "create_launch_template_version",
             "delete_launch_template",
             "describe_instances",
+            "describe_route_tables",
+            "describe_vpc_endpoints",
+            "describe_managed_prefix_lists",
+            "get_managed_prefix_list_entries",
             "describe_images",
             "describe_subnets",
             "describe_spot_price_history",

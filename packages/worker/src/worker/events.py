@@ -103,6 +103,7 @@ class WorkerUsageMetricName(StrEnum):
     GpuMemory = "gpu_memory_byte_seconds"
     NetworkIngress = "network_ingress_bytes"
     NetworkSent = "network_sent_bytes"
+    NetworkEgress = "network_egress_bytes"
     NetworkIngressPackets = "network_ingress_packets"
     NetworkEgressPackets = "network_egress_packets"
     ContainerDisk = "container_disk_byte_seconds"
@@ -233,6 +234,7 @@ class WorkerUsageEvidence(ContractModel):
     gpu_memory_byte_seconds: float = 0
     network_ingress_bytes: int = 0
     network_sent_bytes: int = 0
+    network_egress_bytes: int = 0
     network_ingress_packets: int = 0
     network_egress_packets: int = 0
     disk_read_bytes: int = 0
@@ -247,6 +249,7 @@ class WorkerUsageEvidence(ContractModel):
             self.gpu_memory_byte_seconds,
             self.network_ingress_bytes,
             self.network_sent_bytes,
+            self.network_egress_bytes,
             self.network_ingress_packets,
             self.network_egress_packets,
             self.disk_read_bytes,
@@ -613,6 +616,7 @@ def plan_worker_usage_metrics(
         (WorkerUsageMetricName.GpuMemory, measured.gpu_memory_byte_seconds),
         (WorkerUsageMetricName.NetworkIngress, measured.network_ingress_bytes),
         (WorkerUsageMetricName.NetworkSent, measured.network_sent_bytes),
+        (WorkerUsageMetricName.NetworkEgress, measured.network_egress_bytes),
         (WorkerUsageMetricName.NetworkIngressPackets, measured.network_ingress_packets),
         (WorkerUsageMetricName.NetworkEgressPackets, measured.network_egress_packets),
         (WorkerUsageMetricName.DiskRead, measured.disk_read_bytes),

@@ -84,6 +84,14 @@ prices from the placement the control plane recorded, so a worker's own copy of
 it is a label, and a second copy that decided nothing would still have to be
 kept in step with the one that does.
 
+Raw interface TX is telemetry. Billable internet egress counts routed IP bytes,
+including retransmissions, on the container's owned host veth after forwarding
+authorization. It excludes private destinations and service routes the provider
+verified for the durable machine owner. An address family without that evidence
+is unbilled. These counters never change firewall authorization, and cleanup
+removes only the container's own rules. Usage still uses the worker's bounded
+windows; a crash or unavailable final sample can lose unflushed evidence.
+
 A container that outgrows its reservation is stopped here, not by the kernel.
 The worker holds the two readings the decision needs, its own memory pressure
 and what each container currently uses, and the kernel is seconds away once a

@@ -66,10 +66,12 @@ from shared.errors import (
     NotFoundError,
     UpstreamUnavailableError,
 )
+from shared.http.worker_network import WorkerEgressPolicy
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
 from shared.timestamps import to_utc, utc_now
+from shared.usage import UsageBillingOwner
 
 from compute.aws_connections import AwsAccountPoolDrain
 from compute.context import ComputeContext
@@ -2130,6 +2132,40 @@ class ComputeService:
             raise RuntimeError("internal compute unit does not use pooled capacity")
         snapshot = provider.pooled.describe_unit(self._provider_unit_request(unit, offer))
         return unit, snapshot
+
+    def worker_egress_policy(
+        self, *, workspace_id: str, capacity_owner_id: str, machine_id: str
+    ) -> WorkerEgressPolicy:
+        with self.context.database.session() as session:
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(capacity_owner_id)
+        if unit is None or unit.workspace_id != workspace_id:
+            raise ConflictError("worker network policy has no workspace-owned capacity unit")
+        if not unit.platform_fleet:
+            return WorkerEgressPolicy(
+                billing_owner=(
+                    UsageBillingOwner.ConnectedCloud
+                    if unit.provider_connection_id
+                    else UsageBillingOwner.SelfHosted
+                ),
+                verified_at=utc_now(),
+            )
+        with self.context.database.session() as session:
+            bindings = ComputeProviderInstanceRepository(session).machine_bindings_for_pool(unit.id)
+        instances = [instance for instance, machine in bindings.items() if machine == machine_id]
+        if len(instances) != 1:
+            raise ConflictError("worker has no unique provider instance in its capacity unit")
+        provider, _ = self._resolved_internal_unit_provider(unit)
+        if provider.pooled is None:
+            raise UpstreamUnavailableError("worker provider cannot verify its network routes")
+        try:
+            destinations = provider.pooled.unbilled_network_destinations(unit, instances[0])
+        except Exception as exc:
+            raise UpstreamUnavailableError("worker provider route evidence is unavailable") from exc
+        return WorkerEgressPolicy(
+            billing_owner=UsageBillingOwner.PlatformFleet,
+            routes=destinations,
+            verified_at=utc_now(),
+        )
 
     def internal_unit_machine_by_instance(
         self,

@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from identity.auth import AuthError, AuthorizationDeniedError
 from identity.authz import worker_requirement
 from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.http.worker_network import WorkerEgressPolicy, WorkerEgressPolicyRequest
 from shared.identity import AuthScope
 from worker.events import WorkerStreamEvent
 from worker.origin_access import (
@@ -826,6 +827,13 @@ def set_network_lock(
     principal: WorkerPrincipal,
 ) -> NetworkLockResponse:
     return service.set_network_lock(request, principal=principal)
+
+
+@router.post("/worker-repository/egress-policy", response_model=WorkerEgressPolicy)
+def worker_egress_policy(
+    request: WorkerEgressPolicyRequest, service: WorkerRepo, principal: WorkerPrincipal
+) -> WorkerEgressPolicy:
+    return service.worker_egress_policy(principal=principal)
 
 
 @router.post(

@@ -29,6 +29,7 @@ from provider_aws import (
     AwsProviderControlErrorCode,
     AwsRegionalPrices,
 )
+from provider_aws.network_egress import NetworkFilter
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from shared.aws_connections import AwsAccountNetwork
 from shared.compute_policy import (
@@ -57,6 +58,22 @@ _STRINGS = TypeAdapter(list[str])
 
 
 class _Ec2:
+    def describe_route_tables(
+        self, *, Filters: list[NetworkFilter], NextToken: str = ""
+    ) -> Mapping[str, object]:
+        raise AssertionError("capacity lifecycle must not inspect network billing routes")
+
+    def describe_vpc_endpoints(self, *, VpcEndpointIds: list[str]) -> Mapping[str, object]:
+        raise AssertionError("capacity lifecycle must not inspect network billing routes")
+
+    def describe_managed_prefix_lists(self, *, PrefixListIds: list[str]) -> Mapping[str, object]:
+        raise AssertionError("capacity lifecycle must not inspect network billing routes")
+
+    def get_managed_prefix_list_entries(
+        self, *, PrefixListId: str, NextToken: str = ""
+    ) -> Mapping[str, object]:
+        raise AssertionError("capacity lifecycle must not inspect network billing routes")
+
     def __init__(self) -> None:
         self.launch_template = False
         self.launch_versions: dict[int, tuple[str, Mapping[str, object]]] = {}

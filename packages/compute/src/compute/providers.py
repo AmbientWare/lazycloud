@@ -17,6 +17,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.contracts import ContractModel
+from shared.network_egress import NetworkEgressRouteEvidence
 from shared.timestamps import to_utc
 from shared.urls import normalize_http_origin
 
@@ -226,6 +227,10 @@ class DirectMachineProviderRegistry(Protocol):
 
 
 class PooledCapacityProvider(Protocol):
+    def unbilled_network_destinations(
+        self, unit: ComputeUnitRecord, provider_instance_id: str
+    ) -> NetworkEgressRouteEvidence: ...
+
     def list_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]: ...
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:

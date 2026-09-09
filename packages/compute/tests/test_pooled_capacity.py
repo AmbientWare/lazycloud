@@ -88,6 +88,7 @@ from shared.compute_policy import (
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
+from shared.network_egress import NetworkEgressRouteEvidence
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.supplier_costs import SupplierCostTerms
 from tests.service_fixtures import workspace_owner_user_id
@@ -97,6 +98,11 @@ _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 
 @dataclass(slots=True)
 class _PooledProvider:
+    def unbilled_network_destinations(
+        self, unit: ComputeUnitRecord, provider_instance_id: str
+    ) -> NetworkEgressRouteEvidence:
+        raise AssertionError("capacity lifecycle must not request network billing evidence")
+
     desired: int = 0
     offer: ComputeOffer = field(default_factory=lambda: _offer())
     ensure_calls: list[ProviderUnitRequest] = field(default_factory=list)

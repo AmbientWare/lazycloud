@@ -15,6 +15,7 @@ from worker.events import (
     GpuMemoryCounters,
     build_container_metrics_payload,
 )
+from worker.network_egress import NetworkEgressCounterSample
 from worker.tools import (
     NetworkIoCounters,
     ProcessIoCounters,
@@ -44,6 +45,7 @@ class ContainerMetricsSourceFactory(Protocol):
 class ContainerMetricsCounterState(ContractModel):
     process_io: ProcessIoCounters = Field(default_factory=ProcessIoCounters)
     network_io: NetworkIoCounters = Field(default_factory=NetworkIoCounters)
+    network_egress: NetworkEgressCounterSample | None = None
 
 
 class ContainerMetricsRawSample(ContractModel):
@@ -71,10 +73,15 @@ class ContainerMetricsSampleResult(ContractModel):
     next_state: ContainerMetricsCounterState
     published: bool = False
     reason: str = ""
+    network_egress_bytes: int = 0
 
 
 class ContainerDiskUsageSource(Protocol):
     def used_bytes(self, container_id: str) -> int: ...
+
+
+class ContainerNetworkEgressSource(Protocol):
+    def sample(self, container_id: str) -> NetworkEgressCounterSample: ...
 
 
 @dataclass(slots=True)
@@ -85,6 +92,7 @@ class WorkerContainerMetricsService:
     # Reports the bytes a container's own layer occupies, so ephemeral disk is
     # billed on what was actually used rather than on an oversubscribed cap.
     disk_usage: ContainerDiskUsageSource | None = None
+    network_egress: ContainerNetworkEgressSource | None = None
 
     def sample_and_publish(
         self,
@@ -123,6 +131,20 @@ class WorkerContainerMetricsService:
         sample_interval_ms: int,
     ) -> ContainerMetricsSampleResult:
         next_state = sample.counter_state()
+        egress_bytes = 0
+        if self.network_egress is not None:
+            try:
+                egress = self.network_egress.sample(request.container_id)
+                next_state.network_egress = egress
+                prior = previous.network_egress if previous is not None else None
+                if prior is not None and prior.policy_digest == egress.policy_digest:
+                    egress_bytes = max(0, egress.total_bytes - prior.total_bytes)
+            except Exception:
+                LOGGER.warning(
+                    "internet egress classification unavailable for %s; interval is unbilled",
+                    request.container_id,
+                    exc_info=True,
+                )
         if previous is None:
             return ContainerMetricsSampleResult(
                 next_state=next_state,
@@ -141,6 +163,7 @@ class WorkerContainerMetricsService:
         return ContainerMetricsSampleResult(
             payload=payload,
             next_state=next_state,
+            network_egress_bytes=egress_bytes,
             published=True,
             reason="container metrics published",
         )

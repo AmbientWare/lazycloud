@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
+from compute.service import ComputeService
 from compute.state import AsyncRedisComputeStateRepository, RedisComputeStateRepository
 from control.deployment_resources import DeploymentResourceService
 from coordination.event_bus import (
@@ -64,6 +65,7 @@ from shared.errors import (
     NotFoundError,
     UpstreamUnavailableError,
 )
+from shared.http.worker_network import WorkerEgressPolicy
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import AuthScope, TokenStatus
 from shared.image_building.records import BuildStatus
@@ -337,6 +339,7 @@ class WorkerRepositoryCacheStorage(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class WorkerRepositoryDependencies:
+    compute: ComputeService
     context: ServiceContext
     auth: AuthService
     deployment_resources: DeploymentResourceService
@@ -2510,6 +2513,17 @@ class WorkerRepositoryService:
         return (
             worker_network_prefix(worker.capacity_owner_id, worker.machine_id),
             worker,
+        )
+
+    def worker_egress_policy(self, *, principal: WorkerRepositoryPrincipal) -> WorkerEgressPolicy:
+        _, worker = self._authorized_network_scope(principal)
+        unit = self._feeding_unit(worker, principal)
+        if self.services is None:
+            raise UpstreamUnavailableError("worker network policy service is unavailable")
+        return self.services.compute.worker_egress_policy(
+            workspace_id=unit.workspace_id,
+            capacity_owner_id=unit.capacity_owner_id,
+            machine_id=worker.machine_id,
         )
 
     def _authorize_network_container(

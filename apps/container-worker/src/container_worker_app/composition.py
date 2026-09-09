@@ -77,6 +77,7 @@ from worker.network_backend import (
     AgentBridgeNetworkConfig,
     SchedulerNetworkIpAllocator,
 )
+from worker.network_egress import WorkerNetworkEgressCounters
 from worker.oci_runtime import (
     OciRuntimeCommandController,
     OciRuntimeSpecBuilder,
@@ -268,6 +269,9 @@ def build_worker_process_services(
                 worker_id=identity.worker_id,
                 sink=RemoteContainerMetricsSink(repository),
                 disk_usage=container_rootfs,
+                network_egress=network_backend.egress_counters
+                if network_backend is not None
+                else None,
             )
             if metrics_enabled
             else None
@@ -722,6 +726,7 @@ def _client_network_backend(
             worker_id=config.worker_id,
         ),
         config=bridge,
+        egress_counters=WorkerNetworkEgressCounters(load_policy=client.egress_policy),
     )
 
 

@@ -14,6 +14,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.checkpoints import AutomaticCheckpointCreationLease, CheckpointRecord
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
+from shared.http.worker_network import WorkerEgressPolicy, WorkerEgressPolicyRequest
 from shared.image_building.records import BuildStatus
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsPayload
 from shared.routing import AgentBackendRoute
@@ -294,6 +295,11 @@ class WorkerRepositoryShutdownTransport(Protocol):
 @dataclass(slots=True)
 class WorkerRepositoryHttpClient:
     transport: WorkerRepositoryTransport
+
+    def egress_policy(self) -> WorkerEgressPolicy:
+        return self._post_model(
+            "/worker-repository/egress-policy", WorkerEgressPolicyRequest(), WorkerEgressPolicy
+        )
 
     def prepare_shutdown(self, *, timeout_seconds: float) -> None:
         if isinstance(self.transport, WorkerRepositoryShutdownTransport):

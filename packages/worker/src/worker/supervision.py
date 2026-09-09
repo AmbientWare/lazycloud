@@ -375,6 +375,8 @@ def usage_record_kind(metric: WorkerUsageMetricName) -> tuple[UsageMetric, Usage
         return (UsageMetric.NetworkIngressBytes, UsageUnit.Bytes)
     if metric is WorkerUsageMetricName.NetworkSent:
         return (UsageMetric.NetworkSentBytes, UsageUnit.Bytes)
+    if metric is WorkerUsageMetricName.NetworkEgress:
+        return (UsageMetric.NetworkEgressBytes, UsageUnit.Bytes)
     if metric is WorkerUsageMetricName.NetworkIngressPackets:
         return (UsageMetric.NetworkIngressPackets, UsageUnit.Count)
     if metric is WorkerUsageMetricName.NetworkEgressPackets:

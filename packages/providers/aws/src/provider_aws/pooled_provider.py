@@ -23,6 +23,7 @@ from shared.compute_policy import (
     ComputeUnitProviderState,
     ComputeUnitRecord,
 )
+from shared.network_egress import NetworkEgressRouteEvidence
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 from shared.timestamps import utc_now
 
@@ -43,6 +44,7 @@ from .managed_pool import (
     AwsManagedPoolSnapshot,
     AwsManagedPoolSpec,
 )
+from .network_egress import same_region_storage_destinations
 from .spot_prices import load_aws_spot_quotes
 from .supplier_prices import AwsRegionalPrices
 
@@ -64,6 +66,23 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     regional_prices: Mapping[str, AwsRegionalPrices] = field(
         default_factory=lambda: dict[str, AwsRegionalPrices]()
     )
+
+    def unbilled_network_destinations(
+        self, unit: ComputeUnitRecord, provider_instance_id: str
+    ) -> NetworkEgressRouteEvidence:
+        network = self.connection.network
+        if network is None:
+            raise ValueError("AWS network evidence requires a configured network")
+        clients = self.client_provider.assume(
+            self.connection.model_copy(update={"region": unit.region})
+        )
+        return same_region_storage_destinations(
+            clients.ec2,
+            region=unit.region,
+            instance_id=provider_instance_id,
+            vpc_id=network.vpc_id,
+            subnet_ids=network.subnet_ids,
+        )
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
         parts = unit.offer_id.split(":")

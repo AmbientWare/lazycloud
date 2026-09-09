@@ -279,6 +279,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
     _started_at_utc: datetime
     _stop: threading.Event = field(default_factory=threading.Event)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _sample_lock: threading.Lock = field(default_factory=threading.Lock)
     _usage_cursor_ms: int = 0
     _pending_usage_evidence: WorkerUsageEvidence = field(default_factory=WorkerUsageEvidence)
     _held: list[tuple[_UsageWindow, WorkerUsageEvidence]] = field(default_factory=list)
@@ -452,6 +453,16 @@ class _ThreadedContainerRuntimeMonitorHandle:
         return emitted
 
     def _publish_once(self, *, recorded_at: float) -> None:
+        # Shutdown may reach here while the sampler is still in external I/O.
+        # Two reads must never claim a delta from the same previous counter.
+        if not self._sample_lock.acquire(blocking=False):
+            return
+        try:
+            self._publish_sample(recorded_at=recorded_at)
+        finally:
+            self._sample_lock.release()
+
+    def _publish_sample(self, *, recorded_at: float) -> None:
         if self.metrics is None:
             return
         previous_sample_at = self._last_sample_at
@@ -485,6 +496,9 @@ class _ThreadedContainerRuntimeMonitorHandle:
             if result.payload is not None:
                 self._pending_usage_evidence = self._pending_usage_evidence.plus(
                     _usage_evidence_from_metrics(result.payload.metrics)
+                )
+                self._pending_usage_evidence = self._pending_usage_evidence.plus(
+                    WorkerUsageEvidence(network_egress_bytes=result.network_egress_bytes)
                 )
 
     def _record_usage_until(self, *, recorded_at: float) -> WorkerUsageEmissionResult | None:
