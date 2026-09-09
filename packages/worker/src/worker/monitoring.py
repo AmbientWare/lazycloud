@@ -137,17 +137,7 @@ class ContainerRuntimeMonitorSettings(ContractModel):
     sample_interval_seconds: float = 5.0
     join_timeout_seconds: float = 2.0
     exit_flush_attempts: int = 3
-    """How many times the last drain of a container's life is attempted.
-
-    The sample loop stops at the first refusal and lets the next tick carry the
-    window, which is right while there is a next tick. At exit there is not one:
-    whatever is still held when this returns is never offered again, so a single
-    unlucky write would lose every second since the previous success.
-
-    Bounded rather than persistent because this runs on the teardown path a
-    customer is waiting on, and because a control plane that has refused three
-    times in a row is not about to answer the fourth.
-    """
+    """Bound final usage retries so an unavailable API cannot hold shutdown open."""
 
     exit_flush_retry_seconds: float = 0.5
 
@@ -337,11 +327,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
             try:
                 self._record_usage_until(recorded_at=current)
             except Exception:  # pragma: no cover - defensive worker boundary
-                # This thread is the only thing metering this container between
-                # start and exit. Letting an exception out of it ends metering
-                # silently for the rest of the container's life, and the daemon
-                # thread dying is not something anything downstream observes —
-                # the next signal would be a bill that is short.
+                # Keep metering after a failed claim; this is the only sampler.
                 LOGGER.warning(
                     "container usage claim failed",
                     exc_info=True,
@@ -496,6 +482,10 @@ class _ThreadedContainerRuntimeMonitorHandle:
         except Exception:  # pragma: no cover - defensive worker boundary
             with self._lock:
                 self._pending_measurement_complete = False
+                # The missing interval is billed at its reservation. A later
+                # counter delta must not include that interval again.
+                self._previous = None
+                self._last_sample_at = None
             LOGGER.warning(
                 "container metrics sample failed",
                 exc_info=True,
@@ -524,14 +514,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
                 )
 
     def _record_usage_until(self, *, recorded_at: float) -> WorkerUsageEmissionResult | None:
-        """Emit every window this container owes the meter, oldest first.
-
-        A window that failed is offered again before any new ground is claimed,
-        so the platform sees the same bounds and the same evidence it saw the
-        first time. Stopping at the first failure leaves the rest of the
-        lifetime unclaimed rather than piling up windows against a control plane
-        that is not answering.
-        """
+        """Retry unchanged windows before claiming new usage; stop on failure."""
 
         recorder = self.usage_recorder
         if recorder is None:
@@ -581,21 +564,10 @@ class _ThreadedContainerRuntimeMonitorHandle:
         self,
         recorded_at: float,
     ) -> tuple[_UsageWindow, WorkerUsageEvidence] | None:
-        """The next window owed: one held from a failure, or ground since the cursor.
+        """Claim before writing so the sampler and shutdown cannot bill overlapping windows.
 
-        Claiming before the write rather than after is what keeps two emitters —
-        the sample loop and a `stop()` whose join timed out on a slow write —
-        from offering overlapping windows and billing the same seconds twice.
-
-        A held window is re-offered with the bounds and the evidence it was
-        claimed with, never widened to reach the present. The record ids the
-        platform derives are a function of those bounds, so a write whose reply
-        was lost after it committed is re-sent under the ids it already has and
-        is refused as a duplicate. Widening instead would ask the platform to
-        price ground it had already priced, under ids that cannot collide with
-        the ones holding that charge.
-
-        `None` once nothing is owed, which is how the drain loop ends.
+        Retries retain their bounds and evidence because record IDs derive from
+        those bounds. Widening a retry would charge the same usage under new IDs.
         """
 
         with self._lock:
@@ -623,17 +595,10 @@ class _ThreadedContainerRuntimeMonitorHandle:
         window: _UsageWindow,
         evidence: WorkerUsageEvidence,
     ) -> None:
-        """Keep a failed window intact until the next attempt.
+        """Keep failed evidence separate from samples collected since its window.
 
-        The cursor stays past it, so samples taken since accumulate against the
-        ground that follows rather than joining evidence measured over this
-        window. That pairing is what stops a retry from charging current
-        evidence against a window that did not measure it.
-
-        A list because two emitters can be in flight at once — the sample loop
-        and a `stop()` whose join timed out on a slow write — and a slot would
-        let the second failure drop the first window's ground on the floor. It
-        cannot grow past them: no new ground is claimed while anything is held.
+        Both the sampler and shutdown can have a write in flight, so retain both
+        failures. Claim no new window until these have been accepted.
         """
 
         with self._lock:

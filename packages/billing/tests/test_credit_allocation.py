@@ -8,9 +8,10 @@ from uuid import uuid4
 import httpx
 import pytest
 from api.server.services import ApiServices
-from billing.credits import fund_subscription_credits
+from billing.credits import fund_subscription_credits, reconcile_credit_cutover
 from billing.rate_publication import publish_metered_rate_history
 from database.repositories import billing_credits
+from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_ledger import BillingLedgerRepository
@@ -88,6 +89,117 @@ def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
         assert settlement is not None
         assert (settlement.credited_nanos, settlement.payable_nanos) == (10, 10)
         assert session.scalar(select(func.count()).select_from(BillingMeterOutboxTable)) == 0
+
+
+def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_proration_terms(
+    postgres_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2027, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=30)
+    now = end + timedelta(days=1)
+    monkeypatch.setattr(billing_credits, "utc_now", lambda: now)
+    user_id, workspace_id = legacy_billing_account(
+        postgres_services.context,
+        period_started_at=start - timedelta(days=30),
+        period_ended_at=start,
+    )
+    with postgres_services.context.database.session() as session:
+        account = BillingAccountRepository(session).get_by_user(user_id)
+        assert account is not None
+        credits = BillingCreditRepository(session)
+        credits.prepare_cutover(user_id=user_id, effective_at=start)
+        credits.complete_cutover(user_id=user_id, at=start)
+        PlatformRateRepository(session).publish(
+            pricing_version="missing-renewal",
+            effective_at=start,
+            nanos_per_egress_byte=Decimal(1),
+            nanos_per_volume_byte_second=Decimal(0),
+        )
+        record = UsageRecord(
+            id=str(uuid4()),
+            workspace_id=workspace_id,
+            resource_type="workspace",
+            resource_id=workspace_id,
+            metric=UsageMetric.NetworkEgressBytes,
+            quantity=20,
+            unit=UsageUnit.Bytes,
+            metadata={
+                METERING_WINDOW_STARTED_AT_METADATA_KEY: (end - timedelta(seconds=10)).isoformat(),
+                METERING_WINDOW_ENDED_AT_METADATA_KEY: (end + timedelta(seconds=10)).isoformat(),
+            },
+        )
+        UsageRepository(session).append(record)
+        BillingLedgerRepository(session).price_record(record)
+        assert credits.balance(user_id=user_id, at=now) == -20
+    subscription = ProviderSubscription(
+        provider_subscription_id=account.provider_subscription_id,
+        status="active",
+        current_period_started_at=end,
+        current_period_ended_at=end + timedelta(days=30),
+        plan=BillingPlanId.Business,
+        terms_version=SubscriptionTermsVersion.Business,
+        scheduled_terms_version=None,
+        scheduled_change_at=None,
+    )
+    line = ProviderPaidSubscriptionPeriod(
+        provider_invoice_id="in_missing_renewal",
+        provider_invoice_line_id="il_missing_renewal",
+        provider_subscription_id=account.provider_subscription_id,
+        plan=BillingPlanId.Business,
+        terms_version=SubscriptionTermsVersion.Business,
+        period_started_at=start,
+        period_ended_at=end,
+        prorated=True,
+        amount_nanos=249_000_000_000,
+        invoice_paid_nanos=249_000_000_000,
+        paid_at=now,
+    )
+
+    def receipts(
+        self: StripeBilling,
+        *,
+        provider_customer_id: str,
+        provider_subscription_id: str,
+        since: datetime,
+    ) -> tuple[ProviderPaidSubscriptionPeriod, ...]:
+        return (line,)
+
+    monkeypatch.setattr(StripeBilling, "paid_subscription_periods", receipts)
+    with httpx.Client() as client:
+        payments = StripeBilling(client)
+        with postgres_services.context.database.session() as session:
+            assert (
+                reconcile_credit_cutover(
+                    session, payments, account=account, subscription=subscription, at=now
+                )
+                == ""
+            )
+            assert (
+                BillingAllowanceRepository(session).current_period(user_id=user_id, at=start)
+                is None
+            )
+        line = line.model_copy(update={"prorated": False})
+        for _ in range(2):
+            with postgres_services.context.database.session() as session:
+                assert (
+                    reconcile_credit_cutover(
+                        session, payments, account=account, subscription=subscription, at=now
+                    )
+                    == ""
+                )
+                assert BillingCreditRepository(session).balance(user_id=user_id, at=now) == -10
+        with postgres_services.context.database.session() as session:
+            lot = session.scalars(
+                select(BillingCreditLotTable).where(BillingCreditLotTable.user_id == user_id)
+            ).one()
+            assert lot.expires_at is not None
+            assert (to_utc(lot.effective_at), to_utc(lot.expires_at)) == (start, end)
+            assert lot.amount_nanos == 50_000_000_000
+            settlement = session.get(BillingCreditSettlementTable, record.id)
+            assert settlement is not None
+            assert (settlement.credited_nanos, settlement.payable_nanos) == (10, 10)
+            assert session.scalar(select(func.count()).select_from(BillingMeterOutboxTable)) == 0
 
 
 def test_storage_grace_waives_only_retained_time_and_top_up_resumes_charges(

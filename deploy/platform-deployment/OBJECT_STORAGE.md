@@ -31,8 +31,11 @@ command or fallback storage path.
    usage-reporting routes and must be replaced.
 3. Switch to the S3 descriptor and matching application release. Before reopening
    admission, manually clear references to discarded platform objects, images,
-   source packages and checkpoints. Keep accounts, workspace identities, billing
-   history, BYO storage and cloud connections.
+   source packages and checkpoints. Clear each managed workspace's persisted
+   storage configuration and reprovision its bucket through the workspace storage
+   owner so it records the S3 endpoint, region and bucket. Preserve customer-owned
+   storage configurations, accounts, workspace identities, billing history and
+   cloud connections.
 4. Recreate workers, rebuild images and upload source again. Check a cold build,
    volume writes and artifact upload/download.
 5. Empty the exact old R2 application, deployment, release and managed workspace

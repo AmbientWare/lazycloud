@@ -49,6 +49,8 @@ class UnfundedStorageRetentionService:
             account = BillingAccountRepository(session).get_by_user(user_id, for_update=True)
             if account is None:
                 return
+            # A top-up may commit while this sweep waits for the account lock.
+            now = max(now, to_utc(utc_now()))
             repository = StorageRetentionRepository(session)
             period = repository.active(user_id=user_id)
             credits = BillingCreditRepository(session)

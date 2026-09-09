@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import monotonic, sleep
 
+import pytest
 from shared.realtime.contracts import ContainerMetricsPayload
 from shared.scheduling import (
     ContainerStatusUpdatePlan,
@@ -155,6 +156,54 @@ class UsageRecorder:
             pool_mode=WorkerPoolMode.Public,
             reason="worker usage emitted",
         )
+
+
+@pytest.mark.parametrize("failure", ["read", "publish"])
+def test_metrics_failure_does_not_rebill_cpu_from_an_earlier_window(failure: str) -> None:
+    @dataclass
+    class Source:
+        reading: int = -1
+
+        def metrics_source_for_container(self, container_id: str) -> Source:
+            return self
+
+        def sample(self, request: ContainerRequestContext) -> ContainerMetricsRawSample:
+            self.reading += 1
+            if failure == "read" and self.reading == 1:
+                raise RuntimeError("cgroup read failed")
+            return ContainerMetricsRawSample(
+                cpu_usage_usec=self.reading * 1_000_000,
+                measurement_complete=True,
+            )
+
+    @dataclass
+    class Sink:
+        unavailable: bool = True
+
+        def publish_container_metrics(self, payload: ContainerMetricsPayload) -> None:
+            if failure == "publish" and self.unavailable:
+                self.unavailable = False
+                raise RuntimeError("telemetry unavailable")
+
+    source = Source()
+    usage = UsageRecorder()
+    monitor = WorkerContainerRuntimeMonitor(
+        metrics=WorkerContainerMetricsService(worker_id="worker-1", sink=Sink()),
+        metrics_source_factory=source,
+        usage_recorder=usage,
+        settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.01),
+    )
+    handle = monitor.start_monitoring(ContainerRequestContext(container_id="ctr-1"))
+    try:
+        deadline = monotonic() + 2
+        while len(usage.windows) < 3 and monotonic() < deadline:
+            print(f"counter={source.reading}, usage_windows={len(usage.windows)}")
+            sleep(0.01)
+    finally:
+        handle.stop()
+
+    cpu = [evidence.cpu_used_core_seconds for evidence in usage.evidence[:3]]
+    assert cpu == ([0, 0, 1] if failure == "read" else [1, 1, 1])
 
 
 def test_worker_container_metrics_service_computes_deltas_and_publishes() -> None:

@@ -708,6 +708,30 @@ def test_managed_pool_agent_artifact_change_versions_template_and_updates_group(
     assert f"AGENT_SHA256={'c' * 64}" in user_data
 
 
+def test_managed_pool_scale_up_applies_current_spot_purchase_ceiling() -> None:
+    ec2 = _Ec2()
+    autoscaling = _AutoScaling()
+    provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
+    spec = _spec().model_copy(update={"preemptible": True, "max_compute_hourly_micros": 500_000})
+    provisioner.ensure(spec)
+
+    provisioner.scale(
+        spec.model_copy(update={"max_compute_hourly_micros": 250_000}),
+        desired_nodes=2,
+        max_nodes=spec.max_nodes,
+    )
+
+    version = int(str(autoscaling.launch_template["Version"]))
+    _, launch_data = ec2.launch_versions[version]
+    market = launch_data["InstanceMarketOptions"]
+    assert isinstance(market, Mapping)
+    assert market["SpotOptions"] == {
+        "MaxPrice": "0.25",
+        "SpotInstanceType": "one-time",
+        "InstanceInterruptionBehavior": "terminate",
+    }
+
+
 def test_managed_pool_delete_converges_after_asg_instance_cleanup() -> None:
     ec2 = _Ec2()
     autoscaling = _AutoScaling()

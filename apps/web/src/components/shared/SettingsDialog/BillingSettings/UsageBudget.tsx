@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
 
 import { Panel } from "@/components/shared/Panel";
@@ -39,6 +39,8 @@ export function UsageBudget() {
 
 function BudgetForm({ preferences }: { preferences: BillingPreferences }) {
   const queryClient = useQueryClient();
+  const mutationKey = billingPreferencesQueryOptions().queryKey;
+  const savingPreferences = useIsMutating({ mutationKey }) > 0;
   const inputId = useId();
   const [draft, setDraft] = useState<string | null>(null);
   const saved = preferences.monthly_usage_limit_nanos;
@@ -48,6 +50,7 @@ function BudgetForm({ preferences }: { preferences: BillingPreferences }) {
     nanos === null ||
     (/^\d+(\.\d{1,2})?$/.test(amount) && Number.isSafeInteger(nanos) && nanos >= 0);
   const save = useMutation({
+    mutationKey,
     mutationFn: saveBillingPreferences,
     onSuccess: (value) => {
       queryClient.setQueryData(billingPreferencesQueryOptions().queryKey, value);
@@ -60,7 +63,7 @@ function BudgetForm({ preferences }: { preferences: BillingPreferences }) {
       className="flex flex-col gap-2"
       onSubmit={(event) => {
         event.preventDefault();
-        if (valid && !save.isPending) {
+        if (valid && queryClient.isMutating({ mutationKey }) === 0) {
           save.mutate({ ...preferences, monthly_usage_limit_nanos: nanos });
         }
       }}
@@ -74,13 +77,13 @@ function BudgetForm({ preferences }: { preferences: BillingPreferences }) {
           inputMode="decimal"
           value={amount}
           placeholder="No limit"
-          disabled={save.isPending}
+          disabled={savingPreferences}
           onChange={(event) => {
             setDraft(event.target.value);
             save.reset();
           }}
         />
-        <Button type="submit" disabled={!valid || save.isPending}>
+        <Button type="submit" disabled={!valid || savingPreferences}>
           {save.isPending ? "Saving…" : "Save limit"}
         </Button>
       </div>

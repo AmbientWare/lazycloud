@@ -40,31 +40,13 @@ from billing.webhooks import ENDED_SUBSCRIPTION_STATUSES
 LOGGER = logging.getLogger(__name__)
 
 PLAN_CHANGE_ABANDONED_ACTION = "billing.plan_change.abandoned"
-"""A plan change nobody could settle.
-
-Either its outcome could not be established, or it was established and is not
-one this platform may write down — a change collected on a subscription that has
-since ended is money taken for terms nothing can be given.
-"""
 
 PLAN_CHANGE_RESOURCE_TYPE = "billing_plan_change"
 
 MAX_ATTEMPTS = 20
-"""Attempts an intent is given before its outcome is given up on.
 
-With the backoff below this spans about seven hours. Nothing bounds it from the
-provider's side the way the meter outbox is bounded — reading a subscription is
-idempotent and carries no deduplication window — so what it is sized against is
-how long an account may sit holding a plan nobody here has decided about.
-"""
-
+# New intents hold the first claim while their request calls the provider.
 CLAIM_TTL = timedelta(minutes=5)
-"""How long a settler holds an intent before the sweep may take it.
-
-Also the grace the request that opened the intent gets to finish its own
-provider call: the intent is inserted already claimed, so this is what keeps the
-sweep from reading a subscription the swap is still in flight against.
-"""
 
 _RETRY_BASE = timedelta(seconds=30)
 _RETRY_CAP = timedelta(seconds=1_800)
@@ -72,8 +54,6 @@ _RETRY_CAP = timedelta(seconds=1_800)
 
 @dataclass(frozen=True, slots=True)
 class PlanChangeSettleResult:
-    """What one sweep decided, and how much is still undecided."""
-
     applied_count: int = 0
     not_applied_count: int = 0
     retried_count: int = 0
@@ -85,12 +65,7 @@ class _Verdict(Enum):
     Applied = auto()
     NotApplied = auto()
     Unresolved = auto()
-    """The provider holds the plan and nothing here may record it.
-
-    Terminal like the other two, and the only one that costs an operator
-    something: the money may have been taken, and the subscription it was taken
-    on is not one this account can be given.
-    """
+    """The provider applied the plan to a subscription the account no longer holds."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,14 +73,7 @@ class _Settlement:
     account: BillingAccount
     verdict: _Verdict
     settled: bool
-    """Whether the outcome reached the intent, false where the claim was lost.
-
-    A settler whose claim went stale mid-flight still writes the account row —
-    it holds that row's lock and writes what the provider says — but the intent
-    belongs to whoever reclaimed it. Counting an outcome this settler did not
-    record would report a change as finished while it is still open, and the
-    figure an operator watches for changes nobody decided is exactly that count.
-    """
+    """False if another settler reclaimed the intent before its outcome was written."""
 
     reason: str = ""
 
@@ -213,7 +181,6 @@ class BillingPlanChangeService:
         )
 
     def settle_open(self, *, now: datetime | None = None) -> PlanChangeSettleResult:
-
         moment = to_utc(now or utc_now())
         payments = self.payments()
         with self.database.session() as session:
@@ -255,9 +222,6 @@ class BillingPlanChangeService:
                 )
                 continue
             if not settlement.settled:
-                # Reclaimed while the provider was being asked. The account row
-                # is right either way, and the intent is now somebody else's to
-                # decide and to count.
                 continue
             if settlement.verdict is _Verdict.Applied:
                 applied += 1
@@ -265,9 +229,7 @@ class BillingPlanChangeService:
                 not_applied += 1
             else:
                 abandoned += 1
-        # Outside the transactions that settled them: the sink opens its own
-        # session, and an event recorded from inside one would claim a
-        # settlement that has not committed.
+        # The sink opens its own transaction, so emit only after settlement commits.
         for intent, reason in exhausted:
             self._record_abandonment(intent, reason)
         with self.database.session() as session:
@@ -283,7 +245,6 @@ class BillingPlanChangeService:
     def _settle_after_refusal(
         self, payments: SubscriptionPaymentProvider, intent: ClaimedPlanChange, *, claim_token: str
     ) -> _Settlement | None:
-
         moment = utc_now()
         try:
             held = payments.subscription(provider_subscription_id=intent.provider_subscription_id)
@@ -304,7 +265,6 @@ class BillingPlanChangeService:
         claim_token: str,
         subscription: ProviderSubscription | None,
     ) -> _Settlement:
-
         settlement = self._settle(
             payments, intent, claim_token=claim_token, subscription=subscription
         )
@@ -320,7 +280,6 @@ class BillingPlanChangeService:
         claim_token: str,
         subscription: ProviderSubscription | None,
     ) -> _Settlement:
-
         held = subscription or payments.subscription(
             provider_subscription_id=intent.provider_subscription_id
         )
@@ -332,9 +291,6 @@ class BillingPlanChangeService:
             if account is None:
                 raise NotFoundError(f"no billing account to settle a plan change for: {intent.id}")
             if held.plan is None:
-                # A licensed price this platform did not publish. Whether the
-                # change happened is not answerable from it, and neither is what
-                # the cycle would be worth, so the intent stays open.
                 raise UpstreamUnavailableError(
                     f"the payment provider holds subscription {intent.provider_subscription_id} "
                     "on a price this platform did not publish, so there is no plan change to "
@@ -410,8 +366,6 @@ class BillingPlanChangeService:
         now: datetime,
         reason: str,
     ) -> _Settlement:
-        """Stop asking about a change nothing here may record, and say why."""
-
         return _Settlement(
             account=account,
             verdict=_Verdict.Unresolved,
@@ -470,8 +424,7 @@ class BillingPlanChangeService:
                 },
             )
         except Exception:
-            # Wrapped so that failing to record the abandonment cannot replace
-            # the abandonment as what this process reports.
+            # An event-sink failure must not undo the recorded abandonment.
             LOGGER.exception(
                 "billing: plan change %s was abandoned and the event was not recorded",
                 intent.id,

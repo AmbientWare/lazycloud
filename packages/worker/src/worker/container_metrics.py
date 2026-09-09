@@ -184,7 +184,16 @@ class WorkerContainerMetricsService:
             sample_interval_ms=sample_interval_ms,
             disk_used_bytes=self._disk_used_bytes(request.container_id),
         )
-        self.sink.publish_container_metrics(payload)
+        published = False
+        try:
+            self.sink.publish_container_metrics(payload)
+            published = True
+        except Exception:
+            LOGGER.warning(
+                "container metrics publication failed",
+                exc_info=True,
+                extra={"container_id": request.container_id},
+            )
         return ContainerMetricsSampleResult(
             payload=payload,
             measurement_complete=complete,
@@ -192,8 +201,10 @@ class WorkerContainerMetricsService:
             memory_rss_byte_seconds=previous.memory_rss_bytes * sample_interval_ms / 1_000,
             next_state=next_state,
             network_egress_bytes=egress_bytes,
-            published=True,
-            reason="container metrics published",
+            published=published,
+            reason="container metrics published"
+            if published
+            else "container metrics publication failed",
         )
 
 

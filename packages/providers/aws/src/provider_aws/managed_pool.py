@@ -763,6 +763,12 @@ class AwsManagedPoolProvisioner:
                 operation="scale managed pool",
                 detail="managed pool launch template is incomplete",
             )
+        launch_template_id = resources.launch_template_id
+        launch_template_version = resources.launch_template_latest_version
+        if desired_nodes > group.desired:
+            launch_template_id, launch_template_version = self._ensure_launch_template(
+                spec, spec.security_group_id
+            )
         self._asg(
             "scale Auto Scaling Group",
             self._clients.autoscaling.update_auto_scaling_group,
@@ -773,8 +779,8 @@ class AwsManagedPoolProvisioner:
             NewInstancesProtectedFromScaleIn=True,
             VPCZoneIdentifier=",".join(subnets),
             LaunchTemplate={
-                "LaunchTemplateId": resources.launch_template_id,
-                "Version": str(resources.launch_template_latest_version),
+                "LaunchTemplateId": launch_template_id,
+                "Version": str(launch_template_version),
             },
         )
 

@@ -396,17 +396,52 @@ def _recover_period_funding(
     subscription: ProviderSubscription,
     since: datetime,
 ) -> None:
-    periods = BillingAllowanceRepository(session).unconfirmed_periods(
-        user_id=account.user_id,
-        since=since,
-        before=subscription.current_period_started_at,
-    )
-    if not periods:
+    if since >= subscription.current_period_started_at:
         return
     evidence = payments.paid_subscription_periods(
         provider_customer_id=account.provider_customer_id,
         provider_subscription_id=subscription.provider_subscription_id,
         since=since,
+    )
+    allowances = BillingAllowanceRepository(session)
+    for line in evidence:
+        if (
+            line.prorated
+            or line.invoice_paid_nanos <= 0
+            or line.amount_nanos <= 0
+            or line.period_started_at < since
+            or line.period_ended_at > subscription.current_period_started_at
+        ):
+            continue
+        if (
+            line.provider_subscription_id != subscription.provider_subscription_id
+            or subscription_terms(line.terms_version).plan is not line.plan
+            or line.period_started_at >= line.period_ended_at
+        ):
+            raise UpstreamUnavailableError(
+                "paid renewal does not establish valid subscription terms"
+            )
+        period = allowances.current_period(user_id=account.user_id, at=line.period_started_at)
+        if period is not None:
+            if (period.started_at, period.ended_at) != (
+                line.period_started_at,
+                line.period_ended_at,
+            ):
+                raise ConflictError("paid renewal disagrees with its recorded subscription period")
+            continue
+        # A failed renewal may never have reached the local period owner.
+        # Proration lines cannot establish the missing cycle's full interval.
+        allowances.set_subscription_period(
+            user_id=account.user_id,
+            period_started_at=line.period_started_at,
+            period_ended_at=line.period_ended_at,
+            allowance_nanos=0,
+            funded=False,
+        )
+    periods = allowances.unconfirmed_periods(
+        user_id=account.user_id,
+        since=since,
+        before=subscription.current_period_started_at,
     )
     for period in periods:
         funded = max(

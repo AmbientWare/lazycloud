@@ -17,9 +17,12 @@ from shared.timestamps import to_utc, utc_now
 from sqlalchemy import func, select
 from storage.unfunded_retention import UnfundedStorageRetentionService
 
+from storage import unfunded_retention
+
 
 def test_only_positive_balance_ends_retention_and_prevents_a_concurrent_claim(
     postgres_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     services = postgres_services
     volume = services.volumes.get_or_create("keep-on-topup", admit=None)
@@ -60,11 +63,13 @@ def test_only_positive_balance_ends_retention_and_prevents_a_concurrent_claim(
         assert session.scalar(select(func.count()).select_from(EmailOutboxTable)) == 1
         assert VolumeRepository(session).get(volume.name, workspace_id=workspace_id) is not None
 
-    restored_at = current + timedelta(days=29, hours=23)
+    sweep_at = current + timedelta(days=30)
+    restored_at = sweep_at + timedelta(seconds=1)
     with ThreadPoolExecutor(max_workers=1) as executor:
         with services.database.session() as session:
             BillingAccountRepository(session).get_by_user(user_id, for_update=True)
-            sweep = executor.submit(retention.reconcile, now=current + timedelta(days=30))
+            sweep = executor.submit(retention.reconcile, now=sweep_at)
+            monkeypatch.setattr(unfunded_retention, "utc_now", lambda: restored_at)
             BillingCreditRepository(session).issue(
                 user_id=user_id,
                 grant=CreditGrant(
@@ -82,7 +87,7 @@ def test_only_positive_balance_ends_retention_and_prevents_a_concurrent_claim(
         assert StorageRetentionRepository(session).active(user_id=user_id) is None
         assert StorageRetentionRepository(session).intervals(
             user_id=user_id, started_at=current, ended_at=current + timedelta(days=31)
-        ) == ((current, current + timedelta(days=30)),)
+        ) == ((current, restored_at),)
         kept = VolumeRepository(session).get(volume.name, workspace_id=workspace_id)
         assert kept is not None and kept.deletion_requested_at is None
 

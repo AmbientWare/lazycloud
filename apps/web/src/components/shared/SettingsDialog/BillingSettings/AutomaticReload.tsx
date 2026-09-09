@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
 
 import { Panel } from "@/components/shared/Panel";
@@ -71,6 +71,8 @@ export function AutomaticReload() {
 
 function ReloadForm({ preferences }: { preferences: BillingPreferences }) {
   const queryClient = useQueryClient();
+  const mutationKey = billingPreferencesQueryOptions().queryKey;
+  const savingPreferences = useIsMutating({ mutationKey }) > 0;
   const pricing = useQuery(pricingCatalogQueryOptions());
   const id = useId();
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -100,6 +102,7 @@ function ReloadForm({ preferences }: { preferences: BillingPreferences }) {
     amountCents <= terms.maximum_cents &&
     (limitCents === null || limitCents >= 0);
   const save = useMutation({
+    mutationKey,
     mutationFn: saveBillingPreferences,
     onSuccess: (value) => {
       queryClient.setQueryData(billingPreferencesQueryOptions().queryKey, value);
@@ -117,7 +120,7 @@ function ReloadForm({ preferences }: { preferences: BillingPreferences }) {
       className="flex flex-col gap-3"
       onSubmit={(event) => {
         event.preventDefault();
-        if (valid && !save.isPending)
+        if (valid && queryClient.isMutating({ mutationKey }) === 0)
           save.mutate({
             ...preferences,
             reload_enabled: enabled ?? preferences.reload_enabled,
@@ -130,7 +133,7 @@ function ReloadForm({ preferences }: { preferences: BillingPreferences }) {
       <label className="flex items-center gap-2 text-sm">
         <Checkbox
           checked={enabled ?? preferences.reload_enabled}
-          disabled={save.isPending}
+          disabled={savingPreferences}
           onCheckedChange={(value) => {
             setEnabled(value === true);
             save.reset();
@@ -161,7 +164,7 @@ function ReloadForm({ preferences }: { preferences: BillingPreferences }) {
             id={`${id}-${field.name}`}
             inputMode="decimal"
             value={field.value}
-            disabled={save.isPending}
+            disabled={savingPreferences}
             placeholder={field.name === "limit" ? "No limit" : undefined}
             onChange={(event) => {
               field.set(event.target.value);
@@ -180,7 +183,7 @@ function ReloadForm({ preferences }: { preferences: BillingPreferences }) {
           Each reload must add ${terms.minimum_cents / 100} to ${terms.maximum_cents / 100}.
         </p>
       ) : null}
-      <Button type="submit" disabled={!valid || save.isPending}>
+      <Button type="submit" disabled={!valid || savingPreferences}>
         {save.isPending ? "Saving…" : "Save reload settings"}
       </Button>
       {save.error || pricing.error ? (
