@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
@@ -21,7 +22,7 @@ from shared.gpu import GPU_ANY, SUPPORTED_GPU_TYPES
 from shared.http.volumes import GetOrCreateVolumeRequest
 from shared.timestamps import utc_now
 from sqlalchemy import func, select
-from tests.service_fixtures import unbilled_account, workspace_owner_user_id
+from tests.service_fixtures import legacy_billing_account, unbilled_account, workspace_owner_user_id
 
 from billing import DatabaseBillingAdmission
 
@@ -168,11 +169,17 @@ def test_an_unfunded_account_gets_no_new_volume_but_still_reaches_the_one_it_has
     """An empty balance refuses new storage without hiding existing files."""
 
     volumes = isolated_services.volume_service
+    now = utc_now()
+    user_id, workspace_id = legacy_billing_account(
+        isolated_services.context,
+        period_started_at=now,
+        period_ended_at=now + timedelta(days=30),
+    )
     with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
-    with isolated_services.context.database.session() as session:
-        lot_id = BillingCreditRepository(session).issue(
+        credits = BillingCreditRepository(session)
+        credits.prepare_cutover(user_id=user_id, effective_at=now)
+        credits.complete_cutover(user_id=user_id, at=now)
+        lot_id = credits.issue(
             user_id=user_id,
             grant=CreditGrant(
                 "payment:storage-access",
