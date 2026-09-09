@@ -117,6 +117,7 @@ class ProviderUnitInstance(ContractModel):
 class ProviderPurchaseLimit(ContractModel):
     region: str = Field(min_length=1)
     instance_type: str = Field(min_length=1)
+    preemptible: bool = False
     max_hourly_cost_micros: int = Field(gt=0)
 
 
@@ -137,9 +138,11 @@ class ProviderCapacityPolicy(ContractModel):
             raise ValueError("provider default region must be allowed")
         if self.max_cpu_instances is not None and self.warm_cpu_min > self.max_cpu_instances:
             raise ValueError("provider warm CPU minimum cannot exceed provider capacity limit")
-        identities = {(limit.region, limit.instance_type) for limit in self.purchase_limits}
+        identities = {
+            (limit.region, limit.instance_type, limit.preemptible) for limit in self.purchase_limits
+        }
         if len(identities) != len(self.purchase_limits):
-            raise ValueError("provider purchase limits must be unique per region and instance type")
+            raise ValueError("provider purchase limits must be unique per region, type and market")
         if any(limit.region not in self.allowed_regions for limit in self.purchase_limits):
             raise ValueError("provider purchase limits must belong to allowed regions")
         return self
@@ -155,7 +158,15 @@ class ProviderCapacityPolicy(ContractModel):
             and any(
                 limit.region == offer.region
                 and limit.instance_type == offer.instance_type
+                and limit.preemptible is offer.preemptible
                 and cost <= limit.max_hourly_cost_micros
+                and (
+                    not offer.preemptible
+                    or (
+                        offer.max_hourly_cost_micros is not None
+                        and cost <= offer.max_hourly_cost_micros <= limit.max_hourly_cost_micros
+                    )
+                )
                 for limit in self.purchase_limits
             )
         )

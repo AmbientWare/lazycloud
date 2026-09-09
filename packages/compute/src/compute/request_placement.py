@@ -79,6 +79,8 @@ class ComputeCapacityPlacementService:
             min_cpu_millicores=requirements.cpu_millicores,
             min_memory_mb=requirements.memory_mb,
             architecture=requirements.architecture or "amd64",
+            preemptible=requirements.preemptible,
+            availability_zone=requirements.availability_zone,
             runtime=requirements.runtime,
             gpu=requirements.gpu,
             min_gpu_count=requirements.gpu_count,

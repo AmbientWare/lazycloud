@@ -51,6 +51,19 @@ def test_a_node_the_request_would_exactly_fill_is_not_offered() -> None:
     assert filter_offers([exact, larger], request) == [larger]
 
 
+def test_purchase_respects_interruption_and_zone_requirements() -> None:
+    regular = _offer("m7i.2xlarge", 8_000, 32 * 1024).model_copy(
+        update={"availability_zone": "use1-az1"}
+    )
+    spot = regular.model_copy(update={"preemptible": True})
+    assert filter_offers([spot, regular], OfferRequest()) == [regular]
+    assert filter_offers([spot, regular], OfferRequest(preemptible=True)) == [spot, regular]
+    assert (
+        filter_offers([spot, regular], OfferRequest(preemptible=True, availability_zone="use1-az2"))
+        == []
+    )
+
+
 def _gpu_offer(instance_type: str, gpu: str, hourly_cost_micros: int) -> ComputeOffer:
     return pooled_cloud_offer(
         offer_id=f"us-east-1:{instance_type}",
@@ -181,3 +194,13 @@ def test_purchase_ceiling_includes_disk_and_ip_and_accepts_its_boundary() -> Non
     assert not policy.accepts(offer.model_copy(update={"region": "us-west-2"}))
     assert not policy.accepts(offer.model_copy(update={"instance_type": "unapproved"}))
     assert not policy.model_copy(update={"purchase_limits": ()}).accepts(offer)
+    spot = offer.model_copy(update={"preemptible": True, "max_hourly_cost_micros": 125_000})
+    assert not policy.accepts(spot)
+    spot_policy = policy.model_copy(
+        update={
+            "purchase_limits": (policy.purchase_limits[0].model_copy(update={"preemptible": True}),)
+        }
+    )
+    assert spot_policy.accepts(spot)
+    assert not spot_policy.accepts(spot.model_copy(update={"max_hourly_cost_micros": 125_001}))
+    assert not spot_policy.accepts(spot.model_copy(update={"max_hourly_cost_micros": None}))
