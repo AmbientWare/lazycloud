@@ -5,6 +5,7 @@ import re
 from enum import StrEnum
 from types import MappingProxyType
 
+from compute.providers import ProviderPurchaseLimit
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shared.compute_policy import UnitName
 from shared.gpu import SUPPORTED_GPU_TYPES, GpuType
@@ -24,6 +25,7 @@ class AwsInstanceCatalogEntry(AwsInstanceCatalogModel):
     kind: AwsInstanceCategory
     cpu_millicores: int = Field(gt=0)
     memory_mb: int = Field(gt=0)
+    max_hourly_cost_micros: int = Field(gt=0)
     gpu: GpuType | None = None
     gpu_count: int = Field(default=0, ge=0)
 
@@ -45,36 +47,42 @@ class AwsInstanceCatalogEntry(AwsInstanceCatalogModel):
 AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     AwsInstanceCatalogEntry(
         instance_type="m7i.2xlarge",
+        max_hourly_cost_micros=430_423,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="m7i.4xlarge",
+        max_hourly_cost_micros=833_623,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=16_000,
         memory_mb=64 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="m7i.8xlarge",
+        max_hourly_cost_micros=1_640_023,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=32_000,
         memory_mb=128 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="m7i.12xlarge",
+        max_hourly_cost_micros=2_446_423,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=48_000,
         memory_mb=192 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="m7i.16xlarge",
+        max_hourly_cost_micros=3_252_823,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=64_000,
         memory_mb=256 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.xlarge",
+        max_hourly_cost_micros=553_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=4_000,
         memory_mb=16 * 1024,
@@ -83,6 +91,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.2xlarge",
+        max_hourly_cost_micros=779_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
@@ -91,6 +100,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.4xlarge",
+        max_hourly_cost_micros=1_231_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=64 * 1024,
@@ -99,6 +109,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.12xlarge",
+        max_hourly_cost_micros=3_939_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=48_000,
         memory_mb=192 * 1024,
@@ -107,6 +118,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.metal",
+        max_hourly_cost_micros=7_851_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=384 * 1024,
@@ -115,6 +127,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.xlarge",
+        max_hourly_cost_micros=1_033_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=4_000,
         memory_mb=16 * 1024,
@@ -123,6 +136,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.2xlarge",
+        max_hourly_cost_micros=1_239_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
@@ -131,6 +145,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.4xlarge",
+        max_hourly_cost_micros=1_651_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=64 * 1024,
@@ -139,6 +154,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.8xlarge",
+        max_hourly_cost_micros=2_475_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=32_000,
         memory_mb=128 * 1024,
@@ -147,6 +163,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.16xlarge",
+        max_hourly_cost_micros=4_123_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=64_000,
         memory_mb=256 * 1024,
@@ -155,6 +172,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.12xlarge",
+        max_hourly_cost_micros=5_699_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=48_000,
         memory_mb=192 * 1024,
@@ -163,6 +181,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.24xlarge",
+        max_hourly_cost_micros=8_171_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=384 * 1024,
@@ -171,6 +190,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.48xlarge",
+        max_hourly_cost_micros=16_315_223,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=768 * 1024,
@@ -179,6 +199,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.xlarge",
+        max_hourly_cost_micros=832_023,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=4_000,
         memory_mb=16 * 1024,
@@ -187,6 +208,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.2xlarge",
+        max_hourly_cost_micros=1_004_823,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
@@ -195,6 +217,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.4xlarge",
+        max_hourly_cost_micros=1_350_423,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=64 * 1024,
@@ -203,6 +226,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.8xlarge",
+        max_hourly_cost_micros=2_041_623,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=32_000,
         memory_mb=128 * 1024,
@@ -211,6 +235,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.16xlarge",
+        max_hourly_cost_micros=3_424_023,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=64_000,
         memory_mb=256 * 1024,
@@ -219,6 +244,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.12xlarge",
+        max_hourly_cost_micros=4_628_823,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=48_000,
         memory_mb=192 * 1024,
@@ -227,6 +253,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.24xlarge",
+        max_hourly_cost_micros=6_702_423,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=384 * 1024,
@@ -235,12 +262,23 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.48xlarge",
+        max_hourly_cost_micros=13_377_623,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=768 * 1024,
         gpu=GpuType.L4,
         gpu_count=8,
     ),
+)
+
+# Ceilings include 200 GiB gp3 and one public IPv4 address in us-east-1.
+AWS_PURCHASE_LIMITS = tuple(
+    ProviderPurchaseLimit(
+        region="us-east-1",
+        instance_type=instance.instance_type,
+        max_hourly_cost_micros=instance.max_hourly_cost_micros,
+    )
+    for instance in AWS_INSTANCE_CATALOG
 )
 
 _INSTANCE_BY_TYPE = MappingProxyType(

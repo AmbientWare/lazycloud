@@ -27,6 +27,7 @@ from provider_aws import (
     AwsRegionalPrices,
     Boto3AwsManagedPoolClientProvider,
 )
+from provider_aws.instance_catalog import AWS_PURCHASE_LIMITS
 from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
 from provider_hetzner.client import HetznerClient
 from provider_hetzner.pooled_provider import HetznerPooledProvider
@@ -205,9 +206,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
                 max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
                 root_volume_gib=AWS_COMPUTE_CONFIGURATION.root_volume_gib,
                 idle_timeout_seconds=AWS_COMPUTE_CONFIGURATION.idle_timeout_seconds,
-                allowed_instance_types=tuple(
-                    instance.instance_type for instance in AWS_INSTANCE_CATALOG
-                ),
+                purchase_limits=AWS_PURCHASE_LIMITS,
             ),
             pooled=AwsConnectedAccountPooledProvider(
                 provider_ref=provider_ref,

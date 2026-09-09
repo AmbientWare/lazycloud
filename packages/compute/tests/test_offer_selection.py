@@ -8,6 +8,7 @@ from compute.offers import (
     filter_offers,
     pooled_cloud_offer,
 )
+from compute.providers import ProviderCapacityPolicy, ProviderPurchaseLimit
 from shared.container_requests import OciRuntimeName
 from shared.supplier_costs import SupplierCostTerms
 
@@ -142,3 +143,41 @@ def test_an_unknown_supplier_price_does_not_outrank_known_costs() -> None:
     assert choose_offer([unknown, known], OfferRequest()) is known
     with pytest.raises(ValueError, match="no compute offers"):
         choose_offer([unknown], OfferRequest())
+
+
+def test_purchase_ceiling_includes_disk_and_ip_and_accepts_its_boundary() -> None:
+    policy = ProviderCapacityPolicy(
+        default_region="us-east-1",
+        allowed_regions=("us-east-1", "us-west-2"),
+        purchase_limits=(
+            ProviderPurchaseLimit(
+                region="us-east-1", instance_type="approved", max_hourly_cost_micros=125_000
+            ),
+        ),
+    )
+    offer = _offer("approved", 4_000, 8 * 1024).model_copy(
+        update={
+            "cost_terms": SupplierCostTerms(
+                compute_hourly_micros=100_000,
+                root_disk_hourly_micros=20_000,
+                public_ipv4_hourly_micros=5_000,
+            )
+        }
+    )
+
+    assert policy.accepts(offer)
+    assert not policy.accepts(
+        offer.model_copy(
+            update={
+                "cost_terms": offer.cost_terms.model_copy(
+                    update={"public_ipv4_hourly_micros": 5_001}
+                )
+            }
+        )
+    )
+    assert not policy.accepts(
+        offer.model_copy(update={"cost_terms": SupplierCostTerms(compute_hourly_micros=100_000)})
+    )
+    assert not policy.accepts(offer.model_copy(update={"region": "us-west-2"}))
+    assert not policy.accepts(offer.model_copy(update={"instance_type": "unapproved"}))
+    assert not policy.model_copy(update={"purchase_limits": ()}).accepts(offer)

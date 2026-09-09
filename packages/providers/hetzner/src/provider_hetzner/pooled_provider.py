@@ -69,7 +69,10 @@ class HetznerPooledProvider:
             raise ValueError("Hetzner supplier currency conversion must be positive")
         for shape in self.client.server_types():
             if (
-                shape.name not in HETZNER_CAPACITY_POLICY.allowed_instance_types
+                not any(
+                    limit.instance_type == shape.name
+                    for limit in HETZNER_CAPACITY_POLICY.purchase_limits
+                )
                 or shape.architecture != "x86"
             ):
                 continue

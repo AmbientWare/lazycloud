@@ -26,6 +26,7 @@ from compute.offers import ComputeOffer
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
+    ProviderPurchaseLimit,
     ProviderUnitBootstrap,
     ProviderUnitInstance,
     ProviderUnitRequest,
@@ -747,6 +748,13 @@ def _compute(isolated_services: ApiServices, provider: _PooledProvider) -> Compu
                 platform_fleet=connection.platform_fleet,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
+                purchase_limits=(
+                    ProviderPurchaseLimit(
+                        region=_REGION,
+                        instance_type="m7i.xlarge",
+                        max_hourly_cost_micros=340_000,
+                    ),
+                ),
                 max_cpu_instances=AWS_COMPUTE_CONFIGURATION.max_cpu_instances,
                 max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
             ),

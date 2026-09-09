@@ -17,6 +17,7 @@ from compute.policy import WorkspaceComputePolicyService
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
+    ProviderPurchaseLimit,
     ProviderUnitBootstrap,
     ProviderUnitInstance,
     ProviderUnitRequest,
@@ -312,6 +313,13 @@ class _Resolver(ComputeProviderResolver):
                 platform_fleet=connection.platform_fleet,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
+                purchase_limits=(
+                    ProviderPurchaseLimit(
+                        region=self.provider.offer.region,
+                        instance_type=self.provider.offer.instance_type,
+                        max_hourly_cost_micros=1_000_000,
+                    ),
+                ),
                 max_cpu_instances=self.max_cpu_instances,
                 max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
             ),
@@ -470,6 +478,13 @@ def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
                     platform_fleet=True,
                     default_region=offer.region,
                     allowed_regions=(offer.region,),
+                    purchase_limits=(
+                        ProviderPurchaseLimit(
+                            region=offer.region,
+                            instance_type=offer.instance_type,
+                            max_hourly_cost_micros=1_000_000,
+                        ),
+                    ),
                 ),
             )
         )
@@ -531,6 +546,13 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
             platform_fleet=True,
             default_region=offer.region,
             allowed_regions=(offer.region,),
+            purchase_limits=(
+                ProviderPurchaseLimit(
+                    region=offer.region,
+                    instance_type=offer.instance_type,
+                    max_hourly_cost_micros=1_000_000,
+                ),
+            ),
         ),
     )
     resolver = WorkspaceComputeProviderResolver(
@@ -617,6 +639,72 @@ def test_acquired_node_costs_survive_offer_changes_and_catalog_loss(
     }
     with pytest.raises(NotFoundError):
         inspection.inspect(workspace_id=str(uuid4()), unit_id=unit.id)
+
+
+def test_price_increase_blocks_acquisition_but_preserves_owned_capacity(
+    isolated_services: ApiServices,
+) -> None:
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider, isolated_services),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    unit = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    acquisition = CapacityAcquisitionRequest(
+        capacity_owner_id=unit.capacity_owner_id,
+        reservation_id=str(uuid4()),
+        operation_id=str(uuid4()),
+        shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
+    )
+    assert compute.ensure_capacity(acquisition).status is CapacityAcquisitionStatus.Requested
+    provider.offer = provider.offer.model_copy(
+        update={
+            "cost_terms": provider.offer.cost_terms.model_copy(
+                update={"compute_hourly_micros": 1_000_001}
+            )
+        }
+    )
+
+    assert compute.ensure_capacity(acquisition).status is CapacityAcquisitionStatus.ExistingPending
+    compute.reconcile_pooled_capacity()
+    with isolated_services.context.database.session() as session:
+        observed = ComputeUnitRepository(session).get(unit.id)
+    assert observed is not None
+    assert observed.observed_machines == 1
+    assert observed.phase is ComputeUnitPhase.Ready
+    with pytest.raises(ConflictError, match="purchase ceiling"):
+        compute.scale_internal_unit(
+            unit.workspace_id, unit.capacity_owner_id, 2, before_mutation=_allow_scale
+        )
+
+    rejected = compute.ensure_capacity(
+        acquisition.model_copy(
+            update={"reservation_id": str(uuid4()), "operation_id": str(uuid4())}
+        )
+    )
+    assert rejected.status is CapacityAcquisitionStatus.TemporarilyUnavailable
+    assert "purchase ceiling" in rejected.reason
+    assert provider.desired == 1
+    with isolated_services.context.database.session() as session:
+        unchanged = ComputeUnitRepository(session).get(unit.id)
+    assert unchanged is not None
+    assert unchanged.desired_machines == 1
+
+    released = compute.scale_internal_unit(
+        unit.workspace_id, unit.capacity_owner_id, 0, before_mutation=_allow_scale
+    )
+    assert released.observed_machines == 0
+    assert provider.desired == 0
 
 
 def test_internal_pool_lookup_is_workspace_scoped(isolated_services: ApiServices) -> None:
