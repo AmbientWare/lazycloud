@@ -156,9 +156,13 @@ jobs:
               -- lazycloud --help >/dev/null
           done
 
-  validate:
-    name: Changed Python owners
+  test-shards:
+    name: Changed Python owners ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: [1, 2, 3, 4]
     # Real Redis and real PostgreSQL, because the properties that most need
     # proving cannot be proven without them: single-winner races, expired-lease
     # recovery, exactly-once delivery, prefix sweeps matched against the real key
@@ -222,12 +226,24 @@ jobs:
         run: >-
           uv run --group dev python .github/scripts/validate_changed_scope.py
           --base "${BASE_SHA}" --check tests --workers 2
+          --splits 4 --group ${{ matrix.shard }}
           --junitxml test-results/python.xml
 
       - name: Upload test timings
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: python-test-results
+          name: python-test-results-${{ matrix.shard }}
           path: test-results/python.xml
           retention-days: 14
+
+  validate:
+    name: Changed Python owners
+    needs: test-shards
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every test shard to pass
+        env:
+          TEST_RESULT: ${{ needs.test-shards.result }}
+        run: test "${TEST_RESULT}" = success

@@ -19,16 +19,25 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--base", required=True, help="Git revision used as the comparison base")
     parser.add_argument("--check", choices=("all", "types", "tests"), default="all")
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--splits", type=int, default=1)
+    parser.add_argument("--group", type=int, default=1)
     parser.add_argument("--junitxml", type=Path)
     parser.add_argument(
         "--list", action="store_true", help="Print selected paths without running checks"
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not 1 <= args.group <= args.splits:
+        parser.error("--group must be between 1 and --splits")
+    return args
 
 
-def _run(command: Sequence[str]) -> None:
+def _run(command: Sequence[str], *, allow_empty_group: bool = False) -> None:
     print(f"+ {shlex.join(command)}", flush=True)
-    subprocess.run(command, cwd=REPOSITORY_ROOT, check=True)
+    result = subprocess.run(command, cwd=REPOSITORY_ROOT, check=False)
+    if allow_empty_group and result.returncode == 5:
+        print("This shard has no selected tests.", flush=True)
+        return
+    result.check_returncode()
 
 
 def _output(command: Sequence[str]) -> str:
@@ -210,9 +219,20 @@ def _validate(args: argparse.Namespace) -> None:
 
     if tests and args.check in ("all", "tests"):
         command = ["uv", "run", "--group", "dev", "pytest", "-x", "-q", "-n", str(args.workers)]
+        if args.splits > 1:
+            command.extend(
+                [
+                    "--splits",
+                    str(args.splits),
+                    "--group",
+                    str(args.group),
+                    "--splitting-algorithm",
+                    "least_duration",
+                ]
+            )
         if args.junitxml:
             command.extend(["--junitxml", str(args.junitxml)])
-        _run([*command, *tests])
+        _run([*command, *tests], allow_empty_group=args.splits > 1)
 
     if not python_files and not typing_targets and not test_targets:
         print("No changed Python validation scope.", flush=True)

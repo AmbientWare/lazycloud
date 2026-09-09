@@ -78,8 +78,10 @@ uv run --group dev python .github/scripts/validate_changed_scope.py --base origi
 uv run --group dev python .github/scripts/validate_changed_scope.py --base origin/main --workers 2
 ```
 
-CI runs types and tests in separate jobs and uploads test timings. Local runs
-print the slowest setup, execution, and teardown phases. Add
+CI runs four test shards with two workers each, alongside type checks, and uploads
+each shard's test timings. Every selected test belongs to one shard. To reproduce
+one shard locally, add `--splits 4 --group 1` to the changed-scope command.
+Local runs print the slowest setup, execution, and teardown phases. Add
 `--junitxml=test-results/python.xml` to retain a local report.
 Stop the test-only stack with `docker compose -f compose.test.yaml down -v`.
 
