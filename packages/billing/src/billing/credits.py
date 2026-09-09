@@ -21,7 +21,12 @@ from shared.billing_accounts import BillingAccount
 from shared.billing_credits import CreditGrant, CreditKind, CreditScope
 from shared.billing_plans import BillingPlanId
 from shared.billing_quotes import BILLED_METRICS
-from shared.billing_rate_card import ONE_TIME_TRIAL_NANOS, TRIAL_VALIDITY_DAYS, subscription_terms
+from shared.billing_rate_card import (
+    ONE_TIME_TRIAL_NANOS,
+    TRIAL_CREDIT_SCOPE,
+    TRIAL_VALIDITY_DAYS,
+    subscription_terms,
+)
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.payments import (
     METER_EVENT_NAMES,
@@ -206,7 +211,7 @@ def initialize_local_credits(
         grant=CreditGrant(
             source_id=f"trial:{user_id}",
             kind=CreditKind.Trial,
-            scope=CreditScope.Compute,
+            scope=TRIAL_CREDIT_SCOPE,
             amount_nanos=ONE_TIME_TRIAL_NANOS,
             effective_at=to_utc(effective_at),
             expires_at=to_utc(effective_at) + timedelta(days=TRIAL_VALIDITY_DAYS),

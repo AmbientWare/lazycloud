@@ -26,8 +26,6 @@ def test_reload_serializes_payments_preserves_pause_and_counts_refunds_and_old_p
         workspace_id = postgres_services.context.default_workspace_id(session)
         user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
         credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=now)
-        credits.complete_cutover(user_id=user_id, at=now)
         BillingFundingService(session).set_preferences(user_id=user_id, preferences=preferences)
     service = AutomaticReloadService(
         postgres_services.context.database,

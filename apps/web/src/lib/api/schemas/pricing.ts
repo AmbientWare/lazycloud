@@ -129,7 +129,7 @@ export const pricingCatalogSchema = z
       .object({
         amount_nanos: z.number().int().positive(),
         duration_days: z.number().int().positive(),
-        scope: z.literal("compute"),
+        scope: creditScopeSchema,
         one_time: z.literal(true),
       })
       .strict(),

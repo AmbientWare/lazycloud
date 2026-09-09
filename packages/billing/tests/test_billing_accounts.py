@@ -328,7 +328,7 @@ def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
         trial = lots[0]
         original = (trial.id, trial.amount_nanos, trial.effective_at, trial.expires_at)
         assert trial.kind == CreditKind.Trial.value
-        assert trial.scope == CreditScope.Compute.value
+        assert trial.scope == CreditScope.AllMetered.value
         assert trial.amount_nanos == ONE_TIME_TRIAL_NANOS
         assert trial.expires_at is not None
         assert trial.expires_at == trial.effective_at + timedelta(days=TRIAL_VALIDITY_DAYS)
@@ -343,7 +343,7 @@ def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
             credits.balance(
                 user_id=user_id, at=CYCLE_STARTED_AT, dimension=BilledDimension.VolumeStorage
             ).available_nanos
-            == 0
+            == ONE_TIME_TRIAL_NANOS
         )
         assert (
             credits.balance(

@@ -24,6 +24,7 @@ all would have nowhere for its usage to land.
 
 FREE_PLAN_INCLUDED_NANOS = 0
 ONE_TIME_TRIAL_NANOS = 5 * NANOS_PER_USD
+TRIAL_CREDIT_SCOPE = CreditScope.AllMetered
 TRIAL_VALIDITY_DAYS = 30
 
 FREE_PLAN_MAX_CPU_CONTAINERS = 30
@@ -884,6 +885,7 @@ __all__ = [
     "TEAM_PLAN_MAX_CPU_CONTAINERS",
     "TEAM_PLAN_MAX_GPUS",
     "TEAM_PLAN_MONTHLY_NANOS",
+    "TRIAL_CREDIT_SCOPE",
     "TRIAL_VALIDITY_DAYS",
     "AccountTerms",
     "AllGpuTypes",

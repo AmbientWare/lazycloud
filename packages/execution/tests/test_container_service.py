@@ -48,8 +48,6 @@ from shared.workload_keys import (
 from tests.real_redis import RealRedisActors
 from tests.service_fixtures import workspace_owner_user_id
 
-pytestmark = pytest.mark.usefixtures("funded_execution_account")
-
 
 class _Scheduler:
     def __init__(self) -> None:

@@ -22,7 +22,7 @@ admission decision, credit funding and migration, and the sweep.
   an active subscription is not payment evidence. Repeated receipts and renewals
   cannot issue another grant for terms already funded. Upgrade increments do not
   rewrite prior exports or remove purchased funds.
-- Initial local-credit provisioning issues one compute-only trial per account,
+- Initial local-credit provisioning issues one trial for all metered usage per account,
   expiring after 30 days. Its account-scoped source and recorded credit cutover
   prevent retries, more workspaces, renewals and resubscription from repeating
   it. Existing accounts retain their funded lots; migration does not give them

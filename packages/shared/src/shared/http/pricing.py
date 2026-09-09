@@ -16,6 +16,7 @@ from shared.billing_rate_card import (
     PUBLISHED_METERED_RATE_HISTORY,
     PUBLISHED_PLANS,
     SECONDS_PER_30_DAY_MONTH,
+    TRIAL_CREDIT_SCOPE,
     TRIAL_VALIDITY_DAYS,
     AllGpuTypes,
     EntitlementLimit,
@@ -110,7 +111,7 @@ class CreditPurchaseTermsResponse(HttpModel):
 class TrialTermsResponse(HttpModel):
     amount_nanos: int = Field(gt=0)
     duration_days: int = Field(gt=0)
-    scope: Literal["compute"] = "compute"
+    scope: CreditScope
     one_time: Literal[True] = True
 
 
@@ -159,6 +160,7 @@ def pricing_catalog_response(*, at: datetime | None = None) -> PricingCatalogRes
         trial=TrialTermsResponse(
             amount_nanos=ONE_TIME_TRIAL_NANOS,
             duration_days=TRIAL_VALIDITY_DAYS,
+            scope=TRIAL_CREDIT_SCOPE,
         ),
         credit_purchase=CreditPurchaseTermsResponse(
             minimum_cents=MIN_CREDIT_PURCHASE_CENTS,

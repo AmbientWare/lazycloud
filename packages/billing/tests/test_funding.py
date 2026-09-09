@@ -39,7 +39,7 @@ from shared.usage import (
     UsageUnit,
 )
 from sqlalchemy import select
-from tests.service_fixtures import workspace_owner_user_id
+from tests.service_fixtures import legacy_billing_account
 
 
 def test_destroyed_worker_releases_unknown_hold_and_waives_late_usage(
@@ -47,9 +47,10 @@ def test_destroyed_worker_releases_unknown_hold_and_waives_late_usage(
 ) -> None:
     at = utc_now()
     container_id, machine_id, instance_id = (str(uuid4()) for _ in range(3))
+    user_id, workspace_id = legacy_billing_account(
+        postgres_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
+    )
     with postgres_services.context.database.session() as session:
-        workspace_id = postgres_services.context.default_workspace_id(session)
-        user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
         publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
         credits = BillingCreditRepository(session)
         credits.prepare_cutover(user_id=user_id, effective_at=at)
@@ -208,9 +209,10 @@ def test_two_concurrent_starts_cannot_reserve_the_same_available_credit(
     postgres_services: ApiServices,
 ) -> None:
     at = utc_now()
+    user_id, workspace_id = legacy_billing_account(
+        postgres_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
+    )
     with postgres_services.context.database.session() as session:
-        workspace_id = postgres_services.context.default_workspace_id(session)
-        user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
         publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
         credits = BillingCreditRepository(session)
         credits.prepare_cutover(user_id=user_id, effective_at=at)
@@ -285,9 +287,10 @@ def test_burst_usage_settles_its_hold_and_refunded_spent_credit_blocks_new_work(
     end = at + timedelta(seconds=10)
     container_id = str(uuid4())
     worker_id = "funding-worker"
+    user_id, workspace_id = legacy_billing_account(
+        postgres_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
+    )
     with postgres_services.context.database.session() as session:
-        workspace_id = postgres_services.context.default_workspace_id(session)
-        user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
         publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
         credits = BillingCreditRepository(session)
         credits.prepare_cutover(user_id=user_id, effective_at=at)

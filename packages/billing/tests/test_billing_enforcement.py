@@ -7,7 +7,6 @@ from uuid import uuid4
 from api.server.services import ApiServices
 from billing.enforcement import BillingEnforcementService
 from database.repositories.billing import BillingAccountRepository
-from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_funding import BillingFundingRepository
 from database.repositories.orchestration import ContainerRepository
 from shared.billing_quotes import ContainerShape
@@ -42,9 +41,6 @@ def test_expired_funding_is_stopped_even_with_a_saved_card(
         BillingAccountRepository(session).set_payment_method_present(
             user_id=user_id, present=True, at=now
         )
-        credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=now)
-        credits.complete_cutover(user_id=user_id, at=now)
         active_id, expired_id = str(uuid4()), str(uuid4())
         for container_id, deadline in (
             (active_id, now + timedelta(seconds=60)),

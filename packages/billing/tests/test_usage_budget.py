@@ -30,8 +30,6 @@ def test_monthly_cap_serializes_starts_and_covers_rollover_and_saved_edits(
         user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
         publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
         credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=now)
-        credits.complete_cutover(user_id=user_id, at=now)
         credits.issue(
             user_id=user_id,
             grant=CreditGrant(

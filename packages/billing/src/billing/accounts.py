@@ -47,7 +47,7 @@ class BillingAccountService:
         creating it.
 
         Initial provisioning creates the provider relationship and one expiring
-        compute trial. Subscription cycles cannot replenish that trial.
+        usage trial. Subscription cycles cannot replenish that trial.
 
         Idempotent, because every one of those can be repeated. An account whose
         row already names a subscription returns it and reaches no provider at

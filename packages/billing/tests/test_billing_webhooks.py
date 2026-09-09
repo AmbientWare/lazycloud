@@ -11,9 +11,8 @@ from database.repositories.billing_allowance import BillingAllowanceRepository
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import (
-    FREE_PLAN_INCLUDED_NANOS,
-    TEAM_PLAN_INCLUDED_NANOS,
     published_plan,
+    subscription_terms,
 )
 from shared.errors import PaymentRequiredError
 from shared.payments import (
@@ -27,7 +26,7 @@ from shared.payments import (
     ProviderSubscription,
     SubscriptionChangeTiming,
 )
-from tests.service_fixtures import workspace_owner_user_id
+from tests.service_fixtures import legacy_billing_account, workspace_owner_user_id
 
 from billing import BillingWebhookService, DatabaseBillingAdmission
 
@@ -47,7 +46,11 @@ class _Provider:
 
     granted: list[int] = field(default_factory=list)
     expired_grants: list[str] = field(default_factory=list)
-    subscription_plan: BillingPlanId = BillingPlanId.Team
+    terms_version: SubscriptionTermsVersion = SubscriptionTermsVersion.Team
+
+    @property
+    def subscription_plan(self) -> BillingPlanId:
+        return subscription_terms(self.terms_version).plan
 
     cards_on_file: set[str] = field(default_factory=set)
     """Customers the provider says hold something chargeable."""
@@ -116,7 +119,7 @@ class _Provider:
             current_period_started_at=CYCLE_STARTED_AT,
             current_period_ended_at=CYCLE_ENDED_AT,
             plan=self.subscription_plan,
-            terms_version=published_plan(self.subscription_plan).terms_version,
+            terms_version=self.terms_version,
             scheduled_terms_version=None,
             scheduled_change_at=None,
         )
@@ -316,11 +319,13 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
     """
 
     provider = _Provider()
-    provider.subscription_plan = BillingPlanId.Team
+    provider.terms_version = SubscriptionTermsVersion.TeamLegacy
     provider.cards_on_file.add("cus_webhook")
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+    user_id, _ = legacy_billing_account(
+        isolated_services.context,
+        period_started_at=CYCLE_STARTED_AT,
+        period_ended_at=CYCLE_ENDED_AT,
+    )
     with isolated_services.context.database.session() as session:
         BillingAccountRepository(session).upsert(
             user_id=user_id,
@@ -329,7 +334,7 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
             provider_subscription_id="sub_webhook",
             provider_credit_grant_id="credgr_free",
             plan=BillingPlanId.Free,
-            subscription_terms_version=published_plan(BillingPlanId.Free).terms_version,
+            subscription_terms_version=SubscriptionTermsVersion.FreeLegacy,
             scheduled_terms_version=None,
             scheduled_change_at=None,
         )
@@ -344,7 +349,7 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
             user_id=user_id,
             period_started_at=CYCLE_STARTED_AT,
             period_ended_at=CYCLE_ENDED_AT,
-            allowance_nanos=FREE_PLAN_INCLUDED_NANOS,
+            allowance_nanos=subscription_terms(SubscriptionTermsVersion.FreeLegacy).included_nanos,
             funded=True,
         )
         session.commit()
@@ -372,7 +377,10 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
     assert account.provider_credit_grant_id == "credgr_team"
     assert allowance is not None
     assert allowance.started_at == CYCLE_STARTED_AT
-    assert allowance.allowance_nanos == TEAM_PLAN_INCLUDED_NANOS
+    assert (
+        allowance.allowance_nanos
+        == subscription_terms(SubscriptionTermsVersion.TeamLegacy).included_nanos
+    )
 
 
 def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
@@ -445,7 +453,7 @@ def test_a_saved_card_preserves_existing_credit_without_replenishment(
 ) -> None:
 
     provider = _Provider()
-    provider.subscription_plan = BillingPlanId.Free
+    provider.terms_version = SubscriptionTermsVersion.Free
     provider.payment_method_owners = {"pm_first": "cus_webhook"}
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)

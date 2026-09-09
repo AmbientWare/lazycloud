@@ -262,7 +262,7 @@ function pricingCatalog(): PricingCatalog {
     currency: "USD",
     connected_cloud_management_fee_percent: 8,
     credit_purchase: { minimum_cents: 2000, maximum_cents: 100000 },
-    trial: { amount_nanos: 5_000_000_000, duration_days: 30, scope: "compute", one_time: true },
+    trial: { amount_nanos: 5_000_000_000, duration_days: 30, scope: "all_metered", one_time: true },
     no_payment_method: {
       max_concurrent_cpu_containers: 10,
       max_concurrent_gpus: 1,

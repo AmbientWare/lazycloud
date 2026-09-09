@@ -36,7 +36,7 @@ from shared.usage import (
     UsageUnit,
 )
 from sqlalchemy import func, select
-from tests.service_fixtures import workspace_owner_user_id
+from tests.service_fixtures import legacy_billing_account
 
 
 def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
@@ -44,9 +44,10 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
 ) -> None:
     start = datetime(2027, 1, 1, tzinfo=UTC)
     end = start + timedelta(days=30)
+    user_id, _ = legacy_billing_account(
+        postgres_services.context, period_started_at=start, period_ended_at=end
+    )
     with postgres_services.context.database.session() as session:
-        workspace_id = postgres_services.context.default_workspace_id(session)
-        user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
         credits = BillingCreditRepository(session)
         credits.prepare_cutover(user_id=user_id, effective_at=start)
         credits.complete_cutover(user_id=user_id, at=start)
@@ -249,9 +250,10 @@ def test_credit_expiry_and_start_split_a_frozen_charge_and_preserve_purchased_fu
     postgres_services: ApiServices,
 ) -> None:
     at = datetime(2026, 9, 12, tzinfo=UTC)
+    user_id, workspace_id = legacy_billing_account(
+        postgres_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
+    )
     with postgres_services.context.database.session() as session:
-        workspace_id = postgres_services.context.default_workspace_id(session)
-        user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
         publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
         credits = BillingCreditRepository(session)
         credits.prepare_cutover(user_id=user_id, effective_at=at)
@@ -327,9 +329,10 @@ def test_concurrent_usage_and_duplicate_receipts_cannot_spend_the_same_credit_tw
     postgres_services: ApiServices,
 ) -> None:
     at = datetime(2026, 9, 12, tzinfo=UTC)
+    user_id, workspace_id = legacy_billing_account(
+        postgres_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
+    )
     with postgres_services.context.database.session() as session:
-        workspace_id = postgres_services.context.default_workspace_id(session)
-        user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
         publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
         credits = BillingCreditRepository(session)
         credits.prepare_cutover(user_id=user_id, effective_at=at)
@@ -391,9 +394,10 @@ def test_crossing_cutover_keeps_legacy_export_and_resumes_net_settlement_once(
 ) -> None:
     at = datetime(2026, 9, 12, tzinfo=UTC)
     boundary = at + timedelta(seconds=5)
+    user_id, workspace_id = legacy_billing_account(
+        postgres_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
+    )
     with postgres_services.context.database.session() as session:
-        workspace_id = postgres_services.context.default_workspace_id(session)
-        user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
         publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
         credits = BillingCreditRepository(session)
         credits.prepare_cutover(user_id=user_id, effective_at=boundary)
@@ -476,9 +480,10 @@ def test_waived_usage_preserves_purchased_credit_and_records_the_gross_waiver(
     postgres_services: ApiServices,
 ) -> None:
     at = datetime(2026, 9, 12, tzinfo=UTC)
+    user_id, workspace_id = legacy_billing_account(
+        postgres_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
+    )
     with postgres_services.context.database.session() as session:
-        workspace_id = postgres_services.context.default_workspace_id(session)
-        user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
         publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
         account = session.scalar(
             select(BillingAccountTable).where(BillingAccountTable.user_id == user_id)
