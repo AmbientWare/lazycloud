@@ -8,13 +8,11 @@ from fastapi.responses import StreamingResponse
 from identity.auth import AuthError, AuthorizationDeniedError
 from identity.authz import worker_requirement
 from shared.errors import ConflictError, UpstreamUnavailableError
-from shared.funding import FundingPermit
-from shared.http.worker_funding import (
-    WorkerFundingRequest,
+from shared.http.worker_network import WorkerEgressPolicy, WorkerEgressPolicyRequest
+from shared.http.worker_usage import (
     WorkerUsageWindowRequest,
     WorkerUsageWindowResponse,
 )
-from shared.http.worker_network import WorkerEgressPolicy, WorkerEgressPolicyRequest
 from shared.identity import AuthScope
 from worker.events import WorkerStreamEvent
 from worker.origin_access import (
@@ -757,20 +755,6 @@ def record_worker_usage_window(
     principal: WorkerPrincipal,
 ) -> WorkerUsageWindowResponse:
     return service.record_worker_usage_window(request, worker_id=principal.worker_id)
-
-
-@router.post("/worker-repository/authorize-container-funding", response_model=FundingPermit)
-def authorize_container_funding(
-    request: WorkerFundingRequest, service: WorkerRepo, principal: WorkerPrincipal
-) -> FundingPermit:
-    return service.authorize_container_funding(request, worker_id=principal.worker_id)
-
-
-@router.post("/worker-repository/renew-container-funding", response_model=FundingPermit)
-def renew_container_funding(
-    request: WorkerFundingRequest, service: WorkerRepo, principal: WorkerPrincipal
-) -> FundingPermit:
-    return service.renew_container_funding(request, worker_id=principal.worker_id)
 
 
 @router.post(

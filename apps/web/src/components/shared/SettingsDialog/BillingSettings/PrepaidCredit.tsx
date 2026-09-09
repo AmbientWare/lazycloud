@@ -40,19 +40,10 @@ export function PrepaidCredit() {
         </p>
         {balance.data?.ready ? (
           <div className="text-sm">
-            <p>{formatCostNanos(balance.data.compute.available_nanos)} available for compute.</p>
-            <p>
-              {formatCostNanos(balance.data.storage_and_transfer.available_nanos)} of that is also
-              available for storage and transfer.
-            </p>
-            <p className="text-muted-foreground">
-              {formatCostNanos(balance.data.compute.held_nanos)} reserved for running or queued
-              work.
-            </p>
-            {balance.data.compute.debt_nanos > 0 ? (
+            <p>Credit balance: {formatCostNanos(balance.data.balance_nanos)}.</p>
+            {balance.data.balance_nanos <= 0 ? (
               <p className="text-destructive">
-                Outstanding balance: {formatCostNanos(balance.data.compute.debt_nanos)}. Add credit
-                to resume work.
+                Add credit to resume work. New credit covers any negative balance first.
               </p>
             ) : null}
           </div>

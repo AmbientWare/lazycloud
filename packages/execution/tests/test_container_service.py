@@ -15,7 +15,6 @@ from coordination.event_bus import (
     event_id_for_event,
     event_key,
 )
-from database.repositories.billing_funding import BillingFundingRepository
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.repositories.orchestration import (
@@ -261,9 +260,6 @@ def test_checkpoint_gpu_limit_rejects_before_scheduler_submission(
         )
 
     assert scheduler.requests == []
-    with isolated_services.context.database.session() as session:
-        funding = BillingFundingRepository(session).get(container.id)
-        assert funding is not None and funding.cancelled_at is not None
 
 
 def test_container_stop_targets_only_assigned_worker(

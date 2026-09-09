@@ -55,7 +55,7 @@ function PlanDialogBody({ controller }: { controller: BillingSettingsController 
         <DialogHeader className="shrink-0 border-b border-border bg-muted/20 px-5 py-4 pr-12 text-left">
           <DialogTitle className="text-base">Subscription</DialogTitle>
           <DialogDescription>
-            Paid plans include monthly compute credit. Usage rates are the same across plans.
+            Paid plans include monthly usage credit. Usage rates are the same across plans.
           </DialogDescription>
         </DialogHeader>
 
@@ -154,7 +154,7 @@ function PlanCard({
       <ul className="mt-4 flex-1 space-y-2 border-t border-border/80 pt-4 text-xs leading-5">
         <PlanPoint>
           {offer.included_nanos > 0
-            ? `${exactDollars(offer.included_nanos)} ${offer.credit_scope === "compute" ? "compute" : "usage"} credit each month`
+            ? `${exactDollars(offer.included_nanos)} usage credit each month`
             : "Pay for usage with prepaid credit"}
         </PlanPoint>
         <PlanPoint>
@@ -258,8 +258,7 @@ function ChangeConfirmation({
           ) : (
             <li>
               Future months cost {exactDollars(offer.monthly_nanos)} and include{" "}
-              {exactDollars(offer.included_nanos)} of{" "}
-              {offer.credit_scope === "compute" ? "compute" : "usage"} credit.
+              {exactDollars(offer.included_nanos)} of usage credit.
             </li>
           )}
           {summary ? (

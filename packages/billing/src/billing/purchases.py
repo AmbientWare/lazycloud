@@ -11,7 +11,7 @@ from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.credit_purchases import CreditPurchaseRepository
 from database.tables.credit_purchases import CreditPurchaseTable
-from shared.billing_credits import CreditGrant, CreditKind, CreditScope
+from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_quotes import NANOS_PER_USD
 from shared.credit_payments import (
     MAX_CREDIT_PURCHASE_CENTS,
@@ -307,7 +307,6 @@ class CreditPurchaseService:
                 grant=CreditGrant(
                     source_id=f"payment:{payment.provider_payment_id}",
                     kind=CreditKind.Purchased,
-                    scope=CreditScope.AllMetered,
                     amount_nanos=row.amount_nanos,
                     effective_at=funded_at,
                 ),

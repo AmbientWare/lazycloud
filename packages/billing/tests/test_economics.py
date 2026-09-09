@@ -133,7 +133,6 @@ def test_report_keeps_cash_out_of_revenue_and_requires_reconciled_actual_costs(
                         user_id=user.id,
                         source_id=kind.value,
                         kind=kind.value,
-                        scope="all_metered",
                         amount_nanos=amount,
                         effective_at=start,
                     )
@@ -141,6 +140,7 @@ def test_report_keeps_cash_out_of_revenue_and_requires_reconciled_actual_costs(
                 session.flush()
                 session.add(
                     BillingCreditAllocationTable(
+                        id=str(uuid4()),
                         credit_lot_id=lot_id,
                         ledger_segment_id=segment_id,
                         started_at=start,
@@ -157,21 +157,6 @@ def test_report_keeps_cash_out_of_revenue_and_requires_reconciled_actual_costs(
                     credited_nanos=611,
                     payable_nanos=gross + 7 - 611,
                     settled_at=start,
-                )
-            )
-            session.add(
-                BillingMeterOutboxTable(
-                    workspace_id=workspace.id,
-                    usage_record_id=usage_id,
-                    identifier=usage_id,
-                    provider_customer_id="economics",
-                    meter_event_name="compute",
-                    value_nanos=gross + 7 - 611,
-                    pricing_version="economics",
-                    occurred_at=start,
-                    metering_ended_at=end + timedelta(minutes=1),
-                    status="sent",
-                    next_attempt_at=start,
                 )
             )
             session.add(

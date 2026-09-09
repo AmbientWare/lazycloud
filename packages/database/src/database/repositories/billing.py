@@ -6,9 +6,13 @@ from datetime import datetime
 from uuid import uuid4
 
 from database.tables.billing import BillingAccountTable
+from database.tables.identity import WorkspaceMemberTable
+from database.tables.orchestration import ContainerTable
 from shared.billing_accounts import BillingAccount, BillingAccountStatus
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
+from shared.containers import LIVE_CONTAINER_STATUSES
 from shared.errors import ConflictError
+from shared.identity import WorkspaceRole
 from shared.timestamps import to_utc
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -135,6 +139,31 @@ class BillingAccountRepository:
             statement.order_by(BillingAccountTable.user_id).limit(limit)
         ).all()
         return tuple(_account(row) for row in rows)
+
+    def page_with_live_compute(
+        self, *, after_user_id: str | None, limit: int
+    ) -> tuple[BillingAccount, ...]:
+        statement = select(BillingAccountTable).where(
+            select(ContainerTable.id)
+            .join(
+                WorkspaceMemberTable,
+                WorkspaceMemberTable.workspace_id == ContainerTable.workspace_id,
+            )
+            .where(
+                WorkspaceMemberTable.user_id == BillingAccountTable.user_id,
+                WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+            )
+            .exists()
+        )
+        if after_user_id is not None:
+            statement = statement.where(BillingAccountTable.user_id > after_user_id)
+        return tuple(
+            _account(row)
+            for row in self.session.scalars(
+                statement.order_by(BillingAccountTable.user_id).limit(limit)
+            )
+        )
 
     def upsert(
         self,

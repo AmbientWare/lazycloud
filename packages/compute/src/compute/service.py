@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from database.repositories.billing_funding import BillingFundingRepository
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
@@ -3036,7 +3035,6 @@ class ComputeService:
             if machine_id not in scoped_ids:
                 msg = f"machine not found in workspace: {machine_id}"
                 raise KeyError(msg)
-            BillingFundingRepository(session).require_machine_evidence_released((machine_id,))
             MachineRepository(session).records.delete(machine_id, workspace_id=workspace_id)
         self._publish_change(
             workspace_id=workspace_id,

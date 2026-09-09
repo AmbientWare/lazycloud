@@ -356,28 +356,6 @@ class BillingAllowanceRepository:
             for row in rows
         )
 
-    def credit_confirmed(self, *, user_id: str, started_at: datetime, ended_at: datetime) -> bool:
-        periods = self.session.scalars(
-            select(BillingAllowancePeriodTable)
-            .where(
-                BillingAllowancePeriodTable.user_id == user_id,
-                BillingAllowancePeriodTable.period_started_at < ended_at,
-                BillingAllowancePeriodTable.period_ended_at > started_at,
-            )
-            .order_by(BillingAllowancePeriodTable.period_started_at)
-        ).all()
-        covered_until = to_utc(started_at)
-        for period in periods:
-            if (
-                to_utc(period.period_started_at) > covered_until
-                or period.credit_confirmed_at is None
-            ):
-                return False
-            covered_until = max(covered_until, to_utc(period.period_ended_at))
-            if covered_until >= to_utc(ended_at):
-                return True
-        return False
-
     def _preceding_period_ended_at(
         self, *, user_id: str, period_started_at: datetime
     ) -> datetime | None:

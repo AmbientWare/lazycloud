@@ -8,29 +8,33 @@ billed from lives in `observability`; the rates, the priced ledger and the rows
 waiting to be sent live in `database`. This package owns the account, the
 admission decision, credit funding and migration, and the sweep.
 
-- Local credit lots and their ledger allocations own spendable credit after an
-  account's recorded cutover. Purchased funds do not expire. Subscription and
-  trial grants have explicit eligibility and expiry. Allocate expiring credits
-  first, under the same account lock that serializes issuance and settlement.
-- A credit allocation must lie inside its grant's effective interval. Split a
-  frozen ledger segment at credit boundaries and apportion its integer cost
-  cumulatively so the slices retain the exact gross total.
-- Gross ledger charges remain immutable. Local settlement records the credit
-  consumed and the uncovered amount sent through the existing meter outbox.
-  Fully covered usage needs no meter event. Waived usage consumes no credits.
+- Each account has one signed credit balance. Trial, subscription and purchased
+  credit pay for every metered resource. Purchased credit does not expire;
+  subscription and trial credit retain their effective and expiry dates.
+  Allocate expiring credit first under the account lock that serializes grants,
+  usage settlement and payment adjustments.
+- Price recorded usage into immutable ledger charges, then deduct each charge
+  once. Credit allocations preserve exact integer totals across grant boundaries.
+  Uncovered usage makes the balance negative; later credit pays that debt first.
+  Usage settlement does not require an active or funded subscription period.
+  Payment evidence controls issuing credit, not deducting recorded usage.
+  Local wallet usage never creates a Stripe meter event. Historical exports
+  before the account's recorded cutover remain in the meter outbox.
+- Waived usage remains visible in the gross ledger but consumes no credit and
+  creates no wallet debt. Local settlement records the waiver so withdrawing
+  complimentary status cannot charge that usage later.
 - A confirmed paid invoice line funds paid subscription credits. A saved card or
   an active subscription is not payment evidence. Repeated receipts and renewals
   cannot issue another grant for terms already funded. Upgrade increments do not
   rewrite prior exports or remove purchased funds.
-- Initial local-credit provisioning issues one trial for all metered usage per account,
-  expiring after 30 days. Its account-scoped source and recorded credit cutover
-  prevent retries, more workspaces, renewals and resubscription from repeating
-  it. Existing accounts retain their funded lots; migration does not give them
-  another trial. Free cycles have no recurring credit. Attaching or removing a
-  card never creates, increases or revokes credit.
+- Initial provisioning issues one trial per account, expiring after 30 days.
+  Its account-scoped source and recorded cutover prevent duplicate grants from
+  retries, extra workspaces, renewals or resubscription. Migration preserves
+  existing credit without granting another trial. Free cycles have no recurring
+  credit. Adding or removing a card never changes the balance.
 - Migration uses one fixed renewal boundary per account. Preserve prior gross
   exports and Stripe grants until those invoices reconcile. Hold later net
-  settlement durably until migration and period funding complete. Existing
+  settlement durably until migration completes. Existing
   purchased Stripe credit requires payment and consumption evidence before any
   transfer; unknown value is a named blocker, never zero.
 - Reconciliation advances this recorded credit transition and retries confirmed
@@ -66,7 +70,7 @@ admission decision, credit funding and migration, and the sweep.
 - Subscription terms are immutable versions. Existing subscriptions and paid
   invoice lines use their verified version, not today's published offer. Unknown
   prices leave terms unavailable until reconciled. Delayed invoices retain the
-  amount and eligibility of the terms they paid for.
+  amount and covered interval of the terms they paid for.
 - Paid upgrades take effect after the provider collects the prorated difference.
   Included credits are prorated across the same covered interval, net of the old
   plan's credited interval. Issue each paid invoice increment once and preserve
@@ -127,9 +131,10 @@ admission decision, credit funding and migration, and the sweep.
   with a conflict, which is a button that says so rather than a bill that does
   not.
 - Plan-change and credit-transition intents authorize their respective recovery
-  workflows. Other differences remain reports. Invoice reconciliation subtracts
-  allocated credits, unsettled credit records, waived charges and undelivered
-  outbox amounts from gross ledger cost. It reports when a divergence changes.
+  workflows. Other differences remain reports. Invoice reconciliation excludes
+  local wallet charges, including outstanding wallet debt, along with unsettled
+  transitions, waived charges and undelivered legacy outbox amounts. A wallet
+  shortfall must not become a second charge through a provider invoice.
 - The invoice it compares is the newest finalized one covering a period there is
   usage in. A plan change is prorated onto an invoice raised there and then,
   which carries no metered line and covers no span; taken as the newest closed
@@ -177,24 +182,14 @@ admission decision, credit funding and migration, and the sweep.
   account is shown no plan and no allowance rather than terms nothing will hold
   it to, is refused new work, and is provisioned by the first billing route it
   reaches.
-- New containers reserve eligible credits before becoming visible to placement.
-  The account lock serializes reservations, actual usage and payment adjustments.
-  Reserve the maximum CPU and RAM ceilings plus GPU charges through the permit
-  and shutdown interval. A saved card does not bypass funding.
-- The worker's local permit deadline bounds compute when the control plane is
-  unreachable. Renewals retain unreceived usage exposure. Only complete contiguous
-  metering releases past exposure; actual worker exit releases future exposure.
-  A stop request is not proof that runtime ended. Compute holds do not cover
-  object storage growth or network transfer.
-- Lost worker metering is resolved only after exact provider storage-destruction
-  evidence, permit expiry plus shutdown grace, and settlement of received usage.
-  Record the evidence and bounded exposure accepted by the platform before
-  releasing credit. Preserve prior charges; waive late compute usage in both
-  credit settlement and the meter outbox. Deletion retains machine evidence until
-  this resolution or complete terminal metering, including canceled accounts.
-- Purchased-credit refunds are immutable adjustments. A refund cannot erase
-  runtime already authorized against a lot. Its later usage consumes that
-  reservation and exposes the resulting debt, which blocks new funded work.
+- Admission requires a positive balance and remaining monthly usage budget.
+  Billing does not reserve credit or issue worker funding permits. The existing
+  usage monitor stops compute through the normal stop path when recorded usage
+  exhausts the balance or budget. Interval and shutdown overage is accepted and
+  charged to the same balance; a saved card does not bypass this check.
+- Purchased-credit refunds are immutable adjustments. They do not erase usage
+  already charged. A refund can make the balance negative, and the next credit
+  pays that debt before funding more work.
 - An administrator can waive an account's bill, and the waiver is a column on
   the account rather than a plan. A plan is something the provider prices and the
   rate card publishes; the rate card refuses a plan id it has no price for, and
@@ -204,15 +199,10 @@ admission decision, credit funding and migration, and the sweep.
   subscription is left untouched so withdrawing the waiver puts it back on that
   subscription with nothing to provision. The waiver is never read off the
   platform role. Who pays is a billing fact and who administers is an
-  authorization fact, and a demotion must not switch somebody's bill on. Usage
-  is still priced into the ledger so the account can see it, and the meter
-  event that would carry it to the provider is written as `waived` rather than
-  left out. Every
-  priced record then owes exactly one outbox row whatever the account's standing
-  was, and the row is what tells reconciliation afterwards why that window
-  reached no invoice, since the waiver itself may be gone by then. Waived rows
-  are subtracted before the invoice comparison like abandoned ones and are no
-  divergence, and like abandoned ones they are never pruned.
+  authorization fact, and a demotion must not switch somebody's bill on.
+  Historical usage before local credit cutover retains its waived outbox row;
+  local wallet usage records its waiver in settlement. Both preserve why a
+  charge was waived after the account's status changes.
 - Every billed thing asks that question, not only a container, and the method is
   named for the question rather than for what is asking. A volume asks it before
   it exists; a third billable resource asks the same one and adds no method. Only
@@ -227,19 +217,16 @@ admission decision, credit funding and migration, and the sweep.
   other than what was asked for. A model the plan does not offer is a payment
   refusal naming the model and the plan that does offer it, since that is a
   customer who has to decide something rather than one who has to wait.
-- A volume is admitted on creation alone, and the remainder is deliberate rather
-  than overlooked. Storage is the one billed dimension that keeps accruing with
-  nothing running, so the sweep that stops containers can do nothing about it,
-  which is why the refusal has to happen before the volume exists. But resolving
-  a volume that already exists is never refused: that is how a container mounts
-  one and how its owner reads their own files back, and locking an account out of
-  its data to collect a few cents is a data-loss incident wearing a billing
-  control's clothes. Nothing bounds how large an existing volume grows either.
-  Uploads are not admitted and there is no size quota, so the gate shrinks the
-  window rather than closing it; closing it needs a quota or an admission on the
-  write path, and neither exists. Cloning a stub also creates volumes without
-  asking, which is tolerable only because a volume is priced on byte-seconds and
-  an empty one is free.
+- Check new CLI and dashboard transfer requests at their existing authenticated
+  endpoints. Block them when credit or the monthly usage budget runs out;
+  already-started transfers may finish. Compute stops through its normal monitor,
+  including workloads using mounted storage. Do not add a metered proxy or
+  byte reservations to impose a hard cutoff on in-flight transfers.
+- Keep platform-managed data for a 30-day grace period after credit runs out,
+  notify the owner, and delete it if funds are not restored. A positive balance
+  ends the grace period. Recheck credit under the account lock before claiming
+  deletion, preserve customer-owned infrastructure, and charge no storage for
+  the grace interval.
 - Concurrency is refused separately and with a different error, because an
   account at its limit owes nothing and paying would not help it. It is a bound
   on how much one account can have running before anything notices, which matters
@@ -249,7 +236,7 @@ admission decision, credit funding and migration, and the sweep.
   is a term of a plan and making another workspace is self-serve. Deliberately
   approximate under concurrent starts. Closing that gap would put a per-account
   exclusive lock in the path of every autoscaler ramp to protect a guardrail
-  whose overshoot self-corrects and is invoiced like anything else.
+  whose overshoot self-corrects and is charged to the same balance.
 - Two concurrency pools, not one count with a GPU share inside it. A container
   counts against the CPU pool, or, when it asks for cards, against the GPU pool
   by the number of cards it holds, never both. One count would mean GPU work

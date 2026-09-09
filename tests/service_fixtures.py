@@ -37,7 +37,6 @@ from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import (
     METERED_RATES_EFFECTIVE_AT,
     ONE_TIME_TRIAL_NANOS,
-    TRIAL_CREDIT_SCOPE,
     TRIAL_VALIDITY_DAYS,
 )
 from shared.identity import (
@@ -122,7 +121,6 @@ def _fixture_account(database: DatabaseClient, display_name: str) -> str:
             grant=CreditGrant(
                 source_id=f"trial:{user_id}",
                 kind=CreditKind.Trial,
-                scope=TRIAL_CREDIT_SCOPE,
                 amount_nanos=ONE_TIME_TRIAL_NANOS,
                 effective_at=now,
                 expires_at=now + timedelta(days=TRIAL_VALIDITY_DAYS),
@@ -217,6 +215,7 @@ def postgres_services(
 ) -> Iterator[ApiServices]:
     settings = DatabaseSettings(
         url=postgres_database_url.render_as_string(hide_password=False),
+        direct_url=postgres_database_url.render_as_string(hide_password=False),
         application_name=DatabaseApplicationName.Test,
     )
     database = DatabaseClient.from_settings(settings)

@@ -6,7 +6,6 @@ from typing import Literal
 
 from pydantic import Field
 
-from shared.billing_credits import CreditScope
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import (
     CONNECTED_CLOUD_MANAGEMENT_FEE,
@@ -16,7 +15,6 @@ from shared.billing_rate_card import (
     PUBLISHED_METERED_RATE_HISTORY,
     PUBLISHED_PLANS,
     SECONDS_PER_30_DAY_MONTH,
-    TRIAL_CREDIT_SCOPE,
     TRIAL_VALIDITY_DAYS,
     AllGpuTypes,
     EntitlementLimit,
@@ -51,7 +49,6 @@ class PlanEntitlementsResponse(HttpModel):
 class PublishedPlanResponse(HttpModel):
     id: BillingPlanId
     terms_version: SubscriptionTermsVersion
-    credit_scope: CreditScope
     name: str
     summary: str
     monthly_nanos: int = Field(ge=0)
@@ -111,7 +108,6 @@ class CreditPurchaseTermsResponse(HttpModel):
 class TrialTermsResponse(HttpModel):
     amount_nanos: int = Field(gt=0)
     duration_days: int = Field(gt=0)
-    scope: CreditScope
     one_time: Literal[True] = True
 
 
@@ -160,7 +156,6 @@ def pricing_catalog_response(*, at: datetime | None = None) -> PricingCatalogRes
         trial=TrialTermsResponse(
             amount_nanos=ONE_TIME_TRIAL_NANOS,
             duration_days=TRIAL_VALIDITY_DAYS,
-            scope=TRIAL_CREDIT_SCOPE,
         ),
         credit_purchase=CreditPurchaseTermsResponse(
             minimum_cents=MIN_CREDIT_PURCHASE_CENTS,
@@ -209,7 +204,6 @@ def pricing_catalog_response(*, at: datetime | None = None) -> PricingCatalogRes
             PublishedPlanResponse(
                 id=plan.id,
                 terms_version=plan.terms_version,
-                credit_scope=plan.credit_scope,
                 name=plan.name,
                 summary=plan.summary,
                 monthly_nanos=plan.monthly_nanos,

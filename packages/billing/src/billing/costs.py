@@ -29,12 +29,9 @@ from shared.billing_quotes import BilledDimension
 from shared.billing_rate_card import PlanEntitlements, account_terms, complimentary_terms
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
-from shared.funding import FundingBalance
 from shared.http.usage import UsageCostBucket, UsageCostGroupKey
 from shared.timestamps import to_utc
 from sqlalchemy.orm import Session
-
-from billing.funding import BillingFundingService
 
 MAX_COST_PAGE = 200
 MAX_COST_WINDOW_DAYS = 400
@@ -80,8 +77,7 @@ class BillingEntitlementUsage:
 
 @dataclass(frozen=True, slots=True)
 class BillingCreditSummary:
-    compute: FundingBalance
-    storage_and_transfer: FundingBalance
+    balance_nanos: int
     ready: bool
 
 
@@ -218,17 +214,13 @@ class BillingStandingService:
     session: Session
 
     def credit_balance(self, *, user_id: str, at: datetime) -> BillingCreditSummary:
-        BillingAccountRepository(self.session).get_by_user(user_id, for_update=True)
-        cutover = BillingCreditRepository(self.session).cutover(user_id=user_id)
-        funding = BillingFundingService(self.session)
+        credits = BillingCreditRepository(self.session)
+        cutover = credits.cutover(user_id=user_id)
+        if cutover is None:
+            return BillingCreditSummary(balance_nanos=0, ready=False)
         return BillingCreditSummary(
-            compute=funding.balance(
-                user_id=user_id, dimension=BilledDimension.ComputeRuntime, at=at
-            ),
-            storage_and_transfer=funding.balance(
-                user_id=user_id, dimension=BilledDimension.NetworkEgress, at=at
-            ),
-            ready=cutover is not None and cutover.completed_at is not None,
+            balance_nanos=credits.balance(user_id=user_id, at=at),
+            ready=cutover.completed_at is not None,
         )
 
     def standing(self, *, user_id: str, at: datetime) -> BillingStanding:

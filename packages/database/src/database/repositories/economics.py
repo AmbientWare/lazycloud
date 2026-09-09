@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+from database.repositories.billing_credits import BillingCreditRepository
 from database.tables.billing_credits import (
     BillingCreditAllocationTable,
     BillingCreditCutoverTable,
@@ -147,6 +148,21 @@ class EconomicsRepository:
             or 0
         )
         outbox = BillingMeterOutboxTable
+        local_waived = sum(
+            segment.cost_nanos
+            if settled.waived_nanos == settled.gross_nanos
+            else BillingCreditRepository(self.session).retained_storage_cost([segment])
+            for segment, settled in self.session.execute(
+                select(ledger, settlement)
+                .join(settlement, settlement.usage_record_id == ledger.usage_record_id)
+                .join(cutover, cutover.user_id == ledger.owner_user_id)
+                .where(
+                    *attributed,
+                    ledger.segment_started_at >= cutover.effective_at,
+                    settlement.waived_nanos > 0,
+                )
+            )
+        )
         delivery_window = and_(
             outbox.usage_record_id == ledger.usage_record_id,
             outbox.occurred_at <= ledger.segment_started_at,
@@ -180,10 +196,14 @@ class EconomicsRepository:
                 .select_from(ledger)
                 .outerjoin(segment_allocations, segment_allocations.c.id == ledger.id)
                 .outerjoin(outbox, delivery_window)
+                .outerjoin(cutover, cutover.user_id == ledger.owner_user_id)
                 .where(
                     *attributed,
                     ledger.cost_nanos > func.coalesce(segment_allocations.c.credit, 0),
                     outbox.id.is_(None),
+                    or_(
+                        cutover.user_id.is_(None), ledger.segment_started_at < cutover.effective_at
+                    ),
                 )
             )
             or 0
@@ -242,7 +262,7 @@ class EconomicsRepository:
         return EconomicsLedgerFacts(
             usage=usage,
             credits=credits,
-            waived_nanos=meter_totals.get("waived", 0),
+            waived_nanos=meter_totals.get("waived", 0) + local_waived,
             pending_meter_nanos=meter_totals.get("pending", 0) + meter_totals.get("sending", 0),
             abandoned_meter_nanos=meter_totals.get("abandoned", 0),
             purchased_redemptions_booked_nanos=int(booked),

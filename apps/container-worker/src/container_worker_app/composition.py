@@ -51,7 +51,6 @@ from worker.execution import (
     GatewayEndpointSettings,
     GatewayServiceSettings,
 )
-from worker.funding import WorkerFundingSupervisor
 from worker.gpu import (
     DynamicGpuAllocationManager,
     GpuAllocationManager,
@@ -429,7 +428,6 @@ def build_worker_process_services(
         image_unmounter=image_runtime.unmount,
     )
     return assemble_worker_process_services(
-        funding=WorkerFundingSupervisor(repository),
         identity=identity,
         dependencies=dependencies,
         workers=worker_repository,

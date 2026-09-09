@@ -92,7 +92,6 @@ describe("billing settings controller", () => {
       terms_version: "team-v1" as const,
       monthly_nanos: 100_000_000_000,
       included_nanos: 30_000_000_000,
-      credit_scope: "all_metered" as const,
     };
     const requests = recordRequests(
       summary({ payment_method_on_file: true, plan: legacy }),
@@ -132,7 +131,6 @@ describe("billing settings controller", () => {
           terms_version: null,
           monthly_nanos: null,
           included_nanos: null,
-          credit_scope: null,
         },
       }),
     );
@@ -210,7 +208,6 @@ function plan(id: "free" | "team", name: string): NonNullable<BillingSummary["pl
     terms_version: id === "free" ? "free-v2" : "team-v2",
     monthly_nanos: id === "free" ? 0 : 49_000_000_000,
     included_nanos: id === "free" ? 0 : 10_000_000_000,
-    credit_scope: "compute",
     scheduled_terms_version: null,
     scheduled_change_at: null,
     period_started_at: "2026-08-01T00:00:00Z",
@@ -262,7 +259,7 @@ function pricingCatalog(): PricingCatalog {
     currency: "USD",
     connected_cloud_management_fee_percent: 8,
     credit_purchase: { minimum_cents: 2000, maximum_cents: 100000 },
-    trial: { amount_nanos: 5_000_000_000, duration_days: 30, scope: "all_metered", one_time: true },
+    trial: { amount_nanos: 5_000_000_000, duration_days: 30, one_time: true },
     no_payment_method: {
       max_concurrent_cpu_containers: 10,
       max_concurrent_gpus: 1,
@@ -271,7 +268,6 @@ function pricingCatalog(): PricingCatalog {
       {
         id: "free",
         terms_version: "free-v2",
-        credit_scope: "compute",
         name: "Free",
         summary: "Free plan",
         monthly_nanos: 0,
@@ -282,7 +278,6 @@ function pricingCatalog(): PricingCatalog {
       {
         id: "team",
         terms_version: "team-v2",
-        credit_scope: "compute",
         name: "Team",
         summary: "Team plan",
         monthly_nanos: 49_000_000_000,

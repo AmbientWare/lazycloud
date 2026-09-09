@@ -55,7 +55,6 @@ from worker.routes import (
 )
 from worker.runtime_config import (
     RuntimeContainerStatus,
-    absolute_container_accounting_cgroup_path,
     prepare_container_accounting_cgroup,
     release_container_accounting_cgroup,
 )
@@ -567,14 +566,9 @@ class WorkerRuntimeContainerStopper:
     graceful_timeout_seconds: float = DEFAULT_GRACEFUL_STOP_TIMEOUT_SECONDS
     poll_interval_seconds: float = DEFAULT_GRACEFUL_STOP_POLL_SECONDS
 
-    def require_funded_stop(self, container_id: str) -> None:
-        cgroup = absolute_container_accounting_cgroup_path(container_id)
-        if not cgroup or not Path(cgroup, "cgroup.kill").is_file():
-            raise RuntimeError("funded runtime requires cgroup v2 process termination")
-
-    def prepare_funded_runtime(self, container_id: str, resources: OciLinuxResources) -> None:
+    def prepare_runtime_resources(self, container_id: str, resources: OciLinuxResources) -> None:
         if resources.memory is None:
-            raise RuntimeError("funded runtime requires a hard memory ceiling")
+            raise RuntimeError("runtime requires a hard memory ceiling")
         directory = prepare_container_accounting_cgroup(container_id)
         (directory / "cpu.max").write_text(
             f"{resources.cpu.quota} {resources.cpu.period}", encoding="ascii"
@@ -593,20 +587,6 @@ class WorkerRuntimeContainerStopper:
         reason: StopContainerReason = StopContainerReason.Unknown,
     ) -> None:
         if self.build_cancels is not None and self.build_cancels.cancel(container_id).invoked:
-            return
-        if reason is StopContainerReason.Unfunded:
-            if not isinstance(self.runtime, WorkerContainerStopReasonRecorder):
-                raise RuntimeError("container runtime cannot persist the requested stop reason")
-            self.runtime.record_stop_reason(container_id, reason)
-            cgroup = absolute_container_accounting_cgroup_path(container_id)
-            if not cgroup:
-                raise RuntimeError("funded runtime requires an owned cgroup")
-            try:
-                Path(cgroup, "cgroup.kill").write_text("1", encoding="ascii")
-            except FileNotFoundError:
-                # Startup verifies the kill handle before accepting its PID.
-                # An expired permit also rejects any later startup callback.
-                return
             return
         if self.instances is not None:
             instance = self.instances.get_container_instance(container_id)

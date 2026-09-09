@@ -4,10 +4,6 @@ from shared.http.base import HttpModel
 from shared.usage import UsageRecord
 
 
-class WorkerFundingRequest(HttpModel):
-    container_id: str = Field(min_length=1)
-
-
 class WorkerUsageWindowRequest(HttpModel):
     container_id: str = Field(min_length=1)
     started_at: AwareDatetime

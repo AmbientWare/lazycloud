@@ -10,7 +10,6 @@ export const billingTermsVersionSchema = z.enum([
   "business-v1",
 ]);
 export type BillingTermsVersion = z.infer<typeof billingTermsVersionSchema>;
-export const creditScopeSchema = z.enum(["compute", "all_metered"]);
 
 export const entitlementLimitSchema = z.union([
   z.number().int().positive(),
@@ -51,7 +50,6 @@ export const publishedPlanSchema = z
   .object({
     id: billingPlanIdSchema,
     terms_version: billingTermsVersionSchema,
-    credit_scope: creditScopeSchema,
     name: z.string(),
     summary: z.string(),
     monthly_nanos: z.number().int().nonnegative(),
@@ -129,7 +127,6 @@ export const pricingCatalogSchema = z
       .object({
         amount_nanos: z.number().int().positive(),
         duration_days: z.number().int().positive(),
-        scope: creditScopeSchema,
         one_time: z.literal(true),
       })
       .strict(),

@@ -8,7 +8,7 @@ from api.server.services import ApiServices
 from database.repositories.observability import UsageRepository
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.container_requests import StopContainerReason
-from shared.http.worker_funding import WorkerUsageWindowRequest
+from shared.http.worker_usage import WorkerUsageWindowRequest
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
     METERING_WINDOW_STARTED_AT_METADATA_KEY,

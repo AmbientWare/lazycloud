@@ -278,6 +278,7 @@ class WorkerImageBuildExecutionService:
                 self.instances.save_container_instance(stored)
 
         try:
+            resources.require_valid()
             self.address_publisher.publish_worker_address(_request_context(request, payload))
             self.instances.save_container_instance(instance)
             log("image build worker request accepted")

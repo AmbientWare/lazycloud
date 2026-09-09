@@ -198,12 +198,7 @@ function EntitlementUsage({ summary }: { summary: BillingSummary }) {
 function SubscriptionTerms({ summary }: { summary: BillingSummary }) {
   const plan = summary.plan;
   if (!plan) return null;
-  if (
-    plan.terms_version === null ||
-    plan.monthly_nanos === null ||
-    plan.included_nanos === null ||
-    plan.credit_scope === null
-  ) {
+  if (plan.terms_version === null || plan.monthly_nanos === null || plan.included_nanos === null) {
     return (
       <p className="text-sm text-warning">
         Your subscription terms are being verified. Plan changes are paused until verification
@@ -216,7 +211,7 @@ function SubscriptionTerms({ summary }: { summary: BillingSummary }) {
       <p>
         Your {plan.name} subscription costs {exactDollars(plan.monthly_nanos)} per month
         {plan.included_nanos > 0
-          ? ` and includes ${exactDollars(plan.included_nanos)} of ${plan.credit_scope === "compute" ? "compute" : "usage"} credit`
+          ? ` and includes ${exactDollars(plan.included_nanos)} of usage credit`
           : ""}
         .
       </p>

@@ -5,7 +5,6 @@ from database.repositories.billing import BillingAccountRepository
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_preferences import BillingPreferencesTable
 from shared.billing_preferences import AutomaticReloadPauseReason
-from shared.billing_quotes import BilledDimension
 from shared.errors import NotFoundError
 from shared.http.billing_preferences import BillingPreferences
 from shared.timestamps import to_utc
@@ -98,9 +97,7 @@ class BillingPreferencesRepository:
         self.session.flush()
         return BillingPreferences.model_validate(row)
 
-    def gross_usage(
-        self, *, user_id: str, start: datetime, end: datetime, container_id: str | None = None
-    ) -> int:
+    def gross_usage(self, *, user_id: str, start: datetime, end: datetime) -> int:
         segment = BillingLedgerSegmentTable
         duration = func.extract("epoch", segment.segment_ended_at - segment.segment_started_at)
         cost = cast(segment.cost_nanos, Numeric(asdecimal=True))
@@ -120,12 +117,6 @@ class BillingPreferencesRepository:
             segment.segment_started_at < end,
             segment.segment_ended_at > start,
         )
-        if container_id is not None:
-            statement = statement.where(
-                segment.subject_type == "container",
-                segment.subject_id == container_id,
-                segment.dimension == BilledDimension.ComputeRuntime.value,
-            )
         return int(self.session.scalar(statement) or 0)
 
     def _row(self, user_id: str) -> BillingPreferencesTable:

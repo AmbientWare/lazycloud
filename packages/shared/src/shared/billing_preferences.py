@@ -16,7 +16,6 @@ class UsageBudget:
     month_ended_at: datetime
     limit_nanos: int | None
     spent_nanos: int
-    held_nanos: int
     available_nanos: int | None
 
 

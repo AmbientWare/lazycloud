@@ -6,7 +6,6 @@ from uuid import UUID
 from pydantic import Field
 
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_credits import CreditScope
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.credit_payments import (
     MAX_CREDIT_PURCHASE_CENTS,
@@ -63,18 +62,8 @@ class CreditPurchaseResponse(HttpModel):
 
 
 class CreditBalanceResponse(HttpModel):
-    purchased_nanos: int
-    subscription_nanos: int
-    trial_nanos: int
-    held_nanos: int = Field(ge=0)
-    debt_nanos: int = Field(ge=0)
-    available_nanos: int = Field(ge=0)
-
-
-class CreditSummaryResponse(HttpModel):
     ready: bool
-    compute: CreditBalanceResponse
-    storage_and_transfer: CreditBalanceResponse
+    balance_nanos: int
 
 
 class UsageBudgetResponse(HttpModel):
@@ -82,7 +71,6 @@ class UsageBudgetResponse(HttpModel):
     month_ended_at: datetime
     limit_nanos: int | None = Field(ge=0)
     spent_nanos: int = Field(ge=0)
-    held_nanos: int = Field(ge=0)
     available_nanos: int | None = Field(ge=0)
 
 
@@ -106,7 +94,6 @@ class BillingPlanResponse(HttpModel):
     terms_version: SubscriptionTermsVersion | None
     monthly_nanos: int | None = Field(ge=0)
     included_nanos: int | None = Field(ge=0)
-    credit_scope: CreditScope | None
     scheduled_terms_version: SubscriptionTermsVersion | None
     scheduled_change_at: datetime | None
 
@@ -229,6 +216,5 @@ __all__ = [
     "CreditBalanceResponse",
     "CreditPurchaseRequest",
     "CreditPurchaseResponse",
-    "CreditSummaryResponse",
     "UsageBudgetResponse",
 ]

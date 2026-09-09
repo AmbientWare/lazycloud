@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from foundation.process import (
     ProcessOutputChunk,
@@ -16,8 +16,6 @@ from scheduler.state import (
     SchedulerContainerStatus,
 )
 from shared.container_requests import StopContainerReason, WorkerStartupKind
-from shared.funding import FundingPermit
-from shared.http.worker_funding import WorkerFundingRequest
 from shared.timestamps import utc_now
 from shared.worker_events import WorkerEventRecord
 from storage_client.mounts import StorageMountResult
@@ -49,7 +47,6 @@ from worker.finalization import (
     ContainerFinalizationStep,
     WorkerContainerFinalizationService,
 )
-from worker.funding import WorkerFundingSupervisor
 from worker.gpu import ContainerGpuAssignmentResult
 from worker.monitoring import ContainerRuntimeMonitoringResult
 from worker.oci_spec import OciRuntimeContainerSpec
@@ -544,10 +541,7 @@ class EventSink(WorkerEventSink):
 
 @dataclass(slots=True)
 class Stopper:
-    def prepare_funded_runtime(self, container_id: str, resources: OciLinuxResources) -> None:
-        pass
-
-    def require_funded_stop(self, container_id: str) -> None:
+    def prepare_runtime_resources(self, container_id: str, resources: OciLinuxResources) -> None:
         pass
 
     stopped: list[tuple[str, bool]] = field(default_factory=list)
@@ -560,22 +554,6 @@ class Stopper:
         reason: StopContainerReason = StopContainerReason.Unknown,
     ) -> None:
         self.stopped.append((container_id, force))
-
-
-class FundingClient:
-    def authorize_container_funding(self, request: WorkerFundingRequest) -> FundingPermit:
-        return FundingPermit(
-            container_id=request.container_id,
-            revision=1,
-            valid_until=utc_now() + timedelta(seconds=90),
-        )
-
-    def renew_container_funding(self, request: WorkerFundingRequest) -> FundingPermit:
-        return FundingPermit(
-            container_id=request.container_id,
-            revision=2,
-            valid_until=utc_now() + timedelta(seconds=90),
-        )
 
 
 def test_worker_container_execution_service_runs_full_lifecycle() -> None:
@@ -1021,8 +999,7 @@ def _service(
     final_repo = repo or FinalizationRepository()
     final_cleanup = cleanup or Cleanup()
     return WorkerContainerExecutionService(
-        funding=WorkerFundingSupervisor(FundingClient()),
-        funding_stopper=Stopper(),
+        runtime_resources=Stopper(),
         address_publisher=AddressPublisher(log),
         image_loader=image_loader or ImageLoader(log, image_result or ContainerImageLoadResult()),
         port_allocator=PortAllocator(log),

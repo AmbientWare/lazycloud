@@ -4,12 +4,12 @@ from threading import Barrier
 from api.server.services import ApiServices
 from billing.automatic_reload import AutomaticReloadService
 from billing.automatic_reload_policy import AutomaticPurchaseDecision, authorize_automatic_purchase
-from billing.funding import BillingFundingService
+from billing.preferences import BillingPreferencesService
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_preferences import BillingPreferencesRepository
 from database.repositories.credit_purchases import CreditPurchaseRepository
-from shared.billing_credits import CreditGrant, CreditKind, CreditScope
+from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_preferences import AutomaticReloadPauseReason, usage_budget_month
 from shared.credit_payments import CreditPaymentStatus
 from shared.http.billing_preferences import BillingPreferences
@@ -26,7 +26,7 @@ def test_reload_serializes_payments_preserves_pause_and_counts_refunds_and_old_p
         workspace_id = postgres_services.context.default_workspace_id(session)
         user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
         credits = BillingCreditRepository(session)
-        BillingFundingService(session).set_preferences(user_id=user_id, preferences=preferences)
+        BillingPreferencesService(session).set(user_id=user_id, preferences=preferences)
     service = AutomaticReloadService(
         postgres_services.context.database,
         postgres_services.payment_provider,
@@ -45,7 +45,7 @@ def test_reload_serializes_payments_preserves_pause_and_counts_refunds_and_old_p
     assert service.status(user_id=user_id, now=now).monthly_payment_committed_cents == 2000
 
     with postgres_services.context.database.session() as session:
-        BillingFundingService(session).set_preferences(
+        BillingPreferencesService(session).set(
             user_id=user_id,
             preferences=preferences.model_copy(update={"reload_enabled": False}),
         )
@@ -68,7 +68,7 @@ def test_reload_serializes_payments_preserves_pause_and_counts_refunds_and_old_p
         )
     assert service.prepare_due_reload(user_id=user_id, now=now) is None
     with postgres_services.context.database.session() as session:
-        BillingFundingService(session).set_preferences(user_id=user_id, preferences=preferences)
+        BillingPreferencesService(session).set(user_id=user_id, preferences=preferences)
     assert service.prepare_due_reload(user_id=user_id, now=now) is None
     assert service.status(user_id=user_id).paused_purchase_id == status.paused_purchase_id
     assert service.resume(user_id=user_id).paused_purchase_id is None
@@ -90,7 +90,6 @@ def test_reload_serializes_payments_preserves_pause_and_counts_refunds_and_old_p
             grant=CreditGrant(
                 "payment:confirmed-reload",
                 CreditKind.Purchased,
-                CreditScope.AllMetered,
                 purchase.amount_nanos,
                 now,
             ),
@@ -110,7 +109,7 @@ def test_reload_serializes_payments_preserves_pause_and_counts_refunds_and_old_p
     assert service.prepare_due_reload(user_id=user_id, now=utc_now()) is None
 
     with postgres_services.context.database.session() as session:
-        BillingFundingService(session).set_preferences(
+        BillingPreferencesService(session).set(
             user_id=user_id,
             preferences=preferences.model_copy(update={"reload_monthly_payment_limit_cents": 4000}),
         )
@@ -118,7 +117,7 @@ def test_reload_serializes_payments_preserves_pause_and_counts_refunds_and_old_p
     assert pending_id is not None
     _, following_month = usage_budget_month(now)
     with postgres_services.context.database.session() as session:
-        BillingFundingService(session).set_preferences(
+        BillingPreferencesService(session).set(
             user_id=user_id,
             preferences=preferences.model_copy(update={"reload_monthly_payment_limit_cents": 1999}),
         )

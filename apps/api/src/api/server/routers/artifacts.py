@@ -25,7 +25,7 @@ from shared.http.artifacts import (
 )
 from shared.http_headers import INLINE_RENDERABLE_CONTENT_TYPES, content_disposition
 
-from api.server.auth import read_workspace, write_workspace
+from api.server.auth import read_transfer, read_workspace, write_transfer, write_workspace
 from api.server.public_transfers import attribute_public_transfer
 from api.server.service_dependencies import artifact_service
 
@@ -35,7 +35,7 @@ router = APIRouter(prefix="/api/v1/artifacts", tags=["artifact"])
 @router.post("/save", response_model=ArtifactSaveResponse)
 def save_artifact(
     request: ArtifactSaveBody,
-    workspace_id: write_workspace,
+    workspace_id: write_transfer,
     service: ArtifactStorageService = Depends(artifact_service),
 ) -> ArtifactSaveResponse:
     return service.save(
@@ -141,7 +141,7 @@ def read_artifact_content(
     id: str,
     task_id: str,
     filename: str,
-    workspace_id: read_workspace,
+    workspace_id: read_transfer,
     download: bool = False,
     service: ArtifactStorageService = Depends(artifact_service),
 ) -> Response:
@@ -200,7 +200,7 @@ def stat_artifact(
 @router.post("/public-url", response_model=ArtifactPublicUrlResponse)
 def artifact_public_url(
     request: ArtifactPublicUrlRequest,
-    workspace_id: read_workspace,
+    workspace_id: read_transfer,
     service: ArtifactStorageService = Depends(artifact_service),
 ) -> ArtifactPublicUrlResponse:
     plan = service.public_url(

@@ -368,9 +368,10 @@ class BillingReconciliationService:
                 "ledger_nanos": ledger_nanos,
                 "credited_nanos": credits.credited_nanos,
                 "unsettled_nanos": credits.unsettled_nanos,
+                "wallet_unpaid_nanos": credits.unpaid_nanos,
                 "undelivered_nanos": outstanding.waiting_nanos,
                 "abandoned_nanos": outstanding.abandoned_nanos,
-                "waived_nanos": outstanding.waived_nanos,
+                "waived_nanos": outstanding.waived_nanos + credits.waived_nanos,
                 "invoiced_nanos": invoiced_nanos,
             }
             meters[event_name] = figures
@@ -382,6 +383,8 @@ class BillingReconciliationService:
                 ledger_nanos
                 - credits.credited_nanos
                 - credits.unsettled_nanos
+                - credits.unpaid_nanos
+                - credits.waived_nanos
                 - outstanding.waiting_nanos
                 - outstanding.abandoned_nanos
                 - outstanding.waived_nanos

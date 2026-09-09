@@ -100,19 +100,18 @@ is unbilled. These counters never change firewall authorization, and cleanup
 removes only the container's own rules. Usage still uses the worker's bounded
 windows; a crash or unavailable final sample can lose unflushed evidence.
 
-Funded execution creates an accounting cgroup before starting the runtime. The
+Execution creates an accounting cgroup before starting the runtime. The
 runtime uses its child, so cumulative CPU counters survive guest exit and runtime
 cleanup. CPU billing uses counter deltas. RSS billing integrates each observed
 `anon + file_mapped` value over the interval until the next sample. The final
 sample closes that interval before the accounting parent is removed. A missing
 counter is incomplete evidence, never zero usage.
 
-The worker renews a funded permit while execution runs. A separate local deadline
-thread kills the accounting cgroup when the permit expires, even if renewal is
-blocked on the control plane. Renewal cannot revive an expired permit. Cleanup
-and usage delivery follow the kill; neither delays it. Complete usage windows and
-actual exit proof release unused holds through the billing owner. A stop request
-alone cannot release money reserved for dispatched execution.
+Billing enforcement uses the normal container stop path after recorded usage
+exhausts the account balance. Workers send usage windows and terminal evidence;
+they do not reserve money or renew financial execution permits. CPU and memory
+cgroups remain the resource boundary. Builds register their process cancellation
+with the same stop registry and retain their final usage window during cleanup.
 
 A container that outgrows its reservation is stopped here, not by the kernel.
 The worker holds the two readings the decision needs, its own memory pressure

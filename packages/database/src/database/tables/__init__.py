@@ -25,11 +25,6 @@ from database.tables.billing_credits import (
     BillingCreditLotTable,
     BillingCreditSettlementTable,
 )
-from database.tables.billing_funding import (
-    BillingFundingAllocationTable,
-    BillingFundingHoldTable,
-    BillingFundingWindowTable,
-)
 from database.tables.billing_ledger import (
     BillingLedgerSegmentTable,
     ContainerBillingShapeTable,
@@ -108,6 +103,7 @@ from database.tables.source_cache import (
 )
 from database.tables.storage import CacheEntryTable, ObjectTable, VolumeTable
 from database.tables.storage_access import StorageAccessTable
+from database.tables.storage_retention import StorageRetentionPeriodTable
 
 __all__ = [
     "AgentLeaseTable",
@@ -126,9 +122,6 @@ __all__ = [
     "BillingCreditCutoverTable",
     "BillingCreditLotTable",
     "BillingCreditSettlementTable",
-    "BillingFundingAllocationTable",
-    "BillingFundingHoldTable",
-    "BillingFundingWindowTable",
     "BillingLedgerSegmentTable",
     "BillingMeterOutboxTable",
     "BillingPlanChangeIntentTable",
@@ -176,6 +169,7 @@ __all__ = [
     "SecretTable",
     "SourceCacheCleanupTargetTable",
     "StorageAccessTable",
+    "StorageRetentionPeriodTable",
     "StubTable",
     "TaskAttemptTable",
     "TaskDependencyTable",

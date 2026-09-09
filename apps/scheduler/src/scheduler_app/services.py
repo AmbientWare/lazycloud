@@ -95,6 +95,7 @@ from storage.retention import (
 )
 from storage.retention_settings import RetentionSettings
 from storage.service import CacheStorage, ObjectStorage
+from storage.unfunded_retention import UnfundedStorageRetentionService
 from storage.volume_deletion import VolumeDeletionService
 from storage.volume_filesystem import (
     WorkspaceVolumeFilesystem,
@@ -242,15 +243,23 @@ class SchedulerAppServices:
         billing_payments = BillingPaymentMaintenance(
             context.database, stripe_settings.provider_factory()
         )
+        worker_repository = RedisSchedulerWorkerRepository(redis)
+        volume_deletion = VolumeDeletionService(
+            context,
+            volume_filesystem,
+            volume_metering,
+            DatabaseDurableWorkerAbsence(context, worker_repository),
+            workspace_changes,
+        )
         retention = scheduler_retention(
             context=context,
             object_storage=object_storage,
             cache_storage=CacheStorage(context),
             settings=storage.retention,
             image_archive_settings=image_archive_config,
-            workload_image_registry_repository=(storage.workload_image_registry_repository),
+            volume_deletion=volume_deletion,
+            workload_image_registry_repository=storage.workload_image_registry_repository,
         )
-        worker_repository = RedisSchedulerWorkerRepository(redis)
         container_repository = RedisSchedulerContainerRepository(redis)
         # See the API composition: the resolver exists only where connected AWS is
         # configured, and a half-configured deployment is rejected by settings.
@@ -426,13 +435,7 @@ class SchedulerAppServices:
             volume_filesystem=volume_filesystem,
             volume_metering=volume_metering,
             storage_access=_storage_access(context.database, storage.object_store),
-            volume_deletion=VolumeDeletionService(
-                context,
-                volume_filesystem,
-                volume_metering,
-                DatabaseDurableWorkerAbsence(context, worker_repository),
-                workspace_changes,
-            ),
+            volume_deletion=volume_deletion,
             meter_outbox=meter_outbox,
             email_outbox=email_outbox,
             plan_changes=plan_changes,
@@ -577,6 +580,7 @@ def _billing_reconciliation(
 class SchedulerRetention:
     service: RetentionService
     deployment_resources: DeploymentResourceService
+    unfunded_storage: UnfundedStorageRetentionService
 
     def protected_checkpoint_stub_keys(self) -> list[str]:
         return sorted(
@@ -585,6 +589,7 @@ class SchedulerRetention:
         )
 
     def reconcile(self, *, now: datetime | None = None) -> RetentionResult:
+        self.unfunded_storage.reconcile(now=now)
         return self.service.reconcile(
             active_recent_stub_keys=self.protected_checkpoint_stub_keys(),
             now=now,
@@ -598,6 +603,7 @@ def scheduler_retention(
     cache_storage: CacheStorage,
     settings: RetentionSettings,
     image_archive_settings: ImageArchiveSettings,
+    volume_deletion: VolumeDeletionService,
     workload_image_registry_repository: str = "",
 ) -> SchedulerRetention | None:
     if not settings.enabled:
@@ -621,4 +627,9 @@ def scheduler_retention(
             workload_image_registry=workload_registry,
         ),
         deployment_resources=DeploymentResourceService(context),
+        unfunded_storage=UnfundedStorageRetentionService(
+            context=context,
+            volume_deletion=volume_deletion,
+            max_items_per_workspace=settings.max_items_per_cycle,
+        ),
     )

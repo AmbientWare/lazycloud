@@ -5,8 +5,7 @@ from database.repositories.billing_allowance import (
     SubscriptionPeriodOutcome,
 )
 from database.repositories.billing_credits import BillingCreditRepository
-from shared.billing_credits import CreditScope
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import subscription_terms
 from shared.errors import UpstreamUnavailableError
 from shared.payments import ProviderSubscription, SubscriptionPaymentProvider
@@ -42,10 +41,10 @@ def carry_plan_into_cycle(
     if (
         not local
         and held_terms.monthly_nanos > 0
-        and held_terms.credit_scope is CreditScope.Compute
+        and subscription.terms_version is not SubscriptionTermsVersion.TeamLegacy
     ):
         raise UpstreamUnavailableError(
-            "compute-only subscription terms require the local credit transition"
+            "prepaid subscription terms require the local credit transition"
         )
     written = BillingAllowanceRepository(session).set_subscription_period(
         user_id=account_id,

@@ -24,11 +24,9 @@ from worker.container_execution import (
     ContainerExecutionPhaseResult,
     ContainerExecutionResult,
 )
-from worker.funding import WorkerFundingSupervisor
+from worker.events import WorkerBuildCancelRegistry
 from worker.repository_client import (
     WorkerRepositoryClientError,
-    WorkerRepositoryHttpClient,
-    WorkerRepositoryHttpTransport,
 )
 from worker.scheduler_requests import (
     WorkerSchedulerRequestAction,
@@ -55,9 +53,7 @@ def test_worker_scheduler_request_processor_executes_and_releases_capacity() -> 
     )
     execution = _ExecutionService()
     processor = WorkerSchedulerRequestProcessor(
-        funding=WorkerFundingSupervisor(
-            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
-        ),
+        build_cancels=WorkerBuildCancelRegistry(),
         worker_id="worker-1",
         workers=workers,
         containers=containers,
@@ -99,9 +95,7 @@ def test_worker_scheduler_request_processor_tracks_active_container_for_shutdown
         containers=containers,
     )
     processor = WorkerSchedulerRequestProcessor(
-        funding=WorkerFundingSupervisor(
-            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
-        ),
+        build_cancels=WorkerBuildCancelRegistry(),
         worker_id="worker-1",
         workers=workers,
         containers=containers,
@@ -149,9 +143,7 @@ def test_worker_scheduler_request_processor_backgrounds_long_lived_container() -
         containers=containers,
     )
     processor = WorkerSchedulerRequestProcessor(
-        funding=WorkerFundingSupervisor(
-            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
-        ),
+        build_cancels=WorkerBuildCancelRegistry(),
         worker_id="worker-1",
         workers=workers,
         containers=containers,
@@ -192,9 +184,7 @@ def test_worker_scheduler_request_processor_drops_missing_state_and_releases_cap
     request = _request()
     workers = _WorkerRepository(requests=[request])
     processor = WorkerSchedulerRequestProcessor(
-        funding=WorkerFundingSupervisor(
-            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
-        ),
+        build_cancels=WorkerBuildCancelRegistry(),
         worker_id="worker-1",
         workers=workers,
         containers=_ContainerRepository(),
@@ -216,9 +206,7 @@ def test_worker_scheduler_request_processor_drops_stopping_state_and_deletes_sta
         states={"ctr-1": _state(request, status=SchedulerContainerStatus.Stopping)}
     )
     processor = WorkerSchedulerRequestProcessor(
-        funding=WorkerFundingSupervisor(
-            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
-        ),
+        build_cancels=WorkerBuildCancelRegistry(),
         worker_id="worker-1",
         workers=_WorkerRepository(requests=[request]),
         containers=containers,
@@ -247,9 +235,7 @@ def test_worker_scheduler_request_processor_reports_execution_failure() -> None:
         ]
     )
     processor = WorkerSchedulerRequestProcessor(
-        funding=WorkerFundingSupervisor(
-            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
-        ),
+        build_cancels=WorkerBuildCancelRegistry(),
         worker_id="worker-1",
         workers=workers,
         containers=_ContainerRepository(
@@ -292,9 +278,7 @@ def test_worker_scheduler_request_processor_reconciles_a_redelivered_request() -
         containers=containers,
     )
     processor = WorkerSchedulerRequestProcessor(
-        funding=WorkerFundingSupervisor(
-            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
-        ),
+        build_cancels=WorkerBuildCancelRegistry(),
         worker_id="worker-1",
         workers=workers,
         containers=containers,
@@ -333,9 +317,7 @@ def test_worker_scheduler_request_processor_keeps_a_request_it_could_not_act_on(
     )
     execution = _ExecutionService()
     processor = WorkerSchedulerRequestProcessor(
-        funding=WorkerFundingSupervisor(
-            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
-        ),
+        build_cancels=WorkerBuildCancelRegistry(),
         worker_id="worker-1",
         workers=workers,
         containers=containers,
@@ -374,9 +356,7 @@ def test_worker_scheduler_request_processor_refuses_a_container_it_already_start
     )
     execution = _ExecutionService()
     processor = WorkerSchedulerRequestProcessor(
-        funding=WorkerFundingSupervisor(
-            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
-        ),
+        build_cancels=WorkerBuildCancelRegistry(),
         worker_id="worker-1",
         workers=workers,
         containers=containers,

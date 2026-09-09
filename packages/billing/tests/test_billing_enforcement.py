@@ -7,14 +7,13 @@ from uuid import uuid4
 from api.server.services import ApiServices
 from billing.enforcement import BillingEnforcementService
 from database.repositories.billing import BillingAccountRepository
-from database.repositories.billing_funding import BillingFundingRepository
+from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.orchestration import ContainerRepository
-from shared.billing_quotes import ContainerShape
+from shared.billing_credits import CreditGrant, CreditKind
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.timestamps import utc_now
-from shared.usage import UsageBillingOwner
-from tests.service_fixtures import workspace_owner_user_id
+from tests.service_fixtures import legacy_billing_account
 
 
 @dataclass(slots=True)
@@ -31,56 +30,74 @@ class _Stopper:
         return None
 
 
-def test_expired_funding_is_stopped_even_with_a_saved_card(
+def test_monitor_stops_empty_accounts_and_canceled_subscriptions_with_live_compute(
     postgres_services: ApiServices,
 ) -> None:
     now = utc_now()
+    user_id, workspace_id = legacy_billing_account(
+        postgres_services.context,
+        period_started_at=now,
+        period_ended_at=now + timedelta(days=30),
+    )
+    container_id = str(uuid4())
     with postgres_services.context.database.session() as session:
-        workspace_id = postgres_services.context.default_workspace_id(session)
-        user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
-        BillingAccountRepository(session).set_payment_method_present(
-            user_id=user_id, present=True, at=now
+        accounts = BillingAccountRepository(session)
+        accounts.set_payment_method_present(user_id=user_id, present=True, at=now)
+        credits = BillingCreditRepository(session)
+        credits.prepare_cutover(user_id=user_id, effective_at=now)
+        credits.complete_cutover(user_id=user_id, at=now)
+        lot_id = credits.issue(
+            user_id=user_id,
+            grant=CreditGrant("payment:monitor", CreditKind.Purchased, 10**9, now),
         )
-        active_id, expired_id = str(uuid4()), str(uuid4())
-        for container_id, deadline in (
-            (active_id, now + timedelta(seconds=60)),
-            (expired_id, now - timedelta(seconds=1)),
-        ):
-            ContainerRepository(session).records.upsert(
-                ContainerRecord(
-                    id=container_id,
-                    name="funding-enforcement",
-                    image="image",
-                    command=["true"],
-                    workspace_id=workspace_id,
-                    status=ContainerStatus.Running,
-                ),
+        ContainerRepository(session).records.upsert(
+            ContainerRecord(
+                id=container_id,
+                name="credit-enforcement",
+                image="image",
+                command=["true"],
                 workspace_id=workspace_id,
-            )
-            funding = BillingFundingRepository(session)
-            shape = ContainerShape(UsageBillingOwner.PlatformFleet, "", 1000, 1024, 0)
-            funding.create(
-                container_id=container_id,
-                workspace_id=workspace_id,
-                user_id=user_id,
-                shape=shape,
-            )
-            funding.authorize(
-                container_id=container_id,
-                worker_id="worker",
-                shape=shape,
-                authorized_at=now - timedelta(seconds=60),
-                valid_until=deadline,
-            )
+                status=ContainerStatus.Running,
+            ),
+            workspace_id=workspace_id,
+        )
     stopper = _Stopper()
     service = BillingEnforcementService(
         database=postgres_services.context.database,
         containers=stopper,
         events=postgres_services.events,
-        stop_limit_per_account=1,
     )
-
+    assert service.enforce(now=now).stopped_count == 0
+    with postgres_services.context.database.session() as session:
+        BillingCreditRepository(session).adjust(
+            user_id=user_id,
+            credit_lot_id=lot_id,
+            source_id="refund:monitor",
+            amount_nanos=-(10**9),
+            effective_at=now,
+        )
     result = service.enforce(now=now)
-
-    assert stopper.stopped == {expired_id: StopContainerReason.Unfunded}
+    assert stopper.stopped == {container_id: StopContainerReason.Unfunded}
     assert (result.unfunded_count, result.stopped_count, result.failed_count) == (1, 1, 0)
+    with postgres_services.context.database.session() as session:
+        BillingCreditRepository(session).issue(
+            user_id=user_id,
+            grant=CreditGrant("payment:monitor-refill", CreditKind.Purchased, 10**9, now),
+        )
+    assert service.enforce(now=now).stopped_count == 0
+    with postgres_services.context.database.session() as session:
+        accounts = BillingAccountRepository(session)
+        account = accounts.get_by_user(user_id)
+        assert account is not None
+        accounts.upsert(
+            user_id=user_id,
+            status=account.status,
+            provider_customer_id=account.provider_customer_id,
+            provider_subscription_id="",
+            provider_credit_grant_id="",
+            plan=None,
+            subscription_terms_version=None,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
+        )
+    assert service.enforce(now=now).stopped_count == 1

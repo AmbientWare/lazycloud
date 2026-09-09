@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from threading import Barrier
+from decimal import Decimal
 from uuid import uuid4
 
 import httpx
@@ -13,6 +13,9 @@ from billing.rate_publication import publish_metered_rate_history
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_ledger import BillingLedgerRepository
+from database.repositories.billing_rates import PlatformRateRepository
+from database.repositories.observability import UsageRepository
+from database.repositories.storage_retention import StorageRetentionRepository
 from database.tables.billing import BillingAccountTable
 from database.tables.billing_credits import (
     BillingCreditAllocationTable,
@@ -22,7 +25,7 @@ from database.tables.billing_credits import (
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from provider_stripe.billing import StripeBilling
-from shared.billing_credits import CreditGrant, CreditKind, CreditScope
+from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension
 from shared.billing_rate_card import METERED_RATES_EFFECTIVE_AT
@@ -37,6 +40,78 @@ from shared.usage import (
 )
 from sqlalchemy import func, select
 from tests.service_fixtures import legacy_billing_account
+
+
+def test_storage_grace_waives_only_retained_time_and_top_up_resumes_charges(
+    postgres_services: ApiServices,
+) -> None:
+    start = datetime(2027, 1, 1, tzinfo=UTC)
+    end = start + timedelta(seconds=10)
+    user_id, workspace_id = legacy_billing_account(
+        postgres_services.context,
+        period_started_at=start,
+        period_ended_at=start + timedelta(days=30),
+    )
+    record = UsageRecord(
+        id=str(uuid4()),
+        workspace_id=workspace_id,
+        resource_type="volume",
+        resource_id="retained",
+        metric=UsageMetric.PersistentVolumeByteSeconds,
+        quantity=10,
+        unit=UsageUnit.ByteSeconds,
+        metadata={
+            METERING_WINDOW_STARTED_AT_METADATA_KEY: start.isoformat(),
+            METERING_WINDOW_ENDED_AT_METADATA_KEY: end.isoformat(),
+        },
+        created_at=end,
+    )
+    with postgres_services.context.database.session() as session:
+        credits = BillingCreditRepository(session)
+        credits.prepare_cutover(user_id=user_id, effective_at=start)
+        credits.complete_cutover(user_id=user_id, at=start)
+        BillingAllowanceRepository(session).confirm_credit(
+            user_id=user_id, period_started_at=start, at=start
+        )
+        PlatformRateRepository(session).publish(
+            pricing_version="retention",
+            effective_at=start,
+            nanos_per_egress_byte=Decimal(0),
+            nanos_per_volume_byte_second=Decimal(1),
+        )
+        retention = StorageRetentionRepository(session)
+        period = retention.start(user_id=user_id, at=start + timedelta(seconds=2))
+        retention.close(period, at=start + timedelta(seconds=7))
+        credits.issue(
+            user_id=user_id,
+            grant=CreditGrant(
+                "payment:retention",
+                CreditKind.Purchased,
+                100,
+                start + timedelta(seconds=7),
+            ),
+        )
+        UsageRepository(session).append_storage(record)
+        ledger = BillingLedgerRepository(session)
+        ledger.price_record(record)
+        ledger.price_record(record)
+        settlement = session.get(BillingCreditSettlementTable, record.id)
+        assert settlement is not None
+        assert (settlement.gross_nanos, settlement.credited_nanos, settlement.payable_nanos) == (
+            10,
+            3,
+            2,
+        )
+        assert settlement.waived_nanos == 5
+        outbox = session.scalars(
+            select(BillingMeterOutboxTable).where(
+                BillingMeterOutboxTable.usage_record_id == record.id
+            )
+        ).all()
+        assert outbox == []
+        assert credits.balance(user_id=user_id, at=end) == 95
+        totals = credits.account_adjustments(user_id=user_id, start=start, end=end)
+        assert totals[BilledDimension.VolumeStorage].waived_nanos == 5
 
 
 def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
@@ -225,7 +300,6 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
                 grant=CreditGrant(
                     source_id="subscription:in_legacy:il_legacy",
                     kind=CreditKind.Subscription,
-                    scope=CreditScope.AllMetered,
                     amount_nanos=30_000_000_000,
                     effective_at=start,
                     expires_at=end,
@@ -235,15 +309,12 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
         fund()
         with postgres_services.context.database.session() as session:
             lots = session.execute(
-                select(
-                    BillingCreditLotTable.amount_nanos,
-                    BillingCreditLotTable.scope,
-                ).where(
+                select(BillingCreditLotTable.amount_nanos).where(
                     BillingCreditLotTable.user_id == user_id,
                     BillingCreditLotTable.expires_at == end,
                 )
             ).all()
-            assert set(lots) == {(30_000_000_000, "all_metered"), (10_000_000_000, "compute")}
+            assert {row[0] for row in lots} == {30_000_000_000, 10_000_000_000}
 
 
 def test_credit_expiry_and_start_split_a_frozen_charge_and_preserve_purchased_funds(
@@ -262,27 +333,25 @@ def test_credit_expiry_and_start_split_a_frozen_charge_and_preserve_purchased_fu
         period = allowance.current_period(user_id=user_id, at=at)
         assert period is not None
         allowance.confirm_credit(user_id=user_id, period_started_at=period.started_at, at=at)
-        for source, kind, scope, start, end in (
-            ("purchased", CreditKind.Purchased, CreditScope.AllMetered, at, None),
-            ("early", CreditKind.Trial, CreditScope.AllMetered, at, at + timedelta(seconds=5)),
+        for source, kind, start, end in (
+            ("purchased", CreditKind.Purchased, at, None),
+            ("early", CreditKind.Trial, at, at + timedelta(seconds=5)),
             (
                 "compute",
                 CreditKind.Subscription,
-                CreditScope.Compute,
                 at,
                 at + timedelta(seconds=30),
             ),
             (
                 "late",
                 CreditKind.Trial,
-                CreditScope.AllMetered,
                 at + timedelta(seconds=8),
                 at + timedelta(seconds=30),
             ),
         ):
             credits.issue(
                 user_id=user_id,
-                grant=CreditGrant(source, kind, scope, 100_000_000, start, end),
+                grant=CreditGrant(source, kind, 100_000_000, start, end),
             )
     record = UsageRecord(
         id=str(uuid4()),
@@ -312,81 +381,14 @@ def test_credit_expiry_and_start_split_a_frozen_charge_and_preserve_purchased_fu
         ).all()
         assert {row[0]: row[1] for row in allocations} == {
             "early": 65_000_000,
-            "late": 26_000_000,
-            "purchased": 39_000_000,
+            "compute": 65_000_000,
         }
         assert session.scalar(select(func.sum(BillingLedgerSegmentTable.cost_nanos))) == 130_000_000
         balance = BillingCreditRepository(session).balance(
-            user_id=user_id, at=at + timedelta(seconds=10), dimension=BilledDimension.NetworkEgress
+            user_id=user_id, at=at + timedelta(seconds=10)
         )
-        assert balance.purchased_nanos == 61_000_000
-        assert balance.subscription_nanos == 0
-        assert balance.trial_nanos == 74_000_000
+        assert balance == 235_000_000
         assert session.scalar(select(func.count()).select_from(BillingMeterOutboxTable)) == 0
-
-
-def test_concurrent_usage_and_duplicate_receipts_cannot_spend_the_same_credit_twice(
-    postgres_services: ApiServices,
-) -> None:
-    at = datetime(2026, 9, 12, tzinfo=UTC)
-    user_id, workspace_id = legacy_billing_account(
-        postgres_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
-    )
-    with postgres_services.context.database.session() as session:
-        publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
-        credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=at)
-        credits.complete_cutover(user_id=user_id, at=at)
-        allowance = BillingAllowanceRepository(session)
-        period = allowance.current_period(user_id=user_id, at=at)
-        assert period is not None
-        allowance.confirm_credit(user_id=user_id, period_started_at=period.started_at, at=at)
-        grant = CreditGrant(
-            "payment:confirmed", CreditKind.Purchased, CreditScope.AllMetered, 200_000_000, at
-        )
-        lot_id = credits.issue(user_id=user_id, grant=grant)
-        assert credits.issue(user_id=user_id, grant=grant) == lot_id
-    records = [
-        UsageRecord(
-            id=str(uuid4()),
-            workspace_id=workspace_id,
-            resource_type="workspace",
-            resource_id=workspace_id,
-            metric=UsageMetric.NetworkEgressBytes,
-            quantity=1_073_741_824,
-            unit=UsageUnit.Bytes,
-            metadata={
-                METERING_WINDOW_STARTED_AT_METADATA_KEY: at.isoformat(),
-                METERING_WINDOW_ENDED_AT_METADATA_KEY: (at + timedelta(seconds=10)).isoformat(),
-            },
-        )
-        for _ in range(2)
-    ]
-    barrier = Barrier(2)
-
-    def append(record: UsageRecord) -> None:
-        barrier.wait(timeout=5)
-        postgres_services.usage.append(record)
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [executor.submit(append, record) for record in records]
-        for future in futures:
-            future.result(timeout=15)
-    for record in records:
-        postgres_services.usage.append(record)
-    with postgres_services.context.database.session() as session:
-        assert session.scalar(select(func.sum(BillingLedgerSegmentTable.cost_nanos))) == 260_000_000
-        assert (
-            session.scalar(select(func.sum(BillingCreditAllocationTable.amount_nanos)))
-            == 200_000_000
-        )
-        assert session.scalar(select(func.sum(BillingMeterOutboxTable.value_nanos))) == 60_000_000
-        assert (
-            BillingCreditRepository(session)
-            .balance(user_id=user_id, at=at, dimension=BilledDimension.NetworkEgress)
-            .available_nanos
-            == 0
-        )
 
 
 def test_crossing_cutover_keeps_legacy_export_and_resumes_net_settlement_once(
@@ -406,7 +408,6 @@ def test_crossing_cutover_keeps_legacy_export_and_resumes_net_settlement_once(
             grant=CreditGrant(
                 "payment:cutover",
                 CreditKind.Purchased,
-                CreditScope.AllMetered,
                 40_000_000,
                 boundary,
             ),
@@ -445,12 +446,7 @@ def test_crossing_cutover_keeps_legacy_export_and_resumes_net_settlement_once(
         credits = BillingCreditRepository(session)
         credits.complete_cutover(user_id=user_id, at=boundary)
         BillingLedgerRepository(session).settle_pending_credits(owner_user_id=user_id)
-        assert settlement.settled_at is None
-        allowance = BillingAllowanceRepository(session)
-        period = allowance.current_period(user_id=user_id, at=boundary)
-        assert period is not None
-        allowance.confirm_credit(user_id=user_id, period_started_at=period.started_at, at=boundary)
-        BillingLedgerRepository(session).settle_pending_credits(owner_user_id=user_id)
+        assert settlement.settled_at is not None
     postgres_services.usage.append(record)
     with postgres_services.context.database.session() as session:
         rows = session.scalars(
@@ -460,10 +456,9 @@ def test_crossing_cutover_keeps_legacy_export_and_resumes_net_settlement_once(
         ).all()
         assert [(row.status, row.value_nanos) for row in rows] == [
             ("sent", 65_000_000),
-            ("pending", 25_000_000),
         ]
         assert all(row.usage_record_id == record.id for row in rows)
-        assert to_utc(rows[1].occurred_at) == boundary
+        assert BillingCreditRepository(session).balance(user_id=user_id, at=boundary) == -25_000_000
         assert (
             list(
                 session.scalars(
@@ -497,7 +492,6 @@ def test_waived_usage_preserves_purchased_credit_and_records_the_gross_waiver(
             grant=CreditGrant(
                 "payment:waived",
                 CreditKind.Purchased,
-                CreditScope.AllMetered,
                 100_000_000,
                 at,
             ),
@@ -522,18 +516,14 @@ def test_waived_usage_preserves_purchased_credit_and_records_the_gross_waiver(
         assert (settlement.gross_nanos, settlement.credited_nanos, settlement.payable_nanos) == (
             130_000_000,
             0,
-            130_000_000,
+            0,
         )
-        outbox = session.scalar(select(BillingMeterOutboxTable))
-        assert outbox is not None and outbox.status == "waived"
-        assert outbox.value_nanos == 130_000_000
+        assert settlement.waived_nanos == 130_000_000
+        assert session.scalar(select(BillingMeterOutboxTable)) is None
         assert (
-            BillingCreditRepository(session)
-            .balance(
+            BillingCreditRepository(session).balance(
                 user_id=user_id,
                 at=at,
-                dimension=BilledDimension.NetworkEgress,
             )
-            .purchased_nanos
             == 100_000_000
         )

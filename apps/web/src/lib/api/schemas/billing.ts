@@ -1,11 +1,6 @@
 import { z } from "zod";
 
-import {
-  billingPlanIdSchema,
-  billingTermsVersionSchema,
-  creditScopeSchema,
-  planEntitlementsSchema,
-} from "./pricing";
+import { billingPlanIdSchema, billingTermsVersionSchema, planEntitlementsSchema } from "./pricing";
 import { userSchema } from "./users";
 
 const timestampSchema = z.string().datetime({ offset: true });
@@ -36,25 +31,13 @@ export const creditPurchaseSchema = z
   .strict();
 export type CreditPurchase = z.infer<typeof creditPurchaseSchema>;
 
-const creditBalanceSchema = z
-  .object({
-    purchased_nanos: z.number().int(),
-    subscription_nanos: z.number().int(),
-    trial_nanos: z.number().int(),
-    held_nanos: z.number().int().nonnegative(),
-    debt_nanos: z.number().int().nonnegative(),
-    available_nanos: z.number().int().nonnegative(),
-  })
-  .strict();
-
-export const creditSummarySchema = z
+export const creditBalanceSchema = z
   .object({
     ready: z.boolean(),
-    compute: creditBalanceSchema,
-    storage_and_transfer: creditBalanceSchema,
+    balance_nanos: z.number().int(),
   })
   .strict();
-export type CreditSummary = z.infer<typeof creditSummarySchema>;
+export type CreditBalance = z.infer<typeof creditBalanceSchema>;
 
 export const billingPreferencesSchema = z
   .object({
@@ -89,7 +72,6 @@ export const usageBudgetSchema = z
     month_ended_at: timestampSchema,
     limit_nanos: z.number().int().nonnegative().nullable(),
     spent_nanos: z.number().int().nonnegative(),
-    held_nanos: z.number().int().nonnegative(),
     available_nanos: z.number().int().nonnegative().nullable(),
   })
   .strict();
@@ -104,7 +86,6 @@ export const billingPlanSchema = z
     terms_version: billingTermsVersionSchema.nullable(),
     monthly_nanos: z.number().int().nonnegative().nullable(),
     included_nanos: z.number().int().nonnegative().nullable(),
-    credit_scope: creditScopeSchema.nullable(),
     scheduled_terms_version: billingTermsVersionSchema.nullable(),
     scheduled_change_at: timestampSchema.nullable(),
     // Sent by the server from the same rate card as the pricing endpoint, so the

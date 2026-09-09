@@ -46,6 +46,7 @@ from worker.execution import (
     MIB,
     ContainerNetworkIdentity,
     ContainerResourceRequest,
+    OciLinuxResources,
     OciMount,
     PortBinding,
     WorkerOomWatcherPlan,
@@ -58,7 +59,6 @@ from worker.finalization import (
     ContainerStatusUpdater,
     WorkerContainerFinalizationService,
 )
-from worker.funding import FundedContainerStopper, WorkerFundingSupervisor
 from worker.gpu import ContainerGpuAssignmentResult
 from worker.lifecycle import (
     ContainerStartupPortRequest,
@@ -405,10 +405,15 @@ def enforced_memory_limit_bytes(context: ContainerExecutionContext) -> int | Non
     return resources.memory.limit_bytes
 
 
+class ContainerRuntimeResourcePreparer(Protocol):
+    def prepare_runtime_resources(
+        self, container_id: str, resources: OciLinuxResources
+    ) -> None: ...
+
+
 @dataclass(slots=True)
 class WorkerContainerExecutionService:
-    funding: WorkerFundingSupervisor
-    funding_stopper: FundedContainerStopper
+    runtime_resources: ContainerRuntimeResourcePreparer
     address_publisher: WorkerAddressPublisher
     image_loader: ContainerImageLoader
     port_allocator: ContainerPortAllocator
@@ -898,37 +903,20 @@ class WorkerContainerExecutionService:
         holder: dict[str, ContainerRuntimeRunResult],
     ) -> None:
         monitor = _RuntimeMonitorState()
-        self.funding_stopper.prepare_funded_runtime(
+        self.runtime_resources.prepare_runtime_resources(
             context.request.container_id,
             plan_oci_linux_resources(container_resource_request(context)),
         )
-        funded = self.funding.begin(
-            context.request.container_id,
-            stop=lambda: self.funding_stopper.stop_container(
-                context.request.container_id,
-                force=True,
-                reason=StopContainerReason.Unfunded,
-            ),
+        log_capture = (
+            self.container_logs.begin(context.request) if self.container_logs is not None else None
         )
-        try:
-            log_capture = (
-                self.container_logs.begin(context.request)
-                if self.container_logs is not None
-                else None
-            )
-        except Exception:
-            funded.close()
-            raise
         output_sink = log_capture.process_output_sink if log_capture is not None else None
 
         def monitored_started(pid: int) -> None:
-            self.funding_stopper.require_funded_stop(context.request.container_id)
-            funded.require_valid()
             monitor.start(self.runtime_monitor, context.request, pid)
             on_started(pid)
 
         try:
-            funded.require_valid()
             monitor.start(self.runtime_monitor, context.request, 0)
             restored = (
                 self.checkpoint_restorer.restore(
@@ -955,7 +943,6 @@ class WorkerContainerExecutionService:
             result.runtime_output = _redact_runtime_output(exc.output, context.request)
             raise
         finally:
-            funded.close()
             result.monitoring = monitor.stop()
             if log_capture is not None:
                 result.container_logs = log_capture.close()

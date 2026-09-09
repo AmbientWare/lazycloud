@@ -18,12 +18,11 @@ from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.identity import WorkspaceMemberTable
 from database.tables.observability import UsageRecordTable
 from shared.billing_accounts import BillingAccount
-from shared.billing_credits import CreditGrant, CreditKind, CreditScope
+from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_plans import BillingPlanId
 from shared.billing_quotes import BILLED_METRICS
 from shared.billing_rate_card import (
     ONE_TIME_TRIAL_NANOS,
-    TRIAL_CREDIT_SCOPE,
     TRIAL_VALIDITY_DAYS,
     subscription_terms,
 )
@@ -168,20 +167,11 @@ def _invoice_subscription_grant(
     )
     if amount == 0 or effective_at >= period_ended_at:
         return None
-    scope = (
-        CreditScope.Compute
-        if any(
-            subscription_terms(line.terms_version).credit_scope is CreditScope.Compute
-            for line in positive
-        )
-        else CreditScope.AllMetered
-    )
     return CreditGrant(
         source_id=_subscription_source(
             min(positive, key=lambda line: line.provider_invoice_line_id)
         ),
         kind=CreditKind.Subscription,
-        scope=scope,
         amount_nanos=amount,
         effective_at=to_utc(effective_at),
         expires_at=to_utc(period_ended_at),
@@ -211,7 +201,6 @@ def initialize_local_credits(
         grant=CreditGrant(
             source_id=f"trial:{user_id}",
             kind=CreditKind.Trial,
-            scope=TRIAL_CREDIT_SCOPE,
             amount_nanos=ONE_TIME_TRIAL_NANOS,
             effective_at=to_utc(effective_at),
             expires_at=to_utc(effective_at) + timedelta(days=TRIAL_VALIDITY_DAYS),

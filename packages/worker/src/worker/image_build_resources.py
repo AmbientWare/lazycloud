@@ -11,7 +11,6 @@ from pathlib import Path
 from time import monotonic
 from uuid import UUID
 
-from worker.funding import WorkerFundingSession
 from worker.runtime_config import (
     prepare_container_accounting_cgroup,
     release_container_accounting_cgroup,
@@ -22,7 +21,6 @@ from worker.runtime_config import (
 class ImageBuildResources:
     root: Path
     cancellation: threading.Event = field(default_factory=threading.Event)
-    funding: WorkerFundingSession | None = field(default=None, repr=False)
     stopped_monotonic: float | None = field(default=None, init=False)
     _processes: dict[int, subprocess.Popen[bytes]] = field(default_factory=dict, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -51,9 +49,6 @@ class ImageBuildResources:
     def require_valid(self) -> None:
         if self.cancellation.is_set():
             raise RuntimeError("image build was cancelled")
-        if self.funding is None:
-            raise RuntimeError("image build funding is not authorized")
-        self.funding.require_valid()
 
     def spawn(
         self,

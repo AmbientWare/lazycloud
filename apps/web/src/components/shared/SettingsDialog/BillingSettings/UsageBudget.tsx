@@ -23,10 +23,7 @@ export function UsageBudget() {
           resets on the first of each month at midnight UTC. Subscription fees are separate.
         </p>
         {budget.data ? (
-          <p className="text-sm">
-            {formatCostNanos(budget.data.spent_nanos)} used this month.{" "}
-            {formatCostNanos(budget.data.held_nanos)} reserved for work already admitted.
-          </p>
+          <p className="text-sm">{formatCostNanos(budget.data.spent_nanos)} used this month.</p>
         ) : null}
         {preferences.data ? <BudgetForm preferences={preferences.data} /> : null}
         {preferences.isPending ? <p role="status">Loading saved limit…</p> : null}
@@ -88,8 +85,8 @@ function BudgetForm({ preferences }: { preferences: BillingPreferences }) {
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        Leave blank for no limit. Set $0 to block new compute. Running compute stops when its
-        current funding expires. Stored data and existing transfer access can still incur charges.
+        Leave blank for no limit. Set $0 to block new work and transfers. Usage is recorded
+        periodically, so the final charge can exceed the limit before running compute stops.
       </p>
       {save.error ? (
         <p role="alert" className="text-sm text-destructive">

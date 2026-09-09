@@ -284,9 +284,7 @@ function MarketingPricing() {
                     </p>
                     <dl className="mt-4 border-t border-border text-[13px]">
                       <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
-                        <dt className="text-muted-foreground">
-                          Monthly {plan.credit_scope === "compute" ? "compute" : "usage"} credit
-                        </dt>
+                        <dt className="text-muted-foreground">Monthly usage credit</dt>
                         <dd className="font-mono font-medium text-brand">
                           {exactDollars(plan.included_nanos)}{" "}
                           <span className="text-muted-foreground">/ month</span>

@@ -89,7 +89,7 @@ from shared.container_requests import ContainerShutdownTarget, StopContainerReas
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.http.errors import ErrorResponse
-from shared.http.worker_funding import WorkerUsageWindowResponse
+from shared.http.worker_usage import WorkerUsageWindowResponse
 from shared.identity import AuthScope, TokenKind, WorkspaceStorageConfig
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus, ImageBuildRecord, ImageRecord

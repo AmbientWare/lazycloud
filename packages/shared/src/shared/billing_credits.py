@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from shared.billing_quotes import BilledDimension
 from shared.enums import StringEnum
 
 
@@ -13,19 +12,10 @@ class CreditKind(StringEnum):
     Trial = "trial"
 
 
-class CreditScope(StringEnum):
-    Compute = "compute"
-    AllMetered = "all_metered"
-
-    def covers(self, dimension: BilledDimension) -> bool:
-        return self is CreditScope.AllMetered or dimension is BilledDimension.ComputeRuntime
-
-
 @dataclass(frozen=True, slots=True)
 class CreditGrant:
     source_id: str
     kind: CreditKind
-    scope: CreditScope
     amount_nanos: int
     effective_at: datetime
     expires_at: datetime | None = None
@@ -45,21 +35,10 @@ class CreditGrant:
 
 
 @dataclass(frozen=True, slots=True)
-class CreditBalance:
-    purchased_nanos: int
-    subscription_nanos: int
-    trial_nanos: int
-
-    @property
-    def available_nanos(self) -> int:
-        return self.purchased_nanos + self.subscription_nanos + self.trial_nanos
-
-
-@dataclass(frozen=True, slots=True)
 class CreditSettlement:
     gross_nanos: int
     credited_nanos: int
     payable_nanos: int
 
 
-__all__ = ["CreditBalance", "CreditGrant", "CreditKind", "CreditScope", "CreditSettlement"]
+__all__ = ["CreditGrant", "CreditKind", "CreditSettlement"]

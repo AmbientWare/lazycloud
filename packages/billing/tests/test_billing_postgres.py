@@ -25,7 +25,6 @@ from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccount
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
-from shared.billing_quotes import BilledDimension
 from shared.billing_rate_card import ONE_TIME_TRIAL_NANOS, published_plan, subscription_terms
 from shared.errors import ConflictError
 from shared.events import Event, EventLevel
@@ -564,13 +563,7 @@ def test_postgresql_two_first_sign_ins_provision_one_account_and_refuse_nobody()
         with database.session() as session:
             stored = BillingAccountRepository(session).get_by_user(user_id)
             assert (
-                BillingCreditRepository(session)
-                .balance(
-                    user_id=user_id,
-                    at=CYCLE_STARTED_AT,
-                    dimension=BilledDimension.ComputeRuntime,
-                )
-                .trial_nanos
+                BillingCreditRepository(session).balance(user_id=user_id, at=CYCLE_STARTED_AT)
                 == ONE_TIME_TRIAL_NANOS
             )
 

@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from decimal import ROUND_DOWN, Decimal
 from typing import Literal, TypeAlias
 
-from shared.billing_credits import CreditScope
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BYTES_PER_GIB, NANOS_PER_USD
 from shared.gpu import NO_GPU, SUPPORTED_GPU_TYPES, GpuType
@@ -15,16 +14,9 @@ from shared.timestamps import to_utc
 from shared.usage import UsageBillingOwner
 
 FREE_PLAN_MONTHLY_NANOS = 0
-"""What the free plan charges, published as a price rather than as no price.
-
-A zero price is still a subscription line, and that is what carries the metered
-prices an account's overage is billed through. An account on no subscription at
-all would have nowhere for its usage to land.
-"""
 
 FREE_PLAN_INCLUDED_NANOS = 0
 ONE_TIME_TRIAL_NANOS = 5 * NANOS_PER_USD
-TRIAL_CREDIT_SCOPE = CreditScope.AllMetered
 TRIAL_VALIDITY_DAYS = 30
 
 FREE_PLAN_MAX_CPU_CONTAINERS = 30
@@ -104,7 +96,6 @@ class SubscriptionTerms:
     plan: BillingPlanId
     monthly_nanos: int
     included_nanos: int
-    credit_scope: CreditScope
 
 
 SUBSCRIPTION_TERMS: tuple[SubscriptionTerms, ...] = (
@@ -113,35 +104,30 @@ SUBSCRIPTION_TERMS: tuple[SubscriptionTerms, ...] = (
         BillingPlanId.Free,
         0,
         5 * NANOS_PER_USD,
-        CreditScope.AllMetered,
     ),
     SubscriptionTerms(
         SubscriptionTermsVersion.TeamLegacy,
         BillingPlanId.Team,
         100 * NANOS_PER_USD,
         30 * NANOS_PER_USD,
-        CreditScope.AllMetered,
     ),
     SubscriptionTerms(
         SubscriptionTermsVersion.Free,
         BillingPlanId.Free,
         FREE_PLAN_MONTHLY_NANOS,
         FREE_PLAN_INCLUDED_NANOS,
-        CreditScope.Compute,
     ),
     SubscriptionTerms(
         SubscriptionTermsVersion.Team,
         BillingPlanId.Team,
         TEAM_PLAN_MONTHLY_NANOS,
         TEAM_PLAN_INCLUDED_NANOS,
-        CreditScope.Compute,
     ),
     SubscriptionTerms(
         SubscriptionTermsVersion.Business,
         BillingPlanId.Business,
         BUSINESS_PLAN_MONTHLY_NANOS,
         BUSINESS_PLAN_INCLUDED_NANOS,
-        CreditScope.Compute,
     ),
 )
 _SUBSCRIPTION_TERMS_BY_VERSION = {terms.version: terms for terms in SUBSCRIPTION_TERMS}
@@ -367,8 +353,8 @@ class PublishedPlan:
     Carries no money and no count. The figures above are rendered by whichever
     surface shows the plan, in that surface's own format, so a term can never
     restate a number and then disagree with it. What is true on every plan —
-    what a card on file changes, how included compute is issued, how overage is
-    billed — is not here either: it belongs to the surface that says it once,
+    what a card on file changes, how included credit is issued, how usage is
+    charged, is not here either: it belongs to the surface that says it once,
     and repeating it per plan is how two plans start describing the platform
     differently.
     """
@@ -380,10 +366,6 @@ class PublishedPlan:
     @property
     def included_nanos(self) -> int:
         return subscription_terms(self.terms_version).included_nanos
-
-    @property
-    def credit_scope(self) -> CreditScope:
-        return subscription_terms(self.terms_version).credit_scope
 
 
 @dataclass(frozen=True, slots=True)
@@ -568,7 +550,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
     PublishedPlan(
         id=BillingPlanId.Team,
         name="Team",
-        summary="A monthly subscription that comes with compute included.",
+        summary="A monthly subscription with included usage credit.",
         terms_version=SubscriptionTermsVersion.Team,
         entitlements=PlanEntitlements(
             max_concurrent_cpu_containers=TEAM_PLAN_MAX_CPU_CONTAINERS,
@@ -885,7 +867,6 @@ __all__ = [
     "TEAM_PLAN_MAX_CPU_CONTAINERS",
     "TEAM_PLAN_MAX_GPUS",
     "TEAM_PLAN_MONTHLY_NANOS",
-    "TRIAL_CREDIT_SCOPE",
     "TRIAL_VALIDITY_DAYS",
     "AccountTerms",
     "AllGpuTypes",

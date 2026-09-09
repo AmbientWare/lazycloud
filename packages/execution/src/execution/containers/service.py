@@ -29,15 +29,12 @@ from observability.events import EventService
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import Field
 from shared.autoscaler_state import autoscaler_target_kind
-from shared.billing_quotes import ContainerShape
 from shared.container_requests import (
     ContainerShutdownTarget,
     OciRuntimeName,
     StopContainerReason,
     WorkerContainerRequestPayload,
     WorkerStartupKind,
-    container_cpu_ceiling_millicores,
-    container_memory_ceiling_mib,
 )
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
@@ -46,7 +43,7 @@ from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.events import EventLevel
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.image_building.records import BuildStatus
-from shared.placement import ProductRegion, placement_rate_class
+from shared.placement import ProductRegion
 from shared.scheduling import (
     SchedulerContainerCancellationResult,
     SchedulerContainerSubmitResult,
@@ -55,7 +52,6 @@ from shared.scheduling import (
 )
 from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
-from shared.usage import UsageBillingOwner
 
 from execution.admission import PaymentAdmission
 from execution.containers.planning import (
@@ -243,51 +239,11 @@ class ContainerService:
         values["gpu_count"] = gpu_count_for_capacity(gpu, reservation.gpu_count)
         container_id = reservation.id or str(uuid4())
         values["id"] = container_id
-        self._reserve_container_funding(session, reservation, container_id=container_id, gpu=gpu)
         return ContainerRepository(session).records.create(
             values,
             workspace_id=reservation.workspace_id,
             name=reservation.name,
             status=ContainerStatus.Pending.value,
-        )
-
-    def _reserve_container_funding(
-        self,
-        session: DatabaseSession,
-        reservation: PendingContainerReservation,
-        *,
-        container_id: str,
-        gpu: Sequence[str],
-    ) -> None:
-        rate_class = placement_rate_class(
-            pinned=bool(reservation.region or reservation.availability_zone),
-            preemptible=reservation.preemptible,
-        )
-        candidates = [
-            ContainerShape(
-                billing_owner=owner,
-                gpu_type=model,
-                cpu_millicores=reservation.cpu_millicores,
-                memory_mib=reservation.memory_mib,
-                gpu_count=gpu_count_for_capacity(gpu, reservation.gpu_count),
-                rate_class=rate_class,
-            )
-            for owner in (UsageBillingOwner.PlatformFleet, UsageBillingOwner.ConnectedCloud)
-            for model in (gpu or [""])
-        ]
-        self.payment_admission.reserve_container_funding(
-            session,
-            container_id=container_id,
-            workspace_id=reservation.workspace_id,
-            candidate_shapes=candidates,
-            cpu_ceiling_millicores=container_cpu_ceiling_millicores(
-                reservation.cpu_millicores,
-                limit_millicores=reservation.cpu_limit_millicores,
-            ),
-            memory_ceiling_mib=container_memory_ceiling_mib(
-                reservation.memory_mib,
-                limit_mib=reservation.memory_limit_mib,
-            ),
         )
 
     def reserve_image_build_container(
@@ -337,9 +293,6 @@ class ContainerService:
             if existing is not None:
                 if existing.workspace_id != workspace_id or existing.image != image_id:
                     raise ConflictError("image build container identity does not match")
-                self._reserve_container_funding(
-                    session, reservation, container_id=container_id, gpu=()
-                )
                 return existing
             record = self.reserve_pending(
                 session,
@@ -800,7 +753,6 @@ class ContainerService:
             current = containers.get_across_workspaces(container_id)
             if current is None:
                 raise NotFoundError(f"container not found: {container_id}")
-            self.payment_admission.cancel_container_funding(session, container_id=container_id)
             if current.status in TERMINAL_CONTAINER_STATUSES:
                 # The worker's report landed while this was deciding, and it
                 # says what actually happened: a full-payload write from the

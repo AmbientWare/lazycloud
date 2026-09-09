@@ -13,13 +13,11 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.checkpoints import AutomaticCheckpointCreationLease, CheckpointRecord
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
-from shared.funding import FundingPermit
-from shared.http.worker_funding import (
-    WorkerFundingRequest,
+from shared.http.worker_network import WorkerEgressPolicy, WorkerEgressPolicyRequest
+from shared.http.worker_usage import (
     WorkerUsageWindowRequest,
     WorkerUsageWindowResponse,
 )
-from shared.http.worker_network import WorkerEgressPolicy, WorkerEgressPolicyRequest
 from shared.image_building.records import BuildStatus
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsPayload
 from shared.routing import AgentBackendRoute
@@ -753,16 +751,6 @@ class WorkerRepositoryHttpClient:
             "/worker-repository/record-worker-usage-window",
             request,
             WorkerUsageWindowResponse,
-        )
-
-    def authorize_container_funding(self, request: WorkerFundingRequest) -> FundingPermit:
-        return self._post_model(
-            "/worker-repository/authorize-container-funding", request, FundingPermit
-        )
-
-    def renew_container_funding(self, request: WorkerFundingRequest) -> FundingPermit:
-        return self._post_model(
-            "/worker-repository/renew-container-funding", request, FundingPermit
         )
 
     def publish_container_lifecycle(

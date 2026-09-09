@@ -6,10 +6,11 @@ from uuid import UUID, uuid4
 
 from database.client import DatabaseClient
 from database.repositories.billing import BillingAccountRepository
+from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_preferences import BillingPreferencesRepository
 from database.repositories.credit_purchases import CreditPurchaseRepository
 from shared.billing_preferences import AutomaticReloadPauseReason, usage_budget_month
-from shared.billing_quotes import NANOS_PER_USD, BilledDimension
+from shared.billing_quotes import NANOS_PER_USD
 from shared.credit_payments import CreditPaymentStatus, CreditPurchaseKind
 from shared.errors import ConflictError, DomainError, NotFoundError
 from shared.http.billing_preferences import AutomaticReloadStatus
@@ -18,7 +19,6 @@ from shared.timestamps import to_utc, utc_now
 from sqlalchemy.orm import Session
 
 from billing.automatic_reload_policy import automatic_reload_account_eligible
-from billing.funding import BillingFundingService
 from billing.purchases import CreditPurchaseService
 
 LOGGER = logging.getLogger(__name__)
@@ -133,14 +133,11 @@ class AutomaticReloadService:
             purchases = CreditPurchaseRepository(session)
             if purchases.pending_automatic(user_id=user_id) is not None:
                 return None
-            balance = BillingFundingService(session).balance(
+            balance = BillingCreditRepository(session).balance(
                 user_id=user_id,
-                dimension=BilledDimension.VolumeStorage,
                 at=now,
             )
-            if balance.available_nanos > preferences.reload_threshold_cents * (
-                NANOS_PER_USD // 100
-            ):
+            if balance > preferences.reload_threshold_cents * (NANOS_PER_USD // 100):
                 return None
             start, end = usage_budget_month(now)
             committed = purchases.automatic_payment_commitment(

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from database.repositories.billing import BillingAccountRepository
+from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_plan_changes import BillingPlanChangeIntentRepository
 from database.repositories.compute import AwsAccountConnectionRepository
 from database.repositories.custom_domains import CustomDomainRepository
@@ -14,7 +15,6 @@ from database.repositories.identity import (
 from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
-from shared.billing_quotes import BilledDimension, ContainerShape
 from shared.billing_rate_card import (
     AccountTerms,
     PlanEntitlements,
@@ -32,61 +32,39 @@ from shared.placement import ProductRegion
 from shared.timestamps import utc_now
 from sqlalchemy.orm import Session
 
-from billing.funding import BillingFundingService
+from billing.preferences import BillingPreferencesService
 
 
 @dataclass(frozen=True, slots=True)
 class DatabaseBillingAdmission:
-    """Apply plan entitlements and reserve credits before new compute becomes visible.
+    """Check account credit and plan entitlements before starting billed work."""
 
-    Warm invocations check entitlements without reserving another container.
-    Container creation reserves its maximum compute exposure in the same transaction.
-    """
-
-    def assert_may_take_on_billed_work(self, session: Session, *, workspace_id: str) -> None:
-        """Require eligible credit before creating a billed resource.
-
-        This creation check does not reserve storage growth or transfer charges.
-        """
-
-        resolved = self._billable_account(session, workspace_id=workspace_id)
-        if resolved is None:
-            raise PaymentRequiredError("billed work requires a workspace billing owner")
-        account = BillingAccountRepository(session).get_by_user(resolved[0])
-        if account is not None and account.complimentary_since is not None:
-            return
-        balance = BillingFundingService(session).balance(
-            user_id=resolved[0],
-            dimension=BilledDimension.VolumeStorage,
-        )
-        if balance.available_nanos <= 0:
-            raise PaymentRequiredError("add credit before creating another billed resource")
-
-    def reserve_container_funding(
+    def assert_may_take_on_billed_work(
         self,
         session: Session,
         *,
-        container_id: str,
         workspace_id: str,
-        candidate_shapes: Sequence[ContainerShape],
-        cpu_ceiling_millicores: int,
-        memory_ceiling_mib: int,
     ) -> None:
-        BillingFundingService(session).reserve_pending(
-            container_id=container_id,
-            workspace_id=workspace_id,
-            candidate_shapes=tuple(
-                replace(
-                    shape,
-                    cpu_millicores=cpu_ceiling_millicores,
-                    memory_mib=memory_ceiling_mib,
-                )
-                for shape in candidate_shapes
-            ),
-        )
+        resolved = self._billable_account(session, workspace_id=workspace_id)
+        if resolved is None:
+            raise PaymentRequiredError("billed work requires a workspace billing owner")
+        self._assert_funds(session, user_id=resolved[0])
 
-    def cancel_container_funding(self, session: Session, *, container_id: str) -> None:
-        BillingFundingService(session).cancel_pending(container_id=container_id)
+    def _assert_funds(self, session: Session, *, user_id: str) -> None:
+        account = BillingAccountRepository(session).get_by_user(user_id)
+        if account is not None and account.complimentary_since is not None:
+            return
+        credits = BillingCreditRepository(session)
+        cutover = credits.cutover(user_id=user_id)
+        if cutover is None or cutover.completed_at is None:
+            raise PaymentRequiredError("credit migration must complete before starting billed work")
+        if credits.balance(user_id=user_id, at=utc_now()) <= 0:
+            raise PaymentRequiredError("add credit before starting more billed work")
+        preferences = BillingPreferencesService(session)
+        if preferences.get(user_id=user_id).monthly_usage_limit_nanos is not None:
+            budget = preferences.usage_budget(user_id=user_id)
+            if budget.available_nanos is not None and budget.available_nanos <= 0:
+                raise PaymentRequiredError("the monthly usage limit has been reached")
 
     def admit_container_start(
         self,
@@ -116,10 +94,9 @@ class DatabaseBillingAdmission:
                 "region or availability zone selection requires the Team plan"
             )
         if resolved is None:
-            # No account to judge, so nothing to narrow either: what was asked
-            # for is what gets scheduled.
-            return list(gpu)
+            raise PaymentRequiredError("billed work requires a workspace billing owner")
         owner_user_id, terms = resolved
+        self._assert_funds(session, user_id=owner_user_id)
         containers = ContainerRepository(session)
         if gpu_count == 0 and not gpu:
             live = containers.count_live_cpu_for_owner(owner_user_id=owner_user_id)

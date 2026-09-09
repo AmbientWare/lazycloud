@@ -12,14 +12,13 @@ from billing.costs import (
     UsageCostSeries,
     UsageCostService,
 )
-from billing.funding import BillingFundingService
+from billing.preferences import BillingPreferencesService
 from billing.purchases import CreditPurchaseService
 from database.repositories.billing_costs import PayerCostScope
 from fastapi import APIRouter, Depends, Query, status
 from shared.billing_rate_card import published_plan, subscription_terms
 from shared.credit_payments import CreditPurchaseKind
 from shared.errors import InvalidInputError
-from shared.funding import FundingBalance
 from shared.http.billing import (
     BillingAccountAdminListResponse,
     BillingAccountAdminResponse,
@@ -33,7 +32,6 @@ from shared.http.billing import (
     CreditBalanceResponse,
     CreditPurchaseRequest,
     CreditPurchaseResponse,
-    CreditSummaryResponse,
     UsageBudgetResponse,
 )
 from shared.http.billing_preferences import AutomaticReloadStatus, BillingPreferences
@@ -103,7 +101,7 @@ def get_billing_preferences(
     services: ApiServices = Depends(current_services),
 ) -> BillingPreferences:
     with services.context.database.session() as session:
-        return BillingFundingService(session).get_preferences(user_id=user_id)
+        return BillingPreferencesService(session).get(user_id=user_id)
 
 
 @router.put(
@@ -115,7 +113,7 @@ def set_billing_preferences(
     services: ApiServices = Depends(current_services),
 ) -> BillingPreferences:
     with services.context.database.session() as session:
-        return BillingFundingService(session).set_preferences(user_id=user_id, preferences=request)
+        return BillingPreferencesService(session).set(user_id=user_id, preferences=request)
 
 
 @router.get("/usage-budget", response_model=UsageBudgetResponse, operation_id="get_usage_budget")
@@ -124,33 +122,18 @@ def get_usage_budget(
     services: ApiServices = Depends(current_services),
 ) -> UsageBudgetResponse:
     with services.context.database.session() as session:
-        budget = BillingFundingService(session).usage_budget(user_id=user_id)
+        budget = BillingPreferencesService(session).usage_budget(user_id=user_id)
     return UsageBudgetResponse.model_validate(budget)
 
 
-@router.get("/credits", response_model=CreditSummaryResponse, operation_id="get_credit_balance")
+@router.get("/credits", response_model=CreditBalanceResponse, operation_id="get_credit_balance")
 def get_credit_balance(
     user_id: read_user,
     services: ApiServices = Depends(current_services),
-) -> CreditSummaryResponse:
+) -> CreditBalanceResponse:
     with services.context.database.session() as session:
         summary = BillingStandingService(session).credit_balance(user_id=user_id, at=utc_now())
-    return CreditSummaryResponse(
-        ready=summary.ready,
-        compute=_credit_balance_response(summary.compute),
-        storage_and_transfer=_credit_balance_response(summary.storage_and_transfer),
-    )
-
-
-def _credit_balance_response(balance: FundingBalance) -> CreditBalanceResponse:
-    return CreditBalanceResponse(
-        purchased_nanos=balance.credits.purchased_nanos,
-        subscription_nanos=balance.credits.subscription_nanos,
-        trial_nanos=balance.credits.trial_nanos,
-        held_nanos=balance.held_nanos,
-        debt_nanos=balance.debt_nanos,
-        available_nanos=balance.available_nanos,
-    )
+    return CreditBalanceResponse(ready=summary.ready, balance_nanos=summary.balance_nanos)
 
 
 @router.post(
@@ -470,7 +453,6 @@ def _summary(standing: BillingStanding) -> BillingSummaryResponse:
                 terms_version=standing.subscription_terms_version,
                 monthly_nanos=terms.monthly_nanos if terms else None,
                 included_nanos=terms.included_nanos if terms else None,
-                credit_scope=terms.credit_scope if terms else None,
                 scheduled_terms_version=standing.scheduled_terms_version,
                 scheduled_change_at=standing.scheduled_change_at,
                 period_started_at=allowance.started_at if allowance else None,

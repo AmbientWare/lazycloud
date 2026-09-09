@@ -8,11 +8,12 @@ from api.server.services import ApiServices
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.custom_domains import CustomDomainRepository
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository
 from database.tables.orchestration import ContainerTable
 from database.tables.storage import VolumeTable
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_credits import CreditGrant, CreditKind, CreditScope
+from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import FREE_PLAN_GPU_TYPES
 from shared.containers import ContainerRecord, ContainerStatus
@@ -27,6 +28,16 @@ from tests.service_fixtures import legacy_billing_account, unbilled_account, wor
 from billing import DatabaseBillingAdmission
 
 FUNCTION_IMAGE = "python:3.12-slim"
+
+
+def test_compute_requires_a_workspace_billing_owner(isolated_services: ApiServices) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = WorkspaceRepository(session).create(name="unowned-compute").id
+    with pytest.raises(PaymentRequiredError, match="workspace billing owner"):
+        isolated_services.containers.run(
+            "unowned", FUNCTION_IMAGE, ["true"], workspace_id=workspace_id
+        )
+    assert _container_count(isolated_services, workspace_id) == 0
 
 
 def test_free_plan_refuses_paid_capabilities(isolated_services: ApiServices) -> None:
@@ -184,7 +195,6 @@ def test_an_unfunded_account_gets_no_new_volume_but_still_reaches_the_one_it_has
             grant=CreditGrant(
                 "payment:storage-access",
                 CreditKind.Purchased,
-                CreditScope.AllMetered,
                 1_000_000_000,
                 utc_now(),
             ),

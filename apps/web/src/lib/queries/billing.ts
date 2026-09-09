@@ -5,7 +5,7 @@ import {
   billingHostedSessionResponseSchema,
   billingSummarySchema,
   creditPurchaseSchema,
-  creditSummarySchema,
+  creditBalanceSchema,
   billingPreferencesSchema,
   usageBudgetSchema,
   automaticReloadStatusSchema,
@@ -45,7 +45,7 @@ export function billingSummaryQueryOptions() {
 export function creditBalanceQueryOptions() {
   return queryOptions({
     queryKey: [...accountQueryKeys.billing(), "credits"],
-    queryFn: () => apiRequest("/api/v1/billing/credits", creditSummarySchema),
+    queryFn: () => apiRequest("/api/v1/billing/credits", creditBalanceSchema),
     refetchInterval: 5_000,
   });
 }

@@ -13,7 +13,6 @@ from database.repositories.billing_rates import ComputeRateRepository, PlatformR
 from database.repositories.identity import WorkspaceMemberRepository
 from database.tables.base import DatabaseBase
 from database.tables.billing import BillingAccountTable
-from database.tables.billing_funding import BillingFundingHoldTable
 from database.tables.billing_ledger import (
     BillingLedgerSegmentTable,
     ContainerBillingShapeTable,
@@ -48,7 +47,6 @@ from shared.usage import (
     METERING_WINDOW_STARTED_AT_METADATA_KEY,
     UsageBillingOwner,
     UsageRecord,
-    usage_record_id,
 )
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import Insert as PostgresInsert
@@ -320,7 +318,7 @@ class BillingLedgerRepository:
             segments=tuple(segment for _, pricing in priced for segment in pricing.segments)
         )
         if recorded.count == 0:
-            self._queue_local_credit(usage_record_id=record.id, owner_user_id=owner.user_id)
+            self._settle_local_credit(usage_record_id=record.id, owner_user_id=owner.user_id)
             return FrozenSpan(
                 dimension=billed.dimension,
                 cost_nanos=self._frozen_cost_nanos(record.id),
@@ -331,7 +329,7 @@ class BillingLedgerRepository:
             at=started_at,
             cost_nanos=recorded.cost_nanos,
         )
-        self._queue_local_credit(usage_record_id=record.id, owner_user_id=owner.user_id)
+        self._settle_local_credit(usage_record_id=record.id, owner_user_id=owner.user_id)
         legacy_segments = tuple(
             segment
             for _, pricing in priced
@@ -361,13 +359,13 @@ class BillingLedgerRepository:
         for record_id in BillingCreditRepository(self.session).pending_records(
             user_id=owner_user_id
         ):
-            self._queue_local_credit(usage_record_id=record_id, owner_user_id=owner_user_id)
+            self._settle_local_credit(usage_record_id=record_id, owner_user_id=owner_user_id)
 
-    def _queue_local_credit(self, *, usage_record_id: str, owner_user_id: str) -> bool:
+    def _settle_local_credit(self, *, usage_record_id: str, owner_user_id: str) -> None:
         credits = BillingCreditRepository(self.session)
         cutover = credits.cutover(user_id=owner_user_id)
         if cutover is None:
-            return False
+            return
         segments = self.session.scalars(
             select(BillingLedgerSegmentTable)
             .where(
@@ -377,40 +375,15 @@ class BillingLedgerRepository:
             .order_by(BillingLedgerSegmentTable.segment_started_at, BillingLedgerSegmentTable.id)
         ).all()
         if not segments:
-            return False
+            return
         account = BillingAccountRepository(self.session).get_by_user(owner_user_id, for_update=True)
         if account is None:
             raise ConflictError("priced usage has no billing account for credit settlement")
-        occurred_at = to_utc(segments[0].segment_started_at)
-        settled = credits.settle(
+        credits.settle(
             user_id=owner_user_id,
             usage_record_id=usage_record_id,
-            funding_confirmed=BillingAllowanceRepository(self.session).credit_confirmed(
-                user_id=owner_user_id,
-                started_at=occurred_at,
-                ended_at=max(to_utc(segment.segment_ended_at) for segment in segments),
-            ),
-            waived=account.complimentary_since is not None
-            or self._lost_execution_usage(usage_record_id, BilledDimension(segments[0].dimension)),
+            waived=account.complimentary_since is not None,
         )
-        if settled is not None:
-            self._queue_meter_event(
-                workspace_id=segments[0].workspace_id,
-                usage_record_id=usage_record_id,
-                identifier=_credit_meter_identifier(usage_record_id),
-                dimension=BilledDimension(segments[0].dimension),
-                occurred_at=occurred_at,
-                ended_at=max(to_utc(segment.segment_ended_at) for segment in segments),
-                recorded=_RecordedSegments(
-                    count=len(segments),
-                    cost_nanos=settled.payable_nanos,
-                    pricing_versions=tuple(
-                        dict.fromkeys(segment.pricing_version for segment in segments)
-                    ),
-                ),
-                owner_user_id=owner_user_id,
-            )
-        return True
 
     def _shape(self, record: UsageRecord) -> ContainerShape | None:
         if record.resource_type != _CONTAINER_SUBJECT or not _is_uuid(record.resource_id):
@@ -472,15 +445,6 @@ class BillingLedgerRepository:
             pricing_versions=tuple(dict.fromkeys(str(row.pricing_version) for row in ordered)),
         )
 
-    def _lost_execution_usage(self, record_id: str, dimension: BilledDimension) -> bool:
-        if dimension != BilledDimension.ComputeRuntime:
-            return False
-        record = self.session.get(UsageRecordTable, record_id)
-        if record is None or record.resource_type != _CONTAINER_SUBJECT:
-            return False
-        hold = self.session.get(BillingFundingHoldTable, record.resource_id)
-        return hold is not None and hold.loss_resolved_at is not None
-
     def _queue_meter_event(
         self,
         *,
@@ -495,9 +459,8 @@ class BillingLedgerRepository:
     ) -> None:
         """Queue the frozen payable amount for one settlement interval.
 
-        Its identifier deduplicates retries at the provider. A cutover-crossing
-        record has separate legacy and local intervals with the same ledger source.
-        Waivers retain gross value as evidence; zero payable needs no event.
+        Only usage before the wallet cutover reaches the provider. The stable
+        identifier deduplicates retries. Waivers retain their gross value.
         """
 
         if recorded.cost_nanos == 0:
@@ -511,7 +474,7 @@ class BillingLedgerRepository:
         if account is None or not account[0]:
             return
         provider_customer_id = str(account[0])
-        waived = account[1] is not None or self._lost_execution_usage(usage_record_id, dimension)
+        waived = account[1] is not None
         now = utc_now()
         self.session.execute(
             _insert(self.session, BillingMeterOutboxTable)
@@ -536,10 +499,6 @@ class BillingLedgerRepository:
             .on_conflict_do_nothing(index_elements=[BillingMeterOutboxTable.identifier])
         )
         self.session.flush()
-
-
-def _credit_meter_identifier(record_id: str) -> str:
-    return usage_record_id("credit-settlement", record_id)
 
 
 def _split_credit_boundary(pricing: PricedSpan, boundary: datetime) -> PricedSpan:

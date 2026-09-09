@@ -19,9 +19,8 @@ from database.repositories.identity import (
 from database.repositories.orchestration import ContainerRepository
 from database.tables.billing_credits import BillingCreditLotTable
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_credits import CreditKind, CreditScope
+from shared.billing_credits import CreditKind
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
-from shared.billing_quotes import BilledDimension
 from shared.billing_rate_card import (
     FREE_PLAN_INCLUDED_NANOS,
     NO_CARD_MAX_CPU_CONTAINERS,
@@ -328,29 +327,12 @@ def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
         trial = lots[0]
         original = (trial.id, trial.amount_nanos, trial.effective_at, trial.expires_at)
         assert trial.kind == CreditKind.Trial.value
-        assert trial.scope == CreditScope.AllMetered.value
         assert trial.amount_nanos == ONE_TIME_TRIAL_NANOS
         assert trial.expires_at is not None
         assert trial.expires_at == trial.effective_at + timedelta(days=TRIAL_VALIDITY_DAYS)
         credits = BillingCreditRepository(session)
-        assert (
-            credits.balance(
-                user_id=user_id, at=CYCLE_STARTED_AT, dimension=BilledDimension.ComputeRuntime
-            ).trial_nanos
-            == ONE_TIME_TRIAL_NANOS
-        )
-        assert (
-            credits.balance(
-                user_id=user_id, at=CYCLE_STARTED_AT, dimension=BilledDimension.VolumeStorage
-            ).available_nanos
-            == ONE_TIME_TRIAL_NANOS
-        )
-        assert (
-            credits.balance(
-                user_id=user_id, at=trial.expires_at, dimension=BilledDimension.ComputeRuntime
-            ).available_nanos
-            == 0
-        )
+        assert credits.balance(user_id=user_id, at=CYCLE_STARTED_AT) == ONE_TIME_TRIAL_NANOS
+        assert credits.balance(user_id=user_id, at=trial.expires_at) == 0
 
     provider.cycle_started_at = CYCLE_ENDED_AT
     provider.cycle_ended_at = CYCLE_ENDED_AT + timedelta(days=30)
@@ -651,31 +633,15 @@ def test_the_container_limit_counts_every_workspace_the_account_owns(
     card is the issue sends them to fix something that is not broken.
     """
 
-    user_id, first_workspace_id = unbilled_account(isolated_services.context)
+    first_workspace_id = owned_workspace(
+        isolated_services.control_plane_service, f"first-{uuid4()}"
+    ).id
+    user_id = workspace_owner_user_id(isolated_services.context, first_workspace_id)
     with isolated_services.context.database.session() as session:
         second_workspace_id = WorkspaceRepository(session).create(name=f"second-{uuid4()}").id
         WorkspaceMemberRepository(session).ensure_owner(
             workspace_id=second_workspace_id, user_id=user_id
         )
-        BillingAccountRepository(session).upsert(
-            user_id=user_id,
-            status=BillingAccountStatus.Active,
-            provider_customer_id=f"cus_{user_id}",
-            provider_subscription_id=f"sub_{user_id}",
-            provider_credit_grant_id=f"credgr_{user_id}",
-            plan=BillingPlanId.Free,
-            subscription_terms_version=published_plan(BillingPlanId.Free).terms_version,
-            scheduled_terms_version=None,
-            scheduled_change_at=None,
-        )
-        BillingAllowanceRepository(session).set_subscription_period(
-            user_id=user_id,
-            period_started_at=CYCLE_STARTED_AT,
-            period_ended_at=CYCLE_ENDED_AT,
-            allowance_nanos=FREE_PLAN_INCLUDED_NANOS,
-            funded=True,
-        )
-        session.commit()
 
     admission = DatabaseBillingAdmission()
     with isolated_services.context.database.session() as session:

@@ -72,10 +72,7 @@ function heldTermsUnverified(summary: BillingSummary | undefined): boolean {
   const held = summary?.plan;
   return Boolean(
     held &&
-    (held.terms_version === null ||
-      held.monthly_nanos === null ||
-      held.included_nanos === null ||
-      held.credit_scope === null),
+    (held.terms_version === null || held.monthly_nanos === null || held.included_nanos === null),
   );
 }
 

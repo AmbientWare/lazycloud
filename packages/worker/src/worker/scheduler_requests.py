@@ -34,9 +34,8 @@ from worker.container_execution import (
     ContainerExecutionContext,
     ContainerExecutionResult,
 )
-from worker.events import ContainerRequestContext
+from worker.events import ContainerRequestContext, WorkerBuildCancelRegistry
 from worker.finalization import ContainerFinalizationRepository
-from worker.funding import WorkerFundingSupervisor
 from worker.image_build_execution import (
     WorkerImageBuildExecutionResult,
     is_image_build_scheduler_request,
@@ -201,12 +200,12 @@ class _PendingImageBuildResult:
 
 @dataclass(slots=True)
 class WorkerSchedulerRequestProcessor:
+    build_cancels: WorkerBuildCancelRegistry
     worker_id: str
     workers: WorkerSchedulerRequestWorkerRepository
     containers: WorkerSchedulerRequestContainerRepository
     execution: WorkerSchedulerRequestExecutionService
     worker_gpu_type: str
-    funding: WorkerFundingSupervisor
     """The GPU model this worker's machine declares it holds, empty on a CPU host.
 
     No default: it is what every container this worker runs is billed for, and a
@@ -727,6 +726,17 @@ class WorkerSchedulerRequestProcessor:
     def _start_background_image_build(
         self, request: WorkerExecutionRequest
     ) -> WorkerSchedulerRequestResult:
+        self.build_cancels.register_pending(request.container_id)
+        try:
+            return self._start_registered_image_build(request)
+        except BaseException:
+            self.build_cancels.unregister(request.container_id)
+            raise
+
+    def _start_registered_image_build(
+        self,
+        request: WorkerExecutionRequest,
+    ) -> WorkerSchedulerRequestResult:
         # A native build has no OCI registration. Publish ownership before
         # acknowledging the request so a failed write can still be redelivered.
         ownership = self.containers.update_container_status(
@@ -735,6 +745,7 @@ class WorkerSchedulerRequestProcessor:
             ttl_seconds=DEFAULT_CONTAINER_STATE_TTL_SECONDS,
         )
         if ownership.next_status is not SchedulerContainerStatus.Running:
+            self.build_cancels.unregister(request.container_id)
             return self._drop_request(
                 request,
                 plan_delivered_container_request(
@@ -750,9 +761,12 @@ class WorkerSchedulerRequestProcessor:
         active = _BackgroundExecution(request=request)
 
         def execute() -> None:
-            result = self._execute_image_build_request(request).model_copy(
-                update={"background": True}
-            )
+            try:
+                result = self._execute_image_build_request(request).model_copy(
+                    update={"background": True}
+                )
+            finally:
+                self.build_cancels.unregister(request.container_id)
             active.result = (
                 result
                 if result.image_build_report_pending
@@ -888,25 +902,20 @@ class WorkerSchedulerRequestProcessor:
             ),
         )
         try:
-            funding = self.funding.begin(request.container_id, stop=resources.stop)
-            resources.funding = funding
+            metering = ImageBuildMetering(
+                resources,
+                image_build_request_context(request, worker_gpu_type=self.worker_gpu_type),
+                usage_recorder,
+            )
+            metering.start()
+            progress.start()
             try:
-                metering = ImageBuildMetering(
-                    resources,
-                    image_build_request_context(request, worker_gpu_type=self.worker_gpu_type),
-                    usage_recorder,
-                )
-                metering.start()
-                progress.start()
-                try:
-                    resources.require_valid()
-                    result = image_builds.execute(request, resources=resources)
-                finally:
-                    resources.quiesce()
-                    exited_at = metering.close()
-                return result.model_copy(update={"exited_at": exited_at})
+                resources.require_valid()
+                result = image_builds.execute(request, resources=resources)
             finally:
-                funding.close()
+                resources.quiesce()
+                exited_at = metering.close()
+            return result.model_copy(update={"exited_at": exited_at})
         finally:
             stop_progress.set()
             if progress.ident is not None:
