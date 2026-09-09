@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Iterator, Mapping
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Protocol, runtime_checkable
@@ -302,17 +303,14 @@ class WorkerRepositoryHttpClient:
         self,
         request: GetNextContainerRequestRequest,
     ) -> GetNextContainerRequestResponse:
-        last_response = GetNextContainerRequestResponse()
-        for response in self.stream_next_container_requests(request):
-            last_response = response
-            if response.container_request is not None:
-                return response
-        return last_response
+        # Idle responses return control to cleanup, result retries, and spindown checks.
+        with closing(self.stream_next_container_requests(request)) as responses:
+            return next(responses, GetNextContainerRequestResponse())
 
     def stream_next_container_requests(
         self,
         request: GetNextContainerRequestRequest,
-    ) -> Iterator[GetNextContainerRequestResponse]:
+    ) -> Generator[GetNextContainerRequestResponse, None, None]:
         yield from self._stream_model(
             "/worker-repository/get-next-container-request",
             request,
