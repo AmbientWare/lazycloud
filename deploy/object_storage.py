@@ -20,9 +20,7 @@ def put_object(
     cache_control: str,
     immutable: bool,
 ) -> None:
-    store = S3ObjectStoreClient.from_settings(
-        S3Credentials().transport_settings(bucket=bucket)
-    )
+    store = S3ObjectStoreClient.from_settings(S3Credentials().transport_settings(bucket=bucket))
     payload = source.read_bytes()
     try:
         try:
