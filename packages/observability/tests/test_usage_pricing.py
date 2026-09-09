@@ -482,6 +482,7 @@ def test_usage_no_published_rate_covers_is_recorded_without_cost_and_reported(
         cpu_millicores=_CPU_MILLICORES,
         memory_mib=_MEMORY_MIB,
         gpu_count=0,
+        rate_class="unpublished",
     )
     workspace_id, container_id = _shaped_container(isolated_services, shape=shape)
     started_at = now + _WINDOW_AT
@@ -601,6 +602,7 @@ def test_usage_metered_before_any_rate_can_be_priced_once_a_rate_exists(
         cpu_millicores=_CPU_MILLICORES,
         memory_mib=_MEMORY_MIB,
         gpu_count=0,
+        rate_class="unpublished",
     )
     workspace_id, container_id = _shaped_container(isolated_services, shape=shape)
     started_at = now - timedelta(minutes=20)
@@ -626,6 +628,7 @@ def test_usage_metered_before_any_rate_can_be_priced_once_a_rate_exists(
             billing_owner=UsageBillingOwner.PlatformFleet,
             gpu_type="",
             pricing_version="test.first",
+            rate_class=shape.rate_class,
             effective_at=started_at - timedelta(minutes=1),
             nanos_per_container_second=Decimal(0),
             nanos_per_cpu_core_second=Decimal(5),
