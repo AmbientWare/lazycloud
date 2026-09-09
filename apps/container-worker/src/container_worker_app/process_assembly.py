@@ -63,6 +63,7 @@ from worker.events import WorkerBuildCancelRegistry, WorkerPoolMode, WorkerStrea
 from worker.finalization import (
     WorkerContainerFinalizationService,
 )
+from worker.funding import WorkerFundingSupervisor
 from worker.image_build_execution import (
     WorkerImageArchivePublisher,
     WorkerImageBuilder,
@@ -213,6 +214,7 @@ def assemble_worker_process_services(
     instances: WorkerContainerInstanceStore,
     event_sink: WorkerEventSink,
     usage_recorder: WorkerUsageRecorder,
+    funding: WorkerFundingSupervisor,
     pool_mode: WorkerPoolMode,
     billing_owner: UsageBillingOwner,
     registration: SchedulerWorkerRecord,
@@ -273,6 +275,8 @@ def assemble_worker_process_services(
         ),
     )
     execution = WorkerContainerExecutionService(
+        funding=funding,
+        funding_stopper=runtime_stopper,
         address_publisher=address_publisher,
         image_loader=dependencies.image_loader,
         port_allocator=dependencies.port_allocator,
@@ -369,6 +373,7 @@ def assemble_worker_process_services(
     )
     processor = WorkerSchedulerRequestProcessor(
         worker_id=identity.worker_id,
+        funding=funding,
         workers=worker_repository,
         containers=container_repository,
         execution=execution,

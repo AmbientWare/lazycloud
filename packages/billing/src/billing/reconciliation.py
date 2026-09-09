@@ -19,7 +19,7 @@ from shared.billing_accounts import BillingAccount, BillingAccountStatus
 from shared.enums import StringEnum
 from shared.errors import UpstreamUnavailableError
 from shared.events import EventLevel
-from shared.payments import METER_EVENT_NAMES, PaymentProvider, ProviderInvoice
+from shared.payments import METER_EVENT_NAMES, ProviderInvoice, SubscriptionPaymentProvider
 from shared.timestamps import to_utc, utc_now
 
 from billing.credits import reconcile_credit_cutover
@@ -100,7 +100,7 @@ class BillingReconciliationService:
     """
 
     database: DatabaseClient
-    payments: Callable[[], PaymentProvider]
+    payments: Callable[[], SubscriptionPaymentProvider]
     events: BillingEventSink
     batch_limit: int = 100
     max_accounts: int = 500
@@ -173,7 +173,7 @@ class BillingReconciliationService:
             )
 
     def _divergences(
-        self, payments: PaymentProvider, account: BillingAccount, *, now: datetime
+        self, payments: SubscriptionPaymentProvider, account: BillingAccount, *, now: datetime
     ) -> tuple[str, ...] | None:
         """What this account disagrees about, or `None` if it could not be read."""
 
@@ -265,7 +265,7 @@ class BillingReconciliationService:
 
     def _usage_divergences(
         self,
-        payments: PaymentProvider,
+        payments: SubscriptionPaymentProvider,
         account: BillingAccount,
         *,
         data: dict[str, JsonValue],
@@ -359,7 +359,7 @@ class BillingReconciliationService:
         return kinds
 
     def _closed_invoice(
-        self, payments: PaymentProvider, account: BillingAccount, *, now: datetime
+        self, payments: SubscriptionPaymentProvider, account: BillingAccount, *, now: datetime
     ) -> ProviderInvoice | None:
         """The newest finalized invoice covering a period there is usage in.
 

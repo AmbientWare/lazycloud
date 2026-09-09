@@ -258,6 +258,10 @@ class SchedulerBillingReconciliationService(Protocol):
     def reconcile(self, *, now: datetime | None = None) -> SchedulerBillingReconciliationBatch: ...
 
 
+class SchedulerBillingPaymentsService(Protocol):
+    def maintain(self, *, now: datetime | None = None) -> None: ...
+
+
 class SchedulerBillingEnforcementBatch(Protocol):
     @property
     def accounts_checked(self) -> int: ...
@@ -445,6 +449,7 @@ class SchedulerCapacityControls:
 
 @dataclass(frozen=True, slots=True)
 class SchedulerMaintenanceControls:
+    billing_payments: SchedulerBillingPaymentsService | None = None
     storage_access: SchedulerStorageAccessService | None = None
     volume_metering: SchedulerVolumeMeteringService | None = None
     volume_deletion: SchedulerVolumeDeletionService | None = None
@@ -929,6 +934,11 @@ class Scheduler:
             limit=container_limit,
         )
         meter_events = self._drain_meter_events(now=now)
+        if self.maintenance.billing_payments is not None:
+            try:
+                self.maintenance.billing_payments.maintain(now=now)
+            except Exception:
+                LOGGER.exception("prepaid payment maintenance failed; purchases remain recorded")
         plan_changes = self._settle_plan_changes(now=now)
         billing_reconciliation = self._best_effort_reconcile_billing(now=now)
         self._best_effort_deliver_email(now=now)

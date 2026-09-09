@@ -28,7 +28,7 @@ from worker.container_checkpoints import (
 )
 from worker.container_logs import WorkerContainerLogCaptureService
 from worker.container_metrics import (
-    ProcessTreeContainerMetricsSourceFactory,
+    CgroupContainerMetricsSourceFactory,
     WorkerContainerMetricsService,
 )
 from worker.container_rootfs import ContainerRootfsOverlayManager
@@ -51,6 +51,7 @@ from worker.execution import (
     GatewayEndpointSettings,
     GatewayServiceSettings,
 )
+from worker.funding import WorkerFundingSupervisor
 from worker.gpu import (
     DynamicGpuAllocationManager,
     GpuAllocationManager,
@@ -262,23 +263,14 @@ def build_worker_process_services(
     lifecycle_events = AsyncContainerLifecycleSink(
         RemoteContainerLifecycleSink(repository, worker_id=identity.worker_id)
     )
-    metrics_enabled = configuration.monitoring.metrics_enabled
     runtime_monitor = WorkerContainerRuntimeMonitor(
-        metrics=(
-            WorkerContainerMetricsService(
-                worker_id=identity.worker_id,
-                sink=RemoteContainerMetricsSink(repository),
-                disk_usage=container_rootfs,
-                network_egress=network_backend.egress_counters
-                if network_backend is not None
-                else None,
-            )
-            if metrics_enabled
-            else None
+        metrics=WorkerContainerMetricsService(
+            worker_id=identity.worker_id,
+            sink=RemoteContainerMetricsSink(repository),
+            disk_usage=container_rootfs,
+            network_egress=network_backend.egress_counters if network_backend is not None else None,
         ),
-        metrics_source_factory=(
-            ProcessTreeContainerMetricsSourceFactory() if metrics_enabled else None
-        ),
+        metrics_source_factory=CgroupContainerMetricsSourceFactory(),
         usage_recorder=WorkerSupervisionService(
             worker_id=identity.worker_id,
             event_sink=event_sink,
@@ -408,8 +400,8 @@ def build_worker_process_services(
         image_builder=BuildahWorkerImageBuilder(
             scratch=image_build_scratch,
             repository=repository,
-            image_runtime=image_runtime,
             archive_root=Path(paths.image_cache_path),
+            index_cache_root=image_content_cache_root,
             context_loader=RepositoryImageBuildContextLoader(repository, internal_http),
         ),
         image_archive_publisher=image_archive_publisher,
@@ -437,6 +429,7 @@ def build_worker_process_services(
         image_unmounter=image_runtime.unmount,
     )
     return assemble_worker_process_services(
+        funding=WorkerFundingSupervisor(repository),
         identity=identity,
         dependencies=dependencies,
         workers=worker_repository,

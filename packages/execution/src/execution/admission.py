@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from database.types import DatabaseSession
+from shared.billing_quotes import ContainerShape
 from shared.placement import ProductRegion
 
 
@@ -28,6 +29,19 @@ class PaymentAdmission(Protocol):
     def assert_may_take_on_billed_work(
         self, session: DatabaseSession, *, workspace_id: str
     ) -> None: ...
+
+    def reserve_container_funding(
+        self,
+        session: DatabaseSession,
+        *,
+        container_id: str,
+        workspace_id: str,
+        candidate_shapes: Sequence[ContainerShape],
+        cpu_ceiling_millicores: int,
+        memory_ceiling_mib: int,
+    ) -> None: ...
+
+    def cancel_container_funding(self, session: DatabaseSession, *, container_id: str) -> None: ...
 
     def admit_container_start(
         self,

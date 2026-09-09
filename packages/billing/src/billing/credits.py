@@ -22,9 +22,9 @@ from shared.billing_quotes import BILLED_METRICS
 from shared.errors import ConflictError
 from shared.payments import (
     METER_EVENT_NAMES,
-    PaymentProvider,
     ProviderCreditApplicability,
     ProviderSubscription,
+    SubscriptionPaymentProvider,
 )
 from shared.timestamps import to_utc, utc_now
 from shared.usage import METERING_WINDOW_STARTED_AT_METADATA_KEY
@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 
 def fund_subscription_credits(
     session: Session,
-    payments: PaymentProvider,
+    payments: SubscriptionPaymentProvider,
     *,
     user_id: str,
     provider_customer_id: str,
@@ -96,7 +96,7 @@ def fund_subscription_credits(
 
 def initialize_local_credits(
     session: Session,
-    payments: PaymentProvider,
+    payments: SubscriptionPaymentProvider,
     *,
     user_id: str,
     provider_customer_id: str,
@@ -116,7 +116,7 @@ def initialize_local_credits(
 
 def reconcile_credit_cutover(
     session: Session,
-    payments: PaymentProvider,
+    payments: SubscriptionPaymentProvider,
     *,
     account: BillingAccount,
     subscription: ProviderSubscription,
@@ -209,7 +209,11 @@ def reconcile_credit_cutover(
 
 
 def _legacy_settlement_gap(
-    session: Session, payments: PaymentProvider, *, account: BillingAccount, boundary: datetime
+    session: Session,
+    payments: SubscriptionPaymentProvider,
+    *,
+    account: BillingAccount,
+    boundary: datetime,
 ) -> str:
     unpriced = session.scalars(
         select(UsageRecordTable)
@@ -292,7 +296,7 @@ def _legacy_settlement_gap(
 
 def _recover_period_funding(
     session: Session,
-    payments: PaymentProvider,
+    payments: SubscriptionPaymentProvider,
     *,
     account: BillingAccount,
     subscription: ProviderSubscription,

@@ -8,7 +8,7 @@ from database.repositories.billing_credits import BillingCreditRepository
 from shared.billing_plans import BillingPlanId
 from shared.billing_rate_card import account_terms
 from shared.errors import UpstreamUnavailableError
-from shared.payments import PaymentProvider, ProviderSubscription
+from shared.payments import ProviderSubscription, SubscriptionPaymentProvider
 from sqlalchemy.orm import Session
 
 from billing.credits import fund_subscription_credits
@@ -16,7 +16,7 @@ from billing.credits import fund_subscription_credits
 
 def carry_plan_into_cycle(
     session: Session,
-    payments: PaymentProvider,
+    payments: SubscriptionPaymentProvider,
     *,
     account_id: str,
     provider_customer_id: str,

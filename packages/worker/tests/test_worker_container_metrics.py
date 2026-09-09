@@ -86,10 +86,10 @@ class SequenceMetricsSource:
 @dataclass(slots=True)
 class SequenceMetricsSourceFactory:
     source: SequenceMetricsSource
-    pids: list[int] = field(default_factory=list)
+    container_ids: list[str] = field(default_factory=list)
 
-    def metrics_source_for_pid(self, pid: int) -> SequenceMetricsSource:
-        self.pids.append(pid)
+    def metrics_source_for_container(self, container_id: str) -> SequenceMetricsSource:
+        self.container_ids.append(container_id)
         return self.source
 
 
@@ -128,6 +128,7 @@ class UsageRecorder:
         metering_window_started_at: datetime,
         metering_window_ended_at: datetime,
         evidence: WorkerUsageEvidence | None = None,
+        measurement_complete: bool = False,
     ) -> WorkerUsageEmissionResult:
         self.offered.append(
             (
@@ -224,10 +225,12 @@ def test_worker_container_runtime_monitor_publishes_metrics_and_usage_on_stop() 
     source = SequenceMetricsSource(
         samples=[
             ContainerMetricsRawSample(
+                cpu_usage_usec=0,
                 process_io=ProcessIoCounters(disk_read_bytes=1),
                 network_interfaces=[NetworkIoCounters(name="eth0", bytes_recv=1)],
             ),
             ContainerMetricsRawSample(
+                cpu_usage_usec=500_000,
                 cpu_used_millicores=500,
                 process_io=ProcessIoCounters(disk_read_bytes=5),
                 network_interfaces=[NetworkIoCounters(name="eth0", bytes_recv=9)],
@@ -257,7 +260,7 @@ def test_worker_container_runtime_monitor_publishes_metrics_and_usage_on_stop() 
     handle = monitor.start_monitoring(request, started_pid=123)
     result = handle.stop()
 
-    assert source_factory.pids == [123]
+    assert source_factory.container_ids == [request.container_id]
     assert result.metrics_samples >= 2
     assert result.metrics_published >= 1
     assert result.usage is not None

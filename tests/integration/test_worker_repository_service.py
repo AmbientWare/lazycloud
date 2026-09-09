@@ -89,6 +89,7 @@ from shared.container_requests import ContainerShutdownTarget, StopContainerReas
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.http.errors import ErrorResponse
+from shared.http.worker_funding import WorkerUsageWindowResponse
 from shared.identity import AuthScope, TokenKind, WorkspaceStorageConfig
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus, ImageBuildRecord, ImageRecord
@@ -143,7 +144,6 @@ from worker.repository_payloads import (
     PrepareCheckpointArchiveUploadRequest,
     PrepareImageBuildContextDownloadRequest,
     PublishContainerLifecycleRequest,
-    RecordWorkerUsageResponse,
     ReleaseAutomaticCheckpointLeaseRequest,
     ReportImageBuildResultRequest,
     SaveCheckpointStateRequest,
@@ -243,6 +243,7 @@ def test_worker_result_durably_finishes_a_build_and_is_idempotent(
         )
     )
     request = ReportImageBuildResultRequest(
+        exited_at=utc_now(),
         worker_id="worker-1",
         workspace_id=workspace_id,
         container_id=container_id,
@@ -1948,7 +1949,9 @@ def test_worker_exit_retains_pooled_startup_failure_when_detail_arrives_after_ex
             status=ContainerStatus.Pending.value,
         )
     principal = WorkerRepositoryPrincipal(worker_id="worker-1")
-    exit_report = SetContainerExitCodeRequest(container_id=container.id, exit_code=1)
+    exit_report = SetContainerExitCodeRequest(
+        container_id=container.id, exit_code=1, exited_at=utc_now()
+    )
     service.set_container_exit_code(exit_report, principal=principal)
     service.set_container_exit_code(
         exit_report.model_copy(
@@ -1998,7 +2001,7 @@ def test_worker_repository_exit_preserves_function_retry_state(
     isolated_services.tasks.save(task)
 
     service.set_container_exit_code(
-        SetContainerExitCodeRequest(container_id=container.id, exit_code=1),
+        SetContainerExitCodeRequest(container_id=container.id, exit_code=1, exited_at=utc_now()),
         principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
     )
 
@@ -2048,7 +2051,9 @@ def test_worker_repository_stale_container_exit_does_not_fail_new_attempt(
     isolated_services.tasks.save(task)
 
     service.set_container_exit_code(
-        SetContainerExitCodeRequest(container_id=old_container.id, exit_code=1),
+        SetContainerExitCodeRequest(
+            container_id=old_container.id, exit_code=1, exited_at=utc_now()
+        ),
         principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
     )
 
@@ -2102,6 +2107,7 @@ def test_worker_repository_late_exit_preserves_user_stopped_container(
     stopped = container_service.stop(container.id)
     service.set_container_exit_code(
         SetContainerExitCodeRequest(
+            exited_at=utc_now(),
             container_id=container.id,
             exit_code=137,
             termination_reason=StopContainerReason.Preempted,
@@ -2201,7 +2207,7 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
         route=routes[0],
     )
     service.set_container_exit_code(
-        SetContainerExitCodeRequest(container_id=container_id, exit_code=0),
+        SetContainerExitCodeRequest(container_id=container_id, exit_code=0, exited_at=utc_now()),
         principal=WorkerRepositoryPrincipal(worker_id="compose-container-worker"),
     )
 
@@ -2706,6 +2712,7 @@ def _worker_repository_service(
         origin_credentials=WorkerCacheOriginCredentialService(services=isolated_services),
         dependencies=WorkerRepositoryDependencies(
             context=isolated_services.context,
+            compute=isolated_services.compute,
             auth=isolated_services.auth,
             deployment_resources=isolated_services.deployment_resources,
             checkpoints=isolated_services.checkpoints,
@@ -3027,18 +3034,30 @@ def test_worker_container_routes_are_bound_to_the_container_the_worker_was_given
     }
 
     def _record(worker: str) -> int:
+        ended_at = utc_now()
+        started_at = ended_at - timedelta(seconds=1)
         return client.post(
-            "/worker-repository/record-worker-usage",
+            "/worker-repository/record-worker-usage-window",
             json={
-                "record": UsageRecord(
-                    id=str(uuid4()),
-                    workspace_id=workspace.id,
-                    resource_type="container",
-                    resource_id=container_id,
-                    metric=UsageMetric.CpuUsedCoreSeconds,
-                    unit=UsageUnit.Seconds,
-                    quantity=3600.0,
-                ).model_dump(mode="json")
+                "container_id": container_id,
+                "started_at": started_at.isoformat(),
+                "ended_at": ended_at.isoformat(),
+                "measurement_complete": False,
+                "records": [
+                    UsageRecord(
+                        id=str(uuid4()),
+                        workspace_id=workspace.id,
+                        resource_type="container",
+                        resource_id=container_id,
+                        metric=UsageMetric.CpuUsedCoreSeconds,
+                        unit=UsageUnit.Seconds,
+                        quantity=3600.0,
+                        metadata={
+                            METERING_WINDOW_STARTED_AT_METADATA_KEY: started_at.isoformat(),
+                            METERING_WINDOW_ENDED_AT_METADATA_KEY: ended_at.isoformat(),
+                        },
+                    ).model_dump(mode="json")
+                ],
             },
             headers=sessions[worker],
         ).status_code
@@ -3128,21 +3147,27 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
 
     def _record(window_started_at: datetime, window_ended_at: datetime) -> tuple[int, bytes]:
         response = client.post(
-            "/worker-repository/record-worker-usage",
+            "/worker-repository/record-worker-usage-window",
             json={
-                "record": UsageRecord(
-                    id=str(uuid4()),
-                    workspace_id=workspace.id,
-                    resource_type="container",
-                    resource_id=container_id,
-                    metric=UsageMetric.CpuUsedCoreSeconds,
-                    unit=UsageUnit.Seconds,
-                    quantity=3600.0,
-                    metadata={
-                        METERING_WINDOW_STARTED_AT_METADATA_KEY: window_started_at.isoformat(),
-                        METERING_WINDOW_ENDED_AT_METADATA_KEY: window_ended_at.isoformat(),
-                    },
-                ).model_dump(mode="json")
+                "container_id": container_id,
+                "started_at": window_started_at.isoformat(),
+                "ended_at": window_ended_at.isoformat(),
+                "measurement_complete": False,
+                "records": [
+                    UsageRecord(
+                        id=str(uuid4()),
+                        workspace_id=workspace.id,
+                        resource_type="container",
+                        resource_id=container_id,
+                        metric=UsageMetric.CpuUsedCoreSeconds,
+                        unit=UsageUnit.Seconds,
+                        quantity=3600.0,
+                        metadata={
+                            METERING_WINDOW_STARTED_AT_METADATA_KEY: window_started_at.isoformat(),
+                            METERING_WINDOW_ENDED_AT_METADATA_KEY: window_ended_at.isoformat(),
+                        },
+                    ).model_dump(mode="json")
+                ],
             },
             headers=headers,
         )
@@ -3152,8 +3177,7 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
     claimed_end = finished_at + timedelta(hours=6)
     status_code, body = _record(claimed_start, claimed_end)
     assert status_code == 200
-    accepted = RecordWorkerUsageResponse.model_validate_json(body).record
-    assert accepted is not None
+    accepted = WorkerUsageWindowResponse.model_validate_json(body).records[0]
     window_start, window_end = (
         datetime.fromisoformat(str(accepted.metadata[key]))
         for key in (
@@ -3231,7 +3255,7 @@ def test_worker_repository_exit_charges_an_attempt_for_what_a_pooled_container_l
     first = crashing_container("pooled-exit-1")
     isolated_services.tasks.start(claimed.id, container_id=first.id)
     service.set_container_exit_code(
-        SetContainerExitCodeRequest(container_id=first.id, exit_code=137),
+        SetContainerExitCodeRequest(container_id=first.id, exit_code=137, exited_at=utc_now()),
         principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
     )
 
@@ -3245,7 +3269,7 @@ def test_worker_repository_exit_charges_an_attempt_for_what_a_pooled_container_l
     second = crashing_container("pooled-exit-2")
     isolated_services.tasks.start(claimed.id, container_id=second.id)
     service.set_container_exit_code(
-        SetContainerExitCodeRequest(container_id=second.id, exit_code=137),
+        SetContainerExitCodeRequest(container_id=second.id, exit_code=137, exited_at=utc_now()),
         principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
     )
 

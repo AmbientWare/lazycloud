@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from database.repositories.billing import BillingAccountRepository
-from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_plan_changes import BillingPlanChangeIntentRepository
 from database.repositories.compute import AwsAccountConnectionRepository
 from database.repositories.custom_domains import CustomDomainRepository
@@ -15,6 +14,7 @@ from database.repositories.identity import (
 from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
+from shared.billing_quotes import BilledDimension, ContainerShape
 from shared.billing_rate_card import (
     AccountTerms,
     PlanEntitlements,
@@ -32,77 +32,61 @@ from shared.placement import ProductRegion
 from shared.timestamps import utc_now
 from sqlalchemy.orm import Session
 
+from billing.funding import BillingFundingService
+
 
 @dataclass(frozen=True, slots=True)
 class DatabaseBillingAdmission:
-    """Whether an account may start more work.
+    """Apply plan entitlements and reserve credits before new compute becomes visible.
 
-    Asked before a container exists, in the transaction that would create it, so
-    a refusal leaves nothing behind — no row, no published change, and nothing
-    reserved at a provider. This mirrors how a paused app is refused, and for the
-    same reason: a check after the record is written has to undo it, and the
-    version of that which runs after a crash never happens at all.
-
-    Only ever refuses *new* work — a container about to start, a volume about to
-    exist. Containers already running are stopped, when they are stopped at all,
-    by the sweep that watches accounts nobody can be charged for, a decision made
-    against the whole account rather than against whichever container happened to
-    start next. A volume that already exists is stopped by nothing, which is why
-    the refusal is the only place it can be caught.
-
-    The two questions below are split by what they ask, not by what is asking.
-    Everything billed asks the first; only a container carries a count, so only a
-    container has a second method.
-
-    The first question is still the only one that matters for an account somebody
-    can bill: will what this runs reach an invoice somebody is paying? For those
-    accounts, how much it costs is not part of it. Every one holds a subscription
-    carrying the metered prices, so overage is billed by the provider and chased
-    through their card — spending past what a plan includes is something to
-    invoice, never something to refuse on.
-
-    An account with no card on file is the case that reasoning does not cover.
-    There is no card to chase and no invoice that will ever be paid, so what it
-    spends past its allowance is not billed later, it is lost. That is the one
-    place an amount decides, and it decides only for accounts in that state:
-    attaching a card moves them onto the plan's terms and out of this check for
-    good.
-
-    Concurrency is refused separately and differently, because an account at its
-    limit owes nothing and paying would not help it. It is a bound on how much a
-    single account can have running before anything notices — the metering
-    interval means spend is always seen slightly late, and the limit is what
-    keeps the size of that blind spot proportional. Two pools rather than one:
-    a container counts against the CPU pool or, when it asks for cards, against
-    the GPU pool by the number of cards, so a plan's GPU allowance can never be
-    spent on web apps and neither figure has to be read as a share of the other.
-
-    Read from local rows rather than from the provider, because this runs on
-    every container start and a network round trip there is a start that fails
-    whenever the provider is slow.
+    Warm invocations check entitlements without reserving another container.
+    Container creation reserves its maximum compute exposure in the same transaction.
     """
 
     def assert_may_take_on_billed_work(self, session: Session, *, workspace_id: str) -> None:
-        """Refuse an account whose next billed thing would reach no invoice.
+        """Require eligible credit before creating a billed resource.
 
-        Named for the question rather than for what is being created, because the
-        answer does not depend on which resource asks. A volume asks it before it
-        exists; anything else the platform starts charging for asks the same
-        thing and needs no method of its own.
-
-        What this does not cover is worth stating plainly for volumes, which are
-        the one billed thing that keeps costing after everything stops. Only
-        creation is refused, and only the record: an account that made a volume
-        while it still had a fraction of a cent left keeps it, and nothing here
-        or anywhere else bounds how large it grows — uploads are not admitted and
-        there is no size quota. Reaching data that already exists is deliberately
-        not refused, since an account locked out of its own files would be a
-        data-loss incident dressed as a billing control. So this shrinks the
-        window rather than closing it, and closing it needs either a quota or an
-        admission on the write path, neither of which exists yet.
+        This creation check does not reserve storage growth or transfer charges.
         """
 
-        self._billable_account(session, workspace_id=workspace_id)
+        resolved = self._billable_account(session, workspace_id=workspace_id)
+        if resolved is None:
+            raise PaymentRequiredError("billed work requires a workspace billing owner")
+        account = BillingAccountRepository(session).get_by_user(resolved[0])
+        if account is not None and account.complimentary_since is not None:
+            return
+        balance = BillingFundingService(session).balance(
+            user_id=resolved[0],
+            dimension=BilledDimension.VolumeStorage,
+        )
+        if balance.available_nanos <= 0:
+            raise PaymentRequiredError("add credit before creating another billed resource")
+
+    def reserve_container_funding(
+        self,
+        session: Session,
+        *,
+        container_id: str,
+        workspace_id: str,
+        candidate_shapes: Sequence[ContainerShape],
+        cpu_ceiling_millicores: int,
+        memory_ceiling_mib: int,
+    ) -> None:
+        BillingFundingService(session).reserve_pending(
+            container_id=container_id,
+            workspace_id=workspace_id,
+            candidate_shapes=tuple(
+                replace(
+                    shape,
+                    cpu_millicores=cpu_ceiling_millicores,
+                    memory_mib=memory_ceiling_mib,
+                )
+                for shape in candidate_shapes
+            ),
+        )
+
+    def cancel_container_funding(self, session: Session, *, container_id: str) -> None:
+        BillingFundingService(session).cancel_pending(container_id=container_id)
 
     def admit_container_start(
         self,
@@ -338,21 +322,6 @@ class DatabaseBillingAdmission:
             )
         has_card = account.payment_method_attached_at is not None
         terms = account_terms(account.plan, has_payment_method=has_card)
-        if not has_card:
-            spent = BillingAllowanceRepository(session).current_period(
-                user_id=owner.user_id, at=utc_now()
-            )
-            # No period covers this instant only in the seam between a cycle
-            # ending at the provider and the delivery that opens the next one
-            # here. An account with a card is admitted through it and billed for
-            # what it does; one without has no terms to spend against, and
-            # admitting on absent terms is the unbounded-free-compute state this
-            # whole check exists to make unreachable.
-            if spent is None or spent.remaining_nanos <= 0:
-                raise PaymentRequiredError(
-                    "this account has used the compute it gets without a payment method; "
-                    "add a card to keep running work"
-                )
         return owner.user_id, terms
 
     def _account_terms_for_user(self, session: Session, *, user_id: str) -> AccountTerms:

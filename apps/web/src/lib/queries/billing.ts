@@ -4,6 +4,8 @@ import { apiRequest } from "@/lib/api/client";
 import {
   billingHostedSessionResponseSchema,
   billingSummarySchema,
+  creditPurchaseSchema,
+  creditSummarySchema,
   type BillingPlanId,
   type BillingSummary,
 } from "@/lib/api/schemas";
@@ -41,6 +43,14 @@ export function billingSummaryQueryOptions() {
   });
 }
 
+export function creditBalanceQueryOptions() {
+  return queryOptions({
+    queryKey: [...accountQueryKeys.billing(), "credits"],
+    queryFn: () => apiRequest("/api/v1/billing/credits", creditSummarySchema),
+    refetchInterval: 5_000,
+  });
+}
+
 /**
  * Ask the control plane for a page at the payment provider, and go there.
  *
@@ -68,6 +78,21 @@ export function startCardSetup(): Promise<void> {
 
 export function openBillingPortal(): Promise<void> {
   return openHostedSession("/api/v1/billing/portal-session");
+}
+
+export async function purchaseCredit(request: { requestKey: string; amountCents: number }) {
+  const returnUrl = window.location.href;
+  const purchase = await apiRequest("/api/v1/billing/credit-purchases", creditPurchaseSchema, {
+    method: "POST",
+    body: JSON.stringify({
+      request_key: request.requestKey,
+      amount_cents: request.amountCents,
+      return_url: returnUrl,
+      cancel_url: returnUrl,
+    }),
+  });
+  if (purchase.checkout_url) window.location.assign(purchase.checkout_url);
+  return purchase;
 }
 
 /**

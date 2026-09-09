@@ -15,6 +15,7 @@ from coordination.event_bus import (
     event_id_for_event,
     event_key,
 )
+from database.repositories.billing_funding import BillingFundingRepository
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.repositories.orchestration import (
@@ -25,6 +26,7 @@ from database.repositories.orchestration import (
 from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
+from execution.containers.service import PendingContainerReservation
 from scheduler.containers import (
     SchedulerContainerCancellationResult,
     SchedulerContainerSubmitResult,
@@ -45,6 +47,8 @@ from shared.workload_keys import (
 )
 from tests.real_redis import RealRedisActors
 from tests.service_fixtures import workspace_owner_user_id
+
+pytestmark = pytest.mark.usefixtures("funded_execution_account")
 
 
 class _Scheduler:
@@ -227,14 +231,19 @@ def test_checkpoint_gpu_limit_rejects_before_scheduler_submission(
         isolated_services,
         containers=replace(isolated_services.containers, scheduler=scheduler),
     )
-    container = ContainerRecord(
-        id="checkpoint-pod",
-        name="checkpoint-pod",
-        image="image",
-        command=["python", "-m", "app"],
-        workspace_id="workspace",
-        stub_id="stub",
-    )
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        container = isolated_services.containers.reserve_pending(
+            session,
+            PendingContainerReservation(
+                name="checkpoint-pod",
+                image="image",
+                command=["python", "-m", "app"],
+                workspace_id=workspace_id,
+                cpu_millicores=1000,
+                memory_mib=1024,
+            ),
+        )
 
     with pytest.raises(
         InvalidInputError,
@@ -254,6 +263,9 @@ def test_checkpoint_gpu_limit_rejects_before_scheduler_submission(
         )
 
     assert scheduler.requests == []
+    with isolated_services.context.database.session() as session:
+        funding = BillingFundingRepository(session).get(container.id)
+        assert funding is not None and funding.cancelled_at is not None
 
 
 def test_container_stop_targets_only_assigned_worker(

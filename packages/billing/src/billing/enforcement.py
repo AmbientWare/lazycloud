@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from database.repositories.billing import BillingAccountRepository
-from database.repositories.billing_allowance import BillingAllowanceRepository
+from database.repositories.billing_credits import BillingCreditRepository
+from database.repositories.billing_funding import BillingFundingRepository
 from database.repositories.orchestration import ContainerRepository
-from shared.billing_accounts import BillingAccount
+from shared.billing_accounts import BillingAccount, BillingAccountStatus
 from shared.container_requests import StopContainerReason
 from shared.errors import DomainError
 from shared.events import EventLevel
+from shared.funding import FUNDING_SHUTDOWN_GRACE_SECONDS
 from shared.timestamps import to_utc, utc_now
 
+from billing.funding import BillingFundingService
 from billing.sweeps import BillingEventSink
 from database import DatabaseClient
 
@@ -45,28 +48,9 @@ class BillingEnforcementResult:
 
 @dataclass(slots=True)
 class BillingEnforcementService:
-    """Stop compute for accounts that have spent what nobody will pay for.
+    """Stop containers with invalid funding or accounts with unpaid credit debt.
 
-    Admission refuses the container that has not started. This is the other
-    half: a container already running goes on costing money every second, and
-    for an account with no card that money is not billed late — it is lost.
-
-    Only ever cardless accounts. An account with a card that runs past its
-    allowance is a customer to invoice, and stopping their work over a bill they
-    have not been given the chance to pay is the opposite of what this platform
-    sells. A card that stopped working is `PastDue`, which refuses *new* work
-    and leaves what is running alone, deliberately.
-
-    Which accounts those are is read from the local row, so a card removed
-    mid-cycle does not reach this until the cycle boundary re-asks the provider.
-    That is the rule the owner chose — a card being swapped must not kill live
-    work — and it falls out of where the fact is written rather than needing a
-    grace period here.
-
-    This is the control that actually bounds the loss, not admission: usage
-    reaches the ledger on an interval, so an account is always some fraction of
-    that interval past whatever it has been measured at, and the interval between
-    passes here adds to it directly. It is meant to run on every tick.
+    Workers enforce permit expiry locally even when this sweep cannot reach them.
     """
 
     database: DatabaseClient
@@ -86,6 +70,7 @@ class BillingEnforcementService:
 
     cursor_user_id: str | None = field(default=None, init=False)
     """Where the last pass stopped, `None` at the start of the walk."""
+    recovery_cursor_user_id: str | None = field(default=None, init=False)
 
     def enforce(self, *, now: datetime | None = None) -> BillingEnforcementResult:
         """Walk a bounded slice of subscribed accounts and stop what is unfunded.
@@ -97,6 +82,7 @@ class BillingEnforcementService:
         """
 
         moment = to_utc(now or utc_now())
+        self._recover_destroyed_workers(now=moment)
         checked = unfunded = stopped = failed = 0
         while checked < self.max_accounts:
             accounts = self._page()
@@ -106,10 +92,11 @@ class BillingEnforcementService:
             for account in accounts:
                 self.cursor_user_id = account.user_id
                 checked += 1
-                if not self._is_unfunded(account, now=moment):
+                container_ids = self._unfunded_containers(account, now=moment)
+                if not container_ids:
                     continue
                 unfunded += 1
-                account_stopped, account_failed = self._stop_everything(account)
+                account_stopped, account_failed = self._stop_containers(account, container_ids)
                 stopped += account_stopped
                 failed += account_failed
                 if checked >= self.max_accounts:
@@ -127,6 +114,25 @@ class BillingEnforcementService:
             failed_count=failed,
         )
 
+    def _recover_destroyed_workers(self, *, now: datetime) -> None:
+        with self.database.session() as session:
+            user_ids = BillingFundingRepository(session).recovery_accounts(
+                after_user_id=self.recovery_cursor_user_id,
+                expired_before=now - timedelta(seconds=FUNDING_SHUTDOWN_GRACE_SECONDS),
+                limit=20,
+            )
+        for user_id in user_ids:
+            self.recovery_cursor_user_id = user_id
+            try:
+                with self.database.session() as session:
+                    BillingFundingService(session).reconcile_destroyed_workers(
+                        user_id=user_id, now=now, limit=20
+                    )
+            except DomainError:
+                LOGGER.exception("billing: could not reconcile destroyed workers for %s", user_id)
+        if len(user_ids) < 20:
+            self.recovery_cursor_user_id = None
+
     def _page(self) -> tuple[BillingAccount, ...]:
         with self.database.session() as session:
             return BillingAccountRepository(session).page_subscribed(
@@ -134,36 +140,33 @@ class BillingEnforcementService:
                 limit=self.batch_limit,
             )
 
-    def _is_unfunded(self, account: BillingAccount, *, now: datetime) -> bool:
-        """Whether this account may not keep what it is running.
-
-        A cycle nothing covers counts as unfunded for the same reason admission
-        refuses on it: there are no terms to spend against, and the seam it
-        happens in is measured in the minutes between a cycle ending at the
-        provider and the delivery that opens the next one here.
-        """
-
-        if (
-            account.payment_method_attached_at is not None
-            or account.complimentary_since is not None
-        ):
-            return False
+    def _unfunded_containers(self, account: BillingAccount, *, now: datetime) -> tuple[str, ...]:
+        if account.complimentary_since is not None:
+            return ()
         with self.database.session() as session:
-            spent = BillingAllowanceRepository(session).current_period(
-                user_id=account.user_id, at=now
+            credits = BillingCreditRepository(session)
+            cutover = credits.cutover(user_id=account.user_id)
+            if (
+                account.status is BillingAccountStatus.PastDue
+                or account.plan is None
+                or not account.provider_subscription_id
+                or (credits.debt_nanos(user_id=account.user_id, at=now) > 0)
+                or cutover is None
+                or cutover.completed_at is None
+            ):
+                return tuple(
+                    ContainerRepository(session).live_container_ids_for_owner(
+                        owner_user_id=account.user_id,
+                        limit=self.stop_limit_per_account,
+                    )
+                )
+            return BillingFundingRepository(session).unfunded_live_container_ids(
+                user_id=account.user_id, at=now, limit=self.stop_limit_per_account
             )
-        return spent is None or spent.remaining_nanos <= 0
 
-    def _stop_everything(self, account: BillingAccount) -> tuple[int, int]:
-        """Stop what this account is holding, reporting what worked and what did not."""
-
-        with self.database.session() as session:
-            container_ids = ContainerRepository(session).live_container_ids_for_owner(
-                owner_user_id=account.user_id,
-                limit=self.stop_limit_per_account,
-            )
-        if not container_ids:
-            return 0, 0
+    def _stop_containers(
+        self, account: BillingAccount, container_ids: tuple[str, ...]
+    ) -> tuple[int, int]:
         stopped = failed = 0
         for container_id in container_ids:
             try:
@@ -181,10 +184,7 @@ class BillingEnforcementService:
                 resource_type="billing_account",
                 resource_id=account.user_id,
                 level=EventLevel.Warning,
-                message=(
-                    f"stopped {stopped} containers for an account with no payment method "
-                    f"that has spent what it was given"
-                ),
+                message=(f"stopped {stopped} containers without funded runtime permission"),
                 data={"stopped": stopped, "failed": failed},
             )
         return stopped, failed

@@ -13,6 +13,7 @@ from database.repositories.billing_rates import ComputeRateRepository, PlatformR
 from database.repositories.identity import WorkspaceMemberRepository
 from database.tables.base import DatabaseBase
 from database.tables.billing import BillingAccountTable
+from database.tables.billing_funding import BillingFundingHoldTable
 from database.tables.billing_ledger import (
     BillingLedgerSegmentTable,
     ContainerBillingShapeTable,
@@ -389,7 +390,8 @@ class BillingLedgerRepository:
                 started_at=occurred_at,
                 ended_at=max(to_utc(segment.segment_ended_at) for segment in segments),
             ),
-            waived=account.complimentary_since is not None,
+            waived=account.complimentary_since is not None
+            or self._lost_execution_usage(usage_record_id, BilledDimension(segments[0].dimension)),
         )
         if settled is not None:
             self._queue_meter_event(
@@ -470,6 +472,15 @@ class BillingLedgerRepository:
             pricing_versions=tuple(dict.fromkeys(str(row.pricing_version) for row in ordered)),
         )
 
+    def _lost_execution_usage(self, record_id: str, dimension: BilledDimension) -> bool:
+        if dimension != BilledDimension.ComputeRuntime:
+            return False
+        record = self.session.get(UsageRecordTable, record_id)
+        if record is None or record.resource_type != _CONTAINER_SUBJECT:
+            return False
+        hold = self.session.get(BillingFundingHoldTable, record.resource_id)
+        return hold is not None and hold.loss_resolved_at is not None
+
     def _queue_meter_event(
         self,
         *,
@@ -500,7 +511,7 @@ class BillingLedgerRepository:
         if account is None or not account[0]:
             return
         provider_customer_id = str(account[0])
-        waived = account[1] is not None
+        waived = account[1] is not None or self._lost_execution_usage(usage_record_id, dimension)
         now = utc_now()
         self.session.execute(
             _insert(self.session, BillingMeterOutboxTable)

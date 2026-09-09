@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_webhook_events import BillingWebhookEventRepository
 from shared.billing_accounts import BillingAccount, BillingAccountStatus
-from shared.payments import PaymentEvent, PaymentProvider, ProviderSubscription
+from shared.payments import PaymentEvent, ProviderSubscription, SubscriptionPaymentProvider
 from shared.timestamps import utc_now
 from sqlalchemy.orm import Session
 
@@ -83,7 +83,7 @@ class BillingWebhookService:
     """
 
     session: Session
-    payments: Callable[[], PaymentProvider]
+    payments: Callable[[], SubscriptionPaymentProvider]
     """Resolved only once a delivery turns out to concern an account this
     platform holds. Most do not — an endpoint carries every event it is
     subscribed to, and a payment credential that has not been configured must not
@@ -165,7 +165,7 @@ class BillingWebhookService:
         self,
         accounts: BillingAccountRepository,
         account: BillingAccount,
-        payments: PaymentProvider,
+        payments: SubscriptionPaymentProvider,
     ) -> None:
         """Give the cycle in progress the terms the first card just bought.
 
@@ -276,7 +276,7 @@ class BillingWebhookService:
 
     def _carry_the_period(
         self,
-        payments: PaymentProvider,
+        payments: SubscriptionPaymentProvider,
         account: BillingAccount,
         subscription: ProviderSubscription,
     ) -> bool:

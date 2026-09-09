@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import Field
 
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
+from shared.credit_payments import (
+    MAX_CREDIT_PURCHASE_CENTS,
+    MIN_CREDIT_PURCHASE_CENTS,
+    CreditPaymentStatus,
+)
 from shared.http.base import HttpModel
 from shared.http.pricing import PlanEntitlementsResponse
 from shared.http.users import UserResponse
@@ -37,6 +43,37 @@ class BillingHostedSessionResponse(HttpModel):
     """
 
     url: str = Field(min_length=1, max_length=2048)
+
+
+class CreditPurchaseRequest(BillingHostedSessionRequest):
+    request_key: UUID
+    amount_cents: int = Field(
+        ge=MIN_CREDIT_PURCHASE_CENTS, le=MAX_CREDIT_PURCHASE_CENTS, strict=True
+    )
+
+
+class CreditPurchaseResponse(HttpModel):
+    id: UUID
+    amount_nanos: int = Field(gt=0)
+    status: CreditPaymentStatus
+    checkout_url: str | None = None
+    funded_at: datetime | None = None
+    reversed_nanos: int = Field(ge=0)
+
+
+class CreditBalanceResponse(HttpModel):
+    purchased_nanos: int
+    subscription_nanos: int
+    trial_nanos: int
+    held_nanos: int = Field(ge=0)
+    debt_nanos: int = Field(ge=0)
+    available_nanos: int = Field(ge=0)
+
+
+class CreditSummaryResponse(HttpModel):
+    ready: bool
+    compute: CreditBalanceResponse
+    storage_and_transfer: CreditBalanceResponse
 
 
 class BillingPlanChangeRequest(HttpModel):
@@ -227,4 +264,8 @@ __all__ = [
     "BillingPlanChangeRequest",
     "BillingPlanResponse",
     "BillingSummaryResponse",
+    "CreditBalanceResponse",
+    "CreditPurchaseRequest",
+    "CreditPurchaseResponse",
+    "CreditSummaryResponse",
 ]

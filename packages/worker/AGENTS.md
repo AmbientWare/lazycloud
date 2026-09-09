@@ -79,6 +79,14 @@ one being retried: evidence and window travel together, and a retry that carried
 current samples against an earlier window would bill a burst that window never
 saw.
 
+Image builds own a cgroup for Buildah, registry pushes and image indexing. Each
+child joins before exec; moving it afterwards can leave descendants outside the
+limit. Index generation uses one invocation of the image-runtime binary, so the
+build can kill and reap it without affecting mounted images. Independent CPU/RSS
+sampling closes measured windows while delivery retries the same evidence. The
+final window ends at the owned processes' stop time, which also travels with the
+build result. A delayed upload or result retry must not extend that interval.
+
 What a container reserved is not restated as a usage metric. The reservation
 prices from the placement the control plane recorded, so a worker's own copy of
 it is a label, and a second copy that decided nothing would still have to be
@@ -91,6 +99,20 @@ verified for the durable machine owner. An address family without that evidence
 is unbilled. These counters never change firewall authorization, and cleanup
 removes only the container's own rules. Usage still uses the worker's bounded
 windows; a crash or unavailable final sample can lose unflushed evidence.
+
+Funded execution creates an accounting cgroup before starting the runtime. The
+runtime uses its child, so cumulative CPU counters survive guest exit and runtime
+cleanup. CPU billing uses counter deltas. RSS billing integrates each observed
+`anon + file_mapped` value over the interval until the next sample. The final
+sample closes that interval before the accounting parent is removed. A missing
+counter is incomplete evidence, never zero usage.
+
+The worker renews a funded permit while execution runs. A separate local deadline
+thread kills the accounting cgroup when the permit expires, even if renewal is
+blocked on the control plane. Renewal cannot revive an expired permit. Cleanup
+and usage delivery follow the kill; neither delays it. Complete usage windows and
+actual exit proof release unused holds through the billing owner. A stop request
+alone cannot release money reserved for dispatched execution.
 
 A container that outgrows its reservation is stopped here, not by the kernel.
 The worker holds the two readings the decision needs, its own memory pressure

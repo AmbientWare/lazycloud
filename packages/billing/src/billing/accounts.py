@@ -7,7 +7,7 @@ from database.repositories.identity import UserRepository, WorkspaceMemberReposi
 from shared.billing_accounts import BillingAccount
 from shared.billing_plans import BillingPlanId
 from shared.errors import NotFoundError, UpstreamUnavailableError
-from shared.payments import PaymentProvider
+from shared.payments import SubscriptionPaymentProvider
 from sqlalchemy.orm import Session
 
 from billing.credits import initialize_local_credits
@@ -36,7 +36,7 @@ class BillingAccountService:
         return account
 
     def billing_account_for(
-        self, payments: PaymentProvider, *, user_id: str, workspace_id: str
+        self, payments: SubscriptionPaymentProvider, *, user_id: str, workspace_id: str
     ) -> BillingAccount:
         """The account this person is billed through, provisioned if it is not.
 
@@ -84,7 +84,7 @@ class BillingAccountService:
 
     def _provision(
         self,
-        payments: PaymentProvider,
+        payments: SubscriptionPaymentProvider,
         existing: BillingAccount,
         *,
         user_id: str,
@@ -145,7 +145,7 @@ class BillingAccountService:
 
     def _customer_id(
         self,
-        payments: PaymentProvider,
+        payments: SubscriptionPaymentProvider,
         existing: BillingAccount,
         *,
         user_id: str,

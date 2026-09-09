@@ -9,6 +9,7 @@ from uuid import uuid4
 from pydantic import Field, JsonValue, TypeAdapter
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
+from shared.http.worker_funding import WorkerUsageWindowRequest
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
     METERING_WINDOW_STARTED_AT_METADATA_KEY,
@@ -58,19 +59,7 @@ class WorkerContainerStopper(Protocol):
 
 
 class WorkerUsageRecorder(Protocol):
-    def record(
-        self,
-        *,
-        id: str | None = None,
-        workspace_id: str,
-        resource_type: str,
-        resource_id: str,
-        metric: UsageMetric,
-        quantity: float,
-        unit: UsageUnit,
-        labels: dict[str, str] | None = None,
-        metadata: dict[str, JsonValue] | None = None,
-    ) -> UsageRecord: ...
+    def record_window(self, request: WorkerUsageWindowRequest) -> tuple[UsageRecord, ...]: ...
 
 
 class WorkerOomHandlingResult(ContractModel):
@@ -149,6 +138,7 @@ class WorkerSupervisionService:
         metering_window_started_at: datetime,
         metering_window_ended_at: datetime,
         evidence: WorkerUsageEvidence | None = None,
+        measurement_complete: bool = False,
     ) -> WorkerUsageEmissionResult:
         window_start_ms, window_end_ms = _usage_window_bounds(
             duration_ms=duration_ms,
@@ -206,6 +196,7 @@ class WorkerSupervisionService:
             billing_owner=self.billing_owner,
             pool_mode=self.pool_mode,
             evidence=evidence,
+            measurement_complete=measurement_complete,
         )
         if not plans:
             return WorkerUsageEmissionResult(
@@ -224,7 +215,7 @@ class WorkerSupervisionService:
 
         try:
             records = [
-                self._record_usage_plan(
+                self._usage_record(
                     request,
                     plan,
                     window_start_ms=window_start_ms,
@@ -234,6 +225,17 @@ class WorkerSupervisionService:
                 )
                 for plan in plans
             ]
+            records = list(
+                self.usage_recorder.record_window(
+                    WorkerUsageWindowRequest(
+                        container_id=request.container_id,
+                        started_at=metering_window_started_at,
+                        ended_at=metering_window_ended_at,
+                        records=tuple(records),
+                        measurement_complete=measurement_complete,
+                    )
+                )
+            )
         except Exception as exc:
             self._publish_usage_failure(
                 request,
@@ -316,7 +318,7 @@ class WorkerSupervisionService:
         )
         return _JSON_OBJECT.validate_json(payload.model_dump_json())
 
-    def _record_usage_plan(
+    def _usage_record(
         self,
         request: ContainerRequestContext,
         plan: WorkerUsageMetricPlan,
@@ -326,12 +328,9 @@ class WorkerSupervisionService:
         metering_window_started_at: datetime,
         metering_window_ended_at: datetime,
     ) -> UsageRecord:
-        if self.usage_recorder is None:
-            msg = "usage recorder is not configured"
-            raise RuntimeError(msg)
         metric, unit = usage_record_kind(plan.name)
         labels = {key: str(value) for key, value in plan.labels.items()}
-        return self.usage_recorder.record(
+        return UsageRecord(
             id=usage_record_id(
                 metric.value,
                 request.workspace_id,

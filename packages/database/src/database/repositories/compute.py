@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import uuid4
 
+from database.repositories.billing_funding import BillingFundingRepository
 from database.repositories.common import (
     GlobalTableRepository,
     TableRepositoryConfig,
@@ -499,6 +500,16 @@ class ComputeUnitRepository:
         workspace = WorkspaceRepository(self.session).lock_for_deletion(workspace_id)
         if workspace.status is not WorkspaceStatus.Deleting:
             raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
+        machine_ids = tuple(
+            str(value)
+            for value in self.session.scalars(
+                select(ComputeProviderInstanceTable.machine_id).where(
+                    ComputeProviderInstanceTable.pool_id == pool_id,
+                    ComputeProviderInstanceTable.machine_id.is_not(None),
+                )
+            )
+        )
+        BillingFundingRepository(self.session).require_machine_evidence_released(machine_ids)
         result = self.session.execute(
             delete(ComputeUnitTable).where(
                 ComputeUnitTable.id == pool_id,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from scheduler.state import ContainerStatusUpdatePlan, SchedulerContainerStatus
 from worker.events import (
@@ -31,6 +32,7 @@ class FinalizationRepository:
         container_id: str,
         exit_code: int,
         *,
+        exited_at: datetime,
         termination_reason: StopContainerReason,
         failed_phase: ContainerExecutionPhase | None = None,
         failure_detail: str = "",

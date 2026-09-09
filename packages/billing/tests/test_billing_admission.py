@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from datetime import timedelta
 from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
 from database.repositories.billing import BillingAccountRepository
-from database.repositories.billing_allowance import BillingAllowanceRepository
+from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.custom_domains import CustomDomainRepository
 from database.repositories.orchestration import ContainerRepository
 from database.tables.orchestration import ContainerTable
 from database.tables.storage import VolumeTable
 from shared.billing_accounts import BillingAccountStatus
+from shared.billing_credits import CreditGrant, CreditKind, CreditScope
 from shared.billing_plans import BillingPlanId
 from shared.billing_rate_card import FREE_PLAN_GPU_TYPES
 from shared.containers import ContainerRecord, ContainerStatus
@@ -162,34 +162,38 @@ def test_an_account_behind_on_payment_cannot_start_work_and_leaves_no_container(
 def test_an_unfunded_account_gets_no_new_volume_but_still_reaches_the_one_it_has(
     isolated_services: ApiServices,
 ) -> None:
-    """The two halves of the only control a volume has, which pull opposite ways.
-
-    Storage is the one billed thing that keeps costing with nothing running. The
-    sweep that protects the money stops containers, so an account with a volume
-    and nothing running is one it can do nothing about — and for a cardless
-    account past its allowance, what accrues is not billed late but lost. Refusing
-    the volume is the only point where that is preventable.
-
-    Refusing to *resolve* one is a different act entirely: that is how a container
-    mounts a volume and how its owner reads their own files back, and an account
-    locked out of its data over a few cents of storage is a data-loss incident
-    wearing a billing control's clothes. So creation is refused and resolution is
-    not, and this is the seam where a later simplification would quietly merge
-    them.
-    """
+    """An empty balance refuses new storage without hiding existing files."""
 
     volumes = isolated_services.volume_service
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
     user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+    with isolated_services.context.database.session() as session:
+        lot_id = BillingCreditRepository(session).issue(
+            user_id=user_id,
+            grant=CreditGrant(
+                "payment:storage-access",
+                CreditKind.Purchased,
+                CreditScope.AllMetered,
+                1_000_000_000,
+                utc_now(),
+            ),
+        )
     existing = volumes.get_or_create_volume(
         GetOrCreateVolumeRequest(name="already-here"),
         workspace_id=workspace_id,
     )
     assert existing.volume is not None
-    _exhaust_the_cardless_allowance(isolated_services, user_id)
+    with isolated_services.context.database.session() as session:
+        BillingCreditRepository(session).adjust(
+            user_id=user_id,
+            credit_lot_id=lot_id,
+            source_id="refund:storage-access",
+            amount_nanos=-1_000_000_000,
+            effective_at=utc_now(),
+        )
 
-    with pytest.raises(PaymentRequiredError, match="without a payment method"):
+    with pytest.raises(PaymentRequiredError, match="add credit"):
         volumes.get_or_create_volume(
             GetOrCreateVolumeRequest(name="one-more"),
             workspace_id=workspace_id,
@@ -205,26 +209,6 @@ def test_an_unfunded_account_gets_no_new_volume_but_still_reaches_the_one_it_has
     )
     assert resolved.volume is not None
     assert resolved.volume.id == existing.volume.id
-
-
-def _exhaust_the_cardless_allowance(services: ApiServices, user_id: str) -> None:
-    """Leave the account nothing to spend, the way spending all of it does.
-
-    Written as a period with no allowance rather than as usage against one: what
-    admission reads is what remains, and a cycle that opened with nothing is the
-    same answer arrived at without metering a container to get there.
-    """
-
-    now = utc_now()
-    with services.context.database.session() as session:
-        BillingAllowanceRepository(session).set_subscription_period(
-            user_id=user_id,
-            period_started_at=now - timedelta(days=1),
-            period_ended_at=now + timedelta(days=29),
-            allowance_nanos=0,
-            funded=False,
-        )
-        session.commit()
 
 
 def _volume_names(services: ApiServices, workspace_id: str) -> list[str]:

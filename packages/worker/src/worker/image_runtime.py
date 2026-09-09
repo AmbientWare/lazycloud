@@ -28,27 +28,6 @@ class ImageRuntimeClient:
     def health(self) -> ImageRuntimeResponse:
         return self._call("health")
 
-    def create_index(
-        self,
-        *,
-        image_id: str,
-        local_layout_path: Path,
-        storage_image_ref: str,
-        output_path: Path,
-        architecture: str,
-    ) -> Path:
-        response = self._call(
-            "index",
-            image_id=image_id,
-            local_layout_path=str(local_layout_path),
-            storage_image_ref=storage_image_ref,
-            output_path=str(output_path),
-            architecture=architecture,
-        )
-        if not response.ok:
-            raise RuntimeError(response.error or "image runtime could not create the image index")
-        return output_path
-
     def mount(
         self,
         *,

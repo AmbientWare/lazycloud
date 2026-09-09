@@ -18,11 +18,17 @@ from database.tables.base import (
 )
 from database.tables.billing import BillingAccountTable
 from database.tables.billing_allowance import BillingAllowancePeriodTable
+from database.tables.billing_credit_adjustments import BillingCreditAdjustmentTable
 from database.tables.billing_credits import (
     BillingCreditAllocationTable,
     BillingCreditCutoverTable,
     BillingCreditLotTable,
     BillingCreditSettlementTable,
+)
+from database.tables.billing_funding import (
+    BillingFundingAllocationTable,
+    BillingFundingHoldTable,
+    BillingFundingWindowTable,
 )
 from database.tables.billing_ledger import (
     BillingLedgerSegmentTable,
@@ -45,6 +51,7 @@ from database.tables.compute import (
     WorkspaceComputePolicyTable,
 )
 from database.tables.container_rollouts import ContainerRolloutDrainTable
+from database.tables.credit_purchases import CreditPurchaseTable
 from database.tables.custom_domains import CustomDomainTable
 from database.tables.email_outbox import EmailOutboxTable
 from database.tables.endpoint_dispatch import EndpointDispatchTable
@@ -113,10 +120,14 @@ __all__ = [
     "AwsAuthorizationCleanupTombstoneTable",
     "BillingAccountTable",
     "BillingAllowancePeriodTable",
+    "BillingCreditAdjustmentTable",
     "BillingCreditAllocationTable",
     "BillingCreditCutoverTable",
     "BillingCreditLotTable",
     "BillingCreditSettlementTable",
+    "BillingFundingAllocationTable",
+    "BillingFundingHoldTable",
+    "BillingFundingWindowTable",
     "BillingLedgerSegmentTable",
     "BillingMeterOutboxTable",
     "BillingPlanChangeIntentTable",
@@ -134,6 +145,7 @@ __all__ = [
     "ContainerRolloutDrainTable",
     "ContainerTable",
     "CredentialTable",
+    "CreditPurchaseTable",
     "CronJobRunTable",
     "CronJobTable",
     "CustomDomainTable",

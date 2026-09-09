@@ -24,18 +24,12 @@ from worker.container_execution import (
     ContainerExecutionPhaseResult,
     ContainerExecutionResult,
 )
-from worker.events import (
-    ContainerRequestContext,
-    WorkerPoolMode,
-    WorkerUsageEvidence,
-    WorkerUsageMetricName,
-    WorkerUsageMetricPlan,
+from worker.funding import WorkerFundingSupervisor
+from worker.repository_client import (
+    WorkerRepositoryClientError,
+    WorkerRepositoryHttpClient,
+    WorkerRepositoryHttpTransport,
 )
-from worker.image_build_execution import (
-    WorkerImageBuildExecutionResult,
-    WorkerImageBuildStatus,
-)
-from worker.repository_client import WorkerRepositoryClientError
 from worker.scheduler_requests import (
     WorkerSchedulerRequestAction,
     WorkerSchedulerRequestProcessor,
@@ -43,82 +37,9 @@ from worker.scheduler_requests import (
     WorkerSchedulerRequestStatus,
     container_execution_context_from_scheduler_request,
 )
-from worker.supervision import WorkerUsageEmissionResult
 from worker.worker_lifecycle import WorkerLifecycleOrchestrator
 
 _CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
-
-
-def test_cleanup_preserves_build_assignment_until_result_is_acknowledged(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    clock = [0.0]
-    monkeypatch.setattr("worker.scheduler_requests.monotonic", lambda: clock[0])
-
-    class PendingContainers(_ContainerRepository):
-        def list_pending_storage_cleanup(self) -> list[str]:
-            return [
-                container_id
-                for container_id, state in self.states.items()
-                if state.status is SchedulerContainerStatus.Complete
-            ]
-
-    class CleanupExecution(_ExecutionService):
-        def recover_cleanup(self, container_ids: Sequence[str]) -> None:
-            for container_id in container_ids:
-                containers.delete_container_state(container_id, storage_released=True)
-
-    class RetryingReporter(_ImageBuildResultReporter):
-        acknowledged = False
-
-        def report_image_build_result(
-            self, request: WorkerExecutionRequest, result: WorkerImageBuildExecutionResult
-        ) -> None:
-            if containers.get_container_state(request.container_id) is None:
-                raise WorkerRepositoryClientError("build assignment is missing")
-            containers.update_container_status(
-                request.container_id, SchedulerContainerStatus.Complete, ttl_seconds=300
-            )
-            if not self.acknowledged:
-                raise WorkerRepositoryClientError("result committed but response was lost")
-            super().report_image_build_result(request, result)
-
-    request = _request(
-        payload={"kind": "image-build", "build_id": "build-1", "image_id": "image-1"}
-    )
-    containers = PendingContainers(
-        states={"ctr-1": _state(request, status=SchedulerContainerStatus.Pending)}
-    )
-    workers = _WorkerRepository(requests=[request])
-    reporter = RetryingReporter()
-    finished = threading.Event()
-    finished.set()
-    lifecycle = WorkerLifecycleOrchestrator(worker_id="worker-1")
-    processor = WorkerSchedulerRequestProcessor(
-        worker_id="worker-1",
-        workers=workers,
-        containers=containers,
-        execution=CleanupExecution(),
-        worker_gpu_type="",
-        image_builds=_ImageBuildExecutionService(finished),
-        image_build_results=reporter,
-        usage_recorder=_UsageWindowRecorder(),
-        lifecycle=lifecycle,
-    )
-    processor.run_once()
-    assert _wait_for_background_result(processor, "ctr-1").image_build_report_pending
-    clock[0] = 10.0
-    assert processor.run_once().image_build_report_pending
-    assert containers.get_container_state("ctr-1") is not None
-    assert lifecycle.active_container_ids() == ["ctr-1"]
-
-    reporter.acknowledged = True
-    clock[0] = 20.0
-    assert processor.run_once().capacity_released
-    assert lifecycle.active_container_ids() == []
-    clock[0] = 30.0
-    processor.run_once()
-    assert containers.get_container_state("ctr-1") is None
 
 
 def test_worker_scheduler_request_processor_executes_and_releases_capacity() -> None:
@@ -134,6 +55,9 @@ def test_worker_scheduler_request_processor_executes_and_releases_capacity() -> 
     )
     execution = _ExecutionService()
     processor = WorkerSchedulerRequestProcessor(
+        funding=WorkerFundingSupervisor(
+            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
+        ),
         worker_id="worker-1",
         workers=workers,
         containers=containers,
@@ -159,118 +83,6 @@ def test_worker_scheduler_request_processor_executes_and_releases_capacity() -> 
     assert execution.contexts[0].run_delayed_cleanup
 
 
-def test_worker_scheduler_request_processor_serves_work_while_an_image_build_runs() -> None:
-    request = _request(
-        payload={
-            "kind": "image-build",
-            "build_id": "build-1",
-            "image_id": "image-1",
-            "build_options": {"dockerfile": "FROM python:3.12-slim\n"},
-        }
-    )
-    other = _request(payload={"image_id": "other", "startup_kind": "function"}).model_copy(
-        update={"container_id": "ctr-2"}
-    )
-    workers = _WorkerRepository(requests=[request, other])
-    finish_build = threading.Event()
-    usage = _UsageWindowRecorder()
-    lifecycle = WorkerLifecycleOrchestrator(worker_id="worker-1")
-    containers = _ContainerRepository(
-        states={
-            item.container_id: _state(item, status=SchedulerContainerStatus.Pending)
-            for item in (request, other)
-        }
-    )
-    processor = WorkerSchedulerRequestProcessor(
-        worker_id="worker-1",
-        workers=workers,
-        containers=containers,
-        execution=_ExecutionService(),
-        worker_gpu_type="",
-        image_builds=_ImageBuildExecutionService(finish_build=finish_build),
-        image_build_results=_ImageBuildResultReporter(),
-        usage_recorder=usage,
-        lifecycle=lifecycle,
-    )
-
-    try:
-        started = processor.run_once()
-        assert started.background
-        assert not started.capacity_released
-        unrelated = processor.run_once()
-        assert unrelated.container_id == other.container_id
-        result = _wait_for_background_result(processor, other.container_id)
-        assert result.status is WorkerSchedulerRequestStatus.Executed
-        assert result.capacity_released
-        assert usage.windows == []
-        assert not lifecycle.spindown_plan(seconds_since_last_request=1_000).should_shutdown
-    finally:
-        finish_build.set()
-        build = _wait_for_background_result(processor, request.container_id)
-
-    assert build.status is WorkerSchedulerRequestStatus.Executed
-    assert build.capacity_released
-    assert build.image_build is not None and build.image_build.ok
-    assert lifecycle.active_container_ids() == []
-    [window] = usage.windows
-    assert window.container_id == request.container_id
-    assert window.duration_ms > 0
-
-
-def test_worker_scheduler_request_processor_bills_an_image_build_that_failed() -> None:
-    """A build that fails held the capacity it was placed with and is billed for it.
-
-    The window carries the placed cpu, memory and card, which is what the ledger
-    prices the build's recorded placement against.
-    """
-
-    request = _request(
-        payload={
-            "kind": "image-build",
-            "build_id": "build-1",
-            "image_id": "image-1",
-            "build_options": {"dockerfile": "FROM python:3.12-slim\n"},
-        },
-        gpu_type="A100",
-        gpu_count=1,
-    )
-    workers = _WorkerRepository(requests=[request])
-    containers = _ContainerRepository(
-        states={"ctr-1": _state(request, status=SchedulerContainerStatus.Pending)}
-    )
-    usage = _UsageWindowRecorder()
-    processor = WorkerSchedulerRequestProcessor(
-        worker_id="worker-1",
-        workers=workers,
-        containers=containers,
-        execution=_ExecutionService(),
-        worker_gpu_type="A100",
-        image_builds=_FailingImageBuildExecutionService(),
-        image_build_results=_ImageBuildResultReporter(),
-        usage_recorder=usage,
-    )
-
-    started = processor.run_once()
-    assert started.background
-    result = _wait_for_background_result(processor, "ctr-1")
-
-    assert result.status is WorkerSchedulerRequestStatus.Error
-    assert containers.exit_codes == []
-    [window] = usage.windows
-    assert window.container_id == "ctr-1"
-    assert window.duration_ms > 0
-    assert window.window_start_ms == 0
-    assert window.window_end_ms == window.duration_ms
-    assert (
-        window.metering_window_ended_at - window.metering_window_started_at
-    ).total_seconds() * 1000 == window.duration_ms
-    [plan] = window.plans
-    assert plan.labels["cpu_millicores"] == 1000
-    assert plan.labels["mem_mb"] == 512
-    assert plan.labels["gpu"] == "A100"
-    assert plan.labels["gpu_count"] == 1
-
-
 def test_worker_scheduler_request_processor_tracks_active_container_for_shutdown() -> None:
     request = _request(payload={"image_id": "image-1", "startup_kind": "function"})
     workers = _WorkerRepository(requests=[request])
@@ -287,6 +99,9 @@ def test_worker_scheduler_request_processor_tracks_active_container_for_shutdown
         containers=containers,
     )
     processor = WorkerSchedulerRequestProcessor(
+        funding=WorkerFundingSupervisor(
+            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
+        ),
         worker_id="worker-1",
         workers=workers,
         containers=containers,
@@ -334,6 +149,9 @@ def test_worker_scheduler_request_processor_backgrounds_long_lived_container() -
         containers=containers,
     )
     processor = WorkerSchedulerRequestProcessor(
+        funding=WorkerFundingSupervisor(
+            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
+        ),
         worker_id="worker-1",
         workers=workers,
         containers=containers,
@@ -374,6 +192,9 @@ def test_worker_scheduler_request_processor_drops_missing_state_and_releases_cap
     request = _request()
     workers = _WorkerRepository(requests=[request])
     processor = WorkerSchedulerRequestProcessor(
+        funding=WorkerFundingSupervisor(
+            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
+        ),
         worker_id="worker-1",
         workers=workers,
         containers=_ContainerRepository(),
@@ -395,6 +216,9 @@ def test_worker_scheduler_request_processor_drops_stopping_state_and_deletes_sta
         states={"ctr-1": _state(request, status=SchedulerContainerStatus.Stopping)}
     )
     processor = WorkerSchedulerRequestProcessor(
+        funding=WorkerFundingSupervisor(
+            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
+        ),
         worker_id="worker-1",
         workers=_WorkerRepository(requests=[request]),
         containers=containers,
@@ -423,6 +247,9 @@ def test_worker_scheduler_request_processor_reports_execution_failure() -> None:
         ]
     )
     processor = WorkerSchedulerRequestProcessor(
+        funding=WorkerFundingSupervisor(
+            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
+        ),
         worker_id="worker-1",
         workers=workers,
         containers=_ContainerRepository(
@@ -465,6 +292,9 @@ def test_worker_scheduler_request_processor_reconciles_a_redelivered_request() -
         containers=containers,
     )
     processor = WorkerSchedulerRequestProcessor(
+        funding=WorkerFundingSupervisor(
+            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
+        ),
         worker_id="worker-1",
         workers=workers,
         containers=containers,
@@ -503,6 +333,9 @@ def test_worker_scheduler_request_processor_keeps_a_request_it_could_not_act_on(
     )
     execution = _ExecutionService()
     processor = WorkerSchedulerRequestProcessor(
+        funding=WorkerFundingSupervisor(
+            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
+        ),
         worker_id="worker-1",
         workers=workers,
         containers=containers,
@@ -541,6 +374,9 @@ def test_worker_scheduler_request_processor_refuses_a_container_it_already_start
     )
     execution = _ExecutionService()
     processor = WorkerSchedulerRequestProcessor(
+        funding=WorkerFundingSupervisor(
+            WorkerRepositoryHttpClient(WorkerRepositoryHttpTransport("http://127.0.0.1:1", ""))
+        ),
         worker_id="worker-1",
         workers=workers,
         containers=containers,
@@ -699,6 +535,7 @@ class _ContainerRepository:
         container_id: str,
         exit_code: int,
         *,
+        exited_at: datetime,
         termination_reason: StopContainerReason = StopContainerReason.Unknown,
         failed_phase: ContainerExecutionPhase | None = None,
         failure_detail: str = "",
@@ -722,110 +559,6 @@ class _ExecutionService:
     def execute(self, context: ContainerExecutionContext) -> ContainerExecutionResult:
         self.contexts.append(context)
         return self.result
-
-
-@dataclass(slots=True)
-class _ImageBuildExecutionService:
-    finish_build: threading.Event
-
-    def read_logs(self, container_id: str, *, after: int, limit: int = 256) -> list[str]:
-        del container_id, after, limit
-        return []
-
-    def execute(self, request: WorkerExecutionRequest) -> WorkerImageBuildExecutionResult:
-        if not self.finish_build.wait(timeout=2):
-            raise TimeoutError("image build did not release the worker request consumer")
-        return WorkerImageBuildExecutionResult(
-            ok=True,
-            container_id=request.container_id,
-            image_id=str(request.payload["image_id"]),
-            build_id=str(request.payload["build_id"]),
-            object_key=f"{request.payload['image_id']}.rclip",
-            status=WorkerImageBuildStatus.Complete,
-        )
-
-
-@dataclass(slots=True)
-class _FailingImageBuildExecutionService:
-    def read_logs(self, container_id: str, *, after: int, limit: int = 256) -> list[str]:
-        del container_id, after, limit
-        return []
-
-    def execute(self, request: WorkerExecutionRequest) -> WorkerImageBuildExecutionResult:
-        return WorkerImageBuildExecutionResult(
-            ok=False,
-            container_id=request.container_id,
-            image_id=str(request.payload["image_id"]),
-            build_id=str(request.payload["build_id"]),
-            status=WorkerImageBuildStatus.Failed,
-            error_message="image archive build failed",
-        )
-
-
-@dataclass(slots=True)
-class _ImageBuildResultReporter:
-    reports: list[tuple[WorkerExecutionRequest, WorkerImageBuildExecutionResult]] = field(
-        default_factory=list
-    )
-
-    def report_image_build_progress(
-        self, request: WorkerExecutionRequest, *, after: int, logs: list[str]
-    ) -> int:
-        del request
-        return after + len(logs)
-
-    def report_image_build_result(
-        self,
-        request: WorkerExecutionRequest,
-        result: WorkerImageBuildExecutionResult,
-    ) -> None:
-        self.reports.append((request, result))
-
-
-@dataclass(slots=True)
-class _UsageWindowRecorder:
-    windows: list[WorkerUsageEmissionResult] = field(default_factory=list)
-    failure: Exception | None = None
-
-    def record_usage_window(
-        self,
-        request: ContainerRequestContext,
-        *,
-        duration_ms: int,
-        window_start_ms: int = 0,
-        window_end_ms: int | None = None,
-        metering_window_started_at: datetime,
-        metering_window_ended_at: datetime,
-        evidence: WorkerUsageEvidence | None = None,
-    ) -> WorkerUsageEmissionResult:
-        _ = evidence
-        if self.failure is not None:
-            raise self.failure
-        result = WorkerUsageEmissionResult(
-            worker_id="worker-1",
-            container_id=request.container_id,
-            duration_ms=duration_ms,
-            window_start_ms=window_start_ms,
-            window_end_ms=window_end_ms if window_end_ms is not None else duration_ms,
-            metering_window_started_at=metering_window_started_at,
-            metering_window_ended_at=metering_window_ended_at,
-            pool_mode=WorkerPoolMode.Public,
-            plans=(
-                WorkerUsageMetricPlan(
-                    name=WorkerUsageMetricName.ContainerDuration,
-                    labels={
-                        "container_id": request.container_id,
-                        "cpu_millicores": request.cpu_millicores,
-                        "mem_mb": request.memory_mib,
-                        "gpu": request.gpu,
-                        "gpu_count": request.gpu_count,
-                    },
-                    value=float(duration_ms),
-                ),
-            ),
-        )
-        self.windows.append(result)
-        return result
 
 
 @dataclass(slots=True)

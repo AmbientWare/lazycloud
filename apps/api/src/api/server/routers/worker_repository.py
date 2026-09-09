@@ -8,6 +8,12 @@ from fastapi.responses import StreamingResponse
 from identity.auth import AuthError, AuthorizationDeniedError
 from identity.authz import worker_requirement
 from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.funding import FundingPermit
+from shared.http.worker_funding import (
+    WorkerFundingRequest,
+    WorkerUsageWindowRequest,
+    WorkerUsageWindowResponse,
+)
 from shared.http.worker_network import WorkerEgressPolicy, WorkerEgressPolicyRequest
 from shared.identity import AuthScope
 from worker.events import WorkerStreamEvent
@@ -76,8 +82,6 @@ from worker.repository_payloads import (
     PublishContainerMetricsResponse,
     PublishWorkerEventRequest,
     PublishWorkerEventResponse,
-    RecordWorkerUsageRequest,
-    RecordWorkerUsageResponse,
     ReleaseAutomaticCheckpointLeaseRequest,
     ReleaseAutomaticCheckpointLeaseResponse,
     RemoveContainerIpRequest,
@@ -744,15 +748,29 @@ def publish_worker_event(
 
 
 @router.post(
-    "/worker-repository/record-worker-usage",
-    response_model=RecordWorkerUsageResponse,
+    "/worker-repository/record-worker-usage-window",
+    response_model=WorkerUsageWindowResponse,
 )
-def record_worker_usage(
-    request: RecordWorkerUsageRequest,
+def record_worker_usage_window(
+    request: WorkerUsageWindowRequest,
     service: WorkerRepo,
     principal: WorkerPrincipal,
-) -> RecordWorkerUsageResponse:
-    return service.record_worker_usage(request, worker_id=principal.worker_id)
+) -> WorkerUsageWindowResponse:
+    return service.record_worker_usage_window(request, worker_id=principal.worker_id)
+
+
+@router.post("/worker-repository/authorize-container-funding", response_model=FundingPermit)
+def authorize_container_funding(
+    request: WorkerFundingRequest, service: WorkerRepo, principal: WorkerPrincipal
+) -> FundingPermit:
+    return service.authorize_container_funding(request, worker_id=principal.worker_id)
+
+
+@router.post("/worker-repository/renew-container-funding", response_model=FundingPermit)
+def renew_container_funding(
+    request: WorkerFundingRequest, service: WorkerRepo, principal: WorkerPrincipal
+) -> FundingPermit:
+    return service.renew_container_funding(request, worker_id=principal.worker_id)
 
 
 @router.post(

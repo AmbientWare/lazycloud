@@ -196,18 +196,24 @@ admission decision, credit funding and migration, and the sweep.
   account is shown no plan and no allowance rather than terms nothing will hold
   it to, is refused new work, and is provisioned by the first billing route it
   reaches.
-- Admission asks whether what this runs will reach an invoice somebody is paying.
-  For an account somebody can bill, that is the whole question and the amount is
-  no part of it: overage is billed by the provider and chased through their card,
-  only the provider knows whether it was collected, and spending past what a plan
-  includes is something to invoice rather than something to refuse on. Two things
-  answer no. The provider has reported a payment did not go through; or the
-  account holds no subscription for its usage to land on, which covers an account
-  never provisioned, one whose provisioning stopped part-way, and one whose
-  subscription has ended. All of those would otherwise meter usage into a ledger
-  and a meter that reach no invoice, which is unbounded compute nobody is charged
-  for. Provisioning at sign-in is what makes that state unreachable; the refusal
-  is what makes it a fact rather than an expectation.
+- New containers reserve eligible credits before becoming visible to placement.
+  The account lock serializes reservations, actual usage and payment adjustments.
+  Reserve the maximum CPU and RAM ceilings plus GPU charges through the permit
+  and shutdown interval. A saved card does not bypass funding.
+- The worker's local permit deadline bounds compute when the control plane is
+  unreachable. Renewals retain unreceived usage exposure. Only complete contiguous
+  metering releases past exposure; actual worker exit releases future exposure.
+  A stop request is not proof that runtime ended. Compute holds do not cover
+  object storage growth or network transfer.
+- Lost worker metering is resolved only after exact provider storage-destruction
+  evidence, permit expiry plus shutdown grace, and settlement of received usage.
+  Record the evidence and bounded exposure accepted by the platform before
+  releasing credit. Preserve prior charges; waive late compute usage in both
+  credit settlement and the meter outbox. Deletion retains machine evidence until
+  this resolution or complete terminal metering, including canceled accounts.
+- Purchased-credit refunds are immutable adjustments. A refund cannot erase
+  runtime already authorized against a lot. Its later usage consumes that
+  reservation and exposes the resulting debt, which blocks new funded work.
 - An administrator can waive an account's bill, and the waiver is a column on
   the account rather than a plan. A plan is something the provider prices and the
   rate card publishes; the rate card refuses a plan id it has no price for, and
@@ -226,15 +232,6 @@ admission decision, credit funding and migration, and the sweep.
   reached no invoice, since the waiver itself may be gone by then. Waived rows
   are subtracted before the invoice comparison like abandoned ones and are no
   divergence, and like abandoned ones they are never pruned.
-- An account with no card on file is the case that reasoning does not cover, and
-  it is the one place an amount decides. There is no card to chase and no invoice
-  that will ever be paid, so what such an account spends past its allowance is not
-  billed late. It is lost, against hardware already paid for. So a cardless
-  account is refused once its allowance is gone, and only a cardless account is:
-  attaching a card moves it onto the plan's terms and out of this check for good.
-  What it may spend before that is deliberately small, because every figure in it
-  is money the platform has decided to give away to find out whether it can bill
-  anybody.
 - Every billed thing asks that question, not only a container, and the method is
   named for the question rather than for what is asking. A volume asks it before
   it exists; a third billable resource asks the same one and adds no method. Only

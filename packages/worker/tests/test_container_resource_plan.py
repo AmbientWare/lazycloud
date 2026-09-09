@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from shared.container_requests import DEFAULT_CONTAINER_OOM_THRESHOLD_PERCENT
 from worker.execution import MIB, ContainerResourceRequest, plan_oci_linux_resources
 from worker.runtime_config import (
-    DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT,
     build_base_oci_config,
     container_cgroup_path,
     parse_proc_cgroup_path,
@@ -89,7 +89,7 @@ def test_a_container_is_never_killed_inside_its_reservation() -> None:
         wall = resources.memory.limit_bytes
         where = f"request={request_mib} node={node_mib}"
         assert low <= high <= wall, where
-        kills_at = wall * DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT / 100
+        kills_at = wall * DEFAULT_CONTAINER_OOM_THRESHOLD_PERCENT / 100
         assert kills_at > low, where
 
 

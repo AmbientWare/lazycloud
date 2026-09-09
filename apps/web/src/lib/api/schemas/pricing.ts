@@ -118,6 +118,12 @@ export const pricingCatalogSchema = z
     metered_rates_effective_at: z.string().datetime({ offset: true }),
     currency: z.string().regex(/^[A-Z]{3}$/),
     connected_cloud_management_fee_percent: z.number().int().min(0).max(100),
+    credit_purchase: z
+      .object({
+        minimum_cents: z.number().int().positive(),
+        maximum_cents: z.number().int().positive(),
+      })
+      .strict(),
     no_payment_method: z
       .object({
         included_nanos: z.number().int().nonnegative(),

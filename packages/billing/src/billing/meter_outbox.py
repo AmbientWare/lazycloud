@@ -14,7 +14,7 @@ from database.repositories.billing_outbox import BillingMeterOutboxRepository, C
 from shared.billing_quotes import BilledDimension
 from shared.errors import InvalidInputError
 from shared.events import EventLevel
-from shared.payments import METER_EVENT_NAMES, PaymentProvider
+from shared.payments import METER_EVENT_NAMES, SubscriptionPaymentProvider
 from shared.timestamps import to_utc, utc_now
 
 from billing.sweeps import BillingEventSink, next_attempt_at
@@ -101,7 +101,7 @@ class BillingMeterOutboxService:
     """
 
     database: DatabaseClient
-    payments: Callable[[], PaymentProvider]
+    payments: Callable[[], SubscriptionPaymentProvider]
     events: BillingEventSink
     batch_limit: int = 200
     max_batches: int = 5
@@ -164,7 +164,7 @@ class BillingMeterOutboxService:
 
     def _deliver(
         self,
-        payments: PaymentProvider,
+        payments: SubscriptionPaymentProvider,
         claimed: Sequence[ClaimedMeterEvent],
     ) -> list[_Outcome]:
         with ThreadPoolExecutor(
@@ -173,7 +173,7 @@ class BillingMeterOutboxService:
         ) as pool:
             return list(pool.map(partial(self._send, payments), claimed))
 
-    def _send(self, payments: PaymentProvider, event: ClaimedMeterEvent) -> _Outcome:
+    def _send(self, payments: SubscriptionPaymentProvider, event: ClaimedMeterEvent) -> _Outcome:
         """Offer one event, answering with what should become of its row.
 
         Every failure is caught here because the batch is a set of independent

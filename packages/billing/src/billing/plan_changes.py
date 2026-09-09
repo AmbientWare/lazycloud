@@ -24,7 +24,7 @@ from shared.errors import (
     UpstreamUnavailableError,
 )
 from shared.events import EventLevel
-from shared.payments import PaymentProvider, ProviderSubscription, SubscriptionProration
+from shared.payments import ProviderSubscription, SubscriptionPaymentProvider, SubscriptionProration
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy.orm import Session
 
@@ -142,7 +142,7 @@ class BillingPlanChangeService:
     """
 
     database: DatabaseClient
-    payments: Callable[[], PaymentProvider]
+    payments: Callable[[], SubscriptionPaymentProvider]
     events: BillingEventSink
     batch_limit: int = 100
 
@@ -344,7 +344,7 @@ class BillingPlanChangeService:
         )
 
     def _settle_after_refusal(
-        self, payments: PaymentProvider, intent: ClaimedPlanChange, *, claim_token: str
+        self, payments: SubscriptionPaymentProvider, intent: ClaimedPlanChange, *, claim_token: str
     ) -> _Settlement | None:
         """Decide a refused change only where the provider already holds the plan.
 
@@ -374,7 +374,7 @@ class BillingPlanChangeService:
 
     def _decide(
         self,
-        payments: PaymentProvider,
+        payments: SubscriptionPaymentProvider,
         intent: ClaimedPlanChange,
         *,
         claim_token: str,
@@ -396,7 +396,7 @@ class BillingPlanChangeService:
 
     def _settle(
         self,
-        payments: PaymentProvider,
+        payments: SubscriptionPaymentProvider,
         intent: ClaimedPlanChange,
         *,
         claim_token: str,

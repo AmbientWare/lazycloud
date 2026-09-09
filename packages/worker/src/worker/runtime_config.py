@@ -15,7 +15,6 @@ from shared.container_requests import OciRuntimeName, RuntimeContainerStatus
 from shared.contracts import ContractModel
 
 DEFAULT_RUNSC_ROOT = "/run/gvisor"
-DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT = 95.0
 DEFAULT_OCI_NAMESPACES = ("mount", "pid", "ipc", "uts", "cgroup")
 DEFAULT_CONTAINER_CLI_SOURCE = f"/app/.venv/bin/{CLI_NAME}"
 DEFAULT_CONTAINER_CLI_PATH = f"/usr/bin/{CLI_NAME}"
@@ -397,7 +396,7 @@ def container_cgroup_path(container_id: str, *, root: str = CGROUP_ROOT) -> str:
         )
         return ""
     relative = posixpath.relpath(worker, root)
-    return posixpath.join("/", relative, container_id)
+    return posixpath.join("/", relative, container_id, "runtime")
 
 
 def absolute_container_cgroup_path(container_id: str, *, root: str = CGROUP_ROOT) -> str:
@@ -412,6 +411,40 @@ def absolute_container_cgroup_path(container_id: str, *, root: str = CGROUP_ROOT
     if not relative:
         return ""
     return str(Path(root, relative.lstrip("/")))
+
+
+def absolute_container_accounting_cgroup_path(container_id: str, *, root: str = CGROUP_ROOT) -> str:
+    if not container_id or container_id in {".", ".."} or "/" in container_id:
+        raise ValueError("invalid container accounting identity")
+    child = absolute_container_cgroup_path(container_id, root=root)
+    return str(Path(child).parent) if child else ""
+
+
+def prepare_container_accounting_cgroup(container_id: str) -> Path:
+    path = absolute_container_accounting_cgroup_path(container_id)
+    if not path:
+        raise RuntimeError("container accounting requires delegated cgroup v2 controllers")
+    directory = Path(path)
+    directory.mkdir(exist_ok=True)
+    controllers = (directory / "cgroup.controllers").read_text().split()
+    if not {"cpu", "memory", "pids"}.issubset(controllers):
+        raise RuntimeError("container accounting requires CPU, memory and PID controllers")
+    (directory / "cgroup.subtree_control").write_text("+cpu +memory +pids", encoding="ascii")
+    for name in ("cgroup.kill", "cpu.stat", "memory.stat"):
+        if not (directory / name).is_file():
+            raise RuntimeError(f"container accounting requires {name}")
+    return directory
+
+
+def release_container_accounting_cgroup(container_id: str) -> None:
+    path = absolute_container_accounting_cgroup_path(container_id)
+    if not path or not Path(path).exists():
+        return
+    directory = Path(path)
+    for child in sorted(directory.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if child.is_dir():
+            child.rmdir()
+    directory.rmdir()
 
 
 def _memory_is_delegated(cgroup_path: str) -> bool:
@@ -675,7 +708,7 @@ def prepare_worker_cgroup(*, root: str = CGROUP_ROOT) -> bool:
                 # A process that will not move leaves the parent non-empty, which
                 # the delegation below then fails on and reports.
                 continue
-        Path(parent, "cgroup.subtree_control").write_text("+memory +cpu", encoding="utf-8")
+        Path(parent, "cgroup.subtree_control").write_text("+memory +cpu +pids", encoding="utf-8")
     except OSError as error:
         LOGGER.warning(
             "cannot prepare %s to hold container cgroups (%s); containers will not be "

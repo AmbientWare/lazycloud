@@ -126,6 +126,7 @@ func (p *mutableCredentialProvider) update(credentials registryCredentials) erro
 
 func main() {
 	config := serverConfig{}
+	indexOnly := flag.Bool("index", false, "create one image index from a stdin request")
 	flag.StringVar(&config.socketPath, "socket", "/run/lazycloud/image-runtime.sock", "private Unix socket")
 	flag.StringVar(&config.imageRoot, "image-root", "/var/lib/lazycloud/images", "image index root")
 	flag.StringVar(&config.mountRoot, "mount-root", "/var/lib/lazycloud/image-mounts", "image mount root")
@@ -142,6 +143,20 @@ func main() {
 		credentials: newMutableCredentialProvider(),
 		mounts:      make(map[string]mountedImage),
 		locks:       make(map[string]*sync.Mutex),
+	}
+	if *indexOnly {
+		var req request
+		decoder := json.NewDecoder(io.LimitReader(os.Stdin, maxRequestBytes))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
+			slog.Error("invalid image index request")
+			os.Exit(1)
+		}
+		if err := runtime.index(req); err != nil {
+			slog.Error("image index failed", "error", err)
+			os.Exit(1)
+		}
+		return
 	}
 	if err := runtime.serve(); err != nil {
 		slog.Error("image runtime stopped", "error", err)
@@ -223,8 +238,6 @@ func (r *imageRuntime) dispatch(req request) (result response) {
 		r.mu.Lock()
 		result.Mounts = len(r.mounts)
 		r.mu.Unlock()
-	case "index":
-		err = r.index(req)
 	case "mount":
 		result.MountPoint, err = r.mount(req)
 	case "credentials":

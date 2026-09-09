@@ -1,28 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import timedelta
 from uuid import uuid4
 
 from api.server.services import ApiServices
 from billing.enforcement import BillingEnforcementService
 from database.repositories.billing import BillingAccountRepository
-from database.repositories.billing_allowance import BillingAllowanceRepository
-from database.repositories.identity import (
-    UserRepository,
-    WorkspaceMemberRepository,
-    WorkspaceRepository,
-)
+from database.repositories.billing_credits import BillingCreditRepository
+from database.repositories.billing_funding import BillingFundingRepository
 from database.repositories.orchestration import ContainerRepository
-from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS, NO_CARD_INCLUDED_NANOS
+from shared.billing_quotes import ContainerShape
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.timestamps import utc_now
-
-CYCLE_STARTED_AT = datetime(2026, 8, 1, tzinfo=UTC)
-CYCLE_ENDED_AT = datetime(2026, 9, 1, tzinfo=UTC)
+from shared.usage import UsageBillingOwner
+from tests.service_fixtures import workspace_owner_user_id
 
 
 @dataclass(slots=True)
@@ -39,96 +32,59 @@ class _Stopper:
         return None
 
 
-def _account(
-    services: ApiServices,
-    *,
-    has_card: bool,
-    allowance_nanos: int,
-    spent_nanos: int,
-) -> tuple[str, str]:
-    """An account in a cycle it has spent the given amount of, and its container."""
-
-    with services.context.database.session() as session:
-        user_id = UserRepository(session).create(display_name=f"enforce-{uuid4().hex[:8]}").id
-        workspace_id = WorkspaceRepository(session).create(name=f"enforce-{uuid4()}").id
-        WorkspaceMemberRepository(session).ensure_owner(workspace_id=workspace_id, user_id=user_id)
-        accounts = BillingAccountRepository(session)
-        accounts.upsert(
-            user_id=user_id,
-            status=BillingAccountStatus.Active,
-            provider_customer_id=f"cus_{user_id}",
-            provider_subscription_id=f"sub_{user_id}",
-            provider_credit_grant_id=f"credgr_{user_id}",
-            plan=BillingPlanId.Free,
-        )
-        if has_card:
-            accounts.set_payment_method_present(user_id=user_id, present=True, at=utc_now())
-        allowances = BillingAllowanceRepository(session)
-        allowances.set_subscription_period(
-            user_id=user_id,
-            period_started_at=CYCLE_STARTED_AT,
-            period_ended_at=CYCLE_ENDED_AT,
-            allowance_nanos=allowance_nanos,
-            funded=True,
-        )
-        allowances.increment(user_id=user_id, at=CYCLE_STARTED_AT, cost_nanos=spent_nanos)
-        container = ContainerRepository(session).upsert(
-            ContainerRecord(
-                id=str(uuid4()),
-                name="running",
-                image="",
-                command=[],
-                workspace_id=workspace_id,
-                status=ContainerStatus.Running,
-            )
-        )
-        session.commit()
-    return user_id, container.id
-
-
-def test_only_compute_nobody_can_be_billed_for_is_stopped(
-    isolated_services: ApiServices,
+def test_expired_funding_is_stopped_even_with_a_saved_card(
+    postgres_services: ApiServices,
 ) -> None:
-    """Overspending is invoiced. Overspending with no card is stopped.
-
-    The whole of the distinction this sweep exists to make, and the expensive
-    half to get wrong in either direction. Stopping the carded account would kill
-    a paying customer's work over a bill they have not been handed yet; leaving
-    the cardless one running spends real money on hardware against an invoice
-    nobody will ever pay.
-
-    Both accounts below are past their allowance by the same margin, so the only
-    thing separating them is whether anybody can be charged.
-    """
-
-    _, cardless_container_id = _account(
-        isolated_services,
-        has_card=False,
-        allowance_nanos=NO_CARD_INCLUDED_NANOS,
-        spent_nanos=NO_CARD_INCLUDED_NANOS + 1,
-    )
-    _, carded_container_id = _account(
-        isolated_services,
-        has_card=True,
-        allowance_nanos=FREE_PLAN_INCLUDED_NANOS,
-        spent_nanos=FREE_PLAN_INCLUDED_NANOS + 1,
-    )
-    _, solvent_container_id = _account(
-        isolated_services,
-        has_card=False,
-        allowance_nanos=NO_CARD_INCLUDED_NANOS,
-        spent_nanos=0,
-    )
+    now = utc_now()
+    with postgres_services.context.database.session() as session:
+        workspace_id = postgres_services.context.default_workspace_id(session)
+        user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
+        BillingAccountRepository(session).set_payment_method_present(
+            user_id=user_id, present=True, at=now
+        )
+        credits = BillingCreditRepository(session)
+        credits.prepare_cutover(user_id=user_id, effective_at=now)
+        credits.complete_cutover(user_id=user_id, at=now)
+        active_id, expired_id = str(uuid4()), str(uuid4())
+        for container_id, deadline in (
+            (active_id, now + timedelta(seconds=60)),
+            (expired_id, now - timedelta(seconds=1)),
+        ):
+            ContainerRepository(session).records.upsert(
+                ContainerRecord(
+                    id=container_id,
+                    name="funding-enforcement",
+                    image="image",
+                    command=["true"],
+                    workspace_id=workspace_id,
+                    status=ContainerStatus.Running,
+                ),
+                workspace_id=workspace_id,
+            )
+            funding = BillingFundingRepository(session)
+            shape = ContainerShape(UsageBillingOwner.PlatformFleet, "", 1000, 1024, 0)
+            funding.create(
+                container_id=container_id,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                shape=shape,
+            )
+            funding.authorize(
+                container_id=container_id,
+                worker_id="worker",
+                shape=shape,
+                authorized_at=now - timedelta(seconds=60),
+                valid_until=deadline,
+            )
     stopper = _Stopper()
     service = BillingEnforcementService(
-        database=isolated_services.context.database,
+        database=postgres_services.context.database,
         containers=stopper,
-        events=isolated_services.events,
+        events=postgres_services.events,
+        stop_limit_per_account=1,
     )
 
-    result = service.enforce(now=CYCLE_STARTED_AT)
+    result = service.enforce(now=now)
 
-    assert stopper.stopped == {cardless_container_id: StopContainerReason.Unfunded}
-    assert carded_container_id not in stopper.stopped
-    assert solvent_container_id not in stopper.stopped
+    assert stopper.stopped == {expired_id: StopContainerReason.Unfunded}
     assert (result.unfunded_count, result.stopped_count, result.failed_count) == (1, 1, 0)

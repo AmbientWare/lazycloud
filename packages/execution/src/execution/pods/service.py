@@ -84,7 +84,6 @@ from shared.scheduling import (
     SchedulerContainerState,
     SchedulerContainerStatus,
     WorkerContainerState,
-    gpu_count_for_capacity,
 )
 from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
@@ -103,6 +102,7 @@ from execution.container_clients import (
 )
 from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.readiness import AsyncContainerReadiness
+from execution.containers.service import PendingContainerReservation
 from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
@@ -257,42 +257,37 @@ class PodControlService:
         if request.checkpoint_id:
             env["CHECKPOINT_ID"] = request.checkpoint_id
         with self.services.context.database.session() as session:
-            gpu = self.services.containers.admit_container_start(
+            container = self.services.containers.reserve_pending(
                 session,
-                workspace_id=stub.workspace_id,
-                gpu=plan.gpu,
-                gpu_count=plan.gpu_count,
-                region=config.runtime.region,
-                availability_zone=config.runtime.availability_zone,
-                stub_id=stub.id,
-            )
-            container = ContainerRecord(
-                id=plan.container_id,
-                name=f"{'sandbox' if stub.kind is StubKind.Sandbox else 'pod'}-{stub.name}",
-                image=plan.image_id or POD_IMAGE,
-                command=list(plan.entrypoint),
-                workspace_id=stub.workspace_id,
-                stub_id=stub.id,
-                app_id=stub.app_id,
-                status=ContainerStatus.Pending,
-                env=env,
-                ports={str(port): port for port in plan.ports},
-                network_blocked=config.runtime.block_network,
-                network_allow_list=list(config.runtime.allow_list),
-                gpu=gpu,
-                gpu_count=gpu_count_for_capacity(gpu, plan.gpu_count),
-                timeout_seconds=timeout_seconds,
-                expires_at=(
-                    created_at + timedelta(seconds=timeout_seconds) if timeout_seconds > 0 else None
+                PendingContainerReservation(
+                    id=plan.container_id,
+                    cpu_millicores=plan.cpu_millicores,
+                    memory_mib=plan.memory_mib,
+                    cpu_limit_millicores=plan.cpu_limit_millicores,
+                    memory_limit_mib=plan.memory_limit_mib,
+                    preemptible=config.runtime.preemptible,
+                    region=config.runtime.region,
+                    availability_zone=config.runtime.availability_zone,
+                    name=f"{'sandbox' if stub.kind is StubKind.Sandbox else 'pod'}-{stub.name}",
+                    image=plan.image_id or POD_IMAGE,
+                    command=list(plan.entrypoint),
+                    workspace_id=stub.workspace_id,
+                    stub_id=stub.id,
+                    app_id=stub.app_id,
+                    env=env,
+                    ports={str(port): port for port in plan.ports},
+                    network_blocked=config.runtime.block_network,
+                    network_allow_list=list(config.runtime.allow_list),
+                    gpu=list(plan.gpu),
+                    gpu_count=plan.gpu_count,
+                    timeout_seconds=timeout_seconds,
+                    expires_at=(
+                        created_at + timedelta(seconds=timeout_seconds)
+                        if timeout_seconds > 0
+                        else None
+                    ),
+                    created_at=created_at,
                 ),
-                created_at=created_at,
-            )
-            ContainerRepository(session).records.upsert(
-                container,
-                key=container.id,
-                workspace_id=container.workspace_id,
-                name=container.name,
-                status=container.status.value,
             )
         self.services.containers.publish_lifecycle_change(
             container,

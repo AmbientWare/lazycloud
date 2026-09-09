@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
+from billing.funding import BillingFundingService
 from compute.service import ComputeService
 from compute.state import AsyncRedisComputeStateRepository, RedisComputeStateRepository
 from control.deployment_resources import DeploymentResourceService
@@ -21,6 +22,7 @@ from coordination.event_bus import (
 )
 from coordination.redis_client import AsyncRedisClient, RedisClient, redis_text
 from database.context import ServiceContext
+from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.compute import ComputeUnitRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.identity import WorkspaceMemberRepository
@@ -64,6 +66,12 @@ from shared.errors import (
     InvalidInputError,
     NotFoundError,
     UpstreamUnavailableError,
+)
+from shared.funding import FundingPermit
+from shared.http.worker_funding import (
+    WorkerFundingRequest,
+    WorkerUsageWindowRequest,
+    WorkerUsageWindowResponse,
 )
 from shared.http.worker_network import WorkerEgressPolicy
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
@@ -165,8 +173,6 @@ from worker.repository_payloads import (
     PublishContainerMetricsResponse,
     PublishWorkerEventRequest,
     PublishWorkerEventResponse,
-    RecordWorkerUsageRequest,
-    RecordWorkerUsageResponse,
     ReleaseAutomaticCheckpointLeaseRequest,
     ReleaseAutomaticCheckpointLeaseResponse,
     RemoveContainerIpRequest,
@@ -1345,6 +1351,8 @@ class WorkerRepositoryService:
         self._sync_runtime_container_exit(
             request.container_id,
             request.exit_code,
+            exited_at=request.exited_at,
+            worker_id=principal.worker_id,
             failed_phase=request.failed_phase,
             failure_detail=request.failure_detail,
             termination_reason=request.termination_reason,
@@ -1859,6 +1867,7 @@ class WorkerRepositoryService:
             SetContainerExitCodeRequest(
                 container_id=request.container_id,
                 exit_code=0 if record.status is BuildStatus.Complete else 1,
+                exited_at=request.exited_at,
             ),
             principal=principal,
         )
@@ -2099,18 +2108,78 @@ class WorkerRepositoryService:
         record = self.services.worker_events.append(request.record)
         return PublishWorkerEventResponse(record=record)
 
-    def record_worker_usage(
+    def record_worker_usage_window(
         self,
-        request: RecordWorkerUsageRequest,
+        request: WorkerUsageWindowRequest,
         *,
         worker_id: str,
-    ) -> RecordWorkerUsageResponse:
+    ) -> WorkerUsageWindowResponse:
         services = self.services
         if services is None:
             raise UpstreamUnavailableError("service dependencies are required for worker usage")
-        accepted = self._authorized_usage_record(request.record, worker_id=worker_id)
-        record = services.usage.append(accepted)
-        return RecordWorkerUsageResponse(record=record)
+        if request.ended_at <= request.started_at:
+            raise InvalidInputError("a usage window must have positive duration")
+        if len({record.id for record in request.records}) != len(request.records) or len(
+            {record.metric for record in request.records}
+        ) != len(request.records):
+            raise InvalidInputError("a usage window must contain unique records and metrics")
+        accepted: list[UsageRecord] = []
+        for record in request.records:
+            if record.resource_id != request.container_id or _metering_window(record) != (
+                request.started_at,
+                request.ended_at,
+            ):
+                raise InvalidInputError("all usage records must describe the same container window")
+            accepted.append(self._authorized_usage_record(record, worker_id=worker_id))
+        with services.context.database.session() as session:
+            records = tuple(
+                services.usage.append_in_session(session, record) for record in accepted
+            )
+            if request.measurement_complete:
+                if any(
+                    _metering_window(record) != (request.started_at, request.ended_at)
+                    for record in records
+                ):
+                    raise InvalidInputError(
+                        "complete usage cannot extend beyond the container lifetime"
+                    )
+                BillingFundingService(session).record_window(
+                    container_id=request.container_id,
+                    worker_id=worker_id,
+                    started_at=request.started_at,
+                    ended_at=request.ended_at,
+                    usage_record_ids=tuple(record.id for record in records),
+                )
+        return WorkerUsageWindowResponse(records=records)
+
+    def authorize_container_funding(
+        self, request: WorkerFundingRequest, *, worker_id: str
+    ) -> FundingPermit:
+        self._authorize_worker_container(
+            request.container_id, worker_id=worker_id, operation="funding"
+        )
+        if self.services is None:
+            raise UpstreamUnavailableError("service dependencies are required for worker funding")
+        with self.services.context.database.session() as session:
+            shape = ContainerBillingShapeRepository(session).shape_for(request.container_id)
+            if shape is None:
+                raise ConflictError("the container has no assigned billing shape")
+            return BillingFundingService(session).authorize(
+                container_id=request.container_id, worker_id=worker_id, shape=shape
+            )
+
+    def renew_container_funding(
+        self, request: WorkerFundingRequest, *, worker_id: str
+    ) -> FundingPermit:
+        self._authorize_worker_container(
+            request.container_id, worker_id=worker_id, operation="funding"
+        )
+        if self.services is None:
+            raise UpstreamUnavailableError("service dependencies are required for worker funding")
+        with self.services.context.database.session() as session:
+            return BillingFundingService(session).renew(
+                container_id=request.container_id, worker_id=worker_id
+            )
 
     def _authorized_usage_record(
         self,
@@ -2648,6 +2717,8 @@ class WorkerRepositoryService:
         container_id: str,
         exit_code: int,
         *,
+        exited_at: datetime,
+        worker_id: str,
         termination_reason: StopContainerReason,
         failed_phase: ContainerExecutionPhase | None = None,
         failure_detail: str = "",
@@ -2664,6 +2735,16 @@ class WorkerRepositoryService:
             container = ContainerRepository(session).get_across_workspaces(container_id)
             if container is None:
                 return
+            if (
+                to_utc(exited_at) > now + _METERING_WINDOW_TOLERANCE
+                or to_utc(exited_at) < to_utc(container.created_at) - _METERING_WINDOW_TOLERANCE
+            ):
+                raise InvalidInputError("container exit time is outside its lifetime")
+            funding = BillingFundingService(session)
+            if not funding.cancel_pending(container_id=container_id):
+                funding.observe_terminal(
+                    container_id=container_id, worker_id=worker_id, exited_at=exited_at
+                )
             reconcile_preemption = preempted and container.status is not ContainerStatus.Stopped
             previous_state = (
                 container.status,

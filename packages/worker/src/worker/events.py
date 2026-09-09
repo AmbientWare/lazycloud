@@ -569,6 +569,7 @@ def plan_worker_usage_metrics(
     billing_owner: UsageBillingOwner,
     pool_mode: WorkerPoolMode = WorkerPoolMode.Public,
     evidence: WorkerUsageEvidence | None = None,
+    measurement_complete: bool = False,
 ) -> tuple[WorkerUsageMetricPlan, ...]:
     labels: dict[str, JsonValue] = {
         "container_id": request.container_id,
@@ -626,5 +627,9 @@ def plan_worker_usage_metrics(
         WorkerUsageMetricPlan(name=name, labels=labels, value=float(value))
         for name, value in evidence_values
         if value > 0
+        or (
+            measurement_complete
+            and name in {WorkerUsageMetricName.CpuUsed, WorkerUsageMetricName.MemoryRss}
+        )
     )
-    return tuple(plan for plan in plans if plan.value > 0)
+    return tuple(plans)

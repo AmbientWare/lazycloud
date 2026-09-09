@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-import math
 import posixpath
 import shlex
 from collections.abc import Mapping, Sequence
@@ -11,10 +10,11 @@ from urllib.parse import urlparse
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 from shared.container_requests import (
-    CONTAINER_CPU_BURST_CEILING_MILLICORES,
     CONTAINER_INNER_PORT,
+    DEFAULT_CONTAINER_OOM_THRESHOLD_PERCENT,
+    container_cpu_ceiling_millicores,
+    container_memory_ceiling_mib,
     container_memory_limit_mib,
-    schedulable_capacity,
 )
 from shared.contracts import ContractModel
 from shared.env import (
@@ -32,7 +32,6 @@ from shared.env import (
 from shared.routing import BackendRouteTransport
 
 from worker.runtime_config import (
-    DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT,
     OciRuntimeName,
     OomWatcherKind,
 )
@@ -598,8 +597,9 @@ def plan_oci_linux_resources(request: ContainerResourceRequest) -> OciLinuxResou
     # Bounded by the machine when the worker knows it. A flat allowance is either
     # unreachable or the whole node depending on what it landed on, and neither
     # is what "sixteen cores above the request" was meant to say.
-    ceiling_millicores = request.cpu_limit_millicores or _cpu_burst_ceiling_millicores(
+    ceiling_millicores = container_cpu_ceiling_millicores(
         request.cpu_millicores,
+        limit_millicores=request.cpu_limit_millicores,
         node_cpu_millicores=request.node_cpu_millicores,
     )
     cpu = OciLinuxCpu(
@@ -637,9 +637,9 @@ def plan_oci_linux_resources(request: ContainerResourceRequest) -> OciLinuxResou
         # scanning zero pages.
         reservation = request.memory_mib * MIB
         requested_high = request.memory_limit_mib or container_memory_limit_mib(request.memory_mib)
-        hard_mib = _hard_memory_ceiling_mib(
-            requested_high,
-            request_mib=request.memory_mib,
+        hard_mib = container_memory_ceiling_mib(
+            request.memory_mib,
+            limit_mib=request.memory_limit_mib,
             node_memory_mib=request.node_memory_mib,
         )
         # The throttle takes the same bound the wall does. Above it the throttle
@@ -652,7 +652,7 @@ def plan_oci_linux_resources(request: ContainerResourceRequest) -> OciLinuxResou
         # above that point is one the watcher reaches first -- the container
         # killed having never been slowed, which is what these two values exist
         # to avoid.
-        watcher_trips_at = int(hard_mib * DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT / 100)
+        watcher_trips_at = int(hard_mib * DEFAULT_CONTAINER_OOM_THRESHOLD_PERCENT / 100)
         high_mib = min(high_mib, watcher_trips_at - 1)
         if hard_mib > request.memory_mib:
             high_mib = min(high_mib, hard_mib - max((hard_mib - request.memory_mib) // 10, 1))
@@ -679,62 +679,6 @@ def plan_oci_linux_resources(request: ContainerResourceRequest) -> OciLinuxResou
         )
         deferred[CGROUP_V2_MEMORY_HIGH_PARAMETER] = str(high_mib * MIB)
     return OciLinuxResources(cpu=cpu, memory=memory, deferred=deferred)
-
-
-def _cpu_burst_ceiling_millicores(request_millicores: int, *, node_cpu_millicores: int) -> int:
-    """How far above its request a container may run when the node is idle.
-
-    Processor time is compressible, so this ceiling costs a neighbour latency
-    rather than its life, and it can be generous. It still cannot exceed the
-    machine: a quota above what the node has is not a larger allowance, it is an
-    unenforceable number.
-    """
-    ceiling = request_millicores + CONTAINER_CPU_BURST_CEILING_MILLICORES
-    if node_cpu_millicores <= 0:
-        return ceiling
-    # Floored at the request for the same reason memory is: shares still promise
-    # the request under contention, so a quota below it would throttle a
-    # container beneath what it reserved on an otherwise idle machine.
-    return max(min(ceiling, schedulable_capacity(node_cpu_millicores)), request_millicores)
-
-
-def _lowest_survivable_wall_mib(request_mib: int) -> int:
-    """The smallest wall a container can reserve `request_mib` behind and live.
-
-    The sandbox OOM watcher trips at a percentage of whatever wall it is handed,
-    so a wall equal to the reservation is a kill *below* it: at ninety-five per
-    cent, a container promised 4096 MiB dies at 3979 having never been throttled,
-    inside the guarantee the reservation exists to sell. The wall therefore has to
-    clear the reservation by at least the watcher's own margin.
-
-    One mebibyte above the exact quotient, because the watcher truncates and the
-    two must not meet.
-    """
-    exact = math.ceil(request_mib * 100 / DEFAULT_GVISOR_OOM_THRESHOLD_PERCENT)
-    return exact + 1
-
-
-def _hard_memory_ceiling_mib(high_mib: int, *, request_mib: int, node_memory_mib: int) -> int:
-    """The wall behind the throttle, never larger than the machine holds.
-
-    A container has to be able to reach its own ceiling for that ceiling to be
-    the thing that stops it. Above the node's own size it never can, and the
-    kernel's global OOM killer resolves the shortage instead -- by `oom_badness`,
-    which scores resident size and knows nothing about what anyone reserved.
-
-    Floored so the reservation stays survivable, which is a stronger floor than
-    the reservation itself and the reason this is not `max(..., request_mib)`.
-    Reaching that floor means spending headroom the overhead factor had set aside
-    for the machine, and that is the right trade: a node too small to hold a
-    request plus the watcher's margin was the wrong placement, and killing the
-    tenant inside its reservation is not a better way to say so.
-    """
-    floor = _lowest_survivable_wall_mib(request_mib)
-    if node_memory_mib <= 0:
-        # The worker could not read its machine. Better a ceiling that may be too
-        # generous than one invented from a number nobody measured.
-        return max(high_mib, floor)
-    return max(min(high_mib, schedulable_capacity(node_memory_mib)), floor)
 
 
 def container_id_hash_suffix(container_id: str, length: int) -> str:

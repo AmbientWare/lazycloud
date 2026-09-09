@@ -200,6 +200,11 @@ class EndpointControlService:
                 session,
                 PendingContainerReservation(
                     name=f"endpoint-{stub.name}",
+                    cpu_millicores=config.runtime.requested_cpu_millicores,
+                    memory_mib=config.runtime.requested_memory_mib,
+                    cpu_limit_millicores=config.runtime.limit_cpu_millicores,
+                    memory_limit_mib=config.runtime.limit_memory_mib,
+                    preemptible=config.runtime.preemptible,
                     image=image_id,
                     command=list(plan.entrypoint),
                     workspace_id=stub.workspace_id,

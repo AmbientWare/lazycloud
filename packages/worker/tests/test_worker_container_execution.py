@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 from foundation.process import (
     ProcessOutputChunk,
@@ -15,6 +16,9 @@ from scheduler.state import (
     SchedulerContainerStatus,
 )
 from shared.container_requests import StopContainerReason, WorkerStartupKind
+from shared.funding import FundingPermit
+from shared.http.worker_funding import WorkerFundingRequest
+from shared.timestamps import utc_now
 from shared.worker_events import WorkerEventRecord
 from storage_client.mounts import StorageMountResult
 from worker.container_execution import (
@@ -39,12 +43,13 @@ from worker.events import (
     ContainerLifecyclePayload,
     ContainerRequestContext,
 )
-from worker.execution import ContainerNetworkIdentity, PortBinding
+from worker.execution import ContainerNetworkIdentity, OciLinuxResources, PortBinding
 from worker.finalization import (
     CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS,
     ContainerFinalizationStep,
     WorkerContainerFinalizationService,
 )
+from worker.funding import WorkerFundingSupervisor
 from worker.gpu import ContainerGpuAssignmentResult
 from worker.monitoring import ContainerRuntimeMonitoringResult
 from worker.oci_spec import OciRuntimeContainerSpec
@@ -453,6 +458,7 @@ class FinalizationRepository:
         container_id: str,
         exit_code: int,
         *,
+        exited_at: datetime,
         termination_reason: StopContainerReason,
         failed_phase: ContainerExecutionPhase | None = None,
         failure_detail: str = "",
@@ -538,6 +544,12 @@ class EventSink(WorkerEventSink):
 
 @dataclass(slots=True)
 class Stopper:
+    def prepare_funded_runtime(self, container_id: str, resources: OciLinuxResources) -> None:
+        pass
+
+    def require_funded_stop(self, container_id: str) -> None:
+        pass
+
     stopped: list[tuple[str, bool]] = field(default_factory=list)
 
     def stop_container(
@@ -548,6 +560,22 @@ class Stopper:
         reason: StopContainerReason = StopContainerReason.Unknown,
     ) -> None:
         self.stopped.append((container_id, force))
+
+
+class FundingClient:
+    def authorize_container_funding(self, request: WorkerFundingRequest) -> FundingPermit:
+        return FundingPermit(
+            container_id=request.container_id,
+            revision=1,
+            valid_until=utc_now() + timedelta(seconds=90),
+        )
+
+    def renew_container_funding(self, request: WorkerFundingRequest) -> FundingPermit:
+        return FundingPermit(
+            container_id=request.container_id,
+            revision=2,
+            valid_until=utc_now() + timedelta(seconds=90),
+        )
 
 
 def test_worker_container_execution_service_runs_full_lifecycle() -> None:
@@ -666,6 +694,7 @@ def test_checkpoint_startup_is_monitored_before_running_and_route_publication() 
         ContainerRuntimeMonitoringResult(
             container_id="ctr-1",
             started_pid=123,
+            exited_at=utc_now(),
         )
     )
     service = _service(
@@ -992,6 +1021,8 @@ def _service(
     final_repo = repo or FinalizationRepository()
     final_cleanup = cleanup or Cleanup()
     return WorkerContainerExecutionService(
+        funding=WorkerFundingSupervisor(FundingClient()),
+        funding_stopper=Stopper(),
         address_publisher=AddressPublisher(log),
         image_loader=image_loader or ImageLoader(log, image_result or ContainerImageLoadResult()),
         port_allocator=PortAllocator(log),

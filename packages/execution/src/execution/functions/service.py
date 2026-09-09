@@ -500,6 +500,7 @@ class FunctionControlService:
             region=config.runtime.region,
             availability_zone=config.runtime.availability_zone,
             eligible_at=eligible_at,
+            preemptible=config.runtime.preemptible,
             authority=authority,
             max_containers=function_container_ceiling(stub.config.autoscaler.max_containers),
         )
@@ -805,6 +806,7 @@ class FunctionControlService:
         stub_app_id: str | None,
         region: ProductRegion | None,
         availability_zone: str,
+        preemptible: bool,
         eligible_at: datetime | None,
         authority: FunctionContainerStartAuthority,
         max_containers: int,
@@ -853,6 +855,11 @@ class FunctionControlService:
                     session,
                     PendingContainerReservation(
                         id=container_plan.container_id,
+                        cpu_millicores=container_plan.cpu_millicores,
+                        memory_mib=container_plan.memory_mib,
+                        cpu_limit_millicores=container_plan.cpu_limit_millicores,
+                        memory_limit_mib=container_plan.memory_limit_mib,
+                        preemptible=preemptible,
                         name=f"function-{stub_name}",
                         image=container_plan.image_id or FUNCTION_IMAGE,
                         command=list(container_plan.entrypoint),

@@ -101,6 +101,7 @@ class WorkerUsageWindowRecorder(Protocol):
         metering_window_started_at: datetime,
         metering_window_ended_at: datetime,
         evidence: WorkerUsageEvidence | None = None,
+        measurement_complete: bool = False,
     ) -> WorkerUsageEmissionResult: ...
 
 
@@ -114,6 +115,7 @@ class ContainerLifecycleSink(Protocol):
 class ContainerRuntimeMonitoringResult(ContractModel):
     container_id: str
     started_pid: int
+    exited_at: datetime
     duration_ms: int = 0
     metrics_samples: int = 0
     metrics_published: int = 0
@@ -124,6 +126,7 @@ class ContainerRuntimeMonitoringResult(ContractModel):
 class _UsageWindow:
     start_ms: int
     end_ms: int
+    measurement_complete: bool = True
 
     @property
     def duration_ms(self) -> int:
@@ -182,7 +185,7 @@ class WorkerContainerRuntimeMonitor:
         started_pid: int,
     ) -> ContainerRuntimeMonitorHandle:
         source = (
-            self.metrics_source_factory.metrics_source_for_pid(started_pid)
+            self.metrics_source_factory.metrics_source_for_container(request.container_id)
             if self.metrics is not None and self.metrics_source_factory is not None
             else None
         )
@@ -282,6 +285,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
     _sample_lock: threading.Lock = field(default_factory=threading.Lock)
     _usage_cursor_ms: int = 0
     _pending_usage_evidence: WorkerUsageEvidence = field(default_factory=WorkerUsageEvidence)
+    _pending_measurement_complete: bool = True
     _held: list[tuple[_UsageWindow, WorkerUsageEvidence]] = field(default_factory=list)
     _previous: ContainerMetricsCounterState | None = None
     _last_sample_at: float | None = None
@@ -294,6 +298,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
     def start(self) -> None:
         if self.metrics is None and self.usage_recorder is None and self.container_states is None:
             return
+        self._publish_once(recorded_at=self._started_at)
         self._thread = threading.Thread(
             target=self._run,
             name=f"container-monitor-{self.request.container_id}",
@@ -302,10 +307,10 @@ class _ThreadedContainerRuntimeMonitorHandle:
         self._thread.start()
 
     def stop(self) -> ContainerRuntimeMonitoringResult:
+        current = monotonic()
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=self.settings.join_timeout_seconds)
-        current = monotonic()
         if self.metrics is not None:
             self._publish_once(recorded_at=current)
         duration_ms = max(1, int((current - self._started_at) * 1000))
@@ -313,6 +318,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
         return ContainerRuntimeMonitoringResult(
             container_id=self.request.container_id,
             started_pid=self.started_pid,
+            exited_at=self._started_at_utc + timedelta(milliseconds=duration_ms),
             duration_ms=duration_ms,
             metrics_samples=self._samples,
             metrics_published=self._published,
@@ -320,7 +326,6 @@ class _ThreadedContainerRuntimeMonitorHandle:
         )
 
     def _run(self) -> None:
-        self._publish_once(recorded_at=monotonic())
         while not self._stop.wait(self.settings.sample_interval_seconds):
             current = monotonic()
             self._heartbeat_container_state(recorded_at=current)
@@ -464,6 +469,8 @@ class _ThreadedContainerRuntimeMonitorHandle:
 
     def _publish_sample(self, *, recorded_at: float) -> None:
         if self.metrics is None:
+            with self._lock:
+                self._pending_measurement_complete = False
             return
         previous_sample_at = self._last_sample_at
         sample_interval_ms = max(
@@ -481,6 +488,8 @@ class _ThreadedContainerRuntimeMonitorHandle:
                 sample_interval_ms=sample_interval_ms,
             )
         except Exception:  # pragma: no cover - defensive worker boundary
+            with self._lock:
+                self._pending_measurement_complete = False
             LOGGER.warning(
                 "container metrics sample failed",
                 exc_info=True,
@@ -489,13 +498,20 @@ class _ThreadedContainerRuntimeMonitorHandle:
             return
         with self._lock:
             self._samples += 1
+            if not result.measurement_complete:
+                self._pending_measurement_complete = False
             if result.published:
                 self._published += 1
             self._previous = result.next_state
             self._last_sample_at = recorded_at
             if result.payload is not None:
                 self._pending_usage_evidence = self._pending_usage_evidence.plus(
-                    _usage_evidence_from_metrics(result.payload.metrics)
+                    _usage_evidence_from_metrics(result.payload.metrics).model_copy(
+                        update={
+                            "cpu_used_core_seconds": result.cpu_used_core_seconds,
+                            "memory_rss_byte_seconds": result.memory_rss_byte_seconds,
+                        }
+                    )
                 )
                 self._pending_usage_evidence = self._pending_usage_evidence.plus(
                     WorkerUsageEvidence(network_egress_bytes=result.network_egress_bytes)
@@ -540,6 +556,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
                 metering_window_ended_at=self._started_at_utc
                 + timedelta(milliseconds=window.end_ms),
                 evidence=evidence,
+                measurement_complete=window.measurement_complete,
             )
         except Exception:  # pragma: no cover - defensive worker boundary
             LOGGER.warning(
@@ -588,7 +605,12 @@ class _ThreadedContainerRuntimeMonitorHandle:
             self._usage_cursor_ms = end_ms
             evidence = self._pending_usage_evidence
             self._pending_usage_evidence = WorkerUsageEvidence()
-            return (_UsageWindow(start_ms=start_ms, end_ms=end_ms), evidence)
+            complete = self._pending_measurement_complete and self._last_sample_at == recorded_at
+            self._pending_measurement_complete = True
+            return (
+                _UsageWindow(start_ms=start_ms, end_ms=end_ms, measurement_complete=complete),
+                evidence,
+            )
 
     def _hold_usage_window(
         self,

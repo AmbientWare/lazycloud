@@ -7,12 +7,14 @@ from itertools import pairwise
 from uuid import uuid4
 
 from database.repositories.billing import BillingAccountRepository
+from database.tables.billing_credit_adjustments import BillingCreditAdjustmentTable
 from database.tables.billing_credits import (
     BillingCreditAllocationTable,
     BillingCreditCutoverTable,
     BillingCreditLotTable,
     BillingCreditSettlementTable,
 )
+from database.tables.billing_funding import BillingFundingAllocationTable
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from shared.billing_credits import (
@@ -25,7 +27,7 @@ from shared.billing_credits import (
 from shared.billing_quotes import BilledDimension
 from shared.errors import ConflictError, NotFoundError
 from shared.timestamps import to_utc, utc_now
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, true
 from sqlalchemy.orm import Session
 
 
@@ -40,6 +42,13 @@ class CreditCutover:
 class CreditAdjustments:
     credited_nanos: int = 0
     unsettled_nanos: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SpendableCreditLot:
+    id: str
+    amount_nanos: int
+    expires_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,12 +150,79 @@ class BillingCreditRepository:
 
     def balance(self, *, user_id: str, at: datetime, dimension: BilledDimension) -> CreditBalance:
         totals = {kind: 0 for kind in CreditKind}
-        for lot, remaining in self._available(user_id=user_id, at=at, dimension=dimension):
+        for lot, remaining in self._lot_balances(user_id=user_id, at=at, dimension=dimension):
             totals[CreditKind(lot.kind)] += remaining
         return CreditBalance(
             purchased_nanos=totals[CreditKind.Purchased],
             subscription_nanos=totals[CreditKind.Subscription],
             trial_nanos=totals[CreditKind.Trial],
+        )
+
+    def adjust(
+        self,
+        *,
+        user_id: str,
+        credit_lot_id: str,
+        source_id: str,
+        amount_nanos: int,
+        effective_at: datetime,
+    ) -> str:
+        self._lock(user_id)
+        if not source_id or len(source_id) > 255 or amount_nanos == 0:
+            raise ConflictError("a credit adjustment needs a stable source and a nonzero amount")
+        lot = self.session.get(BillingCreditLotTable, credit_lot_id)
+        if lot is None or lot.user_id != user_id:
+            raise NotFoundError("the credit lot does not belong to this billing account")
+        moment = to_utc(effective_at)
+        existing = self.session.scalar(
+            select(BillingCreditAdjustmentTable).where(
+                BillingCreditAdjustmentTable.credit_lot_id == credit_lot_id,
+                BillingCreditAdjustmentTable.source_id == source_id,
+            )
+        )
+        if existing is not None:
+            if existing.amount_nanos != amount_nanos or to_utc(existing.effective_at) != moment:
+                raise ConflictError(
+                    "a credit adjustment source cannot be reused with different terms"
+                )
+            return existing.id
+        row = BillingCreditAdjustmentTable(
+            id=str(uuid4()),
+            credit_lot_id=credit_lot_id,
+            source_id=source_id,
+            amount_nanos=amount_nanos,
+            effective_at=moment,
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row.id
+
+    def debt_nanos(self, *, user_id: str, at: datetime) -> int:
+        return max(
+            0,
+            -self.balance(
+                user_id=user_id,
+                at=at,
+                dimension=BilledDimension.ComputeRuntime,
+            ).purchased_nanos,
+        )
+
+    def spendable_lots(
+        self,
+        *,
+        user_id: str,
+        at: datetime,
+        dimension: BilledDimension,
+        container_id: str = "",
+    ) -> tuple[SpendableCreditLot, ...]:
+        return tuple(
+            SpendableCreditLot(lot.id, amount, to_utc(lot.expires_at) if lot.expires_at else None)
+            for lot, amount in self._available(
+                user_id=user_id,
+                at=at,
+                dimension=dimension,
+                container_id=container_id,
+            )
         )
 
     def subscription_issued(self, *, user_id: str, period_ended_at: datetime) -> int:
@@ -211,6 +287,13 @@ class BillingCreditRepository:
                     user_id=user_id,
                     at=started_at,
                     dimension=BilledDimension(segment.dimension),
+                    container_id=(
+                        segment.subject_id
+                        if segment.subject_type == "container"
+                        and segment.dimension == BilledDimension.ComputeRuntime.value
+                        else ""
+                    ),
+                    consume_reserved=True,
                 ):
                     amount = min(remaining_cost, available)
                     if amount <= 0:
@@ -226,6 +309,18 @@ class BillingCreditRepository:
                     )
                     credited += amount
                     remaining_cost -= amount
+                    if segment.subject_type == "container" and (
+                        segment.dimension == BilledDimension.ComputeRuntime.value
+                    ):
+                        held = self.session.get(
+                            BillingFundingAllocationTable,
+                            (segment.subject_id, lot.id),
+                        )
+                        if held is not None:
+                            if held.amount_nanos <= amount:
+                                self.session.delete(held)
+                            else:
+                                held.amount_nanos -= amount
                 self.session.flush()
         existing.credited_nanos = credited
         existing.payable_nanos = existing.gross_nanos - credited
@@ -340,6 +435,66 @@ class BillingCreditRepository:
         }
 
     def _available(
+        self,
+        *,
+        user_id: str,
+        at: datetime,
+        dimension: BilledDimension,
+        container_id: str = "",
+        consume_reserved: bool = False,
+    ) -> list[tuple[BillingCreditLotTable, int]]:
+        balances = self._lot_balances(user_id=user_id, at=at, dimension=dimension)
+        purchased_debt = sum(
+            -amount
+            for lot, amount in balances
+            if lot.kind == CreditKind.Purchased.value and amount < 0
+        )
+        held_rows = self.session.execute(
+            select(
+                BillingFundingAllocationTable.credit_lot_id,
+                func.sum(BillingFundingAllocationTable.amount_nanos),
+            )
+            .join(
+                BillingCreditLotTable,
+                BillingCreditLotTable.id == BillingFundingAllocationTable.credit_lot_id,
+            )
+            .where(
+                BillingCreditLotTable.user_id == user_id,
+                BillingFundingAllocationTable.container_id != container_id
+                if container_id
+                else true(),
+            )
+            .group_by(BillingFundingAllocationTable.credit_lot_id)
+        ).all()
+        held = {row[0]: int(row[1]) for row in held_rows}
+        reserved = (
+            {
+                row.credit_lot_id: row.amount_nanos
+                for row in self.session.scalars(
+                    select(BillingFundingAllocationTable).where(
+                        BillingFundingAllocationTable.container_id == container_id,
+                    )
+                )
+            }
+            if consume_reserved and container_id
+            else {}
+        )
+        available: list[tuple[BillingCreditLotTable, int]] = []
+        for lot, amount in balances:
+            if lot.kind == CreditKind.Purchased.value:
+                offset = min(max(0, amount), purchased_debt)
+                amount -= offset
+                purchased_debt -= offset
+            amount -= held.get(lot.id, 0)
+            # A refund cannot erase runtime already authorized against this lot.
+            # Consuming its reservation records the resulting purchased-credit debt.
+            if lot.kind == CreditKind.Purchased.value:
+                amount = max(amount, reserved.get(lot.id, 0))
+            if amount > 0:
+                available.append((lot, amount))
+        return available
+
+    def _lot_balances(
         self, *, user_id: str, at: datetime, dimension: BilledDimension
     ) -> list[tuple[BillingCreditLotTable, int]]:
         spent = (
@@ -347,13 +502,42 @@ class BillingCreditRepository:
                 BillingCreditAllocationTable.credit_lot_id,
                 func.sum(BillingCreditAllocationTable.amount_nanos).label("amount"),
             )
+            .join(
+                BillingCreditLotTable,
+                BillingCreditLotTable.id == BillingCreditAllocationTable.credit_lot_id,
+            )
+            .where(BillingCreditLotTable.user_id == user_id)
             .group_by(BillingCreditAllocationTable.credit_lot_id)
             .subquery()
         )
         moment = to_utc(at)
+        adjustments = (
+            select(
+                BillingCreditAdjustmentTable.credit_lot_id,
+                func.sum(BillingCreditAdjustmentTable.amount_nanos).label("amount"),
+            )
+            .join(
+                BillingCreditLotTable,
+                BillingCreditLotTable.id == BillingCreditAdjustmentTable.credit_lot_id,
+            )
+            .where(
+                BillingCreditLotTable.user_id == user_id,
+                BillingCreditAdjustmentTable.effective_at <= utc_now(),
+            )
+            .group_by(
+                BillingCreditAdjustmentTable.credit_lot_id,
+            )
+            .subquery()
+        )
         rows = self.session.execute(
-            select(BillingCreditLotTable, func.coalesce(spent.c.amount, 0))
+            select(
+                BillingCreditLotTable,
+                BillingCreditLotTable.amount_nanos
+                + func.coalesce(adjustments.c.amount, 0)
+                - func.coalesce(spent.c.amount, 0),
+            )
             .outerjoin(spent, spent.c.credit_lot_id == BillingCreditLotTable.id)
+            .outerjoin(adjustments, adjustments.c.credit_lot_id == BillingCreditLotTable.id)
             .where(
                 BillingCreditLotTable.user_id == user_id,
                 BillingCreditLotTable.effective_at <= moment,
@@ -361,7 +545,6 @@ class BillingCreditRepository:
                     BillingCreditLotTable.expires_at.is_(None),
                     BillingCreditLotTable.expires_at > moment,
                 ),
-                BillingCreditLotTable.amount_nanos > func.coalesce(spent.c.amount, 0),
             )
             .order_by(
                 BillingCreditLotTable.expires_at.asc().nulls_last(),
@@ -371,8 +554,8 @@ class BillingCreditRepository:
             )
         ).all()
         return [
-            (lot, lot.amount_nanos - int(allocated))
-            for lot, allocated in rows
+            (lot, int(remaining))
+            for lot, remaining in rows
             if CreditScope(lot.scope).covers(dimension)
         ]
 

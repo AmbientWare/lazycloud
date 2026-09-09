@@ -35,7 +35,14 @@ class SchedulerSubmissionResult(Protocol):
 
 class ExecutionContainerService(Protocol):
     def reserve_image_build_container(
-        self, *, container_id: str, workspace_id: str, image_id: str
+        self,
+        *,
+        container_id: str,
+        workspace_id: str,
+        image_id: str,
+        cpu_millicores: int,
+        memory_mib: int,
+        preemptible: bool,
     ) -> ContainerRecord: ...
 
     def reserve_pending(

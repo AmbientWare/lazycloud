@@ -19,6 +19,38 @@ export const billingHostedSessionResponseSchema = z
   .strict();
 export type BillingHostedSessionResponse = z.infer<typeof billingHostedSessionResponseSchema>;
 
+export const creditPurchaseSchema = z
+  .object({
+    id: z.string().uuid(),
+    amount_nanos: z.number().int().positive(),
+    status: z.enum(["pending", "action_required", "succeeded", "declined", "cancelled"]),
+    checkout_url: z.string().nullable(),
+    funded_at: timestampSchema.nullable(),
+    reversed_nanos: z.number().int().nonnegative(),
+  })
+  .strict();
+export type CreditPurchase = z.infer<typeof creditPurchaseSchema>;
+
+const creditBalanceSchema = z
+  .object({
+    purchased_nanos: z.number().int(),
+    subscription_nanos: z.number().int(),
+    trial_nanos: z.number().int(),
+    held_nanos: z.number().int().nonnegative(),
+    debt_nanos: z.number().int().nonnegative(),
+    available_nanos: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const creditSummarySchema = z
+  .object({
+    ready: z.boolean(),
+    compute: creditBalanceSchema,
+    storage_and_transfer: creditBalanceSchema,
+  })
+  .strict();
+export type CreditSummary = z.infer<typeof creditSummarySchema>;
+
 export const billingAccountStatuses = ["active", "past_due"] as const;
 export type BillingAccountStatus = (typeof billingAccountStatuses)[number];
 

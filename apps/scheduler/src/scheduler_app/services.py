@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from agent.binary import AgentBinarySettings
+from billing.payment_maintenance import BillingPaymentMaintenance
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.policy import WorkspaceComputePolicyService
 from compute.provider_launches import ProviderNodeLaunchService
@@ -170,6 +171,7 @@ class SchedulerAppServices:
     email_outbox: EmailOutboxDrain
     plan_changes: BillingPlanChangeService
     billing_reconciliation: BillingReconciliationService
+    billing_payments: BillingPaymentMaintenance
     billing_enforcement: BillingEnforcementService
     retention: SchedulerRetention | None
     redis_client: RedisClient
@@ -237,6 +239,9 @@ class SchedulerAppServices:
         email_outbox = _email_outbox(context)
         plan_changes = _plan_changes(context, events, stripe_settings)
         billing_reconciliation = _billing_reconciliation(context, events, stripe_settings)
+        billing_payments = BillingPaymentMaintenance(
+            context.database, stripe_settings.provider_factory()
+        )
         retention = scheduler_retention(
             context=context,
             object_storage=object_storage,
@@ -432,6 +437,7 @@ class SchedulerAppServices:
             email_outbox=email_outbox,
             plan_changes=plan_changes,
             billing_reconciliation=billing_reconciliation,
+            billing_payments=billing_payments,
             billing_enforcement=billing_enforcement,
             retention=retention,
             redis_client=redis,

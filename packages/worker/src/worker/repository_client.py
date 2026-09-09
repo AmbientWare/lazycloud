@@ -7,13 +7,18 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Protocol, runtime_checkable
 from urllib.parse import urlparse
-from uuid import uuid4
 
 from networking.internal_http import InternalHttpClient, InternalHttpError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.checkpoints import AutomaticCheckpointCreationLease, CheckpointRecord
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
+from shared.funding import FundingPermit
+from shared.http.worker_funding import (
+    WorkerFundingRequest,
+    WorkerUsageWindowRequest,
+    WorkerUsageWindowResponse,
+)
 from shared.http.worker_network import WorkerEgressPolicy, WorkerEgressPolicyRequest
 from shared.image_building.records import BuildStatus
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsPayload
@@ -39,7 +44,7 @@ from shared.source_cache_cleanup import (
     SourceCacheCleanupTargetRecord,
     WorkerCacheGenerationState,
 )
-from shared.usage import UsageMetric, UsageRecord, UsageUnit
+from shared.usage import UsageRecord
 from shared.worker_events import WorkerEventRecord
 
 from worker.checkpoints import CheckpointStatePayload
@@ -112,8 +117,6 @@ from worker.repository_payloads import (
     PublishContainerMetricsResponse,
     PublishWorkerEventRequest,
     PublishWorkerEventResponse,
-    RecordWorkerUsageRequest,
-    RecordWorkerUsageResponse,
     ReleaseAutomaticCheckpointLeaseRequest,
     ReleaseAutomaticCheckpointLeaseResponse,
     RemoveContainerIpRequest,
@@ -742,14 +745,24 @@ class WorkerRepositoryHttpClient:
             PublishWorkerEventResponse,
         )
 
-    def record_worker_usage(
+    def record_worker_usage_window(
         self,
-        request: RecordWorkerUsageRequest,
-    ) -> RecordWorkerUsageResponse:
+        request: WorkerUsageWindowRequest,
+    ) -> WorkerUsageWindowResponse:
         return self._post_model(
-            "/worker-repository/record-worker-usage",
+            "/worker-repository/record-worker-usage-window",
             request,
-            RecordWorkerUsageResponse,
+            WorkerUsageWindowResponse,
+        )
+
+    def authorize_container_funding(self, request: WorkerFundingRequest) -> FundingPermit:
+        return self._post_model(
+            "/worker-repository/authorize-container-funding", request, FundingPermit
+        )
+
+    def renew_container_funding(self, request: WorkerFundingRequest) -> FundingPermit:
+        return self._post_model(
+            "/worker-repository/renew-container-funding", request, FundingPermit
         )
 
     def publish_container_lifecycle(
@@ -906,6 +919,8 @@ class RemoteSchedulerWorkerRepository:
         request: WorkerExecutionRequest,
         result: WorkerImageBuildExecutionResult,
     ) -> None:
+        if result.exited_at is None:
+            raise WorkerRepositoryClientError("image build result lacks its measured exit time")
         for after in range(0, len(result.logs), 256):
             self.report_image_build_progress(
                 request, after=after, logs=result.logs[after : after + 256]
@@ -918,6 +933,7 @@ class RemoteSchedulerWorkerRepository:
                 build_id=result.build_id,
                 image_id=result.image_id,
                 status=BuildStatus.Complete if result.ok else BuildStatus.Failed,
+                exited_at=result.exited_at,
                 object_key=result.object_key,
                 archive_size_bytes=result.archive_size_bytes,
                 archive_sha256=result.archive_sha256,
@@ -1185,6 +1201,7 @@ class RemoteSchedulerContainerRepository:
         container_id: str,
         exit_code: int,
         *,
+        exited_at: datetime,
         termination_reason: StopContainerReason = StopContainerReason.Unknown,
         failed_phase: ContainerExecutionPhase | None = None,
         failure_detail: str = "",
@@ -1193,6 +1210,7 @@ class RemoteSchedulerContainerRepository:
             SetContainerExitCodeRequest(
                 container_id=container_id,
                 exit_code=exit_code,
+                exited_at=exited_at,
                 termination_reason=termination_reason,
                 failed_phase=failed_phase,
                 failure_detail=failure_detail,
@@ -1470,35 +1488,8 @@ class RemoteWorkerEventSink:
 class RemoteWorkerUsageRecorder:
     client: WorkerRepositoryHttpClient
 
-    def record(
-        self,
-        *,
-        id: str | None = None,
-        workspace_id: str,
-        resource_type: str,
-        resource_id: str,
-        metric: UsageMetric,
-        quantity: float,
-        unit: UsageUnit,
-        labels: dict[str, str] | None = None,
-        metadata: dict[str, JsonValue] | None = None,
-    ) -> UsageRecord:
-        record = UsageRecord(
-            id=id or str(uuid4()),
-            workspace_id=workspace_id,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            metric=metric,
-            quantity=quantity,
-            unit=unit,
-            labels=labels or {},
-            metadata=metadata or {},
-        )
-        response = self.client.record_worker_usage(RecordWorkerUsageRequest(record=record))
-        if response.record is None:
-            msg = f"usage record {record.id!r} was not returned by repository"
-            raise WorkerRepositoryClientError(msg)
-        return response.record
+    def record_window(self, request: WorkerUsageWindowRequest) -> tuple[UsageRecord, ...]:
+        return self.client.record_worker_usage_window(request).records
 
 
 @dataclass(slots=True)

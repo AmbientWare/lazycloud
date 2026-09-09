@@ -4,7 +4,6 @@ import logging
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
 from enum import StrEnum
 from time import monotonic
 from typing import Literal, Protocol
@@ -13,6 +12,8 @@ from shared.container_requests import (
     StopContainerReason,
     WorkerContainerRequestPayload,
     WorkerStartupKind,
+    container_cpu_ceiling_millicores,
+    container_memory_ceiling_mib,
     container_memory_limit_mib,
 )
 from shared.contracts import ContractModel
@@ -35,11 +36,14 @@ from worker.container_execution import (
 )
 from worker.events import ContainerRequestContext
 from worker.finalization import ContainerFinalizationRepository
+from worker.funding import WorkerFundingSupervisor
 from worker.image_build_execution import (
     WorkerImageBuildExecutionResult,
     is_image_build_scheduler_request,
 )
+from worker.image_build_metering import ImageBuildMetering
 from worker.image_build_requests import IMAGE_BUILD_REQUEST_KIND
+from worker.image_build_resources import ImageBuildResources
 from worker.memory_pressure import ResidentContainer
 from worker.monitoring import WorkerUsageWindowRecorder
 from worker.runtime_config import absolute_container_cgroup_path
@@ -114,7 +118,9 @@ class WorkerSchedulerRequestLifecycle(Protocol):
 
 
 class WorkerSchedulerRequestImageBuildExecutor(Protocol):
-    def execute(self, request: WorkerExecutionRequest) -> WorkerImageBuildExecutionResult: ...
+    def execute(
+        self, request: WorkerExecutionRequest, *, resources: ImageBuildResources
+    ) -> WorkerImageBuildExecutionResult: ...
 
     def read_logs(self, container_id: str, *, after: int, limit: int = 256) -> list[str]: ...
 
@@ -200,6 +206,7 @@ class WorkerSchedulerRequestProcessor:
     containers: WorkerSchedulerRequestContainerRepository
     execution: WorkerSchedulerRequestExecutionService
     worker_gpu_type: str
+    funding: WorkerFundingSupervisor
     """The GPU model this worker's machine declares it holds, empty on a CPU host.
 
     No default: it is what every container this worker runs is billed for, and a
@@ -681,6 +688,7 @@ class WorkerSchedulerRequestProcessor:
                 self.containers.set_exit_code(
                     request.container_id,
                     1,
+                    exited_at=utc_now(),
                     termination_reason=StopContainerReason.Unknown,
                 )
                 self.containers.update_container_status(
@@ -843,21 +851,6 @@ class WorkerSchedulerRequestProcessor:
         image_builds: WorkerSchedulerRequestImageBuildExecutor,
         usage_recorder: WorkerUsageWindowRecorder,
     ) -> WorkerImageBuildExecutionResult:
-        """Run the build and bill the capacity it held while it ran.
-
-        A build that fails held the same cpu, memory and card as one that
-        succeeds, for as long as it ran, so the window is reported whichever way
-        it ends and whatever it produced. Reported before the container is
-        marked finished, so the window closes inside the lifetime the control
-        plane holds rather than an instant past it.
-
-        The window is measured monotonically and the wall-clock end derived from
-        it, so the quantity billed and the interval it is priced over cannot
-        disagree when the host's clock steps.
-        """
-
-        started_at = monotonic()
-        started_at_utc = utc_now()
         stop_progress = threading.Event()
         reporter = self.image_build_results
         if reporter is None:
@@ -883,37 +876,42 @@ class WorkerSchedulerRequestProcessor:
         progress = threading.Thread(
             target=report_progress, name=f"build-progress-{request.container_id}", daemon=True
         )
-        progress.start()
+        resources = ImageBuildResources.create(
+            request.container_id,
+            cpu_millicores=container_cpu_ceiling_millicores(
+                request.cpu_millicores,
+                node_cpu_millicores=self.node_cpu_millicores,
+            ),
+            memory_mib=container_memory_ceiling_mib(
+                request.memory_mib,
+                node_memory_mib=self.node_memory_mib,
+            ),
+        )
         try:
-            return image_builds.execute(request)
+            funding = self.funding.begin(request.container_id, stop=resources.stop)
+            resources.funding = funding
+            try:
+                metering = ImageBuildMetering(
+                    resources,
+                    image_build_request_context(request, worker_gpu_type=self.worker_gpu_type),
+                    usage_recorder,
+                )
+                metering.start()
+                progress.start()
+                try:
+                    resources.require_valid()
+                    result = image_builds.execute(request, resources=resources)
+                finally:
+                    resources.quiesce()
+                    exited_at = metering.close()
+                return result.model_copy(update={"exited_at": exited_at})
+            finally:
+                funding.close()
         finally:
             stop_progress.set()
-            progress.join()
-            duration_ms = max(int((monotonic() - started_at) * 1000), 1)
-            try:
-                usage_recorder.record_usage_window(
-                    image_build_request_context(
-                        request,
-                        worker_gpu_type=self.worker_gpu_type,
-                    ),
-                    duration_ms=duration_ms,
-                    window_start_ms=0,
-                    window_end_ms=duration_ms,
-                    metering_window_started_at=started_at_utc,
-                    metering_window_ended_at=started_at_utc + timedelta(milliseconds=duration_ms),
-                )
-            except Exception:
-                # The control plane holds the durable trace through the worker
-                # event the recorder publishes; losing it must not also lose the
-                # build's own result.
-                LOGGER.warning(
-                    "image build usage window was not recorded",
-                    exc_info=True,
-                    extra={
-                        "container_id": request.container_id,
-                        "duration_ms": duration_ms,
-                    },
-                )
+            if progress.ident is not None:
+                progress.join(timeout=1)
+            resources.close()
 
     def _drop_request(
         self,

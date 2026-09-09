@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
 from pydantic import Field
 from shared.contracts import ContractModel
 from shared.scheduling import ContainerStatusUpdatePlan, SchedulerContainerStatus
+from shared.timestamps import utc_now
 
 from worker.events import (
     ContainerExecutionPhase,
@@ -53,6 +55,7 @@ class ContainerFinalizationRepository(ContainerStatusUpdater, Protocol):
         container_id: str,
         exit_code: int,
         *,
+        exited_at: datetime,
         termination_reason: StopContainerReason,
         failed_phase: ContainerExecutionPhase | None = None,
         failure_detail: str = "",
@@ -86,6 +89,7 @@ class ContainerFinalizationCleanup(Protocol):
 class ContainerFinalizationRequest(ContractModel):
     request: ContainerRequestContext
     exit_code: int
+    exited_at: datetime = Field(default_factory=utc_now)
     stop_reason: StopContainerReason = StopContainerReason.Unknown
     oom_killed: bool = False
     failed_phase: ContainerExecutionPhase | None = None
@@ -143,6 +147,7 @@ class WorkerContainerFinalizationService:
                 lambda: self.repository.set_exit_code(
                     plan.container_id,
                     plan.normalized_exit_code,
+                    exited_at=request.exited_at,
                     termination_reason=plan.stop_reason,
                     failed_phase=plan.failed_phase,
                     failure_detail=plan.failure_detail,

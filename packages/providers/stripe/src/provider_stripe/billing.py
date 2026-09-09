@@ -8,7 +8,8 @@ from decimal import Decimal, InvalidOperation
 import httpx
 from pydantic import ConfigDict, Field
 from shared.billing_plans import BillingPlanId
-from shared.errors import InvalidInputError, UpstreamUnavailableError
+from shared.credit_payments import CreditPayment, CreditPaymentStatus, CreditPurchaseCheckout
+from shared.errors import InvalidInputError, PaymentRequiredError, UpstreamUnavailableError
 from shared.payments import (
     BILLING_CURRENCY,
     HostedPaymentSession,
@@ -120,6 +121,63 @@ rather than the new one they asked for.
 
 class _Customer(StripeObject):
     id: str = Field(min_length=1)
+
+
+class _CreditCheckout(StripeObject):
+    id: str
+    customer: str
+    client_reference_id: str
+    payment_intent: str | None
+    url: str | None
+    expires_at: int
+    status: str
+
+
+class _InvoicePaymentSettings(StripeObject):
+    default_payment_method: str | None
+
+
+class _CreditCustomer(StripeObject):
+    invoice_settings: _InvoicePaymentSettings
+
+
+class _CreditCharge(StripeObject):
+    id: str
+    payment_intent: str
+    amount_captured: int = Field(ge=0, strict=True)
+    amount_refunded: int = Field(ge=0, strict=True)
+    paid: bool
+    captured: bool
+    disputed: bool
+
+
+class _CreditPaymentError(StripeObject):
+    code: str = ""
+
+
+class _CreditIntent(StripeObject):
+    id: str
+    customer: str
+    currency: str
+    amount: int = Field(gt=0, strict=True)
+    amount_received: int = Field(ge=0, strict=True)
+    status: str
+    metadata: dict[str, str]
+    latest_charge: _CreditCharge | None
+    last_payment_error: _CreditPaymentError | None = None
+
+
+class _CreditDispute(StripeObject):
+    id: str
+    charge: str
+    currency: str
+    amount: int = Field(gt=0, strict=True)
+    status: str
+
+
+class _CreditDisputes(StripeObject):
+    data: list[_CreditDispute]
+    has_more: bool
 
 
 class _HostedSession(StripeObject):
@@ -300,6 +358,182 @@ class StripeBilling:
     """
 
     client: httpx.Client
+
+    def create_credit_purchase_checkout(
+        self,
+        *,
+        provider_customer_id: str,
+        purchase_id: str,
+        amount_nanos: int,
+        success_url: str,
+        cancel_url: str,
+    ) -> CreditPurchaseCheckout:
+        amount_cents = cents(amount_nanos)
+        if amount_cents <= 0:
+            raise InvalidInputError("credit purchases must have a positive amount")
+        session = read(
+            _CreditCheckout,
+            self.client,
+            "POST",
+            "/checkout/sessions",
+            data=[
+                ("mode", "payment"),
+                ("customer", provider_customer_id),
+                ("client_reference_id", purchase_id),
+                ("metadata[credit_purchase_id]", purchase_id),
+                ("payment_intent_data[metadata][credit_purchase_id]", purchase_id),
+                ("payment_method_types[0]", "card"),
+                ("line_items[0][price_data][currency]", BILLING_CURRENCY.lower()),
+                ("line_items[0][price_data][unit_amount]", str(amount_cents)),
+                ("line_items[0][price_data][product_data][name]", "Compute and storage credit"),
+                ("line_items[0][quantity]", "1"),
+                ("success_url", success_url),
+                ("cancel_url", cancel_url),
+            ],
+            idempotency_key=f"credit-checkout-{purchase_id}",
+        )
+        return _credit_checkout(session)
+
+    def credit_purchase_checkout(self, *, provider_session_id: str) -> CreditPurchaseCheckout:
+        return _credit_checkout(
+            read(_CreditCheckout, self.client, "GET", f"/checkout/sessions/{provider_session_id}")
+        )
+
+    def create_credit_purchase_payment(
+        self, *, provider_customer_id: str, purchase_id: str, amount_nanos: int
+    ) -> CreditPayment:
+        amount_cents = cents(amount_nanos)
+        if amount_cents <= 0:
+            raise InvalidInputError("credit purchases must have a positive amount")
+        customer = read(_CreditCustomer, self.client, "GET", f"/customers/{provider_customer_id}")
+        payment_method = customer.invoice_settings.default_payment_method
+        if payment_method is None:
+            raise PaymentRequiredError("save a default payment method before automatic reload")
+        intent = read(
+            _CreditIntent,
+            self.client,
+            "POST",
+            "/payment_intents",
+            data=[
+                ("customer", provider_customer_id),
+                ("amount", str(amount_cents)),
+                ("currency", BILLING_CURRENCY.lower()),
+                ("payment_method", payment_method),
+                ("payment_method_types[0]", "card"),
+                ("capture_method", "automatic"),
+                ("metadata[credit_purchase_id]", purchase_id),
+                ("expand[]", "latest_charge"),
+            ],
+            idempotency_key=f"credit-payment-{purchase_id}",
+        )
+        return self._credit_payment(intent)
+
+    def confirm_credit_purchase_payment(self, *, provider_payment_id: str) -> CreditPayment:
+        try:
+            send(
+                self.client,
+                "POST",
+                f"/payment_intents/{provider_payment_id}/confirm",
+                data=[("off_session", "true")],
+                idempotency_key=f"credit-confirm-{provider_payment_id}",
+            )
+        except InvalidInputError:
+            # A declined card is an HTTP error; the persisted intent tells the
+            # domain whether to ask for authentication or a different card.
+            result = self.credit_purchase_payment(provider_payment_id=provider_payment_id)
+            if result.status not in {
+                CreditPaymentStatus.Declined,
+                CreditPaymentStatus.ActionRequired,
+                CreditPaymentStatus.Succeeded,
+            }:
+                raise
+            return result
+        return self.credit_purchase_payment(provider_payment_id=provider_payment_id)
+
+    def credit_purchase_payment(self, *, provider_payment_id: str) -> CreditPayment:
+        intent = read(
+            _CreditIntent,
+            self.client,
+            "GET",
+            f"/payment_intents/{provider_payment_id}",
+            params=[("expand[]", "latest_charge")],
+        )
+        return self._credit_payment(intent)
+
+    def _credit_payment(self, intent: _CreditIntent) -> CreditPayment:
+        statuses = {
+            "requires_confirmation": CreditPaymentStatus.Pending,
+            "processing": CreditPaymentStatus.Pending,
+            "requires_capture": CreditPaymentStatus.Pending,
+            "requires_payment_method": CreditPaymentStatus.Declined,
+            "requires_action": CreditPaymentStatus.ActionRequired,
+            "canceled": CreditPaymentStatus.Cancelled,
+            "succeeded": CreditPaymentStatus.Succeeded,
+        }
+        status = statuses.get(intent.status)
+        if (
+            status is CreditPaymentStatus.Declined
+            and intent.last_payment_error is not None
+            and intent.last_payment_error.code == "authentication_required"
+        ):
+            status = CreditPaymentStatus.ActionRequired
+        purchase_id = intent.metadata.get("credit_purchase_id", "")
+        if intent.currency.upper() != BILLING_CURRENCY or status is None or not purchase_id:
+            raise UpstreamUnavailableError("Stripe payment lacks valid credit purchase evidence")
+        charge = intent.latest_charge
+        if charge is not None and charge.payment_intent != intent.id:
+            raise UpstreamUnavailableError("Stripe charge does not belong to the credit payment")
+        if status is CreditPaymentStatus.Succeeded and (
+            charge is None
+            or not charge.paid
+            or not charge.captured
+            or charge.amount_captured != intent.amount_received
+        ):
+            raise UpstreamUnavailableError("Stripe credit payment lacks a matching captured charge")
+        disputed = 0
+        if charge is not None and charge.disputed:
+            cursor = ""
+            seen: set[str] = set()
+            while True:
+                params = [("charge", charge.id), ("limit", "100")]
+                if cursor:
+                    params.append(("starting_after", cursor))
+                page = read(_CreditDisputes, self.client, "GET", "/disputes", params=params)
+                for dispute in page.data:
+                    if (
+                        dispute.id in seen
+                        or dispute.charge != charge.id
+                        or dispute.currency.upper() != BILLING_CURRENCY
+                    ):
+                        raise UpstreamUnavailableError("Stripe dispute evidence does not reconcile")
+                    seen.add(dispute.id)
+                    if dispute.status in {"needs_response", "under_review", "lost"}:
+                        disputed += dispute.amount
+                    elif dispute.status not in {
+                        "won",
+                        "warning_needs_response",
+                        "warning_under_review",
+                        "warning_closed",
+                    }:
+                        raise UpstreamUnavailableError("Stripe returned an unknown dispute status")
+                if not page.has_more:
+                    break
+                if not page.data:
+                    raise UpstreamUnavailableError("Stripe dispute pagination made no progress")
+                cursor = page.data[-1].id
+            if not seen:
+                raise UpstreamUnavailableError("Stripe disputed charge has no dispute evidence")
+        return CreditPayment(
+            provider_payment_id=intent.id,
+            provider_customer_id=intent.customer,
+            purchase_id=purchase_id,
+            status=status,
+            amount_nanos=intent.amount * NANOS_PER_CENT,
+            received_nanos=intent.amount_received * NANOS_PER_CENT,
+            refunded_nanos=(charge.amount_refunded if charge else 0) * NANOS_PER_CENT,
+            disputed_nanos=disputed * NANOS_PER_CENT,
+            confirmation_required=intent.status == "requires_confirmation",
+        )
 
     def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
         """Register a payer, for as long as Stripe remembers the key, only once.
@@ -933,6 +1167,20 @@ def _page_cursor(ids: list[str], has_more: bool, seen: set[str]) -> str:
         raise UpstreamUnavailableError("Stripe returned an incomplete or repeated history page")
     seen.update(ids)
     return ids[-1] if ids else ""
+
+
+def _credit_checkout(session: _CreditCheckout) -> CreditPurchaseCheckout:
+    if session.status not in {"open", "complete", "expired"}:
+        raise UpstreamUnavailableError("Stripe returned an unknown checkout status")
+    return CreditPurchaseCheckout(
+        provider_session_id=session.id,
+        provider_customer_id=session.customer,
+        purchase_id=session.client_reference_id,
+        provider_payment_id=session.payment_intent or "",
+        url=session.url,
+        expires_at=datetime.fromtimestamp(session.expires_at, UTC),
+        expired=session.status == "expired",
+    )
 
 
 def _monetary_nanos(amount: _GrantAmount) -> int:

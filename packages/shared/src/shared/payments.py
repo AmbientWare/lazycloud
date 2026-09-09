@@ -9,6 +9,7 @@ from pydantic import Field
 from shared.billing_plans import BillingPlanId
 from shared.billing_quotes import BilledDimension
 from shared.contracts import ContractModel
+from shared.credit_payments import CreditPayment, CreditPurchaseCheckout
 from shared.enums import StringEnum
 
 BILLING_CURRENCY = "USD"
@@ -86,6 +87,9 @@ class PaymentEvent(ContractModel):
 
     payment_method_id: str = Field(default="", max_length=255)
     """The instrument a delivery says was saved, empty on everything else."""
+
+    payment_id: str = Field(default="", max_length=255)
+    credit_purchase_id: str = Field(default="", max_length=255)
 
 
 class ProviderSubscription(ContractModel):
@@ -208,19 +212,37 @@ class HostedPaymentSession(ContractModel):
     url: str = Field(min_length=1, max_length=2048)
 
 
-class PaymentProvider(Protocol):
-    """Where the money side of the relationship lives.
+class CreditPurchasePaymentProvider(Protocol):
+    """Provider payment evidence for purchased prepaid credit."""
 
-    Provider-neutral by construction: who pays, the pages they manage their card
-    on, which instrument their charges go to, what they are subscribed to, what
-    their plan includes, and the usage reported against them. The subscription,
-    the allowance, the invoice and the retries when a card is refused are all the
-    provider's — collection machinery written on this side would be a second
-    implementation of a system that already exists.
+    def create_credit_purchase_checkout(
+        self,
+        *,
+        provider_customer_id: str,
+        purchase_id: str,
+        amount_nanos: int,
+        success_url: str,
+        cancel_url: str,
+    ) -> CreditPurchaseCheckout: ...
 
-    Nothing here names a catalog object. A caller names a plan and the adapter
-    resolves it against its own published catalog, so no caller has to hold a
-    provider's identifiers to put somebody on one.
+    def credit_purchase_checkout(self, *, provider_session_id: str) -> CreditPurchaseCheckout: ...
+
+    def create_credit_purchase_payment(
+        self, *, provider_customer_id: str, purchase_id: str, amount_nanos: int
+    ) -> CreditPayment:
+        """Create an unconfirmed payment; persist its identity before confirmation."""
+        ...
+
+    def confirm_credit_purchase_payment(self, *, provider_payment_id: str) -> CreditPayment: ...
+
+    def credit_purchase_payment(self, *, provider_payment_id: str) -> CreditPayment: ...
+
+
+class SubscriptionPaymentProvider(Protocol):
+    """Customer relationships, subscriptions and their invoiced usage.
+
+    Callers name published plans; the adapter resolves its catalog identifiers.
+    Paid invoice lines are funding evidence, while a saved card is not.
     """
 
     def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
@@ -459,9 +481,14 @@ class PaymentProvider(Protocol):
         ...
 
 
+class PaymentProvider(SubscriptionPaymentProvider, CreditPurchasePaymentProvider, Protocol):
+    """The payment adapter composed by application processes."""
+
+
 __all__ = [
     "BILLING_CURRENCY",
     "METER_EVENT_NAMES",
+    "CreditPurchasePaymentProvider",
     "HostedPaymentSession",
     "PaymentCustomer",
     "PaymentEvent",
@@ -472,5 +499,6 @@ __all__ = [
     "ProviderInvoice",
     "ProviderPaidSubscriptionPeriod",
     "ProviderSubscription",
+    "SubscriptionPaymentProvider",
     "SubscriptionProration",
 ]

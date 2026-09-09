@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from urllib.parse import urlparse
+from uuid import UUID
 
 from billing.costs import (
     MAX_COST_PAGE,
@@ -10,10 +11,13 @@ from billing.costs import (
     UsageCostSeries,
     UsageCostService,
 )
+from billing.purchases import CreditPurchaseService
 from database.repositories.billing_costs import PayerCostScope
 from fastapi import APIRouter, Depends, Query, status
 from shared.billing_rate_card import published_plan
+from shared.credit_payments import CreditPurchaseKind
 from shared.errors import InvalidInputError
+from shared.funding import FundingBalance
 from shared.http.billing import (
     BillingAccountAdminListResponse,
     BillingAccountAdminResponse,
@@ -25,6 +29,10 @@ from shared.http.billing import (
     BillingPlanChangeRequest,
     BillingPlanResponse,
     BillingSummaryResponse,
+    CreditBalanceResponse,
+    CreditPurchaseRequest,
+    CreditPurchaseResponse,
+    CreditSummaryResponse,
 )
 from shared.http.pricing import PlanEntitlementsResponse
 from shared.http.usage import (
@@ -56,6 +64,67 @@ from billing import (
 )
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
+
+
+@router.get("/credits", response_model=CreditSummaryResponse, operation_id="get_credit_balance")
+def get_credit_balance(
+    user_id: read_user,
+    services: ApiServices = Depends(current_services),
+) -> CreditSummaryResponse:
+    with services.context.database.session() as session:
+        summary = BillingStandingService(session).credit_balance(user_id=user_id, at=utc_now())
+    return CreditSummaryResponse(
+        ready=summary.ready,
+        compute=_credit_balance_response(summary.compute),
+        storage_and_transfer=_credit_balance_response(summary.storage_and_transfer),
+    )
+
+
+def _credit_balance_response(balance: FundingBalance) -> CreditBalanceResponse:
+    return CreditBalanceResponse(
+        purchased_nanos=balance.credits.purchased_nanos,
+        subscription_nanos=balance.credits.subscription_nanos,
+        trial_nanos=balance.credits.trial_nanos,
+        held_nanos=balance.held_nanos,
+        debt_nanos=balance.debt_nanos,
+        available_nanos=balance.available_nanos,
+    )
+
+
+@router.post(
+    "/credit-purchases",
+    response_model=CreditPurchaseResponse,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="create_credit_purchase",
+)
+def create_credit_purchase(
+    request: CreditPurchaseRequest,
+    user_id: write_user,
+    services: ApiServices = Depends(current_services),
+) -> CreditPurchaseResponse:
+    return CreditPurchaseService(services.context.database, services.payment_provider).create(
+        user_id=user_id,
+        request_key=str(request.request_key),
+        amount_cents=request.amount_cents,
+        kind=CreditPurchaseKind.Manual,
+        success_url=_own_url(services, request.return_url),
+        cancel_url=_own_url(services, request.cancel_url or request.return_url),
+    )
+
+
+@router.get(
+    "/credit-purchases/{purchase_id}",
+    response_model=CreditPurchaseResponse,
+    operation_id="get_credit_purchase",
+)
+def get_credit_purchase(
+    purchase_id: UUID,
+    user_id: read_user,
+    services: ApiServices = Depends(current_services),
+) -> CreditPurchaseResponse:
+    return CreditPurchaseService(services.context.database, services.payment_provider).get(
+        user_id=user_id, purchase_id=str(purchase_id)
+    )
 
 
 @router.get(

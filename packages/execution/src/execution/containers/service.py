@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
 from database.repositories.apps import StubRepository
@@ -29,12 +29,15 @@ from observability.events import EventService
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import Field
 from shared.autoscaler_state import autoscaler_target_kind
+from shared.billing_quotes import ContainerShape
 from shared.container_requests import (
     ContainerShutdownTarget,
     OciRuntimeName,
     StopContainerReason,
     WorkerContainerRequestPayload,
     WorkerStartupKind,
+    container_cpu_ceiling_millicores,
+    container_memory_ceiling_mib,
 )
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
@@ -43,7 +46,7 @@ from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.events import EventLevel
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.image_building.records import BuildStatus
-from shared.placement import ProductRegion
+from shared.placement import ProductRegion, placement_rate_class
 from shared.scheduling import (
     SchedulerContainerCancellationResult,
     SchedulerContainerSubmitResult,
@@ -52,6 +55,7 @@ from shared.scheduling import (
 )
 from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
+from shared.usage import UsageBillingOwner
 
 from execution.admission import PaymentAdmission
 from execution.containers.planning import (
@@ -119,6 +123,11 @@ class ContainerCursorPayload(ContractModel):
 
 
 class PendingContainerReservation(ContractModel):
+    cpu_millicores: int = Field(ge=0, exclude=True)
+    memory_mib: int = Field(ge=0, exclude=True)
+    cpu_limit_millicores: int = Field(default=0, ge=0, exclude=True)
+    memory_limit_mib: int = Field(default=0, ge=0, exclude=True)
+    preemptible: bool = Field(default=False, exclude=True)
     region: ProductRegion | None = Field(default=None, exclude=True)
     availability_zone: str = Field(default="", exclude=True)
     id: str | None = None
@@ -138,6 +147,9 @@ class PendingContainerReservation(ContractModel):
     network_allow_list: list[str] = Field(default_factory=list)
     gpu: list[str] = Field(default_factory=list)
     gpu_count: int = Field(default=0, ge=0)
+    timeout_seconds: int = 0
+    expires_at: datetime | None = None
+    created_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -229,11 +241,53 @@ class ContainerService:
         values["status"] = ContainerStatus.Pending.value
         values["gpu"] = gpu
         values["gpu_count"] = gpu_count_for_capacity(gpu, reservation.gpu_count)
+        container_id = reservation.id or str(uuid4())
+        values["id"] = container_id
+        self._reserve_container_funding(session, reservation, container_id=container_id, gpu=gpu)
         return ContainerRepository(session).records.create(
             values,
             workspace_id=reservation.workspace_id,
             name=reservation.name,
             status=ContainerStatus.Pending.value,
+        )
+
+    def _reserve_container_funding(
+        self,
+        session: DatabaseSession,
+        reservation: PendingContainerReservation,
+        *,
+        container_id: str,
+        gpu: Sequence[str],
+    ) -> None:
+        rate_class = placement_rate_class(
+            pinned=bool(reservation.region or reservation.availability_zone),
+            preemptible=reservation.preemptible,
+        )
+        candidates = [
+            ContainerShape(
+                billing_owner=owner,
+                gpu_type=model,
+                cpu_millicores=reservation.cpu_millicores,
+                memory_mib=reservation.memory_mib,
+                gpu_count=gpu_count_for_capacity(gpu, reservation.gpu_count),
+                rate_class=rate_class,
+            )
+            for owner in (UsageBillingOwner.PlatformFleet, UsageBillingOwner.ConnectedCloud)
+            for model in (gpu or [""])
+        ]
+        self.payment_admission.reserve_container_funding(
+            session,
+            container_id=container_id,
+            workspace_id=reservation.workspace_id,
+            candidate_shapes=candidates,
+            cpu_ceiling_millicores=container_cpu_ceiling_millicores(
+                reservation.cpu_millicores,
+                limit_millicores=reservation.cpu_limit_millicores,
+            ),
+            memory_ceiling_mib=container_memory_ceiling_mib(
+                reservation.memory_mib,
+                limit_mib=reservation.memory_limit_mib,
+            ),
         )
 
     def reserve_image_build_container(
@@ -242,6 +296,9 @@ class ContainerService:
         container_id: str,
         workspace_id: str,
         image_id: str,
+        cpu_millicores: int,
+        memory_mib: int,
+        preemptible: bool,
     ) -> ContainerRecord:
         """Record the container an image build is about to run in.
 
@@ -267,19 +324,26 @@ class ContainerService:
             repository = ContainerRepository(session)
             repository.lock_reservation(container_id)
             existing = repository.get_across_workspaces(container_id)
+            reservation = PendingContainerReservation(
+                id=container_id,
+                name=f"image-build-{container_id}",
+                image=image_id,
+                command=[],
+                workspace_id=workspace_id,
+                cpu_millicores=cpu_millicores,
+                memory_mib=memory_mib,
+                preemptible=preemptible,
+            )
             if existing is not None:
                 if existing.workspace_id != workspace_id or existing.image != image_id:
                     raise ConflictError("image build container identity does not match")
+                self._reserve_container_funding(
+                    session, reservation, container_id=container_id, gpu=()
+                )
                 return existing
             record = self.reserve_pending(
                 session,
-                PendingContainerReservation(
-                    id=container_id,
-                    name=f"image-build-{container_id}",
-                    image=image_id,
-                    command=[],
-                    workspace_id=workspace_id,
-                ),
+                reservation,
             )
         self.publish_lifecycle_change(record, WorkspaceChangeType.Created)
         return record
@@ -337,6 +401,9 @@ class ContainerService:
                 session,
                 PendingContainerReservation(
                     name=name,
+                    cpu_millicores=cpu_millicores,
+                    memory_mib=memory_mib,
+                    preemptible=preemptible,
                     region=region,
                     availability_zone=availability_zone,
                     image=image,
@@ -429,6 +496,20 @@ class ContainerService:
         record: ContainerRecord,
         options: ContainerSchedulingOptions,
     ) -> SchedulerContainerSubmitResult:
+        submitted: SchedulerContainerSubmitResult | None = None
+        try:
+            request = self._scheduler_request(record, options)
+            submitted = self.scheduler.submit(request, ready_at=options.ready_at)
+            return submitted
+        finally:
+            if submitted is None or not submitted.accepted:
+                self.stop(record.id, reason=StopContainerReason.Scheduler)
+
+    def _scheduler_request(
+        self,
+        record: ContainerRecord,
+        options: ContainerSchedulingOptions,
+    ) -> SchedulerWorkerRequest:
         runtime_name, runtime_constraint = resolve_oci_runtime(
             runtime=options.runtime,
             runtime_class=options.runtime_class,
@@ -524,7 +605,7 @@ class ContainerService:
                     workspace_id=record.workspace_id,
                     target_kind=target_kind,
                 )
-        return self.scheduler.submit(request, ready_at=options.ready_at)
+        return request
 
     def _authorized_archive_sha256(self, image_id: str, *, workspace_id: str) -> str:
         """Archive digest for this image, resolved through the workspace's own authorization.
@@ -719,6 +800,7 @@ class ContainerService:
             current = containers.get_across_workspaces(container_id)
             if current is None:
                 raise NotFoundError(f"container not found: {container_id}")
+            self.payment_admission.cancel_container_funding(session, container_id=container_id)
             if current.status in TERMINAL_CONTAINER_STATUSES:
                 # The worker's report landed while this was deciding, and it
                 # says what actually happened: a full-payload write from the

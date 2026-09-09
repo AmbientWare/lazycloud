@@ -20,6 +20,7 @@ from shared.billing_rate_card import (
     published_metered_rate_card,
     published_placement_rates,
 )
+from shared.credit_payments import MAX_CREDIT_PURCHASE_CENTS, MIN_CREDIT_PURCHASE_CENTS
 from shared.gpu import NO_GPU, PLATFORM_GPU_TYPES, GpuType
 from shared.http.base import HttpModel
 from shared.payments import BILLING_CURRENCY
@@ -97,6 +98,11 @@ class PublishedPlacementRateResponse(HttpModel):
     compute_rates: list[PlacementComputeRateResponse]
 
 
+class CreditPurchaseTermsResponse(HttpModel):
+    minimum_cents: int = Field(gt=0)
+    maximum_cents: int = Field(gt=0)
+
+
 class PricingCatalogResponse(HttpModel):
     pricing_version: str
     metered_rates_effective_at: datetime
@@ -108,6 +114,7 @@ class PricingCatalogResponse(HttpModel):
     gpu_rates: list[PublishedGpuRateResponse]
     platform_rate: PublishedPlatformRateResponse
     placement_rates: list[PublishedPlacementRateResponse]
+    credit_purchase: CreditPurchaseTermsResponse
 
 
 def _entitlements_response(entitlements: PlanEntitlements) -> PlanEntitlementsResponse:
@@ -137,6 +144,10 @@ def pricing_catalog_response(*, at: datetime | None = None) -> PricingCatalogRes
     if fee_percent != fee_percent.to_integral_value():
         raise ValueError("the connected-cloud fee is not a whole percentage")
     return PricingCatalogResponse(
+        credit_purchase=CreditPurchaseTermsResponse(
+            minimum_cents=MIN_CREDIT_PURCHASE_CENTS,
+            maximum_cents=MAX_CREDIT_PURCHASE_CENTS,
+        ),
         pricing_version=active.pricing_version,
         metered_rates_effective_at=active.effective_at,
         currency=BILLING_CURRENCY,

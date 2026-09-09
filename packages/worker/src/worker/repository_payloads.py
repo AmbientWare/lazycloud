@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 from shared.checkpoints import CheckpointRecord
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
@@ -35,7 +35,6 @@ from shared.source_cache_cleanup import (
     SourceCacheCleanupTargetRecord,
     WorkerCacheGenerationState,
 )
-from shared.usage import UsageRecord
 from shared.worker_events import WorkerEventRecord
 
 from worker.checkpoints import CheckpointStatePayload
@@ -250,6 +249,7 @@ class UpdateContainerStatusResponse(WorkerRepositoryResponse):
 class SetContainerExitCodeRequest(ContractModel):
     container_id: str
     exit_code: int
+    exited_at: datetime
     termination_reason: StopContainerReason = StopContainerReason.Unknown
     # A container that died before or during its run phase carries the reason on the
     # same synchronous call that makes its task terminal. The asynchronous lifecycle
@@ -434,6 +434,7 @@ class ReportImageBuildResultRequest(ContractModel):
     build_id: str
     image_id: str
     status: BuildStatus
+    exited_at: AwareDatetime
     object_key: str = ""
     archive_size_bytes: int = Field(default=0, ge=0)
     archive_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
@@ -546,14 +547,6 @@ class PublishWorkerEventRequest(ContractModel):
 
 class PublishWorkerEventResponse(WorkerRepositoryResponse):
     record: WorkerEventRecord | None = None
-
-
-class RecordWorkerUsageRequest(ContractModel):
-    record: UsageRecord
-
-
-class RecordWorkerUsageResponse(WorkerRepositoryResponse):
-    record: UsageRecord | None = None
 
 
 class PublishContainerLifecycleRequest(ContractModel):

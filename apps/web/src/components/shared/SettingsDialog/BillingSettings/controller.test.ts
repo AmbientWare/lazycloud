@@ -187,6 +187,7 @@ function pricingCatalog(): PricingCatalog {
     metered_rates_effective_at: "2026-09-11T00:00:00Z",
     currency: "USD",
     connected_cloud_management_fee_percent: 8,
+    credit_purchase: { minimum_cents: 2000, maximum_cents: 100000 },
     no_payment_method: {
       included_nanos: 1_000_000_000,
       max_concurrent_cpu_containers: 10,

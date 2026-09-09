@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 
 import { useBillingSettingsController, type PlanOffer } from "./controller";
 import { PlanDialog } from "./PlanDialog";
+import { PrepaidCredit } from "./PrepaidCredit";
 
 /**
  * What this account is on, what it has left to spend, and how to change either.
@@ -89,9 +90,8 @@ export function BillingSettings({
               ) : null}
               {complimentary ? null : (
                 <p className="text-sm text-muted-foreground">
-                  {summary.payment_method_on_file
-                    ? "Usage beyond the included amount is invoiced monthly and charged to the card on file."
-                    : "Add a payment method to increase included compute and bill overages instead of stopping workloads. Payment details are stored by our payment provider, not LazyCloud."}
+                  Usage consumes your prepaid credit. Add credit before your balance runs out to
+                  keep workloads running.
                 </p>
               )}
               <div className="flex flex-wrap gap-2">
@@ -99,11 +99,6 @@ export function BillingSettings({
                   <>
                     <Button
                       size="sm"
-                      // Not disabled while a change is settling. A declined upgrade
-                      // holds an intent for hours, and locking the button would trap
-                      // the customer on a plan they are trying to leave. The server
-                      // refuses a second change with a conflict, which is a sentence
-                      // rather than a dead control.
                       disabled={controller.busy}
                       onClick={controller.openPlan}
                     >
@@ -121,10 +116,6 @@ export function BillingSettings({
                       ) : (
                         <CreditCard className="size-4" />
                       )}
-                      {/* The two states differ in what the button is for, not only in
-                      wording: with no card it is the thing that lifts the cap and
-                      stops work being killed, and with one saved it is a second
-                      card the hosted page will make the default. */}
                       {summary.payment_method_on_file
                         ? "Change payment method"
                         : "Add payment method"}
@@ -156,6 +147,7 @@ export function BillingSettings({
           )}
         </div>
       </Panel>
+      {summary && !complimentary ? <PrepaidCredit /> : null}
       <PlanDialog controller={controller} />
     </>
   );
@@ -258,9 +250,6 @@ function AllowanceMeter({
   allowance: NonNullable<BillingPlan["allowance"]>;
   currency: string;
 }) {
-  // Spending past the allowance is normal — the overage is billed rather than
-  // refused — so the bar fills and the figure beside it goes on counting rather
-  // than being clamped.
   const filled = allowance.allowance_nanos
     ? Math.min(100, (allowance.spent_nanos / allowance.allowance_nanos) * 100)
     : 100;

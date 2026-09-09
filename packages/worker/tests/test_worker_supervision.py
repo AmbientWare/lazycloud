@@ -8,6 +8,7 @@ from api.server.services import ApiServices
 from database.repositories.observability import UsageRepository
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.container_requests import StopContainerReason
+from shared.http.worker_funding import WorkerUsageWindowRequest
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
     METERING_WINDOW_STARTED_AT_METADATA_KEY,
@@ -76,33 +77,15 @@ class Stopper:
 @dataclass(slots=True)
 class MemoryUsageRecorder:
     records: list[UsageRecord] = field(default_factory=list)
+    repository: UsageRepository | None = None
 
-    def record(
-        self,
-        *,
-        id: str | None = None,
-        workspace_id: str,
-        resource_type: str,
-        resource_id: str,
-        metric: UsageMetric,
-        quantity: float,
-        unit: UsageUnit,
-        labels: dict[str, str] | None = None,
-        metadata: dict[str, JsonValue] | None = None,
-    ) -> UsageRecord:
-        record = UsageRecord(
-            id=id or f"usage-{len(self.records)}",
-            workspace_id=workspace_id,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            metric=metric,
-            quantity=quantity,
-            unit=unit,
-            labels=labels or {},
-            metadata=metadata or {},
+    def record_window(self, request: WorkerUsageWindowRequest) -> tuple[UsageRecord, ...]:
+        records = tuple(
+            self.repository.append(record) if self.repository is not None else record
+            for record in request.records
         )
-        self.records.append(record)
-        return record
+        self.records.extend(records)
+        return records
 
 
 def test_worker_supervision_handles_sandbox_oom_with_forced_stop() -> None:
@@ -190,7 +173,7 @@ def test_worker_supervision_records_usage_records(isolated_services: ApiServices
         service = WorkerSupervisionService(
             worker_id="worker-1",
             event_sink=sink,
-            usage_recorder=UsageRepository(session),
+            usage_recorder=MemoryUsageRecorder(repository=UsageRepository(session)),
         )
         request = ContainerRequestContext(
             container_id="ctr-1",
@@ -295,7 +278,7 @@ def test_worker_supervision_usage_windows_are_idempotent(
         service = WorkerSupervisionService(
             worker_id="worker-1",
             event_sink=sink,
-            usage_recorder=UsageRepository(session),
+            usage_recorder=MemoryUsageRecorder(repository=UsageRepository(session)),
         )
         request = ContainerRequestContext(
             container_id="ctr-1",
