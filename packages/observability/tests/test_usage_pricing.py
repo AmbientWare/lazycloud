@@ -727,15 +727,7 @@ def test_cost_priced_in_the_renewal_gap_lands_on_the_period_that_opens_over_it(
 def test_usage_of_a_complimentary_account_is_priced_and_its_meter_event_waived(
     isolated_services: ApiServices,
 ) -> None:
-    """A waived account's usage reaches the ledger and never reaches the provider.
-
-    Both halves matter. The segment is what the account and an administrator
-    read as what the usage cost, so it is priced like anyone else's. The outbox
-    row is written rather than skipped, and written as waived, because it is the
-    only record afterwards that this cost was never owed: the waiver on the
-    account can be withdrawn, and reconciliation reading the ledger against an
-    invoice with nothing on it would otherwise report money that never left.
-    """
+    """Waived usage remains visible to cost and reconciliation reports."""
 
     now = utc_now()
     with isolated_services.context.database.session() as session:
@@ -769,7 +761,9 @@ def test_usage_of_a_complimentary_account_is_priced_and_its_meter_event_waived(
     assert segments[0].cost_nanos == 4_096
     with isolated_services.context.database.session() as session:
         owed = session.scalars(
-            select(BillingMeterOutboxTable).where(BillingMeterOutboxTable.identifier == saved.id)
+            select(BillingMeterOutboxTable).where(
+                BillingMeterOutboxTable.usage_record_id == saved.id
+            )
         ).one()
         assert owed.status == "waived"
         assert owed.value_nanos == 4_096
