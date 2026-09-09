@@ -5,25 +5,12 @@ import { countLabel } from "@/lib/format";
 import { billingSummaryQueryOptions } from "@/lib/queries/billing";
 import { cn } from "@/lib/utils";
 
-/**
- * Why a container here was refused, when the reason belongs to the account.
- *
- * This page is one workspace's spend; concurrency limits belong to the
- * account, and the containers filling them may be in a workspace nobody is
- * looking at. Without this line the page has no answer to the only billing
- * question somebody asks while reading it. Everything that can be changed —
- * the plan, the card, the invoices — lives in settings, and this links there
- * rather than repeating it.
- *
- * The same query the settings section reads, so it costs no extra request.
- */
+// Account limits include containers in workspaces outside this page.
 export function AccountCeilingLine() {
   const summary = useQuery(billingSummaryQueryOptions());
   const data = summary.data;
   if (!data) return null;
   if (!data.plan) {
-    // No subscription is the state in which every container is refused, so this
-    // is exactly when the line has to say something.
     return (
       <p className="text-xs text-warning">
         No active plan. Subscribe in account settings to start containers.

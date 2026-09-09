@@ -108,62 +108,14 @@ class BillingAllowanceRepository:
         allowance_nanos: int,
         funded: bool,
     ) -> WrittenSubscriptionPeriod:
-        """Make this cycle's terms be these, reporting what that did to them.
+        """Record provider cycle bounds under the caller's billing account lock.
 
-        Bounds come from the provider's own cycle rather than a calendar month:
-        the included compute is what the subscription carries, so it has to start
-        and end when the subscription does or a customer gets two part allowances
-        at the seam.
+        Funded legacy periods keep their larger allowance. Local wallet callers
+        pass the amount issued from paid invoices with `funded=False`.
 
-        A cycle already on these terms is left alone, and one whose terms differ
-        — a plan changed part-way through — is re-termed in place so the spend
-        already counted against it survives.
-
-        An allowance a customer paid for is never reduced inside the period it
-        was stamped on. What they were given when the cycle opened is what they
-        spent against while it ran, and re-terming it downwards mid-cycle would
-        put the smaller figure in front of usage that was included when it
-        happened: the credit the provider applies at finalization would fall
-        short of the spend the plan had already covered, and the difference would
-        be invoiced. So a smaller figure is declined and the larger one kept,
-        which is the same rule `BillingAllowanceResponse` states to a customer —
-        the allowance is what the period opened on, not what the plan currently
-        includes. The end of the cycle is the provider's own and always takes the
-        new value.
-
-        `funded` is what separates that from the other reason terms shrink. An
-        account nobody can be charged for did not pay for the larger figure: it
-        was given on the expectation that somebody could be billed for whatever
-        was spent past it, and once that stops being true the platform is not
-        holding to it. Attaching a card and removing it again would otherwise
-        keep the larger allowance for the rest of the cycle — and every cycle
-        after, since each renewal re-terms from a period that still holds it —
-        which is the cardless bound removed by the one action a customer can take
-        freely. So an unfunded cycle takes the figure it is given, downwards
-        included, and a funded one keeps what it opened with.
-
-        The outcome is what the caller pairs with a grant at the provider. One
-        delivered renewal arrives as more than one delivery, so the period is
-        what settles which of them buys the allowance and which finds it already
-        bought — and opening a cycle is a different act from re-terming the one
-        in progress, because only the second has an outgoing grant to void.
-
-        The cycle this one follows is reported beside the outcome, because the
-        allowance bought here must not be reachable by the invoice that cycle
-        raises. These rows are the only record of it: the account row holds the
-        newest grant and forgets the one before, and a cycle re-termed part-way
-        through has an outgoing grant of its own that says nothing about what
-        came earlier.
-
-        A cycle opened for the first time starts with whatever the ledger already
-        priced inside it. Cost is priced on its own schedule and the cycle is
-        opened by a delivery, so usage between a cycle beginning at the provider
-        and this row existing has nowhere to be counted at the moment it is
-        priced; reading it back from the ledger here is what stops that spend
-        from being lost from the figure the customer is shown.
-
-        Concurrent callers are serialized by the account row lock each of them
-        takes first, which is also what makes the read-then-write below safe.
+        Backfill a new period's spend from the ledger because usage can arrive
+        before the renewal webhook. Return the preceding cycle's end so legacy
+        grant issuance can preserve its invoice settlement delay.
         """
 
         if period_ended_at <= period_started_at:

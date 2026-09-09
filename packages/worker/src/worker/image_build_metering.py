@@ -45,6 +45,7 @@ class ImageBuildMetering:
     _memory_byte_seconds: float = 0
     _ended_ms: int = 0
     _measurement_failed: bool = False
+    _delivery_deadline: float | None = None
 
     def start(self) -> None:
         self._previous_cpu, self._previous_memory = self.resources.counters()
@@ -59,14 +60,19 @@ class ImageBuildMetering:
 
     def close(self) -> datetime:
         self._stop.set()
-        if self._sampler is not None:
-            self._sampler.join()
-        if not self._measurement_failed and not self._finished.is_set():
-            self._sample(final=True)
-        self._finished.set()
-        self._ready.set()
-        if self._publisher is not None:
-            self._publisher.join(timeout=10)
+        try:
+            if self._sampler is not None:
+                self._sampler.join()
+            if not self._measurement_failed and not self._finished.is_set():
+                self._sample(final=True)
+        finally:
+            self._delivery_deadline = monotonic() + 10
+            self._finished.set()
+            self._ready.set()
+            if self._publisher is not None:
+                self._publisher.join(timeout=10)
+                if self._publisher.is_alive():
+                    self._report_pending_usage("image build usage delivery remains in flight")
         if self._measurement_failed:
             raise RuntimeError("image build resource measurement failed")
         return self.started_at + timedelta(milliseconds=self._ended_ms)
@@ -117,6 +123,7 @@ class ImageBuildMetering:
             self._ready.set()
 
     def _publish_loop(self) -> None:
+        final_failures = 0
         while True:
             self._ready.wait(1)
             self._ready.clear()
@@ -126,6 +133,9 @@ class ImageBuildMetering:
                 if self._finished.is_set():
                     return
                 continue
+            if self._delivery_deadline is not None and monotonic() >= self._delivery_deadline:
+                self._report_pending_usage("image build final usage delivery deadline reached")
+                return
             try:
                 result = self.recorder.record_usage_window(
                     self.request,
@@ -147,8 +157,21 @@ class ImageBuildMetering:
                     extra={"container_id": self.request.container_id},
                     exc_info=True,
                 )
+                if self._finished.is_set():
+                    final_failures += 1
+                    if final_failures >= 3:
+                        self._report_pending_usage("image build final usage retries exhausted")
+                        return
                 continue
             with self._lock:
                 self._windows.popleft()
                 if self._windows:
                     self._ready.set()
+
+    def _report_pending_usage(self, message: str) -> None:
+        with self._lock:
+            windows = [(window.start_ms, window.end_ms) for window in self._windows]
+        LOGGER.warning(
+            message,
+            extra={"container_id": self.request.container_id, "pending_windows_ms": windows},
+        )

@@ -579,25 +579,16 @@ class StripeBilling:
         )
 
     def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
-        """Register a payer, for as long as Stripe remembers the key, only once.
+        """Register a payer using the account's idempotency key.
 
-        Stripe keeps an idempotency key for 24 hours, which is why the identifier
-        is stored in the request that registered it rather than reconciled by a
-        later sweep: past that window a retry registers again and there is
-        nothing to recognise it by.
+        Persist the customer ID before Stripe's 24-hour idempotency window expires.
         """
 
         data = [
-            # Stripe is the system of record for who pays; this repository is the
-            # system of record for what they used. The workspace is stamped here
-            # so a payment reaching us out of band—a webhook, a dispute—can be
-            # traced back without a second lookup table.
+            # Associate provider-side payment investigations with the workspace.
             ("metadata[workspace_id]", workspace_id),
         ]
-        # Omitted rather than sent empty: an account whose identity provider
-        # exposes no verified address is a real one, and a customer with no email
-        # is the truthful record of that. An empty value is a value Stripe may
-        # reject, and a rejection here is a person who cannot register at all.
+        # Identity providers may omit a verified email address.
         if email:
             data.append(("email", email))
         customer = read(

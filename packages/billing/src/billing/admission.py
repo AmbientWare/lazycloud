@@ -76,13 +76,7 @@ class DatabaseBillingAdmission:
         region: ProductRegion | None = None,
         availability_zone: str = "",
     ) -> list[str]:
-        """The question above, plus what a container's own shape is bounded by.
-
-        Answers with the models to schedule rather than only yes or no, because
-        `any` is a request the plan narrows: a free account asking for whatever
-        the platform has must reach the scheduler naming the cards it may hold,
-        or the first offer taken would be hardware its plan does not sell it.
-        """
+        """Check funds and concurrency, resolving GPU wildcards against plan entitlements."""
 
         resolved = self._billable_account(session, workspace_id=workspace_id)
         if (
@@ -119,14 +113,7 @@ class DatabaseBillingAdmission:
         return models
 
     def assert_may_create_workspace(self, session: Session, *, owner_user_id: str) -> None:
-        """Refuse an account a workspace beyond what its plan comes with.
-
-        The first workspace is allowed before anything is known about the
-        account, because sign-in provisions it before billing exists: gated on
-        terms, a new customer's very first workspace would be refused for an
-        account that is a few statements away from having a subscription, and
-        the sign-in that was meant to create both would leave neither.
-        """
+        """Allow the first workspace before sign-in provisions billing."""
 
         owned = WorkspaceMemberRepository(session).owned_workspace_count(owner_user_id)
         if owned == 0:
@@ -167,14 +154,7 @@ class DatabaseBillingAdmission:
         workspace_id: str,
         email: str,
     ) -> None:
-        """Whether an offer to this address could be honoured if it were accepted now.
-
-        An open offer holds a seat: five invitations against one free seat would
-        send five emails and refuse four people at the door, and the refusal
-        should land on the administrator who can act on it. An address already
-        seated in one of this owner's workspaces takes no new seat, the same
-        allowance adding that account by id gets.
-        """
+        """Count open invitations as seats so acceptance cannot exceed the plan."""
         resolved = self._billable_account(session, workspace_id=workspace_id)
         if resolved is None:
             return
@@ -267,25 +247,13 @@ class DatabaseBillingAdmission:
     def _billable_account(
         self, session: Session, *, workspace_id: str
     ) -> tuple[str, AccountTerms] | None:
-        """Whether this workspace's usage will reach an invoice somebody pays.
-
-        Returns the account and what it is allowed, so the caller that also has a
-        count to check does not read the same rows twice. `None` means there was
-        no account to judge rather than that one passed.
-        """
+        """Resolve the workspace payer and entitlements under the account lock."""
 
         owner = WorkspaceMemberRepository(session).owner(workspace_id)
         if owner is None:
-            # A workspace with no owner row is reachable by nobody, so there is
-            # no account to judge and nothing this can decide.
             return None
         account = BillingAccountRepository(session).get_by_user(owner.user_id, for_update=True)
         if account is not None and account.complimentary_since is not None:
-            # Nothing this runs is owed, so whether it would reach an invoice is
-            # not a question. What is still asked is how much may run at once,
-            # which is a bound on the platform's own exposure rather than on a
-            # bill, and the Team plan's figure is the one every waived account
-            # is held to.
             return owner.user_id, complimentary_terms()
         if account is None or not account.provider_subscription_id or account.plan is None:
             raise PaymentRequiredError(
@@ -328,14 +296,7 @@ class DatabaseBillingAdmission:
 
 
 def _admitted_gpu_models(gpu: Sequence[str], entitlements: PlanEntitlements) -> list[str]:
-    """The models a GPU request is to be scheduled with, or a refusal.
-
-    A request for `any` is answered with the plan's own models rather than
-    passed through, so the wildcard is resolved once here instead of by every
-    pool that later has to decide what an account may be offered. A request that
-    names models is answered with those models, because narrowing a stated
-    preference would run something other than what was asked for.
-    """
+    """Expand wildcards to allowed GPUs and reject disallowed explicit models."""
 
     offered = tuple(model.value for model in entitlements.allowed_gpu_types)
     named: list[str] = []
@@ -351,28 +312,20 @@ def _admitted_gpu_models(gpu: Sequence[str], entitlements: PlanEntitlements) -> 
                 f"{', '.join(offered)}. The Team plan runs every model the platform rents."
             )
         named.append(normalized)
-    # A count without a model is the wildcard said another way, and the plan
-    # narrows it the same.
+    # A GPU count without a model requests any allowed model.
     return named or list(offered)
 
 
 def _unofferable_gpu_violations(
     session: Session, *, user_id: str, target: BillingPlanId
 ) -> list[str]:
-    """What this account is running that the plan it is moving to does not sell.
-
-    Counted per model rather than per container, because the model is what the
-    customer has to act on: stopping some of six containers means nothing if the
-    card under them is the one the plan drops.
-    """
+    """Group incompatible running containers by GPU model for the refusal message."""
 
     offered = tuple(model.value for model in published_plan(target).entitlements.allowed_gpu_types)
     running: dict[str, int] = {}
     for record in ContainerRepository(session).live_gpu_containers_for_owner(owner_user_id=user_id):
         for entry in record.gpu:
             normalized = normalize_gpu_type(entry)
-            # A container that named no model, or asked for whatever was going,
-            # is holding a card the target plan can offer by definition.
             if normalized in (NO_GPU, GPU_ANY) or normalized in offered:
                 continue
             running[normalized] = running.get(normalized, 0) + 1
