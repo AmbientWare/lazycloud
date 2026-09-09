@@ -82,7 +82,6 @@ class SchedulerProcessResult:
     meter_events_abandoned_count: int = 0
     meter_events_abandoned_outstanding_count: int = 0
     meter_events_abandoned_outstanding_nanos: int = 0
-    meter_events_pruned: int = 0
     plan_changes_applied_count: int = 0
     plan_changes_not_applied_count: int = 0
     plan_changes_retried_count: int = 0
@@ -126,7 +125,6 @@ class SchedulerProcessResult:
             "meter_events_abandoned_outstanding_nanos": (
                 self.meter_events_abandoned_outstanding_nanos
             ),
-            "meter_events_pruned": self.meter_events_pruned,
             "plan_changes_applied_count": self.plan_changes_applied_count,
             "plan_changes_not_applied_count": self.plan_changes_not_applied_count,
             "plan_changes_retried_count": self.plan_changes_retried_count,
@@ -243,7 +241,6 @@ def run_scheduler(
                 meter_events_abandoned_outstanding_nanos=(
                     result.meter_events_abandoned_outstanding_nanos
                 ),
-                meter_events_pruned=result.meter_events_pruned,
                 plan_changes_applied_count=result.plan_changes_applied_count,
                 plan_changes_not_applied_count=result.plan_changes_not_applied_count,
                 plan_changes_retried_count=result.plan_changes_retried_count,

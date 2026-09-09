@@ -213,9 +213,6 @@ class SchedulerMeterOutboxService(Protocol):
 
     def abandoned_backlog(self) -> SchedulerAbandonedMeterEvents: ...
 
-    def prune(self, *, now: datetime | None = None, limit: int = 1_000) -> int: ...
-
-
 class SchedulerPlanChangeBatch(Protocol):
     @property
     def applied_count(self) -> int: ...
@@ -480,13 +477,6 @@ class Scheduler:
     last_email_prune_at: datetime | None = field(default=None, init=False)
     event_prune_interval_seconds: float = 3600.0
     last_event_prune_at: datetime | None = field(default=None, init=False)
-    meter_event_prune_interval_seconds: float = 3600.0
-    """Acknowledged outbox rows are deleted on a retention cadence, not on the
-    drain's. A row is settled the moment the provider takes it; how long the
-    evidence of that is kept afterwards is a retention question and nothing the
-    sending loop should spend a query on every tick."""
-
-    last_meter_event_prune_at: datetime | None = field(default=None, init=False)
     last_reported_abandoned_meter_events: int | None = field(default=None, init=False)
     """The outstanding abandoned figure the last line reported.
 
@@ -927,7 +917,6 @@ class Scheduler:
         meter_events = self._drain_meter_events(now=now)
         plan_changes = self._settle_plan_changes(now=now)
         billing_reconciliation = self._best_effort_reconcile_billing(now=now)
-        meter_events_pruned = self._best_effort_prune_meter_events(now=now)
         self._best_effort_deliver_email(now=now)
         self._best_effort_reconcile_custom_domains(now=now)
         expired_tokens_pruned = (
@@ -947,7 +936,6 @@ class Scheduler:
             meter_events_abandoned_count=meter_events.abandoned_count,
             meter_events_abandoned_outstanding_count=meter_events.abandoned_outstanding_count,
             meter_events_abandoned_outstanding_nanos=meter_events.abandoned_outstanding_nanos,
-            meter_events_pruned=meter_events_pruned,
             plan_changes_applied_count=plan_changes.applied_count,
             plan_changes_not_applied_count=plan_changes.not_applied_count,
             plan_changes_retried_count=plan_changes.retried_count,
@@ -1250,25 +1238,6 @@ class Scheduler:
             LOGGER.exception("scheduler email redaction failed")
             return
         self.last_email_prune_at = current
-
-    def _best_effort_prune_meter_events(self, *, now: datetime | None = None) -> int:
-        meter_outbox = self.maintenance.meter_outbox
-        if meter_outbox is None:
-            return 0
-        current = now or utc_now()
-        if (
-            self.last_meter_event_prune_at is not None
-            and (current - self.last_meter_event_prune_at).total_seconds()
-            < self.meter_event_prune_interval_seconds
-        ):
-            return 0
-        try:
-            pruned = meter_outbox.prune(now=current)
-        except Exception:
-            LOGGER.exception("scheduler meter event pruning failed")
-            return 0
-        self.last_meter_event_prune_at = current
-        return pruned
 
     def _best_effort_retain_artifacts(self, *, now: datetime | None = None) -> tuple[int, int]:
         retention = self.maintenance.retention
@@ -1807,7 +1776,6 @@ class SchedulerRunResult(ContractModel):
     meter_events_abandoned_count: int = 0
     meter_events_abandoned_outstanding_count: int = 0
     meter_events_abandoned_outstanding_nanos: int = 0
-    meter_events_pruned: int = 0
     plan_changes_applied_count: int = 0
     plan_changes_not_applied_count: int = 0
     plan_changes_retried_count: int = 0

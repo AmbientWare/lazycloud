@@ -529,6 +529,7 @@ version = "0.1.0"
 source = { editable = "apps/cli" }
 dependencies = [
     { name = "agent" },
+    { name = "billing" },
     { name = "boto3" },
     { name = "compute" },
     { name = "control" },
@@ -552,6 +553,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agent", editable = "packages/agent" },
+    { name = "billing", editable = "packages/billing" },
     { name = "boto3", specifier = ">=1.35,<2" },
     { name = "compute", editable = "packages/compute" },
     { name = "control", editable = "packages/control" },

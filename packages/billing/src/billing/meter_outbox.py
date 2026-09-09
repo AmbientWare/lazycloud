@@ -36,7 +36,6 @@ a second charge.
 """
 
 CLAIM_TTL = timedelta(minutes=5)
-SENT_RETENTION = timedelta(days=7)
 
 _RETRY_BASE = timedelta(seconds=5)
 _RETRY_CAP = timedelta(seconds=900)
@@ -155,20 +154,6 @@ class BillingMeterOutboxService:
         with self.database.session() as session:
             count, value_nanos = BillingMeterOutboxRepository(session).abandoned_total()
         return AbandonedMeterEvents(count=count, value_nanos=value_nanos)
-
-    def prune(self, *, now: datetime | None = None, limit: int = 1_000) -> int:
-        """Delete acknowledged rows past their retention, in one bounded batch.
-
-        Only the acknowledged ones. An abandoned row is the evidence of money
-        that never left, and it is kept until somebody has answered for it.
-        """
-
-        moment = to_utc(now or utc_now())
-        with self.database.session() as session:
-            return BillingMeterOutboxRepository(session).prune(
-                sent_before=moment - SENT_RETENTION,
-                limit=limit,
-            )
 
     def _reclaim(self, now: datetime) -> None:
         with self.database.session() as session:
@@ -324,7 +309,6 @@ __all__ = [
     "MAX_ATTEMPTS",
     "METER_EVENT_ABANDONED_ACTION",
     "METER_EVENT_RESOURCE_TYPE",
-    "SENT_RETENTION",
     "AbandonedMeterEvents",
     "BillingMeterOutboxService",
     "MeterEventDrainResult",

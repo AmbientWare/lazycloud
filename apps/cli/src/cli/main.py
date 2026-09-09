@@ -16,6 +16,7 @@ from cli.billing import billing_app
 from cli.components.errors import ADMIN_ERROR_POLICY
 from cli.control_plane import concurrency_app, stub_app, workspace_configure
 from cli.database import database_app
+from cli.economics import economics_app
 from cli.execution import events, invoke
 from cli.fleet import fleet_app
 from cli.identity import (
@@ -94,6 +95,7 @@ _ADMIN_GROUP_ORDER = (
     "client",
     "usage",
     "billing",
+    "economics",
     "example",
     "wireguard",
 )
@@ -140,6 +142,7 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.add_group("stub", stub_app)
     registry.add_group("concurrency", concurrency_app)
     registry.add_group("billing", billing_app)
+    registry.add_group("economics", economics_app)
     registry.add_group("database", database_app)
     registry.add_group("maintenance", maintenance_app)
     registry.add_group("release", release_app)
