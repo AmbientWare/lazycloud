@@ -125,7 +125,11 @@ function PlanCard({
       </p>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">{offer.summary}</p>
       <ul className="mt-4 flex-1 space-y-2 border-t border-border/80 pt-4 text-xs leading-5">
-        <PlanPoint>{exactDollars(offer.included_nanos)} compute included each month</PlanPoint>
+        <PlanPoint>
+          {offer.included_nanos > 0
+            ? `${exactDollars(offer.included_nanos)} compute included each month`
+            : "Pay for usage with prepaid credit"}
+        </PlanPoint>
         <PlanPoint>
           {countLabel(offer.entitlements.max_concurrent_cpu_containers, "CPU container")} running at
           once

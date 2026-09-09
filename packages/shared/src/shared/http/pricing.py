@@ -2,18 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import Field
 
 from shared.billing_plans import BillingPlanId
 from shared.billing_rate_card import (
     CONNECTED_CLOUD_MANAGEMENT_FEE,
-    NO_CARD_INCLUDED_NANOS,
     NO_CARD_MAX_CPU_CONTAINERS,
     NO_CARD_MAX_GPUS,
+    ONE_TIME_TRIAL_NANOS,
     PUBLISHED_METERED_RATE_HISTORY,
     PUBLISHED_PLANS,
     SECONDS_PER_30_DAY_MONTH,
+    TRIAL_VALIDITY_DAYS,
     AllGpuTypes,
     EntitlementLimit,
     PlanEntitlements,
@@ -55,7 +57,6 @@ class PublishedPlanResponse(HttpModel):
 
 
 class NoPaymentMethodTermsResponse(HttpModel):
-    included_nanos: int = Field(ge=0)
     max_concurrent_cpu_containers: int = Field(gt=0)
     max_concurrent_gpus: int = Field(gt=0)
 
@@ -103,7 +104,15 @@ class CreditPurchaseTermsResponse(HttpModel):
     maximum_cents: int = Field(gt=0)
 
 
+class TrialTermsResponse(HttpModel):
+    amount_nanos: int = Field(gt=0)
+    duration_days: int = Field(gt=0)
+    scope: Literal["compute"] = "compute"
+    one_time: Literal[True] = True
+
+
 class PricingCatalogResponse(HttpModel):
+    trial: TrialTermsResponse
     pricing_version: str
     metered_rates_effective_at: datetime
     currency: str = Field(pattern=r"^[A-Z]{3}$")
@@ -144,6 +153,10 @@ def pricing_catalog_response(*, at: datetime | None = None) -> PricingCatalogRes
     if fee_percent != fee_percent.to_integral_value():
         raise ValueError("the connected-cloud fee is not a whole percentage")
     return PricingCatalogResponse(
+        trial=TrialTermsResponse(
+            amount_nanos=ONE_TIME_TRIAL_NANOS,
+            duration_days=TRIAL_VALIDITY_DAYS,
+        ),
         credit_purchase=CreditPurchaseTermsResponse(
             minimum_cents=MIN_CREDIT_PURCHASE_CENTS,
             maximum_cents=MAX_CREDIT_PURCHASE_CENTS,
@@ -184,7 +197,6 @@ def pricing_catalog_response(*, at: datetime | None = None) -> PricingCatalogRes
         ],
         connected_cloud_management_fee_percent=int(fee_percent),
         no_payment_method=NoPaymentMethodTermsResponse(
-            included_nanos=NO_CARD_INCLUDED_NANOS,
             max_concurrent_cpu_containers=NO_CARD_MAX_CPU_CONTAINERS,
             max_concurrent_gpus=NO_CARD_MAX_GPUS,
         ),

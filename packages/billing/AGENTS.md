@@ -22,6 +22,12 @@ admission decision, credit funding and migration, and the sweep.
   an active subscription is not payment evidence. Repeated receipts and renewals
   cannot issue another grant for terms already funded. Upgrade increments do not
   rewrite prior exports or remove purchased funds.
+- Initial local-credit provisioning issues one compute-only trial per account,
+  expiring after 30 days. Its account-scoped source and recorded credit cutover
+  prevent retries, more workspaces, renewals and resubscription from repeating
+  it. Existing accounts retain their funded lots; migration does not give them
+  another trial. Free cycles have no recurring credit. Attaching or removing a
+  card never creates, increases or revokes credit.
 - Migration uses one fixed renewal boundary per account. Preserve prior gross
   exports and Stripe grants until those invoices reconcile. Hold later net
   settlement durably until migration and period funding complete. Existing
@@ -54,14 +60,9 @@ admission decision, credit funding and migration, and the sweep.
   naming the account as well, which is a different failure: a registration whose
   answer was lost is retried, and without the key that retry is a second customer
   holding half the same person's invoices.
-- Every account holds a subscription, and the free plan is a $0 one. Provisioning
-  is a customer, a subscription carrying the plan's price and the three metered
-  prices, the allowance period the subscription's own cycle defines, and the
-  grant that funds it. One shape rather than two, so there is one billing flow,
-  a plan change is a price swapped on the subscription that already exists, and
-  free usage is metered into the provider like any other. The free subscription
-  needs its metered prices: without them, usage past what the plan includes
-  reaches no invoice at all.
+- Every account holds a subscription, and the Free plan is a $0 one. Its metered
+  items remain when the licensed plan price changes. Local credits fund usage;
+  the provider subscription does not authorize unfunded compute.
 - A plan change never creates a subscription, and moving down never ends one.
   The licensed item's price is swapped in place in both directions, so the
   subscription id, the billing anniversary and the three metered items survive

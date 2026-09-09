@@ -46,12 +46,8 @@ class BillingAccountService:
         one — a card to save, a plan to change — finds it here rather than
         creating it.
 
-        Provisioning is a customer at the provider, a subscription on the free
-        plan carrying that plan's price and the three metered prices, the
-        allowance period the subscription's own cycle defines, and the grant that
-        funds it. One plan shape rather than two: the account that has never paid
-        and the account that pays are the same objects with a different price, so
-        overage is billed for both instead of refused for one.
+        Initial provisioning creates the provider relationship and one expiring
+        compute trial. Subscription cycles cannot replenish that trial.
 
         Idempotent, because every one of those can be repeated. An account whose
         row already names a subscription returns it and reaches no provider at
@@ -138,7 +134,6 @@ class BillingAccountService:
                 provider_credit_grant_id=existing.provider_credit_grant_id,
                 subscription=subscription,
                 plan=plan,
-                has_payment_method=existing.payment_method_attached_at is not None,
             ),
             plan=plan,
         )

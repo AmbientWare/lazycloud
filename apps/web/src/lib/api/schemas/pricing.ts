@@ -114,6 +114,14 @@ export type PublishedPlacementRate = z.infer<typeof publishedPlacementRateSchema
 
 export const pricingCatalogSchema = z
   .object({
+    trial: z
+      .object({
+        amount_nanos: z.number().int().positive(),
+        duration_days: z.number().int().positive(),
+        scope: z.literal("compute"),
+        one_time: z.literal(true),
+      })
+      .strict(),
     pricing_version: z.string(),
     metered_rates_effective_at: z.string().datetime({ offset: true }),
     currency: z.string().regex(/^[A-Z]{3}$/),
@@ -126,7 +134,6 @@ export const pricingCatalogSchema = z
       .strict(),
     no_payment_method: z
       .object({
-        included_nanos: z.number().int().nonnegative(),
         max_concurrent_cpu_containers: z.number().int().positive(),
         max_concurrent_gpus: z.number().int().positive(),
       })

@@ -6,7 +6,7 @@ from database.repositories.billing_allowance import (
 )
 from database.repositories.billing_credits import BillingCreditRepository
 from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import account_terms
+from shared.billing_rate_card import published_plan
 from shared.errors import UpstreamUnavailableError
 from shared.payments import ProviderSubscription, SubscriptionPaymentProvider
 from sqlalchemy.orm import Session
@@ -23,7 +23,6 @@ def carry_plan_into_cycle(
     provider_credit_grant_id: str,
     subscription: ProviderSubscription,
     plan: BillingPlanId,
-    has_payment_method: bool,
 ) -> str:
     """Record this cycle's terms and fund the included credit once.
 
@@ -35,11 +34,8 @@ def carry_plan_into_cycle(
         user_id=account_id,
         period_started_at=subscription.current_period_started_at,
         period_ended_at=subscription.current_period_ended_at,
-        allowance_nanos=account_terms(plan, has_payment_method=has_payment_method).included_nanos,
-        # An account with no card did not pay for whatever this cycle is holding,
-        # so terms may narrow to what the platform gives away. With a card they
-        # did, and a plan moved down keeps what it opened with.
-        funded=has_payment_method,
+        allowance_nanos=published_plan(plan).included_nanos,
+        funded=True,
     )
     cutover = BillingCreditRepository(session).cutover(user_id=account_id)
     if cutover is not None and subscription.current_period_started_at >= cutover.effective_at:
@@ -57,7 +53,7 @@ def carry_plan_into_cycle(
                 "paid subscription credits await a matching paid invoice line"
             )
         return provider_credit_grant_id
-    if written.outcome is SubscriptionPeriodOutcome.Unchanged:
+    if plan is BillingPlanId.Free or written.outcome is SubscriptionPeriodOutcome.Unchanged:
         return provider_credit_grant_id
     if written.outcome is SubscriptionPeriodOutcome.ReTermed and provider_credit_grant_id:
         payments.expire_credit_grant(provider_credit_grant_id=provider_credit_grant_id)

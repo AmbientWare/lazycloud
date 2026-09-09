@@ -219,7 +219,6 @@ class BillingReconciliationService:
                                 provider_credit_grant_id=account.provider_credit_grant_id,
                                 subscription=subscription,
                                 plan=subscription.plan,
-                                has_payment_method=account.payment_method_attached_at is not None,
                             )
                         except UpstreamUnavailableError:
                             kinds.add(BillingDivergence.CreditSettlementPending)

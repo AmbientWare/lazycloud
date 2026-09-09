@@ -147,65 +147,12 @@ class BillingWebhookService:
             provider_customer_id=event.customer_id,
             provider_payment_method_id=event.payment_method_id,
         )
-        # After the provider accepted it, never before: a card this platform
-        # recorded but the provider did not take is an account credited with an
-        # allowance nothing can charge against.
         if not accounts.set_payment_method_present(
             user_id=account.user_id, present=True, at=utc_now()
         ):
-            # A card was already on file. Saving a second one changes nothing
-            # about what this account may spend, and re-terming the cycle for it
-            # would buy a second grant covering a period already funded.
             return True
         LOGGER.info("billing: %s now has a card on file", account.user_id)
-        self._widen_allowance(accounts, account, payments)
         return True
-
-    def _widen_allowance(
-        self,
-        accounts: BillingAccountRepository,
-        account: BillingAccount,
-        payments: SubscriptionPaymentProvider,
-    ) -> None:
-        """Give the cycle in progress the terms the first card just bought.
-
-        Without this an account gets what a card is worth only when its next
-        cycle opens, which is up to a month after somebody typed their card in to
-        carry on working. The cycle is re-termed rather than replaced, so the
-        spend already counted against it survives — the usage is on the same
-        invoice this allowance is credit against.
-
-        Nothing is bought where the provider no longer calls the subscription
-        live, or where it carries a price this platform did not publish. Both are
-        the state `_read_standing` clears the row for, and buying an allowance
-        against a cycle nothing will invoice is the way a grant becomes a gift.
-        """
-
-        if not account.provider_subscription_id:
-            return
-        held = payments.subscription(provider_subscription_id=account.provider_subscription_id)
-        if held.status in ENDED_SUBSCRIPTION_STATUSES or held.plan is None:
-            return
-        grant_id = carry_plan_into_cycle(
-            self.session,
-            payments,
-            account_id=account.user_id,
-            provider_customer_id=account.provider_customer_id,
-            provider_credit_grant_id=account.provider_credit_grant_id,
-            subscription=held,
-            plan=held.plan,
-            has_payment_method=True,
-        )
-        if grant_id == account.provider_credit_grant_id:
-            return
-        accounts.upsert(
-            user_id=account.user_id,
-            status=account.status,
-            provider_customer_id=account.provider_customer_id,
-            provider_subscription_id=account.provider_subscription_id,
-            provider_credit_grant_id=grant_id,
-            plan=held.plan,
-        )
 
     def _read_standing(self, event: PaymentEvent) -> bool:
         """Settle where a subscribed account stands, from the subscription itself.
@@ -306,13 +253,8 @@ class BillingWebhookService:
                 account.user_id,
             )
             return False
-        # The cycle boundary is the one place a card *removed* can be noticed:
-        # detaching one leaves a notification naming no customer, so there is
-        # nothing to resolve it back to and no delivery that can report it. Asked
-        # here, an account that has taken its card off is given the terms that go
-        # with having none from its next cycle — and keeps what it was already
-        # granted for the cycle it is in, which is what stops a card being swapped
-        # from stopping the work running against it.
+        # A detached-card event has no customer, so refresh its presence from
+        # the subscription owner when the cycle changes.
         has_card = payments.has_payment_method(provider_customer_id=account.provider_customer_id)
         accounts = BillingAccountRepository(self.session)
         if accounts.set_payment_method_present(
@@ -333,7 +275,6 @@ class BillingWebhookService:
             provider_credit_grant_id=account.provider_credit_grant_id,
             subscription=subscription,
             plan=subscription.plan,
-            has_payment_method=has_card,
         )
         if grant_id != account.provider_credit_grant_id:
             LOGGER.info("billing: %s starts a new subscription period", account.user_id)

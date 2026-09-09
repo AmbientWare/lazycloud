@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
@@ -19,6 +19,7 @@ from shared.billing_accounts import BillingAccount
 from shared.billing_credits import CreditGrant, CreditKind, CreditScope
 from shared.billing_plans import BillingPlanId
 from shared.billing_quotes import BILLED_METRICS
+from shared.billing_rate_card import ONE_TIME_TRIAL_NANOS, TRIAL_VALIDITY_DAYS
 from shared.errors import ConflictError
 from shared.payments import (
     METER_EVENT_NAMES,
@@ -47,7 +48,6 @@ def fund_subscription_credits(
         user_id=user_id, period_ended_at=subscription.current_period_ended_at
     )
     now = utc_now()
-    funding_id = "free"
     effective_at = subscription.current_period_started_at if issued == 0 else now
     if plan is not BillingPlanId.Free and issued < allowance_nanos:
         evidence = payments.paid_subscription_periods(
@@ -70,7 +70,6 @@ def fund_subscription_credits(
         funding_id = funded.provider_invoice_id
         if issued:
             effective_at = funded.paid_at
-    if allowance_nanos > issued:
         credits.issue(
             user_id=user_id,
             grant=CreditGrant(
@@ -112,6 +111,17 @@ def initialize_local_credits(
         )
     credits.prepare_cutover(user_id=user_id, effective_at=effective_at)
     credits.complete_cutover(user_id=user_id, at=utc_now())
+    credits.issue(
+        user_id=user_id,
+        grant=CreditGrant(
+            source_id=f"trial:{user_id}",
+            kind=CreditKind.Trial,
+            scope=CreditScope.Compute,
+            amount_nanos=ONE_TIME_TRIAL_NANOS,
+            effective_at=to_utc(effective_at),
+            expires_at=to_utc(effective_at) + timedelta(days=TRIAL_VALIDITY_DAYS),
+        ),
+    )
 
 
 def reconcile_credit_cutover(

@@ -162,7 +162,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
    before they have paid for anything. The rest is disclosure, not pricing. */
 function accountTerm(catalog: PricingCatalog): string {
   const terms = catalog.no_payment_method;
-  return `Without a card, each plan includes ${exactDollars(terms.included_nanos)} of usage, ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once, and ${countLabel(terms.max_concurrent_gpus, "GPU card")}. Once the included usage is spent, containers stop and new volumes cannot be created. Existing volumes remain readable, and you continue to pay for them.`;
+  return `New accounts receive a one-time ${exactDollars(catalog.trial.amount_nanos)} compute trial, valid for ${catalog.trial.duration_days} days. Without a saved card, you can run ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once and ${countLabel(terms.max_concurrent_gpus, "GPU card")}. Further usage needs prepaid credit.`;
 }
 
 const sectionTitle =
@@ -284,7 +284,7 @@ function MarketingPricing() {
                     </p>
                     <dl className="mt-4 border-t border-border text-[13px]">
                       <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
-                        <dt className="text-muted-foreground">Usage included</dt>
+                        <dt className="text-muted-foreground">Monthly compute credit</dt>
                         <dd className="font-mono font-medium text-brand">
                           {exactDollars(plan.included_nanos)}{" "}
                           <span className="text-muted-foreground">/ month</span>

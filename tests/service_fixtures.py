@@ -30,7 +30,7 @@ from identity.users import UserService
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import NO_CARD_INCLUDED_NANOS
+from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS
 from shared.identity import (
     AuthTokenRecord,
     PlatformRole,
@@ -116,7 +116,7 @@ def _fixture_account(database: DatabaseClient, display_name: str) -> str:
             user_id=user_id,
             period_started_at=now - timedelta(days=365),
             period_ended_at=now + timedelta(days=30),
-            allowance_nanos=NO_CARD_INCLUDED_NANOS,
+            allowance_nanos=FREE_PLAN_INCLUDED_NANOS,
             funded=False,
         )
         return user_id

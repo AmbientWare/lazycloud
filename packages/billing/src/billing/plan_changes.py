@@ -485,7 +485,6 @@ class BillingPlanChangeService:
                 provider_credit_grant_id=account.provider_credit_grant_id,
                 subscription=held,
                 plan=held.plan,
-                has_payment_method=account.payment_method_attached_at is not None,
             )
             written = accounts.upsert(
                 user_id=account.user_id,

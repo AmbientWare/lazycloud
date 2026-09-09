@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
+from billing.periods import carry_plan_into_cycle
 from control.service import ControlPlaneService
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
@@ -16,13 +17,17 @@ from database.repositories.identity import (
     WorkspaceRepository,
 )
 from database.repositories.orchestration import ContainerRepository
+from database.tables.billing_credits import BillingCreditLotTable
 from shared.billing_accounts import BillingAccountStatus
+from shared.billing_credits import CreditKind, CreditScope
 from shared.billing_plans import BillingPlanId
+from shared.billing_quotes import BilledDimension
 from shared.billing_rate_card import (
     FREE_PLAN_INCLUDED_NANOS,
-    NO_CARD_INCLUDED_NANOS,
     NO_CARD_MAX_CPU_CONTAINERS,
+    ONE_TIME_TRIAL_NANOS,
     TEAM_PLAN_INCLUDED_NANOS,
+    TRIAL_VALIDITY_DAYS,
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import CapacityLimitReachedError, PaymentRequiredError, UpstreamUnavailableError
@@ -38,6 +43,7 @@ from shared.payments import (
     SubscriptionProration,
 )
 from shared.timestamps import utc_now
+from sqlalchemy import select
 from tests.service_fixtures import (
     carded_account,
     owned_workspace,
@@ -281,47 +287,89 @@ def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
         admission.admit_container_start(session, workspace_id=stranger.id, gpu=(), gpu_count=0)
 
 
-def test_provisioning_an_account_twice_leaves_one_customer_and_one_subscription(
-    isolated_services: ApiServices,
+def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
+    postgres_services: ApiServices,
 ) -> None:
-    """A sign-in that already provisioned its account must not do it again.
-
-    Provisioning happens on every sign-in, so the second one arrives at an
-    account that already holds everything — and so does the retry after a sign-in
-    that failed once the provider had already answered. A second customer would
-    hold one person's invoices with only one of them named here; a second
-    subscription would carry the same three metered prices, and that account's
-    usage would be counted onto two invoices.
-    """
-
     provider = _Provider()
-    user_id, workspace_id = unbilled_account(isolated_services.context)
-
-    with isolated_services.context.database.session() as session:
-        first = BillingAccountService(session).billing_account_for(
-            provider, user_id=user_id, workspace_id=workspace_id
-        )
-        session.commit()
-
-    with isolated_services.context.database.session() as session:
-        again = BillingAccountService(session).billing_account_for(
-            provider, user_id=user_id, workspace_id=workspace_id
-        )
-        session.commit()
-        stored = BillingAccountRepository(session).get_by_user(user_id)
-
-    assert stored is not None
-    assert first.provider_customer_id == again.provider_customer_id == "cus_subscriber"
-    assert first.provider_subscription_id == again.provider_subscription_id == "sub_1"
-    assert provider.customers == [workspace_id]
-    assert provider.subscriptions == [BillingPlanId.Free]
-    with isolated_services.context.database.session() as session:
-        assert (
-            BillingCreditRepository(session).subscription_issued(
-                user_id=user_id, period_ended_at=CYCLE_ENDED_AT
+    user_id, workspace_id = unbilled_account(postgres_services.context)
+    with postgres_services.context.database.session() as session:
+        service = BillingAccountService(session)
+        first = service.billing_account_for(provider, user_id=user_id, workspace_id=workspace_id)
+        again = service.billing_account_for(provider, user_id=user_id, workspace_id=workspace_id)
+        assert first.provider_subscription_id == again.provider_subscription_id
+        lots = list(
+            session.scalars(
+                select(BillingCreditLotTable).where(BillingCreditLotTable.user_id == user_id)
             )
-            == NO_CARD_INCLUDED_NANOS
         )
+        assert len(lots) == 1
+        trial = lots[0]
+        original = (trial.id, trial.amount_nanos, trial.effective_at, trial.expires_at)
+        assert trial.kind == CreditKind.Trial.value
+        assert trial.scope == CreditScope.Compute.value
+        assert trial.amount_nanos == ONE_TIME_TRIAL_NANOS
+        assert trial.expires_at is not None
+        assert trial.expires_at == trial.effective_at + timedelta(days=TRIAL_VALIDITY_DAYS)
+        credits = BillingCreditRepository(session)
+        assert (
+            credits.balance(
+                user_id=user_id, at=CYCLE_STARTED_AT, dimension=BilledDimension.ComputeRuntime
+            ).trial_nanos
+            == ONE_TIME_TRIAL_NANOS
+        )
+        assert (
+            credits.balance(
+                user_id=user_id, at=CYCLE_STARTED_AT, dimension=BilledDimension.VolumeStorage
+            ).available_nanos
+            == 0
+        )
+        assert (
+            credits.balance(
+                user_id=user_id, at=trial.expires_at, dimension=BilledDimension.ComputeRuntime
+            ).available_nanos
+            == 0
+        )
+
+    provider.cycle_started_at = CYCLE_ENDED_AT
+    provider.cycle_ended_at = CYCLE_ENDED_AT + timedelta(days=30)
+    with postgres_services.context.database.session() as session:
+        subscription = provider.subscription(
+            provider_subscription_id=first.provider_subscription_id
+        )
+        for _ in range(2):
+            carry_plan_into_cycle(
+                session,
+                provider,
+                account_id=user_id,
+                provider_customer_id=first.provider_customer_id,
+                provider_credit_grant_id="",
+                subscription=subscription,
+                plan=BillingPlanId.Free,
+            )
+        accounts = BillingAccountRepository(session)
+        accounts.upsert(
+            user_id=user_id,
+            status=first.status,
+            provider_customer_id=first.provider_customer_id,
+            provider_subscription_id="",
+            provider_credit_grant_id="",
+            plan=None,
+        )
+        BillingAccountService(session).billing_account_for(
+            provider, user_id=user_id, workspace_id=workspace_id
+        )
+        lots = list(
+            session.scalars(
+                select(BillingCreditLotTable).where(BillingCreditLotTable.user_id == user_id)
+            )
+        )
+        assert [(lot.id, lot.amount_nanos, lot.effective_at, lot.expires_at) for lot in lots] == [
+            original
+        ]
+        period = BillingAllowanceRepository(session).current_period(
+            user_id=user_id, at=CYCLE_ENDED_AT
+        )
+        assert period is not None and period.allowance_nanos == 0
 
 
 def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
@@ -550,70 +598,6 @@ def test_an_account_with_no_subscription_cannot_start_work(
         admission.admit_container_start(session, workspace_id=workspace_id, gpu=(), gpu_count=0)
 
 
-def test_an_account_with_a_card_is_admitted_past_its_allowance(
-    isolated_services: ApiServices,
-) -> None:
-    """Spending past what a plan includes is billed, never refused.
-
-    The card gate must not become a spend cap on customers who can be charged.
-    Overage is metered, invoiced and chased through the card on file — refusing
-    it would stop paying customers at a ceiling nobody agreed to, which is the
-    opposite of what a platform selling scalable compute is for.
-
-    The same account with no card is refused on the identical numbers, so what
-    separates the two is only whether anybody can be billed.
-    """
-
-    carded_user_id, carded_workspace_id = carded_account(isolated_services.context)
-    cardless_user_id, cardless_workspace_id = unbilled_account(isolated_services.context)
-    with isolated_services.context.database.session() as session:
-        BillingAccountService(session).billing_account_for(
-            _Provider(), user_id=carded_user_id, workspace_id=carded_workspace_id
-        )
-        # Written rather than provisioned: the fake names one customer for every
-        # account it registers, and two of those collide on the index that keeps
-        # a provider customer belonging to exactly one account.
-        BillingAccountRepository(session).upsert(
-            user_id=cardless_user_id,
-            status=BillingAccountStatus.Active,
-            provider_customer_id=f"cus_{cardless_user_id}",
-            provider_subscription_id=f"sub_{cardless_user_id}",
-            provider_credit_grant_id=f"credgr_{cardless_user_id}",
-            plan=BillingPlanId.Free,
-        )
-        BillingAllowanceRepository(session).set_subscription_period(
-            user_id=cardless_user_id,
-            period_started_at=CYCLE_STARTED_AT,
-            period_ended_at=CYCLE_ENDED_AT,
-            allowance_nanos=NO_CARD_INCLUDED_NANOS,
-            funded=True,
-        )
-        session.commit()
-
-    # Both spend every nanodollar their cycle came with, and then some.
-    now = utc_now()
-    for user_id in (carded_user_id, cardless_user_id):
-        with isolated_services.context.database.session() as session:
-            period = BillingAllowanceRepository(session).current_period(user_id=user_id, at=now)
-            assert period is not None
-            BillingAllowanceRepository(session).increment(
-                user_id=user_id,
-                at=now,
-                cost_nanos=period.allowance_nanos + 1,
-            )
-            session.commit()
-
-    admission = DatabaseBillingAdmission()
-    with isolated_services.context.database.session() as session:
-        admission.admit_container_start(
-            session, workspace_id=carded_workspace_id, gpu=(), gpu_count=0
-        )
-        with pytest.raises(PaymentRequiredError):
-            admission.admit_container_start(
-                session, workspace_id=cardless_workspace_id, gpu=(), gpu_count=0
-            )
-
-
 def test_the_container_limit_counts_every_workspace_the_account_owns(
     isolated_services: ApiServices,
 ) -> None:
@@ -647,7 +631,7 @@ def test_the_container_limit_counts_every_workspace_the_account_owns(
             user_id=user_id,
             period_started_at=CYCLE_STARTED_AT,
             period_ended_at=CYCLE_ENDED_AT,
-            allowance_nanos=NO_CARD_INCLUDED_NANOS,
+            allowance_nanos=FREE_PLAN_INCLUDED_NANOS,
             funded=True,
         )
         session.commit()

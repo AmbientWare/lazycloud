@@ -12,7 +12,6 @@ from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
 from shared.billing_rate_card import (
     FREE_PLAN_INCLUDED_NANOS,
-    NO_CARD_INCLUDED_NANOS,
     TEAM_PLAN_INCLUDED_NANOS,
 )
 from shared.errors import PaymentRequiredError
@@ -423,21 +422,9 @@ def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
         )
 
 
-def test_a_first_card_widens_the_cycle_already_in_progress(
+def test_a_saved_card_preserves_existing_credit_without_replenishment(
     isolated_services: ApiServices,
 ) -> None:
-    """Attaching a card buys the plan's allowance now, not next month.
-
-    An account with no card is given what the platform will spend to find out
-    whether it can bill anybody. The moment somebody types a card in, that
-    question is answered — and making them wait up to a month for the terms they
-    just qualified for is a customer stopped mid-work by a limit that no longer
-    applies to them.
-
-    The cycle is re-termed rather than replaced, so the spend already counted
-    against it survives: that usage lands on the same invoice this allowance is
-    credit against, and forgetting it would give the month's spending away twice.
-    """
 
     provider = _Provider()
     provider.subscription_plan = BillingPlanId.Free
@@ -459,7 +446,7 @@ def test_a_first_card_widens_the_cycle_already_in_progress(
             user_id=user_id,
             period_started_at=CYCLE_STARTED_AT,
             period_ended_at=CYCLE_ENDED_AT,
-            allowance_nanos=NO_CARD_INCLUDED_NANOS,
+            allowance_nanos=1_000_000_000,
             funded=True,
         )
         BillingAllowanceRepository(session).increment(
@@ -488,11 +475,8 @@ def test_a_first_card_widens_the_cycle_already_in_progress(
     assert account is not None
     assert account.payment_method_attached_at is not None
     assert allowance is not None
-    assert allowance.allowance_nanos == FREE_PLAN_INCLUDED_NANOS
+    assert allowance.allowance_nanos == 1_000_000_000
     assert allowance.spent_nanos == 400_000_000
-    # One grant covers the cycle: the cardless one is expired before the
-    # replacement is bought, or the customer holds two allowances for one period
-    # and nothing downstream can say which a charge was spent against.
-    assert provider.granted == [FREE_PLAN_INCLUDED_NANOS]
-    assert provider.expired_grants == ["credgr_cardless"]
-    assert account.provider_credit_grant_id == "credgr_free"
+    assert provider.granted == []
+    assert provider.expired_grants == []
+    assert account.provider_credit_grant_id == "credgr_cardless"

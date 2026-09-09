@@ -21,8 +21,9 @@ prices an account's overage is billed through. An account on no subscription at
 all would have nowhere for its usage to land.
 """
 
-FREE_PLAN_INCLUDED_NANOS = 5 * NANOS_PER_USD
-"""What the free plan comes with, issued as a credit grant each period."""
+FREE_PLAN_INCLUDED_NANOS = 0
+ONE_TIME_TRIAL_NANOS = 5 * NANOS_PER_USD
+TRIAL_VALIDITY_DAYS = 30
 
 FREE_PLAN_MAX_CPU_CONTAINERS = 30
 """How much the free plan may run at once without a GPU, across every workspace.
@@ -71,18 +72,6 @@ EntitlementLimit: TypeAlias = int | UnlimitedEntitlement
 AllGpuTypes: TypeAlias = Literal["all"]
 GpuTypeEntitlement: TypeAlias = frozenset[GpuType] | AllGpuTypes
 """Which cards a plan may ask for: a named set, or every model the platform rents."""
-
-NO_CARD_INCLUDED_NANOS = 1 * NANOS_PER_USD
-"""What an account with no card on file may spend before it is stopped.
-
-Enough to run something real and see it work, and small enough that losing all of
-it costs less than the sign-up did. Nothing here can be collected — there is no
-payment method to charge — so this figure is spending, not credit.
-
-It is not the free plan's allowance reduced. The free plan's $5 is what an
-account gets once somebody can be billed for what they do next; this is what the
-platform is willing to give away to find that out.
-"""
 
 NO_CARD_MAX_CPU_CONTAINERS = 10
 """How much an account with no card may run at once without a GPU.
@@ -385,36 +374,19 @@ class PlanEntitlements:
 
 @dataclass(frozen=True, slots=True)
 class AccountTerms:
-    """What one account may spend and run for a cycle.
-
-    A plan's figures are not an account's. Everything a plan comes with is
-    promised against being able to charge for what happens next, and an account
-    with no card on file has not made that possible — so the two figures move
-    together, from the same fact, and are resolved in one place rather than by
-    two callers each deciding what a missing card means.
-    """
+    """Published recurring credits and the account's concurrency limits."""
 
     included_nanos: int
     entitlements: PlanEntitlements
 
 
 def account_terms(plan: BillingPlanId, *, has_payment_method: bool) -> AccountTerms:
-    """What this account gets, given its plan and whether anyone can charge it.
-
-    Having no card replaces the plan's terms rather than reducing them, and it
-    does so whatever the plan says. A subscription nobody can collect on is not a
-    cheaper subscription — the $200 plan's invoice fails exactly like the free
-    one's — so there is no plan for which "they have no card" should still mean
-    "give them the plan's allowance".
-
-    The plan still decides everything once a card exists, which is the only state
-    a paid plan is ever meant to be in.
-    """
+    """A saved card affects concurrency, never evidence that credits were funded."""
 
     published = published_plan(plan)
     if not has_payment_method:
         return AccountTerms(
-            included_nanos=NO_CARD_INCLUDED_NANOS,
+            included_nanos=published.included_nanos,
             entitlements=replace(
                 published.entitlements,
                 max_concurrent_cpu_containers=NO_CARD_MAX_CPU_CONTAINERS,
@@ -814,9 +786,9 @@ __all__ = [
     "FREE_PLAN_MONTHLY_NANOS",
     "METERED_RATES_EFFECTIVE_AT",
     "METERED_RATE_VERSION",
-    "NO_CARD_INCLUDED_NANOS",
     "NO_CARD_MAX_CPU_CONTAINERS",
     "NO_CARD_MAX_GPUS",
+    "ONE_TIME_TRIAL_NANOS",
     "PUBLISHED_COMPUTE_RATES",
     "PUBLISHED_GPU_RATES",
     "PUBLISHED_METERED_RATE_HISTORY",
@@ -829,6 +801,7 @@ __all__ = [
     "TEAM_PLAN_MAX_CPU_CONTAINERS",
     "TEAM_PLAN_MAX_GPUS",
     "TEAM_PLAN_MONTHLY_NANOS",
+    "TRIAL_VALIDITY_DAYS",
     "AccountTerms",
     "AllGpuTypes",
     "EntitlementLimit",

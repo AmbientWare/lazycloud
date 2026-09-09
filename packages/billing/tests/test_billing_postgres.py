@@ -25,7 +25,8 @@ from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccount
 from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS
+from shared.billing_quotes import BilledDimension
+from shared.billing_rate_card import ONE_TIME_TRIAL_NANOS
 from shared.errors import ConflictError
 from shared.events import Event, EventLevel
 from shared.payments import (
@@ -149,11 +150,11 @@ class _RegistrationCountingProvider:
         period_ended_at: datetime,
         previous_period_ended_at: datetime | None,
     ) -> ProviderCreditGrant:
-        del provider_customer_id, amount_nanos, previous_period_ended_at
+        del provider_customer_id, previous_period_ended_at
         self.grants.append(account_id)
         return ProviderCreditGrant(
             provider_credit_grant_id=f"credgr_{len(self.grants)}",
-            amount_nanos=FREE_PLAN_INCLUDED_NANOS,
+            amount_nanos=amount_nanos,
             expires_at=period_ended_at,
         )
 
@@ -551,10 +552,14 @@ def test_postgresql_two_first_sign_ins_provision_one_account_and_refuse_nobody()
         with database.session() as session:
             stored = BillingAccountRepository(session).get_by_user(user_id)
             assert (
-                BillingCreditRepository(session).subscription_issued(
-                    user_id=user_id, period_ended_at=CYCLE_ENDED_AT
+                BillingCreditRepository(session)
+                .balance(
+                    user_id=user_id,
+                    at=CYCLE_STARTED_AT,
+                    dimension=BilledDimension.ComputeRuntime,
                 )
-                > 0
+                .trial_nanos
+                == ONE_TIME_TRIAL_NANOS
             )
 
     assert provider.registrations == [user_id]
