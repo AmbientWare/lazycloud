@@ -32,11 +32,9 @@ class BillingAccount(ContractModel):
     relationship, and a record per workspace would be three cards to keep in
     step. `shared.aws_connections` resolves the same way, through the owner.
 
-    A row is written when an account signs in, before its session exists, and
-    carries the customer, the subscription and the grant that registration
-    created. One that never signed in — an account that exists to own tokens —
-    holds none of them, and `plan` is how a reader tells that apart from an
-    account on the cheapest plan there is.
+    A row is written when an account signs in, before its session exists.
+    It records the provider customer and any paid subscription. `plan` is
+    `None` when the account has no recorded plan.
     """
 
     id: str = Field(pattern=_UUID_PATTERN)
@@ -50,11 +48,7 @@ class BillingAccount(ContractModel):
     created.
     """
     provider_subscription_id: str = Field(default="", max_length=255)
-    """The subscription carrying the plan price and the metered prices, empty
-    until the account is provisioned."""
-    provider_credit_grant_id: str = Field(default="", max_length=255)
-    """The grant carrying the included allowance for the current period, empty
-    until one is issued."""
+    """The paid plan subscription, empty when the account has none."""
     plan: BillingPlanId | None = None
     """Which plan this account is on, `None` when it is on none.
 

@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
+from billing.costs import BillingStandingService
 from billing.periods import carry_plan_into_cycle
 from control.service import ControlPlaneService
 from database.repositories.billing import BillingAccountRepository
@@ -36,8 +37,6 @@ from shared.identity import WorkspaceRole
 from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
-    ProviderCreditGrant,
-    ProviderCreditGrantBalance,
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
@@ -65,36 +64,14 @@ class _Provider:
     customers: list[str] = field(default_factory=list)
     subscriptions: list[BillingPlanId] = field(default_factory=list)
     plan_changes: list[BillingPlanId] = field(default_factory=list)
-    grants: list[int] = field(default_factory=list)
-    grant_predecessors: list[datetime | None] = field(default_factory=list)
-    """The cycle each grant was told it follows, in the order they were bought.
 
-    What decides when an allowance becomes spendable, so it is money: a grant
-    told it follows a cycle is held back until that cycle's invoice has settled,
-    and one told it follows nothing is spendable at once."""
-
-    expired_grants: list[str] = field(default_factory=list)
     plan: BillingPlanId = BillingPlanId.Free
     invoice_paid: bool = True
     cycle_started_at: datetime = CYCLE_STARTED_AT
     cycle_ended_at: datetime = CYCLE_ENDED_AT
-    """The cycle the provider currently says the subscription is in.
-
-    Movable, because a renewal moves it and a plan change does not, and telling
-    those two apart is what decides whether an outgoing grant is expired."""
 
     cards_on_file: set[str] = field(default_factory=set)
     """Customers the provider says hold something chargeable."""
-
-    @property
-    def live_grants(self) -> list[str]:
-        """Every grant issued that has not since been expired."""
-
-        return [
-            f"credgr_{index}"
-            for index in range(1, len(self.grants) + 1)
-            if f"credgr_{index}" not in self.expired_grants
-        ]
 
     def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
         del account_id, email
@@ -194,34 +171,8 @@ class _Provider:
             scheduled_change_at=None,
         )
 
-    def create_credit_grant(
-        self,
-        *,
-        account_id: str,
-        provider_customer_id: str,
-        amount_nanos: int,
-        period_ended_at: datetime,
-        previous_period_ended_at: datetime | None,
-    ) -> ProviderCreditGrant:
-        del account_id, provider_customer_id
-        self.grants.append(amount_nanos)
-        self.grant_predecessors.append(previous_period_ended_at)
-        return ProviderCreditGrant(
-            provider_credit_grant_id=f"credgr_{len(self.grants)}",
-            amount_nanos=amount_nanos,
-            expires_at=period_ended_at,
-        )
-
-    def expire_credit_grant(self, *, provider_credit_grant_id: str) -> None:
-        self.expired_grants.append(provider_credit_grant_id)
-
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("subscribing must not read invoices")
-
-    def credit_grants_for(
-        self, *, provider_customer_id: str
-    ) -> Sequence[ProviderCreditGrantBalance]:
-        return ()
 
     def paid_subscription_periods(
         self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
@@ -286,7 +237,6 @@ def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
             status=BillingAccountStatus.PastDue,
             provider_customer_id="cus_paying",
             provider_subscription_id="sub_paying",
-            provider_credit_grant_id="credgr_paying",
             plan=BillingPlanId.Team,
             subscription_terms_version=published_plan(BillingPlanId.Team).terms_version,
             scheduled_terms_version=None,
@@ -310,7 +260,9 @@ def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
 
 def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
     postgres_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("billing.admission.utc_now", lambda: CYCLE_STARTED_AT)
     provider = _Provider()
     user_id, workspace_id = unbilled_account(postgres_services.context)
     with postgres_services.context.database.session() as session:
@@ -332,6 +284,13 @@ def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
         assert trial.expires_at == trial.effective_at + timedelta(days=TRIAL_VALIDITY_DAYS)
         credits = BillingCreditRepository(session)
         assert credits.balance(user_id=user_id, at=CYCLE_STARTED_AT) == ONE_TIME_TRIAL_NANOS
+        displayed = BillingStandingService(session).credit_balance(
+            user_id=user_id, at=CYCLE_STARTED_AT
+        )
+        assert displayed.ready and displayed.balance_nanos == ONE_TIME_TRIAL_NANOS
+        DatabaseBillingAdmission().assert_may_take_on_billed_work(
+            session, workspace_id=workspace_id
+        )
         assert credits.balance(user_id=user_id, at=trial.expires_at) == 0
 
     provider.cycle_started_at = CYCLE_ENDED_AT
@@ -346,7 +305,6 @@ def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
                 provider,
                 account_id=user_id,
                 provider_customer_id=first.provider_customer_id,
-                provider_credit_grant_id="",
                 subscription=subscription,
                 plan=BillingPlanId.Free,
             )
@@ -356,7 +314,6 @@ def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
             status=first.status,
             provider_customer_id=first.provider_customer_id,
             provider_subscription_id="",
-            provider_credit_grant_id="",
             plan=None,
             subscription_terms_version=None,
             scheduled_terms_version=None,
@@ -549,7 +506,6 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
             user_id=user_id, at=CYCLE_ENDED_AT
         )
 
-    assert provider.expired_grants == []
     assert account is not None
     with isolated_services.context.database.session() as session:
         credits = BillingCreditRepository(session)
@@ -603,7 +559,6 @@ def test_an_account_with_no_subscription_cannot_start_work(
             status=BillingAccountStatus.Active,
             provider_customer_id="cus_halfway",
             provider_subscription_id="",
-            provider_credit_grant_id="",
             plan=None,
             subscription_terms_version=None,
             scheduled_terms_version=None,

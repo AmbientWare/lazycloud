@@ -14,8 +14,6 @@ from shared.events import EventLevel
 from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
-    ProviderCreditGrant,
-    ProviderCreditGrantBalance,
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
@@ -103,27 +101,8 @@ class _Provider:
     def subscription(self, *, provider_subscription_id: str) -> ProviderSubscription:
         raise AssertionError("draining the outbox must not read subscriptions")
 
-    def create_credit_grant(
-        self,
-        *,
-        account_id: str,
-        provider_customer_id: str,
-        amount_nanos: int,
-        period_ended_at: datetime,
-        previous_period_ended_at: datetime | None,
-    ) -> ProviderCreditGrant:
-        raise AssertionError("draining the outbox must not grant an allowance")
-
-    def expire_credit_grant(self, *, provider_credit_grant_id: str) -> None:
-        raise AssertionError("draining the outbox must not expire an allowance")
-
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("draining the outbox must not read invoices")
-
-    def credit_grants_for(
-        self, *, provider_customer_id: str
-    ) -> Sequence[ProviderCreditGrantBalance]:
-        return ()
 
     def paid_subscription_periods(
         self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime

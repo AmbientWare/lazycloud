@@ -55,9 +55,6 @@ class DatabaseBillingAdmission:
         if account is not None and account.complimentary_since is not None:
             return
         credits = BillingCreditRepository(session)
-        cutover = credits.cutover(user_id=user_id)
-        if cutover is None or cutover.completed_at is None:
-            raise PaymentRequiredError("credit migration must complete before starting billed work")
         if credits.balance(user_id=user_id, at=utc_now()) <= 0:
             raise PaymentRequiredError("add credit before starting more billed work")
         preferences = BillingPreferencesService(session)

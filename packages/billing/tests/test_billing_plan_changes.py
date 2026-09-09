@@ -6,13 +6,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from api.server.services import ApiServices
-from billing.periods import carry_plan_into_cycle
 from billing.plan_changes import CLAIM_TTL, PLAN_CHANGE_ABANDONED_ACTION
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.tables.billing_plan_changes import BillingPlanChangeIntentTable
-from shared.billing_accounts import BillingAccount, BillingAccountStatus
+from shared.billing_accounts import BillingAccount
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import (
     FREE_PLAN_INCLUDED_NANOS,
@@ -20,13 +19,11 @@ from shared.billing_rate_card import (
     published_plan,
     subscription_terms,
 )
-from shared.errors import ConflictError, PaymentRequiredError, UpstreamUnavailableError
+from shared.errors import PaymentRequiredError, UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
-    ProviderCreditGrant,
-    ProviderCreditGrantBalance,
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
@@ -51,8 +48,6 @@ class _Provider:
     change happened.
     """
 
-    grants: list[int] = field(default_factory=list)
-    expired_grants: list[str] = field(default_factory=list)
     plan_changes: list[BillingPlanId] = field(default_factory=list)
     prorations: list[SubscriptionChangeTiming] = field(default_factory=list)
     subscription_reads: int = 0
@@ -65,14 +60,6 @@ class _Provider:
 
     cards_on_file: set[str] = field(default_factory=set)
     """Customers the provider says hold something chargeable."""
-
-    @property
-    def live_grants(self) -> list[str]:
-        return [
-            f"credgr_{index}"
-            for index in range(1, len(self.grants) + 1)
-            if f"credgr_{index}" not in self.expired_grants
-        ]
 
     def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
         del account_id, email, workspace_id
@@ -149,39 +136,8 @@ class _Provider:
             raise self.read_error
         return self._subscription()
 
-    def create_credit_grant(
-        self,
-        *,
-        account_id: str,
-        provider_customer_id: str,
-        amount_nanos: int,
-        period_ended_at: datetime,
-        previous_period_ended_at: datetime | None,
-    ) -> ProviderCreditGrant:
-        del account_id, provider_customer_id, previous_period_ended_at
-        if self.credit_evidence_error is not None:
-            raise self.credit_evidence_error
-        self.grants.append(amount_nanos)
-        return ProviderCreditGrant(
-            provider_credit_grant_id=f"credgr_{len(self.grants)}",
-            amount_nanos=amount_nanos,
-            expires_at=period_ended_at,
-        )
-
-    def expire_credit_grant(self, *, provider_credit_grant_id: str) -> None:
-        # Idempotent, like the adapter: it reads the grant first and returns
-        # where it has already ended, so a retry of the change that expired it
-        # converges rather than recording a second expiry.
-        if provider_credit_grant_id not in self.expired_grants:
-            self.expired_grants.append(provider_credit_grant_id)
-
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("settling a plan change must not read invoices")
-
-    def credit_grants_for(
-        self, *, provider_customer_id: str
-    ) -> Sequence[ProviderCreditGrantBalance]:
-        return ()
 
     def paid_subscription_periods(
         self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
@@ -316,7 +272,6 @@ def test_a_plan_change_the_provider_never_took_writes_nothing(
             )
             == FREE_PLAN_INCLUDED_NANOS
         )
-    assert provider.expired_grants == []
 
 
 def test_a_plan_change_whose_subscription_ended_is_never_written_back(
@@ -484,67 +439,6 @@ def test_subscribing_without_a_card_is_refused_before_an_intent_exists(
     assert account is not None
     assert account.plan is BillingPlanId.Free
     assert provider.plan_changes == [], "the provider was asked to swap a plan nobody can pay for"
-
-
-def test_paid_terms_cannot_replace_a_legacy_grant_before_credit_migration(
-    isolated_services: ApiServices,
-) -> None:
-    user_id, _ = carded_account(isolated_services.context)
-    provider = _Provider()
-    with isolated_services.context.database.session() as session:
-        BillingAccountRepository(session).upsert(
-            user_id=user_id,
-            status=BillingAccountStatus.Active,
-            provider_customer_id="cus_plan_change",
-            provider_subscription_id="sub_plan_change",
-            provider_credit_grant_id="credgr_legacy",
-            plan=BillingPlanId.Free,
-            subscription_terms_version=SubscriptionTermsVersion.FreeLegacy,
-            scheduled_terms_version=None,
-            scheduled_change_at=None,
-        )
-        BillingCreditRepository(session).prepare_cutover(
-            user_id=user_id, effective_at=CYCLE_ENDED_AT
-        )
-        BillingAllowanceRepository(session).set_subscription_period(
-            user_id=user_id,
-            period_started_at=CYCLE_STARTED_AT,
-            period_ended_at=CYCLE_ENDED_AT,
-            allowance_nanos=5_000_000_000,
-            funded=True,
-        )
-    with pytest.raises(ConflictError, match="credit migration"):
-        _plan_changes(isolated_services, provider).change_plan(
-            user_id=user_id,
-            target=BillingPlanId.Team,
-            target_terms_version=SubscriptionTermsVersion.Team,
-        )
-    with isolated_services.context.database.session() as session:
-        assert session.scalars(select(BillingPlanChangeIntentTable)).all() == []
-        with pytest.raises(UpstreamUnavailableError, match="local credit transition"):
-            carry_plan_into_cycle(
-                session,
-                provider,
-                account_id=user_id,
-                provider_customer_id="cus_plan_change",
-                provider_credit_grant_id="credgr_legacy",
-                plan=BillingPlanId.Team,
-                subscription=ProviderSubscription(
-                    provider_subscription_id="sub_plan_change",
-                    status="active",
-                    plan=BillingPlanId.Team,
-                    terms_version=SubscriptionTermsVersion.Team,
-                    scheduled_terms_version=None,
-                    scheduled_change_at=None,
-                    current_period_started_at=CYCLE_STARTED_AT,
-                    current_period_ended_at=CYCLE_ENDED_AT,
-                ),
-            )
-        period = BillingAllowanceRepository(session).current_period(
-            user_id=user_id, at=CYCLE_STARTED_AT
-        )
-        assert period is not None and period.allowance_nanos == 5_000_000_000
-    assert _account(isolated_services, user_id).provider_credit_grant_id == "credgr_legacy"
 
 
 def test_returning_to_a_plan_inside_one_cycle_is_not_charged_twice(

@@ -21,7 +21,7 @@ metering, and `database` owns rates, ledger entries and durable payment records.
   eligibility window, but cannot cover later usage or refunded-purchase debt.
   Deduct recorded usage even when no subscription period is active or funded.
 - Local wallet usage never creates a provider meter event. Preserve historical
-  exports before the account's recorded cutover. Invoice reconciliation excludes
+  exports and never charge their usage to the wallet again. Invoice reconciliation excludes
   wallet allocations, outstanding wallet debt, pending settlement, waivers and
   undelivered legacy exports. Never invoice a wallet shortfall a second time.
 - Issue paid subscription credit only from a confirmed paid invoice and matching
@@ -61,16 +61,9 @@ metering, and `database` owns rates, ledger entries and durable payment records.
   subscription clears both plan and subscription identity. Missing billing rows
   or subscriptions refuse billed work and are provisioned by billing entrypoints.
 
-- Credit migration uses one fixed renewal boundary per account. Preserve legacy
-  exports and grants until invoices reconcile. Record later usage settlement as
-  pending until cutover completes. Existing purchased Stripe credit requires
-  payment and consumption evidence; missing evidence is a named blocker.
-- Recovery may advance recorded credit-transition and plan-change intents and
+- Recovery may advance recorded plan-change intents and
   retry funding supported by payment evidence. Report unrelated standing or plan
-  differences. Retire only the account's recorded legacy promotional allowance.
-- Legacy allowance changes follow the recorded period transition. A plan change
-  expires its replaced grant; renewal leaves the previous grant available for
-  invoice settlement. A first period has no predecessor's settlement delay.
+  differences.
 - Reconcile the newest finalized invoice covering a period with usage. An
   immediate proration invoice must not replace that period comparison.
 - Backfill allowance totals from the immutable ledger when a delayed renewal
