@@ -506,11 +506,20 @@ of normal deployment; it is not a separate scheduler path.
 Shared capacity is a connected-AWS pool in the platform's own account, using the
 same managed flow a customer uses, which is what the control stack anticipates
 when it says a customer account can be this account. `deploy/platform-deployment`
-declares the fleet VPC, its two subnets, the security group and the connection
+declares the fleet VPC, a subnet in each available standard AZ, the security group and the connection
 role, one set per deployment, and the `fleet-ensure` Job registers them through
 the public API after the control plane is serving. The connection role's policy
 is never hand-written: it is rendered from `provider_aws.connection_policy` into
 `connection-role-policy.json`, and CI fails on a stale copy.
+
+Review the Terraform plan before expanding an existing fleet network. Existing
+subnets and their CIDRs must remain unchanged; new AZs add subnets and route table
+associations. Customer authorization stacks create up to six standard-AZ subnets
+automatically and attach an S3 gateway endpoint to their route table. When
+updating an existing customer stack, retain `AvailabilityZoneA` and
+`AvailabilityZoneB` with `UsePreviousValue`, and assign the remaining discovered
+zones to `AvailabilityZoneC` through `AvailabilityZoneF`. Review the change set
+for additions without replacing existing subnets.
 
 ## Secrets and rotation
 

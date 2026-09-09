@@ -36,14 +36,14 @@ class FleetInfrastructure(Contract):
         str, Field(pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::\d{12}:role/[A-Za-z0-9+=,.@_/-]+$")
     ]
     vpc_id: Annotated[str, Field(pattern=r"^vpc-[a-f0-9]+$")]
-    subnet_ids: Annotated[list[Name], Field(min_length=2, max_length=2)]
+    subnet_ids: Annotated[list[Name], Field(min_length=2)]
     security_group_id: Annotated[str, Field(pattern=r"^sg-[a-f0-9]+$")]
 
     @model_validator(mode="after")
     def validate_identity(self) -> FleetInfrastructure:
         if self.role_arn.split(":", maxsplit=5)[4] != self.account_id:
             raise ValueError("Fleet role must belong to its account")
-        if len(set(self.subnet_ids)) != 2:
+        if len(set(self.subnet_ids)) != len(self.subnet_ids):
             raise ValueError("Fleet subnets must be distinct")
         return self
 

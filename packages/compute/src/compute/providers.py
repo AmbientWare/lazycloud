@@ -184,6 +184,7 @@ class ProviderUnitSnapshot(ContractModel):
     desired_machines: int = 0
     max_machines: int = 0
     observed_machines: int = 0
+    last_capacity_failure_at: datetime | None = None
     instances: list[ProviderUnitInstance] = Field(default_factory=list)
     provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)
     current_template_version: str = ""

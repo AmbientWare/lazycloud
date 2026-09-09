@@ -18,7 +18,7 @@
 # the refusal against the template, naming nothing about a subnet.
 #
 # A customer's network gets this from the authorization stack, which creates the
-# VPC, both subnets and the security group and tags all three. Ours is built here
+# VPC, subnets and the security group and tags each. Ours is built here
 # instead, so it is tagged here, and the two networks are the same shape to the
 # policy that reads them.
 locals {
@@ -27,6 +27,11 @@ locals {
 
 data "aws_availability_zones" "available" {
   state = "available"
+
+  filter {
+    name   = "zone-type"
+    values = ["availability-zone"]
+  }
 }
 
 resource "aws_vpc" "fleet" {
@@ -43,11 +48,8 @@ resource "aws_internet_gateway" "fleet" {
   tags = { Name = "${var.deployment}-fleet" }
 }
 
-# Exactly two, in two zones. `AwsAccountNetwork` accepts no other count, and an
-# Auto Scaling group spanning one zone cannot replace a node when that zone is
-# what failed.
 resource "aws_subnet" "fleet" {
-  count = 2
+  count = length(data.aws_availability_zones.available.names)
 
   vpc_id                  = aws_vpc.fleet.id
   cidr_block              = cidrsubnet(var.fleet_cidr, 8, count.index + 1)
@@ -72,7 +74,7 @@ resource "aws_route_table" "fleet" {
 }
 
 resource "aws_route_table_association" "fleet" {
-  count = 2
+  count = length(aws_subnet.fleet)
 
   subnet_id      = aws_subnet.fleet[count.index].id
   route_table_id = aws_route_table.fleet.id

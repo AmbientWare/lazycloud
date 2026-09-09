@@ -71,6 +71,22 @@ class _Ec2:
     def describe_images(self, *, ImageIds: list[str]) -> Mapping[str, object]:
         return {"Images": [{"ImageId": ImageIds[0], "RootDeviceName": self.root_device_name}]}
 
+    def describe_subnets(self, *, SubnetIds: list[str]) -> Mapping[str, object]:
+        return {
+            "Subnets": [
+                {
+                    "SubnetId": subnet_id,
+                    "VpcId": _VPC_ID,
+                    "AvailabilityZoneId": f"use1-az{index + 1}",
+                }
+                for index, subnet_id in enumerate(_SUBNET_IDS)
+                if subnet_id in SubnetIds
+            ]
+        }
+
+    def describe_spot_price_history(self, **kwargs: object) -> Mapping[str, object]:
+        return {"SpotPriceHistory": []}
+
     def describe_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
         instances: list[Mapping[str, object]] = [
             {
@@ -190,6 +206,9 @@ class _Ec2:
 
 
 class _AutoScaling:
+    def describe_scaling_activities(self, **kwargs: object) -> Mapping[str, object]:
+        return {"Activities": []}
+
     def __init__(self) -> None:
         self.exists = False
         self.name = ""
@@ -316,6 +335,27 @@ def test_managed_pool_accepts_fleet_capacity_and_enforces_its_ceiling() -> None:
     assert spec.max_nodes == 500
     with pytest.raises(ValidationError, match="desired_nodes cannot exceed max_nodes"):
         _spec(desired_nodes=501, max_nodes=500)
+
+
+def test_managed_pool_rejects_preemptible_capacity_without_an_enforceable_price() -> None:
+    values = _spec().model_dump() | {"preemptible": True}
+    with pytest.raises(ValidationError, match="maximum compute hourly price"):
+        AwsManagedPoolSpec.model_validate(values)
+    with pytest.raises(ValidationError, match="greater than 1000"):
+        AwsManagedPoolSpec.model_validate(values | {"max_compute_hourly_micros": 1_000})
+
+
+def test_managed_pool_rejects_unavailable_zone_before_creating_resources() -> None:
+    ec2 = _Ec2()
+    autoscaling = _AutoScaling()
+    provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
+    spec = _spec().model_copy(update={"availability_zone": "use1-az3"})
+
+    with pytest.raises(AwsManagedPoolProvisioningError, match="no subnet in availability zone"):
+        provisioner.ensure(spec)
+
+    assert not ec2.launch_template
+    assert not autoscaling.exists
 
 
 def _connection_target(

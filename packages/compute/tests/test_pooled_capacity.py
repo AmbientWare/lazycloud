@@ -110,6 +110,8 @@ class _PooledProvider:
     delete_failure: Exception | None = None
     catalog_failure: Exception | None = None
     storage_failure: Exception | None = None
+    last_capacity_failure_at: datetime | None = None
+    max_observed_machines: int | None = None
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
         return self.offer
@@ -192,6 +194,8 @@ class _PooledProvider:
             )
             for index in range(self.desired)
         ]
+        if self.max_observed_machines is not None:
+            instances = instances[: self.max_observed_machines]
         return ProviderUnitSnapshot(
             phase=phase,
             resource_id="asg-hidden",
@@ -199,6 +203,7 @@ class _PooledProvider:
             max_machines=request.max_machines,
             observed_machines=len(instances),
             instances=instances,
+            last_capacity_failure_at=self.last_capacity_failure_at,
             provider_state=ComputeUnitProviderState(resource_id="asg-hidden"),
         )
 
@@ -1394,6 +1399,76 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
             pool.capacity_owner_id
         )
     assert [operation.status for operation in operations] == ["released", "requested"]
+
+
+@pytest.mark.parametrize("failure_after_operation", [True, False])
+def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_owned_capacity(
+    isolated_services: ApiServices,
+    failure_after_operation: bool,
+) -> None:
+    _seed_connection(isolated_services)
+    provider = _PooledProvider(max_observed_machines=0)
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider, isolated_services),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        root_volume_gib=200,
+    )
+    request = CapacityAcquisitionRequest(
+        capacity_owner_id=pool.capacity_owner_id,
+        reservation_id=str(uuid4()),
+        operation_id=str(uuid4()),
+        shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
+    )
+    requested = compute.ensure_capacity(request)
+    assert requested.status is CapacityAcquisitionStatus.Requested
+    assert requested.owns_capacity
+    with isolated_services.context.database.session() as session:
+        operation = ComputeCapacityOperationRepository(session).get(
+            request.capacity_owner_id, request.operation_id
+        )
+    assert operation is not None
+    provider.last_capacity_failure_at = operation.created_at + timedelta(
+        seconds=1 if failure_after_operation else -1
+    )
+
+    observed = compute.ensure_capacity(request)
+    retained = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
+    if not failure_after_operation:
+        assert observed.status is CapacityAcquisitionStatus.ExistingPending
+        assert observed.owns_capacity
+        assert retained.provider_state.degraded_reason is None
+        assert provider.desired == 1
+        return
+
+    assert observed.status is CapacityAcquisitionStatus.Rejected
+    assert observed.owns_capacity
+    assert retained.provider_state.degraded_reason == "provider_acquisition_rejected"
+    assert compute.ensure_capacity(request).status is CapacityAcquisitionStatus.Rejected
+    release = CapacityReleaseRequest(
+        capacity_owner_id=request.capacity_owner_id,
+        reservation_id=request.reservation_id,
+        operation_id=request.operation_id,
+    )
+    assert compute.release_acquired_capacity(release).status is CapacityAcquisitionStatus.Requested
+    assert (
+        compute.release_acquired_capacity(release).status
+        is CapacityAcquisitionStatus.ExistingPending
+    )
+    assert provider.desired == 0
+    with isolated_services.context.database.session() as session:
+        released = ComputeCapacityOperationRepository(session).get(
+            request.capacity_owner_id, request.operation_id
+        )
+    assert released is not None
+    assert released.status == "released"
 
 
 def test_named_retirement_keeps_its_intent_across_provider_failure_and_stale_observation(

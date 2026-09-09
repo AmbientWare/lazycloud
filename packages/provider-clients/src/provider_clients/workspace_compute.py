@@ -111,7 +111,10 @@ def configured_aws_compute_catalog(
             launchable = (
                 cpu_available if instance.kind is AwsInstanceCategory.Cpu else gpu_available
             )
-            if not launchable or instance.instance_type not in priced_instance_types:
+            if not launchable or (
+                instance.instance_type not in priced_instance_types
+                and instance.max_spot_hourly_cost_micros is None
+            ):
                 continue
             instances_by_type.setdefault(
                 instance.instance_type,
