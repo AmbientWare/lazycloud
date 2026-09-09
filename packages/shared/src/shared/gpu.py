@@ -58,20 +58,16 @@ SUPPORTED_GPU_TYPES: tuple[GpuType, ...] = (
     GpuType.H100,
     GpuType.H200,
 )
-"""The GPU models the platform offers—the single list, not one of two.
+"""Models with scheduling and billing contracts, including customer-owned hardware.
 
-`GpuType` is a vocabulary: every name a request, a provider or a worker might
-utter, including ones nothing here runs. This is the subset the platform actually
-schedules, and it is what both the provider catalogs and the sell-price catalog
-are held to. Kept apart, a schedulable list and a priced list drift, and the drift
-is only visible as a GPU that runs and cannot be billed, or a rate for hardware
-nobody can rent.
-
-Adding a model means adding it here first; the catalogs that must agree then fail
-loudly until they do.
+Managed offerings are the subset in PLATFORM_GPU_TYPES. Removing a managed
+offering must preserve customer hardware and historical billing identities.
 """
 
 SUPPORTED_GPU_NAMES: frozenset[str] = frozenset(gpu.value for gpu in SUPPORTED_GPU_TYPES)
+
+PLATFORM_GPU_TYPES: tuple[GpuType, ...] = (GpuType.T4, GpuType.A10G, GpuType.L4)
+"""Products sold on managed capacity; other known models remain valid on customer hardware."""
 
 
 _GPU_ALIASES: tuple[tuple[str, str], ...] = (
@@ -243,6 +239,7 @@ def _unschedulable_gpu_message(entry: object, normalized: str) -> str:
 __all__ = [
     "GPU_ANY",
     "NO_GPU",
+    "PLATFORM_GPU_TYPES",
     "SUPPORTED_GPU_NAMES",
     "SUPPORTED_GPU_TYPES",
     "GpuInput",

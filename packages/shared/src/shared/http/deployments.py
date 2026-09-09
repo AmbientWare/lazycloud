@@ -9,11 +9,13 @@ from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.deployments import DeploymentKind
 from shared.http.base import HttpModel
 from shared.http.stubs import StubResponse
-from shared.placement import ProductRegion
+from shared.placement import AvailabilityZone, ProductRegion
 
 
 class DeploymentResourcesResponse(HttpModel):
     region: ProductRegion | None = Field(default=None, exclude_if=lambda value: value is None)
+    availability_zone: AvailabilityZone = ""
+    preemptible: bool = False
     cpu: CpuRequest | None = None
     memory: MemoryRequest | None = None
     disk: str | None = None

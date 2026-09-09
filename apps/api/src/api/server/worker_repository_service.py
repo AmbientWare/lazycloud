@@ -888,6 +888,7 @@ class WorkerRepositoryService:
                 # for a name to change. Told, not asserted.
                 "pool": unit.pool,
                 "region": product_region(unit.region),
+                "availability_zone": unit.offer_availability_zone,
                 "preemptible": unit.worker_preemptible,
                 # Whose pool this is decides who may land on it, so the unit
                 # answers rather than the machine. A worker is launched by an

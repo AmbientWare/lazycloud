@@ -50,6 +50,7 @@ def _capacity_request(request: SchedulerWorkerRequest) -> ComputeCapacityPlaceme
             gpu_count=gpu_count,
             architecture=request.architecture,
             preemptible=request.preemptible,
+            availability_zone=request.availability_zone,
             runtime=request.provider_runtime,
         ),
     )

@@ -263,6 +263,7 @@ class PodControlService:
                 gpu=plan.gpu,
                 gpu_count=plan.gpu_count,
                 region=config.runtime.region,
+                availability_zone=config.runtime.availability_zone,
                 stub_id=stub.id,
             )
             container = ContainerRecord(
@@ -360,6 +361,7 @@ class PodControlService:
                     gpu_count=container.gpu_count,
                     pool_selector=config.runtime.pool_selector or "",
                     region=config.runtime.region,
+                    availability_zone=config.runtime.availability_zone,
                     runtime=config.runtime.runtime,
                     runtime_class=config.runtime.runtime_class or "",
                     docker_enabled=config.runtime.docker_enabled,

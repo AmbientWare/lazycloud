@@ -375,6 +375,33 @@ def test_egress_is_metered_and_priced_at_an_explicit_zero(
     assert segments[0].pricing_version == "test.a"
 
 
+def test_unclassified_interface_traffic_does_not_become_an_egress_charge(
+    isolated_services: ApiServices,
+) -> None:
+    now = utc_now()
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        PlatformRateRepository(session).publish(
+            pricing_version="test.a",
+            effective_at=now + _RATE_ONE_AT,
+            nanos_per_egress_byte=Decimal(1),
+            nanos_per_volume_byte_second=Decimal(0),
+        )
+    started_at = now + _WINDOW_AT
+    record = _usage(
+        workspace_id=workspace_id,
+        resource_id=str(uuid4()),
+        metric=UsageMetric.NetworkSentBytes,
+        unit=UsageUnit.Bytes,
+        quantity=4_096,
+        started_at=started_at,
+        ended_at=started_at + _WINDOW,
+    )
+    saved = isolated_services.usage.append(record)
+    assert saved.quantity == 4_096
+    assert _segments(isolated_services, saved.id) == []
+
+
 def test_a_re_recorded_quantity_keeps_the_frozen_cost_and_is_reported(
     isolated_services: ApiServices,
 ) -> None:

@@ -209,6 +209,7 @@ class EndpointControlService:
                     gpu=list(config.runtime.gpu),
                     gpu_count=config.runtime.gpu_count,
                     region=config.runtime.region,
+                    availability_zone=config.runtime.availability_zone,
                 ),
             )
         self.services.containers.publish_lifecycle_change(
@@ -262,6 +263,7 @@ class EndpointControlService:
                 gpu_count=container.gpu_count,
                 pool_selector=config.effective_pool_selector,
                 region=config.runtime.region,
+                availability_zone=config.runtime.availability_zone,
                 runtime=config.runtime.runtime,
                 runtime_class=config.runtime.runtime_class or "",
                 docker_enabled=config.runtime.docker_enabled,

@@ -10,10 +10,8 @@ from shared.billing_plans import BillingPlanId
 from shared.billing_quotes import BYTES_PER_GIB, NANOS_PER_USD
 from shared.gpu import NO_GPU, SUPPORTED_GPU_TYPES, GpuType
 from shared.placement import AUTO_RATE_CLASS, PlacementRateClass, placement_rate_class
+from shared.timestamps import to_utc
 from shared.usage import UsageBillingOwner
-
-PRICING_VERSION = "2026-09-09.a"
-"""The version of the plans, entitlements, and rates exposed to customers."""
 
 FREE_PLAN_MONTHLY_NANOS = 0
 """What the free plan charges, published as a price rather than as no price.
@@ -112,7 +110,6 @@ cents, and 30 USD converts exactly.
 """
 
 _SECONDS_PER_HOUR = 3_600
-"""Whole, not a `Decimal`: it is a divisor and a modulus, never a price."""
 
 SECONDS_PER_30_DAY_MONTH = 2_592_000
 """The month volume storage is quoted by, said in seconds because that is what a
@@ -155,8 +152,7 @@ def _stored_rate(exact: Decimal) -> Decimal:
 def _management_fee(fleet_nanos_per_hour: int) -> int:
     """The fleet's hourly price as the fee for running the same thing elsewhere.
 
-    Snapped down to a whole nanodollar a second, because a share of a price is
-    not generally divisible by 3600 and the card refuses a figure that is not.
+    Management fees use whole nanodollars per second in the published history.
     Down rather than nearest, for the reason `_stored_rate` rounds down: the
     published figure is what a customer is quoted, and landing under it is a
     rounding artefact where landing over it is a price nobody published. The
@@ -167,16 +163,14 @@ def _management_fee(fleet_nanos_per_hour: int) -> int:
     return fee // _SECONDS_PER_HOUR * _SECONDS_PER_HOUR
 
 
-def _exact_per_second(nanos_per_hour: int) -> Decimal:
-    exact = Decimal(nanos_per_hour) / _SECONDS_PER_HOUR
-    if _stored_rate(exact) != exact:
-        raise ValueError("the hourly compute rate exceeds stored per-second precision")
-    return exact
+def _per_second_rate(nanos_per_hour: int) -> Decimal:
+    """Round down by less than one stored step per resource-second."""
+    return _stored_rate(Decimal(nanos_per_hour) / _SECONDS_PER_HOUR)
 
 
 @dataclass(frozen=True, slots=True)
 class PublishedComputeRate:
-    """Hourly resource prices with exact per-second values at ledger precision."""
+    """Hourly resource prices converted to ledger precision without rounding up."""
 
     billing_owner: UsageBillingOwner
     gpu_type: str
@@ -206,19 +200,19 @@ class PublishedComputeRate:
 
     @property
     def nanos_per_container_second(self) -> Decimal:
-        return _exact_per_second(self.nanos_per_container_hour)
+        return _per_second_rate(self.nanos_per_container_hour)
 
     @property
     def nanos_per_cpu_core_second(self) -> Decimal:
-        return _exact_per_second(self.nanos_per_cpu_core_hour)
+        return _per_second_rate(self.nanos_per_cpu_core_hour)
 
     @property
     def nanos_per_memory_gib_second(self) -> Decimal:
-        return _exact_per_second(self.nanos_per_memory_gib_hour)
+        return _per_second_rate(self.nanos_per_memory_gib_hour)
 
     @property
     def nanos_per_gpu_card_second(self) -> Decimal:
-        return _exact_per_second(self.nanos_per_gpu_card_hour)
+        return _per_second_rate(self.nanos_per_gpu_card_hour)
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,7 +447,7 @@ _PLATFORM_FLEET_SHAPE = PublishedShapeRate(
     55_126_800,
     7_560_000,
 )
-"""The one compute price this platform sets. Every other capacity derives from it."""
+"""The original compute prices retained by historical publications."""
 
 _INITIAL_SHAPE_RATES: tuple[PublishedShapeRate, ...] = (
     _PLATFORM_FLEET_SHAPE,
@@ -482,12 +476,26 @@ _INITIAL_GPU_RATES: tuple[PublishedGpuRate, ...] = (
     PublishedGpuRate(GpuType.H100, 3_372_120_000),
     PublishedGpuRate(GpuType.H200, 3_918_236_400),
 )
-"""Every GPU model the platform schedules, at the price it is rented for.
+"""Original prices for every billable GPU identity, retained for historical usage."""
 
-Held to `shared.gpu.SUPPORTED_GPU_TYPES` exactly: a model that schedules and has
-no row here is compute nothing can price, and a row for a model nobody can rent
-is a quote nobody can take.
-"""
+_SEPTEMBER_SHAPE_RATES = (
+    PublishedShapeRate(UsageBillingOwner.PlatformFleet, 0, 22_000_000, 7_500_000),
+    PublishedShapeRate(
+        UsageBillingOwner.ConnectedCloud, 0, _management_fee(22_000_000), _management_fee(7_500_000)
+    ),
+    PublishedShapeRate(UsageBillingOwner.SelfHosted, 0, 0, 0),
+)
+_SEPTEMBER_GPU_RATES = tuple(
+    replace(
+        rate,
+        platform_fleet_nanos_per_card_hour={
+            GpuType.T4: 550_000_000,
+            GpuType.A10G: 1_000_000_000,
+            GpuType.L4: 750_000_000,
+        }.get(rate.gpu_type, rate.platform_fleet_nanos_per_card_hour),
+    )
+    for rate in _INITIAL_GPU_RATES
+)
 
 _INITIAL_PLATFORM_RATE = PublishedPlatformRate(
     nanos_per_egress_gib=0,
@@ -703,25 +711,51 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[PublishedMeteredRateCard, ...] = (
             nanos_per_volume_gib_month=50_000_000,
         ),
     ),
+    PublishedMeteredRateCard(
+        pricing_version="2026-09-12.a",
+        effective_at=datetime(2026, 9, 12, tzinfo=timezone.utc),
+        compute_rates=tuple(
+            rate
+            for placement in _placement_rates(
+                _published_compute_rates(_SEPTEMBER_SHAPE_RATES, _SEPTEMBER_GPU_RATES)
+            )
+            for rate in placement.compute_rates
+        ),
+        platform_rate=None,
+    ),
 )
 """Reviewed price history. Existing cards retain their original figures and dates."""
 
 
-_CURRENT_METERED_CARD = PUBLISHED_METERED_RATE_HISTORY[-1]
-METERED_RATE_VERSION = _CURRENT_METERED_CARD.pricing_version
-METERED_RATES_EFFECTIVE_AT = _CURRENT_METERED_CARD.effective_at
-PUBLISHED_COMPUTE_RATES = tuple(
-    {
-        (rate.billing_owner, rate.rate_class, rate.gpu_type): rate
-        for card in PUBLISHED_METERED_RATE_HISTORY
-        for rate in card.compute_rates
-    }.values()
-)
-PUBLISHED_PLATFORM_RATE = next(
-    card.platform_rate
-    for card in reversed(PUBLISHED_METERED_RATE_HISTORY)
-    if card.platform_rate is not None
-)
+def published_metered_rate_card(at: datetime) -> PublishedMeteredRateCard:
+    applicable = tuple(
+        card for card in PUBLISHED_METERED_RATE_HISTORY if card.effective_at <= to_utc(at)
+    )
+    if not applicable:
+        raise ValueError("no published rates cover the requested time")
+    latest = applicable[-1]
+    return PublishedMeteredRateCard(
+        pricing_version=latest.pricing_version,
+        effective_at=latest.effective_at,
+        compute_rates=tuple(
+            {
+                (rate.billing_owner, rate.rate_class, rate.gpu_type): rate
+                for card in applicable
+                for rate in card.compute_rates
+            }.values()
+        ),
+        platform_rate=next(
+            card.platform_rate for card in reversed(applicable) if card.platform_rate is not None
+        ),
+    )
+
+
+METERED_RATE_VERSION = PUBLISHED_METERED_RATE_HISTORY[-1].pricing_version
+METERED_RATES_EFFECTIVE_AT = PUBLISHED_METERED_RATE_HISTORY[-1].effective_at
+_LATEST_METERED_CARD = published_metered_rate_card(METERED_RATES_EFFECTIVE_AT)
+PUBLISHED_COMPUTE_RATES = _LATEST_METERED_CARD.compute_rates
+PUBLISHED_PLATFORM_RATE = _LATEST_METERED_CARD.platform_rate
+assert PUBLISHED_PLATFORM_RATE is not None
 PUBLISHED_SHAPE_RATES = tuple(
     PublishedShapeRate(
         billing_owner=rate.billing_owner,
@@ -741,9 +775,19 @@ PUBLISHED_GPU_RATES = tuple(
 )
 
 
-PUBLISHED_PLACEMENT_RATES = _placement_rates(
-    _published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES)
-)
+def published_placement_rates(
+    rates: tuple[PublishedComputeRate, ...],
+) -> tuple[PublishedPlacementRate, ...]:
+    return tuple(
+        replace(
+            placement,
+            compute_rates=tuple(rate for rate in rates if rate.rate_class == placement.rate_class),
+        )
+        for placement in _placement_rates(
+            tuple(rate for rate in rates if rate.rate_class == AUTO_RATE_CLASS)
+        )
+        if any(rate.rate_class == placement.rate_class for rate in rates)
+    )
 
 
 if tuple(rate.gpu_type for rate in PUBLISHED_GPU_RATES) != SUPPORTED_GPU_TYPES:
@@ -766,11 +810,9 @@ __all__ = [
     "NO_CARD_INCLUDED_NANOS",
     "NO_CARD_MAX_CPU_CONTAINERS",
     "NO_CARD_MAX_GPUS",
-    "PRICING_VERSION",
     "PUBLISHED_COMPUTE_RATES",
     "PUBLISHED_GPU_RATES",
     "PUBLISHED_METERED_RATE_HISTORY",
-    "PUBLISHED_PLACEMENT_RATES",
     "PUBLISHED_PLANS",
     "PUBLISHED_PLATFORM_RATE",
     "PUBLISHED_SHAPE_RATES",
@@ -794,5 +836,7 @@ __all__ = [
     "PublishedShapeRate",
     "account_terms",
     "complimentary_terms",
+    "published_metered_rate_card",
+    "published_placement_rates",
     "published_plan",
 ]

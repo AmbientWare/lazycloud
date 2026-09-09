@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from execution.artifacts.service import ArtifactStorageService
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 from shared.artifacts import InheritRetention
 from shared.http.artifacts import (
@@ -26,6 +26,7 @@ from shared.http.artifacts import (
 from shared.http_headers import INLINE_RENDERABLE_CONTENT_TYPES, content_disposition
 
 from api.server.auth import read_workspace, write_workspace
+from api.server.public_transfers import attribute_public_transfer
 from api.server.service_dependencies import artifact_service
 
 router = APIRouter(prefix="/api/v1/artifacts", tags=["artifact"])
@@ -136,6 +137,7 @@ def delete_artifact(
 
 @router.get("/content", operation_id="read_artifact_content")
 def read_artifact_content(
+    request: Request,
     id: str,
     task_id: str,
     filename: str,
@@ -155,6 +157,12 @@ def read_artifact_content(
         filename=filename,
     )
     inline = not download and content_type in INLINE_RENDERABLE_CONTENT_TYPES
+    attribute_public_transfer(
+        request,
+        workspace_id=workspace_id,
+        resource_type="artifact",
+        resource_id=id,
+    )
     return Response(
         content=content,
         media_type=content_type,

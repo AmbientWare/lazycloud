@@ -222,7 +222,9 @@ if request.backfill == true then
         if requested_gpu > 0 and requested_gpu <= total_gpu
             and (queued.pool_selector == "" or queued.pool_selector == worker_field("pool", ""))
             and (queued.region == cjson.null or queued.region == nil
-                or queued.region == worker_field("region", cjson.null)) then
+                or queued.region == worker_field("region", cjson.null))
+            and (queued.availability_zone == nil or queued.availability_zone == ""
+                or queued.availability_zone == worker_field("availability_zone", "")) then
             for _, gpu in ipairs(queued.gpu) do
                 if gpu_matches[gpu] ~= false then return -5 end
             end
@@ -3501,6 +3503,14 @@ def plan_worker_capacity_change(
             request=request,
             accepted=False,
             reason="worker is outside the selected region",
+        )
+    if request.availability_zone and worker.availability_zone != request.availability_zone:
+        return WorkerCapacityPlan(
+            worker=worker,
+            change=change,
+            request=request,
+            accepted=False,
+            reason="worker is outside the selected availability zone",
         )
     if not request.preemptible and worker.preemptible:
         return WorkerCapacityPlan(

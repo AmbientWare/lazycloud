@@ -607,7 +607,7 @@ def _usage_evidence_from_metrics(metrics: ContainerMetricsData) -> WorkerUsageEv
         disk_used_byte_seconds=metrics.disk_used_bytes * interval_seconds,
         gpu_memory_byte_seconds=metrics.gpu_memory_used_bytes * interval_seconds,
         network_ingress_bytes=metrics.network_recv_bytes,
-        network_egress_bytes=metrics.network_sent_bytes,
+        network_sent_bytes=metrics.network_sent_bytes,
         network_ingress_packets=metrics.network_recv_packets,
         network_egress_packets=metrics.network_sent_packets,
         disk_read_bytes=metrics.disk_read_bytes,

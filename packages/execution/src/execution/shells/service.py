@@ -143,6 +143,7 @@ class ShellControlService:
                 gpu=plan.gpu,
                 gpu_count=plan.gpu_count,
                 region=stub.config.runtime.region,
+                availability_zone=stub.config.runtime.availability_zone,
                 stub_id=stub.id,
             )
             record = ContainerRecord(
@@ -175,8 +176,10 @@ class ShellControlService:
             record,
             ContainerSchedulingOptions(
                 region=stub.config.runtime.region,
+                availability_zone=stub.config.runtime.availability_zone,
                 workspace_name=workspace.name,
                 stub_type="shell",
+                preemptible=stub.config.runtime.preemptible,
                 startup_kind=WorkerStartupKind.Pod,
                 entrypoint=list(plan.entrypoint),
                 env=env,

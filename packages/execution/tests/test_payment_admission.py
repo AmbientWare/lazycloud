@@ -7,6 +7,7 @@ from database.repositories.billing import BillingAccountRepository
 from database.tables.execution import TaskTable
 from database.tables.orchestration import ContainerTable
 from execution.functions.service import FunctionControlService
+from pydantic import JsonValue
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
 from shared.errors import PaymentRequiredError
@@ -51,17 +52,19 @@ def test_invoking_a_function_past_due_refuses_and_queues_nothing(
     assert _row_counts(isolated_services, stub.workspace_id) == before
 
 
-def test_free_function_region_selection_refuses_before_creating_work(
+@pytest.mark.parametrize("placement", [{"region": "eu-central"}, {"availability_zone": "use1-az5"}])
+def test_free_function_pinned_placement_refuses_before_creating_work(
     isolated_services: ApiServices,
+    placement: dict[str, JsonValue],
 ) -> None:
     stub = ControlPlaneService(isolated_services.context).create_stub(
         "regional-function",
         kind=StubKind.Function,
         handler="pkg.workloads:handler",
-        config={"runtime": {"region": "eu-central"}},
+        config={"runtime": placement},
     )
     before = _row_counts(isolated_services, stub.workspace_id)
-    with pytest.raises(PaymentRequiredError, match="region selection requires the Team plan"):
+    with pytest.raises(PaymentRequiredError, match="selection requires the Team plan"):
         FunctionControlService(isolated_services).function_invoke(
             FunctionInvokeBody(stub_id=stub.id, invocation=FunctionJsonInvocation(args=[]))
         )

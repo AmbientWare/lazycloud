@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from shared.deployment_records import request_and_limit
 from shared.deployments import DeploymentKind
 from shared.http.gateway import DeployStubRequest, GetOrCreateStubRequest
+from shared.placement import ProductRegion
 from shared.workload_config import StubConfig
 from tests.redis_fakes import FakeRedis
 
@@ -107,7 +108,7 @@ def test_runtime_prepare_stays_outside_apps_and_deployments_until_publish(
     assert deployed[0].deployment_id == published.deployment_id
 
 
-def test_a_resource_ceiling_survives_being_stored_and_read_back() -> None:
+def test_resource_requests_and_placement_survive_storage() -> None:
     """`cpu=(1, 4)` has to reach the deploy that reads the stub back.
 
     The pair crosses JSON to reach the stub row, so it returns as a list rather
@@ -119,6 +120,9 @@ def test_a_resource_ceiling_survives_being_stored_and_read_back() -> None:
         stub_type=DeploymentKind.Function.value,
         cpu=(1.0, 4.0),
         memory=("1Gi", "2Gi"),
+        region=ProductRegion.UsEast,
+        availability_zone="use1-az5",
+        preemptible=False,
     )
 
     stored = json.loads(stub_config(request).model_dump_json())
@@ -126,6 +130,9 @@ def test_a_resource_ceiling_survives_being_stored_and_read_back() -> None:
 
     assert request_and_limit(runtime.cpu) == (1.0, 4.0)
     assert request_and_limit(runtime.memory) == ("1Gi", "2Gi")
+    assert runtime.region is ProductRegion.UsEast
+    assert runtime.availability_zone == "use1-az5"
+    assert runtime.preemptible is False
 
     spec = deployment_spec_from_stub(
         StubRecord(
@@ -138,6 +145,9 @@ def test_a_resource_ceiling_survives_being_stored_and_read_back() -> None:
     )
     assert request_and_limit(spec.resources.cpu) == (1.0, 4.0)
     assert request_and_limit(spec.resources.memory) == ("1Gi", "2Gi")
+    assert spec.resources.region is ProductRegion.UsEast
+    assert spec.resources.availability_zone == "use1-az5"
+    assert spec.resources.preemptible is False
 
 
 def test_a_ceiling_below_its_request_is_refused_at_the_public_boundary() -> None:

@@ -16,6 +16,7 @@ export const usageMetrics = [
   "gpu_memory_byte_seconds",
   "network_ingress_bytes",
   "network_egress_bytes",
+  "network_sent_bytes",
   "network_ingress_packets",
   "network_egress_packets",
   "disk_read_bytes",

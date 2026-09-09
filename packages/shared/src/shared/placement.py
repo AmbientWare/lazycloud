@@ -15,11 +15,13 @@ class ProductRegion(StringEnum):
     ApSoutheast = "ap-southeast"
 
 
+AvailabilityZone = Annotated[str, StringConstraints(max_length=128, pattern=r"^[A-Za-z0-9._:-]*$")]
+
+
 PlacementRateClass = Annotated[
     str, StringConstraints(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_-]*$")
 ]
 AUTO_RATE_CLASS: PlacementRateClass = "auto"
-
 PINNED_RATE_CLASS: PlacementRateClass = "pinned"
 NON_PREEMPTIBLE_RATE_CLASS: PlacementRateClass = "non_preemptible"
 PINNED_NON_PREEMPTIBLE_RATE_CLASS: PlacementRateClass = "pinned_non_preemptible"
@@ -55,6 +57,10 @@ def product_region(provider_region: str) -> ProductRegion | None:
     return _PROVIDER_REGIONS.get(provider_region)
 
 
-def validate_region_pool(region: ProductRegion | None, pool: str | None) -> None:
-    if region is not None and pool:
-        raise ValueError("region and an explicit pool cannot be selected together")
+def validate_placement_pool(
+    region: ProductRegion | None, availability_zone: str, pool: str | None
+) -> None:
+    if (region is not None or availability_zone) and pool:
+        raise ValueError(
+            "region or availability zone and an explicit pool cannot be selected together"
+        )

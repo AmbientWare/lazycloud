@@ -120,6 +120,7 @@ class ContainerCursorPayload(ContractModel):
 
 class PendingContainerReservation(ContractModel):
     region: ProductRegion | None = Field(default=None, exclude=True)
+    availability_zone: str = Field(default="", exclude=True)
     id: str | None = None
     name: str
     image: str
@@ -161,6 +162,7 @@ class ContainerService:
         gpu: Sequence[str],
         gpu_count: int,
         region: ProductRegion | None = None,
+        availability_zone: str = "",
         stub_id: str | None = None,
     ) -> list[str]:
         """Refuse a start the account may not make, before anything exists.
@@ -181,6 +183,7 @@ class ContainerService:
             gpu=gpu,
             gpu_count=gpu_count_for_capacity(gpu, gpu_count),
             region=region,
+            availability_zone=availability_zone,
         )
         if stub_id is not None:
             stub = StubRepository(session).get(stub_id, workspace_id=workspace_id)
@@ -207,6 +210,7 @@ class ContainerService:
             gpu=reservation.gpu,
             gpu_count=reservation.gpu_count,
             region=reservation.region,
+            availability_zone=reservation.availability_zone,
             stub_id=reservation.stub_id,
         )
         app_id = optional_uuid(reservation.app_id, field="app_id")
@@ -302,6 +306,7 @@ class ContainerService:
         gpu_count: int = 0,
         pool_selector: str = "",
         region: ProductRegion | None = None,
+        availability_zone: str = "",
         runtime: OciRuntimeName | str = OciRuntimeName.Runsc,
         runtime_class: str = "",
         docker_enabled: bool = False,
@@ -333,6 +338,7 @@ class ContainerService:
                 PendingContainerReservation(
                     name=name,
                     region=region,
+                    availability_zone=availability_zone,
                     image=image,
                     command=argv,
                     workspace_id=workspace.id,
@@ -371,6 +377,7 @@ class ContainerService:
                 gpu_count=record.gpu_count,
                 pool_selector=pool_selector,
                 region=region,
+                availability_zone=availability_zone,
                 runtime=runtime,
                 runtime_class=runtime_class,
                 docker_enabled=docker_enabled,
@@ -497,6 +504,7 @@ class ContainerService:
             gpu_count=options.gpu_count,
             pool_selector=options.pool_selector,
             region=options.region,
+            availability_zone=options.availability_zone,
             runtime_class=runtime_constraint,
             docker_enabled=options.docker_enabled,
             preemptible=options.preemptible,

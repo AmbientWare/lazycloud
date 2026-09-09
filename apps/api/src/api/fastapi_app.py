@@ -55,6 +55,7 @@ from api.server import include_api_routers, service_dependencies
 from api.server.async_io import ApiAsyncIo
 from api.server.client_version import ClientVersionMiddleware
 from api.server.host_routing import GeneratedInvokeHostRoutingMiddleware
+from api.server.public_transfers import PublicTransferMiddleware
 from api.server.rate_limit import UnauthenticatedRateLimitMiddleware
 from api.server.services import (
     ApiServices,
@@ -218,6 +219,11 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
     app.add_middleware(
         GeneratedInvokeHostRoutingMiddleware,
         services_provider=services_provider,
+    )
+    app.add_middleware(
+        PublicTransferMiddleware,
+        usage=lambda: services_provider.current().usage,
+        client_ip_header=public_ingress.client_ip_header,
     )
     app.add_middleware(
         UnauthenticatedRateLimitMiddleware,

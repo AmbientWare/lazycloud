@@ -37,6 +37,7 @@ class UsageMetric(StringEnum):
     GpuMemoryByteSeconds = "gpu_memory_byte_seconds"
     NetworkIngressBytes = "network_ingress_bytes"
     NetworkEgressBytes = "network_egress_bytes"
+    NetworkSentBytes = "network_sent_bytes"
     NetworkIngressPackets = "network_ingress_packets"
     NetworkEgressPackets = "network_egress_packets"
     ContainerDiskByteSeconds = "container_disk_byte_seconds"

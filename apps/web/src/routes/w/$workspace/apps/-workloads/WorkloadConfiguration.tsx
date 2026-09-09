@@ -15,9 +15,10 @@ export function WorkloadConfiguration({
   kind: string;
 }) {
   const resources = deployment.spec.resources;
+  const pinned = Boolean(resources.region || resources.availability_zone);
   const pricing = useQuery(pricingCatalogQueryOptions());
   const placement = pricing.data?.placement_rates.find(
-    (rate) => rate.pinned === Boolean(resources.region) && rate.preemptible === resources.preemptible,
+    (rate) => rate.pinned === pinned && rate.preemptible === resources.preemptible,
   );
   // A Pod holds connections rather than executing tasks, so per-task
   // concurrency and timeout describe nothing it does.
@@ -36,6 +37,9 @@ export function WorkloadConfiguration({
         ) : null}
         <Fact label="Pool" value={deployment.spec.pool || "Not reported"} />
         <Fact label="Region" value={resources.region || "Automatic"} />
+        {resources.availability_zone ? (
+          <Fact label="Availability zone" value={resources.availability_zone} />
+        ) : null}
         <Fact
           label="Platform CPU and memory multiplier"
           value={
@@ -60,10 +64,10 @@ export function WorkloadConfiguration({
         ) : null}
       </ConfigurationGroup>
       <p className="text-xs leading-relaxed text-muted-foreground lg:col-span-2">
-        {resources.region
-          ? "This workload is restricted to its selected region. New starts require region selection on the account's plan."
+        {pinned
+          ? "This workload is restricted to its selected location. New starts require location selection on the account's plan."
           : "Automatic region selection follows your compute pool policy without a location premium."}{" "}
-        Set the region in your SDK configuration before deploying a new
+        Set the region or availability zone in your SDK configuration before deploying a new
         version.
       </p>
 

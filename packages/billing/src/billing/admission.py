@@ -112,6 +112,7 @@ class DatabaseBillingAdmission:
         gpu: Sequence[str],
         gpu_count: int,
         region: ProductRegion | None = None,
+        availability_zone: str = "",
     ) -> list[str]:
         """The question above, plus what a container's own shape is bounded by.
 
@@ -123,11 +124,13 @@ class DatabaseBillingAdmission:
 
         resolved = self._billable_account(session, workspace_id=workspace_id)
         if (
-            region is not None
+            (region is not None or availability_zone)
             and resolved is not None
             and not resolved[1].entitlements.region_selection
         ):
-            raise PaymentRequiredError("region selection requires the Team plan")
+            raise PaymentRequiredError(
+                "region or availability zone selection requires the Team plan"
+            )
         if resolved is None:
             # No account to judge, so nothing to narrow either: what was asked
             # for is what gets scheduled.

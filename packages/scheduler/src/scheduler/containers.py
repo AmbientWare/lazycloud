@@ -595,10 +595,7 @@ class SchedulerContainerRequestService:
                 )
                 continue
             if outcome.decision is not SchedulingDecision.WaitForWorker:
-                if not claim.request.preemptible and worker.preemptible:
-                remaining.append(claim)
-                continue
-            recovered = self._recover_gpu_backfill(
+                recovered = self._recover_gpu_backfill(
                     claim,
                     schedulable_workers,
                     owner_user_id=owners_by_workspace_id[request.workspace_id],
@@ -739,6 +736,12 @@ class SchedulerContainerRequestService:
                 remaining.append(claim)
                 continue
             if claim.request.region is not None and worker.region != claim.request.region:
+                remaining.append(claim)
+                continue
+            if (
+                claim.request.availability_zone
+                and worker.availability_zone != claim.request.availability_zone
+            ):
                 remaining.append(claim)
                 continue
             if not claim.request.preemptible and worker.preemptible:
@@ -1220,7 +1223,7 @@ class SchedulerContainerRequestService:
 
 def _request_rate_class(request: SchedulerWorkerRequest) -> PlacementRateClass:
     return placement_rate_class(
-        pinned=request.region is not None,
+        pinned=request.region is not None or bool(request.availability_zone),
         preemptible=request.preemptible,
     )
 
@@ -1267,6 +1270,7 @@ def _scheduling_request(
     return SchedulingRequest(
         backfill=request.backfill,
         region=request.region,
+        availability_zone=request.availability_zone,
         id=request.container_id,
         owner_user_id=owner_user_id,
         queue=request.stub_id or "containers",
@@ -1323,6 +1327,7 @@ def _worker_capacity(
     reserved = reserved_capacity or WorkerReservedCapacity()
     return WorkerCapacity(
         region=worker.region,
+        availability_zone=worker.availability_zone,
         worker_id=worker.worker_id,
         pool=worker.pool,
         owner_user_id=worker.owner_user_id,

@@ -147,6 +147,7 @@ class CapacityAcquisitionStatus(StrEnum):
 
 class CapacityRequestShape(ContractModel):
     region: ProductRegion | None = None
+    availability_zone: str = ""
     cpu_millicores: int = Field(ge=0)
     memory_mib: int = Field(ge=0)
     gpu_type: str = ""
@@ -164,6 +165,8 @@ class CapacityRequestShape(ContractModel):
 
     def can_host(self, request: SchedulerWorkerRequest) -> bool:
         if request.region is not None and self.region != request.region:
+            return False
+        if request.availability_zone and self.availability_zone != request.availability_zone:
             return False
         requested_gpu = gpu_count_for_capacity(request.gpu, request.gpu_count)
         if self.cpu_millicores < request.cpu_millicores:
@@ -185,6 +188,7 @@ class CapacityRequestShape(ContractModel):
     def worker_capabilities_match(self, worker: SchedulerWorkerRecord) -> bool:
         return (
             (self.region is None or worker.region == self.region)
+            and (not self.availability_zone or worker.availability_zone == self.availability_zone)
             and worker.total_gpu_count >= self.gpu_count
             and (self.gpu_count == 0 or worker.gpu_type == self.gpu_type)
             and all(runtime in worker.runtime_classes for runtime in self.runtime_classes)
@@ -435,6 +439,7 @@ class ComputeUnitCapacityController:
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
         return CapacityRequestShape(
             region=product_region(self.unit.region),
+            availability_zone=self.unit.offer_availability_zone,
             cpu_millicores=self.unit.worker_cpu_millicores,
             memory_mib=self.unit.worker_memory_mib,
             gpu_type=self.unit.worker_gpu_type,
@@ -1907,6 +1912,7 @@ def _schedulable_shape(
     return reservation.acquisition_shape.model_copy(
         update={
             "region": worker.region,
+            "availability_zone": worker.availability_zone,
             "cpu_millicores": worker.total_cpu_millicores,
             "memory_mib": worker.total_memory_mib,
             "gpu_type": worker.gpu_type if worker.total_gpu_count > 0 else "",

@@ -180,6 +180,20 @@ class UsageService:
         self._publish_change(saved)
         return saved
 
+    async def append_async(self, record: UsageRecord) -> UsageRecord:
+        database = self.async_database
+        if database is None:
+            raise RuntimeError("asynchronous usage database is not configured")
+
+        def persist(session: DatabaseSession) -> UsageRecord:
+            saved = UsageRepository(session).append(record)
+            MeteredUsagePricer(session).price(saved)
+            return saved
+
+        saved = await database.run_transaction(persist)
+        await self._publish_change_async(saved)
+        return saved
+
     def list(
         self,
         query: UsageQuery | None = None,

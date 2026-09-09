@@ -17,7 +17,9 @@ from shared.billing_quotes import ContainerShape, LedgerComponent
 from shared.billing_rate_card import (
     METERED_RATES_EFFECTIVE_AT,
     PUBLISHED_METERED_RATE_HISTORY,
+    STORED_RATE_STEP,
 )
+from shared.http.pricing import pricing_catalog_response
 from shared.placement import placement_rate_class
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
@@ -32,12 +34,17 @@ from sqlalchemy import select
 
 @pytest.mark.parametrize("existing_installation", [False, True])
 def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
-    isolated_services: ApiServices, existing_installation: bool
+    postgres_services: ApiServices, existing_installation: bool
 ) -> None:
     old = PUBLISHED_METERED_RATE_HISTORY[0]
     assert old.platform_rate is not None
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    transfer_boundary = next(
+        card.effective_at
+        for card in PUBLISHED_METERED_RATE_HISTORY
+        if card.platform_rate is not None and card.platform_rate.nanos_per_egress_gib > 0
+    )
+    with postgres_services.context.database.session() as session:
+        workspace_id = postgres_services.context.default_workspace_id(session)
         if existing_installation:
             PlatformRateRepository(session).publish(
                 pricing_version=old.pricing_version,
@@ -58,30 +65,30 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
         unit=UsageUnit.Bytes,
         metadata={
             METERING_WINDOW_STARTED_AT_METADATA_KEY: (
-                METERED_RATES_EFFECTIVE_AT - timedelta(minutes=2)
+                transfer_boundary - timedelta(minutes=2)
             ).isoformat(),
             METERING_WINDOW_ENDED_AT_METADATA_KEY: (
-                METERED_RATES_EFFECTIVE_AT - timedelta(minutes=1)
+                transfer_boundary - timedelta(minutes=1)
             ).isoformat(),
         },
     )
-    isolated_services.usage.append(before)
-    with isolated_services.context.database.session() as session:
+    postgres_services.usage.append(before)
+    with postgres_services.context.database.session() as session:
         publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
 
     after = before.model_copy(
         update={
             "id": str(uuid4()),
             "metadata": {
-                METERING_WINDOW_STARTED_AT_METADATA_KEY: METERED_RATES_EFFECTIVE_AT.isoformat(),
+                METERING_WINDOW_STARTED_AT_METADATA_KEY: transfer_boundary.isoformat(),
                 METERING_WINDOW_ENDED_AT_METADATA_KEY: (
-                    METERED_RATES_EFFECTIVE_AT + timedelta(minutes=1)
+                    transfer_boundary + timedelta(minutes=1)
                 ).isoformat(),
             },
         }
     )
-    isolated_services.usage.append(after)
-    with isolated_services.context.database.session() as session:
+    postgres_services.usage.append(after)
+    with postgres_services.context.database.session() as session:
         old_segment = session.scalar(
             select(BillingLedgerSegmentTable).where(
                 BillingLedgerSegmentTable.usage_record_id == before.id
@@ -118,14 +125,14 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
     ],
 )
 def test_published_execution_choices_price_each_resource_and_preserve_customer_cloud_fees(
-    isolated_services: ApiServices,
+    postgres_services: ApiServices,
     pinned: bool,
     preemptible: bool,
     cpu_memory_multiplier: str,
     gpu_multiplier: str,
 ) -> None:
     started_at = datetime(2026, 9, 9, 1, tzinfo=UTC)
-    with isolated_services.context.database.session() as session:
+    with postgres_services.context.database.session() as session:
         publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
         rates = ComputeRateRepository(session)
         for owner in (UsageBillingOwner.PlatformFleet, UsageBillingOwner.ConnectedCloud):
@@ -161,3 +168,65 @@ def test_published_execution_choices_price_each_resource_and_preserve_customer_c
                     selected[0].rate_nanos_per_unit
                     == base[0].rate_nanos_per_unit * expected_multiplier
                 )
+
+
+def test_price_cutover_matches_quotes_and_preserves_customer_gpu_prices(
+    postgres_services: ApiServices,
+) -> None:
+    boundary = datetime(2026, 9, 12, tzinfo=UTC)
+    with postgres_services.context.database.session() as session:
+        publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
+        rates = ComputeRateRepository(session)
+        for at, expected_cpu in (
+            (boundary - timedelta(seconds=1), 55_126_800),
+            (boundary, 22_000_000),
+        ):
+            catalog = pricing_catalog_response(at=at)
+            automatic = next(
+                placement for placement in catalog.placement_rates if placement.rate_class == "auto"
+            )
+            cpu = next(
+                rate
+                for rate in automatic.compute_rates
+                if rate.billing_owner is UsageBillingOwner.PlatformFleet and not rate.gpu_type
+            )
+            assert cpu.nanos_per_cpu_core_hour == expected_cpu
+            assert {rate.gpu_type for rate in catalog.gpu_rates} == {"T4", "A10G", "L4"}
+            assert not any(
+                rate.billing_owner is UsageBillingOwner.PlatformFleet and rate.gpu_type == "H100"
+                for rate in automatic.compute_rates
+            )
+            assert any(
+                rate.billing_owner is UsageBillingOwner.ConnectedCloud and rate.gpu_type == "H100"
+                for rate in automatic.compute_rates
+            )
+            assert all(placement.effective_at <= at for placement in catalog.placement_rates)
+            for placement in catalog.placement_rates:
+                selected = next(
+                    rate
+                    for rate in placement.compute_rates
+                    if rate.billing_owner is UsageBillingOwner.PlatformFleet
+                    and rate.gpu_type == "T4"
+                )
+                shape = ContainerShape(
+                    UsageBillingOwner.PlatformFleet,
+                    "T4",
+                    1_000,
+                    1_024,
+                    1,
+                    rate_class=placement.rate_class,
+                )
+                for component, hourly in (
+                    (LedgerComponent.Cpu, selected.nanos_per_cpu_core_hour),
+                    (LedgerComponent.Memory, selected.nanos_per_memory_gib_hour),
+                    (LedgerComponent.Gpu, selected.nanos_per_gpu_card_hour),
+                ):
+                    quotes = rates.quotes_for(
+                        shape=shape,
+                        components=(component,),
+                        started_at=at,
+                        ended_at=at + timedelta(seconds=1),
+                    )
+                    assert len(quotes) == 1
+                    error = Decimal(hourly) / 3_600 - quotes[0].rate_nanos_per_unit
+                    assert Decimal(0) <= error < STORED_RATE_STEP

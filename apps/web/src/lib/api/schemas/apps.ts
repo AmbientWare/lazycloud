@@ -38,6 +38,7 @@ export const deploymentSchema = z.object({
         .object({
           cpu: cpuRequestSchema.nullish(),
           region: productRegionSchema.nullish(),
+          availability_zone: z.string().default(""),
           memory: memoryRequestSchema.nullish(),
           disk: z.string().nullish(),
           gpu: z.array(z.string()).default([]),
@@ -45,9 +46,15 @@ export const deploymentSchema = z.object({
           timeout_seconds: z.number().nullish(),
           concurrency: z.number().default(1),
           keep_warm: z.number().nullish(),
-          preemptible: z.boolean().optional(),
+          preemptible: z.boolean().default(false),
         })
-        .default({ gpu: [], gpu_count: 0, concurrency: 1 }),
+        .default({
+          gpu: [],
+          gpu_count: 0,
+          concurrency: 1,
+          availability_zone: "",
+          preemptible: false,
+        }),
       route: z.string().nullish(),
       methods: z.array(z.string()).default([]),
       cron: z.string().nullish(),

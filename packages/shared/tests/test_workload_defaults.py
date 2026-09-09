@@ -17,7 +17,27 @@ from shared.deployment_records import (
 from shared.deployments import DeploymentKind
 from shared.http.deployments import DeploymentResourcesResponse
 from shared.http.gateway import Autoscaler, GetOrCreateStubRequest
-from shared.http.stubs import StubRuntimeConfigResponse
+from shared.http.stubs import StubConfigUpdateRequest, StubCreateRequest, StubRuntimeConfigResponse
+from shared.workload_config import StubRuntimeConfig
+
+
+def test_new_workload_defaults_preserve_explicit_and_stored_preemption_choices() -> None:
+    created = StubCreateRequest(name="new")
+    assert created.config.runtime is not None
+    assert created.config.runtime.preemptible is True
+    explicit = StubCreateRequest.model_validate(
+        {"name": "durable", "config": {"runtime": {"preemptible": False}}}
+    )
+    assert explicit.config.runtime is not None
+    assert explicit.config.runtime.preemptible is False
+    assert StubRuntimeConfig.model_validate({}).preemptible is False
+
+    update = StubConfigUpdateRequest.model_validate({"runtime": {"cpu": 2000}})
+    assert update.fields() == {"runtime": {"cpu": 2000}}
+    clear_pin = StubConfigUpdateRequest.model_validate(
+        {"runtime": {"availability_zone": "", "preemptible": False}}
+    )
+    assert clear_pin.fields() == {"runtime": {"availability_zone": "", "preemptible": False}}
 
 
 def test_deployment_concurrency_is_positive_at_public_http_boundaries() -> None:

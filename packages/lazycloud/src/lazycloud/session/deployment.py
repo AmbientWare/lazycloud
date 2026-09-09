@@ -762,6 +762,7 @@ def _stub_request_from_spec(
         preemptible=spec.resources.preemptible,
         pool=MachinePool(_metadata_pool_name(metadata)),
         region=spec.resources.region,
+        availability_zone=spec.resources.availability_zone,
         workspace=workspace,
     )
 
