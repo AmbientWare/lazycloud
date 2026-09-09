@@ -13,8 +13,10 @@ from database.tables.billing_credits import (
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.observability import UsageRecordTable
+from database.tables.storage_access import StorageAccessTable
 from shared.billing_credits import CreditKind
 from shared.billing_quotes import BILLED_METRICS, LedgerBasis, LedgerComponent
+from shared.storage_access import StorageRequestClass, StorageTransferEvidence
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -26,6 +28,16 @@ class EconomicsUsageTotal:
     basis: LedgerBasis
     quantity: Decimal
     gross_nanos: int
+
+
+@dataclass(frozen=True, slots=True)
+class StorageAccessTotal:
+    request_class: StorageRequestClass
+    transfer_evidence: StorageTransferEvidence
+    attributed: bool
+    requests: int
+    response_bytes: int
+    missing_bytes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +55,7 @@ class EconomicsLedgerFacts:
     legacy_segments: int
     settlement_disagreements: int
     missing_delivery_records: int
+    storage_access: tuple[StorageAccessTotal, ...]
 
 
 @dataclass(slots=True)
@@ -240,4 +253,33 @@ class EconomicsRepository:
             legacy_segments=legacy,
             settlement_disagreements=disagreements,
             missing_delivery_records=missing_delivery,
+            storage_access=tuple(
+                StorageAccessTotal(
+                    StorageRequestClass(kind),
+                    StorageTransferEvidence(evidence),
+                    attributed,
+                    count,
+                    int(size),
+                    missing,
+                )
+                for kind, evidence, attributed, count, size, missing in self.session.execute(
+                    select(
+                        StorageAccessTable.request_class,
+                        StorageAccessTable.transfer_evidence,
+                        StorageAccessTable.workspace_id.is_not(None),
+                        func.count(),
+                        func.coalesce(func.sum(StorageAccessTable.response_bytes), 0),
+                        func.count().filter(StorageAccessTable.response_bytes.is_(None)),
+                    )
+                    .where(
+                        StorageAccessTable.occurred_at >= started_at,
+                        StorageAccessTable.occurred_at < ended_at,
+                    )
+                    .group_by(
+                        StorageAccessTable.request_class,
+                        StorageAccessTable.transfer_evidence,
+                        StorageAccessTable.workspace_id.is_not(None),
+                    )
+                )
+            ),
         )

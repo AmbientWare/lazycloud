@@ -153,6 +153,10 @@ class SchedulerVolumeMeteringBatch(Protocol):
     def failure_count(self) -> int: ...
 
 
+class SchedulerStorageAccessService(Protocol):
+    def reconcile(self) -> int: ...
+
+
 class SchedulerVolumeMeteringService(Protocol):
     def reconcile_due(
         self,
@@ -212,6 +216,7 @@ class SchedulerMeterOutboxService(Protocol):
     def drain(self, *, now: datetime | None = None) -> SchedulerMeterEventBatch: ...
 
     def abandoned_backlog(self) -> SchedulerAbandonedMeterEvents: ...
+
 
 class SchedulerPlanChangeBatch(Protocol):
     @property
@@ -440,6 +445,7 @@ class SchedulerCapacityControls:
 
 @dataclass(frozen=True, slots=True)
 class SchedulerMaintenanceControls:
+    storage_access: SchedulerStorageAccessService | None = None
     volume_metering: SchedulerVolumeMeteringService | None = None
     volume_deletion: SchedulerVolumeDeletionService | None = None
     meter_outbox: SchedulerMeterOutboxService | None = None
@@ -908,6 +914,14 @@ class Scheduler:
         that decides whether work may start.
         """
 
+        access_observed = None
+        access_failures = 0
+        if self.maintenance.storage_access is not None:
+            try:
+                access_observed = self.maintenance.storage_access.reconcile()
+            except Exception:
+                access_failures = 1
+                LOGGER.exception("storage access ingestion failed; delivery remains unacknowledged")
         if self.maintenance.volume_deletion is not None:
             self.maintenance.volume_deletion.reconcile_due(now=now, limit=container_limit)
         volume_metering_count, volume_metering_failure_count = self._meter_persistent_volumes(
@@ -928,6 +942,8 @@ class Scheduler:
         )
         return SchedulerRunResult(
             expired_tokens_pruned=expired_tokens_pruned,
+            storage_access_observed=access_observed,
+            storage_access_failures=access_failures,
             events_pruned=events_pruned,
             volume_metering_count=volume_metering_count,
             volume_metering_failure_count=volume_metering_failure_count,
@@ -1750,6 +1766,8 @@ class Scheduler:
 
 
 class SchedulerRunResult(ContractModel):
+    storage_access_observed: int | None = None
+    storage_access_failures: int = 0
     app_lifecycle_reconciliations: list[AppRecord] = Field(default_factory=list)
     cron_job_runs: list[CronJobRun] = Field(default_factory=list)
     function_retries: list[Task] = Field(default_factory=list)

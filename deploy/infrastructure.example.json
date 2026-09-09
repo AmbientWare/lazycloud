@@ -19,6 +19,8 @@
     "workspace_bucket_prefix": "example-workspace"
   },
   "workspace_storage_role_arn": "arn:aws:iam::000000000000:role/lazycloud-prod-workspace-storage",
+  "storage_access_bucket": "example-storage-access",
+  "storage_access_queue_url": "https://sqs.us-east-1.amazonaws.com/000000000000/lazycloud-prod-storage-access",
   "workload_image_repository": "000000000000.dkr.ecr.us-east-1.amazonaws.com/lazycloud/workloads",
   "control_principal_arn": "arn:aws:iam::000000000000:role/control",
   "public_origin": "https://example.invalid",

@@ -42,8 +42,21 @@ data "aws_iam_policy_document" "control_plane" {
       "s3:CreateBucket", "s3:DeleteBucket", "s3:GetBucketLocation", "s3:ListBucket",
       "s3:ListBucketMultipartUploads", "s3:GetBucketPolicy", "s3:PutBucketPolicy",
       "s3:PutBucketCORS", "s3:PutLifecycleConfiguration",
+      "s3:GetBucketLogging", "s3:PutBucketLogging",
     ]
     resources = [local.workspace_bucket_arn]
+  }
+
+  statement {
+    sid       = "ReadStorageAccessLogs"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.storage_access.arn}/access/*"]
+  }
+
+  statement {
+    sid       = "ConsumeStorageAccessDeliveries"
+    actions   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"]
+    resources = [aws_sqs_queue.storage_access.arn]
   }
 
   statement {

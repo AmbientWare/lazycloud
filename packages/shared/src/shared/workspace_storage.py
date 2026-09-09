@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Protocol
 
 from pydantic import Field, field_validator, model_validator
 
 from shared.contracts import ContractModel
 from shared.identity import WorkspaceStorageConfig
+
+
+class WorkspaceStorageProvider(StrEnum):
+    Aws = "aws"
+    Garage = "garage"
 
 
 class WorkspaceStorageGrant(ContractModel):
@@ -55,4 +61,5 @@ class WorkspaceStorageIssuer(Protocol):
 __all__ = [
     "WorkspaceStorageGrant",
     "WorkspaceStorageIssuer",
+    "WorkspaceStorageProvider",
 ]

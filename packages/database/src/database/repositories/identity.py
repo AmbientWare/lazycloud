@@ -56,6 +56,7 @@ from database.tables.source_cache import (
     WorkerCacheGenerationTable,
 )
 from database.tables.storage import VolumeCleanupTable
+from database.tables.storage_access import StorageAccessTable
 from pydantic import Field, JsonValue, TypeAdapter
 from shared.contracts import ContractModel
 from shared.errors import ConflictError, NotFoundError
@@ -1213,6 +1214,7 @@ def _workspace_purge_excluded_tables() -> set[str]:
         _mapped_table_name(BillingLedgerSegmentTable),
         _mapped_table_name(BillingMeterOutboxTable),
         _mapped_table_name(VolumeCleanupTable),
+        _mapped_table_name(StorageAccessTable),
     }
 
 

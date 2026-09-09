@@ -66,6 +66,7 @@ def report(
             "missing statements": [component.value for component in result.missing_components],
             "reconciliation gaps": "; ".join(result.reconciliation_gaps),
             "operational gaps": "; ".join(result.occupancy.gaps),
+            "storage access gaps": "; ".join(result.storage_access.gaps),
         },
         tone="warning" if result.exit_code else "success",
     )

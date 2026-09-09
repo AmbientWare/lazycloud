@@ -125,6 +125,7 @@ def test_scheduler_runtime_closes_owned_services_on_exception(
         image_build_container_settings=ImageBuildContainerSettings(),
         retention_settings=RetentionSettings(),
         volume_metering=app_services.volume_metering,
+        storage_access=app_services.storage_access,
         volume_deletion=app_services.volume_deletion,
         meter_outbox=app_services.meter_outbox,
         email_outbox=app_services.email_outbox,

@@ -76,6 +76,8 @@ class SchedulerProcessResult:
     worker_cleanup_count: int = 0
     orphaned_container_failure_count: int = 0
     volume_metering_count: int = 0
+    storage_access_observed: int | None = None
+    storage_access_failures: int = 0
     volume_metering_failure_count: int = 0
     meter_events_sent_count: int = 0
     meter_events_retried_count: int = 0
@@ -115,6 +117,12 @@ class SchedulerProcessResult:
             "worker_cleanup_count": self.worker_cleanup_count,
             "orphaned_container_failure_count": self.orphaned_container_failure_count,
             "volume_metering_count": self.volume_metering_count,
+            **(
+                {"storage_access_observed": self.storage_access_observed}
+                if self.storage_access_observed is not None
+                else {}
+            ),
+            "storage_access_failures": self.storage_access_failures,
             "volume_metering_failure_count": self.volume_metering_failure_count,
             "meter_events_sent_count": self.meter_events_sent_count,
             "meter_events_retried_count": self.meter_events_retried_count,
@@ -231,6 +239,8 @@ def run_scheduler(
                 worker_cleanup_count=len(result.worker_cleanups),
                 orphaned_container_failure_count=len(result.orphaned_containers_failed),
                 volume_metering_count=result.volume_metering_count,
+                storage_access_observed=result.storage_access_observed,
+                storage_access_failures=result.storage_access_failures,
                 volume_metering_failure_count=result.volume_metering_failure_count,
                 meter_events_sent_count=result.meter_events_sent_count,
                 meter_events_retried_count=result.meter_events_retried_count,

@@ -18,6 +18,8 @@ from shared.identity import WorkspaceStorageConfig
 from shared.workspace_storage import WorkspaceStorageGrant
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
+from provider_aws.storage_access import AwsStorageAccessSettings
+
 
 class AwsWorkspaceStorageSettings(BaseSettings):
     role_arn: str = Field(
@@ -45,6 +47,15 @@ class _BucketPolicyResponse(TypedDict):
     Policy: str
 
 
+class _LoggingTarget(TypedDict):
+    TargetBucket: str
+    TargetPrefix: str
+
+
+class _BucketLogging(TypedDict, total=False):
+    LoggingEnabled: _LoggingTarget
+
+
 @runtime_checkable
 class _ClientFactory(Protocol):
     def client(self, service_name: Literal["s3", "sts"], *, region_name: str) -> BaseClient: ...
@@ -69,6 +80,12 @@ class _BucketAdministration(Protocol):
 
     def put_bucket_policy(self, *, Bucket: str, ExpectedBucketOwner: str, Policy: str) -> None: ...
 
+    def get_bucket_logging(self, *, Bucket: str, ExpectedBucketOwner: str) -> _BucketLogging: ...
+
+    def put_bucket_logging(
+        self, *, Bucket: str, ExpectedBucketOwner: str, BucketLoggingStatus: _BucketLogging
+    ) -> None: ...
+
     def close(self) -> None: ...
 
 
@@ -83,6 +100,7 @@ def _client(service: Literal["s3", "sts"], region: str) -> BaseClient:
 class AwsWorkspaceStorageIssuer:
     settings: S3ObjectStoreSettings
     authority: AwsWorkspaceStorageSettings
+    access_logs: AwsStorageAccessSettings
 
     def __post_init__(self) -> None:
         region = self.settings.region_name
@@ -90,6 +108,7 @@ class AwsWorkspaceStorageIssuer:
         suffix = "amazonaws.com.cn" if partition == "aws-cn" else "amazonaws.com"
         if (
             not region
+            or self.access_logs.queue_url.split("/")[3] != self.authority.role_arn.split(":")[4]
             or self.authority.role_arn.split(":")[1] != partition
             or self.settings.endpoint_url != f"https://s3.{region}.{suffix}"
         ):
@@ -127,6 +146,19 @@ class AwsWorkspaceStorageIssuer:
             administration.head_bucket(
                 Bucket=bucket, ExpectedBucketOwner=self.authority.role_arn.split(":")[4]
             )
+            owner = self.authority.role_arn.split(":")[4]
+            logging = administration.get_bucket_logging(Bucket=bucket, ExpectedBucketOwner=owner)
+            expected: _LoggingTarget = {
+                "TargetBucket": self.access_logs.bucket,
+                "TargetPrefix": "access/",
+            }
+            current = logging.get("LoggingEnabled")
+            if current is None or any(current.get(key) != value for key, value in expected.items()):
+                administration.put_bucket_logging(
+                    Bucket=bucket,
+                    ExpectedBucketOwner=owner,
+                    BucketLoggingStatus={"LoggingEnabled": expected},
+                )
         finally:
             administration.close()
         partition = self.authority.role_arn.split(":")[1]

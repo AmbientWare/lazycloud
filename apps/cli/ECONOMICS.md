@@ -75,3 +75,10 @@ boundary. Recovery time already overlaps purchased node time and adds no expense
 Current fleet snapshots and catalog prices remain estimates in the fleet cost
 report. They are never accepted as realized supplier invoices here. Keep statement
 files outside the repository.
+
+`storage_access` reports deduplicated S3 requests and actual response bytes from
+access logs. These logs can arrive late, contain duplicates, or omit requests.
+The region field is evidence, not a paid-transfer classification. These requests
+and bytes remain unbilled. Missing byte counts and requests without a workspace
+stay visible. A workspace does not establish the historical payer. Supplier
+invoices still supply the financial expense totals.

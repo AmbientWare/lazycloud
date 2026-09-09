@@ -54,6 +54,7 @@ from operations.container_shutdown import (
     DatabaseDurableWorkerAbsence,
 )
 from provider_aws import AwsEcrImageRegistry
+from provider_aws.storage_access import AwsStorageAccessSettings, AwsStorageAccessSource
 from provider_clients import (
     workspace_compute_provider_resolver,
 )
@@ -82,7 +83,10 @@ from scheduler.state import (
 )
 from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.checkpoints import checkpoint_recent_stub_key
+from shared.deployment_settings import MissingDeploymentSettingError
 from shared.image_building.credentials import parse_ecr_registry, registry_host_for_image
+from shared.workspace_storage import WorkspaceStorageProvider
+from storage.access_metering import StorageAccessMeteringService
 from storage.image_archive import ImageArchiveSettings
 from storage.retention import (
     RetentionResult,
@@ -96,6 +100,7 @@ from storage.volume_filesystem import (
     workspace_volume_store_resolver,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
+from storage.workspace_storage_issuers import WorkspaceStorageIssuerSettings
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
 from billing import (
@@ -159,6 +164,7 @@ class SchedulerAppServices:
     object_store_client: S3ObjectStoreClient
     volume_filesystem: WorkspaceVolumeFilesystem
     volume_metering: PersistentVolumeMeteringService
+    storage_access: StorageAccessMeteringService | None
     volume_deletion: VolumeDeletionService
     meter_outbox: BillingMeterOutboxService
     email_outbox: EmailOutboxDrain
@@ -414,6 +420,7 @@ class SchedulerAppServices:
             object_store_client=object_client,
             volume_filesystem=volume_filesystem,
             volume_metering=volume_metering,
+            storage_access=_storage_access(context.database, storage.object_store),
             volume_deletion=VolumeDeletionService(
                 context,
                 volume_filesystem,
@@ -432,7 +439,11 @@ class SchedulerAppServices:
 
     def close(self) -> None:
         try:
-            self.volume_filesystem.close()
+            try:
+                if self.storage_access is not None:
+                    self.storage_access.source.close()
+            finally:
+                self.volume_filesystem.close()
         finally:
             try:
                 self.object_store_client.close()
@@ -441,6 +452,23 @@ class SchedulerAppServices:
                     self.redis_client.close()
                 finally:
                     self.context.database.dispose()
+
+
+def _storage_access(
+    database: DatabaseClient, settings: S3ObjectStoreSettings
+) -> StorageAccessMeteringService | None:
+    match WorkspaceStorageIssuerSettings().issuer:
+        case WorkspaceStorageProvider.Aws:
+            return StorageAccessMeteringService(
+                database, AwsStorageAccessSource(AwsStorageAccessSettings(), settings), settings
+            )
+        case WorkspaceStorageProvider.Garage:
+            return None
+        case None:
+            raise MissingDeploymentSettingError(
+                "LAZYCLOUD_WORKSPACE_STORAGE_ISSUER",
+                purpose="the storage access observation source",
+            )
 
 
 def _meter_outbox(

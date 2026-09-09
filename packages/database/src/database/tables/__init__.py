@@ -99,6 +99,7 @@ from database.tables.source_cache import (
     WorkerCacheGenerationTable,
 )
 from database.tables.storage import CacheEntryTable, ObjectTable, VolumeTable
+from database.tables.storage_access import StorageAccessTable
 
 __all__ = [
     "AgentLeaseTable",
@@ -160,6 +161,7 @@ __all__ = [
     "RouteTable",
     "SecretTable",
     "SourceCacheCleanupTargetTable",
+    "StorageAccessTable",
     "StubTable",
     "TaskAttemptTable",
     "TaskDependencyTable",

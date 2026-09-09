@@ -81,6 +81,13 @@ class Infrastructure(Contract):
     workspace_storage_role_arn: Annotated[
         str, Field(pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::\d{12}:role/[A-Za-z0-9+=,.@_/-]+$")
     ]
+    storage_access_bucket: Name
+    storage_access_queue_url: Annotated[
+        str,
+        Field(
+            pattern=r"^https://sqs\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?/[0-9]{12}/[A-Za-z0-9_-]+$"
+        ),
+    ]
     workload_image_repository: Name
     control_principal_arn: Name
     public_origin: Annotated[str, Field(pattern=r"^https://[a-zA-Z0-9.-]+$")]
@@ -228,6 +235,8 @@ def render(
     runtime: dict[str, JsonValue] = {
         "LAZYCLOUD_WORKSPACE_STORAGE_ISSUER": "aws",
         "LAZYCLOUD_AWS_WORKSPACE_STORAGE_ROLE_ARN": infrastructure.workspace_storage_role_arn,
+        "LAZYCLOUD_AWS_STORAGE_ACCESS_BUCKET": infrastructure.storage_access_bucket,
+        "LAZYCLOUD_AWS_STORAGE_ACCESS_QUEUE_URL": infrastructure.storage_access_queue_url,
         "LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL": object_store.endpoint_url,
         "LAZYCLOUD_OBJECT_STORE_REGION_NAME": object_store.region_name,
         "LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE": str(object_store.force_path_style).lower(),

@@ -123,6 +123,20 @@ SHA-256 check of the downloaded object. CloudFront serves public release URLs.
 AWS CLI remains responsible for ECR,
 AMI inspection, and customer CloudFormation operations.
 
+Platform S3 access logs use a private bucket and an SQS queue from the infrastructure
+descriptor. `LAZYCLOUD_AWS_STORAGE_ACCESS_BUCKET` and
+`LAZYCLOUD_AWS_STORAGE_ACCESS_QUEUE_URL` use the scheduler's existing AWS identity.
+The issuer enables logging before granting workspace access. Customer buckets keep
+their own storage configuration.
+
+The scheduler retains deduplicated request observations in PostgreSQL. It acknowledges
+each queue message only after its log objects are recorded. Failed messages retry,
+then enter the dead-letter queue after ten receives. Inspect scheduler errors and
+queue age, fix the cause, then redrive that queue. Messages expire after 14 days and
+raw log objects after 30 days. Raw logs contain signed URLs and must stay private.
+Logs can arrive late or omit requests; region evidence does not prove a paid transfer.
+Observed requests and response bytes remain unbilled and appear in the economics report.
+
 Customer authorization discovers two enabled standard availability zones through
 the customer's AWS credentials and supplies them to the connection template.
 The customer profile needs `ec2:DescribeAvailabilityZones`. Default VPC subnets

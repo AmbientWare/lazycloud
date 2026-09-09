@@ -11,6 +11,7 @@ from shared.billing_credits import CreditKind
 from shared.billing_quotes import LedgerBasis, LedgerComponent
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
+from shared.storage_access import StorageRequestClass, StorageTransferEvidence
 from shared.usage import UsageBillingOwner
 from sqlalchemy import text
 
@@ -167,6 +168,14 @@ class OccupancyReport(ContractModel):
     gaps: list[str]
 
 
+class StorageAccessCoverage(ContractModel):
+    requests_by_class: dict[StorageRequestClass, int]
+    response_bytes_by_region_evidence: dict[StorageTransferEvidence, int]
+    requests_without_response_byte_count: int
+    requests_without_workspace: int
+    gaps: list[str]
+
+
 class EconomicsReport(EconomicsPeriod):
     attribution_basis: Literal["segment_started_at"] = "segment_started_at"
     observed_at: AwareDatetime
@@ -191,6 +200,7 @@ class EconomicsReport(EconomicsPeriod):
     missing_components: list[StatementComponent]
     reconciliation_gaps: list[str]
     occupancy: OccupancyReport
+    storage_access: StorageAccessCoverage
 
     @property
     def exit_code(self) -> int:
@@ -351,6 +361,33 @@ def _report(
         missing_components=missing,
         reconciliation_gaps=gaps,
         occupancy=_occupancy(facts, operations),
+        storage_access=StorageAccessCoverage(
+            requests_by_class={
+                kind: sum(
+                    item.requests for item in facts.storage_access if item.request_class is kind
+                )
+                for kind in StorageRequestClass
+            },
+            response_bytes_by_region_evidence={
+                evidence: sum(
+                    item.response_bytes
+                    for item in facts.storage_access
+                    if item.transfer_evidence is evidence
+                )
+                for evidence in StorageTransferEvidence
+            },
+            requests_without_response_byte_count=sum(
+                item.missing_bytes for item in facts.storage_access
+            ),
+            requests_without_workspace=sum(
+                item.requests for item in facts.storage_access if not item.attributed
+            ),
+            gaps=[
+                "access logs are delayed and best-effort; observed totals may be incomplete",
+                "requests and bytes remain unbilled; source region does not prove a paid transfer",
+                "workspace attribution does not establish the historical payer",
+            ],
+        ),
     )
 
 

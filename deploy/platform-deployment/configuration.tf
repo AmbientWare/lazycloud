@@ -21,6 +21,8 @@ output "infrastructure_configuration" {
       workspace_bucket_prefix = local.workspace_bucket_prefix
     }
     workspace_storage_role_arn = aws_iam_role.workspace_storage.arn
+    storage_access_bucket      = aws_s3_bucket.storage_access.id
+    storage_access_queue_url   = aws_sqs_queue.storage_access.url
     workload_image_repository  = local.workload_image_repository
     control_principal_arn      = aws_iam_role.control_principal.arn
     public_origin              = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}"
