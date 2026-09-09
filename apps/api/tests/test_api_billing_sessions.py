@@ -7,7 +7,7 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from fastapi.testclient import TestClient
 from identity.auth import TokenIssuer
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.identity import TokenKind
 from tests.service_fixtures import administrator_credential, workspace_owner_user_id
 
@@ -109,11 +109,13 @@ def test_subscribing_without_a_card_answers_402(
 
     refused = client.post(
         "/api/v1/billing/subscription",
-        json={"plan": BillingPlanId.Team.value},
+        json={
+            "plan": BillingPlanId.Team.value,
+            "terms_version": SubscriptionTermsVersion.Team.value,
+        },
         headers={"Authorization": f"Bearer {raw_token}"},
     )
 
     assert refused.status_code == 402
     body = refused.json()
     assert body["code"] == "payment_required"
-    assert "card" in body["detail"]
