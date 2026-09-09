@@ -21,8 +21,8 @@ metering, and `database` owns rates, ledger entries and durable payment records.
   eligibility window, but cannot cover later usage or refunded-purchase debt.
   Deduct recorded usage even when no subscription period is active or funded.
 - Local wallet usage never creates a provider meter event. Preserve historical
-  exports and never charge their usage to the wallet again. Invoice reconciliation excludes
-  wallet allocations, outstanding wallet debt, pending settlement, waivers and
+  exports and never charge their usage to the wallet again. Invoice reconciliation
+  excludes wallet allocations, outstanding wallet debt, pending settlement, waivers and
   undelivered legacy exports. Never invoice a wallet shortfall a second time.
 - Issue paid subscription credit only from a confirmed paid invoice and matching
   plan line. A saved card or active subscription is not payment evidence. Receipts,
@@ -47,9 +47,8 @@ metering, and `database` owns rates, ledger entries and durable payment records.
   Selecting the held version cancels a scheduled change, including when that
   version is no longer sold. Preserve subscription identity, anniversary and
   metered items.
-- The application owns plan changes because the hosted provider portal cannot
-  update these multi-product subscriptions with metered prices. Use the portal
-  for payment methods and invoice history.
+- The application owns plan changes and their credit funding. Use the hosted
+  provider portal for payment methods and invoice history.
 - Commit a plan-change intent before calling the provider. A partial unique
   index permits at most one open intent per account. Settle against its claim
   and the same live subscription. Never restore an ended subscription from an
