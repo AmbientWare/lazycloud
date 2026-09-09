@@ -2,22 +2,22 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Protocol
 
 from pydantic import AwareDatetime, Field
 
 from shared.contracts import ContractModel
+from shared.enums import StringEnum
 
 
-class StorageRequestClass(StrEnum):
+class StorageRequestClass(StringEnum):
     Read = "read"
     Write = "write"
     Delete = "delete"
     Other = "other"
 
 
-class StorageTransferEvidence(StrEnum):
+class StorageTransferEvidence(StringEnum):
     SameRegion = "same_region"
     OtherRegion = "other_region"
     Unknown = "unknown"
