@@ -35,8 +35,8 @@ Metering is never refused. A window no published rate covers still commits its
 usage record, writes no ledger row, invents no zero, and leaves a durable
 `billing.span.unpriced` error naming the dimension, the gap and the reason. That
 event is cluster-scoped. An explicit zero rate writes a priced segment at $0.00
-and consumes no credit. Local wallet usage never creates Stripe metered charges;
-only usage before the credit cutover reaches the provider meter outbox.
+and consumes no credit. New usage settles against the local wallet. Historical
+provider meter exports remain immutable and cannot debit the wallet on replay.
 
 A record the ledger has already priced keeps the cost it froze. Re-recording a
 quantity under an id that was already priced leaves the segments, the allowance

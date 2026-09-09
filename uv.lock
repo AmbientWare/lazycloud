@@ -770,6 +770,7 @@ version = "0.1.0"
 source = { editable = "packages/database" }
 dependencies = [
     { name = "alembic" },
+    { name = "anyio" },
     { name = "greenlet" },
     { name = "lazycloud-shared" },
     { name = "psycopg", extra = ["binary"] },
@@ -781,6 +782,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.17,<2" },
+    { name = "anyio", specifier = ">=4,<5" },
     { name = "greenlet", specifier = ">=3,<4" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },

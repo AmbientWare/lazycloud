@@ -20,7 +20,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
-from tests.domain_fixtures import unbilled_account
+from tests.domain_fixtures import unfunded_billing_account
 
 from database import AsyncDatabaseClient, DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
@@ -34,7 +34,10 @@ def test_only_verified_public_response_bytes_reach_charges(
     )
     database = DatabaseClient.from_settings(settings)
     context = ServiceContext.create(database, root=tmp_path)
-    _, workspace_id = unbilled_account(context)
+    now = utc_now()
+    _, workspace_id = unfunded_billing_account(
+        context, period_started_at=now, period_ended_at=now + timedelta(days=30)
+    )
     payload = b"a returned artifact\n"
     with database.session() as session:
         PlatformRateRepository(session).publish(

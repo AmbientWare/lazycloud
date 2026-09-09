@@ -20,13 +20,11 @@ from database.tables.observability import UsageRecordTable
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension, LedgerBasis, LedgerComponent
-from shared.billing_rate_card import published_plan
+from shared.billing_rate_card import published_plan, subscription_terms
 from shared.events import EventLevel
 from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
-    ProviderCreditGrant,
-    ProviderCreditGrantBalance,
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
@@ -71,15 +69,27 @@ class _Provider:
             scheduled_change_at=None,
         )
 
-    def credit_grants_for(
-        self, *, provider_customer_id: str
-    ) -> Sequence[ProviderCreditGrantBalance]:
-        return ()
-
     def paid_subscription_periods(
         self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
     ) -> Sequence[ProviderPaidSubscriptionPeriod]:
-        return ()
+        terms = subscription_terms(published_plan(self.plan).terms_version)
+        if terms.monthly_nanos == 0:
+            return ()
+        return (
+            ProviderPaidSubscriptionPeriod(
+                provider_invoice_id=f"in_plan_{provider_customer_id}",
+                provider_invoice_line_id=f"il_plan_{provider_customer_id}",
+                provider_subscription_id=provider_subscription_id,
+                plan=self.plan,
+                terms_version=terms.version,
+                period_started_at=CYCLE_STARTED_AT,
+                period_ended_at=CYCLE_ENDED_AT,
+                prorated=False,
+                amount_nanos=terms.monthly_nanos,
+                invoice_paid_nanos=terms.monthly_nanos,
+                paid_at=CYCLE_STARTED_AT,
+            ),
+        )
 
     def invoices_for(
         self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
@@ -142,20 +152,6 @@ class _Provider:
         operation_created_at: datetime,
     ) -> ProviderSubscription:
         raise AssertionError("reconciling must not change anyone's plan")
-
-    def create_credit_grant(
-        self,
-        *,
-        account_id: str,
-        provider_customer_id: str,
-        amount_nanos: int,
-        period_ended_at: datetime,
-        previous_period_ended_at: datetime | None,
-    ) -> ProviderCreditGrant:
-        raise AssertionError("reconciling must not grant an allowance")
-
-    def expire_credit_grant(self, *, provider_credit_grant_id: str) -> None:
-        raise AssertionError("reconciling must not expire an allowance")
 
 
 def test_a_plan_changed_at_the_provider_is_reported_and_never_corrected(
@@ -369,7 +365,6 @@ def _account_row(services: ApiServices, user_id: str, plan: BillingPlanId) -> No
             status=BillingAccountStatus.Active,
             provider_customer_id=f"cus_{user_id}",
             provider_subscription_id=f"sub_{user_id}",
-            provider_credit_grant_id=f"credgr_{user_id}",
             plan=plan,
             subscription_terms_version=published_plan(plan).terms_version,
             scheduled_terms_version=None,
@@ -380,7 +375,6 @@ def _account_row(services: ApiServices, user_id: str, plan: BillingPlanId) -> No
             period_started_at=CYCLE_STARTED_AT,
             period_ended_at=CYCLE_ENDED_AT,
             allowance_nanos=published_plan(plan).included_nanos,
-            funded=True,
         )
 
 
@@ -398,7 +392,6 @@ def _account_state(services: ApiServices, user_id: str) -> tuple[object, ...]:
         account.plan,
         account.status,
         account.provider_subscription_id,
-        account.provider_credit_grant_id,
         account.updated_at,
         period.started_at,
         period.ended_at,

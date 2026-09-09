@@ -23,7 +23,11 @@ from shared.gpu import GPU_ANY, SUPPORTED_GPU_TYPES
 from shared.http.volumes import GetOrCreateVolumeRequest
 from shared.timestamps import utc_now
 from sqlalchemy import func, select
-from tests.domain_fixtures import legacy_billing_account, unbilled_account, workspace_owner_user_id
+from tests.domain_fixtures import (
+    unbilled_account,
+    unfunded_billing_account,
+    workspace_owner_user_id,
+)
 
 from billing import DatabaseBillingAdmission
 
@@ -155,7 +159,6 @@ def test_an_account_behind_on_payment_cannot_start_work_and_leaves_no_container(
             status=BillingAccountStatus.PastDue,
             provider_customer_id="cus_gate",
             provider_subscription_id="sub_gate",
-            provider_credit_grant_id="credgr_gate",
             plan=BillingPlanId.Team,
             subscription_terms_version=SubscriptionTermsVersion.Team,
             scheduled_terms_version=None,
@@ -181,15 +184,13 @@ def test_an_unfunded_account_gets_no_new_volume_but_still_reaches_the_one_it_has
 
     volumes = isolated_services.volume_service
     now = utc_now()
-    user_id, workspace_id = legacy_billing_account(
+    user_id, workspace_id = unfunded_billing_account(
         isolated_services.context,
         period_started_at=now,
         period_ended_at=now + timedelta(days=30),
     )
     with isolated_services.context.database.session() as session:
         credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=now)
-        credits.complete_cutover(user_id=user_id, at=now)
         lot_id = credits.issue(
             user_id=user_id,
             grant=CreditGrant(
@@ -370,7 +371,6 @@ def test_a_plan_change_names_the_gpu_model_the_target_plan_does_not_offer(
             status=BillingAccountStatus.Active,
             provider_customer_id=f"cus_{user_id}",
             provider_subscription_id=f"sub_{user_id}",
-            provider_credit_grant_id=f"credgr_{user_id}",
             plan=BillingPlanId.Team,
             subscription_terms_version=SubscriptionTermsVersion.Team,
             scheduled_terms_version=None,

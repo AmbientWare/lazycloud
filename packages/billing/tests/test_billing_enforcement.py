@@ -13,7 +13,7 @@ from shared.billing_credits import CreditGrant, CreditKind
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.timestamps import utc_now
-from tests.domain_fixtures import legacy_billing_account
+from tests.domain_fixtures import unfunded_billing_account
 
 
 @dataclass(slots=True)
@@ -34,7 +34,7 @@ def test_monitor_stops_empty_accounts_and_canceled_subscriptions_with_live_compu
     isolated_services: ApiServices,
 ) -> None:
     now = utc_now()
-    user_id, workspace_id = legacy_billing_account(
+    user_id, workspace_id = unfunded_billing_account(
         isolated_services.context,
         period_started_at=now,
         period_ended_at=now + timedelta(days=30),
@@ -44,8 +44,6 @@ def test_monitor_stops_empty_accounts_and_canceled_subscriptions_with_live_compu
         accounts = BillingAccountRepository(session)
         accounts.set_payment_method_present(user_id=user_id, present=True, at=now)
         credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=now)
-        credits.complete_cutover(user_id=user_id, at=now)
         lot_id = credits.issue(
             user_id=user_id,
             grant=CreditGrant("payment:monitor", CreditKind.Purchased, 10**9, now),
@@ -94,7 +92,6 @@ def test_monitor_stops_empty_accounts_and_canceled_subscriptions_with_live_compu
             status=account.status,
             provider_customer_id=account.provider_customer_id,
             provider_subscription_id="",
-            provider_credit_grant_id="",
             plan=None,
             subscription_terms_version=None,
             scheduled_terms_version=None,

@@ -130,7 +130,6 @@ def test_log_retention_deletes_only_expired_rows_under_each_owners_plan(
                     status=BillingAccountStatus.Active,
                     provider_customer_id=f"customer-{owner.id}",
                     provider_subscription_id=f"subscription-{owner.id}",
-                    provider_credit_grant_id="",
                     plan=plan,
                     subscription_terms_version=published_plan(plan).terms_version,
                     scheduled_terms_version=None,

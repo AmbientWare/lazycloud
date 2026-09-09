@@ -86,7 +86,6 @@ def _past_due(services: ApiServices, workspace_id: str) -> None:
             status=BillingAccountStatus.PastDue,
             provider_customer_id="cus_gate",
             provider_subscription_id="sub_gate",
-            provider_credit_grant_id="credgr_gate",
             plan=BillingPlanId.Team,
             subscription_terms_version=SubscriptionTermsVersion.Team,
             scheduled_terms_version=None,

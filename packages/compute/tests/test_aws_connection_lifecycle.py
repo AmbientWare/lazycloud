@@ -158,6 +158,7 @@ class _Validator:
             ),
             node_role_arn=connection.node_role_arn,
             node_instance_profile_arn=connection.node_instance_profile_arn,
+            network=connection.network,
             validated_at=utc_now(),
         )
 
@@ -587,6 +588,25 @@ def test_fleet_ensure_preserves_authorization_on_retry(
     )
     created = service.ensure_fleet(request, user_id=owner)
     assert service.ensure_fleet(request, user_id=owner) == created
+    ready = service.validate(user_id=owner)
+    expanded_request = request.model_copy(
+        update={
+            "network": request.network.model_copy(
+                update={"subnet_ids": (*request.network.subnet_ids, "subnet-abcdef01")}
+            )
+        }
+    )
+
+    expanded = service.ensure_fleet(expanded_request, user_id=owner)
+
+    assert expanded.network == expanded_request.network
+    assert expanded.active_authorization == ready.active_authorization
+    assert expanded.revision == ready.revision + 1
+    assert service.get(user_id=owner) == expanded
+    assert service.ensure_fleet(expanded_request, user_id=owner) == expanded
+    with pytest.raises(ConflictError, match="infrastructure"):
+        service.ensure_fleet(request, user_id=owner)
+    assert service.get(user_id=owner) == expanded
 
 
 def test_fleet_ensure_rejects_changed_infrastructure_without_changing_connection(
@@ -613,3 +633,84 @@ def test_fleet_ensure_rejects_changed_infrastructure_without_changing_connection
     with pytest.raises(ConflictError, match="infrastructure"):
         service.ensure_fleet(changed, user_id=owner)
     assert service.get(user_id=owner) == created
+
+
+def test_fleet_subnet_validation_failure_preserves_ready_connection(
+    isolated_services: ApiServices,
+) -> None:
+    validator = _Validator()
+    service = _service(isolated_services, validator=validator)
+    owner = _owner(isolated_services)
+    request = AwsFleetEnsureRequest(
+        account_id=ACCOUNT_ID,
+        role_arn=f"arn:aws:iam::{ACCOUNT_ID}:role/fleet",
+        external_id="fleet-ensure-test-external-identifier",
+        network=AwsAccountNetwork(
+            vpc_id="vpc-01234567",
+            subnet_ids=("subnet-01234567", "subnet-89abcdef"),
+            security_group_id="sg-01234567",
+        ),
+    )
+    service.ensure_fleet(request, user_id=owner)
+    ready = service.validate(user_id=owner)
+    validator.failures.append(AwsAccountConnectionErrorCode.PermissionDrift)
+    expanded_request = request.model_copy(
+        update={
+            "network": request.network.model_copy(
+                update={"subnet_ids": (*request.network.subnet_ids, "subnet-abcdef01")}
+            )
+        }
+    )
+
+    with pytest.raises(UpstreamUnavailableError, match="not authorized"):
+        service.ensure_fleet(expanded_request, user_id=owner)
+
+    assert service.get(user_id=owner) == ready
+
+
+def test_fleet_subnet_validation_cannot_overwrite_concurrent_reconnect(
+    isolated_services: ApiServices,
+) -> None:
+    owner = _owner(isolated_services)
+    request = AwsFleetEnsureRequest(
+        account_id=ACCOUNT_ID,
+        role_arn=f"arn:aws:iam::{ACCOUNT_ID}:role/fleet",
+        external_id="fleet-ensure-test-external-identifier",
+        network=AwsAccountNetwork(
+            vpc_id="vpc-01234567",
+            subnet_ids=("subnet-01234567", "subnet-89abcdef"),
+            security_group_id="sg-01234567",
+        ),
+    )
+    service = _service(isolated_services)
+    service.ensure_fleet(request, user_id=owner)
+    ready = service.validate(user_id=owner)
+
+    class ReconnectingValidator(_Validator):
+        def validate(
+            self,
+            connection: AwsAccountConnection,
+            authorization: AwsAccountAuthorizationGeneration,
+        ) -> AwsAccountValidationResult:
+            service.reconnect(
+                AwsConnectionReconnectRequest(role_arn=request.role_arn), user_id=owner
+            )
+            return super().validate(connection, authorization)
+
+    updating_service = _service(isolated_services, validator=ReconnectingValidator())
+    expanded_request = request.model_copy(
+        update={
+            "network": request.network.model_copy(
+                update={"subnet_ids": (*request.network.subnet_ids, "subnet-abcdef01")}
+            )
+        }
+    )
+
+    with pytest.raises(ConflictError, match="changed while validating"):
+        updating_service.ensure_fleet(expanded_request, user_id=owner)
+
+    current = service.get(user_id=owner)
+    assert current.phase is AwsAccountConnectionPhase.ReconnectPending
+    assert current.network == ready.network
+    assert current.active_authorization == ready.active_authorization
+    assert current.pending_authorization is not None

@@ -7,7 +7,7 @@ from pydantic import Field, model_validator
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
-MIN_CREDIT_PURCHASE_CENTS = 2_000
+MIN_CREDIT_PURCHASE_CENTS = 500
 MAX_CREDIT_PURCHASE_CENTS = 100_000
 
 

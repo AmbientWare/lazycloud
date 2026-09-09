@@ -8,7 +8,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from api.server.services import ApiServices
-from billing.credits import fund_subscription_credits, reconcile_credit_cutover
+from billing.credits import fund_subscription_credits, recover_subscription_credits
 from billing.rate_publication import publish_metered_rate_history
 from database.repositories import billing_credits
 from database.repositories.billing import BillingAccountRepository
@@ -40,7 +40,7 @@ from shared.usage import (
     UsageUnit,
 )
 from sqlalchemy import func, select
-from tests.domain_fixtures import legacy_billing_account
+from tests.domain_fixtures import unfunded_billing_account
 
 
 def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
@@ -51,13 +51,11 @@ def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
     now = end + timedelta(days=1)
     monkeypatch.setattr(billing_credits, "utc_now", lambda: now)
     start = end - timedelta(seconds=10)
-    user_id, workspace_id = legacy_billing_account(
+    user_id, workspace_id = unfunded_billing_account(
         isolated_services.context, period_started_at=start, period_ended_at=end
     )
     with isolated_services.context.database.session() as session:
         credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=start)
-        credits.complete_cutover(user_id=user_id, at=start)
         PlatformRateRepository(session).publish(
             pricing_version="late-credit",
             effective_at=start,
@@ -98,7 +96,7 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
     end = start + timedelta(days=30)
     now = end + timedelta(days=1)
     monkeypatch.setattr(billing_credits, "utc_now", lambda: now)
-    user_id, workspace_id = legacy_billing_account(
+    user_id, workspace_id = unfunded_billing_account(
         isolated_services.context,
         period_started_at=start - timedelta(days=30),
         period_ended_at=start,
@@ -107,8 +105,6 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
         account = BillingAccountRepository(session).get_by_user(user_id)
         assert account is not None
         credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=start)
-        credits.complete_cutover(user_id=user_id, at=start)
         PlatformRateRepository(session).publish(
             pricing_version="missing-renewal",
             effective_at=start,
@@ -168,11 +164,8 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
     with httpx.Client() as client:
         payments = StripeBilling(client)
         with isolated_services.context.database.session() as session:
-            assert (
-                reconcile_credit_cutover(
-                    session, payments, account=account, subscription=subscription, at=now
-                )
-                == ""
+            recover_subscription_credits(
+                session, payments, account=account, subscription=subscription
             )
             assert (
                 BillingAllowanceRepository(session).current_period(user_id=user_id, at=start)
@@ -181,11 +174,8 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
         line = line.model_copy(update={"prorated": False})
         for _ in range(2):
             with isolated_services.context.database.session() as session:
-                assert (
-                    reconcile_credit_cutover(
-                        session, payments, account=account, subscription=subscription, at=now
-                    )
-                    == ""
+                recover_subscription_credits(
+                    session, payments, account=account, subscription=subscription
                 )
                 assert BillingCreditRepository(session).balance(user_id=user_id, at=now) == -10
         with isolated_services.context.database.session() as session:
@@ -206,7 +196,7 @@ def test_storage_grace_waives_only_retained_time_and_top_up_resumes_charges(
 ) -> None:
     start = datetime(2027, 1, 1, tzinfo=UTC)
     end = start + timedelta(seconds=10)
-    user_id, workspace_id = legacy_billing_account(
+    user_id, workspace_id = unfunded_billing_account(
         isolated_services.context,
         period_started_at=start,
         period_ended_at=start + timedelta(days=30),
@@ -227,8 +217,6 @@ def test_storage_grace_waives_only_retained_time_and_top_up_resumes_charges(
     )
     with isolated_services.context.database.session() as session:
         credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=start)
-        credits.complete_cutover(user_id=user_id, at=start)
         BillingAllowanceRepository(session).confirm_credit(
             user_id=user_id, period_started_at=start, at=start
         )
@@ -278,19 +266,15 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
 ) -> None:
     start = datetime(2027, 1, 1, tzinfo=UTC)
     end = start + timedelta(days=30)
-    user_id, _ = legacy_billing_account(
+    user_id, _ = unfunded_billing_account(
         isolated_services.context, period_started_at=start, period_ended_at=end
     )
     with isolated_services.context.database.session() as session:
-        credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=start)
-        credits.complete_cutover(user_id=user_id, at=start)
         BillingAllowanceRepository(session).set_subscription_period(
             user_id=user_id,
             period_started_at=start,
             period_ended_at=end,
             allowance_nanos=0,
-            funded=False,
         )
     subscription = ProviderSubscription(
         provider_subscription_id="sub_proration",
@@ -384,7 +368,6 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
                 period_started_at=start,
                 period_ended_at=end,
                 allowance_nanos=0,
-                funded=False,
             )
         fund()
         fund()
@@ -452,7 +435,6 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
                 period_started_at=start,
                 period_ended_at=end,
                 allowance_nanos=30_000_000_000,
-                funded=True,
             )
             BillingCreditRepository(session).issue(
                 user_id=user_id,
@@ -480,14 +462,12 @@ def test_credit_expiry_and_start_split_a_frozen_charge_and_preserve_purchased_fu
     isolated_services: ApiServices,
 ) -> None:
     at = datetime(2026, 9, 12, tzinfo=UTC)
-    user_id, workspace_id = legacy_billing_account(
+    user_id, workspace_id = unfunded_billing_account(
         isolated_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
     )
     with isolated_services.context.database.session() as session:
         publish_metered_rate_history(session)
         credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=at)
-        credits.complete_cutover(user_id=user_id, at=at)
         allowance = BillingAllowanceRepository(session)
         period = allowance.current_period(user_id=user_id, at=at)
         assert period is not None
@@ -550,91 +530,11 @@ def test_credit_expiry_and_start_split_a_frozen_charge_and_preserve_purchased_fu
         assert session.scalar(select(func.count()).select_from(BillingMeterOutboxTable)) == 0
 
 
-def test_crossing_cutover_keeps_legacy_export_and_resumes_net_settlement_once(
-    isolated_services: ApiServices,
-) -> None:
-    at = datetime(2026, 9, 12, tzinfo=UTC)
-    boundary = at + timedelta(seconds=5)
-    user_id, workspace_id = legacy_billing_account(
-        isolated_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
-    )
-    with isolated_services.context.database.session() as session:
-        publish_metered_rate_history(session)
-        credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=boundary)
-        credits.issue(
-            user_id=user_id,
-            grant=CreditGrant(
-                "payment:cutover",
-                CreditKind.Purchased,
-                40_000_000,
-                boundary,
-            ),
-        )
-    record = UsageRecord(
-        id=str(uuid4()),
-        workspace_id=workspace_id,
-        resource_type="workspace",
-        resource_id=workspace_id,
-        metric=UsageMetric.NetworkEgressBytes,
-        quantity=1_073_741_824,
-        unit=UsageUnit.Bytes,
-        metadata={
-            METERING_WINDOW_STARTED_AT_METADATA_KEY: at.isoformat(),
-            METERING_WINDOW_ENDED_AT_METADATA_KEY: (at + timedelta(seconds=10)).isoformat(),
-        },
-    )
-    isolated_services.usage.append(record)
-    isolated_services.usage.append(record)
-    with isolated_services.context.database.session() as session:
-        segments = session.scalars(
-            select(BillingLedgerSegmentTable).order_by(
-                BillingLedgerSegmentTable.segment_started_at,
-            )
-        ).all()
-        assert [segment.cost_nanos for segment in segments] == [65_000_000, 65_000_000]
-        frozen_ids = [segment.id for segment in segments]
-        settlement = session.get(BillingCreditSettlementTable, record.id)
-        assert settlement is not None and settlement.settled_at is None
-        assert settlement.gross_nanos == 65_000_000
-        legacy = session.scalar(select(BillingMeterOutboxTable))
-        assert legacy is not None
-        assert legacy.identifier == record.id and legacy.value_nanos == 65_000_000
-        assert to_utc(legacy.metering_ended_at) == boundary
-        legacy.status = "sent"
-        credits = BillingCreditRepository(session)
-        credits.complete_cutover(user_id=user_id, at=boundary)
-        BillingLedgerRepository(session).settle_pending_credits(owner_user_id=user_id)
-        assert settlement.settled_at is not None
-    isolated_services.usage.append(record)
-    with isolated_services.context.database.session() as session:
-        rows = session.scalars(
-            select(BillingMeterOutboxTable).order_by(
-                BillingMeterOutboxTable.occurred_at,
-            )
-        ).all()
-        assert [(row.status, row.value_nanos) for row in rows] == [
-            ("sent", 65_000_000),
-        ]
-        assert all(row.usage_record_id == record.id for row in rows)
-        assert BillingCreditRepository(session).balance(user_id=user_id, at=boundary) == -25_000_000
-        assert (
-            list(
-                session.scalars(
-                    select(BillingLedgerSegmentTable.id).order_by(
-                        BillingLedgerSegmentTable.segment_started_at,
-                    )
-                )
-            )
-            == frozen_ids
-        )
-
-
 def test_waived_usage_preserves_purchased_credit_and_records_the_gross_waiver(
     isolated_services: ApiServices,
 ) -> None:
     at = datetime(2026, 9, 12, tzinfo=UTC)
-    user_id, workspace_id = legacy_billing_account(
+    user_id, workspace_id = unfunded_billing_account(
         isolated_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
     )
     with isolated_services.context.database.session() as session:
@@ -645,7 +545,6 @@ def test_waived_usage_preserves_purchased_credit_and_records_the_gross_waiver(
         assert account is not None
         account.complimentary_since = at
         credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=at)
         credits.issue(
             user_id=user_id,
             grant=CreditGrant(

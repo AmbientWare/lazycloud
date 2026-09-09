@@ -25,7 +25,6 @@ from database.repositories.identity import (
 from database.repositories.observability import UsageRepository
 from database.tables.billing_credits import (
     BillingCreditAllocationTable,
-    BillingCreditCutoverTable,
     BillingCreditLotTable,
     BillingCreditSettlementTable,
 )
@@ -71,15 +70,12 @@ def test_refunded_spent_credit_and_promotional_debt_payment_reconcile(
                 status=BillingAccountStatus.Active,
                 provider_customer_id="refund-economics",
                 provider_subscription_id="",
-                provider_credit_grant_id="",
                 plan=None,
                 subscription_terms_version=None,
                 scheduled_terms_version=None,
                 scheduled_change_at=None,
             )
             credits = BillingCreditRepository(session)
-            credits.prepare_cutover(user_id=user_id, effective_at=start)
-            credits.complete_cutover(user_id=user_id, at=start)
             lot = credits.issue(
                 user_id=user_id, grant=CreditGrant("purchase", CreditKind.Purchased, 20, start)
             )
@@ -186,13 +182,6 @@ def test_report_keeps_cash_out_of_revenue_and_requires_reconciled_actual_costs(
         with database.session() as session:
             user = UserRepository(session).create(display_name="economics")
             workspace = WorkspaceRepository(session).create(name="economics")
-            session.add(
-                BillingCreditCutoverTable(
-                    user_id=user.id,
-                    effective_at=start,
-                    completed_at=start,
-                )
-            )
             session.add(
                 UsageRecordTable(
                     id=usage_id,

@@ -115,7 +115,6 @@ class _Run:
     account: RunAccount
     provider_customer_id: str = ""
     provider_subscription_id: str = ""
-    provider_credit_grant_id: str = ""
     endpoint_id: str = ""
     first_card: str = ""
     second_card: str = ""
@@ -129,7 +128,6 @@ class _Run:
             workspace_id=self.account.workspace_id,
             provider_customer_id=self.provider_customer_id,
             provider_subscription_id=self.provider_subscription_id,
-            provider_credit_grant_id=self.provider_credit_grant_id,
         )
 
     def identifiers(self) -> dict[str, str]:
@@ -139,7 +137,6 @@ class _Run:
             "user_id": self.account.user_id,
             "customer_id": self.provider_customer_id,
             "subscription_id": self.provider_subscription_id,
-            "credit_grant_id": self.provider_credit_grant_id,
             "webhook_endpoint_id": self.endpoint_id,
             "first_card_event": self.first_event,
             "second_card_event": self.second_event,
@@ -226,7 +223,6 @@ def _register_customer(gate: BillingGate, run: _Run) -> None:
     account = register_customer(gate, run.account)
     run.provider_customer_id = account.provider_customer_id
     run.provider_subscription_id = account.provider_subscription_id
-    run.provider_credit_grant_id = account.provider_credit_grant_id
 
 
 def _save_card(gate: BillingGate, run: _Run, token: str, *, first: bool) -> dict[str, Any]:

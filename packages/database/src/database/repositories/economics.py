@@ -8,7 +8,6 @@ from database.repositories.billing_credits import BillingCreditRepository
 from database.tables.billing_credit_adjustments import BillingCreditAdjustmentTable
 from database.tables.billing_credits import (
     BillingCreditAllocationTable,
-    BillingCreditCutoverTable,
     BillingCreditLotTable,
     BillingCreditSettlementTable,
 )
@@ -70,7 +69,13 @@ class EconomicsRepository:
         allocation = BillingCreditAllocationTable
         lot = BillingCreditLotTable
         settlement = BillingCreditSettlementTable
-        cutover = BillingCreditCutoverTable
+        outbox = BillingMeterOutboxTable
+        delivery_window = and_(
+            outbox.usage_record_id == ledger.usage_record_id,
+            outbox.occurred_at <= ledger.segment_started_at,
+            outbox.metering_ended_at >= ledger.segment_ended_at,
+        )
+        delivered = select(outbox.id).where(delivery_window).exists()
         attributed = (
             ledger.segment_started_at >= started_at,
             ledger.segment_started_at < ended_at,
@@ -104,11 +109,10 @@ class EconomicsRepository:
         included_records = select(ledger.usage_record_id).where(*attributed).distinct()
         local_segments = (
             ledger.usage_record_id.in_(included_records),
-            ledger.segment_started_at >= cutover.effective_at,
+            ~delivered,
         )
         record_totals = (
             select(ledger.usage_record_id.label("id"), func.sum(ledger.cost_nanos).label("gross"))
-            .join(cutover, cutover.user_id == ledger.owner_user_id)
             .where(*local_segments)
             .group_by(ledger.usage_record_id)
             .subquery()
@@ -119,7 +123,6 @@ class EconomicsRepository:
                 func.sum(allocation.amount_nanos).label("credit"),
             )
             .join(allocation, allocation.ledger_segment_id == ledger.id)
-            .join(cutover, cutover.user_id == ledger.owner_user_id)
             .where(*local_segments)
             .group_by(ledger.usage_record_id)
             .subquery()
@@ -149,7 +152,6 @@ class EconomicsRepository:
             )
             or 0
         )
-        outbox = BillingMeterOutboxTable
         local_waived = sum(
             segment.cost_nanos
             if settled.waived_nanos == settled.gross_nanos
@@ -157,18 +159,12 @@ class EconomicsRepository:
             for segment, settled in self.session.execute(
                 select(ledger, settlement)
                 .join(settlement, settlement.usage_record_id == ledger.usage_record_id)
-                .join(cutover, cutover.user_id == ledger.owner_user_id)
                 .where(
                     *attributed,
-                    ledger.segment_started_at >= cutover.effective_at,
+                    ~delivered,
                     settlement.waived_nanos > 0,
                 )
             )
-        )
-        delivery_window = and_(
-            outbox.usage_record_id == ledger.usage_record_id,
-            outbox.occurred_at <= ledger.segment_started_at,
-            outbox.metering_ended_at >= ledger.segment_ended_at,
         )
         segment_allocations = (
             select(
@@ -198,14 +194,12 @@ class EconomicsRepository:
                 .select_from(ledger)
                 .outerjoin(segment_allocations, segment_allocations.c.id == ledger.id)
                 .outerjoin(outbox, delivery_window)
-                .outerjoin(cutover, cutover.user_id == ledger.owner_user_id)
+                .outerjoin(settlement, settlement.usage_record_id == ledger.usage_record_id)
                 .where(
                     *attributed,
                     ledger.cost_nanos > func.coalesce(segment_allocations.c.credit, 0),
                     outbox.id.is_(None),
-                    or_(
-                        cutover.user_id.is_(None), ledger.segment_started_at < cutover.effective_at
-                    ),
+                    settlement.usage_record_id.is_(None),
                 )
             )
             or 0
@@ -264,12 +258,9 @@ class EconomicsRepository:
             self.session.scalar(
                 select(func.count())
                 .select_from(ledger)
-                .outerjoin(cutover, cutover.user_id == ledger.owner_user_id)
                 .where(
                     *attributed,
-                    or_(
-                        cutover.user_id.is_(None), ledger.segment_started_at < cutover.effective_at
-                    ),
+                    delivered,
                 )
             )
             or 0

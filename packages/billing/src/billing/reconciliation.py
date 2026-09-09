@@ -22,7 +22,7 @@ from shared.events import EventLevel
 from shared.payments import METER_EVENT_NAMES, ProviderInvoice, SubscriptionPaymentProvider
 from shared.timestamps import to_utc, utc_now
 
-from billing.credits import reconcile_credit_cutover
+from billing.credits import recover_subscription_credits
 from billing.periods import carry_plan_into_cycle
 from billing.sweeps import BillingEventSink
 from billing.webhooks import (
@@ -53,7 +53,6 @@ class BillingDivergence(StringEnum):
     PeriodDisagrees = "period_disagrees"
     MeteredUsageDisagrees = "metered_usage_disagrees"
     UsageNotDelivered = "usage_not_delivered"
-    CreditMigrationBlocked = "credit_migration_blocked"
     CreditSettlementPending = "credit_settlement_pending"
     UsageAbandoned = "usage_abandoned"
     """Priced usage whose meter export requires operator recovery."""
@@ -70,7 +69,7 @@ class BillingReconciliationResult:
 class BillingReconciliationService:
     """Compare what the provider holds against what this platform recorded.
 
-    Advances the recorded credit cutover and retries funding supported by paid
+    Retries local credit funding supported by paid
     invoices. Other plan and standing differences are reported for their owners
     to resolve. Gross ledger history is never rewritten.
     """
@@ -170,7 +169,6 @@ class BillingReconciliationService:
                         status=held.status,
                         provider_customer_id=held.provider_customer_id,
                         provider_subscription_id=held.provider_subscription_id,
-                        provider_credit_grant_id=held.provider_credit_grant_id,
                         plan=subscription.plan,
                         subscription_terms_version=subscription.terms_version,
                         scheduled_terms_version=subscription.scheduled_terms_version,
@@ -186,34 +184,27 @@ class BillingReconciliationService:
         }
         try:
             with self.database.session() as session:
-                credit_gap = reconcile_credit_cutover(
-                    session, payments, account=account, subscription=subscription, at=now
+                recover_subscription_credits(
+                    session, payments, account=account, subscription=subscription
                 )
-                cutover = BillingCreditRepository(session).cutover(user_id=account.user_id)
-                if cutover is not None:
-                    data["credit_cutover_at"] = cutover.effective_at.isoformat()
-                    data["credit_cutover_completed"] = cutover.completed_at is not None
-                    data["credit_cutover_blocked_reason"] = cutover.blocked_reason
-                    if (
-                        subscription.current_period_started_at >= cutover.effective_at
-                        and subscription.plan is not None
-                        and subscription.status in RUNNING_SUBSCRIPTION_STATUSES
-                    ):
-                        try:
-                            carry_plan_into_cycle(
-                                session,
-                                payments,
-                                account_id=account.user_id,
-                                provider_customer_id=account.provider_customer_id,
-                                provider_credit_grant_id=account.provider_credit_grant_id,
-                                subscription=subscription,
-                                plan=subscription.plan,
-                            )
-                        except UpstreamUnavailableError:
-                            kinds.add(BillingDivergence.CreditSettlementPending)
-                            data["credit_funding_pending"] = True
-                if credit_gap:
-                    kinds.add(BillingDivergence.CreditMigrationBlocked)
+                if (
+                    subscription.plan is not None
+                    and subscription.plan is account.plan
+                    and subscription.terms_version is account.subscription_terms_version
+                    and subscription.status in RUNNING_SUBSCRIPTION_STATUSES
+                ):
+                    try:
+                        carry_plan_into_cycle(
+                            session,
+                            payments,
+                            account_id=account.user_id,
+                            provider_customer_id=account.provider_customer_id,
+                            subscription=subscription,
+                            plan=subscription.plan,
+                        )
+                    except UpstreamUnavailableError:
+                        kinds.add(BillingDivergence.CreditSettlementPending)
+                        data["credit_funding_pending"] = True
         except Exception as error:
             LOGGER.warning(
                 "billing: credit reconciliation failed for %s: %s", account.user_id, error
