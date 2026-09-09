@@ -514,8 +514,6 @@ class BillingCreditRepository:
                 debt -= paid
                 available[index] = (lot, amount - paid)
         self.session.flush()
-        if not any(amount > 0 for _, amount in available):
-            return
         for settlement in self._outstanding(user_id=user_id):
             remaining = settlement.payable_nanos or 0
             segments = self.session.scalars(
@@ -534,32 +532,40 @@ class BillingCreditRepository:
                 )
             ).all()
             for segment in segments:
-                spent = int(
-                    self.session.scalar(
-                        select(
-                            func.coalesce(func.sum(BillingCreditAllocationTable.amount_nanos), 0)
-                        ).where(BillingCreditAllocationTable.ledger_segment_id == segment.id)
+                allocations = self.session.scalars(
+                    select(BillingCreditAllocationTable).where(
+                        BillingCreditAllocationTable.ledger_segment_id == segment.id
                     )
-                    or 0
-                )
-                owed = min(
-                    remaining,
-                    segment.cost_nanos - self.retained_storage_cost([segment]) - spent,
-                )
-                for index, (lot, amount) in enumerate(available):
-                    paid = min(owed, amount)
-                    if paid <= 0:
+                ).all()
+                for start, end, cost, retained in self._cost_slices(segment):
+                    if retained:
                         continue
-                    self._allocate(
-                        lot.id,
-                        segment.id,
-                        to_utc(segment.segment_started_at),
-                        to_utc(segment.segment_ended_at),
-                        paid,
+                    owed = min(
+                        remaining,
+                        cost - sum(_allocation_share(row, start, end) for row in allocations),
                     )
-                    owed -= paid
-                    remaining -= paid
-                    available[index] = (lot, amount - paid)
+                    # Delayed renewal evidence can arrive after expiry. That
+                    # credit still covers unpaid usage within its original term.
+                    expired = [
+                        (lot, amount)
+                        for lot, amount in self._available(user_id=user_id, at=start)
+                        if lot.expires_at is not None and to_utc(lot.expires_at) <= to_utc(at)
+                    ]
+                    for lot, amount in expired:
+                        paid = min(owed, amount)
+                        if paid <= 0:
+                            continue
+                        self._allocate(lot.id, segment.id, start, end, paid)
+                        owed -= paid
+                        remaining -= paid
+                    for index, (lot, amount) in enumerate(available):
+                        paid = min(owed, amount)
+                        if paid <= 0:
+                            continue
+                        self._allocate(lot.id, segment.id, start, end, paid)
+                        owed -= paid
+                        remaining -= paid
+                        available[index] = (lot, amount - paid)
             paid = (settlement.payable_nanos or 0) - remaining
             settlement.credited_nanos = (settlement.credited_nanos or 0) + paid
             settlement.payable_nanos = remaining
@@ -639,6 +645,19 @@ def _settlement(row: BillingCreditSettlementTable) -> CreditSettlement:
     if row.credited_nanos is None or row.payable_nanos is None:
         raise ConflictError("credit settlement has not completed")
     return CreditSettlement(row.gross_nanos, row.credited_nanos, row.payable_nanos)
+
+
+def _allocation_share(row: BillingCreditAllocationTable, start: datetime, end: datetime) -> int:
+    lower = max(start, to_utc(row.started_at))
+    upper = min(end, to_utc(row.ended_at))
+    if lower >= upper:
+        return 0
+    origin = to_utc(row.started_at)
+    duration = (to_utc(row.ended_at) - origin) // timedelta(microseconds=1)
+    return (
+        row.amount_nanos * ((upper - origin) // timedelta(microseconds=1)) // duration
+        - row.amount_nanos * ((lower - origin) // timedelta(microseconds=1)) // duration
+    )
 
 
 __all__ = ["BillingCreditRepository", "CreditAdjustments", "CreditCutover"]

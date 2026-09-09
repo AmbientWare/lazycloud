@@ -27,8 +27,8 @@ export function AutomaticReload() {
     <Panel title="Automatic reload">
       <div className="flex flex-col gap-3 p-4">
         <p className="text-sm text-muted-foreground">
-          Charge your saved payment method when available prepaid credit reaches or falls below your
-          threshold. Compute-only grants do not count toward this threshold.
+          Charge your saved payment method when your credit balance reaches or falls below your
+          threshold. Trial, subscription and purchased credit all count toward the balance.
         </p>
         {status.data ? (
           <p className="text-sm">

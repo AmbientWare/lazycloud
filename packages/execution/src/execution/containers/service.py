@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
 from database.repositories.apps import StubRepository
@@ -119,11 +119,6 @@ class ContainerCursorPayload(ContractModel):
 
 
 class PendingContainerReservation(ContractModel):
-    cpu_millicores: int = Field(ge=0, exclude=True)
-    memory_mib: int = Field(ge=0, exclude=True)
-    cpu_limit_millicores: int = Field(default=0, ge=0, exclude=True)
-    memory_limit_mib: int = Field(default=0, ge=0, exclude=True)
-    preemptible: bool = Field(default=False, exclude=True)
     region: ProductRegion | None = Field(default=None, exclude=True)
     availability_zone: str = Field(default="", exclude=True)
     id: str | None = None
@@ -237,8 +232,6 @@ class ContainerService:
         values["status"] = ContainerStatus.Pending.value
         values["gpu"] = gpu
         values["gpu_count"] = gpu_count_for_capacity(gpu, reservation.gpu_count)
-        container_id = reservation.id or str(uuid4())
-        values["id"] = container_id
         return ContainerRepository(session).records.create(
             values,
             workspace_id=reservation.workspace_id,
@@ -252,9 +245,6 @@ class ContainerService:
         container_id: str,
         workspace_id: str,
         image_id: str,
-        cpu_millicores: int,
-        memory_mib: int,
-        preemptible: bool,
     ) -> ContainerRecord:
         """Record the container an image build is about to run in.
 
@@ -286,9 +276,6 @@ class ContainerService:
                 image=image_id,
                 command=[],
                 workspace_id=workspace_id,
-                cpu_millicores=cpu_millicores,
-                memory_mib=memory_mib,
-                preemptible=preemptible,
             )
             if existing is not None:
                 if existing.workspace_id != workspace_id or existing.image != image_id:
@@ -354,9 +341,6 @@ class ContainerService:
                 session,
                 PendingContainerReservation(
                     name=name,
-                    cpu_millicores=cpu_millicores,
-                    memory_mib=memory_mib,
-                    preemptible=preemptible,
                     region=region,
                     availability_zone=availability_zone,
                     image=image,

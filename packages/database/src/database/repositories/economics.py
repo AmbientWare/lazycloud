@@ -5,6 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from database.repositories.billing_credits import BillingCreditRepository
+from database.tables.billing_credit_adjustments import BillingCreditAdjustmentTable
 from database.tables.billing_credits import (
     BillingCreditAllocationTable,
     BillingCreditCutoverTable,
@@ -49,6 +50,7 @@ class EconomicsLedgerFacts:
     pending_meter_nanos: int
     abandoned_meter_nanos: int
     purchased_redemptions_booked_nanos: int
+    purchased_credit_offsets_booked_nanos: int
     crossing_segments: int
     boundary_overlap_gross_nanos: int
     unpriced_records: int
@@ -220,6 +222,19 @@ class EconomicsRepository:
             )
             or 0
         )
+        offsets = (
+            self.session.scalar(
+                select(func.sum(BillingCreditAdjustmentTable.amount_nanos))
+                .join(lot, lot.id == BillingCreditAdjustmentTable.credit_lot_id)
+                .where(
+                    lot.kind == CreditKind.Purchased.value,
+                    BillingCreditAdjustmentTable.source_id.startswith("wallet-offset:"),
+                    BillingCreditAdjustmentTable.created_at >= started_at,
+                    BillingCreditAdjustmentTable.created_at < ended_at,
+                )
+            )
+            or 0
+        )
         crossing, boundary_gross = self.session.execute(
             select(func.count(), func.coalesce(func.sum(ledger.cost_nanos), 0))
             .select_from(ledger)
@@ -266,6 +281,7 @@ class EconomicsRepository:
             pending_meter_nanos=meter_totals.get("pending", 0) + meter_totals.get("sending", 0),
             abandoned_meter_nanos=meter_totals.get("abandoned", 0),
             purchased_redemptions_booked_nanos=int(booked),
+            purchased_credit_offsets_booked_nanos=int(offsets),
             crossing_segments=crossing,
             boundary_overlap_gross_nanos=int(boundary_gross),
             unpriced_records=unpriced,

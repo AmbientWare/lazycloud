@@ -13,7 +13,16 @@ from billing.economics import (
     StatementComponent,
     StatementEntry,
 )
-from database.repositories.identity import UserRepository, WorkspaceRepository
+from database.repositories.billing import BillingAccountRepository
+from database.repositories.billing_credits import BillingCreditRepository
+from database.repositories.billing_ledger import BillingLedgerRepository
+from database.repositories.billing_rates import PlatformRateRepository
+from database.repositories.identity import (
+    UserRepository,
+    WorkspaceMemberRepository,
+    WorkspaceRepository,
+)
+from database.repositories.observability import UsageRepository
 from database.tables.billing_credits import (
     BillingCreditAllocationTable,
     BillingCreditCutoverTable,
@@ -24,10 +33,140 @@ from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.observability import UsageRecordTable
 from pydantic import ValidationError
-from shared.billing_credits import CreditKind
+from shared.billing_accounts import BillingAccountStatus
+from shared.billing_credits import CreditGrant, CreditKind
+from shared.timestamps import utc_now
+from shared.usage import (
+    METERING_WINDOW_ENDED_AT_METADATA_KEY,
+    METERING_WINDOW_STARTED_AT_METADATA_KEY,
+    UsageMetric,
+    UsageRecord,
+    UsageUnit,
+)
 from sqlalchemy.engine import URL
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
+
+
+def test_refunded_spent_credit_and_promotional_debt_payment_reconcile(
+    postgres_database_url: URL,
+) -> None:
+    database = DatabaseClient.from_settings(
+        DatabaseSettings(
+            url=postgres_database_url.render_as_string(hide_password=False),
+            application_name=DatabaseApplicationName.Test,
+        )
+    )
+    start = utc_now() - timedelta(seconds=2)
+    try:
+        database.create_schema()
+        with database.session() as session:
+            user = UserRepository(session).create(display_name="refund economics")
+            workspace = WorkspaceRepository(session).create(name="refund economics")
+            WorkspaceMemberRepository(session).ensure_owner(
+                workspace_id=workspace.id, user_id=user.id
+            )
+            user_id = user.id
+            BillingAccountRepository(session).upsert(
+                user_id=user_id,
+                status=BillingAccountStatus.Active,
+                provider_customer_id="refund-economics",
+                provider_subscription_id="",
+                provider_credit_grant_id="",
+                plan=None,
+                subscription_terms_version=None,
+                scheduled_terms_version=None,
+                scheduled_change_at=None,
+            )
+            credits = BillingCreditRepository(session)
+            credits.prepare_cutover(user_id=user_id, effective_at=start)
+            credits.complete_cutover(user_id=user_id, at=start)
+            lot = credits.issue(
+                user_id=user_id, grant=CreditGrant("purchase", CreditKind.Purchased, 20, start)
+            )
+            PlatformRateRepository(session).publish(
+                pricing_version="refund-economics",
+                effective_at=start,
+                nanos_per_egress_byte=Decimal(1),
+                nanos_per_volume_byte_second=Decimal(0),
+            )
+            record = UsageRecord(
+                id=str(uuid4()),
+                workspace_id=workspace.id,
+                resource_type="workspace",
+                resource_id=workspace.id,
+                metric=UsageMetric.NetworkEgressBytes,
+                quantity=20,
+                unit=UsageUnit.Bytes,
+                metadata={
+                    METERING_WINDOW_STARTED_AT_METADATA_KEY: start.isoformat(),
+                    METERING_WINDOW_ENDED_AT_METADATA_KEY: (
+                        start + timedelta(seconds=1)
+                    ).isoformat(),
+                },
+            )
+            UsageRepository(session).append(record)
+            BillingLedgerRepository(session).price_record(record)
+            credits.adjust(
+                user_id=user_id,
+                credit_lot_id=lot,
+                source_id="refund",
+                amount_nanos=-20,
+                effective_at=utc_now(),
+            )
+            assert credits.balance(user_id=user_id, at=utc_now()) == -20
+        service = EconomicsService(database)
+        period = EconomicsPeriod(started_at=start, ended_at=utc_now())
+        amounts = {component: 0 for component in StatementComponent}
+        amounts.update(
+            {
+                StatementComponent.GrossUsageControl: 20,
+                StatementComponent.PrepaidCashReceived: 20,
+                StatementComponent.PrepaidCashRefunded: 20,
+                StatementComponent.PurchasedCreditClosingNetBalance: -20,
+            }
+        )
+        statement = EconomicsStatement(
+            **period.model_dump(),
+            attribution_basis="segment_started_at",
+            entries=[
+                StatementEntry(component=component, amount_nanos=amount, reference=component.value)
+                for component, amount in amounts.items()
+            ],
+        )
+        assert service.report(period, statement=statement).reconciliation_gaps == []
+        next_start = utc_now()
+        with database.session() as session:
+            credits = BillingCreditRepository(session)
+            credits.issue(
+                user_id=user_id,
+                grant=CreditGrant(
+                    "promotion", CreditKind.Trial, 10, next_start, next_start + timedelta(days=1)
+                ),
+            )
+            assert credits.balance(user_id=user_id, at=utc_now()) == -10
+        period = EconomicsPeriod(started_at=next_start, ended_at=utc_now())
+        amounts = {component: 0 for component in StatementComponent}
+        amounts.update(
+            {
+                StatementComponent.PurchasedCreditOpeningNetBalance: -20,
+                StatementComponent.PurchasedCreditClosingNetBalance: -10,
+            }
+        )
+        statement = EconomicsStatement(
+            **period.model_dump(),
+            attribution_basis="segment_started_at",
+            entries=[
+                StatementEntry(component=component, amount_nanos=amount, reference=component.value)
+                for component, amount in amounts.items()
+            ],
+        )
+        report = service.report(period, statement=statement)
+        assert report.reconciliation_gaps == []
+        assert report.purchased_credit_offsets_booked_nanos == 10
+        assert report.net_revenue_nanos == -10
+    finally:
+        database.dispose()
 
 
 def test_report_keeps_cash_out_of_revenue_and_requires_reconciled_actual_costs(
@@ -217,8 +356,8 @@ def test_report_keeps_cash_out_of_revenue_and_requires_reconciled_actual_costs(
             StatementComponent.FixedInfrastructure: 100,
             StatementComponent.PrepaidCashReceived: 9999,
             StatementComponent.PrepaidCashRefunded: 0,
-            StatementComponent.PrepaidOpeningLiability: 100,
-            StatementComponent.PrepaidClosingLiability: 9792,
+            StatementComponent.PurchasedCreditOpeningNetBalance: 100,
+            StatementComponent.PurchasedCreditClosingNetBalance: 9792,
         }
         statement = EconomicsStatement(
             **period.model_dump(),
@@ -269,7 +408,7 @@ def test_report_keeps_cash_out_of_revenue_and_requires_reconciled_actual_costs(
             update={
                 "entries": [
                     entry.model_copy(update={"amount_nanos": 1})
-                    if entry.component is StatementComponent.PrepaidClosingLiability
+                    if entry.component is StatementComponent.PurchasedCreditClosingNetBalance
                     else entry
                     for entry in statement.entries
                 ]

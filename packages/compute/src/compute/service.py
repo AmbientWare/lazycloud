@@ -2133,6 +2133,18 @@ class ComputeService:
         snapshot = provider.pooled.describe_unit(self._provider_unit_request(unit, offer))
         return unit, snapshot
 
+    def worker_availability_zone(self, *, unit: ComputeUnitRecord, machine_id: str) -> str:
+        if unit.capacity_owner_kind is not CapacityOwnerKind.PooledProvider:
+            return ""
+        with self.context.database.session() as session:
+            instance = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+        if instance is None or instance.pool_id != unit.id:
+            raise ConflictError("worker has no provider instance in its capacity unit")
+        zone = instance.metadata.get("availability_zone", "")
+        if not isinstance(zone, str):
+            raise UpstreamUnavailableError("worker provider reported an invalid availability zone")
+        return zone
+
     def worker_egress_policy(
         self, *, workspace_id: str, capacity_owner_id: str, machine_id: str
     ) -> WorkerEgressPolicy:

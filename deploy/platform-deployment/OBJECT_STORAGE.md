@@ -28,7 +28,7 @@ command or fallback storage path.
 2. Stop admission, drain work and delete old managed volumes through the normal
    cleanup owner. Retire old workers and stop application writers before changing
    storage credentials or applying the new schema. Old workers use removed
-   billing-permit routes and must be replaced.
+   usage-reporting routes and must be replaced.
 3. Switch to the S3 descriptor and matching application release. Before reopening
    admission, manually clear references to discarded platform objects, images,
    source packages and checkpoints. Keep accounts, workspace identities, billing

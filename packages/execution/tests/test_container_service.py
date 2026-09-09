@@ -237,8 +237,6 @@ def test_checkpoint_gpu_limit_rejects_before_scheduler_submission(
                 image="image",
                 command=["python", "-m", "app"],
                 workspace_id=workspace_id,
-                cpu_millicores=1000,
-                memory_mib=1024,
             ),
         )
 

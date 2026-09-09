@@ -103,9 +103,6 @@ class RecordingFunctionService:
     # never reach admission or claiming, and a fake that returned a plausible
     # value would let a route that started calling one of them keep passing.
 
-    def assert_may_accept_invocation(self, stub_id: str) -> None:
-        raise AssertionError(f"unexpected assert_may_accept_invocation call: {stub_id}")
-
     def unclaimed_task_counts(self, stub_ids: Sequence[str]) -> dict[str, int]:
         raise AssertionError(f"unexpected unclaimed_task_counts call: {stub_ids}")
 

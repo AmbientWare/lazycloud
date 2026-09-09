@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from time import sleep
 
 from foundation.process import (
     ProcessOutputChunk,
@@ -16,7 +17,7 @@ from scheduler.state import (
     SchedulerContainerStatus,
 )
 from shared.container_requests import StopContainerReason, WorkerStartupKind
-from shared.timestamps import utc_now
+from shared.scheduling import SchedulerContainerState
 from shared.worker_events import WorkerEventRecord
 from storage_client.mounts import StorageMountResult
 from worker.container_execution import (
@@ -48,7 +49,11 @@ from worker.finalization import (
     WorkerContainerFinalizationService,
 )
 from worker.gpu import ContainerGpuAssignmentResult
-from worker.monitoring import ContainerRuntimeMonitoringResult
+from worker.monitoring import (
+    ContainerRuntimeMonitor,
+    ContainerRuntimeMonitorSettings,
+    WorkerContainerRuntimeMonitor,
+)
 from worker.oci_spec import OciRuntimeContainerSpec
 from worker.repository_payloads import (
     AppendContainerLogsResponse,
@@ -396,34 +401,6 @@ class LifecycleEvents:
 
 
 @dataclass(slots=True)
-class MonitorHandle:
-    result: ContainerRuntimeMonitoringResult
-    stopped: bool = False
-
-    def stop(self) -> ContainerRuntimeMonitoringResult:
-        self.stopped = True
-        return self.result
-
-
-@dataclass(slots=True)
-class RuntimeMonitor:
-    handle: MonitorHandle
-    starts: list[tuple[str, int]] = field(default_factory=list)
-    log: CallLog | None = None
-
-    def start_monitoring(
-        self,
-        request: ContainerRequestContext,
-        *,
-        started_pid: int,
-    ) -> MonitorHandle:
-        if self.log is not None:
-            self.log.calls.append("monitor-start")
-        self.starts.append((request.container_id, started_pid))
-        return self.handle
-
-
-@dataclass(slots=True)
 class CredentialHydrator:
     log: CallLog
 
@@ -449,6 +426,18 @@ class FinalizationRepository:
     deleted: list[str] = field(default_factory=list)
     running_error: RuntimeError | None = None
     running_result_status: SchedulerContainerStatus = SchedulerContainerStatus.Running
+
+    def get_container_state(self, container_id: str) -> SchedulerContainerState:
+        return SchedulerContainerState(
+            container_id=container_id,
+            stub_id="stub-1",
+            workspace_id="workspace-1",
+            status=(
+                self.status_updates[-1][1]
+                if self.status_updates
+                else SchedulerContainerStatus.Pending
+            ),
+        )
 
     def set_exit_code(
         self,
@@ -663,24 +652,28 @@ def test_worker_container_execution_fails_before_running_when_docker_startup_fai
     )
 
 
-def test_checkpoint_startup_is_monitored_before_running_and_route_publication() -> None:
+def test_failed_checkpoint_startup_is_not_promoted_to_running_by_the_monitor() -> None:
+    class SlowFailedCheckpointStartup(AutomaticCheckpointCoordinator):
+        def checkpoint_or_complete_restore(
+            self, context: ContainerExecutionContext, *, container_hostname: str
+        ) -> str:
+            sleep(0.05)
+            raise RuntimeError("checkpoint startup failed")
+
     log = CallLog()
     repo = FinalizationRepository()
-    checkpoints = AutomaticCheckpointCoordinator(log=log, fail=True)
+    checkpoints = SlowFailedCheckpointStartup()
     routes = RoutePublisher(log)
-    monitor_handle = MonitorHandle(
-        ContainerRuntimeMonitoringResult(
-            container_id="ctr-1",
-            started_pid=123,
-            exited_at=utc_now(),
-        )
+    monitor = WorkerContainerRuntimeMonitor(
+        container_states=repo,
+        settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.001),
     )
     service = _service(
         log,
         repo=repo,
         automatic_checkpoints=checkpoints,
         route_publisher=routes,
-        runtime_monitor=RuntimeMonitor(monitor_handle, log=log),
+        runtime_monitor=monitor,
     )
 
     result = service.execute(
@@ -694,12 +687,12 @@ def test_checkpoint_startup_is_monitored_before_running_and_route_publication() 
 
     assert not result.ok
     assert result.failed_phase is ContainerExecutionPhase.CompleteCheckpointStartup
-    assert log.calls.index("monitor-start") < log.calls.index("checkpoint-startup")
     assert not any(
         status is SchedulerContainerStatus.Running for _, status, _ in repo.status_updates
     )
     assert "routes:ctr-1:2" not in log.calls
-    assert monitor_handle.stopped
+    assert result.monitoring is not None
+    assert result.monitoring.started_pid == 0
 
 
 def test_deployment_restore_fallback_starts_fresh_and_completes_handshake() -> None:
@@ -986,7 +979,7 @@ def _service(
     route_publisher: RoutePublisher | None = None,
     network_preparer: NetworkPreparer | None = None,
     lifecycle_events: LifecycleEvents | None = None,
-    runtime_monitor: RuntimeMonitor | None = None,
+    runtime_monitor: ContainerRuntimeMonitor | None = None,
     gpu_assigner: GpuAssigner | None = None,
     spec_builder: SpecBuilder | None = None,
     image_loader: ImageLoader | None = None,

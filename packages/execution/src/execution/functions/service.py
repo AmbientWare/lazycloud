@@ -597,21 +597,6 @@ class FunctionControlService:
                 self.release_dependents(updated)
         return scheduled
 
-    def assert_may_accept_invocation(self, stub_id: str) -> None:
-        """The backpressure refusal, asked before a streaming response begins.
-
-        A stream sends its status before the generator runs, so this raised from
-        inside one cannot be a refusal — it reaches the caller as a response that
-        breaks mid-flight, which is how a clear limit turns into a gateway error
-        with nothing in it about the limit.
-        """
-
-        stub = self.control_plane.get_stub(stub_id)
-        if stub.kind is not StubKind.Function:
-            return
-        config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
-        self._assert_within_pending_limit(stub.id, config)
-
     def _assert_within_pending_limit(self, stub_id: str, config: FunctionStubConfig) -> None:
         """Refuse work this function has no prospect of getting to.
 
@@ -855,11 +840,6 @@ class FunctionControlService:
                     session,
                     PendingContainerReservation(
                         id=container_plan.container_id,
-                        cpu_millicores=container_plan.cpu_millicores,
-                        memory_mib=container_plan.memory_mib,
-                        cpu_limit_millicores=container_plan.cpu_limit_millicores,
-                        memory_limit_mib=container_plan.memory_limit_mib,
-                        preemptible=preemptible,
                         name=f"function-{stub_name}",
                         image=container_plan.image_id or FUNCTION_IMAGE,
                         command=list(container_plan.entrypoint),

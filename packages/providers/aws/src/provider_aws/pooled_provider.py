@@ -38,6 +38,7 @@ from .managed_pool import (
     AwsManagedPoolBinaries,
     AwsManagedPoolBootstrap,
     AwsManagedPoolClientProvider,
+    AwsManagedPoolInstanceDetails,
     AwsManagedPoolPhase,
     AwsManagedPoolProvisioner,
     AwsManagedPoolResourceIds,
@@ -313,10 +314,10 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         provisioner: AwsManagedPoolProvisioner,
         snapshot: AwsManagedPoolSnapshot,
     ) -> ProviderUnitSnapshot:
-        volume_ids = provisioner.storage_volume_ids(
+        details = provisioner.instance_details(
             tuple(instance.instance_id for instance in snapshot.instances)
         )
-        return _snapshot(snapshot, volume_ids=volume_ids)
+        return _snapshot(snapshot, details=details)
 
     def _provisioner(self, region: str) -> AwsManagedPoolProvisioner:
         target = self.connection.model_copy(update={"region": region})
@@ -384,7 +385,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
 def _snapshot(
     snapshot: AwsManagedPoolSnapshot,
     *,
-    volume_ids: Mapping[str, tuple[str, ...]],
+    details: Mapping[str, AwsManagedPoolInstanceDetails],
 ) -> ProviderUnitSnapshot:
     instances = [
         ProviderUnitInstance(
@@ -394,8 +395,8 @@ def _snapshot(
                 if instance.lifecycle_state == "InService" and instance.health_status == "Healthy"
                 else ProviderMachineStatus.Pending
             ),
-            availability_zone=instance.availability_zone,
-            storage_volume_ids=volume_ids.get(instance.instance_id, ()),
+            availability_zone=details[instance.instance_id].availability_zone,
+            storage_volume_ids=details[instance.instance_id].storage_volume_ids,
             booted_template_version=instance.booted_template_version,
         )
         for instance in snapshot.instances

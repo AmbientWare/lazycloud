@@ -21,8 +21,7 @@ checks settlements against all local-credit segments of their parent records.
 Payment delivery windows keep charges on either side of credit cutover separate.
 Crossing segment counts and gross amounts describe boundary exposure; they are
 not extra revenue.
-This is not a prorated service-time report. Expense statements must reconcile to
-this attribution before being supplied.
+Expense statements must reconcile to this attribution before being supplied.
 
 Financial input has `scope: "installation"`, timezone-qualified `started_at` and
 `ended_at`, `attribution_basis: "segment_started_at"`, and an `entries` array.
@@ -51,17 +50,25 @@ costs. Required components are:
 - `fixed_infrastructure`: control-plane and other hosting costs excluded above.
 - `prepaid_cash_received`: cash received for purchased credits during the period.
 - `prepaid_cash_refunded`: purchased-credit cash returned during the period.
-- `prepaid_opening_liability`: purchased-credit liability at period start.
-- `prepaid_closing_liability`: purchased-credit liability at period end.
+- `purchased_credit_opening_net_balance`: signed purchased-credit balance at period start.
+- `purchased_credit_closing_net_balance`: signed purchased-credit balance at period end.
 
-Cash and liability entries use their actual booking dates within the same period.
-Opening liability plus receipts minus refunds minus locally booked purchased
-redemptions must equal closing liability. Purchased credit redemption remains
-usage revenue; the top-up itself is cash and liability. Trial and subscription
-credit allocations reduce usage revenue. Historical records without local credit
-settlement remain an explicit reconciliation gap. Payment delivery records are
-retained as financial evidence. Any records pruned before this policy leave a
-gap; the report cannot infer successful delivery from their absence.
+Cash and credit entries use their actual booking dates within the same period.
+Only the two net balances may be negative. A positive balance is unspent purchased
+credit owed to customers. A negative balance is refunded spent credit owed back
+by customers. These totals exclude trial and subscription balances.
+
+Opening net balance plus receipts minus refunds minus booked redemptions plus
+`purchased_credit_offsets_booked_nanos` must equal closing net balance. Offsets
+record other credit paying purchased-credit refund debt. Transfers between two
+purchased lots cancel in that total. Promotional offsets also reduce recognized
+revenue when booked; they do not create a second usage allocation.
+
+Purchased credit redemption remains usage revenue. A top-up records cash and
+purchased credit, without recognizing revenue. Trial and subscription allocations
+reduce usage revenue. Historical records without local settlement remain a
+reconciliation gap. Retain payment delivery records as financial evidence; their
+absence cannot establish successful delivery.
 
 The optional fleet file uses the same scope and exact period, with a `reference`.
 `capacity`, `reserved_capacity` and `stranded_capacity` each contain observed

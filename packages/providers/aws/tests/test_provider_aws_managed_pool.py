@@ -108,6 +108,7 @@ class _Ec2:
         instances: list[Mapping[str, object]] = [
             {
                 "InstanceId": instance_id,
+                "Placement": {"AvailabilityZoneId": "use1-az1"},
                 "State": {"Name": "terminated"},
                 "BlockDeviceMappings": [
                     {"Ebs": {"VolumeId": f"vol-{instance_id.removeprefix('i-')}"}}
@@ -441,7 +442,8 @@ def test_managed_pool_storage_destruction_requires_exact_volume_absence() -> Non
     instance_id = "i-00000000000000001"
     volume_id = "vol-00000000000000001"
 
-    assert provisioner.storage_volume_ids((instance_id,)) == {instance_id: (volume_id,)}
+    details = provisioner.instance_details((instance_id,))[instance_id]
+    assert details.storage_volume_ids == (volume_id,)
     assert not provisioner.machine_storage_destroyed(_spec(), instance_id, (volume_id,))
     assert not provisioner.machine_storage_destroyed(_spec(), instance_id, ())
 

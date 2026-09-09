@@ -913,11 +913,12 @@ class WorkerContainerExecutionService:
         output_sink = log_capture.process_output_sink if log_capture is not None else None
 
         def monitored_started(pid: int) -> None:
-            monitor.start(self.runtime_monitor, context.request, pid)
             on_started(pid)
+            if monitor.handle is not None:
+                monitor.handle.runtime_started(pid)
 
         try:
-            monitor.start(self.runtime_monitor, context.request, 0)
+            monitor.start(self.runtime_monitor, context.request)
             restored = (
                 self.checkpoint_restorer.restore(
                     context,
@@ -1253,11 +1254,10 @@ class _RuntimeMonitorState:
         self,
         monitor: ContainerRuntimeMonitor | None,
         request: ContainerRequestContext,
-        pid: int,
     ) -> None:
         if monitor is None or self.handle is not None:
             return
-        self.handle = monitor.start_monitoring(request, started_pid=pid)
+        self.handle = monitor.start_monitoring(request)
 
     def stop(self) -> ContainerRuntimeMonitoringResult | None:
         if self.handle is None:

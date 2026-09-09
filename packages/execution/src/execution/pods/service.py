@@ -261,11 +261,6 @@ class PodControlService:
                 session,
                 PendingContainerReservation(
                     id=plan.container_id,
-                    cpu_millicores=plan.cpu_millicores,
-                    memory_mib=plan.memory_mib,
-                    cpu_limit_millicores=plan.cpu_limit_millicores,
-                    memory_limit_mib=plan.memory_limit_mib,
-                    preemptible=config.runtime.preemptible,
                     region=config.runtime.region,
                     availability_zone=config.runtime.availability_zone,
                     name=f"{'sandbox' if stub.kind is StubKind.Sandbox else 'pod'}-{stub.name}",

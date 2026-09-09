@@ -141,9 +141,6 @@ class ShellControlService:
                 session,
                 PendingContainerReservation(
                     id=plan.container_id,
-                    cpu_millicores=plan.cpu_millicores,
-                    memory_mib=plan.memory_mib,
-                    preemptible=stub.config.runtime.preemptible,
                     region=stub.config.runtime.region,
                     availability_zone=stub.config.runtime.availability_zone,
                     name=f"shell-{stub.name}",

@@ -850,6 +850,11 @@ class WorkerRepositoryService:
     ) -> WorkerRecordResponse:
         unit = self._feeding_unit(request.worker, principal)
         self._validate_runtime_worker_registration(request.worker, principal)
+        if self.services is None:
+            raise UpstreamUnavailableError("service dependencies are required for registration")
+        availability_zone = self.services.compute.worker_availability_zone(
+            unit=unit, machine_id=request.worker.machine_id
+        )
         source_cache = self._source_cache_service()
         generation = source_cache.register(
             principal=principal,
@@ -893,7 +898,7 @@ class WorkerRepositoryService:
                 # for a name to change. Told, not asserted.
                 "pool": unit.pool,
                 "region": product_region(unit.region),
-                "availability_zone": unit.offer_availability_zone,
+                "availability_zone": availability_zone,
                 "preemptible": unit.worker_preemptible,
                 # Whose pool this is decides who may land on it, so the unit
                 # answers rather than the machine. A worker is launched by an

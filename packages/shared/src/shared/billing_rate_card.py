@@ -20,42 +20,16 @@ ONE_TIME_TRIAL_NANOS = 5 * NANOS_PER_USD
 TRIAL_VALIDITY_DAYS = 30
 
 FREE_PLAN_MAX_CPU_CONTAINERS = 30
-"""How much the free plan may run at once without a GPU, across every workspace.
-
-A term of the plan rather than a scheduler setting, because it is part of what an
-account is buying and the pricing page states it. Counted per account and not per
-workspace, because the count is a bound on one payer's blast radius and a payer
-is the unit that gets billed for it.
-"""
+"""Published account-wide CPU concurrency, shared across owned workspaces."""
 
 FREE_PLAN_MAX_GPUS = 5
-"""How many GPU cards the free plan may hold at once, across every workspace.
-
-A pool of its own rather than a share of the container count, because the two
-limits bound different things. A CPU container costs cents an hour on capacity
-that is cheap to keep warm; a card costs dollars an hour on hardware that is not,
-so the same number cannot be both a generous CPU ceiling and a sane GPU one.
-Counted in cards rather than containers because a container may ask for several
-and cards are what is scarce.
-"""
+"""Count cards across the account separately from CPU containers."""
 
 FREE_PLAN_GPU_TYPES: frozenset[GpuType] = frozenset({GpuType.T4, GpuType.L4, GpuType.A10G})
-"""Which cards the free plan may ask for: the ones renting for around a dollar an hour.
-
-Not a revenue gate. A free account with a card pays the metered rate on any
-model, so what this protects is the larger cards themselves, which are the ones
-expensive to hold idle and the ones an abuser wants most.
-"""
 
 FREE_PLAN_MAX_WORKSPACES = 1
 FREE_PLAN_MAX_MEMBERS = 1
-"""The owner, and nobody else.
-
-Counted the way the membership repository counts, which includes the owner's own
-membership row, so one is a workspace with no co-members rather than no
-workspace at all. Wanting to work with somebody is the free plan's upgrade
-trigger, and it is the one every customer understands without reading terms.
-"""
+"""Membership counts include the owner."""
 
 TEAM_PLAN_MAX_CPU_CONTAINERS = 1_000
 TEAM_PLAN_MAX_GPUS = 50
@@ -68,19 +42,9 @@ GpuTypeEntitlement: TypeAlias = frozenset[GpuType] | AllGpuTypes
 """Which cards a plan may ask for: a named set, or every model the platform rents."""
 
 NO_CARD_MAX_CPU_CONTAINERS = 10
-"""How much an account with no card may run at once without a GPU.
-
-The real bound on what a cardless account can spend before anything stops it, and
-the reason it is far below the free plan's. Usage reaches the ledger on an
-interval, so an account is always some fraction of that interval past whatever it
-has been measured at; multiply that window by the burn rate of everything running
-and the product is what cannot be collected. This is the only term in it the
-platform sets directly.
-"""
+"""Limit uncollectible interval overage for accounts without a saved card."""
 
 NO_CARD_MAX_GPUS = 1
-"""One card, because the spending cap above stops it inside an hour on any model
-the free plan may ask for, and none is an account that can never see a GPU work."""
 
 TEAM_PLAN_MONTHLY_NANOS = 49 * NANOS_PER_USD
 """The subscription, charged by the payment provider as a flat monthly price."""
@@ -140,22 +104,13 @@ def subscription_terms(version: SubscriptionTermsVersion) -> SubscriptionTerms:
 _SECONDS_PER_HOUR = 3_600
 
 SECONDS_PER_30_DAY_MONTH = 2_592_000
-"""The month volume storage is quoted by, said in seconds because that is what a
-byte-second rate is derived against. Thirty days, which the page states outright
-rather than leaving a reader to assume their own calendar month."""
+"""Storage uses a published 30-day month, independent of calendar length."""
 
 CONNECTED_CLOUD_MANAGEMENT_FEE = Decimal("0.08")
-"""What this platform charges to run a container on capacity somebody else pays for.
+"""Connected-cloud compute fee as a share of the equivalent fleet charge.
 
-A share of what the same container would cost on the fleet, rather than a price
-of its own. Their cloud bills them for the machine; this is the fee for placing,
-scheduling, supervising and metering what runs on it, so it is the one figure
-that decides every connected-cloud compute rate and there is no second table to
-keep in step with the first.
-
-Compute only. Volumes live in this platform's own object store and egress is
-measured here, so both are charged whole wherever the container ran — a share of
-a bill this platform is paying itself would be selling storage below cost.
+The customer pays their provider for capacity. Storage and egress use separate
+published rates.
 """
 
 STORED_RATE_STEP = Decimal("1E-12")
@@ -178,14 +133,7 @@ def _stored_rate(exact: Decimal) -> Decimal:
 
 
 def _management_fee(fleet_nanos_per_hour: int) -> int:
-    """The fleet's hourly price as the fee for running the same thing elsewhere.
-
-    Management fees use whole nanodollars per second in the published history.
-    Down rather than nearest, for the reason `_stored_rate` rounds down: the
-    published figure is what a customer is quoted, and landing under it is a
-    rounding artefact where landing over it is a price nobody published. The
-    snap costs at most two thousandths of a percent.
-    """
+    """Round the management fee down to whole nanodollars per second."""
 
     fee = int(Decimal(fleet_nanos_per_hour) * CONNECTED_CLOUD_MANAGEMENT_FEE)
     return fee // _SECONDS_PER_HOUR * _SECONDS_PER_HOUR
@@ -211,13 +159,7 @@ class PublishedComputeRate:
     rate_class: PlacementRateClass = AUTO_RATE_CLASS
 
     def __post_init__(self) -> None:
-        """Derive every figure once, so an unpublishable one raises on construction.
-
-        The properties below are lazy, and their only production reader is the
-        command that writes the rate rows. Left to them, a price nobody can
-        publish would be discovered by an operator mid-cutover rather than by the
-        import that builds this card — which is every consumer, and every test.
-        """
+        """Reject unrepresentable rates when constructing the catalog."""
 
         _ = (
             self.nanos_per_container_second,
@@ -294,17 +236,9 @@ class PublishedGpuRate:
 
 @dataclass(frozen=True, slots=True)
 class PublishedPlatformRate:
-    """What the platform charges for what a container moves and keeps.
+    """Customer GiB prices converted to byte and byte-second ledger rates.
 
-    Held in the whole units a customer compares — a gibibyte moved, a gibibyte
-    kept for a thirty-day month — and divided below into the per-byte and
-    per-byte-second rates the ledger prices against. That direction is the same
-    one the compute rates take, and for the same reason: the published figure is
-    what a person is quoted, so it is the figure this card states rather than one
-    reconstructed from a rate row.
-
-    Egress is global. Selecting a compute region does not change the customer
-    transfer rate.
+    Compute region selection does not change the customer egress rate.
     """
 
     nanos_per_egress_gib: int
@@ -330,13 +264,7 @@ class PublishedPlatformRate:
 
 @dataclass(frozen=True, slots=True)
 class PublishedPlan:
-    """Everything a surface offering this plan states about it.
-
-    The figures and the words together, because a plan described in one place and
-    priced in another is a plan somebody ships half of. Adding one here is what
-    makes it appear on the pricing page and in the dashboard; neither has copy of
-    its own to keep in step.
-    """
+    """Canonical plan prices, entitlements and copy for public clients."""
 
     id: BillingPlanId
     name: str
@@ -348,16 +276,7 @@ class PublishedPlan:
     terms_version: SubscriptionTermsVersion
     entitlements: PlanEntitlements
     terms: tuple[str, ...]
-    """What this plan promises beyond its figures, one clause each.
-
-    Carries no money and no count. The figures above are rendered by whichever
-    surface shows the plan, in that surface's own format, so a term can never
-    restate a number and then disagree with it. What is true on every plan —
-    what a card on file changes, how included credit is issued, how usage is
-    charged, is not here either: it belongs to the surface that says it once,
-    and repeating it per plan is how two plans start describing the platform
-    differently.
-    """
+    """Plan-specific promises, excluding numeric terms and platform-wide rules."""
 
     @property
     def monthly_nanos(self) -> int:
@@ -469,9 +388,6 @@ _PLATFORM_FLEET_SHAPE = PublishedShapeRate(
 
 _INITIAL_SHAPE_RATES: tuple[PublishedShapeRate, ...] = (
     _PLATFORM_FLEET_SHAPE,
-    # Capacity in a customer's own cloud account: their provider bills them for
-    # the machine, so what this platform charges is the fee for managing what
-    # was placed there — the fleet's own price, shared.
     PublishedShapeRate(
         UsageBillingOwner.ConnectedCloud,
         _management_fee(_PLATFORM_FLEET_SHAPE.nanos_per_container_hour),

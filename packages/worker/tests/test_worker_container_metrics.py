@@ -257,7 +257,8 @@ def test_worker_container_runtime_monitor_publishes_metrics_and_usage_on_stop() 
         memory_mib=128,
     )
 
-    handle = monitor.start_monitoring(request, started_pid=123)
+    handle = monitor.start_monitoring(request)
+    handle.runtime_started(123)
     result = handle.stop()
 
     assert source_factory.container_ids == [request.container_id]
@@ -306,7 +307,8 @@ def test_a_refused_usage_write_is_retried_with_the_window_it_claimed() -> None:
         memory_mib=128,
     )
 
-    handle = monitor.start_monitoring(request, started_pid=123)
+    handle = monitor.start_monitoring(request)
+    handle.runtime_started(123)
     deadline = monotonic() + 10
     while len(usage.offered) < 3 and monotonic() < deadline:
         sleep(0.01)
@@ -339,7 +341,8 @@ def test_windows_accepted_after_a_refusal_tile_the_whole_container() -> None:
         memory_mib=128,
     )
 
-    handle = monitor.start_monitoring(request, started_pid=123)
+    handle = monitor.start_monitoring(request)
+    handle.runtime_started(123)
     deadline = monotonic() + 10
     while len(usage.windows) < 2 and monotonic() < deadline:
         sleep(0.01)
@@ -436,7 +439,8 @@ def test_the_last_window_of_a_containers_life_survives_a_refusal() -> None:
         memory_mib=128,
     )
 
-    handle = monitor.start_monitoring(request, started_pid=123)
+    handle = monitor.start_monitoring(request)
+    handle.runtime_started(123)
     sleep(0.05)
     handle.stop()
 
@@ -488,35 +492,41 @@ def _monitored_request() -> ContainerRequestContext:
     )
 
 
-def test_container_monitor_rearms_the_scheduler_state_ttl_while_the_container_runs() -> None:
-    """A container that is working is kept alive in the scheduler's record.
-
-    The TTL is re-armed only by a write and the worker writes `Running` once, at
-    start. Left alone the record expires under a healthy container after fifteen
-    minutes, while a function may be invoked for an hour — and the orphan sweep
-    then fails a container that is still serving, stops counting it toward its
-    stub's ceiling, and counts it against the stub's failure threshold.
-    """
-
+def test_container_monitor_heartbeats_only_after_the_runtime_starts() -> None:
     states = _RecordingContainerStates(
         state=SchedulerContainerState(
             container_id="ctr-heartbeat",
             stub_id="stub-1",
             workspace_id="workspace-1",
-            status=SchedulerContainerStatus.Running,
+            status=SchedulerContainerStatus.Pending,
         )
     )
+    usage = UsageRecorder()
     monitor = WorkerContainerRuntimeMonitor(
         container_states=states,
+        usage_recorder=usage,
         settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.01),
     )
 
-    handle = monitor.start_monitoring(_monitored_request(), started_pid=4321)
-    deadline = monotonic() + 5.0
-    while not states.refreshes and monotonic() < deadline:
-        sleep(0.01)
-    handle.stop()
+    handle = monitor.start_monitoring(_monitored_request())
+    try:
+        for _ in range(500):
+            print("before startup", len(usage.windows), states.reads, states.refreshes)
+            if len(usage.windows) >= 2:
+                break
+            sleep(0.01)
+        assert len(usage.windows) >= 2
+        assert states.refreshes == []
+        handle.runtime_started(4321)
+        for _ in range(500):
+            print("after startup", len(usage.windows), states.reads, states.refreshes)
+            if states.refreshes:
+                break
+            sleep(0.01)
+    finally:
+        result = handle.stop()
 
+    assert result.started_pid == 4321
     assert states.refreshes, "a running container's state was never re-armed"
     status, ttl = states.refreshes[0]
     assert status is SchedulerContainerStatus.Running
@@ -537,7 +547,8 @@ def test_container_monitor_stops_heartbeating_a_state_the_platform_dropped() -> 
         settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.01),
     )
 
-    handle = monitor.start_monitoring(_monitored_request(), started_pid=4321)
+    handle = monitor.start_monitoring(_monitored_request())
+    handle.runtime_started(4321)
     deadline = monotonic() + 5.0
     while not states.reads and monotonic() < deadline:
         sleep(0.01)

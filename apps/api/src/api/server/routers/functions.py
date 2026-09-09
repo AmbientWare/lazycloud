@@ -76,14 +76,7 @@ def function_invoke_stream(
     control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> StreamingResponse:
     require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
-    # Asked here rather than left to the service, because a streaming response
-    # sends its status before the generator runs: a refusal raised inside it
-    # cannot be a 402 and reaches the caller as a stream that simply ends,
-    # which reads as the platform losing the request rather than declining it.
-    service.assert_may_accept_invocation(request.stub_id)
-    # Admission is asked inside the invocation below, which runs before the
-    # response begins and knows the cards the function wants. Repeating it here
-    # would be the same question asked without the shape that decides it.
+    # Run admission before streaming starts so refusals retain their HTTP status.
     initial = service.function_invoke(request)
     attribute_public_transfer(
         connection,

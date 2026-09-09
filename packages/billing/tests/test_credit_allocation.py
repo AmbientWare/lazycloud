@@ -10,6 +10,7 @@ import pytest
 from api.server.services import ApiServices
 from billing.credits import fund_subscription_credits
 from billing.rate_publication import publish_metered_rate_history
+from database.repositories import billing_credits
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_ledger import BillingLedgerRepository
@@ -40,6 +41,53 @@ from shared.usage import (
 )
 from sqlalchemy import func, select
 from tests.service_fixtures import legacy_billing_account
+
+
+def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
+    postgres_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    end = datetime(2027, 1, 1, tzinfo=UTC)
+    now = end + timedelta(days=1)
+    monkeypatch.setattr(billing_credits, "utc_now", lambda: now)
+    start = end - timedelta(seconds=10)
+    user_id, workspace_id = legacy_billing_account(
+        postgres_services.context, period_started_at=start, period_ended_at=end
+    )
+    with postgres_services.context.database.session() as session:
+        credits = BillingCreditRepository(session)
+        credits.prepare_cutover(user_id=user_id, effective_at=start)
+        credits.complete_cutover(user_id=user_id, at=start)
+        PlatformRateRepository(session).publish(
+            pricing_version="late-credit",
+            effective_at=start,
+            nanos_per_egress_byte=Decimal(1),
+            nanos_per_volume_byte_second=Decimal(0),
+        )
+        record = UsageRecord(
+            id=str(uuid4()),
+            workspace_id=workspace_id,
+            resource_type="workspace",
+            resource_id=workspace_id,
+            metric=UsageMetric.NetworkEgressBytes,
+            quantity=20,
+            unit=UsageUnit.Bytes,
+            metadata={
+                METERING_WINDOW_STARTED_AT_METADATA_KEY: start.isoformat(),
+                METERING_WINDOW_ENDED_AT_METADATA_KEY: (end + timedelta(seconds=10)).isoformat(),
+            },
+        )
+        UsageRepository(session).append(record)
+        BillingLedgerRepository(session).price_record(record)
+        assert credits.balance(user_id=user_id, at=now) == -20
+        grant = CreditGrant("late-renewal", CreditKind.Subscription, 100, start, end)
+        credits.issue(user_id=user_id, grant=grant)
+        credits.issue(user_id=user_id, grant=grant)
+        assert credits.balance(user_id=user_id, at=now) == -10
+        settlement = session.get(BillingCreditSettlementTable, record.id)
+        assert settlement is not None
+        assert (settlement.credited_nanos, settlement.payable_nanos) == (10, 10)
+        assert session.scalar(select(func.count()).select_from(BillingMeterOutboxTable)) == 0
 
 
 def test_storage_grace_waives_only_retained_time_and_top_up_resumes_charges(

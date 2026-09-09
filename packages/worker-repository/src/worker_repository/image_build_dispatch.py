@@ -96,9 +96,6 @@ class DurableImageBuildDispatch:
             container_id=build_id,
             workspace_id=workspace_id,
             image_id=record.image_id or "",
-            cpu_millicores=request.cpu_millicores,
-            memory_mib=request.memory_mib,
-            preemptible=request.preemptible,
         )
         result = self.scheduler.submit(request)
         if not result.accepted:

@@ -176,11 +176,15 @@ class AwsManagedPoolInstance(AwsManagedPoolModel):
     instance_id: str = Field(pattern=_INSTANCE_ID_PATTERN.pattern)
     lifecycle_state: str
     health_status: str
-    availability_zone: str
     # The template version the group launched this instance with, empty when the
     # group reports none. Rolling the group forward leaves running instances on
     # the version they booted with, so this and the group's reference diverge.
     booted_template_version: str = ""
+
+
+class AwsManagedPoolInstanceDetails(AwsManagedPoolModel):
+    availability_zone: str = Field(min_length=1)
+    storage_volume_ids: tuple[str, ...]
 
 
 class AwsManagedPoolSnapshot(AwsManagedPoolModel):
@@ -480,17 +484,22 @@ class _InstanceState(_Response):
     name: str = Field(default="", alias="Name")
 
 
-class _InstanceStorage(_Response):
+class _InstancePlacement(_Response):
+    availability_zone: str = Field(default="", alias="AvailabilityZoneId")
+
+
+class _InstanceDescription(_Response):
     instance_id: str = Field(alias="InstanceId")
+    placement: _InstancePlacement = Field(default_factory=_InstancePlacement, alias="Placement")
     state: _InstanceState = Field(default_factory=_InstanceState, alias="State")
     block_devices: tuple[_InstanceBlockDevice, ...] = Field(default=(), alias="BlockDeviceMappings")
 
 
 class _InstanceReservation(_Response):
-    instances: tuple[_InstanceStorage, ...] = Field(default=(), alias="Instances")
+    instances: tuple[_InstanceDescription, ...] = Field(default=(), alias="Instances")
 
 
-class _DescribeInstanceStorage(_Response):
+class _DescribeInstances(_Response):
     reservations: tuple[_InstanceReservation, ...] = Field(default=(), alias="Reservations")
 
 
@@ -595,7 +604,6 @@ class _GroupInstance(_Response):
     lifecycle_state: str = Field(default="", alias="LifecycleState")
     protected_from_scale_in: bool = Field(default=False, alias="ProtectedFromScaleIn")
     health_status: str = Field(default="", alias="HealthStatus")
-    availability_zone: str = Field(default="", alias="AvailabilityZone")
     launch_template: _GroupLaunchTemplate | None = Field(default=None, alias="LaunchTemplate")
 
 
@@ -1081,31 +1089,40 @@ class AwsManagedPoolProvisioner:
             )
         return payload.values[0] if payload.values else None
 
-    def storage_volume_ids(
+    def instance_details(
         self,
         instance_ids: tuple[str, ...],
-    ) -> dict[str, tuple[str, ...]]:
+    ) -> dict[str, AwsManagedPoolInstanceDetails]:
         if not instance_ids:
             return {}
         response = self._ec2(
-            "describe managed pool instance storage",
+            "describe managed pool instances",
             self._clients.ec2.describe_instances,
             InstanceIds=list(instance_ids),
         )
         described = _validate(
-            _DescribeInstanceStorage,
+            _DescribeInstances,
             response,
-            operation="describe managed pool instance storage",
+            operation="describe managed pool instances",
         )
-        return {
-            instance.instance_id: tuple(
-                mapping.ebs.volume_id
-                for mapping in instance.block_devices
-                if mapping.ebs is not None and mapping.ebs.volume_id
+        instances = {
+            instance.instance_id: AwsManagedPoolInstanceDetails(
+                availability_zone=instance.placement.availability_zone,
+                storage_volume_ids=tuple(
+                    mapping.ebs.volume_id
+                    for mapping in instance.block_devices
+                    if mapping.ebs is not None and mapping.ebs.volume_id
+                ),
             )
             for reservation in described.reservations
             for instance in reservation.instances
         }
+        if instances.keys() != set(instance_ids):
+            raise invalid_response_error(
+                "describe managed pool instances",
+                "AWS did not return exactly the requested pool instances",
+            )
+        return instances
 
     def machine_storage_destroyed(
         self,
@@ -1122,7 +1139,7 @@ class AwsManagedPoolProvisioner:
                 raise
         else:
             described = _validate(
-                _DescribeInstanceStorage,
+                _DescribeInstances,
                 response,
                 operation="verify managed pool instance destruction",
             )
@@ -1436,7 +1453,6 @@ def _instances(group: _Group) -> tuple[AwsManagedPoolInstance, ...]:
             instance_id=item.instance_id,
             lifecycle_state=item.lifecycle_state,
             health_status=item.health_status,
-            availability_zone=item.availability_zone,
             booted_template_version=(
                 item.launch_template.version if item.launch_template is not None else ""
             ),

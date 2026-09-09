@@ -85,9 +85,9 @@ class UnfundedStorageRetentionService:
                 deadline = (now + UNFUNDED_STORAGE_RETENTION).date().isoformat()
                 body = (
                     "Your credit balance is empty. Your stored files will be retained "
-                    f"at no charge until {deadline}. Add credit before that date "
-                    "to keep your data. Otherwise, platform-managed files and volumes will be "
-                    "permanently deleted. Customer-owned storage is unaffected."
+                    f"at no charge until {deadline}. Restore a positive credit balance "
+                    "before that date to keep your data. Otherwise, platform-managed files "
+                    "and volumes will be permanently deleted. Customer-owned storage is unaffected."
                 )
                 period.notification_message_id = EmailOutboxRepository(session).enqueue(
                     EmailMessage(

@@ -16,13 +16,6 @@ import { PrepaidCredit } from "./PrepaidCredit";
 import { UsageBudget } from "./UsageBudget";
 import { AutomaticReload } from "./AutomaticReload";
 
-/**
- * What this account is on, what it has left to spend, and how to change either.
- *
- * The account rather than the workspace, which is why it lives here and not
- * under `/w/<workspace>/`: the provider invoices a person, and somebody holding
- * three workspaces holds one payment relationship.
- */
 export function BillingSettings({
   planOpen,
   onPlanOpenChange,
@@ -66,14 +59,14 @@ export function BillingSettings({
                     limit={summary.entitlements?.max_concurrent_cpu_containers ?? 0}
                     noun="CPU container"
                     state="running or queued"
-                    atLimitNote="New containers will start when capacity is available."
+                    atLimitNote="Stop a container or raise your plan limit before starting another."
                   />
                   <ConcurrencyLine
                     running={summary.usage.concurrent_gpus}
                     limit={summary.entitlements?.max_concurrent_gpus ?? 0}
                     noun="GPU card"
                     state="in use"
-                    atLimitNote="New GPU containers will start when cards are free."
+                    atLimitNote="Release GPU capacity or raise your plan limit before starting more."
                   />
                 </div>
               ) : null}
@@ -147,14 +140,6 @@ export function BillingSettings({
   );
 }
 
-/**
- * How much of one pool this account is holding against how much it may.
- *
- * One line per pool, because the two are bounded separately: a container counts
- * against the CPU ceiling or, if it asks for cards, against the GPU one by the
- * number of cards. A single combined figure would leave an account refused a GPU
- * looking at a container count with plenty of room in it.
- */
 function ConcurrencyLine({
   running,
   limit,
@@ -177,13 +162,6 @@ function ConcurrencyLine({
   );
 }
 
-/**
- * The two ceilings that are not compute: how many workspaces and how many people.
- *
- * Both are counted across the account rather than per workspace, which is the
- * scope a payer is billed in. Somebody holding three workspaces reads one
- * figure here rather than adding up their own.
- */
 function EntitlementUsage({ summary }: { summary: BillingSummary }) {
   const entitlements = summary.entitlements;
   if (!entitlements) return null;

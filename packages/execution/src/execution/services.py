@@ -40,9 +40,6 @@ class ExecutionContainerService(Protocol):
         container_id: str,
         workspace_id: str,
         image_id: str,
-        cpu_millicores: int,
-        memory_mib: int,
-        preemptible: bool,
     ) -> ContainerRecord: ...
 
     def reserve_pending(

@@ -50,15 +50,24 @@ class StatementComponent(StrEnum):
     FixedInfrastructure = "fixed_infrastructure"
     PrepaidCashReceived = "prepaid_cash_received"
     PrepaidCashRefunded = "prepaid_cash_refunded"
-    PrepaidOpeningLiability = "prepaid_opening_liability"
-    PrepaidClosingLiability = "prepaid_closing_liability"
+    PurchasedCreditOpeningNetBalance = "purchased_credit_opening_net_balance"
+    PurchasedCreditClosingNetBalance = "purchased_credit_closing_net_balance"
 
 
 class StatementEntry(ContractModel):
     component: StatementComponent
-    amount_nanos: Nanos
+    amount_nanos: int
     reference: str = Field(min_length=1)
     basis: Literal["actual_statement"] = "actual_statement"
+
+    @model_validator(mode="after")
+    def signed_credit_balance_only(self) -> StatementEntry:
+        if self.amount_nanos < 0 and self.component not in {
+            StatementComponent.PurchasedCreditOpeningNetBalance,
+            StatementComponent.PurchasedCreditClosingNetBalance,
+        }:
+            raise ValueError("only purchased-credit net balances may be negative")
+        return self
 
 
 class EconomicsStatement(EconomicsPeriod):
@@ -186,6 +195,7 @@ class EconomicsReport(EconomicsPeriod):
     subscription_credit_applied_nanos: Nanos
     purchased_credit_applied_nanos: Nanos
     purchased_redemptions_booked_nanos: Nanos
+    purchased_credit_offsets_booked_nanos: int
     waived_nanos: Nanos
     pending_meter_nanos: Nanos
     abandoned_meter_nanos: Nanos
@@ -277,19 +287,20 @@ def _report(
     if control is not None and control != gross:
         gaps.append("statement gross usage does not reconcile to the ledger")
     cash = (
-        StatementComponent.PrepaidOpeningLiability,
+        StatementComponent.PurchasedCreditOpeningNetBalance,
         StatementComponent.PrepaidCashReceived,
         StatementComponent.PrepaidCashRefunded,
-        StatementComponent.PrepaidClosingLiability,
+        StatementComponent.PurchasedCreditClosingNetBalance,
     )
     if all(component in amounts for component in cash) and (
         amounts[cash[0]]
         + amounts[cash[1]]
         - amounts[cash[2]]
         - facts.purchased_redemptions_booked_nanos
+        + facts.purchased_credit_offsets_booked_nanos
         != amounts[cash[3]]
     ):
-        gaps.append("prepaid cash, booked redemptions and closing liability do not reconcile")
+        gaps.append("purchased-credit cash, redemptions, offsets and net balances do not reconcile")
     if trial + subscription + facts.waived_nanos > gross:
         gaps.append("credits and waivers exceed gross usage")
     revenue = contribution = operating = None
@@ -301,6 +312,7 @@ def _report(
             - trial
             - subscription
             - facts.waived_nanos
+            - facts.purchased_credit_offsets_booked_nanos
             + amounts[StatementComponent.SubscriptionRevenue]
             - amounts[StatementComponent.RefundsAndWriteoffs]
         )
@@ -347,6 +359,7 @@ def _report(
         subscription_credit_applied_nanos=subscription,
         purchased_credit_applied_nanos=facts.credits.get(CreditKind.Purchased, 0),
         purchased_redemptions_booked_nanos=facts.purchased_redemptions_booked_nanos,
+        purchased_credit_offsets_booked_nanos=facts.purchased_credit_offsets_booked_nanos,
         waived_nanos=facts.waived_nanos,
         pending_meter_nanos=facts.pending_meter_nanos,
         abandoned_meter_nanos=facts.abandoned_meter_nanos,

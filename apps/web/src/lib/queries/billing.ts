@@ -17,15 +17,8 @@ import {
 
 import { accountQueryKeys } from "./workspace-keys";
 
-/**
- * What the signed-in account is on, and what it has left to spend.
- *
- * Keyed off the account rather than the workspace: the provider invoices a
- * person, and somebody holding three workspaces holds one payment relationship,
- * so switching workspace cannot change the answer.
- */
-const BILLING_SUMMARY_POLL_INTERVAL_MS = 5_000;
 // Provider callbacks can arrive after the hosted page redirects back.
+const BILLING_SUMMARY_POLL_INTERVAL_MS = 5_000;
 
 export function billingSummaryQueryOptions() {
   return queryOptions({
@@ -86,18 +79,6 @@ export function resumeAutomaticReload() {
   });
 }
 
-/**
- * Ask the control plane for a page at the payment provider, and go there.
- *
- * Two of them, differing only in which page: one for somebody who has no card
- * saved and one for somebody managing the card and invoices they already have.
- * Neither renders anything here — the card is collected by the provider, which
- * is what keeps this app out of the way of card data entirely.
- *
- * `window.location.assign` rather than a router navigation, deliberately: the
- * destination is not this app, and the router would treat it as a route it does
- * not have.
- */
 async function openHostedSession(path: string): Promise<void> {
   const returnUrl = window.location.href;
   const session = await apiRequest(path, billingHostedSessionResponseSchema, {
@@ -130,22 +111,6 @@ export async function purchaseCredit(request: { requestKey: string; amountCents:
   return purchase;
 }
 
-/**
- * Move this account onto a published plan, in either direction.
- *
- * The body names a plan id and never a price: the browser reads the catalog the
- * server derives from its rate card, so quoting a figure back would create a
- * second source of truth. Moving down is this same call — the
- * subscription is never cancelled, because ending it would take the metered
- * prices with it and leave this account's usage reaching no invoice.
- *
- * What comes back is the account's standing afterwards, so the section that
- * asked can show the new plan without a second round trip.
- *
- * Stays here rather than becoming a mutation option builder: it is one call with
- * no cache key of its own, and the caller writes the answer into the summary it
- * already reads.
- */
 export function changeBillingPlan(selection: {
   plan: BillingPlanId;
   terms_version: BillingTermsVersion;

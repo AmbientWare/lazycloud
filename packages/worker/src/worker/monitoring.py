@@ -67,6 +67,8 @@ def _heartbeat_next_status(plan: WorkerStatusHeartbeatPlan) -> SchedulerContaine
 
 
 class ContainerRuntimeMonitorHandle(Protocol):
+    def runtime_started(self, pid: int) -> None: ...
+
     def stop(self) -> ContainerRuntimeMonitoringResult: ...
 
 
@@ -85,8 +87,6 @@ class ContainerRuntimeMonitor(Protocol):
     def start_monitoring(
         self,
         request: ContainerRequestContext,
-        *,
-        started_pid: int,
     ) -> ContainerRuntimeMonitorHandle: ...
 
 
@@ -181,8 +181,6 @@ class WorkerContainerRuntimeMonitor:
     def start_monitoring(
         self,
         request: ContainerRequestContext,
-        *,
-        started_pid: int,
     ) -> ContainerRuntimeMonitorHandle:
         source = (
             self.metrics_source_factory.metrics_source_for_container(request.container_id)
@@ -200,7 +198,6 @@ class WorkerContainerRuntimeMonitor:
         started_at = monotonic()
         handle = _ThreadedContainerRuntimeMonitorHandle(
             request=request,
-            started_pid=started_pid,
             metrics=metrics,
             usage_recorder=self.usage_recorder,
             container_states=self.container_states,
@@ -273,13 +270,13 @@ class AsyncContainerLifecycleSink:
 @dataclass(slots=True)
 class _ThreadedContainerRuntimeMonitorHandle:
     request: ContainerRequestContext
-    started_pid: int
     metrics: WorkerContainerMetricsService | None
     usage_recorder: WorkerUsageWindowRecorder | None
     container_states: ContainerStateHeartbeatRepository | None
     settings: ContainerRuntimeMonitorSettings
     _started_at: float
     _started_at_utc: datetime
+    started_pid: int = 0
     _stop: threading.Event = field(default_factory=threading.Event)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _sample_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -294,6 +291,13 @@ class _ThreadedContainerRuntimeMonitorHandle:
     _thread: threading.Thread | None = None
     _heartbeat_stopped: bool = False
     _last_heartbeat_at: float = float("-inf")
+
+    def runtime_started(self, pid: int) -> None:
+        if pid <= 0:
+            raise ValueError("runtime process ID must be positive")
+        with self._lock:
+            self.started_pid = pid
+            self._last_heartbeat_at = float("-inf")
 
     def start(self) -> None:
         if self.metrics is None and self.usage_recorder is None and self.container_states is None:
@@ -367,6 +371,8 @@ class _ThreadedContainerRuntimeMonitorHandle:
         """
 
         if self.container_states is None or self._heartbeat_stopped:
+            return
+        if self.started_pid == 0:
             return
         if recorded_at - self._last_heartbeat_at < _heartbeat_interval_seconds():
             return

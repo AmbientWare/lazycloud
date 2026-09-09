@@ -137,8 +137,9 @@ raw log objects after 30 days. Raw logs contain signed URLs and must stay privat
 Logs can arrive late or omit requests; region evidence does not prove a paid transfer.
 Observed requests and response bytes remain unbilled and appear in the economics report.
 
-Customer authorization discovers two enabled standard availability zones through
-the customer's AWS credentials and supplies them to the connection template.
+Customer authorization discovers all enabled standard availability zones through
+the customer's AWS credentials and supplies them to the connection template,
+which supports two to six zones.
 The customer profile needs `ec2:DescribeAvailabilityZones`. Default VPC subnets
 are not required; authorization stops before creating a stack if fewer than two
 zones are available. The public CLI and `connected-aws/customer_stack.py` use the

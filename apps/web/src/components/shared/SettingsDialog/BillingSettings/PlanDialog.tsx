@@ -26,15 +26,7 @@ import { cn } from "@/lib/utils";
 
 import type { BillingSettingsController, PlanOffer } from "./controller";
 
-/**
- * Every plan the platform publishes, and the one way onto each of them.
- *
- * Mounted only while open, which is what drops the confirmation and the last
- * refusal without anything having to clear them. Its open state is deliberately
- * not in the URL: a customer sent to the payment provider from inside here comes
- * back to the settings dialog with this closed, so returning from a hosted page
- * can never be what completes a plan change.
- */
+// Keep confirmation out of the URL so a checkout return cannot authorize a change.
 export function PlanDialog({ controller }: { controller: BillingSettingsController }) {
   return (
     <Dialog
