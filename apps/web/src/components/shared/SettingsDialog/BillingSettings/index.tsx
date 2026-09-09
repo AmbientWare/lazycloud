@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { useBillingSettingsController, type PlanOffer } from "./controller";
 import { PlanDialog } from "./PlanDialog";
 import { PrepaidCredit } from "./PrepaidCredit";
+import { UsageBudget } from "./UsageBudget";
 
 /**
  * What this account is on, what it has left to spend, and how to change either.
@@ -97,11 +98,7 @@ export function BillingSettings({
               <div className="flex flex-wrap gap-2">
                 {complimentary ? null : (
                   <>
-                    <Button
-                      size="sm"
-                      disabled={controller.busy}
-                      onClick={controller.openPlan}
-                    >
+                    <Button size="sm" disabled={controller.busy} onClick={controller.openPlan}>
                       <Sparkles className="size-4" />
                       Manage subscription
                     </Button>
@@ -148,6 +145,7 @@ export function BillingSettings({
         </div>
       </Panel>
       {summary && !complimentary ? <PrepaidCredit /> : null}
+      {summary && !complimentary ? <UsageBudget /> : null}
       <PlanDialog controller={controller} />
     </>
   );

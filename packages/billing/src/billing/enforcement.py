@@ -146,6 +146,12 @@ class BillingEnforcementService:
         with self.database.session() as session:
             credits = BillingCreditRepository(session)
             cutover = credits.cutover(user_id=account.user_id)
+            funding = BillingFundingService(session)
+            limit = funding.get_preferences(user_id=account.user_id).monthly_usage_limit_nanos
+            over_budget = False
+            if limit is not None:
+                budget = funding.usage_budget(user_id=account.user_id, at=now)
+                over_budget = limit == 0 or budget.spent_nanos + budget.held_nanos > limit
             if (
                 account.status is BillingAccountStatus.PastDue
                 or account.plan is None
@@ -153,6 +159,7 @@ class BillingEnforcementService:
                 or (credits.debt_nanos(user_id=account.user_id, at=now) > 0)
                 or cutover is None
                 or cutover.completed_at is None
+                or over_budget
             ):
                 return tuple(
                     ContainerRepository(session).live_container_ids_for_owner(

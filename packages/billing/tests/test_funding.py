@@ -435,6 +435,8 @@ def test_burst_usage_settles_its_hold_and_refunded_spent_credit_blocks_new_work(
         assert balance.held_nanos == 0
         assert balance.credits.purchased_nanos < 0
         spent = -balance.credits.purchased_nanos
+        budget = funding.usage_budget(user_id=user_id, at=at)
+        assert budget.spent_nanos == spent and budget.held_nanos == 0
         credits = BillingCreditRepository(session)
         credits.issue(
             user_id=user_id,

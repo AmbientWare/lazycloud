@@ -76,6 +76,15 @@ class CreditSummaryResponse(HttpModel):
     storage_and_transfer: CreditBalanceResponse
 
 
+class UsageBudgetResponse(HttpModel):
+    month_started_at: datetime
+    month_ended_at: datetime
+    limit_nanos: int | None = Field(ge=0)
+    spent_nanos: int = Field(ge=0)
+    held_nanos: int = Field(ge=0)
+    available_nanos: int | None = Field(ge=0)
+
+
 class BillingPlanChangeRequest(HttpModel):
     """Which published plan this account is asking to be put on.
 
@@ -268,4 +277,5 @@ __all__ = [
     "CreditPurchaseRequest",
     "CreditPurchaseResponse",
     "CreditSummaryResponse",
+    "UsageBudgetResponse",
 ]

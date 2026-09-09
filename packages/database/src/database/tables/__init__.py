@@ -36,6 +36,7 @@ from database.tables.billing_ledger import (
 )
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.billing_plan_changes import BillingPlanChangeIntentTable
+from database.tables.billing_preferences import BillingPreferencesTable
 from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
 from database.tables.billing_webhook_events import BillingWebhookEventTable
 from database.tables.compute import (
@@ -131,6 +132,7 @@ __all__ = [
     "BillingLedgerSegmentTable",
     "BillingMeterOutboxTable",
     "BillingPlanChangeIntentTable",
+    "BillingPreferencesTable",
     "BillingWebhookEventTable",
     "CacheEntryTable",
     "CheckpointTable",

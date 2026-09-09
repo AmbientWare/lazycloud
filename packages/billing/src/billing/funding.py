@@ -9,6 +9,7 @@ from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_funding import BillingFundingRepository, FundingHold
 from database.repositories.billing_ledger import BillingLedgerRepository
+from database.repositories.billing_preferences import BillingPreferencesRepository
 from database.repositories.billing_rates import ComputeRateRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import ContainerRepository
@@ -18,6 +19,7 @@ from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.observability import UsageRecordTable
 from shared.billing_accounts import BillingAccount, BillingAccountStatus
 from shared.billing_credits import CreditScope
+from shared.billing_preferences import UsageBudget, usage_budget_month
 from shared.billing_quotes import (
     BILLED_METRICS,
     BilledDimension,
@@ -43,6 +45,7 @@ from shared.funding import (
     FundingBalance,
     FundingPermit,
 )
+from shared.http.billing_preferences import BillingPreferences
 from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageMetric, UsageRecord
 from sqlalchemy import func, or_, select
@@ -59,6 +62,33 @@ _COMPUTE_COMPONENTS = (
 @dataclass(frozen=True, slots=True)
 class BillingFundingService:
     session: Session
+
+    def get_preferences(self, *, user_id: str) -> BillingPreferences:
+        return BillingPreferencesRepository(self.session).get(user_id)
+
+    def set_preferences(
+        self, *, user_id: str, preferences: BillingPreferences, now: datetime | None = None
+    ) -> BillingPreferences:
+        return BillingPreferencesRepository(self.session).set(user_id, preferences)
+
+    def usage_budget(self, *, user_id: str, at: datetime | None = None) -> UsageBudget:
+        moment = to_utc(at or utc_now())
+        start, end = usage_budget_month(moment)
+        repository = BillingPreferencesRepository(self.session)
+        limit = repository.get(user_id).monthly_usage_limit_nanos
+        spent = repository.gross_usage(user_id=user_id, start=start, end=end)
+        held = sum(
+            self._budget_exposure(hold, start=start, end=end, now=moment)
+            for hold in BillingFundingRepository(self.session).for_account(user_id)
+        )
+        return UsageBudget(
+            start,
+            end,
+            limit,
+            spent,
+            held,
+            None if limit is None else max(0, limit - spent - held),
+        )
 
     def balance(
         self,
@@ -135,6 +165,13 @@ class BillingFundingService:
         until = moment + timedelta(seconds=FUNDING_PERMIT_SECONDS + FUNDING_SHUTDOWN_GRACE_SECONDS)
         priced = [(self._exposure(shape, moment, until), shape) for shape in candidate_shapes]
         cost, shape = max(priced, key=lambda item: item[0])
+        self._check_usage_budget(
+            user_id=owner.user_id,
+            container_id=container_id,
+            shape=shape,
+            now=moment,
+            until=until,
+        )
         repository.create(
             container_id=container_id,
             workspace_id=workspace_id,
@@ -176,6 +213,14 @@ class BillingFundingService:
             return hold.permit()
         valid_until = moment + timedelta(seconds=FUNDING_PERMIT_SECONDS)
         funded_until = valid_until + timedelta(seconds=FUNDING_SHUTDOWN_GRACE_SECONDS)
+        self._check_usage_budget(
+            user_id=hold.user_id,
+            container_id=container_id,
+            shape=shape,
+            now=moment,
+            until=funded_until,
+            hold=hold,
+        )
         if account.complimentary_since is None:
             repository.reserve_credit(
                 container_id=container_id,
@@ -208,6 +253,14 @@ class BillingFundingService:
             raise PaymentRequiredError("the container's funded runtime permit expired")
         valid_until = moment + timedelta(seconds=FUNDING_PERMIT_SECONDS)
         funded_until = valid_until + timedelta(seconds=FUNDING_SHUTDOWN_GRACE_SECONDS)
+        self._check_usage_budget(
+            user_id=hold.user_id,
+            container_id=container_id,
+            shape=hold.shape,
+            now=moment,
+            until=funded_until,
+            hold=hold,
+        )
         if account.complimentary_since is None:
             repository.reserve_credit(
                 container_id=container_id,
@@ -356,6 +409,77 @@ class BillingFundingService:
             container_id=hold.container_id,
             required_nanos=self._remaining_exposure(hold, end),
         )
+
+    def _check_usage_budget(
+        self,
+        *,
+        user_id: str,
+        container_id: str,
+        shape: ContainerShape,
+        now: datetime,
+        until: datetime,
+        hold: FundingHold | None = None,
+    ) -> None:
+        repository = BillingPreferencesRepository(self.session)
+        limit = repository.get(user_id).monthly_usage_limit_nanos
+        if limit is None:
+            return
+        other_holds = tuple(
+            item
+            for item in BillingFundingRepository(self.session).for_account(user_id)
+            if item.container_id != container_id
+        )
+        month_start, month_end = usage_budget_month(now)
+        while month_start < until:
+            spent = repository.gross_usage(user_id=user_id, start=month_start, end=month_end)
+            held = sum(
+                self._budget_exposure(item, start=month_start, end=month_end, now=now)
+                for item in other_holds
+            )
+            start = max(
+                month_start, (hold.metered_through or hold.authorized_at or now) if hold else now
+            )
+            end = min(month_end, until)
+            own = self._exposure(shape, start, end) if start < end else 0
+            if hold is not None and start < end:
+                own = max(
+                    0,
+                    own
+                    - repository.gross_usage(
+                        user_id=user_id,
+                        start=start,
+                        end=end,
+                        container_id=container_id,
+                    ),
+                )
+            if spent + held + own > limit or limit == 0:
+                raise PaymentRequiredError("the saved monthly usage limit cannot fund this runtime")
+            month_start, month_end = usage_budget_month(month_end)
+
+    def _budget_exposure(
+        self, hold: FundingHold, *, start: datetime, end: datetime, now: datetime
+    ) -> int:
+        lower = max(start, hold.metered_through or hold.authorized_at or now)
+        upper = min(
+            end,
+            hold.terminal_at
+            or (
+                hold.valid_until + timedelta(seconds=FUNDING_SHUTDOWN_GRACE_SECONDS)
+                if hold.valid_until is not None
+                else now
+                + timedelta(seconds=FUNDING_PERMIT_SECONDS + FUNDING_SHUTDOWN_GRACE_SECONDS)
+            ),
+        )
+        if lower >= upper:
+            return 0
+        maximum = self._exposure(hold.shape, lower, upper)
+        posted = BillingPreferencesRepository(self.session).gross_usage(
+            user_id=hold.user_id,
+            start=lower,
+            end=upper,
+            container_id=hold.container_id,
+        )
+        return max(0, maximum - posted)
 
     def _remaining_exposure(self, hold: FundingHold, until: datetime) -> int:
         if hold.loss_resolved_at is not None:

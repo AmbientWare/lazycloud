@@ -112,6 +112,24 @@ class BillingFundingRepository:
         if unresolved is not None:
             raise ConflictError("machine evidence is retained until funded execution is reconciled")
 
+    def for_account(self, user_id: str) -> tuple[FundingHold, ...]:
+        return tuple(
+            _hold(row)
+            for row in self.session.scalars(
+                select(BillingFundingHoldTable).where(
+                    BillingFundingHoldTable.user_id == user_id,
+                    BillingFundingHoldTable.cancelled_at.is_(None),
+                    BillingFundingHoldTable.loss_resolved_at.is_(None),
+                    or_(
+                        BillingFundingHoldTable.terminal_at.is_(None),
+                        BillingFundingHoldTable.metered_through.is_(None),
+                        BillingFundingHoldTable.metered_through
+                        < BillingFundingHoldTable.terminal_at,
+                    ),
+                )
+            )
+        )
+
     def unfunded_live_container_ids(
         self, *, user_id: str, at: datetime, limit: int
     ) -> tuple[str, ...]:

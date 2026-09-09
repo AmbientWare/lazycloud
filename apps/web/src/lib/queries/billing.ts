@@ -6,6 +6,9 @@ import {
   billingSummarySchema,
   creditPurchaseSchema,
   creditSummarySchema,
+  billingPreferencesSchema,
+  usageBudgetSchema,
+  type BillingPreferences,
   type BillingPlanId,
   type BillingSummary,
 } from "@/lib/api/schemas";
@@ -48,6 +51,28 @@ export function creditBalanceQueryOptions() {
     queryKey: [...accountQueryKeys.billing(), "credits"],
     queryFn: () => apiRequest("/api/v1/billing/credits", creditSummarySchema),
     refetchInterval: 5_000,
+  });
+}
+
+export function billingPreferencesQueryOptions() {
+  return queryOptions({
+    queryKey: [...accountQueryKeys.billing(), "preferences"],
+    queryFn: () => apiRequest("/api/v1/billing/preferences", billingPreferencesSchema),
+  });
+}
+
+export function usageBudgetQueryOptions() {
+  return queryOptions({
+    queryKey: [...accountQueryKeys.billing(), "usage-budget"],
+    queryFn: () => apiRequest("/api/v1/billing/usage-budget", usageBudgetSchema),
+    refetchInterval: 5_000,
+  });
+}
+
+export function saveBillingPreferences(preferences: BillingPreferences) {
+  return apiRequest("/api/v1/billing/preferences", billingPreferencesSchema, {
+    method: "PUT",
+    body: JSON.stringify(preferences),
   });
 }
 

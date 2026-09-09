@@ -11,6 +11,7 @@ from billing.costs import (
     UsageCostSeries,
     UsageCostService,
 )
+from billing.funding import BillingFundingService
 from billing.purchases import CreditPurchaseService
 from database.repositories.billing_costs import PayerCostScope
 from fastapi import APIRouter, Depends, Query, status
@@ -33,7 +34,9 @@ from shared.http.billing import (
     CreditPurchaseRequest,
     CreditPurchaseResponse,
     CreditSummaryResponse,
+    UsageBudgetResponse,
 )
+from shared.http.billing_preferences import BillingPreferences
 from shared.http.pricing import PlanEntitlementsResponse
 from shared.http.usage import (
     UsageCostBucket,
@@ -64,6 +67,39 @@ from billing import (
 )
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
+
+
+@router.get(
+    "/preferences", response_model=BillingPreferences, operation_id="get_billing_preferences"
+)
+def get_billing_preferences(
+    user_id: read_user,
+    services: ApiServices = Depends(current_services),
+) -> BillingPreferences:
+    with services.context.database.session() as session:
+        return BillingFundingService(session).get_preferences(user_id=user_id)
+
+
+@router.put(
+    "/preferences", response_model=BillingPreferences, operation_id="set_billing_preferences"
+)
+def set_billing_preferences(
+    request: BillingPreferences,
+    user_id: write_user,
+    services: ApiServices = Depends(current_services),
+) -> BillingPreferences:
+    with services.context.database.session() as session:
+        return BillingFundingService(session).set_preferences(user_id=user_id, preferences=request)
+
+
+@router.get("/usage-budget", response_model=UsageBudgetResponse, operation_id="get_usage_budget")
+def get_usage_budget(
+    user_id: read_user,
+    services: ApiServices = Depends(current_services),
+) -> UsageBudgetResponse:
+    with services.context.database.session() as session:
+        budget = BillingFundingService(session).usage_budget(user_id=user_id)
+    return UsageBudgetResponse.model_validate(budget)
 
 
 @router.get("/credits", response_model=CreditSummaryResponse, operation_id="get_credit_balance")

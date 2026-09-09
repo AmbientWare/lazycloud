@@ -51,6 +51,24 @@ export const creditSummarySchema = z
   .strict();
 export type CreditSummary = z.infer<typeof creditSummarySchema>;
 
+export const billingPreferencesSchema = z
+  .object({
+    monthly_usage_limit_nanos: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+  })
+  .strict();
+export type BillingPreferences = z.infer<typeof billingPreferencesSchema>;
+
+export const usageBudgetSchema = z
+  .object({
+    month_started_at: timestampSchema,
+    month_ended_at: timestampSchema,
+    limit_nanos: z.number().int().nonnegative().nullable(),
+    spent_nanos: z.number().int().nonnegative(),
+    held_nanos: z.number().int().nonnegative(),
+    available_nanos: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+
 export const billingAccountStatuses = ["active", "past_due"] as const;
 export type BillingAccountStatus = (typeof billingAccountStatuses)[number];
 
