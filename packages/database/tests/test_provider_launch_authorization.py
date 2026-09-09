@@ -29,7 +29,7 @@ from shared.provider_config import ProviderKind
 from shared.timestamps import utc_now
 from sqlalchemy.engine import URL
 
-from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings, bootstrap_database
+from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 
 @dataclass(frozen=True)
@@ -41,9 +41,8 @@ class LaunchOwner:
 
 
 @pytest.fixture
-def launch_owner(postgres_database_url: URL) -> Iterator[LaunchOwner]:
-    url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(url)
+def launch_owner(migrated_database_url: URL) -> Iterator[LaunchOwner]:
+    url = migrated_database_url.render_as_string(hide_password=False)
     database = DatabaseClient.from_settings(
         DatabaseSettings(
             url=url, application_name=DatabaseApplicationName.Test, pool_size=4, max_overflow=0

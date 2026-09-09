@@ -33,8 +33,8 @@ from shared.worker_events import GATEWAY_REQUEST_EVENT_ACTION
 from starlette.types import Receive, Scope, Send
 from storage.service import ObjectStorage
 from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
+from tests.domain_fixtures import owned_workspace
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import owned_workspace
 from worker.container_client import models
 
 _JSON_OBJECT: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])

@@ -7,11 +7,12 @@ from uuid import uuid4
 
 import lazycloud.config
 import pytest
-from tests.backing_services import redis_url, unproven_services
+from tests.backing_services import redis_url
 from tests.metric_helpers import install_metric_reader
 from tests.real_redis import RealRedisActors
 
 TEST_ENVIRONMENT_FILE = Path(__file__).parent / "tests" / "env.test"
+pytest_plugins = ["tests.database_fixtures"]
 
 # Cleared from the environment before the suite declares its own configuration.
 # `LAZYCLOUD_TEST_` is exempt: those name the real Redis and PostgreSQL services
@@ -94,19 +95,3 @@ def real_redis_actors() -> Iterator[RealRedisActors]:
         yield actors
     finally:
         actors.cleanup()
-
-
-def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
-    """Say what this run could not prove, rather than leaving it in the dots.
-
-    A skipped backing-service proof is the run telling you it is worth less
-    than it looks, and reading that off a skip count nobody expands is how a
-    broken assertion survived two changes here.
-    """
-
-    missing = unproven_services()
-    if not missing:
-        return
-    terminalreporter.write_sep("=", "unproven without a backing service", yellow=True)
-    for variable in missing:
-        terminalreporter.write_line(f"  {variable} was unset; those proofs did not run")

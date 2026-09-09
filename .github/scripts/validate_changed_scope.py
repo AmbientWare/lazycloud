@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shlex
 import subprocess
 import tomllib
@@ -16,12 +17,27 @@ def _arguments() -> argparse.Namespace:
         description="Validate only Python files and owners changed from a Git base revision."
     )
     parser.add_argument("--base", required=True, help="Git revision used as the comparison base")
-    return parser.parse_args()
+    parser.add_argument("--check", choices=("all", "types", "tests"), default="all")
+    parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--splits", type=int, default=1)
+    parser.add_argument("--group", type=int, default=1)
+    parser.add_argument("--junitxml", type=Path)
+    parser.add_argument(
+        "--list", action="store_true", help="Print selected paths without running checks"
+    )
+    args = parser.parse_args()
+    if not 1 <= args.group <= args.splits:
+        parser.error("--group must be between 1 and --splits")
+    return args
 
 
-def _run(command: Sequence[str]) -> None:
+def _run(command: Sequence[str], *, allow_empty_group: bool = False) -> None:
     print(f"+ {shlex.join(command)}", flush=True)
-    subprocess.run(command, cwd=REPOSITORY_ROOT, check=True)
+    result = subprocess.run(command, cwd=REPOSITORY_ROOT, check=False)
+    if allow_empty_group and result.returncode == 5:
+        print("This shard has no selected tests.", flush=True)
+        return
+    result.check_returncode()
 
 
 def _output(command: Sequence[str]) -> str:
@@ -37,14 +53,14 @@ def _output(command: Sequence[str]) -> str:
 
 def _comparison(base: str) -> list[Path]:
     if base and set(base) != {"0"}:
-        names = _output(
-            ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD", "--"]
-        )
+        ancestor = _output(["git", "merge-base", base, "HEAD"]).strip()
+        names = _output(["git", "diff", "--name-only", "--no-renames", ancestor, "--"])
     else:
         names = _output(
             ["git", "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "HEAD"]
         )
-    return [Path(name) for name in names.splitlines() if name]
+    untracked = _output(["git", "ls-files", "--others", "--exclude-standard"])
+    return sorted({Path(name) for name in (names + untracked).splitlines() if name})
 
 
 def _owner(path: Path) -> Path | None:
@@ -110,19 +126,24 @@ def _requirement_name(requirement: str) -> str:
 
 
 def _existing(paths: set[Path]) -> list[str]:
-    return sorted(str(path) for path in paths if (REPOSITORY_ROOT / path).exists())
+    existing = {path for path in paths if (REPOSITORY_ROOT / path).exists()}
+    return sorted(str(path) for path in existing if not any(p in existing for p in path.parents))
 
 
-def _validate(base: str) -> None:
-    changed = _comparison(base)
+def _validate(args: argparse.Namespace) -> None:
+    changed = _comparison(args.base)
     python_files = {
         path for path in changed if path.suffix == ".py" and (REPOSITORY_ROOT / path).is_file()
     }
 
-    if any(path.name == "pyproject.toml" or path == Path("uv.lock") for path in changed):
+    if (
+        args.check == "all"
+        and not args.list
+        and any(path.name == "pyproject.toml" or path == Path("uv.lock") for path in changed)
+    ):
         _run(["uv", "lock", "--check"])
 
-    if python_files:
+    if args.check == "all" and not args.list and python_files:
         files = _existing(python_files)
         _run(["uv", "run", "--group", "dev", "ruff", "check", *files])
         _run(["uv", "run", "--group", "dev", "ruff", "format", "--check", *files])
@@ -136,22 +157,45 @@ def _validate(base: str) -> None:
         if owner is not None and path.name == "pyproject.toml":
             production_owners.add(owner)
 
-    for path in python_files:
+    for path in changed:
         if _is_opt_in_e2e(path):
             continue
         owner = _owner(path)
         if owner is not None:
             if _is_owner_test(path, owner):
-                typing_targets.add(path)
-                if path.name.startswith("test_"):
+                if path.suffix == ".py":
+                    typing_targets.add(path)
+                if path.name.startswith("test_") and path in python_files:
                     test_targets.add(path)
-            else:
+                else:
+                    test_targets.add(owner / "tests")
+            elif path.suffix == ".py":
                 production_owners.add(owner)
             continue
-        if path.parts and path.parts[0] in DIRECT_SCOPE_ROOTS:
+        if path.suffix == ".py" and path.parts and path.parts[0] in DIRECT_SCOPE_ROOTS:
             typing_targets.add(path)
-            if path.name.startswith("test_"):
+            if path.name.startswith("test_") and path in python_files:
                 test_targets.add(path)
+            elif path.parts[0] == "tests" and len(path.parts) > 2:
+                test_targets.add(path.parent)
+
+    global_paths = {
+        Path("pyproject.toml"),
+        Path("uv.lock"),
+        Path("conftest.py"),
+        Path(".python-version"),
+        Path("compose.test.yaml"),
+        Path(".github/scripts/validate_changed_scope.py"),
+        Path(".github/workflows/ci.yml"),
+    }
+    if any(
+        path in global_paths
+        or (path.parts[0] == "tests" and (len(path.parts) == 2 or path.parts[1] == "contracts"))
+        or (path.name == "pyproject.toml" and not (REPOSITORY_ROOT / path).exists())
+        for path in changed
+    ):
+        typing_targets.update(Path(name) for name in ("apps", "packages", "tests"))
+        test_targets.update(Path(name) for name in ("apps", "packages", "tests"))
 
     for owner in production_owners:
         typing_targets.add(owner)
@@ -162,25 +206,37 @@ def _validate(base: str) -> None:
         tests = dependent / "tests"
         if (REPOSITORY_ROOT / tests).is_dir():
             test_targets.add(tests)
-
-    if Path("pyproject.toml") in changed:
-        typing_targets.update(
-            path
-            for name in ("apps", "packages", "tests")
-            if (REPOSITORY_ROOT / (path := Path(name))).exists()
-        )
+    if production_owners:
+        test_targets.add(Path("tests"))
 
     typing = _existing(typing_targets)
-    if typing:
+    tests = _existing(test_targets)
+    if args.list:
+        print(json.dumps({"typing": typing, "tests": tests}, indent=2))
+        return
+    if typing and args.check in ("all", "types"):
         _run(["uv", "run", "--group", "dev", "basedpyright", *typing])
 
-    tests = _existing(test_targets)
-    if tests:
-        _run(["uv", "run", "--group", "dev", "pytest", "-q", *tests])
+    if tests and args.check in ("all", "tests"):
+        command = ["uv", "run", "--group", "dev", "pytest", "-x", "-q", "-n", str(args.workers)]
+        if args.splits > 1:
+            command.extend(
+                [
+                    "--splits",
+                    str(args.splits),
+                    "--group",
+                    str(args.group),
+                    "--splitting-algorithm",
+                    "least_duration",
+                ]
+            )
+        if args.junitxml:
+            command.extend(["--junitxml", str(args.junitxml)])
+        _run([*command, *tests], allow_empty_group=args.splits > 1)
 
     if not python_files and not typing_targets and not test_targets:
         print("No changed Python validation scope.", flush=True)
 
 
 if __name__ == "__main__":
-    _validate(_arguments().base)
+    _validate(_arguments())

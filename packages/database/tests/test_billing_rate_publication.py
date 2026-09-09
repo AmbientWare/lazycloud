@@ -22,6 +22,7 @@ from shared.billing_quotes import (
     PricedSpan,
     price_span,
 )
+from shared.billing_rate_card import PUBLISHED_METERED_RATE_HISTORY
 from shared.errors import ConflictError
 from shared.timestamps import to_utc, utc_now
 from shared.usage import (
@@ -33,6 +34,8 @@ from shared.usage import (
     UsageUnit,
 )
 from sqlalchemy import func, select
+
+from database import DatabaseClient
 
 _PRICING_VERSION = "test.republish"
 _RATE_AT = timedelta(minutes=1)
@@ -53,7 +56,7 @@ def test_a_boundary_republished_unchanged_writes_nothing_and_one_republished_oth
     and what is published is what a customer was charged.
     """
 
-    now = utc_now()
+    now = max(utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY))
     effective_at = now + _RATE_AT
     started_at = now + _WINDOW_AT
     ended_at = started_at + _WINDOW
@@ -111,12 +114,12 @@ def test_a_boundary_republished_unchanged_writes_nothing_and_one_republished_oth
 
 
 def test_regional_rates_are_isolated_from_automatic_prices(
-    isolated_services: ApiServices,
+    database: DatabaseClient,
 ) -> None:
     now = utc_now()
     shape = ContainerShape(UsageBillingOwner.PlatformFleet, "", 1000, 1024, 0)
     regional = replace(shape, rate_class="eu-central-standard")
-    with isolated_services.context.database.session() as session:
+    with database.session() as session:
         rates = ComputeRateRepository(session)
         for placed, rate in ((shape, Decimal(2)), (regional, Decimal(3))):
             rates.publish(

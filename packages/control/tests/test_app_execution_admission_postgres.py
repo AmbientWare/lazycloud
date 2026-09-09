@@ -59,12 +59,12 @@ class _BlockingExecutionAdmission:
 
 
 def test_postgresql_app_execution_admission_serializes_container_creation_and_pause(
-    postgres_services: ApiServices,
+    isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _prove_creation_that_holds_the_lock_is_captured(postgres_services)
+    _prove_creation_that_holds_the_lock_is_captured(isolated_services)
     _prove_creation_after_lifecycle_begin_is_rejected_without_orphans(
-        postgres_services,
+        isolated_services,
         monkeypatch=monkeypatch,
     )
 

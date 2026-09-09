@@ -3,19 +3,19 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
+from database.context import ServiceContext
 from database.repositories.images import CheckpointRepository
 from shared.checkpoints import (
     CheckpointRecord,
     CheckpointStatus,
     checkpoint_recent_stub_key,
 )
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 
 
-def test_checkpoint_repository_lifecycle_uses_database(isolated_services: ApiServices) -> None:
-    control = ControlPlaneService(isolated_services.context)
+def test_checkpoint_repository_lifecycle_uses_database(service_context: ServiceContext) -> None:
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "workspace-1")
     other_workspace = owned_workspace(control, "workspace-2")
     stub = control.create_stub("stub-1", workspace=workspace.id, kind=StubKind.Function)
@@ -24,7 +24,7 @@ def test_checkpoint_repository_lifecycle_uses_database(isolated_services: ApiSer
         workspace=other_workspace.id,
         kind=StubKind.Function,
     )
-    session_context = isolated_services.context.database.session()
+    session_context = service_context.database.session()
     session = session_context.__enter__()
     repo = CheckpointRepository(session)
     first = repo.create(
@@ -91,9 +91,9 @@ def test_checkpoint_repository_lifecycle_uses_database(isolated_services: ApiSer
 
 
 def test_checkpoint_repository_requires_durable_expiration_before_pruning(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "workspace-1")
     other_workspace = owned_workspace(control, "workspace-2")
     active_stub = control.create_stub(
@@ -111,7 +111,7 @@ def test_checkpoint_repository_requires_durable_expiration_before_pruning(
         workspace=other_workspace.id,
         kind=StubKind.Function,
     )
-    session_context = isolated_services.context.database.session()
+    session_context = service_context.database.session()
     session = session_context.__enter__()
     repo = CheckpointRepository(session)
     now = datetime(2026, 2, 1, tzinfo=UTC)
@@ -185,11 +185,9 @@ def test_checkpoint_repository_requires_durable_expiration_before_pruning(
 
 
 def test_checkpoint_retention_selects_only_published_or_terminal_records(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context), "checkpoint-retention-states"
-    )
+    workspace = owned_workspace(ControlPlaneService(service_context), "checkpoint-retention-states")
     now = datetime(2026, 2, 1, tzinfo=UTC)
     expired = now - timedelta(seconds=1)
     statuses = (
@@ -199,7 +197,7 @@ def test_checkpoint_retention_selects_only_published_or_terminal_records(
         CheckpointStatus.CheckpointFailed,
         CheckpointStatus.RestoreFailed,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = CheckpointRepository(session)
         for status in statuses:
             repository.create(

@@ -5,30 +5,27 @@ from datetime import datetime
 from threading import Barrier
 
 import pytest
-from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.identity import SecretRepository, WorkspaceRepository
 from database.tables.identity import WorkspaceTable
 from shared.errors import ConflictError, NotFoundError
 from sqlalchemy import delete, inspect
 from sqlalchemy.engine import URL
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 
 from database import (
     DatabaseApplicationName,
     DatabaseClient,
     DatabaseSettings,
-    bootstrap_database,
 )
 
 
 def test_secret_repository_mutations_have_exact_outcomes_and_stable_identity(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context), "secret-mutation-owner"
-    )
-    with isolated_services.context.database.session() as session:
+    workspace = owned_workspace(ControlPlaneService(service_context), "secret-mutation-owner")
+    with service_context.database.session() as session:
         repository = SecretRepository(session)
         created = repository.create("API_TOKEN", "ciphertext-1", workspace_id=workspace.id)
         with pytest.raises(ConflictError, match="already exists"):
@@ -66,18 +63,18 @@ def test_secret_repository_mutations_have_exact_outcomes_and_stable_identity(
 
 
 def test_secret_repository_isolates_same_name_and_cascades_workspace_delete(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     first = owned_workspace(control, "secret-isolation-a")
     second = owned_workspace(control, "secret-isolation-b")
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = SecretRepository(session)
         repository.create("SAME_NAME", "ciphertext-a", workspace_id=first.id)
         repository.create("SAME_NAME", "ciphertext-b", workspace_id=second.id)
         session.execute(delete(WorkspaceTable).where(WorkspaceTable.id == first.id))
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = SecretRepository(session)
         assert repository.get("SAME_NAME", workspace_id=first.id) is None
         retained = repository.get("SAME_NAME", workspace_id=second.id)
@@ -86,10 +83,9 @@ def test_secret_repository_isolates_same_name_and_cascades_workspace_delete(
 
 
 def test_postgresql_secret_concurrency_and_current_schema(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
+    database_url = migrated_database_url.render_as_string(hide_password=False)
     database = DatabaseClient.from_settings(
         DatabaseSettings(
             url=database_url,

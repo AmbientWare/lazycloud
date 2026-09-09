@@ -10,7 +10,7 @@ from shared.errors import ConflictError
 from shared.identity import TokenKind
 from shared.source_cache_cleanup import SourceCacheCleanupStatus
 from shared.timestamps import utc_now
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
 

@@ -16,7 +16,7 @@ from shared.deployments import DeploymentKind
 from shared.http.deployments import DeploymentListResponse
 from shared.http.tasks import TaskPageResponse
 from shared.identity import TokenKind
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 
 
 def test_cross_workspace_resource_ids_are_not_found_from_another_workspace(

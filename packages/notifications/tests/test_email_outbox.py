@@ -162,8 +162,9 @@ def test_a_slow_provider_cannot_hold_up_the_rest_of_the_sweep(
     bounds the count and not the time. What is left keeps its claim and the next
     sweep takes it, so bounding the clock delays messages rather than losing any.
     """
-    for index in range(4):
-        _queue(isolated_services, _message(to=f"someone{index}@example.test"))
+    message_ids = [
+        _queue(isolated_services, _message(to=f"someone{index}@example.test")) for index in range(4)
+    ]
     sender = _Sender()
     # Reads the clock once to set the deadline, then before each message after
     # the first. The second read is already past it.
@@ -178,10 +179,15 @@ def test_a_slow_provider_cannot_hold_up_the_rest_of_the_sweep(
     result = drain.drain()
 
     assert result.sent_count == 1
-    assert [item.to for item in sender.sent] == ["someone0@example.test"]
+    assert len(sender.sent) == 1
     # The rest are still claimed rather than settled, so no attempt was wasted
     # on them and the next sweep takes them once the claim ages out.
-    assert _status(isolated_services, _queued_ids(isolated_services)[-1]) == "sending"
+    assert sorted(_status(isolated_services, message_id) for message_id in message_ids) == [
+        "sending",
+        "sending",
+        "sending",
+        "sent",
+    ]
 
 
 def test_a_deployment_with_no_email_provider_keeps_its_messages(

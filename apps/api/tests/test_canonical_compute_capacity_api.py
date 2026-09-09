@@ -9,7 +9,8 @@ from identity.auth import AuthService, TokenIssuer
 from shared.compute_policy import MachinePool, UnitName
 from shared.http.compute import UnitMachineListResponse
 from shared.identity import TokenKind
-from tests.service_fixtures import administrator_credential, workspace_owner_user_id
+from tests.domain_fixtures import workspace_owner_user_id
+from tests.service_fixtures import administrator_credential
 
 
 def test_self_hosted_collection_is_account_scoped_and_excludes_managed_pools(

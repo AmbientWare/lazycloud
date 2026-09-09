@@ -7,7 +7,8 @@ from api.server.services import ApiServices
 from api.server.workspace_deletion import _delete_workspace_workload_state
 from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
-from tests.service_fixtures import administrator_credential, owned_workspace
+from tests.domain_fixtures import owned_workspace
+from tests.service_fixtures import administrator_credential
 
 _WORKLOAD_KEY_ROOTS: tuple[tuple[str, ...], ...] = (
     ("endpoint",),

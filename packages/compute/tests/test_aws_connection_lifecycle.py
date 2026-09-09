@@ -42,7 +42,7 @@ from shared.http.aws_connections import (
     AwsFleetEnsureRequest,
 )
 from shared.timestamps import utc_now
-from tests.service_fixtures import owned_workspace, workspace_owner_user_id
+from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
 
 ACCOUNT_ID = "123456789012"
 TEMPLATE_SHA256 = "a" * 64

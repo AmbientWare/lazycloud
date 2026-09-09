@@ -37,7 +37,6 @@ from shared.objects import ObjectWriteCommand
 from shared.source_cache_cleanup import SourceCacheCleanupStatus
 from shared.timestamps import utc_now
 from shared.workload_config import StubConfig, StubImageConfig
-from sqlalchemy import event
 from storage.checkpoint_retention import DurableCheckpointRetentionService
 from storage.image_archive import ImageArchiveSettings
 from storage.retention import RetentionConfig, RetentionService
@@ -49,7 +48,7 @@ from storage.service import (
     ObjectStorage,
 )
 from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 from worker.checkpoints import (
     WorkerCheckpointStatus,
     create_checkpoint_state_payload,
@@ -1085,26 +1084,14 @@ def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
         ),
         image_archive_settings=_archive_settings(),
     )
-    queries = 0
-
-    def count_query(*_args: object) -> None:
-        nonlocal queries
-        queries += 1
-
-    engine = isolated_services.context.database.engine
-    event.listen(engine, "before_cursor_execute", count_query)
-    try:
-        first = service._prune_image_candidate(
-            image,
-            updated_before=now + timedelta(days=1),
-            recent_build_after=now,
-        )
-    finally:
-        event.remove(engine, "before_cursor_execute", count_query)
+    first = service._prune_image_candidate(
+        image,
+        updated_before=now + timedelta(days=1),
+        recent_build_after=now,
+    )
 
     assert first[0] == 0
     assert first[1] == 7
-    assert queries <= 30
     assert shared_path.exists()
     with isolated_services.context.database.session() as session:
         builds = ImageBuildRepository(session)

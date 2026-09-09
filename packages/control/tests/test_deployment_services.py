@@ -37,9 +37,10 @@ from shared.http.client_manifests import (
 from shared.objects import ObjectRecord
 from shared.timestamps import utc_now
 from shared.workload_config import StubConfig
+from tests.domain_fixtures import owned_workspace
 from tests.real_redis import RealRedisActors
 from tests.scheduler_composition import services_with_redis_container_control
-from tests.service_fixtures import administrator_credential, owned_workspace
+from tests.service_fixtures import administrator_credential
 
 _JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 

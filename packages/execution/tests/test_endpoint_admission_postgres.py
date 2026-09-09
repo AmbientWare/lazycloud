@@ -14,6 +14,7 @@ from uuid import uuid4
 import pytest
 from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
+from billing.rate_publication import publish_metered_rate_history
 from control.service import ControlPlaneService, StubKind
 from coordination.redis_client import RedisSettings
 from database.tables.endpoint_dispatch import EndpointDispatchTable
@@ -39,6 +40,7 @@ from database import (
     DatabaseApplicationName,
     DatabaseClient,
     DatabaseSettings,
+    bootstrap_database,
 )
 
 CONTENDERS = 8
@@ -155,6 +157,7 @@ async def _postgres_services(
             max_overflow=0,
             application_name=DatabaseApplicationName.Test,
         )
+        bootstrap_database(database_settings.url)
         database = DatabaseClient.from_settings(database_settings)
         async_io = ApiAsyncIo.from_settings(
             database_settings,
@@ -166,6 +169,8 @@ async def _postgres_services(
             ),
         )
         try:
+            with database.session() as session:
+                publish_metered_rate_history(session)
             with service_graph(
                 database,
                 tmp_path,
