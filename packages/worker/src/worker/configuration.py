@@ -132,7 +132,6 @@ class WorkerPathConfiguration(ContractModel):
 
 
 class WorkerMonitoringConfiguration(ContractModel):
-    metrics_enabled: bool = True
     metrics_interval_seconds: float = Field(default=5.0, gt=0)
 
 

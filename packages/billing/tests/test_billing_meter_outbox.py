@@ -8,16 +8,18 @@ from uuid import uuid4
 from api.server.services import ApiServices
 from billing.meter_outbox import METER_EVENT_ABANDONED_ACTION, BillingMeterOutboxService
 from database.tables.billing_outbox import BillingMeterOutboxTable
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
     ProviderCreditGrant,
+    ProviderCreditGrantBalance,
     ProviderInvoice,
+    ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
-    SubscriptionProration,
+    SubscriptionChangeTiming,
 )
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import select
@@ -91,8 +93,10 @@ class _Provider:
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
         raise AssertionError("draining the outbox must not change anyone's plan")
 
@@ -116,8 +120,18 @@ class _Provider:
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("draining the outbox must not read invoices")
 
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        return ()
+
+    def paid_subscription_periods(
+        self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        return ()
+
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
         raise AssertionError("draining the outbox must not list invoices")
 
@@ -196,11 +210,13 @@ def _enqueue(
                     id=str(uuid4()),
                     workspace_id=workspace_id,
                     identifier=identifier,
+                    usage_record_id=str(uuid4()),
                     provider_customer_id="cus_outbox",
                     meter_event_name="lazycloud_compute_cost_nanos",
                     value_nanos=1_500,
                     pricing_version="2026-08-13.a",
                     occurred_at=now - timedelta(minutes=1),
+                    metering_ended_at=now,
                     status="pending",
                     attempts=0,
                     next_attempt_at=now - timedelta(seconds=1),

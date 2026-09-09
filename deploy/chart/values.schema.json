@@ -296,8 +296,7 @@
             "type": "string",
             "minLength": 1
           },
-          "minItems": 2,
-          "maxItems": 2
+          "minItems": 2
         },
         "security_group_id": {
           "type": "string",

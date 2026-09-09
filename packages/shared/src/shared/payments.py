@@ -6,9 +6,10 @@ from typing import Protocol
 
 from pydantic import Field
 
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension
 from shared.contracts import ContractModel
+from shared.credit_payments import CreditPayment, CreditPurchaseCheckout
 from shared.enums import StringEnum
 
 BILLING_CURRENCY = "USD"
@@ -34,24 +35,9 @@ makes a line priced at zero visible as metered-and-free rather than absent.
 """
 
 
-class SubscriptionProration(StringEnum):
-    """What a plan change does about the stretch of cycle already invoiced.
-
-    Stated by the caller because it is a money decision and only the caller knows
-    which direction the change goes in. Moving onto dearer terms takes the
-    difference at once, which is what makes "the subscription carries the plan"
-    and "the money was taken" one fact. Moving onto cheaper ones takes nothing
-    and gives nothing back: the cycle was invoiced when it opened, the allowance
-    it opened with is the allowance it keeps, and the smaller price is what the
-    next invoice asks for.
-
-    Protocol-neutral by name: a provider maps these onto whatever it calls
-    proration, and no caller has to hold that vocabulary to change somebody's
-    plan.
-    """
-
-    ChargeDifferenceNow = "charge_difference_now"
-    KeepWhatWasPaidFor = "keep_what_was_paid_for"
+class SubscriptionChangeTiming(StringEnum):
+    Immediate = "immediate"
+    AtRenewal = "at_renewal"
 
 
 class PaymentCustomer(ContractModel):
@@ -87,6 +73,9 @@ class PaymentEvent(ContractModel):
     payment_method_id: str = Field(default="", max_length=255)
     """The instrument a delivery says was saved, empty on everything else."""
 
+    payment_id: str = Field(default="", max_length=255)
+    credit_purchase_id: str = Field(default="", max_length=255)
+
 
 class ProviderSubscription(ContractModel):
     """What a customer is subscribed to, and the period it is currently in.
@@ -111,6 +100,9 @@ class ProviderSubscription(ContractModel):
     current_period_started_at: datetime
     current_period_ended_at: datetime
     plan: BillingPlanId | None = None
+    terms_version: SubscriptionTermsVersion | None
+    scheduled_terms_version: SubscriptionTermsVersion | None
+    scheduled_change_at: datetime | None
     """Which published plan the subscription's licensed price names.
 
     `None` where it names a price this platform did not publish, which is a
@@ -137,6 +129,41 @@ class ProviderCreditGrant(ContractModel):
     A grant that outlives its period would fund the next one, so what the
     provider recorded is the only version of this worth storing.
     """
+
+
+class ProviderCreditApplicability(StringEnum):
+    AllMetered = "all_metered"
+    Restricted = "restricted"
+    Unknown = "unknown"
+
+
+class ProviderCreditGrantBalance(ContractModel):
+    provider_credit_grant_id: str = Field(min_length=1)
+    amount_nanos: int = Field(ge=0)
+    available_balance_nanos: int
+    ledger_balance_nanos: int
+    created_at: datetime
+    effective_at: datetime | None
+    expires_at: datetime | None
+    voided_at: datetime | None
+    category: str
+    name: str
+    applicability: ProviderCreditApplicability
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class ProviderPaidSubscriptionPeriod(ContractModel):
+    provider_invoice_id: str = Field(min_length=1)
+    provider_invoice_line_id: str = Field(min_length=1)
+    provider_subscription_id: str = Field(min_length=1)
+    plan: BillingPlanId
+    terms_version: SubscriptionTermsVersion
+    period_started_at: datetime
+    period_ended_at: datetime
+    prorated: bool
+    amount_nanos: int
+    invoice_paid_nanos: int = Field(ge=0)
+    paid_at: datetime
 
 
 class ProviderInvoice(ContractModel):
@@ -174,19 +201,39 @@ class HostedPaymentSession(ContractModel):
     url: str = Field(min_length=1, max_length=2048)
 
 
-class PaymentProvider(Protocol):
-    """Where the money side of the relationship lives.
+class CreditPurchasePaymentProvider(Protocol):
+    """Provider payment evidence for purchased prepaid credit."""
 
-    Provider-neutral by construction: who pays, the pages they manage their card
-    on, which instrument their charges go to, what they are subscribed to, what
-    their plan includes, and the usage reported against them. The subscription,
-    the allowance, the invoice and the retries when a card is refused are all the
-    provider's — collection machinery written on this side would be a second
-    implementation of a system that already exists.
+    def create_credit_purchase_checkout(
+        self,
+        *,
+        provider_customer_id: str,
+        purchase_id: str,
+        amount_nanos: int,
+        success_url: str,
+        cancel_url: str,
+    ) -> CreditPurchaseCheckout: ...
 
-    Nothing here names a catalog object. A caller names a plan and the adapter
-    resolves it against its own published catalog, so no caller has to hold a
-    provider's identifiers to put somebody on one.
+    def credit_purchase_checkout(self, *, provider_session_id: str) -> CreditPurchaseCheckout: ...
+
+    def create_credit_purchase_payment(
+        self, *, provider_customer_id: str, purchase_id: str, amount_nanos: int
+    ) -> CreditPayment:
+        """Create an unconfirmed payment; persist its identity before confirmation."""
+        ...
+
+    def confirm_credit_purchase_payment(self, *, provider_payment_id: str) -> CreditPayment: ...
+
+    def cancel_credit_purchase_payment(self, *, provider_payment_id: str) -> CreditPayment: ...
+
+    def credit_purchase_payment(self, *, provider_payment_id: str) -> CreditPayment: ...
+
+
+class SubscriptionPaymentProvider(Protocol):
+    """Customer relationships, subscriptions and their invoiced usage.
+
+    Callers name published plans; the adapter resolves its catalog identifiers.
+    Paid invoice lines are funding evidence, while a saved card is not.
     """
 
     def create_customer(self, *, account_id: str, email: str, workspace_id: str) -> PaymentCustomer:
@@ -314,26 +361,17 @@ class PaymentProvider(Protocol):
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
-        """Move an existing subscription onto another plan's price.
+        """Change exact subscription terms, preserving its cycle and metered items.
 
-        The subscription, its identifier and its cycle survive: only the licensed
-        price changes, so the metered prices keep the usage already recorded
-        against them and the customer's billing anniversary does not move. That
-        is what a plan change is here, and it is never a subscription ended and
-        another created — ending one takes the metered prices with it and leaves
-        the account's usage reaching no invoice at all.
-
-        The swap refuses rather than completing unpaid, so where `proration`
-        charges the difference the plan is carried only if the money was taken.
-        Where it does not, there is nothing to collect and nothing that could
-        have failed to.
-
-        Idempotent — a subscription already on the plan is returned unchanged —
-        because the caller is a transaction that can die between changing this
-        and recording it, and its retry must converge rather than charge again.
+        Immediate changes require payment for the proration. Renewal changes
+        retain current paid terms until their recorded boundary. Selecting the
+        held version cancels a scheduled change. The durable operation identity
+        fences retries across provider calls and local commits.
         """
         ...
 
@@ -403,29 +441,46 @@ class PaymentProvider(Protocol):
         ...
 
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
-        """The customer's recent bills, newest the caller can find among them.
-
-        What the guard above needs to be usable without an invoice identifier
-        arriving from somewhere: nothing here stores one, because an invoice is
-        the provider's record and keeping a copy of their list is a second
-        ledger to hold in step. Bounded by a window and a count, since a
-        reconciliation pass reads this per account and an unbounded list would
-        be a walk over a customer's whole history every time.
-        """
+        """Customer invoices since an instant; None exhausts every page in the window."""
         ...
+
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        """All customer grants with provider balances and applicability evidence."""
+        ...
+
+    def paid_subscription_periods(
+        self,
+        *,
+        provider_customer_id: str,
+        provider_subscription_id: str,
+        since: datetime,
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        """Paid invoice plan lines linked to the customer's current subscription."""
+        ...
+
+
+class PaymentProvider(SubscriptionPaymentProvider, CreditPurchasePaymentProvider, Protocol):
+    """The payment adapter composed by application processes."""
 
 
 __all__ = [
     "BILLING_CURRENCY",
     "METER_EVENT_NAMES",
+    "CreditPurchasePaymentProvider",
     "HostedPaymentSession",
     "PaymentCustomer",
     "PaymentEvent",
     "PaymentProvider",
+    "ProviderCreditApplicability",
     "ProviderCreditGrant",
+    "ProviderCreditGrantBalance",
     "ProviderInvoice",
+    "ProviderPaidSubscriptionPeriod",
     "ProviderSubscription",
-    "SubscriptionProration",
+    "SubscriptionChangeTiming",
+    "SubscriptionPaymentProvider",
 ]

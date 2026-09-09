@@ -25,6 +25,7 @@ from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_HTTP_CPU,
     DEFAULT_HTTP_MEMORY,
+    DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
     DeploymentSpec,
     MemoryRequest,
@@ -149,6 +150,7 @@ class EndpointOptions(TypedDict, total=False):
     docker_enabled: bool
     preemptible: bool
     region: str | None
+    availability_zone: str
     pool: PoolInput
     metadata: dict[str, Any] | None
 
@@ -177,7 +179,9 @@ class ASGIOptions(TypedDict, total=False):
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None
     task_policy: TaskPolicy | Mapping[str, Any] | None
     checkpoint_enabled: bool
+    preemptible: bool
     region: str | None
+    availability_zone: str
     pool: PoolInput
 
 
@@ -230,8 +234,9 @@ class Endpoint(Generic[P, R]):
     inputs: SchemaInput = None
     outputs: SchemaInput = None
     docker_enabled: bool = False
-    preemptible: bool = False
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
     region: str | None = None
+    availability_zone: str = ""
     pool: PoolInput = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
@@ -278,6 +283,7 @@ class Endpoint(Generic[P, R]):
             image=self.image.spec(),
             resources=Resources(
                 region=ProductRegion(self.region) if self.region is not None else None,
+                availability_zone=self.availability_zone,
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,
@@ -458,8 +464,9 @@ def _endpoint(
     inputs: SchemaInput = None,
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
-    preemptible: bool = False,
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
+    availability_zone: str = "",
     pool: PoolInput = None,
     metadata: dict[str, Any] | None = None,
 ) -> Endpoint[P, R]: ...
@@ -500,8 +507,9 @@ def _endpoint(
     inputs: SchemaInput = None,
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
-    preemptible: bool = False,
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
+    availability_zone: str = "",
     pool: PoolInput = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Endpoint[P, R]]: ...
@@ -541,8 +549,9 @@ def _endpoint(
     inputs: SchemaInput = None,
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
-    preemptible: bool = False,
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
+    availability_zone: str = "",
     pool: PoolInput = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Endpoint[P, R]] | Endpoint[P, R]:
@@ -579,6 +588,7 @@ def _endpoint(
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             region=region,
+            availability_zone=availability_zone,
             pool=pool,
             metadata=metadata or {},
             route=route,
@@ -618,7 +628,9 @@ class ASGI:
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None
     task_policy: TaskPolicy | Mapping[str, Any] | None = None
     checkpoint_enabled: bool = False
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
     region: str | None = None
+    availability_zone: str = ""
     pool: PoolInput = None
     deployment_client: DeploymentControlClient | None = field(
         default=None,
@@ -662,6 +674,7 @@ class ASGI:
             image=self.image.spec(),
             resources=Resources(
                 region=ProductRegion(self.region) if self.region is not None else None,
+                availability_zone=self.availability_zone,
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,
@@ -670,6 +683,7 @@ class ASGI:
                 timeout_seconds=_effective_timeout_seconds(self.task_policy, self.timeout_seconds),
                 concurrency=self.concurrent_requests,
                 keep_warm=self.keep_warm_seconds,
+                preemptible=self.preemptible,
             ),
             route=self.route,
             domain=self.domain,
@@ -816,7 +830,9 @@ def _asgi(
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
+    availability_zone: str = "",
     pool: PoolInput = None,
 ) -> Callable[[Callable[..., Awaitable[Any]] | Callable[..., Any]], ASGI]:
     def decorate(target: Callable[..., Awaitable[Any]] | Callable[..., Any]) -> ASGI:
@@ -846,7 +862,9 @@ def _asgi(
             autoscaler=autoscaler,
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
+            preemptible=preemptible,
             region=region,
+            availability_zone=availability_zone,
             pool=pool,
         )
 
@@ -879,7 +897,9 @@ def _realtime(
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
+    availability_zone: str = "",
     pool: PoolInput = None,
 ) -> Callable[[Callable[..., Any]], RealtimeASGI]:
     def decorate(target: Callable[..., Any]) -> RealtimeASGI:
@@ -909,7 +929,9 @@ def _realtime(
             autoscaler=autoscaler,
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
+            preemptible=preemptible,
             region=region,
+            availability_zone=availability_zone,
             pool=pool,
         )
 

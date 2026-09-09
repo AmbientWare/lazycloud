@@ -11,7 +11,7 @@ from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
-from shared.placement import ProductRegion
+from shared.placement import AvailabilityZone, ProductRegion
 from shared.routing import AgentBackendRoute
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
@@ -114,6 +114,7 @@ class WorkerExecutionRequest(ContractModel):
 class SchedulerWorkerRequest(WorkerExecutionRequest):
     backfill: bool = False
     region: ProductRegion | None = None
+    availability_zone: AvailabilityZone = ""
 
     def requeued(self, *, now: datetime | None = None) -> SchedulerWorkerRequest:
         return self.model_copy(
@@ -248,6 +249,7 @@ class WorkerExecutionRecord(ContractModel):
 
 class SchedulerWorkerRecord(WorkerExecutionRecord):
     region: ProductRegion | None = None
+    availability_zone: AvailabilityZone = ""
 
 
 class WorkerContainerState(ContractModel):

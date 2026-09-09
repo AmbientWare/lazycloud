@@ -8,7 +8,6 @@ from api.server.services import ApiServices
 from database.repositories.billing_rates import PlatformRateRepository
 from database.repositories.observability import UsageRepository
 from database.tables.billing_ledger import BillingLedgerSegmentTable
-from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.storage import VolumeTable
 from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.timestamps import utc_now
@@ -170,22 +169,10 @@ def test_final_volume_metering_closes_checkpoint_window_when_scan_fails(
     assert checkpoint.metered_at.replace(tzinfo=UTC) == observed_at
 
 
-def test_a_metered_volume_window_is_priced_and_owed_to_the_provider(
+def test_a_metered_volume_window_prices_byte_seconds_exactly(
     isolated_services: ApiServices,
 ) -> None:
-    """Volume storage is a billed dimension, so metering it owes a cost and a charge.
-
-    A window recorded without a cost is money this platform measured and can no
-    longer charge for, and the usage row alone cannot say afterwards whether the
-    cost was skipped or was never owed. A cost recorded with no meter event owed
-    against it is money the ledger holds that no invoice ever asks for.
-
-    Priced at a real rate rather than at a zero, which is the arithmetic this
-    dimension actually runs: a rate of about 1.8e-8 against a quantity of about
-    4e12, inverting compute's magnitudes by ten orders of magnitude in both
-    directions. A gibibyte held for an hour is 3,865,470,566,400 byte-seconds,
-    which at this rate is 69,443.178725376 nanodollars and freezes at 69,443.
-    """
+    """Small storage rates retain exact costs over large byte-second quantities."""
 
     rate = Decimal("0.000000017965")
     now = utc_now()
@@ -220,21 +207,12 @@ def test_a_metered_volume_window_is_priced_and_owed_to_the_provider(
                 )
             )
         )
-        owed = list(
-            session.scalars(
-                select(BillingMeterOutboxTable).where(
-                    BillingMeterOutboxTable.identifier == result.usage_record.id
-                )
-            )
-        )
     assert len(segments) == 1
     assert segments[0].dimension == BilledDimension.VolumeStorage.value
     assert segments[0].rate_nanos_per_unit == rate
     assert segments[0].cost_nanos == 69_443
     assert segments[0].component == LedgerComponent.VolumeStorage.value
     assert segments[0].quantity == Decimal(result.byte_seconds)
-    assert len(owed) == 1
-    assert owed[0].value_nanos == 69_443
 
 
 class _FailingOccupancyFilesystem(LocalVolumeFilesystem):

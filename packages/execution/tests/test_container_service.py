@@ -25,6 +25,7 @@ from database.repositories.orchestration import (
 from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
+from execution.containers.service import PendingContainerReservation
 from scheduler.containers import (
     SchedulerContainerCancellationResult,
     SchedulerContainerSubmitResult,
@@ -227,14 +228,17 @@ def test_checkpoint_gpu_limit_rejects_before_scheduler_submission(
         isolated_services,
         containers=replace(isolated_services.containers, scheduler=scheduler),
     )
-    container = ContainerRecord(
-        id="checkpoint-pod",
-        name="checkpoint-pod",
-        image="image",
-        command=["python", "-m", "app"],
-        workspace_id="workspace",
-        stub_id="stub",
-    )
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        container = isolated_services.containers.reserve_pending(
+            session,
+            PendingContainerReservation(
+                name="checkpoint-pod",
+                image="image",
+                command=["python", "-m", "app"],
+                workspace_id=workspace_id,
+            ),
+        )
 
     with pytest.raises(
         InvalidInputError,
@@ -515,7 +519,7 @@ def test_placing_a_container_records_the_shape_it_will_be_priced_on(
         isolated_services.workspace_changes,
     )
     placed = ContainerShape(
-        billing_owner=UsageBillingOwner.SelfHosted,
+        billing_owner=UsageBillingOwner.PlatformFleet,
         gpu_type="H100",
         cpu_millicores=4_000,
         memory_mib=8_192,
@@ -537,9 +541,9 @@ def test_placing_a_container_records_the_shape_it_will_be_priced_on(
     persistence.assign_runtime(
         container_id=container.id,
         workspace_id=workspace_id,
-        runtime_worker_id="compose-worker",
-        runtime_machine_id="compose-machine",
-        shape=placed,
+        runtime_worker_id="replacement-worker",
+        runtime_machine_id="replacement-machine",
+        shape=replace(placed, rate_class="non_preemptible"),
     )
     with pytest.raises(ConflictError, match="cannot be changed"):
         persistence.assign_runtime(
@@ -547,7 +551,7 @@ def test_placing_a_container_records_the_shape_it_will_be_priced_on(
             workspace_id=workspace_id,
             runtime_worker_id="compose-worker",
             runtime_machine_id="compose-machine",
-            shape=replace(placed, rate_class="eu-central-standard"),
+            shape=replace(placed, cpu_millicores=8_000),
         )
     with isolated_services.context.database.session() as session:
         assert ContainerBillingShapeRepository(session).shape_for(container.id) == placed

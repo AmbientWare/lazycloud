@@ -38,6 +38,12 @@ class BillingPlanChangeIntentTable(TimestampMixin, DatabaseBase):
             name="ck_billing_plan_change_intents_status",
         ),
         CheckConstraint("attempts >= 0", name="ck_billing_plan_change_intents_attempts"),
+        CheckConstraint(
+            "(target_plan = 'free' AND target_terms_version IN ('free-v1', 'free-v2')) OR "
+            "(target_plan = 'team' AND target_terms_version IN ('team-v1', 'team-v2')) OR "
+            "(target_plan = 'business' AND target_terms_version = 'business-v1')",
+            name="ck_billing_plan_change_intents_terms",
+        ),
         # A claimed row cannot exist without its claim, and a claim cannot leak
         # onto an unclaimed one — otherwise a stale settler's write would land on
         # an intent somebody else is already settling.
@@ -89,9 +95,7 @@ class BillingPlanChangeIntentTable(TimestampMixin, DatabaseBase):
     provider_customer_id: Mapped[str] = mapped_column(String(255), nullable=False)
     provider_subscription_id: Mapped[str] = mapped_column(String(255), nullable=False)
     target_plan: Mapped[str] = mapped_column(String(32), nullable=False)
-    """The plan the change was for. What the provider's subscription reads is
-    compared against this, and the two together are the whole verdict: equal
-    means the swap happened and was paid for, unequal means it did not."""
+    target_terms_version: Mapped[str] = mapped_column(String(32), nullable=False)
 
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

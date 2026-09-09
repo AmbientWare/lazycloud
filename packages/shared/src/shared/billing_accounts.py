@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.timestamps import utc_now
@@ -68,6 +68,9 @@ class BillingAccount(ContractModel):
     this is a fast local read for the dashboard and for an upgrade, and never the
     only place a plan is recorded.
     """
+    subscription_terms_version: SubscriptionTermsVersion | None = None
+    scheduled_terms_version: SubscriptionTermsVersion | None = None
+    scheduled_change_at: datetime | None = None
     payment_method_attached_at: datetime | None = None
     """When this account's card was put on file, `None` while it holds none.
 
@@ -109,6 +112,12 @@ class BillingAccount(ContractModel):
     """
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def scheduled_terms_are_paired(self) -> BillingAccount:
+        if (self.scheduled_terms_version is None) != (self.scheduled_change_at is None):
+            raise ValueError("scheduled subscription terms require their effective time")
+        return self
 
 
 __all__ = [

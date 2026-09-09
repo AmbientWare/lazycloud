@@ -11,6 +11,7 @@ from api.server.dependencies import (
     require_app_requirement,
     require_app_scope,
     require_app_token,
+    require_transfer_scope,
     require_user_scope,
     require_workspace_principal,
     require_workspace_scope,
@@ -21,6 +22,8 @@ type read_access = Annotated[None, Depends(require_app_scope(AuthScope.Read))]
 type write_access = Annotated[None, Depends(require_app_scope(AuthScope.Write))]
 type read_workspace = Annotated[str, Depends(require_workspace_scope(AuthScope.Read))]
 type write_workspace = Annotated[str, Depends(require_workspace_scope(AuthScope.Write))]
+type read_transfer = Annotated[str, Depends(require_transfer_scope(AuthScope.Read))]
+type write_transfer = Annotated[str, Depends(require_transfer_scope(AuthScope.Write))]
 type read_user = Annotated[str, Depends(require_user_scope(AuthScope.Read))]
 type write_user = Annotated[str, Depends(require_user_scope(AuthScope.Write))]
 type read_token = Annotated[
@@ -58,12 +61,14 @@ __all__ = [
     "read_app_token",
     "read_principal",
     "read_token",
+    "read_transfer",
     "read_user",
     "read_workspace",
     "write_access",
     "write_app_token",
     "write_principal",
     "write_token",
+    "write_transfer",
     "write_user",
     "write_workspace",
 ]

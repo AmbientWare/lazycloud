@@ -8,6 +8,11 @@ from fastapi.responses import StreamingResponse
 from identity.auth import AuthError, AuthorizationDeniedError
 from identity.authz import worker_requirement
 from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.http.worker_network import WorkerEgressPolicy, WorkerEgressPolicyRequest
+from shared.http.worker_usage import (
+    WorkerUsageWindowRequest,
+    WorkerUsageWindowResponse,
+)
 from shared.identity import AuthScope
 from worker.events import WorkerStreamEvent
 from worker.origin_access import (
@@ -75,8 +80,6 @@ from worker.repository_payloads import (
     PublishContainerMetricsResponse,
     PublishWorkerEventRequest,
     PublishWorkerEventResponse,
-    RecordWorkerUsageRequest,
-    RecordWorkerUsageResponse,
     ReleaseAutomaticCheckpointLeaseRequest,
     ReleaseAutomaticCheckpointLeaseResponse,
     RemoveContainerIpRequest,
@@ -743,15 +746,15 @@ def publish_worker_event(
 
 
 @router.post(
-    "/worker-repository/record-worker-usage",
-    response_model=RecordWorkerUsageResponse,
+    "/worker-repository/record-worker-usage-window",
+    response_model=WorkerUsageWindowResponse,
 )
-def record_worker_usage(
-    request: RecordWorkerUsageRequest,
+def record_worker_usage_window(
+    request: WorkerUsageWindowRequest,
     service: WorkerRepo,
     principal: WorkerPrincipal,
-) -> RecordWorkerUsageResponse:
-    return service.record_worker_usage(request, worker_id=principal.worker_id)
+) -> WorkerUsageWindowResponse:
+    return service.record_worker_usage_window(request, worker_id=principal.worker_id)
 
 
 @router.post(
@@ -826,6 +829,13 @@ def set_network_lock(
     principal: WorkerPrincipal,
 ) -> NetworkLockResponse:
     return service.set_network_lock(request, principal=principal)
+
+
+@router.post("/worker-repository/egress-policy", response_model=WorkerEgressPolicy)
+def worker_egress_policy(
+    request: WorkerEgressPolicyRequest, service: WorkerRepo, principal: WorkerPrincipal
+) -> WorkerEgressPolicy:
+    return service.worker_egress_policy(principal=principal)
 
 
 @router.post(

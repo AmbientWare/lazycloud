@@ -9,6 +9,7 @@ from database.client import DatabaseClient
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_costs import BillingLedgerCostRepository
+from database.repositories.billing_credits import BillingCreditRepository, CreditAdjustments
 from database.repositories.billing_outbox import (
     BillingMeterOutboxRepository,
     UndeliveredMeterTotals,
@@ -16,10 +17,13 @@ from database.repositories.billing_outbox import (
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccount, BillingAccountStatus
 from shared.enums import StringEnum
+from shared.errors import UpstreamUnavailableError
 from shared.events import EventLevel
-from shared.payments import METER_EVENT_NAMES, PaymentProvider, ProviderInvoice
+from shared.payments import METER_EVENT_NAMES, ProviderInvoice, SubscriptionPaymentProvider
 from shared.timestamps import to_utc, utc_now
 
+from billing.credits import reconcile_credit_cutover
+from billing.periods import carry_plan_into_cycle
 from billing.sweeps import BillingEventSink
 from billing.webhooks import (
     ENDED_SUBSCRIPTION_STATUSES,
@@ -35,28 +39,13 @@ RECONCILIATION_DIVERGENCE_ACTION = "billing.reconciliation.divergence"
 BILLING_ACCOUNT_RESOURCE_TYPE = "billing_account"
 
 INVOICE_LOOKBACK = timedelta(days=45)
-"""How far back an invoice is looked for.
-
-Past one monthly cycle plus the days its own invoice takes to finalize, so every
-account has exactly one closed period to compare and none has none.
-"""
+# Include a monthly cycle and its invoice finalization delay.
 
 FINALIZED_INVOICE_STATUSES = frozenset({"paid", "open", "uncollectible", "void"})
-"""Provider words for an invoice whose lines are settled enough to compare.
-
-A draft is not one: its lines are still being assembled, and comparing against a
-total that has not stopped moving would report a disagreement that resolves
-itself in an hour.
-"""
 
 
 class BillingDivergence(StringEnum):
-    """What the provider and this platform disagree about.
-
-    A closed vocabulary rather than prose because it reaches a durable event an
-    operator filters on, and because each value names a different way money goes
-    wrong.
-    """
+    """Stable divergence kinds recorded in billing events."""
 
     PlanDisagrees = "plan_disagrees"
     SubscriptionEnded = "subscription_ended"
@@ -64,21 +53,14 @@ class BillingDivergence(StringEnum):
     PeriodDisagrees = "period_disagrees"
     MeteredUsageDisagrees = "metered_usage_disagrees"
     UsageNotDelivered = "usage_not_delivered"
+    CreditMigrationBlocked = "credit_migration_blocked"
+    CreditSettlementPending = "credit_settlement_pending"
     UsageAbandoned = "usage_abandoned"
-    """Priced usage the outbox gave up on delivering.
-
-    Its own kind because it is the one difference that never resolves itself: a
-    backlog is delivered eventually and the two sides agree again, where this is
-    a charge that will not be made until somebody makes it. Both are subtracted
-    from the ledger before the arithmetic, so the comparison stays a statement
-    about what reached the invoice rather than reporting the same money twice.
-    """
+    """Priced usage whose meter export requires operator recovery."""
 
 
 @dataclass(frozen=True, slots=True)
 class BillingReconciliationResult:
-    """What one pass looked at, and how much of it disagreed."""
-
     accounts_checked: int = 0
     divergent_count: int = 0
     unreachable_count: int = 0
@@ -88,49 +70,23 @@ class BillingReconciliationResult:
 class BillingReconciliationService:
     """Compare what the provider holds against what this platform recorded.
 
-    Reports and never corrects. The plan-change sweep finishes a transaction
-    this platform started and wrote a durable intent for, so it knows what was
-    meant and may complete it. Nothing here has an intent behind it: a
-    difference may be a delivery that never arrived or a deliberate change made
-    in the provider's own dashboard, and quietly making the two agree would be a
-    money write on a guess. A loud disagreement is the cheaper failure.
-
-    Nothing on this path writes to `billing_accounts`, the allowance periods or
-    the ledger, on any branch.
+    Advances the recorded credit cutover and retries funding supported by paid
+    invoices. Other plan and standing differences are reported for their owners
+    to resolve. Gross ledger history is never rewritten.
     """
 
     database: DatabaseClient
-    payments: Callable[[], PaymentProvider]
+    payments: Callable[[], SubscriptionPaymentProvider]
     events: BillingEventSink
     batch_limit: int = 100
     max_accounts: int = 500
     cursor_user_id: str | None = field(default=None, init=False)
-    """Where the last pass stopped, `None` at the start of the walk.
-
-    A pass covers a bounded slice and the next one continues from here, so a
-    large installation is walked across passes rather than in one unbounded
-    read."""
 
     reported: dict[str, tuple[str, ...]] = field(default_factory=dict, init=False)
-    """The divergence each account was last reported with.
-
-    One durable event per account per hour would bury the report it exists to
-    make, so an account is reported when what it disagrees about changes and not
-    again. In memory deliberately: a restart re-reports each live divergence
-    once, which is a repeat rather than a miss, and durable state here would be
-    a second record of something the provider and the rows already answer.
-    """
+    """Suppress repeated events until divergence changes or this process restarts."""
 
     def reconcile(self, *, now: datetime | None = None) -> BillingReconciliationResult:
-        """Walk a bounded slice of subscribed accounts and report what differs.
-
-        The credential is resolved first, so a deployment missing it fails the
-        whole pass by name rather than per account.
-
-        One account whose provider read fails is counted and stepped over: a
-        pass that stopped there would leave every account after it unchecked for
-        as long as that one stayed unreachable.
-        """
+        """Reconcile a bounded page sequence, counting unreachable accounts separately."""
 
         moment = to_utc(now or utc_now())
         payments = self.payments()
@@ -138,8 +94,6 @@ class BillingReconciliationService:
         while checked < self.max_accounts:
             accounts = self._page()
             if not accounts:
-                # The end of the walk, and the next pass starts over from the
-                # first account.
                 self.cursor_user_id = None
                 break
             for account in accounts:
@@ -173,7 +127,7 @@ class BillingReconciliationService:
             )
 
     def _divergences(
-        self, payments: PaymentProvider, account: BillingAccount, *, now: datetime
+        self, payments: SubscriptionPaymentProvider, account: BillingAccount, *, now: datetime
     ) -> tuple[str, ...] | None:
         """What this account disagrees about, or `None` if it could not be read."""
 
@@ -187,6 +141,41 @@ class BillingReconciliationService:
             )
             return None
         kinds: set[BillingDivergence] = set()
+        if (
+            subscription.terms_version is not None
+            and subscription.status in RUNNING_SUBSCRIPTION_STATUSES
+        ):
+            with self.database.session() as session:
+                accounts = BillingAccountRepository(session)
+                held = accounts.get_by_user(account.user_id, for_update=True)
+                if (
+                    held is not None
+                    and held.provider_subscription_id == subscription.provider_subscription_id
+                    and held.provider_customer_id == account.provider_customer_id
+                    and (
+                        (
+                            held.plan is subscription.plan
+                            and held.subscription_terms_version
+                            in {None, subscription.terms_version}
+                        )
+                        or (
+                            held.scheduled_terms_version is subscription.terms_version
+                            and held.scheduled_change_at is not None
+                            and subscription.current_period_started_at >= held.scheduled_change_at
+                        )
+                    )
+                ):
+                    account = accounts.upsert(
+                        user_id=held.user_id,
+                        status=held.status,
+                        provider_customer_id=held.provider_customer_id,
+                        provider_subscription_id=held.provider_subscription_id,
+                        provider_credit_grant_id=held.provider_credit_grant_id,
+                        plan=subscription.plan,
+                        subscription_terms_version=subscription.terms_version,
+                        scheduled_terms_version=subscription.scheduled_terms_version,
+                        scheduled_change_at=subscription.scheduled_change_at,
+                    )
         data: dict[str, JsonValue] = {
             "user_id": account.user_id,
             "provider_subscription_id": account.provider_subscription_id,
@@ -195,7 +184,45 @@ class BillingReconciliationService:
             "status": account.status.value,
             "provider_status": subscription.status,
         }
-        if subscription.plan is not account.plan:
+        try:
+            with self.database.session() as session:
+                credit_gap = reconcile_credit_cutover(
+                    session, payments, account=account, subscription=subscription, at=now
+                )
+                cutover = BillingCreditRepository(session).cutover(user_id=account.user_id)
+                if cutover is not None:
+                    data["credit_cutover_at"] = cutover.effective_at.isoformat()
+                    data["credit_cutover_completed"] = cutover.completed_at is not None
+                    data["credit_cutover_blocked_reason"] = cutover.blocked_reason
+                    if (
+                        subscription.current_period_started_at >= cutover.effective_at
+                        and subscription.plan is not None
+                        and subscription.status in RUNNING_SUBSCRIPTION_STATUSES
+                    ):
+                        try:
+                            carry_plan_into_cycle(
+                                session,
+                                payments,
+                                account_id=account.user_id,
+                                provider_customer_id=account.provider_customer_id,
+                                provider_credit_grant_id=account.provider_credit_grant_id,
+                                subscription=subscription,
+                                plan=subscription.plan,
+                            )
+                        except UpstreamUnavailableError:
+                            kinds.add(BillingDivergence.CreditSettlementPending)
+                            data["credit_funding_pending"] = True
+                if credit_gap:
+                    kinds.add(BillingDivergence.CreditMigrationBlocked)
+        except Exception as error:
+            LOGGER.warning(
+                "billing: credit reconciliation failed for %s: %s", account.user_id, error
+            )
+            return None
+        if (
+            subscription.plan is not account.plan
+            or subscription.terms_version is not account.subscription_terms_version
+        ):
             kinds.add(BillingDivergence.PlanDisagrees)
         if subscription.status in ENDED_SUBSCRIPTION_STATUSES:
             kinds.add(BillingDivergence.SubscriptionEnded)
@@ -220,37 +247,22 @@ class BillingReconciliationService:
             or period.started_at != subscription.current_period_started_at
             or period.ended_at != subscription.current_period_ended_at
         ):
-            # The renewal whose delivery never arrived: the provider rolled the
-            # cycle and raised an invoice, and no period opened here for the
-            # allowance it comes with.
             kinds.add(BillingDivergence.PeriodDisagrees)
         kinds.update(self._usage_divergences(payments, account, data=data, now=now))
         return self._report(account, kinds, data=data)
 
     def _usage_divergences(
         self,
-        payments: PaymentProvider,
+        payments: SubscriptionPaymentProvider,
         account: BillingAccount,
         *,
         data: dict[str, JsonValue],
         now: datetime,
     ) -> set[BillingDivergence]:
-        """Whether the last closed invoice was billed what the ledger holds.
+        """Compare the latest closed invoice against exported ledger cost.
 
-        One invoice per account per pass: the newest whose period has closed
-        inside the lookback. Both sides are integer nanodollars — the metered
-        prices are one nanodollar per unit and a meter event carries the ledger
-        segment's cost verbatim — so a difference is a fact rather than a
-        rounding argument.
-
-        What never reached the provider is subtracted before the comparison,
-        whether it still can or not. An account with a delivery backlog owes the
-        difference rather than disagreeing about it, and one holding an
-        abandoned charge is short by it for good; each is said as a divergence
-        of its own, which is what keeps three different failures from arriving
-        as one number that does not add up. Usage waived while the account's
-        bill was complimentary is subtracted the same way and is no divergence
-        at all: it was priced so the account can see it, and never owed.
+        Remove local wallet charges, waivers and undelivered exports before
+        comparing. Report pending and abandoned exports separately.
         """
 
         invoice = self._closed_invoice(payments, account, now=now)
@@ -279,24 +291,39 @@ class BillingReconciliationService:
                 started_at=invoice.period_started_at,
                 ended_at=invoice.period_ended_at,
             )
+            credit_adjustments = BillingCreditRepository(session).account_adjustments(
+                user_id=account.user_id,
+                start=invoice.period_started_at,
+                end=invoice.period_ended_at,
+            )
         kinds: set[BillingDivergence] = set()
         meters: dict[str, JsonValue] = {}
         for dimension, event_name in METER_EVENT_NAMES.items():
             ledger_nanos = priced.get(dimension, 0)
+            credits = credit_adjustments.get(dimension, CreditAdjustments())
             outstanding = undelivered.get(event_name, UndeliveredMeterTotals())
             invoiced_nanos = invoiced.get(event_name, 0)
             figures: dict[str, JsonValue] = {
                 "ledger_nanos": ledger_nanos,
+                "credited_nanos": credits.credited_nanos,
+                "unsettled_nanos": credits.unsettled_nanos,
+                "wallet_unpaid_nanos": credits.unpaid_nanos,
                 "undelivered_nanos": outstanding.waiting_nanos,
                 "abandoned_nanos": outstanding.abandoned_nanos,
-                "waived_nanos": outstanding.waived_nanos,
+                "waived_nanos": outstanding.waived_nanos + credits.waived_nanos,
                 "invoiced_nanos": invoiced_nanos,
             }
             meters[event_name] = figures
+            if credits.unsettled_nanos:
+                kinds.add(BillingDivergence.CreditSettlementPending)
             if outstanding.abandoned_nanos:
                 kinds.add(BillingDivergence.UsageAbandoned)
             if (
                 ledger_nanos
+                - credits.credited_nanos
+                - credits.unsettled_nanos
+                - credits.unpaid_nanos
+                - credits.waived_nanos
                 - outstanding.waiting_nanos
                 - outstanding.abandoned_nanos
                 - outstanding.waived_nanos
@@ -311,18 +338,9 @@ class BillingReconciliationService:
         return kinds
 
     def _closed_invoice(
-        self, payments: PaymentProvider, account: BillingAccount, *, now: datetime
+        self, payments: SubscriptionPaymentProvider, account: BillingAccount, *, now: datetime
     ) -> ProviderInvoice | None:
-        """The newest finalized invoice covering a period there is usage in.
-
-        An invoice whose period is an instant is skipped, and it is not a
-        curiosity: a plan change is prorated onto an invoice raised there and
-        then, which carries no metered line and covers no span. Taken as the
-        newest closed period it would compare an empty window against an empty
-        invoice, agree, and leave the account with no usage reconciliation at
-        all — starting from the upgrade, which is the event whose lost delivery
-        this pass exists to catch.
-        """
+        """Select the latest finalized period, excluding instant proration invoices."""
 
         try:
             invoices = payments.invoices_for(
@@ -369,13 +387,10 @@ class BillingReconciliationService:
                 ),
                 level=EventLevel.Error,
                 data={**data, "divergences": list(signature)},
-                # A cluster event: an account is a person, not a workspace, and
-                # the workspaces behind one are not who the provider bills.
                 workspace_id=None,
             )
         except Exception:
-            # Wrapped so that failing to record the disagreement cannot replace
-            # the disagreement as what this pass reports.
+            # Event delivery failure must not hide the reconciliation result.
             LOGGER.exception(
                 "billing: %s disagrees with the provider and the event was not recorded",
                 account.user_id,

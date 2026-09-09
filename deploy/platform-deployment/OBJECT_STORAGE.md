@@ -1,71 +1,51 @@
 # Object storage
 
-R2 stores platform-owned object data through the shared S3-compatible client.
-Customers can attach their own storage for BYO infrastructure.
-The application bucket holds images, source
-packages, artifacts and checkpoints. Each workspace has its own bucket for
-files and mounted volumes. Deployment descriptors, public releases and Terraform
-state have separate buckets because their readers and lifetimes differ.
+AWS S3 stores platform-owned data through the shared S3-compatible client.
+The application bucket holds images, source packages, artifacts and checkpoints.
+Each workspace has its own bucket for files and mounted volumes. Customer-owned
+buckets keep their own credentials and endpoints.
 
-## Configuration
+Terraform exports `LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL`,
+`LAZYCLOUD_OBJECT_STORE_REGION_NAME`, `LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE`,
+`LAZYCLOUD_OBJECT_STORE_BUCKET`, `LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX`
+and `LAZYCLOUD_AWS_WORKSPACE_STORAGE_ROLE_ARN`. API and scheduler pods use Pod
+Identity for platform storage. Workers receive renewable STS grants scoped to
+one workspace bucket. Image transfers use signed requests. Local development
+uses Garage.
 
-The platform uses one S3-compatible storage configuration:
+Buckets are private. CORS permits dashboard requests without granting access.
+S3 gateway endpoints attach to cluster and fleet route tables. Same-region
+traffic uses those routes; public downloads, cross-region traffic and workers
+outside AWS can still incur transfer charges.
 
-- `LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL`
-- `LAZYCLOUD_OBJECT_STORE_REGION_NAME`
-- `LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE`
-- `LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID`
-- `LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY`
-- `LAZYCLOUD_OBJECT_STORE_BUCKET`
-- `LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX`
+## Hard cut to S3
 
-Terraform exports the endpoint, signing settings and bucket identities. Store the credential pair
-once in the deployment's operator secret document. The R2 Admin Read & Write
-credential permits the trusted platform to create workspace buckets and manage
-their objects. Only trusted storage consumers receive it. The Cloudflare provider
-issues temporary workspace credentials; the shared transport handles object I/O.
+Existing platform-owned R2 data will be deleted. There is no copy, migration
+command or fallback storage path.
 
-The local `lazycloud-object-storage` credential profile holds the same pair for
-operator publication and Terraform. AWS infrastructure commands use `default`.
-Cloudflare's provisioning API token and the application's custom-hostname token
-have separate permissions and remain separate credentials.
+1. Provision the S3 resources and publish fresh release assets. Preserve the
+   release hostname and update deployment pins to the new manifest.
+2. Stop admission, drain work and delete old managed volumes through the normal
+   cleanup owner. Retire old workers and stop application writers before changing
+   storage credentials or applying the new schema. Old workers use removed
+   usage-reporting routes and must be replaced.
+3. Switch to the S3 descriptor and matching application release. Before reopening
+   admission, manually clear references to discarded platform objects, images,
+   source packages and checkpoints. Clear each managed workspace's persisted
+   storage configuration and reprovision its bucket through the workspace storage
+   owner so it records the S3 endpoint, region and bucket. Preserve customer-owned
+   storage configurations, accounts, workspace identities, billing history and
+   cloud connections.
+4. Recreate workers, rebuild images and upload source again. Check a cold build,
+   volume writes and artifact upload/download.
+5. Empty the exact old R2 application, deployment, release and managed workspace
+   buckets. Apply reviewed Terraform plans removing their former resources and
+   bindings. Runtime-created workspace buckets are outside Terraform and must be
+   deleted directly. If an earlier apply already removed a bucket from state,
+   delete that bucket directly too.
 
-Workers using platform storage receive short-lived object credentials scoped to one workspace bucket.
-They cannot administer buckets or access another workspace. Image transfers use
-signed requests. Archive storage inherits the primary connection and uses the
-`image-archives/` prefix; it has no separate backend settings or secret aliases.
-
-Customer-owned buckets use the customer's storage credentials and endpoint.
-Attaching an external bucket never grants it the platform credential pair.
-Keep storage contracts and configuration names provider-neutral; provider
-packages own vendor-specific administration and credential mechanisms.
-
-Application and workspace buckets are private. Their CORS rules allow dashboard
-transfers without granting object access. Public release objects use the R2
-custom domain. Signed private transfers use `r2.cloudflarestorage.com`.
-
-## Reset and deployment
-
-The owner authorized discarding the installation's existing object data. This
-deletion is irreversible. Inventory exact buckets, versions, incomplete uploads
-and database references before acting. Preserve unrelated resources.
-
-Provision and verify R2 first. Stop admission and writers, drain tasks and
-mounted volumes, and account for outstanding signed requests and credentials.
-Reset image/build, source, checkpoint and workspace storage references together
-through their owners. Invalidate affected worker and shared caches, then deploy
-the R2 configuration and rebuild workloads.
-
-Republish release artifacts and deployment descriptors from source. Transfer
-Terraform's current resource ownership to its private R2 backend before deleting
-the AWS state bucket. Preserve resource IDs and verify every state key, including
-retired roots that still own infrastructure.
-
-Remove old AWS buckets, their versions and multipart uploads only after every
-consumer has switched. Remove their IAM policies, configuration and credentials
-in the same cutover. Verify the named buckets are absent and retained compute,
-databases, networking and registries remain intact.
-
-Acceptance covers SDK uploads/downloads, mounted workspace writes and credential
-refresh, cross-workspace denial, image builds and cold-worker execution,
-checksums, multipart cleanup, release downloads and Terraform locking.
+Review the bucket inventory and Terraform destruction list before deletion.
+Do not run `terraform destroy` against an entire platform root to remove storage.
+Terraform state records infrastructure ownership; move its backend with
+Terraform's normal state migration and preserve it. Unrelated Cloudflare DNS,
+ingress and customer-owned buckets remain.

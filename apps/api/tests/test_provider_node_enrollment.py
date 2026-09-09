@@ -26,6 +26,7 @@ from compute.offers import ComputeOffer
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
+    ProviderPurchaseLimit,
     ProviderUnitBootstrap,
     ProviderUnitInstance,
     ProviderUnitRequest,
@@ -82,6 +83,7 @@ from shared.http.provider_nodes import (
     ProviderNodeCapacity,
     ProviderNodeEnrollmentRequest,
 )
+from shared.network_egress import NetworkEgressRouteEvidence
 from shared.provider_config import ProviderKind
 from shared.supplier_costs import SupplierCostTerms
 from sqlalchemy import create_engine, func, select, text
@@ -148,6 +150,11 @@ class _ReplayGuard:
 
 @dataclass(frozen=True, slots=True)
 class _PooledProvider:
+    def unbilled_network_destinations(
+        self, unit: ComputeUnitRecord, provider_instance_id: str
+    ) -> NetworkEgressRouteEvidence:
+        raise AssertionError("node enrollment must not request network billing evidence")
+
     resource_id: str = _ASG_NAME
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
@@ -747,6 +754,13 @@ def _compute(isolated_services: ApiServices, provider: _PooledProvider) -> Compu
                 platform_fleet=connection.platform_fleet,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
+                purchase_limits=(
+                    ProviderPurchaseLimit(
+                        region=_REGION,
+                        instance_type="m7i.xlarge",
+                        max_hourly_cost_micros=340_000,
+                    ),
+                ),
                 max_cpu_instances=AWS_COMPUTE_CONFIGURATION.max_cpu_instances,
                 max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
             ),

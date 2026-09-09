@@ -37,6 +37,7 @@ class DeploymentOverrides:
     tcp: bool | None = None
     pool: MachinePool | None = None
     region: str | None = None
+    availability_zone: str | None = None
     preemptible: bool | None = None
     entrypoint: list[str] = field(default_factory=list)
     sync_dir: str | None = None
@@ -59,6 +60,7 @@ class DeploymentOverrides:
                 self.tcp is not None,
                 self.pool,
                 self.region,
+                self.availability_zone,
                 self.preemptible is not None,
                 self.entrypoint,
                 self.sync_dir,
@@ -84,6 +86,7 @@ def build_deployment_overrides(
     tcp: bool | None = None,
     pool: MachinePool | None = None,
     region: str | None = None,
+    availability_zone: str | None = None,
     preemptible: bool | None = None,
     entrypoint: list[str] | None = None,
     sync_dir: str | None = None,
@@ -105,6 +108,7 @@ def build_deployment_overrides(
         tcp=tcp,
         pool=pool,
         region=region,
+        availability_zone=availability_zone,
         preemptible=preemptible,
         entrypoint=list(entrypoint or []),
         sync_dir=sync_dir,
@@ -131,6 +135,7 @@ def workflow_kwargs(
         "tcp": overrides.tcp,
         "pool": overrides.pool,
         "region": overrides.region,
+        "availability_zone": overrides.availability_zone,
         "preemptible": overrides.preemptible,
         "entrypoint": list(overrides.entrypoint),
         "sync_dir": overrides.sync_dir,

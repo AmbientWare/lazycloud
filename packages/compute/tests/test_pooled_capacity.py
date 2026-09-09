@@ -17,6 +17,7 @@ from compute.policy import WorkspaceComputePolicyService
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
+    ProviderPurchaseLimit,
     ProviderUnitBootstrap,
     ProviderUnitInstance,
     ProviderUnitRequest,
@@ -87,6 +88,7 @@ from shared.compute_policy import (
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
+from shared.network_egress import NetworkEgressRouteEvidence
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.supplier_costs import SupplierCostTerms
 from tests.service_fixtures import workspace_owner_user_id
@@ -96,6 +98,11 @@ _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 
 @dataclass(slots=True)
 class _PooledProvider:
+    def unbilled_network_destinations(
+        self, unit: ComputeUnitRecord, provider_instance_id: str
+    ) -> NetworkEgressRouteEvidence:
+        raise AssertionError("capacity lifecycle must not request network billing evidence")
+
     desired: int = 0
     offer: ComputeOffer = field(default_factory=lambda: _offer())
     ensure_calls: list[ProviderUnitRequest] = field(default_factory=list)
@@ -109,6 +116,8 @@ class _PooledProvider:
     delete_failure: Exception | None = None
     catalog_failure: Exception | None = None
     storage_failure: Exception | None = None
+    last_capacity_failure_at: datetime | None = None
+    max_observed_machines: int | None = None
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
         return self.offer
@@ -191,6 +200,8 @@ class _PooledProvider:
             )
             for index in range(self.desired)
         ]
+        if self.max_observed_machines is not None:
+            instances = instances[: self.max_observed_machines]
         return ProviderUnitSnapshot(
             phase=phase,
             resource_id="asg-hidden",
@@ -198,6 +209,7 @@ class _PooledProvider:
             max_machines=request.max_machines,
             observed_machines=len(instances),
             instances=instances,
+            last_capacity_failure_at=self.last_capacity_failure_at,
             provider_state=ComputeUnitProviderState(resource_id="asg-hidden"),
         )
 
@@ -312,6 +324,13 @@ class _Resolver(ComputeProviderResolver):
                 platform_fleet=connection.platform_fleet,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
+                purchase_limits=(
+                    ProviderPurchaseLimit(
+                        region=self.provider.offer.region,
+                        instance_type=self.provider.offer.instance_type,
+                        max_hourly_cost_micros=1_000_000,
+                    ),
+                ),
                 max_cpu_instances=self.max_cpu_instances,
                 max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
             ),
@@ -470,6 +489,13 @@ def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
                     platform_fleet=True,
                     default_region=offer.region,
                     allowed_regions=(offer.region,),
+                    purchase_limits=(
+                        ProviderPurchaseLimit(
+                            region=offer.region,
+                            instance_type=offer.instance_type,
+                            max_hourly_cost_micros=1_000_000,
+                        ),
+                    ),
                 ),
             )
         )
@@ -531,6 +557,13 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
             platform_fleet=True,
             default_region=offer.region,
             allowed_regions=(offer.region,),
+            purchase_limits=(
+                ProviderPurchaseLimit(
+                    region=offer.region,
+                    instance_type=offer.instance_type,
+                    max_hourly_cost_micros=1_000_000,
+                ),
+            ),
         ),
     )
     resolver = WorkspaceComputeProviderResolver(
@@ -617,6 +650,72 @@ def test_acquired_node_costs_survive_offer_changes_and_catalog_loss(
     }
     with pytest.raises(NotFoundError):
         inspection.inspect(workspace_id=str(uuid4()), unit_id=unit.id)
+
+
+def test_price_increase_blocks_acquisition_but_preserves_owned_capacity(
+    isolated_services: ApiServices,
+) -> None:
+    _seed_connection(isolated_services)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider, isolated_services),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    unit = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    acquisition = CapacityAcquisitionRequest(
+        capacity_owner_id=unit.capacity_owner_id,
+        reservation_id=str(uuid4()),
+        operation_id=str(uuid4()),
+        shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
+    )
+    assert compute.ensure_capacity(acquisition).status is CapacityAcquisitionStatus.Requested
+    provider.offer = provider.offer.model_copy(
+        update={
+            "cost_terms": provider.offer.cost_terms.model_copy(
+                update={"compute_hourly_micros": 1_000_001}
+            )
+        }
+    )
+
+    assert compute.ensure_capacity(acquisition).status is CapacityAcquisitionStatus.ExistingPending
+    compute.reconcile_pooled_capacity()
+    with isolated_services.context.database.session() as session:
+        observed = ComputeUnitRepository(session).get(unit.id)
+    assert observed is not None
+    assert observed.observed_machines == 1
+    assert observed.phase is ComputeUnitPhase.Ready
+    with pytest.raises(ConflictError, match="purchase ceiling"):
+        compute.scale_internal_unit(
+            unit.workspace_id, unit.capacity_owner_id, 2, before_mutation=_allow_scale
+        )
+
+    rejected = compute.ensure_capacity(
+        acquisition.model_copy(
+            update={"reservation_id": str(uuid4()), "operation_id": str(uuid4())}
+        )
+    )
+    assert rejected.status is CapacityAcquisitionStatus.TemporarilyUnavailable
+    assert "purchase ceiling" in rejected.reason
+    assert provider.desired == 1
+    with isolated_services.context.database.session() as session:
+        unchanged = ComputeUnitRepository(session).get(unit.id)
+    assert unchanged is not None
+    assert unchanged.desired_machines == 1
+
+    released = compute.scale_internal_unit(
+        unit.workspace_id, unit.capacity_owner_id, 0, before_mutation=_allow_scale
+    )
+    assert released.observed_machines == 0
+    assert provider.desired == 0
 
 
 def test_internal_pool_lookup_is_workspace_scoped(isolated_services: ApiServices) -> None:
@@ -1306,6 +1405,76 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
             pool.capacity_owner_id
         )
     assert [operation.status for operation in operations] == ["released", "requested"]
+
+
+@pytest.mark.parametrize("failure_after_operation", [True, False])
+def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_owned_capacity(
+    isolated_services: ApiServices,
+    failure_after_operation: bool,
+) -> None:
+    _seed_connection(isolated_services)
+    provider = _PooledProvider(max_observed_machines=0)
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider, isolated_services),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        root_volume_gib=200,
+    )
+    request = CapacityAcquisitionRequest(
+        capacity_owner_id=pool.capacity_owner_id,
+        reservation_id=str(uuid4()),
+        operation_id=str(uuid4()),
+        shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
+    )
+    requested = compute.ensure_capacity(request)
+    assert requested.status is CapacityAcquisitionStatus.Requested
+    assert requested.owns_capacity
+    with isolated_services.context.database.session() as session:
+        operation = ComputeCapacityOperationRepository(session).get(
+            request.capacity_owner_id, request.operation_id
+        )
+    assert operation is not None
+    provider.last_capacity_failure_at = operation.created_at + timedelta(
+        seconds=1 if failure_after_operation else -1
+    )
+
+    observed = compute.ensure_capacity(request)
+    retained = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
+    if not failure_after_operation:
+        assert observed.status is CapacityAcquisitionStatus.ExistingPending
+        assert observed.owns_capacity
+        assert retained.provider_state.degraded_reason is None
+        assert provider.desired == 1
+        return
+
+    assert observed.status is CapacityAcquisitionStatus.Rejected
+    assert observed.owns_capacity
+    assert retained.provider_state.degraded_reason == "provider_acquisition_rejected"
+    assert compute.ensure_capacity(request).status is CapacityAcquisitionStatus.Rejected
+    release = CapacityReleaseRequest(
+        capacity_owner_id=request.capacity_owner_id,
+        reservation_id=request.reservation_id,
+        operation_id=request.operation_id,
+    )
+    assert compute.release_acquired_capacity(release).status is CapacityAcquisitionStatus.Requested
+    assert (
+        compute.release_acquired_capacity(release).status
+        is CapacityAcquisitionStatus.ExistingPending
+    )
+    assert provider.desired == 0
+    with isolated_services.context.database.session() as session:
+        released = ComputeCapacityOperationRepository(session).get(
+            request.capacity_owner_id, request.operation_id
+        )
+    assert released is not None
+    assert released.status == "released"
 
 
 def test_named_retirement_keeps_its_intent_across_provider_failure_and_stale_observation(

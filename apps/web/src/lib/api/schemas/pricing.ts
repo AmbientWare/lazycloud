@@ -1,8 +1,15 @@
 import { z } from "zod";
-import { productRegionSchema } from "./placement";
 
-export const billingPlanIdSchema = z.enum(["free", "team"]);
+export const billingPlanIdSchema = z.enum(["free", "team", "business"]);
 export type BillingPlanId = z.infer<typeof billingPlanIdSchema>;
+export const billingTermsVersionSchema = z.enum([
+  "free-v1",
+  "team-v1",
+  "free-v2",
+  "team-v2",
+  "business-v1",
+]);
+export type BillingTermsVersion = z.infer<typeof billingTermsVersionSchema>;
 
 export const entitlementLimitSchema = z.union([
   z.number().int().positive(),
@@ -42,6 +49,7 @@ export type PlanEntitlements = z.infer<typeof planEntitlementsSchema>;
 export const publishedPlanSchema = z
   .object({
     id: billingPlanIdSchema,
+    terms_version: billingTermsVersionSchema,
     name: z.string(),
     summary: z.string(),
     monthly_nanos: z.number().int().nonnegative(),
@@ -85,9 +93,15 @@ export const publishedPlacementRateSchema = z
       .min(1)
       .max(64)
       .regex(/^[a-z][a-z0-9_-]*$/),
-    region: productRegionSchema.nullable(),
+    effective_at: z.string().datetime({ offset: true }),
+    pinned: z.boolean(),
+    preemptible: z.boolean(),
     name: z.string(),
-    multiplier: z
+    cpu_memory_multiplier: z
+      .string()
+      .regex(/^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/)
+      .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0),
+    gpu_multiplier: z
       .string()
       .regex(/^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/)
       .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0),
@@ -109,13 +123,25 @@ export type PublishedPlacementRate = z.infer<typeof publishedPlacementRateSchema
 
 export const pricingCatalogSchema = z
   .object({
+    trial: z
+      .object({
+        amount_nanos: z.number().int().positive(),
+        duration_days: z.number().int().positive(),
+        one_time: z.literal(true),
+      })
+      .strict(),
     pricing_version: z.string(),
     metered_rates_effective_at: z.string().datetime({ offset: true }),
     currency: z.string().regex(/^[A-Z]{3}$/),
     connected_cloud_management_fee_percent: z.number().int().min(0).max(100),
+    credit_purchase: z
+      .object({
+        minimum_cents: z.number().int().positive(),
+        maximum_cents: z.number().int().positive(),
+      })
+      .strict(),
     no_payment_method: z
       .object({
-        included_nanos: z.number().int().nonnegative(),
         max_concurrent_cpu_containers: z.number().int().positive(),
         max_concurrent_gpus: z.number().int().positive(),
       })

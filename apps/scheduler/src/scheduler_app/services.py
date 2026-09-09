@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from agent.binary import AgentBinarySettings
+from billing.payment_maintenance import BillingPaymentMaintenance
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.policy import WorkspaceComputePolicyService
 from compute.provider_launches import ProviderNodeLaunchService
@@ -54,6 +55,7 @@ from operations.container_shutdown import (
     DatabaseDurableWorkerAbsence,
 )
 from provider_aws import AwsEcrImageRegistry
+from provider_aws.storage_access import AwsStorageAccessSettings, AwsStorageAccessSource
 from provider_clients import (
     workspace_compute_provider_resolver,
 )
@@ -82,7 +84,10 @@ from scheduler.state import (
 )
 from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.checkpoints import checkpoint_recent_stub_key
+from shared.deployment_settings import MissingDeploymentSettingError
 from shared.image_building.credentials import parse_ecr_registry, registry_host_for_image
+from shared.workspace_storage import WorkspaceStorageProvider
+from storage.access_metering import StorageAccessMeteringService
 from storage.image_archive import ImageArchiveSettings
 from storage.retention import (
     RetentionResult,
@@ -90,12 +95,14 @@ from storage.retention import (
 )
 from storage.retention_settings import RetentionSettings
 from storage.service import CacheStorage, ObjectStorage
+from storage.unfunded_retention import UnfundedStorageRetentionService
 from storage.volume_deletion import VolumeDeletionService
 from storage.volume_filesystem import (
     WorkspaceVolumeFilesystem,
     workspace_volume_store_resolver,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
+from storage.workspace_storage_issuers import WorkspaceStorageIssuerSettings
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
 from billing import (
@@ -159,11 +166,13 @@ class SchedulerAppServices:
     object_store_client: S3ObjectStoreClient
     volume_filesystem: WorkspaceVolumeFilesystem
     volume_metering: PersistentVolumeMeteringService
+    storage_access: StorageAccessMeteringService | None
     volume_deletion: VolumeDeletionService
     meter_outbox: BillingMeterOutboxService
     email_outbox: EmailOutboxDrain
     plan_changes: BillingPlanChangeService
     billing_reconciliation: BillingReconciliationService
+    billing_payments: BillingPaymentMaintenance
     billing_enforcement: BillingEnforcementService
     retention: SchedulerRetention | None
     redis_client: RedisClient
@@ -231,15 +240,26 @@ class SchedulerAppServices:
         email_outbox = _email_outbox(context)
         plan_changes = _plan_changes(context, events, stripe_settings)
         billing_reconciliation = _billing_reconciliation(context, events, stripe_settings)
+        billing_payments = BillingPaymentMaintenance(
+            context.database, stripe_settings.provider_factory()
+        )
+        worker_repository = RedisSchedulerWorkerRepository(redis)
+        volume_deletion = VolumeDeletionService(
+            context,
+            volume_filesystem,
+            volume_metering,
+            DatabaseDurableWorkerAbsence(context, worker_repository),
+            workspace_changes,
+        )
         retention = scheduler_retention(
             context=context,
             object_storage=object_storage,
             cache_storage=CacheStorage(context),
             settings=storage.retention,
             image_archive_settings=image_archive_config,
-            workload_image_registry_repository=(storage.workload_image_registry_repository),
+            volume_deletion=volume_deletion,
+            workload_image_registry_repository=storage.workload_image_registry_repository,
         )
-        worker_repository = RedisSchedulerWorkerRepository(redis)
         container_repository = RedisSchedulerContainerRepository(redis)
         # See the API composition: the resolver exists only where connected AWS is
         # configured, and a half-configured deployment is rejected by settings.
@@ -414,17 +434,13 @@ class SchedulerAppServices:
             object_store_client=object_client,
             volume_filesystem=volume_filesystem,
             volume_metering=volume_metering,
-            volume_deletion=VolumeDeletionService(
-                context,
-                volume_filesystem,
-                volume_metering,
-                DatabaseDurableWorkerAbsence(context, worker_repository),
-                workspace_changes,
-            ),
+            storage_access=_storage_access(context.database, storage.object_store),
+            volume_deletion=volume_deletion,
             meter_outbox=meter_outbox,
             email_outbox=email_outbox,
             plan_changes=plan_changes,
             billing_reconciliation=billing_reconciliation,
+            billing_payments=billing_payments,
             billing_enforcement=billing_enforcement,
             retention=retention,
             redis_client=redis,
@@ -432,7 +448,11 @@ class SchedulerAppServices:
 
     def close(self) -> None:
         try:
-            self.volume_filesystem.close()
+            try:
+                if self.storage_access is not None:
+                    self.storage_access.source.close()
+            finally:
+                self.volume_filesystem.close()
         finally:
             try:
                 self.object_store_client.close()
@@ -441,6 +461,23 @@ class SchedulerAppServices:
                     self.redis_client.close()
                 finally:
                     self.context.database.dispose()
+
+
+def _storage_access(
+    database: DatabaseClient, settings: S3ObjectStoreSettings
+) -> StorageAccessMeteringService | None:
+    match WorkspaceStorageIssuerSettings().issuer:
+        case WorkspaceStorageProvider.Aws:
+            return StorageAccessMeteringService(
+                database, AwsStorageAccessSource(AwsStorageAccessSettings(), settings), settings
+            )
+        case WorkspaceStorageProvider.Garage:
+            return None
+        case None:
+            raise MissingDeploymentSettingError(
+                "LAZYCLOUD_WORKSPACE_STORAGE_ISSUER",
+                purpose="the storage access observation source",
+            )
 
 
 def _meter_outbox(
@@ -543,6 +580,7 @@ def _billing_reconciliation(
 class SchedulerRetention:
     service: RetentionService
     deployment_resources: DeploymentResourceService
+    unfunded_storage: UnfundedStorageRetentionService
 
     def protected_checkpoint_stub_keys(self) -> list[str]:
         return sorted(
@@ -551,6 +589,7 @@ class SchedulerRetention:
         )
 
     def reconcile(self, *, now: datetime | None = None) -> RetentionResult:
+        self.unfunded_storage.reconcile(now=now)
         return self.service.reconcile(
             active_recent_stub_keys=self.protected_checkpoint_stub_keys(),
             now=now,
@@ -564,6 +603,7 @@ def scheduler_retention(
     cache_storage: CacheStorage,
     settings: RetentionSettings,
     image_archive_settings: ImageArchiveSettings,
+    volume_deletion: VolumeDeletionService,
     workload_image_registry_repository: str = "",
 ) -> SchedulerRetention | None:
     if not settings.enabled:
@@ -587,4 +627,9 @@ def scheduler_retention(
             workload_image_registry=workload_registry,
         ),
         deployment_resources=DeploymentResourceService(context),
+        unfunded_storage=UnfundedStorageRetentionService(
+            context=context,
+            volume_deletion=volume_deletion,
+            max_items_per_workspace=settings.max_items_per_cycle,
+        ),
     )

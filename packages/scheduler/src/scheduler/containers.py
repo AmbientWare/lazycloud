@@ -13,10 +13,8 @@ from compute.request_placement import ComputeCapacityPurchase
 from coordination.wake_signal import WakeSignalPublisher
 from pydantic import JsonValue
 from shared.billing_quotes import ContainerShape
-from shared.billing_rate_card import published_placement_rate
 from shared.contracts import ContractModel
-from shared.errors import InvalidInputError
-from shared.placement import PlacementRateClass
+from shared.placement import PlacementRateClass, placement_rate_class
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
     SchedulerContainerCancellationResult,
@@ -740,6 +738,15 @@ class SchedulerContainerRequestService:
             if claim.request.region is not None and worker.region != claim.request.region:
                 remaining.append(claim)
                 continue
+            if (
+                claim.request.availability_zone
+                and worker.availability_zone != claim.request.availability_zone
+            ):
+                remaining.append(claim)
+                continue
+            if not claim.request.preemptible and worker.preemptible:
+                remaining.append(claim)
+                continue
             recovered = self._recover_gpu_backfill(
                 claim,
                 [worker],
@@ -1215,10 +1222,10 @@ class SchedulerContainerRequestService:
 
 
 def _request_rate_class(request: SchedulerWorkerRequest) -> PlacementRateClass:
-    rate = published_placement_rate(request.region)
-    if rate is None:
-        raise InvalidInputError("selected region has no published compute rate")
-    return rate.rate_class
+    return placement_rate_class(
+        pinned=request.region is not None or bool(request.availability_zone),
+        preemptible=request.preemptible,
+    )
 
 
 def _container_state(
@@ -1263,6 +1270,7 @@ def _scheduling_request(
     return SchedulingRequest(
         backfill=request.backfill,
         region=request.region,
+        availability_zone=request.availability_zone,
         id=request.container_id,
         owner_user_id=owner_user_id,
         queue=request.stub_id or "containers",
@@ -1319,6 +1327,7 @@ def _worker_capacity(
     reserved = reserved_capacity or WorkerReservedCapacity()
     return WorkerCapacity(
         region=worker.region,
+        availability_zone=worker.availability_zone,
         worker_id=worker.worker_id,
         pool=worker.pool,
         owner_user_id=worker.owner_user_id,

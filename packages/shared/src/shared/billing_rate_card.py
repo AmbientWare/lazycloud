@@ -6,63 +6,30 @@ from datetime import datetime, timezone
 from decimal import ROUND_DOWN, Decimal
 from typing import Literal, TypeAlias
 
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BYTES_PER_GIB, NANOS_PER_USD
 from shared.gpu import NO_GPU, SUPPORTED_GPU_TYPES, GpuType
-from shared.placement import AUTO_RATE_CLASS, PlacementRateClass, ProductRegion
+from shared.placement import AUTO_RATE_CLASS, PlacementRateClass, placement_rate_class
+from shared.timestamps import to_utc
 from shared.usage import UsageBillingOwner
 
-PRICING_VERSION = "2026-09-07.a"
-"""The version of the plans, entitlements, and rates exposed to customers."""
-
 FREE_PLAN_MONTHLY_NANOS = 0
-"""What the free plan charges, published as a price rather than as no price.
 
-A zero price is still a subscription line, and that is what carries the metered
-prices an account's overage is billed through. An account on no subscription at
-all would have nowhere for its usage to land.
-"""
-
-FREE_PLAN_INCLUDED_NANOS = 5 * NANOS_PER_USD
-"""What the free plan comes with, issued as a credit grant each period."""
+FREE_PLAN_INCLUDED_NANOS = 0
+ONE_TIME_TRIAL_NANOS = 5 * NANOS_PER_USD
+TRIAL_VALIDITY_DAYS = 30
 
 FREE_PLAN_MAX_CPU_CONTAINERS = 30
-"""How much the free plan may run at once without a GPU, across every workspace.
-
-A term of the plan rather than a scheduler setting, because it is part of what an
-account is buying and the pricing page states it. Counted per account and not per
-workspace, because the count is a bound on one payer's blast radius and a payer
-is the unit that gets billed for it.
-"""
+"""Published account-wide CPU concurrency, shared across owned workspaces."""
 
 FREE_PLAN_MAX_GPUS = 5
-"""How many GPU cards the free plan may hold at once, across every workspace.
-
-A pool of its own rather than a share of the container count, because the two
-limits bound different things. A CPU container costs cents an hour on capacity
-that is cheap to keep warm; a card costs dollars an hour on hardware that is not,
-so the same number cannot be both a generous CPU ceiling and a sane GPU one.
-Counted in cards rather than containers because a container may ask for several
-and cards are what is scarce.
-"""
+"""Count cards across the account separately from CPU containers."""
 
 FREE_PLAN_GPU_TYPES: frozenset[GpuType] = frozenset({GpuType.T4, GpuType.L4, GpuType.A10G})
-"""Which cards the free plan may ask for: the ones renting for around a dollar an hour.
-
-Not a revenue gate. A free account with a card pays the metered rate on any
-model, so what this protects is the larger cards themselves, which are the ones
-expensive to hold idle and the ones an abuser wants most.
-"""
 
 FREE_PLAN_MAX_WORKSPACES = 1
 FREE_PLAN_MAX_MEMBERS = 1
-"""The owner, and nobody else.
-
-Counted the way the membership repository counts, which includes the owner's own
-membership row, so one is a workspace with no co-members rather than no
-workspace at all. Wanting to work with somebody is the free plan's upgrade
-trigger, and it is the one every customer understands without reading terms.
-"""
+"""Membership counts include the owner."""
 
 TEAM_PLAN_MAX_CPU_CONTAINERS = 1_000
 TEAM_PLAN_MAX_GPUS = 50
@@ -74,63 +41,76 @@ AllGpuTypes: TypeAlias = Literal["all"]
 GpuTypeEntitlement: TypeAlias = frozenset[GpuType] | AllGpuTypes
 """Which cards a plan may ask for: a named set, or every model the platform rents."""
 
-NO_CARD_INCLUDED_NANOS = 1 * NANOS_PER_USD
-"""What an account with no card on file may spend before it is stopped.
-
-Enough to run something real and see it work, and small enough that losing all of
-it costs less than the sign-up did. Nothing here can be collected — there is no
-payment method to charge — so this figure is spending, not credit.
-
-It is not the free plan's allowance reduced. The free plan's $5 is what an
-account gets once somebody can be billed for what they do next; this is what the
-platform is willing to give away to find that out.
-"""
-
 NO_CARD_MAX_CPU_CONTAINERS = 10
-"""How much an account with no card may run at once without a GPU.
-
-The real bound on what a cardless account can spend before anything stops it, and
-the reason it is far below the free plan's. Usage reaches the ledger on an
-interval, so an account is always some fraction of that interval past whatever it
-has been measured at; multiply that window by the burn rate of everything running
-and the product is what cannot be collected. This is the only term in it the
-platform sets directly.
-"""
+"""Limit uncollectible interval overage for accounts without a saved card."""
 
 NO_CARD_MAX_GPUS = 1
-"""One card, because the spending cap above stops it inside an hour on any model
-the free plan may ask for, and none is an account that can never see a GPU work."""
 
-TEAM_PLAN_MONTHLY_NANOS = 100 * NANOS_PER_USD
+TEAM_PLAN_MONTHLY_NANOS = 49 * NANOS_PER_USD
 """The subscription, charged by the payment provider as a flat monthly price."""
 
-TEAM_PLAN_INCLUDED_NANOS = 30 * NANOS_PER_USD
-"""What the subscription comes with, issued as a credit grant each period.
+TEAM_PLAN_INCLUDED_NANOS = 10 * NANOS_PER_USD
+BUSINESS_PLAN_MONTHLY_NANOS = 249 * NANOS_PER_USD
+BUSINESS_PLAN_INCLUDED_NANOS = 50 * NANOS_PER_USD
 
-Stated in nanodollars like every other figure here; the provider's grant is in
-cents, and 30 USD converts exactly.
-"""
+
+@dataclass(frozen=True, slots=True)
+class SubscriptionTerms:
+    version: SubscriptionTermsVersion
+    plan: BillingPlanId
+    monthly_nanos: int
+    included_nanos: int
+
+
+SUBSCRIPTION_TERMS: tuple[SubscriptionTerms, ...] = (
+    SubscriptionTerms(
+        SubscriptionTermsVersion.FreeLegacy,
+        BillingPlanId.Free,
+        0,
+        5 * NANOS_PER_USD,
+    ),
+    SubscriptionTerms(
+        SubscriptionTermsVersion.TeamLegacy,
+        BillingPlanId.Team,
+        100 * NANOS_PER_USD,
+        30 * NANOS_PER_USD,
+    ),
+    SubscriptionTerms(
+        SubscriptionTermsVersion.Free,
+        BillingPlanId.Free,
+        FREE_PLAN_MONTHLY_NANOS,
+        FREE_PLAN_INCLUDED_NANOS,
+    ),
+    SubscriptionTerms(
+        SubscriptionTermsVersion.Team,
+        BillingPlanId.Team,
+        TEAM_PLAN_MONTHLY_NANOS,
+        TEAM_PLAN_INCLUDED_NANOS,
+    ),
+    SubscriptionTerms(
+        SubscriptionTermsVersion.Business,
+        BillingPlanId.Business,
+        BUSINESS_PLAN_MONTHLY_NANOS,
+        BUSINESS_PLAN_INCLUDED_NANOS,
+    ),
+)
+_SUBSCRIPTION_TERMS_BY_VERSION = {terms.version: terms for terms in SUBSCRIPTION_TERMS}
+
+
+def subscription_terms(version: SubscriptionTermsVersion) -> SubscriptionTerms:
+    return _SUBSCRIPTION_TERMS_BY_VERSION[version]
+
 
 _SECONDS_PER_HOUR = 3_600
-"""Whole, not a `Decimal`: it is a divisor and a modulus, never a price."""
 
 SECONDS_PER_30_DAY_MONTH = 2_592_000
-"""The month volume storage is quoted by, said in seconds because that is what a
-byte-second rate is derived against. Thirty days, which the page states outright
-rather than leaving a reader to assume their own calendar month."""
+"""Storage uses a published 30-day month, independent of calendar length."""
 
 CONNECTED_CLOUD_MANAGEMENT_FEE = Decimal("0.08")
-"""What this platform charges to run a container on capacity somebody else pays for.
+"""Connected-cloud compute fee as a share of the equivalent fleet charge.
 
-A share of what the same container would cost on the fleet, rather than a price
-of its own. Their cloud bills them for the machine; this is the fee for placing,
-scheduling, supervising and metering what runs on it, so it is the one figure
-that decides every connected-cloud compute rate and there is no second table to
-keep in step with the first.
-
-Compute only. Volumes live in this platform's own object store and egress is
-measured here, so both are charged whole wherever the container ran — a share of
-a bill this platform is paying itself would be selling storage below cost.
+The customer pays their provider for capacity. Storage and egress use separate
+published rates.
 """
 
 STORED_RATE_STEP = Decimal("1E-12")
@@ -141,28 +121,7 @@ the two together is `tests/contracts`, which reads the column and compares."""
 
 
 def _stored_rate(exact: Decimal) -> Decimal:
-    """A rate the column holds exactly, at or below the figure it came from.
-
-    A price per gibibyte-month has no exact rate per byte-second: the divisor
-    carries factors of three, so the quotient does not terminate and no amount of
-    column precision would make it. Compute never meets this because a per-hour
-    figure divides by 3600 into a whole nanodollar, which the card holds as a
-    term rather than a coincidence.
-
-    So the published figure is the one this card owns and the stored rate is
-    derived from it downwards. The direction is the whole of it. Rounding up
-    would charge fractionally more than the page states, which is a price the
-    platform never published; rounding down charges fractionally less, which is a
-    rounding artefact in the customer's favour and costs eighteen millionths of
-    the bill.
-
-    Down has a floor, and reaching it is refused rather than rounded to. A price
-    small enough to land under the column's last step would be stored as zero,
-    and a zero here is indistinguishable from the stated zero that means free —
-    so the page would publish a price and the platform would bill nothing at all,
-    which no comparison against the published figure can catch because charging
-    nothing is charging no more than it says.
-    """
+    """Round toward the customer without turning a positive price into free usage."""
 
     stored = exact.quantize(STORED_RATE_STEP, rounding=ROUND_DOWN)
     if stored == 0 and exact != 0:
@@ -174,65 +133,20 @@ def _stored_rate(exact: Decimal) -> Decimal:
 
 
 def _management_fee(fleet_nanos_per_hour: int) -> int:
-    """The fleet's hourly price as the fee for running the same thing elsewhere.
-
-    Snapped down to a whole nanodollar a second, because a share of a price is
-    not generally divisible by 3600 and the card refuses a figure that is not.
-    Down rather than nearest, for the reason `_stored_rate` rounds down: the
-    published figure is what a customer is quoted, and landing under it is a
-    rounding artefact where landing over it is a price nobody published. The
-    snap costs at most two thousandths of a percent.
-    """
+    """Round the management fee down to whole nanodollars per second."""
 
     fee = int(Decimal(fleet_nanos_per_hour) * CONNECTED_CLOUD_MANAGEMENT_FEE)
     return fee // _SECONDS_PER_HOUR * _SECONDS_PER_HOUR
 
 
-def _exact_per_second(nanos_per_hour: int) -> Decimal:
-    """An hourly price as the per-second rate the ledger multiplies, or nothing.
-
-    Compute refuses where the platform rates round: an hourly figure is chosen by
-    whoever prices the card, so one that does not divide into a whole nanodollar
-    a second is a figure to correct rather than a quotient to truncate. Rounding
-    it down here would quietly sell a processor for less than the page says
-    forever, and letting it through unrounded hands the decision to the rate
-    column, which may round it up.
-
-    Whole nanodollars, not merely a figure the column can hold. Those are
-    different tests and the weaker one is not enough: 55_126_809 an hour is
-    15313.0025 a second, which `NUMERIC(30, 12)` stores exactly and the pricing
-    page still refuses, because per-second is a unit the page publishes rather
-    than only a number the database keeps.
-    """
-
-    if nanos_per_hour % _SECONDS_PER_HOUR != 0:
-        raise ValueError(
-            f"{nanos_per_hour} nanodollars an hour is not a whole number of nanodollars a "
-            f"second; every published figure divides by {_SECONDS_PER_HOUR}, and one "
-            "that does not has no per-second price to publish"
-        )
-    return Decimal(nanos_per_hour) / _SECONDS_PER_HOUR
+def _per_second_rate(nanos_per_hour: int) -> Decimal:
+    """Round down by less than one stored step per resource-second."""
+    return _stored_rate(Decimal(nanos_per_hour) / _SECONDS_PER_HOUR)
 
 
 @dataclass(frozen=True, slots=True)
 class PublishedComputeRate:
-    """One shape class's figures, in the units they are published in.
-
-    Published per hour and per whole unit — a core, a gibibyte, a card — because
-    that is what a customer compares against every other cloud. The database
-    stores the per-second figures derived below, and the derivation is exact
-    division rather than a rounded conversion, so the figure on the page and the
-    figure in the rate row are the same number said twice.
-
-    Every figure on this card divides by 3600 to a whole nanodollar, which is
-    what lets a per-second rate reach `NUMERIC(30, 12)` unrounded. That
-    divisibility is load-bearing rather than incidental, and `_exact_per_second`
-    holds it here rather than leaving it to the contract test: a price that broke
-    it would otherwise reach the rate column as a 28-digit quotient and be
-    rounded by the database — in whichever direction the database chose, which
-    may be upward, and a rate above the published figure is a price the platform
-    never stated.
-    """
+    """Hourly resource prices converted to ledger precision without rounding up."""
 
     billing_owner: UsageBillingOwner
     gpu_type: str
@@ -245,13 +159,7 @@ class PublishedComputeRate:
     rate_class: PlacementRateClass = AUTO_RATE_CLASS
 
     def __post_init__(self) -> None:
-        """Derive every figure once, so an unpublishable one raises on construction.
-
-        The properties below are lazy, and their only production reader is the
-        command that writes the rate rows. Left to them, a price nobody can
-        publish would be discovered by an operator mid-cutover rather than by the
-        import that builds this card — which is every consumer, and every test.
-        """
+        """Reject unrepresentable rates when constructing the catalog."""
 
         _ = (
             self.nanos_per_container_second,
@@ -262,19 +170,19 @@ class PublishedComputeRate:
 
     @property
     def nanos_per_container_second(self) -> Decimal:
-        return _exact_per_second(self.nanos_per_container_hour)
+        return _per_second_rate(self.nanos_per_container_hour)
 
     @property
     def nanos_per_cpu_core_second(self) -> Decimal:
-        return _exact_per_second(self.nanos_per_cpu_core_hour)
+        return _per_second_rate(self.nanos_per_cpu_core_hour)
 
     @property
     def nanos_per_memory_gib_second(self) -> Decimal:
-        return _exact_per_second(self.nanos_per_memory_gib_hour)
+        return _per_second_rate(self.nanos_per_memory_gib_hour)
 
     @property
     def nanos_per_gpu_card_second(self) -> Decimal:
-        return _exact_per_second(self.nanos_per_gpu_card_hour)
+        return _per_second_rate(self.nanos_per_gpu_card_hour)
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,17 +236,9 @@ class PublishedGpuRate:
 
 @dataclass(frozen=True, slots=True)
 class PublishedPlatformRate:
-    """What the platform charges for what a container moves and keeps.
+    """Customer GiB prices converted to byte and byte-second ledger rates.
 
-    Held in the whole units a customer compares — a gibibyte moved, a gibibyte
-    kept for a thirty-day month — and divided below into the per-byte and
-    per-byte-second rates the ledger prices against. That direction is the same
-    one the compute rates take, and for the same reason: the published figure is
-    what a person is quoted, so it is the figure this card states rather than one
-    reconstructed from a rate row.
-
-    Egress is global. Selecting a compute region does not change the customer
-    transfer rate.
+    Compute region selection does not change the customer egress rate.
     """
 
     nanos_per_egress_gib: int
@@ -364,13 +264,7 @@ class PublishedPlatformRate:
 
 @dataclass(frozen=True, slots=True)
 class PublishedPlan:
-    """Everything a surface offering this plan states about it.
-
-    The figures and the words together, because a plan described in one place and
-    priced in another is a plan somebody ships half of. Adding one here is what
-    makes it appear on the pricing page and in the dashboard; neither has copy of
-    its own to keep in step.
-    """
+    """Canonical plan prices, entitlements and copy for public clients."""
 
     id: BillingPlanId
     name: str
@@ -379,20 +273,18 @@ class PublishedPlan:
     summary: str
     """The one line under the name, saying what this plan is."""
 
-    monthly_nanos: int
-    included_nanos: int
+    terms_version: SubscriptionTermsVersion
     entitlements: PlanEntitlements
     terms: tuple[str, ...]
-    """What this plan promises beyond its figures, one clause each.
+    """Plan-specific promises, excluding numeric terms and platform-wide rules."""
 
-    Carries no money and no count. The figures above are rendered by whichever
-    surface shows the plan, in that surface's own format, so a term can never
-    restate a number and then disagree with it. What is true on every plan —
-    what a card on file changes, how included compute is issued, how overage is
-    billed — is not here either: it belongs to the surface that says it once,
-    and repeating it per plan is how two plans start describing the platform
-    differently.
-    """
+    @property
+    def monthly_nanos(self) -> int:
+        return subscription_terms(self.terms_version).monthly_nanos
+
+    @property
+    def included_nanos(self) -> int:
+        return subscription_terms(self.terms_version).included_nanos
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,36 +339,19 @@ class PlanEntitlements:
 
 @dataclass(frozen=True, slots=True)
 class AccountTerms:
-    """What one account may spend and run for a cycle.
-
-    A plan's figures are not an account's. Everything a plan comes with is
-    promised against being able to charge for what happens next, and an account
-    with no card on file has not made that possible — so the two figures move
-    together, from the same fact, and are resolved in one place rather than by
-    two callers each deciding what a missing card means.
-    """
+    """Published recurring credits and the account's concurrency limits."""
 
     included_nanos: int
     entitlements: PlanEntitlements
 
 
 def account_terms(plan: BillingPlanId, *, has_payment_method: bool) -> AccountTerms:
-    """What this account gets, given its plan and whether anyone can charge it.
-
-    Having no card replaces the plan's terms rather than reducing them, and it
-    does so whatever the plan says. A subscription nobody can collect on is not a
-    cheaper subscription — the $200 plan's invoice fails exactly like the free
-    one's — so there is no plan for which "they have no card" should still mean
-    "give them the plan's allowance".
-
-    The plan still decides everything once a card exists, which is the only state
-    a paid plan is ever meant to be in.
-    """
+    """A saved card affects concurrency, never evidence that credits were funded."""
 
     published = published_plan(plan)
     if not has_payment_method:
         return AccountTerms(
-            included_nanos=NO_CARD_INCLUDED_NANOS,
+            included_nanos=published.included_nanos,
             entitlements=replace(
                 published.entitlements,
                 max_concurrent_cpu_containers=NO_CARD_MAX_CPU_CONTAINERS,
@@ -509,13 +384,10 @@ _PLATFORM_FLEET_SHAPE = PublishedShapeRate(
     55_126_800,
     7_560_000,
 )
-"""The one compute price this platform sets. Every other capacity derives from it."""
+"""The original compute prices retained by historical publications."""
 
 _INITIAL_SHAPE_RATES: tuple[PublishedShapeRate, ...] = (
     _PLATFORM_FLEET_SHAPE,
-    # Capacity in a customer's own cloud account: their provider bills them for
-    # the machine, so what this platform charges is the fee for managing what
-    # was placed there — the fleet's own price, shared.
     PublishedShapeRate(
         UsageBillingOwner.ConnectedCloud,
         _management_fee(_PLATFORM_FLEET_SHAPE.nanos_per_container_hour),
@@ -538,12 +410,26 @@ _INITIAL_GPU_RATES: tuple[PublishedGpuRate, ...] = (
     PublishedGpuRate(GpuType.H100, 3_372_120_000),
     PublishedGpuRate(GpuType.H200, 3_918_236_400),
 )
-"""Every GPU model the platform schedules, at the price it is rented for.
+"""Original prices for every billable GPU identity, retained for historical usage."""
 
-Held to `shared.gpu.SUPPORTED_GPU_TYPES` exactly: a model that schedules and has
-no row here is compute nothing can price, and a row for a model nobody can rent
-is a quote nobody can take.
-"""
+_SEPTEMBER_SHAPE_RATES = (
+    PublishedShapeRate(UsageBillingOwner.PlatformFleet, 0, 22_000_000, 7_500_000),
+    PublishedShapeRate(
+        UsageBillingOwner.ConnectedCloud, 0, _management_fee(22_000_000), _management_fee(7_500_000)
+    ),
+    PublishedShapeRate(UsageBillingOwner.SelfHosted, 0, 0, 0),
+)
+_SEPTEMBER_GPU_RATES = tuple(
+    replace(
+        rate,
+        platform_fleet_nanos_per_card_hour={
+            GpuType.T4: 550_000_000,
+            GpuType.A10G: 1_000_000_000,
+            GpuType.L4: 750_000_000,
+        }.get(rate.gpu_type, rate.platform_fleet_nanos_per_card_hour),
+    )
+    for rate in _INITIAL_GPU_RATES
+)
 
 _INITIAL_PLATFORM_RATE = PublishedPlatformRate(
     nanos_per_egress_gib=0,
@@ -559,8 +445,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
         id=BillingPlanId.Free,
         name="Free",
         summary="What an account costs before it has agreed to anything.",
-        monthly_nanos=FREE_PLAN_MONTHLY_NANOS,
-        included_nanos=FREE_PLAN_INCLUDED_NANOS,
+        terms_version=SubscriptionTermsVersion.Free,
         entitlements=PlanEntitlements(
             max_concurrent_cpu_containers=FREE_PLAN_MAX_CPU_CONTAINERS,
             max_concurrent_gpus=FREE_PLAN_MAX_GPUS,
@@ -581,9 +466,8 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
     PublishedPlan(
         id=BillingPlanId.Team,
         name="Team",
-        summary="A monthly subscription that comes with compute included.",
-        monthly_nanos=TEAM_PLAN_MONTHLY_NANOS,
-        included_nanos=TEAM_PLAN_INCLUDED_NANOS,
+        summary="A monthly subscription with included usage credit.",
+        terms_version=SubscriptionTermsVersion.Team,
         entitlements=PlanEntitlements(
             max_concurrent_cpu_containers=TEAM_PLAN_MAX_CPU_CONTAINERS,
             max_concurrent_gpus=TEAM_PLAN_MAX_GPUS,
@@ -601,6 +485,25 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             "Every GPU model the platform rents, and as many workspaces and members as you need.",
             "One account and invoice for every workspace it owns.",
         ),
+    ),
+    PublishedPlan(
+        id=BillingPlanId.Business,
+        name="Business",
+        summary="Higher concurrency and longer log retention.",
+        terms_version=SubscriptionTermsVersion.Business,
+        entitlements=PlanEntitlements(
+            max_concurrent_cpu_containers=2_000,
+            max_concurrent_gpus=100,
+            gpu_types="all",
+            max_workspaces="unlimited",
+            max_members="unlimited",
+            connected_cloud=True,
+            region_selection=True,
+            custom_domains=True,
+            self_hosted=True,
+            log_retention_days=90,
+        ),
+        terms=("The same metered rates and capabilities as Team, with higher account limits.",),
     ),
 )
 """Every plan an account can be on, cheapest first."""
@@ -659,6 +562,16 @@ def _published_compute_rates(
 
 
 @dataclass(frozen=True, slots=True)
+class MeteredRateChange:
+    """Changes only the listed compute classes and optional platform prices."""
+
+    pricing_version: str
+    effective_at: datetime
+    compute_rates: tuple[PublishedComputeRate, ...]
+    platform_rate: PublishedPlatformRate | None
+
+
+@dataclass(frozen=True, slots=True)
 class PublishedMeteredRateCard:
     pricing_version: str
     effective_at: datetime
@@ -666,14 +579,89 @@ class PublishedMeteredRateCard:
     platform_rate: PublishedPlatformRate
 
 
-PUBLISHED_METERED_RATE_HISTORY: tuple[PublishedMeteredRateCard, ...] = (
-    PublishedMeteredRateCard(
+@dataclass(frozen=True, slots=True)
+class PublishedPlacementRate:
+    rate_class: PlacementRateClass
+    pinned: bool
+    preemptible: bool
+    name: str
+    cpu_memory_multiplier: Decimal
+    gpu_multiplier: Decimal
+    compute_rates: tuple[PublishedComputeRate, ...]
+
+
+def _multiplied_hourly_rate(nanos_per_hour: int, multiplier: Decimal) -> int:
+    amount = nanos_per_hour * multiplier
+    if amount != amount.to_integral_value():
+        raise ValueError("a multiplied hourly rate must remain an exact number of nanodollars")
+    return int(amount)
+
+
+def _placement_rates(
+    rates: tuple[PublishedComputeRate, ...],
+) -> tuple[PublishedPlacementRate, ...]:
+    placements: list[PublishedPlacementRate] = []
+    for pinned, preemptible, name in (
+        (False, True, "Automatic"),
+        (True, True, "Selected location"),
+        (False, False, "Automatic, non-preemptible"),
+        (True, False, "Selected location, non-preemptible"),
+    ):
+        rate_class = placement_rate_class(pinned=pinned, preemptible=preemptible)
+        location = Decimal("1.5") if pinned else Decimal(1)
+        cpu_memory = location * (1 if preemptible else 3)
+        placements.append(
+            PublishedPlacementRate(
+                rate_class=rate_class,
+                pinned=pinned,
+                preemptible=preemptible,
+                name=name,
+                cpu_memory_multiplier=cpu_memory,
+                gpu_multiplier=location,
+                compute_rates=tuple(
+                    replace(
+                        rate,
+                        rate_class=rate_class,
+                        nanos_per_cpu_core_hour=_multiplied_hourly_rate(
+                            rate.nanos_per_cpu_core_hour, cpu_memory
+                        ),
+                        nanos_per_memory_gib_hour=_multiplied_hourly_rate(
+                            rate.nanos_per_memory_gib_hour, cpu_memory
+                        ),
+                        nanos_per_gpu_card_hour=_multiplied_hourly_rate(
+                            rate.nanos_per_gpu_card_hour, location
+                        ),
+                    )
+                    if rate.billing_owner is UsageBillingOwner.PlatformFleet
+                    else replace(rate, rate_class=rate_class)
+                    for rate in rates
+                ),
+            )
+        )
+    return tuple(placements)
+
+
+PUBLISHED_METERED_RATE_HISTORY: tuple[MeteredRateChange, ...] = (
+    MeteredRateChange(
         pricing_version="2026-08-18.a",
         effective_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         compute_rates=_published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES),
         platform_rate=_INITIAL_PLATFORM_RATE,
     ),
-    PublishedMeteredRateCard(
+    MeteredRateChange(
+        pricing_version="2026-09-09.a",
+        effective_at=datetime(2026, 9, 9, tzinfo=timezone.utc),
+        compute_rates=tuple(
+            rate
+            for placement in _placement_rates(
+                _published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES)
+            )
+            if placement.rate_class != AUTO_RATE_CLASS
+            for rate in placement.compute_rates
+        ),
+        platform_rate=None,
+    ),
+    MeteredRateChange(
         pricing_version="2026-09-04.a",
         effective_at=datetime(2026, 9, 11, tzinfo=timezone.utc),
         compute_rates=_published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES),
@@ -682,14 +670,50 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[PublishedMeteredRateCard, ...] = (
             nanos_per_volume_gib_month=50_000_000,
         ),
     ),
+    MeteredRateChange(
+        pricing_version="2026-09-12.a",
+        effective_at=datetime(2026, 9, 12, tzinfo=timezone.utc),
+        compute_rates=tuple(
+            rate
+            for placement in _placement_rates(
+                _published_compute_rates(_SEPTEMBER_SHAPE_RATES, _SEPTEMBER_GPU_RATES)
+            )
+            for rate in placement.compute_rates
+        ),
+        platform_rate=None,
+    ),
 )
 """Reviewed price history. Existing cards retain their original figures and dates."""
 
-_CURRENT_METERED_CARD = PUBLISHED_METERED_RATE_HISTORY[-1]
-METERED_RATE_VERSION = _CURRENT_METERED_CARD.pricing_version
-METERED_RATES_EFFECTIVE_AT = _CURRENT_METERED_CARD.effective_at
-PUBLISHED_COMPUTE_RATES = _CURRENT_METERED_CARD.compute_rates
-PUBLISHED_PLATFORM_RATE = _CURRENT_METERED_CARD.platform_rate
+
+def published_metered_rate_card(at: datetime) -> PublishedMeteredRateCard:
+    applicable = tuple(
+        card for card in PUBLISHED_METERED_RATE_HISTORY if card.effective_at <= to_utc(at)
+    )
+    if not applicable:
+        raise ValueError("no published rates cover the requested time")
+    latest = applicable[-1]
+    return PublishedMeteredRateCard(
+        pricing_version=latest.pricing_version,
+        effective_at=latest.effective_at,
+        compute_rates=tuple(
+            {
+                (rate.billing_owner, rate.rate_class, rate.gpu_type): rate
+                for card in applicable
+                for rate in card.compute_rates
+            }.values()
+        ),
+        platform_rate=next(
+            card.platform_rate for card in reversed(applicable) if card.platform_rate is not None
+        ),
+    )
+
+
+METERED_RATE_VERSION = PUBLISHED_METERED_RATE_HISTORY[-1].pricing_version
+METERED_RATES_EFFECTIVE_AT = PUBLISHED_METERED_RATE_HISTORY[-1].effective_at
+_LATEST_METERED_CARD = published_metered_rate_card(METERED_RATES_EFFECTIVE_AT)
+PUBLISHED_COMPUTE_RATES = _LATEST_METERED_CARD.compute_rates
+PUBLISHED_PLATFORM_RATE = _LATEST_METERED_CARD.platform_rate
 PUBLISHED_SHAPE_RATES = tuple(
     PublishedShapeRate(
         billing_owner=rate.billing_owner,
@@ -709,34 +733,19 @@ PUBLISHED_GPU_RATES = tuple(
 )
 
 
-@dataclass(frozen=True, slots=True)
-class PublishedPlacementRate:
-    rate_class: PlacementRateClass
-    region: ProductRegion | None
-    name: str
-    multiplier: Decimal
-    compute_rates: tuple[PublishedComputeRate, ...]
-
-    def __post_init__(self) -> None:
-        if self.multiplier <= 0 or not self.compute_rates:
-            raise ValueError("a placement class requires a positive multiplier and compute rates")
-        if any(rate.rate_class != self.rate_class for rate in self.compute_rates):
-            raise ValueError("placement compute rates must belong to their published class")
-
-
-PUBLISHED_PLACEMENT_RATES: tuple[PublishedPlacementRate, ...] = (
-    PublishedPlacementRate(
-        rate_class=AUTO_RATE_CLASS,
-        region=None,
-        name="Automatic",
-        multiplier=Decimal(1),
-        compute_rates=PUBLISHED_COMPUTE_RATES,
-    ),
-)
-
-
-def published_placement_rate(region: ProductRegion | None) -> PublishedPlacementRate | None:
-    return next((rate for rate in PUBLISHED_PLACEMENT_RATES if rate.region == region), None)
+def published_placement_rates(
+    rates: tuple[PublishedComputeRate, ...],
+) -> tuple[PublishedPlacementRate, ...]:
+    return tuple(
+        replace(
+            placement,
+            compute_rates=tuple(rate for rate in rates if rate.rate_class == placement.rate_class),
+        )
+        for placement in _placement_rates(
+            tuple(rate for rate in rates if rate.rate_class == AUTO_RATE_CLASS)
+        )
+        if any(rate.rate_class == placement.rate_class for rate in rates)
+    )
 
 
 if tuple(rate.gpu_type for rate in PUBLISHED_GPU_RATES) != SUPPORTED_GPU_TYPES:
@@ -746,6 +755,8 @@ if tuple(rate.gpu_type for rate in PUBLISHED_GPU_RATES) != SUPPORTED_GPU_TYPES:
 
 
 __all__ = [
+    "BUSINESS_PLAN_INCLUDED_NANOS",
+    "BUSINESS_PLAN_MONTHLY_NANOS",
     "CONNECTED_CLOUD_MANAGEMENT_FEE",
     "FREE_PLAN_GPU_TYPES",
     "FREE_PLAN_INCLUDED_NANOS",
@@ -756,23 +767,23 @@ __all__ = [
     "FREE_PLAN_MONTHLY_NANOS",
     "METERED_RATES_EFFECTIVE_AT",
     "METERED_RATE_VERSION",
-    "NO_CARD_INCLUDED_NANOS",
     "NO_CARD_MAX_CPU_CONTAINERS",
     "NO_CARD_MAX_GPUS",
-    "PRICING_VERSION",
+    "ONE_TIME_TRIAL_NANOS",
     "PUBLISHED_COMPUTE_RATES",
     "PUBLISHED_GPU_RATES",
     "PUBLISHED_METERED_RATE_HISTORY",
-    "PUBLISHED_PLACEMENT_RATES",
     "PUBLISHED_PLANS",
     "PUBLISHED_PLATFORM_RATE",
     "PUBLISHED_SHAPE_RATES",
     "SECONDS_PER_30_DAY_MONTH",
     "STORED_RATE_STEP",
+    "SUBSCRIPTION_TERMS",
     "TEAM_PLAN_INCLUDED_NANOS",
     "TEAM_PLAN_MAX_CPU_CONTAINERS",
     "TEAM_PLAN_MAX_GPUS",
     "TEAM_PLAN_MONTHLY_NANOS",
+    "TRIAL_VALIDITY_DAYS",
     "AccountTerms",
     "AllGpuTypes",
     "EntitlementLimit",
@@ -785,8 +796,11 @@ __all__ = [
     "PublishedPlan",
     "PublishedPlatformRate",
     "PublishedShapeRate",
+    "SubscriptionTerms",
     "account_terms",
     "complimentary_terms",
-    "published_placement_rate",
+    "published_metered_rate_card",
+    "published_placement_rates",
     "published_plan",
+    "subscription_terms",
 ]

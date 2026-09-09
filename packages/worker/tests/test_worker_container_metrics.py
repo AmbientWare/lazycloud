@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import monotonic, sleep
 
+import pytest
 from shared.realtime.contracts import ContainerMetricsPayload
 from shared.scheduling import (
     ContainerStatusUpdatePlan,
@@ -24,6 +25,7 @@ from worker.events import (
     plan_worker_usage_metrics,
 )
 from worker.monitoring import ContainerRuntimeMonitorSettings, WorkerContainerRuntimeMonitor
+from worker.network_egress import NetworkEgressCounterSample
 from worker.status import CONTAINER_STATE_TTL_SECONDS
 from worker.supervision import WorkerUsageEmissionResult
 from worker.tools import NetworkIoCounters, ProcessIoCounters
@@ -35,6 +37,40 @@ class MetricsSink:
 
     def publish_container_metrics(self, payload: ContainerMetricsPayload) -> None:
         self.payloads.append(payload)
+
+
+def test_egress_billing_discards_intervals_without_continuous_route_evidence() -> None:
+    @dataclass
+    class EgressSource:
+        reading: NetworkEgressCounterSample | None
+
+        def sample(self, container_id: str) -> NetworkEgressCounterSample:
+            if self.reading is None:
+                raise RuntimeError("provider route inspection unavailable")
+            return self.reading
+
+    source = EgressSource(NetworkEgressCounterSample(total_bytes=100, policy_digest="a"))
+    service = WorkerContainerMetricsService(
+        worker_id="worker-1", sink=MetricsSink(), network_egress=source
+    )
+    request = ContainerRequestContext(container_id="ctr-egress")
+    previous = None
+    charged: list[int] = []
+    for reading in (
+        source.reading,
+        NetworkEgressCounterSample(total_bytes=200, policy_digest="a"),
+        None,
+        NetworkEgressCounterSample(total_bytes=500, policy_digest="a"),
+        NetworkEgressCounterSample(total_bytes=550, policy_digest="b"),
+        NetworkEgressCounterSample(total_bytes=600, policy_digest="b"),
+    ):
+        source.reading = reading
+        result = service.publish_sample(
+            request, ContainerMetricsRawSample(), previous=previous, sample_interval_ms=1000
+        )
+        previous = result.next_state
+        charged.append(result.network_egress_bytes)
+    assert charged == [0, 100, 0, 0, 0, 50]
 
 
 @dataclass(slots=True)
@@ -51,10 +87,10 @@ class SequenceMetricsSource:
 @dataclass(slots=True)
 class SequenceMetricsSourceFactory:
     source: SequenceMetricsSource
-    pids: list[int] = field(default_factory=list)
+    container_ids: list[str] = field(default_factory=list)
 
-    def metrics_source_for_pid(self, pid: int) -> SequenceMetricsSource:
-        self.pids.append(pid)
+    def metrics_source_for_container(self, container_id: str) -> SequenceMetricsSource:
+        self.container_ids.append(container_id)
         return self.source
 
 
@@ -93,6 +129,7 @@ class UsageRecorder:
         metering_window_started_at: datetime,
         metering_window_ended_at: datetime,
         evidence: WorkerUsageEvidence | None = None,
+        measurement_complete: bool = False,
     ) -> WorkerUsageEmissionResult:
         self.offered.append(
             (
@@ -119,6 +156,54 @@ class UsageRecorder:
             pool_mode=WorkerPoolMode.Public,
             reason="worker usage emitted",
         )
+
+
+@pytest.mark.parametrize("failure", ["read", "publish"])
+def test_metrics_failure_does_not_rebill_cpu_from_an_earlier_window(failure: str) -> None:
+    @dataclass
+    class Source:
+        reading: int = -1
+
+        def metrics_source_for_container(self, container_id: str) -> Source:
+            return self
+
+        def sample(self, request: ContainerRequestContext) -> ContainerMetricsRawSample:
+            self.reading += 1
+            if failure == "read" and self.reading == 1:
+                raise RuntimeError("cgroup read failed")
+            return ContainerMetricsRawSample(
+                cpu_usage_usec=self.reading * 1_000_000,
+                measurement_complete=True,
+            )
+
+    @dataclass
+    class Sink:
+        unavailable: bool = True
+
+        def publish_container_metrics(self, payload: ContainerMetricsPayload) -> None:
+            if failure == "publish" and self.unavailable:
+                self.unavailable = False
+                raise RuntimeError("telemetry unavailable")
+
+    source = Source()
+    usage = UsageRecorder()
+    monitor = WorkerContainerRuntimeMonitor(
+        metrics=WorkerContainerMetricsService(worker_id="worker-1", sink=Sink()),
+        metrics_source_factory=source,
+        usage_recorder=usage,
+        settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.01),
+    )
+    handle = monitor.start_monitoring(ContainerRequestContext(container_id="ctr-1"))
+    try:
+        deadline = monotonic() + 2
+        while len(usage.windows) < 3 and monotonic() < deadline:
+            print(f"counter={source.reading}, usage_windows={len(usage.windows)}")
+            sleep(0.01)
+    finally:
+        handle.stop()
+
+    cpu = [evidence.cpu_used_core_seconds for evidence in usage.evidence[:3]]
+    assert cpu == ([0, 0, 1] if failure == "read" else [1, 1, 1])
 
 
 def test_worker_container_metrics_service_computes_deltas_and_publishes() -> None:
@@ -189,10 +274,12 @@ def test_worker_container_runtime_monitor_publishes_metrics_and_usage_on_stop() 
     source = SequenceMetricsSource(
         samples=[
             ContainerMetricsRawSample(
+                cpu_usage_usec=0,
                 process_io=ProcessIoCounters(disk_read_bytes=1),
                 network_interfaces=[NetworkIoCounters(name="eth0", bytes_recv=1)],
             ),
             ContainerMetricsRawSample(
+                cpu_usage_usec=500_000,
                 cpu_used_millicores=500,
                 process_io=ProcessIoCounters(disk_read_bytes=5),
                 network_interfaces=[NetworkIoCounters(name="eth0", bytes_recv=9)],
@@ -219,10 +306,11 @@ def test_worker_container_runtime_monitor_publishes_metrics_and_usage_on_stop() 
         memory_mib=128,
     )
 
-    handle = monitor.start_monitoring(request, started_pid=123)
+    handle = monitor.start_monitoring(request)
+    handle.runtime_started(123)
     result = handle.stop()
 
-    assert source_factory.pids == [123]
+    assert source_factory.container_ids == [request.container_id]
     assert result.metrics_samples >= 2
     assert result.metrics_published >= 1
     assert result.usage is not None
@@ -268,7 +356,8 @@ def test_a_refused_usage_write_is_retried_with_the_window_it_claimed() -> None:
         memory_mib=128,
     )
 
-    handle = monitor.start_monitoring(request, started_pid=123)
+    handle = monitor.start_monitoring(request)
+    handle.runtime_started(123)
     deadline = monotonic() + 10
     while len(usage.offered) < 3 and monotonic() < deadline:
         sleep(0.01)
@@ -301,7 +390,8 @@ def test_windows_accepted_after_a_refusal_tile_the_whole_container() -> None:
         memory_mib=128,
     )
 
-    handle = monitor.start_monitoring(request, started_pid=123)
+    handle = monitor.start_monitoring(request)
+    handle.runtime_started(123)
     deadline = monotonic() + 10
     while len(usage.windows) < 2 and monotonic() < deadline:
         sleep(0.01)
@@ -398,7 +488,8 @@ def test_the_last_window_of_a_containers_life_survives_a_refusal() -> None:
         memory_mib=128,
     )
 
-    handle = monitor.start_monitoring(request, started_pid=123)
+    handle = monitor.start_monitoring(request)
+    handle.runtime_started(123)
     sleep(0.05)
     handle.stop()
 
@@ -450,35 +541,41 @@ def _monitored_request() -> ContainerRequestContext:
     )
 
 
-def test_container_monitor_rearms_the_scheduler_state_ttl_while_the_container_runs() -> None:
-    """A container that is working is kept alive in the scheduler's record.
-
-    The TTL is re-armed only by a write and the worker writes `Running` once, at
-    start. Left alone the record expires under a healthy container after fifteen
-    minutes, while a function may be invoked for an hour — and the orphan sweep
-    then fails a container that is still serving, stops counting it toward its
-    stub's ceiling, and counts it against the stub's failure threshold.
-    """
-
+def test_container_monitor_heartbeats_only_after_the_runtime_starts() -> None:
     states = _RecordingContainerStates(
         state=SchedulerContainerState(
             container_id="ctr-heartbeat",
             stub_id="stub-1",
             workspace_id="workspace-1",
-            status=SchedulerContainerStatus.Running,
+            status=SchedulerContainerStatus.Pending,
         )
     )
+    usage = UsageRecorder()
     monitor = WorkerContainerRuntimeMonitor(
         container_states=states,
+        usage_recorder=usage,
         settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.01),
     )
 
-    handle = monitor.start_monitoring(_monitored_request(), started_pid=4321)
-    deadline = monotonic() + 5.0
-    while not states.refreshes and monotonic() < deadline:
-        sleep(0.01)
-    handle.stop()
+    handle = monitor.start_monitoring(_monitored_request())
+    try:
+        for _ in range(500):
+            print("before startup", len(usage.windows), states.reads, states.refreshes)
+            if len(usage.windows) >= 2:
+                break
+            sleep(0.01)
+        assert len(usage.windows) >= 2
+        assert states.refreshes == []
+        handle.runtime_started(4321)
+        for _ in range(500):
+            print("after startup", len(usage.windows), states.reads, states.refreshes)
+            if states.refreshes:
+                break
+            sleep(0.01)
+    finally:
+        result = handle.stop()
 
+    assert result.started_pid == 4321
     assert states.refreshes, "a running container's state was never re-armed"
     status, ttl = states.refreshes[0]
     assert status is SchedulerContainerStatus.Running
@@ -499,7 +596,8 @@ def test_container_monitor_stops_heartbeating_a_state_the_platform_dropped() -> 
         settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.01),
     )
 
-    handle = monitor.start_monitoring(_monitored_request(), started_pid=4321)
+    handle = monitor.start_monitoring(_monitored_request())
+    handle.runtime_started(4321)
     deadline = monotonic() + 5.0
     while not states.reads and monotonic() < deadline:
         sleep(0.01)

@@ -8,7 +8,11 @@ import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel, Field
-from shared.aws_connections import AwsConnectionStackAction, AwsStackParameter
+from shared.aws_connections import (
+    AWS_MANAGED_NETWORK_ZONE_PARAMETERS,
+    AwsConnectionStackAction,
+    AwsStackParameter,
+)
 
 
 class _CallerIdentity(BaseModel):
@@ -83,10 +87,19 @@ def create_connection_stack(
             f"AWS region {action.region} needs two available standard zones; "
             f"this account has {len(zones)}. No stack was created."
         )
+    if len(zones) > len(AWS_MANAGED_NETWORK_ZONE_PARAMETERS):
+        raise RuntimeError(
+            f"AWS region {action.region} has {len(zones)} standard zones, exceeding this "
+            "connection template's capacity. Update lazycloud before creating the stack."
+        )
     parameters = (
         *action.request.Parameters,
-        AwsStackParameter(ParameterKey="AvailabilityZoneA", ParameterValue=zones[0]),
-        AwsStackParameter(ParameterKey="AvailabilityZoneB", ParameterValue=zones[1]),
+        *(
+            AwsStackParameter(
+                ParameterKey=AWS_MANAGED_NETWORK_ZONE_PARAMETERS[index], ParameterValue=zone
+            )
+            for index, zone in enumerate(zones)
+        ),
     )
     stack_request = action.request.model_copy(update={"Parameters": parameters})
     create_arguments = [*arguments, "cloudformation", "create-stack"]

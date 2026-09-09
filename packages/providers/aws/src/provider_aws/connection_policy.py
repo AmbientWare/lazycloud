@@ -92,6 +92,10 @@ _AUTOSCALING_SERVICE_ROLE = (
     "arn:{partition}:iam::*:role/aws-service-role/"
     "autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
 )
+_SPOT_SERVICE_ROLE = (
+    "arn:{partition}:iam::{account_id}:role/aws-service-role/"
+    "spot.amazonaws.com/AWSServiceRoleForEC2Spot"
+)
 
 
 def connection_role_statements(
@@ -112,6 +116,7 @@ def connection_role_statements(
             "Effect": "Allow",
             "Action": [
                 "autoscaling:DescribeAutoScalingGroups",
+                "autoscaling:DescribeScalingActivities",
                 "ec2:DescribeAvailabilityZones",
                 "ec2:DescribeInstances",
                 "ec2:DescribeInternetGateways",
@@ -119,7 +124,11 @@ def connection_role_statements(
                 "ec2:DescribeLaunchTemplateVersions",
                 "ec2:DescribeRegions",
                 "ec2:DescribeRouteTables",
+                "ec2:DescribeVpcEndpoints",
+                "ec2:DescribeManagedPrefixLists",
+                "ec2:GetManagedPrefixListEntries",
                 "ec2:DescribeSecurityGroups",
+                "ec2:DescribeSpotPriceHistory",
                 "ec2:DescribeSubnets",
                 "ec2:DescribeVolumes",
                 "ec2:DescribeVpcs",
@@ -245,6 +254,13 @@ def connection_role_statements(
                 "Action": "iam:CreateServiceLinkedRole",
                 "Resource": arns.arn(_AUTOSCALING_SERVICE_ROLE),
                 "Condition": {"StringEquals": {"iam:AWSServiceName": "autoscaling.amazonaws.com"}},
+            },
+            {
+                "Sid": "CreateSpotServiceRole",
+                "Effect": "Allow",
+                "Action": "iam:CreateServiceLinkedRole",
+                "Resource": arns.arn(_SPOT_SERVICE_ROLE),
+                "Condition": {"StringEquals": {"iam:AWSServiceName": "spot.amazonaws.com"}},
             },
             {
                 "Sid": "CreateManagedNodeIdentity",

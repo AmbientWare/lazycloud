@@ -120,6 +120,7 @@ class ContainerCursorPayload(ContractModel):
 
 class PendingContainerReservation(ContractModel):
     region: ProductRegion | None = Field(default=None, exclude=True)
+    availability_zone: str = Field(default="", exclude=True)
     id: str | None = None
     name: str
     image: str
@@ -137,6 +138,9 @@ class PendingContainerReservation(ContractModel):
     network_allow_list: list[str] = Field(default_factory=list)
     gpu: list[str] = Field(default_factory=list)
     gpu_count: int = Field(default=0, ge=0)
+    timeout_seconds: int = 0
+    expires_at: datetime | None = None
+    created_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -161,6 +165,7 @@ class ContainerService:
         gpu: Sequence[str],
         gpu_count: int,
         region: ProductRegion | None = None,
+        availability_zone: str = "",
         stub_id: str | None = None,
     ) -> list[str]:
         """Refuse a start the account may not make, before anything exists.
@@ -181,6 +186,7 @@ class ContainerService:
             gpu=gpu,
             gpu_count=gpu_count_for_capacity(gpu, gpu_count),
             region=region,
+            availability_zone=availability_zone,
         )
         if stub_id is not None:
             stub = StubRepository(session).get(stub_id, workspace_id=workspace_id)
@@ -207,6 +213,7 @@ class ContainerService:
             gpu=reservation.gpu,
             gpu_count=reservation.gpu_count,
             region=reservation.region,
+            availability_zone=reservation.availability_zone,
             stub_id=reservation.stub_id,
         )
         app_id = optional_uuid(reservation.app_id, field="app_id")
@@ -263,19 +270,20 @@ class ContainerService:
             repository = ContainerRepository(session)
             repository.lock_reservation(container_id)
             existing = repository.get_across_workspaces(container_id)
+            reservation = PendingContainerReservation(
+                id=container_id,
+                name=f"image-build-{container_id}",
+                image=image_id,
+                command=[],
+                workspace_id=workspace_id,
+            )
             if existing is not None:
                 if existing.workspace_id != workspace_id or existing.image != image_id:
                     raise ConflictError("image build container identity does not match")
                 return existing
             record = self.reserve_pending(
                 session,
-                PendingContainerReservation(
-                    id=container_id,
-                    name=f"image-build-{container_id}",
-                    image=image_id,
-                    command=[],
-                    workspace_id=workspace_id,
-                ),
+                reservation,
             )
         self.publish_lifecycle_change(record, WorkspaceChangeType.Created)
         return record
@@ -302,6 +310,7 @@ class ContainerService:
         gpu_count: int = 0,
         pool_selector: str = "",
         region: ProductRegion | None = None,
+        availability_zone: str = "",
         runtime: OciRuntimeName | str = OciRuntimeName.Runsc,
         runtime_class: str = "",
         docker_enabled: bool = False,
@@ -333,6 +342,7 @@ class ContainerService:
                 PendingContainerReservation(
                     name=name,
                     region=region,
+                    availability_zone=availability_zone,
                     image=image,
                     command=argv,
                     workspace_id=workspace.id,
@@ -371,6 +381,7 @@ class ContainerService:
                 gpu_count=record.gpu_count,
                 pool_selector=pool_selector,
                 region=region,
+                availability_zone=availability_zone,
                 runtime=runtime,
                 runtime_class=runtime_class,
                 docker_enabled=docker_enabled,
@@ -422,6 +433,20 @@ class ContainerService:
         record: ContainerRecord,
         options: ContainerSchedulingOptions,
     ) -> SchedulerContainerSubmitResult:
+        submitted: SchedulerContainerSubmitResult | None = None
+        try:
+            request = self._scheduler_request(record, options)
+            submitted = self.scheduler.submit(request, ready_at=options.ready_at)
+            return submitted
+        finally:
+            if submitted is None or not submitted.accepted:
+                self.stop(record.id, reason=StopContainerReason.Scheduler)
+
+    def _scheduler_request(
+        self,
+        record: ContainerRecord,
+        options: ContainerSchedulingOptions,
+    ) -> SchedulerWorkerRequest:
         runtime_name, runtime_constraint = resolve_oci_runtime(
             runtime=options.runtime,
             runtime_class=options.runtime_class,
@@ -497,6 +522,7 @@ class ContainerService:
             gpu_count=options.gpu_count,
             pool_selector=options.pool_selector,
             region=options.region,
+            availability_zone=options.availability_zone,
             runtime_class=runtime_constraint,
             docker_enabled=options.docker_enabled,
             preemptible=options.preemptible,
@@ -516,7 +542,7 @@ class ContainerService:
                     workspace_id=record.workspace_id,
                     target_kind=target_kind,
                 )
-        return self.scheduler.submit(request, ready_at=options.ready_at)
+        return request
 
     def _authorized_archive_sha256(self, image_id: str, *, workspace_id: str) -> str:
         """Archive digest for this image, resolved through the workspace's own authorization.

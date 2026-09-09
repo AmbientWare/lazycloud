@@ -6,7 +6,7 @@ from datetime import datetime
 
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from shared.timestamps import to_utc
-from sqlalchemy import CursorResult, delete, func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.orm import Session
 
 _ERROR_LIMIT = 512
@@ -247,32 +247,6 @@ class BillingMeterOutboxRepository:
                 held = replace(held, waiting_nanos=held.waiting_nanos + nanos)
             totals[str(meter_event_name)] = held
         return totals
-
-    def prune(self, *, sent_before: datetime, limit: int) -> int:
-        """Delete settled rows in a bounded batch.
-
-        Only `sent`. An `abandoned` row is the record of a charge that never
-        reached the provider and is kept until somebody has answered for it.
-        """
-
-        if limit <= 0:
-            return 0
-        settled = (
-            select(BillingMeterOutboxTable.id)
-            .where(
-                BillingMeterOutboxTable.status == "sent",
-                BillingMeterOutboxTable.updated_at < sent_before,
-            )
-            .order_by(BillingMeterOutboxTable.updated_at)
-            .limit(limit)
-        )
-        result = self.session.execute(
-            delete(BillingMeterOutboxTable)
-            .where(BillingMeterOutboxTable.id.in_(settled.scalar_subquery()))
-            .execution_options(synchronize_session=False)
-        )
-        self.session.flush()
-        return _rowcount(result)
 
     def _settle(
         self,

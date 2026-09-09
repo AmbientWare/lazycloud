@@ -156,6 +156,7 @@ class ContainerResourceConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore", strict=True)
     region: ProductRegion | None = Field(default=None, strict=False)
+    availability_zone: str = ""
 
     cpu: CpuRequest | None = Field(default=None)
     """Cores to reserve, or a `(reserve, throttle at)` pair.

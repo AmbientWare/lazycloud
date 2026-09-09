@@ -18,7 +18,7 @@ from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.observability import UsageRecordTable
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension, LedgerBasis, LedgerComponent
 from shared.billing_rate_card import published_plan
 from shared.events import EventLevel
@@ -26,9 +26,11 @@ from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
     ProviderCreditGrant,
+    ProviderCreditGrantBalance,
     ProviderInvoice,
+    ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
-    SubscriptionProration,
+    SubscriptionChangeTiming,
 )
 from tests.service_fixtures import unbilled_account, workspace_owner_user_id
 
@@ -62,10 +64,25 @@ class _Provider:
             current_period_started_at=CYCLE_STARTED_AT,
             current_period_ended_at=CYCLE_ENDED_AT,
             plan=self.plan,
+            terms_version=published_plan(self.plan).terms_version
+            if self.plan is not None
+            else None,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
 
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        return ()
+
+    def paid_subscription_periods(
+        self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        return ()
+
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
         del since, limit
         return self.invoices if provider_customer_id == self.billed_customer_id else ()
@@ -119,8 +136,10 @@ class _Provider:
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
         raise AssertionError("reconciling must not change anyone's plan")
 
@@ -327,11 +346,13 @@ def _abandoned_delivery(
                 id=str(uuid4()),
                 workspace_id=workspace_id,
                 identifier=str(uuid4()),
+                usage_record_id=str(uuid4()),
                 provider_customer_id=f"cus_{user_id}",
                 meter_event_name="lazycloud_compute_cost_nanos",
                 value_nanos=value_nanos,
                 pricing_version="2026-08-13.a",
                 occurred_at=PREVIOUS_STARTED_AT + timedelta(hours=1),
+                metering_ended_at=PREVIOUS_STARTED_AT + timedelta(hours=2),
                 status="abandoned",
                 attempts=12,
                 next_attempt_at=PREVIOUS_STARTED_AT,
@@ -350,6 +371,9 @@ def _account_row(services: ApiServices, user_id: str, plan: BillingPlanId) -> No
             provider_subscription_id=f"sub_{user_id}",
             provider_credit_grant_id=f"credgr_{user_id}",
             plan=plan,
+            subscription_terms_version=published_plan(plan).terms_version,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         BillingAllowanceRepository(session).set_subscription_period(
             user_id=user_id,

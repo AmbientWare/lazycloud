@@ -1863,6 +1863,7 @@ async def test_scheduler_dispatch_records_the_placement_an_image_build_is_priced
         container_id="22222222-2222-4222-8222-222222222222",
         cpu_millicores=100,
         memory_mib=128,
+        preemptible=False,
         timestamp=now,
     )
     assert service.submit(request, ready_at=now).accepted
@@ -1889,6 +1890,7 @@ async def test_scheduler_dispatch_records_the_placement_an_image_build_is_priced
             # headroom the scheduler adds, and that is what is paid for.
             memory_mib=160,
             gpu_count=0,
+            rate_class="non_preemptible",
         )
     ]
     assert assignments.cleared == []

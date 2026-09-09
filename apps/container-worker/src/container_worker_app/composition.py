@@ -28,7 +28,7 @@ from worker.container_checkpoints import (
 )
 from worker.container_logs import WorkerContainerLogCaptureService
 from worker.container_metrics import (
-    ProcessTreeContainerMetricsSourceFactory,
+    CgroupContainerMetricsSourceFactory,
     WorkerContainerMetricsService,
 )
 from worker.container_rootfs import ContainerRootfsOverlayManager
@@ -77,6 +77,7 @@ from worker.network_backend import (
     AgentBridgeNetworkConfig,
     SchedulerNetworkIpAllocator,
 )
+from worker.network_egress import WorkerNetworkEgressCounters
 from worker.oci_runtime import (
     OciRuntimeCommandController,
     OciRuntimeSpecBuilder,
@@ -261,20 +262,14 @@ def build_worker_process_services(
     lifecycle_events = AsyncContainerLifecycleSink(
         RemoteContainerLifecycleSink(repository, worker_id=identity.worker_id)
     )
-    metrics_enabled = configuration.monitoring.metrics_enabled
     runtime_monitor = WorkerContainerRuntimeMonitor(
-        metrics=(
-            WorkerContainerMetricsService(
-                worker_id=identity.worker_id,
-                sink=RemoteContainerMetricsSink(repository),
-                disk_usage=container_rootfs,
-            )
-            if metrics_enabled
-            else None
+        metrics=WorkerContainerMetricsService(
+            worker_id=identity.worker_id,
+            sink=RemoteContainerMetricsSink(repository),
+            disk_usage=container_rootfs,
+            network_egress=network_backend.egress_counters if network_backend is not None else None,
         ),
-        metrics_source_factory=(
-            ProcessTreeContainerMetricsSourceFactory() if metrics_enabled else None
-        ),
+        metrics_source_factory=CgroupContainerMetricsSourceFactory(),
         usage_recorder=WorkerSupervisionService(
             worker_id=identity.worker_id,
             event_sink=event_sink,
@@ -404,8 +399,8 @@ def build_worker_process_services(
         image_builder=BuildahWorkerImageBuilder(
             scratch=image_build_scratch,
             repository=repository,
-            image_runtime=image_runtime,
             archive_root=Path(paths.image_cache_path),
+            index_cache_root=image_content_cache_root,
             context_loader=RepositoryImageBuildContextLoader(repository, internal_http),
         ),
         image_archive_publisher=image_archive_publisher,
@@ -722,6 +717,7 @@ def _client_network_backend(
             worker_id=config.worker_id,
         ),
         config=bridge,
+        egress_counters=WorkerNetworkEgressCounters(load_policy=client.egress_policy),
     )
 
 

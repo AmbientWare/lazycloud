@@ -7,8 +7,9 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
-from typing import Literal, Protocol, Self, TypedDict, TypeGuard, overload
+from typing import Literal, NotRequired, Protocol, Self, TypedDict, TypeGuard, overload
 
 from boto3.session import Session
 from botocore.exceptions import BotoCoreError, ClientError
@@ -19,6 +20,7 @@ from compute.node_bootstrap import (
     validate_agent_binary_url,
 )
 from pydantic import (
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -34,12 +36,14 @@ from shared.urls import normalize_http_origin
 from .account_connection import AwsAccountConnectionTarget, connection_profile_name
 from .boto3_clients import has_operations, is_boto3_client_factory
 from .instance_catalog import aws_managed_capacity_resource_name
+from .network_egress import AwsNetworkEvidenceClient
 from .provider_control import (
     AwsProviderControlError,
     AwsProviderControlErrorCode,
     invalid_response_error,
     upstream_error,
 )
+from .spot_prices import AwsSpotPriceClient
 
 AWS_MANAGED_POOL_TAG = "cloud-pool:managed-by"
 AWS_MANAGED_POOL_TAG_VALUE = "control-plane"
@@ -104,13 +108,16 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
     unit_name: UnitName = Field(pattern=r"^[a-z][a-z0-9_-]{0,62}$")
     region: str = Field(pattern=_REGION_PATTERN.pattern)
     instance_type: str = Field(pattern=r"^[a-z0-9-]+\.[a-z0-9]+$")
+    preemptible: bool = False
+    max_compute_hourly_micros: int | None = Field(default=None, gt=1_000)
+    availability_zone: str = ""
     ami_id: str = Field(pattern=_AMI_PATTERN.pattern)
     desired_nodes: int = Field(ge=0)
     max_nodes: int = Field(ge=1)
     root_volume_gib: int = Field(ge=50, le=2048)
     node_instance_profile_arn: str
     vpc_id: str = Field(min_length=1)
-    subnet_ids: tuple[str, str]
+    subnet_ids: tuple[str, ...] = Field(min_length=2)
     security_group_id: str = Field(min_length=1)
     bootstrap: AwsManagedPoolBootstrap
 
@@ -120,6 +127,8 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
             raise ValueError("desired_nodes cannot exceed max_nodes")
         if ":instance-profile/" not in self.node_instance_profile_arn:
             raise ValueError("node instance profile ARN is invalid")
+        if self.preemptible and self.max_compute_hourly_micros is None:
+            raise ValueError("preemptible capacity requires a maximum compute hourly price")
         return self
 
     @property
@@ -167,11 +176,15 @@ class AwsManagedPoolInstance(AwsManagedPoolModel):
     instance_id: str = Field(pattern=_INSTANCE_ID_PATTERN.pattern)
     lifecycle_state: str
     health_status: str
-    availability_zone: str
     # The template version the group launched this instance with, empty when the
     # group reports none. Rolling the group forward leaves running instances on
     # the version they booted with, so this and the group's reference diverge.
     booted_template_version: str = ""
+
+
+class AwsManagedPoolInstanceDetails(AwsManagedPoolModel):
+    availability_zone: str = Field(min_length=1)
+    storage_volume_ids: tuple[str, ...]
 
 
 class AwsManagedPoolSnapshot(AwsManagedPoolModel):
@@ -180,6 +193,7 @@ class AwsManagedPoolSnapshot(AwsManagedPoolModel):
     desired_nodes: int = Field(ge=0)
     max_nodes: int = Field(ge=0)
     instances: tuple[AwsManagedPoolInstance, ...] = ()
+    last_capacity_failure_at: datetime | None = None
 
 
 class AwsManagedPoolProvisioningError(AwsProviderControlError):
@@ -239,6 +253,17 @@ class _TagSpecification(TypedDict):
     Tags: list[_Tag]
 
 
+class _SpotOptions(TypedDict):
+    MaxPrice: str
+    SpotInstanceType: Literal["one-time"]
+    InstanceInterruptionBehavior: Literal["terminate"]
+
+
+class _InstanceMarketOptions(TypedDict):
+    MarketType: Literal["spot"]
+    SpotOptions: _SpotOptions
+
+
 class _LaunchTemplateData(TypedDict):
     ImageId: str
     InstanceType: str
@@ -248,11 +273,13 @@ class _LaunchTemplateData(TypedDict):
     MetadataOptions: _MetadataOptions
     TagSpecifications: list[_TagSpecification]
     UserData: str
+    InstanceMarketOptions: NotRequired[_InstanceMarketOptions]
 
 
-class AwsManagedPoolEc2Client(Protocol):
+class AwsManagedPoolEc2Client(AwsSpotPriceClient, AwsNetworkEvidenceClient, Protocol):
     def describe_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]: ...
     def describe_images(self, *, ImageIds: list[str]) -> Mapping[str, object]: ...
+    def describe_subnets(self, *, SubnetIds: list[str]) -> Mapping[str, object]: ...
     def describe_volumes(
         self,
         *,
@@ -287,6 +314,9 @@ class AwsManagedPoolEc2Client(Protocol):
 
 
 class AwsManagedPoolAutoScalingClient(Protocol):
+    def describe_scaling_activities(
+        self, *, AutoScalingGroupName: str, MaxRecords: int
+    ) -> Mapping[str, object]: ...
     def describe_auto_scaling_groups(
         self, *, AutoScalingGroupNames: list[str]
     ) -> Mapping[str, object]: ...
@@ -409,6 +439,13 @@ def _is_ec2_client(value: object) -> TypeGuard[AwsManagedPoolEc2Client]:
             "create_launch_template_version",
             "delete_launch_template",
             "describe_instances",
+            "describe_route_tables",
+            "describe_vpc_endpoints",
+            "describe_managed_prefix_lists",
+            "get_managed_prefix_list_entries",
+            "describe_images",
+            "describe_subnets",
+            "describe_spot_price_history",
             "describe_launch_templates",
             "describe_launch_template_versions",
             "describe_volumes",
@@ -424,6 +461,7 @@ def _is_autoscaling_client(value: object) -> TypeGuard[AwsManagedPoolAutoScaling
             "create_auto_scaling_group",
             "delete_auto_scaling_group",
             "describe_auto_scaling_groups",
+            "describe_scaling_activities",
             "terminate_instance_in_auto_scaling_group",
             "update_auto_scaling_group",
         ),
@@ -446,17 +484,22 @@ class _InstanceState(_Response):
     name: str = Field(default="", alias="Name")
 
 
-class _InstanceStorage(_Response):
+class _InstancePlacement(_Response):
+    availability_zone: str = Field(default="", alias="AvailabilityZoneId")
+
+
+class _InstanceDescription(_Response):
     instance_id: str = Field(alias="InstanceId")
+    placement: _InstancePlacement = Field(default_factory=_InstancePlacement, alias="Placement")
     state: _InstanceState = Field(default_factory=_InstanceState, alias="State")
     block_devices: tuple[_InstanceBlockDevice, ...] = Field(default=(), alias="BlockDeviceMappings")
 
 
 class _InstanceReservation(_Response):
-    instances: tuple[_InstanceStorage, ...] = Field(default=(), alias="Instances")
+    instances: tuple[_InstanceDescription, ...] = Field(default=(), alias="Instances")
 
 
-class _DescribeInstanceStorage(_Response):
+class _DescribeInstances(_Response):
     reservations: tuple[_InstanceReservation, ...] = Field(default=(), alias="Reservations")
 
 
@@ -523,6 +566,16 @@ class _Images(_Response):
     values: tuple[_Image, ...] = Field(default=(), alias="Images")
 
 
+class _Subnet(_Response):
+    id: str = Field(alias="SubnetId")
+    vpc_id: str = Field(alias="VpcId")
+    availability_zone_id: str = Field(alias="AvailabilityZoneId")
+
+
+class _Subnets(_Response):
+    values: tuple[_Subnet, ...] = Field(alias="Subnets")
+
+
 class _LaunchTemplate(_Response):
     id: str = Field(alias="LaunchTemplateId")
     latest_version: int = Field(alias="LatestVersionNumber")
@@ -551,7 +604,6 @@ class _GroupInstance(_Response):
     lifecycle_state: str = Field(default="", alias="LifecycleState")
     protected_from_scale_in: bool = Field(default=False, alias="ProtectedFromScaleIn")
     health_status: str = Field(default="", alias="HealthStatus")
-    availability_zone: str = Field(default="", alias="AvailabilityZone")
     launch_template: _GroupLaunchTemplate | None = Field(default=None, alias="LaunchTemplate")
 
 
@@ -569,6 +621,15 @@ class _Group(_Response):
 
 class _Groups(_Response):
     values: tuple[_Group, ...] = Field(default=(), alias="AutoScalingGroups")
+
+
+class _ScalingActivity(_Response):
+    started_at: AwareDatetime = Field(alias="StartTime")
+    status: str = Field(alias="StatusCode")
+
+
+class _ScalingActivities(_Response):
+    values: tuple[_ScalingActivity, ...] = Field(alias="Activities")
 
 
 class AwsManagedPoolProvisioner:
@@ -599,6 +660,7 @@ class AwsManagedPoolProvisioner:
             return updated
 
         try:
+            subnets = self._resolve_subnets(spec)
             launch_template_id, launch_template_version = self._ensure_launch_template(
                 spec, spec.security_group_id
             )
@@ -612,14 +674,14 @@ class AwsManagedPoolProvisioner:
             )
             group = self._ensure_group(
                 spec,
-                subnets=spec.subnet_ids,
+                subnets=subnets,
                 launch_template_id=launch_template_id,
                 launch_template_version=launch_template_version,
             )
             state = checkpoint(state.model_copy(update={"autoscaling_group_name": group.name}))
         except AwsProviderControlError as exc:
             raise AwsManagedPoolProvisioningError(exc, resource_ids=state) from exc
-        return _snapshot(group, state)
+        return self._snapshot(group, state)
 
     def describe(
         self,
@@ -643,7 +705,29 @@ class AwsManagedPoolProvisioner:
         state = self.discover(spec, resource_ids).model_copy(
             update={"autoscaling_group_name": group.name}
         )
-        return _snapshot(group, state)
+        return self._snapshot(group, state)
+
+    def _snapshot(self, group: _Group, state: AwsManagedPoolResourceIds) -> AwsManagedPoolSnapshot:
+        snapshot = _snapshot(group, state)
+        if len(group.instances) >= group.desired:
+            return snapshot
+        try:
+            response = self._clients.autoscaling.describe_scaling_activities(
+                AutoScalingGroupName=group.name, MaxRecords=100
+            )
+        except ClientError as exc:
+            raise _client_error(exc, operation="describe capacity acquisition") from exc
+        activities = _validate(
+            _ScalingActivities, response, operation="describe capacity acquisition"
+        ).values
+        # AWS puts ongoing activities first, before completed activities ordered
+        # by start time. An active attempt can still fill the missing capacity.
+        if any(item.status not in {"Failed", "Cancelled", "Successful"} for item in activities):
+            return snapshot
+        latest = max(activities, key=lambda item: item.started_at, default=None)
+        if latest is not None and latest.status in {"Failed", "Cancelled"}:
+            return snapshot.model_copy(update={"last_capacity_failure_at": latest.started_at})
+        return snapshot
 
     def discover(
         self,
@@ -670,6 +754,7 @@ class AwsManagedPoolProvisioner:
         ):
             raise ValueError("invalid managed pool capacity")
         group = self._require_group(spec)
+        subnets = self._resolve_subnets(spec)
         self._protect_instances(group, desired_nodes=desired_nodes)
         resources = self.discover(spec)
         if resources.launch_template_id is None or resources.launch_template_latest_version is None:
@@ -677,6 +762,12 @@ class AwsManagedPoolProvisioner:
                 AwsProviderControlErrorCode.ResourceNotFound,
                 operation="scale managed pool",
                 detail="managed pool launch template is incomplete",
+            )
+        launch_template_id = resources.launch_template_id
+        launch_template_version = resources.launch_template_latest_version
+        if desired_nodes > group.desired:
+            launch_template_id, launch_template_version = self._ensure_launch_template(
+                spec, spec.security_group_id
             )
         self._asg(
             "scale Auto Scaling Group",
@@ -686,10 +777,10 @@ class AwsManagedPoolProvisioner:
             MaxSize=max_nodes,
             DesiredCapacity=desired_nodes,
             NewInstancesProtectedFromScaleIn=True,
-            VPCZoneIdentifier=",".join(spec.subnet_ids),
+            VPCZoneIdentifier=",".join(subnets),
             LaunchTemplate={
-                "LaunchTemplateId": resources.launch_template_id,
-                "Version": str(resources.launch_template_latest_version),
+                "LaunchTemplateId": launch_template_id,
+                "Version": str(launch_template_version),
             },
         )
 
@@ -747,6 +838,39 @@ class AwsManagedPoolProvisioner:
             desired_nodes=0,
             max_nodes=0,
         )
+
+    def _resolve_subnets(self, spec: AwsManagedPoolSpec) -> tuple[str, ...]:
+        if not spec.availability_zone:
+            return spec.subnet_ids
+        operation = "resolve managed pool availability zone"
+        subnets = _validate(
+            _Subnets,
+            self._ec2(
+                operation,
+                self._clients.ec2.describe_subnets,
+                SubnetIds=list(spec.subnet_ids),
+            ),
+            operation=operation,
+        ).values
+        if {subnet.id for subnet in subnets} != set(spec.subnet_ids) or any(
+            subnet.vpc_id != spec.vpc_id for subnet in subnets
+        ):
+            raise invalid_response_error(
+                operation, "AWS returned subnets outside the configured network"
+            )
+        selected = tuple(
+            subnet.id for subnet in subnets if subnet.availability_zone_id == spec.availability_zone
+        )
+        if not selected:
+            raise AwsProviderControlError(
+                AwsProviderControlErrorCode.ResourceNotFound,
+                operation=operation,
+                detail=(
+                    "configured network has no subnet in availability zone "
+                    f"{spec.availability_zone}"
+                ),
+            )
+        return selected
 
     def _resolve_root_device_name(self, ami_id: str) -> str:
         """Return the device name the AMI actually boots from.
@@ -836,7 +960,7 @@ class AwsManagedPoolProvisioner:
         self,
         spec: AwsManagedPoolSpec,
         *,
-        subnets: tuple[str, str],
+        subnets: tuple[str, ...],
         launch_template_id: str,
         launch_template_version: int,
     ) -> _Group:
@@ -971,31 +1095,40 @@ class AwsManagedPoolProvisioner:
             )
         return payload.values[0] if payload.values else None
 
-    def storage_volume_ids(
+    def instance_details(
         self,
         instance_ids: tuple[str, ...],
-    ) -> dict[str, tuple[str, ...]]:
+    ) -> dict[str, AwsManagedPoolInstanceDetails]:
         if not instance_ids:
             return {}
         response = self._ec2(
-            "describe managed pool instance storage",
+            "describe managed pool instances",
             self._clients.ec2.describe_instances,
             InstanceIds=list(instance_ids),
         )
         described = _validate(
-            _DescribeInstanceStorage,
+            _DescribeInstances,
             response,
-            operation="describe managed pool instance storage",
+            operation="describe managed pool instances",
         )
-        return {
-            instance.instance_id: tuple(
-                mapping.ebs.volume_id
-                for mapping in instance.block_devices
-                if mapping.ebs is not None and mapping.ebs.volume_id
+        instances = {
+            instance.instance_id: AwsManagedPoolInstanceDetails(
+                availability_zone=instance.placement.availability_zone,
+                storage_volume_ids=tuple(
+                    mapping.ebs.volume_id
+                    for mapping in instance.block_devices
+                    if mapping.ebs is not None and mapping.ebs.volume_id
+                ),
             )
             for reservation in described.reservations
             for instance in reservation.instances
         }
+        if instances.keys() != set(instance_ids):
+            raise invalid_response_error(
+                "describe managed pool instances",
+                "AWS did not return exactly the requested pool instances",
+            )
+        return instances
 
     def machine_storage_destroyed(
         self,
@@ -1012,7 +1145,7 @@ class AwsManagedPoolProvisioner:
                 raise
         else:
             described = _validate(
-                _DescribeInstanceStorage,
+                _DescribeInstances,
                 response,
                 operation="verify managed pool instance destruction",
             )
@@ -1115,7 +1248,7 @@ def _launch_template_data(
         *_tags(spec, "instance"),
         {"Key": "cloud-pool:enrollment", "Value": spec.bootstrap.enrollment_request_id},
     ]
-    return {
+    data: _LaunchTemplateData = {
         "ImageId": spec.ami_id,
         "InstanceType": spec.instance_type,
         "BlockDeviceMappings": [
@@ -1143,6 +1276,18 @@ def _launch_template_data(
         ],
         "UserData": base64.b64encode(aws_managed_pool_bootstrap_script(spec).encode()).decode(),
     }
+    if spec.preemptible:
+        if spec.max_compute_hourly_micros is None:
+            raise ValueError("preemptible capacity requires a maximum compute hourly price")
+        data["InstanceMarketOptions"] = {
+            "MarketType": "spot",
+            "SpotOptions": {
+                "MaxPrice": str(Decimal(spec.max_compute_hourly_micros) / Decimal(1_000_000)),
+                "SpotInstanceType": "one-time",
+                "InstanceInterruptionBehavior": "terminate",
+            },
+        }
+    return data
 
 
 # The AWS half of the node bootstrap. Everything here is unavailable on another
@@ -1314,7 +1459,6 @@ def _instances(group: _Group) -> tuple[AwsManagedPoolInstance, ...]:
             instance_id=item.instance_id,
             lifecycle_state=item.lifecycle_state,
             health_status=item.health_status,
-            availability_zone=item.availability_zone,
             booted_template_version=(
                 item.launch_template.version if item.launch_template is not None else ""
             ),

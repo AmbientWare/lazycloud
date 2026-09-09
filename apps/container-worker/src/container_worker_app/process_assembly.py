@@ -273,6 +273,7 @@ def assemble_worker_process_services(
         ),
     )
     execution = WorkerContainerExecutionService(
+        runtime_resources=runtime_stopper,
         address_publisher=address_publisher,
         image_loader=dependencies.image_loader,
         port_allocator=dependencies.port_allocator,
@@ -368,6 +369,7 @@ def assemble_worker_process_services(
         else None
     )
     processor = WorkerSchedulerRequestProcessor(
+        build_cancels=build_cancels,
         worker_id=identity.worker_id,
         workers=worker_repository,
         containers=container_repository,

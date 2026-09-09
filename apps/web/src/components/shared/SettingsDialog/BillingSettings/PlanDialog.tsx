@@ -21,20 +21,12 @@ import {
 import type { BillingSummary } from "@/lib/api/schemas";
 import { gpuModelsPhrase, limitPhrase, memberLimitPhrase } from "@/lib/entitlements";
 import { countLabel } from "@/lib/format";
-import { exactDollars, formatCostNanos } from "@/lib/money";
+import { exactDollars } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
 import type { BillingSettingsController, PlanOffer } from "./controller";
 
-/**
- * Every plan the platform publishes, and the one way onto each of them.
- *
- * Mounted only while open, which is what drops the confirmation and the last
- * refusal without anything having to clear them. Its open state is deliberately
- * not in the URL: a customer sent to the payment provider from inside here comes
- * back to the settings dialog with this closed, so returning from a hosted page
- * can never be what completes a plan change.
- */
+// Keep confirmation out of the URL so a checkout return cannot authorize a change.
 export function PlanDialog({ controller }: { controller: BillingSettingsController }) {
   return (
     <Dialog
@@ -55,7 +47,7 @@ function PlanDialogBody({ controller }: { controller: BillingSettingsController 
         <DialogHeader className="shrink-0 border-b border-border bg-muted/20 px-5 py-4 pr-12 text-left">
           <DialogTitle className="text-base">Subscription</DialogTitle>
           <DialogDescription>
-            Each plan includes monthly compute. Additional usage is billed at the same rates.
+            Paid plans include monthly usage credit. Usage rates are the same across plans.
           </DialogDescription>
         </DialogHeader>
 
@@ -68,10 +60,37 @@ function PlanDialogBody({ controller }: { controller: BillingSettingsController 
             <p className="mb-4 rounded-sm border-l-2 border-warning bg-warning/5 px-3 py-2 text-xs">
               Your plan change is processing. You can make another change when it finishes.
             </p>
+          ) : controller.termsUnverified ? (
+            <p className="mb-4 rounded-sm border-l-2 border-warning bg-warning/5 px-3 py-2 text-xs">
+              Your current subscription terms are being verified. Plan changes will be available
+              when verification finishes.
+            </p>
           ) : null}
-          <div className="grid items-stretch gap-4 sm:grid-cols-2">
+          {summary?.plan?.scheduled_change_at ? (
+            <div className="mb-4 space-y-2 rounded-sm border border-border p-3 text-xs">
+              <p>
+                Your scheduled plan change takes effect{" "}
+                <LiveRelativeTime value={summary.plan.scheduled_change_at} />. Your current price
+                and benefits remain active until then.
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={
+                  controller.busy ||
+                  controller.settling ||
+                  controller.termsUnverified ||
+                  controller.complimentary
+                }
+                onClick={controller.cancelScheduledChange}
+              >
+                Keep current plan
+              </Button>
+            </div>
+          ) : null}
+          <div className="grid items-stretch gap-4 sm:grid-cols-3">
             {controller.offers.map((offer) => (
-              <PlanCard key={offer.id} offer={offer} controller={controller} />
+              <PlanCard key={offer.terms_version} offer={offer} controller={controller} />
             ))}
           </div>
           {controller.changeError ? (
@@ -106,7 +125,7 @@ function PlanCard({
   controller: BillingSettingsController;
 }) {
   const current = offer.action === "current";
-  const pending = controller.changingTo === offer.id;
+  const pending = controller.changingTo === offer.terms_version;
 
   return (
     <section
@@ -125,7 +144,11 @@ function PlanCard({
       </p>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">{offer.summary}</p>
       <ul className="mt-4 flex-1 space-y-2 border-t border-border/80 pt-4 text-xs leading-5">
-        <PlanPoint>{exactDollars(offer.included_nanos)} compute included each month</PlanPoint>
+        <PlanPoint>
+          {offer.included_nanos > 0
+            ? `${exactDollars(offer.included_nanos)} usage credit each month`
+            : "Pay for usage with prepaid credit"}
+        </PlanPoint>
         <PlanPoint>
           {countLabel(offer.entitlements.max_concurrent_cpu_containers, "CPU container")} running at
           once
@@ -150,9 +173,14 @@ function PlanCard({
         <div className="mt-5 border-t border-border/80 pt-4">
           <Button
             size="sm"
-            variant={offer.action === "cancel" ? "outline" : "default"}
-            className={cn("w-full", offer.action === "cancel" && "text-destructive")}
-            disabled={controller.busy || controller.settling || controller.complimentary}
+            variant={offer.action === "downgrade" ? "outline" : "default"}
+            className="w-full"
+            disabled={
+              controller.busy ||
+              controller.settling ||
+              controller.complimentary ||
+              offer.action === "unverified"
+            }
             onClick={() => controller.choose(offer)}
           >
             {pending || (offer.action === "card" && controller.leaving === "card") ? (
@@ -162,7 +190,7 @@ function PlanCard({
             ) : null}
             {offer.action === "card"
               ? `Add payment method for ${offer.name}`
-              : offer.action === "cancel"
+              : offer.action === "downgrade"
                 ? `Move to ${offer.name}`
                 : `Switch to ${offer.name}`}
           </Button>
@@ -181,15 +209,6 @@ function PlanPoint({ children }: { children: React.ReactNode }) {
   );
 }
 
-/**
- * What moving down actually does, in the figures this account holds.
- *
- * Every line is derived: the allowance and the date are the server's answer for
- * this period, and the terms taking over are the published card's. The
- * asymmetry is stated rather than smoothed over — the allowance is the one this
- * period opened with and keeps, while how much may run at once is read live and
- * drops straight away.
- */
 function ChangeConfirmation({
   offer,
   summary,
@@ -203,8 +222,7 @@ function ChangeConfirmation({
   onConfirm: () => void;
   onOpenChange: (open: boolean) => void;
 }) {
-  const allowance = summary?.plan?.allowance ?? null;
-  const movingDown = offer.action === "cancel";
+  const movingDown = offer.action === "downgrade";
 
   return (
     <AlertDialog open onOpenChange={onOpenChange}>
@@ -213,37 +231,31 @@ function ChangeConfirmation({
           <AlertDialogTitle>Move to the {offer.name} plan?</AlertDialogTitle>
           <AlertDialogDescription>
             {movingDown
-              ? "Your workloads keep running. Only the monthly price changes."
-              : `The card on file will be charged at the ${offer.name} rate for the rest of this month.`}
+              ? "The change takes effect at your next renewal. Your current benefits stay active until then."
+              : offer.monthly_nanos > 0
+                ? "Your payment method will be charged the prorated difference for the rest of this billing period."
+                : "Your subscription will switch to these terms without a monthly charge."}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <ul className="space-y-2 text-xs leading-5 text-muted-foreground">
-          {/* The period's own figures, never the plan card's. A cardless account
-              is on the terms the platform gives away rather than the ones the
-              plan publishes, and this is the screen where telling it otherwise
-              would be a promise made while asking somebody to commit. */}
-          {allowance ? (
-            <li>
-              You keep {formatCostNanos(allowance.allowance_nanos, summary?.currency)} of included
-              compute through <LiveRelativeTime value={allowance.period_ended_at} />.
-            </li>
-          ) : null}
           {movingDown ? (
             <>
               <li>
-                You won&apos;t be charged another monthly fee. This period isn&apos;t refunded.
+                Your next monthly price will be {exactDollars(offer.monthly_nanos)}. This period
+                isn&apos;t refunded.
               </li>
-              <li>
-                Moving back to {summary?.plan?.name} before this period ends won&apos;t add another
-                charge.
-              </li>
+              <li>You can cancel the scheduled change before renewal.</li>
+              <li>Existing credits keep their original expiry dates.</li>
             </>
           ) : (
-            <li>Future months are billed at the full {offer.name} price.</li>
+            <li>
+              Future months cost {exactDollars(offer.monthly_nanos)} and include{" "}
+              {exactDollars(offer.included_nanos)} of usage credit.
+            </li>
           )}
           {summary ? (
             <li>
-              Your limits change immediately to{" "}
+              Your limits change {movingDown ? "at renewal" : "after payment succeeds"} to{" "}
               {countLabel(offer.entitlements.max_concurrent_cpu_containers, "CPU container")} and{" "}
               {countLabel(offer.entitlements.max_concurrent_gpus, "GPU card")} at once.
             </li>

@@ -20,7 +20,7 @@ output "secrets_reader_role_arn" {
 
 output "deploy_bucket" {
   description = "Non-secret infrastructure descriptor storage."
-  value       = cloudflare_r2_bucket.storage["deploy"].name
+  value       = aws_s3_bucket.storage["deploy"].id
 }
 
 output "ecr_registry" {
@@ -88,9 +88,9 @@ output "cloudflare_tunnel_id" {
   value       = data.terraform_remote_state.cloudflare.outputs.tunnel_id
 }
 output "release_bucket" {
-  value = data.terraform_remote_state.cloudflare.outputs.release_bucket
+  value = aws_s3_bucket.storage["releases"].id
 }
 
 output "release_public_url" {
-  value = data.terraform_remote_state.cloudflare.outputs.release_public_url
+  value = "https://${local.release_hostname}"
 }

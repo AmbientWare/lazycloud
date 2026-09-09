@@ -2,7 +2,7 @@ from collections.abc import Iterator
 from contextlib import ExitStack
 
 import pytest
-from tests.service_fixtures import isolated_services
+from tests.service_fixtures import isolated_services, postgres_database_url, postgres_services
 
 
 @pytest.fixture
@@ -11,4 +11,4 @@ def client_stack() -> Iterator[ExitStack]:
         yield stack
 
 
-__all__ = ["client_stack", "isolated_services"]
+__all__ = ["client_stack", "isolated_services", "postgres_database_url", "postgres_services"]

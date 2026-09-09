@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
@@ -107,7 +107,11 @@ class ContainerSchedulingPersistenceService:
                 # and one that never started has none. Recorded from what was
                 # placed rather than from what the worker later reports, and in
                 # this transaction so the two cannot disagree.
-                ContainerBillingShapeRepository(session).record(
+                billing_shapes = ContainerBillingShapeRepository(session)
+                recorded = billing_shapes.shape_for(container_id)
+                if recorded is not None:
+                    shape = replace(shape, rate_class=recorded.rate_class)
+                billing_shapes.record(
                     container_id=container_id,
                     workspace_id=workspace_id,
                     shape=shape,

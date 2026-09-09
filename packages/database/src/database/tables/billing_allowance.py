@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    String,
     UniqueConstraint,
     text,
 )
@@ -45,6 +46,11 @@ class BillingAllowancePeriodTable(TimestampMixin, DatabaseBase):
             "spent_nanos >= 0 AND allowance_nanos >= 0",
             name="ck_billing_allowance_periods_nonnegative",
         ),
+        CheckConstraint(
+            "funded_terms_version IS NULL OR funded_terms_version IN "
+            "('free-v1', 'team-v1', 'free-v2', 'team-v2', 'business-v1')",
+            name="ck_billing_allowance_periods_funded_terms",
+        ),
         Index(
             "ix_billing_allowance_periods_lookup",
             "user_id",
@@ -70,6 +76,8 @@ class BillingAllowancePeriodTable(TimestampMixin, DatabaseBase):
     Republishing what a plan includes must not restate the terms of a period a
     customer is part-way through; only a plan change does, and it writes here."""
     spent_nanos: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    credit_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    funded_terms_version: Mapped[str | None] = mapped_column(String(32))
 
 
 __all__ = ["BillingAllowancePeriodTable"]

@@ -29,6 +29,7 @@ from provider_aws import (
     AwsProviderControlErrorCode,
     AwsRegionalPrices,
 )
+from provider_aws.network_egress import NetworkFilter
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from shared.aws_connections import AwsAccountNetwork
 from shared.compute_policy import (
@@ -57,6 +58,22 @@ _STRINGS = TypeAdapter(list[str])
 
 
 class _Ec2:
+    def describe_route_tables(
+        self, *, Filters: list[NetworkFilter], NextToken: str = ""
+    ) -> Mapping[str, object]:
+        raise AssertionError("capacity lifecycle must not inspect network billing routes")
+
+    def describe_vpc_endpoints(self, *, VpcEndpointIds: list[str]) -> Mapping[str, object]:
+        raise AssertionError("capacity lifecycle must not inspect network billing routes")
+
+    def describe_managed_prefix_lists(self, *, PrefixListIds: list[str]) -> Mapping[str, object]:
+        raise AssertionError("capacity lifecycle must not inspect network billing routes")
+
+    def get_managed_prefix_list_entries(
+        self, *, PrefixListId: str, NextToken: str = ""
+    ) -> Mapping[str, object]:
+        raise AssertionError("capacity lifecycle must not inspect network billing routes")
+
     def __init__(self) -> None:
         self.launch_template = False
         self.launch_versions: dict[int, tuple[str, Mapping[str, object]]] = {}
@@ -71,10 +88,27 @@ class _Ec2:
     def describe_images(self, *, ImageIds: list[str]) -> Mapping[str, object]:
         return {"Images": [{"ImageId": ImageIds[0], "RootDeviceName": self.root_device_name}]}
 
+    def describe_subnets(self, *, SubnetIds: list[str]) -> Mapping[str, object]:
+        return {
+            "Subnets": [
+                {
+                    "SubnetId": subnet_id,
+                    "VpcId": _VPC_ID,
+                    "AvailabilityZoneId": f"use1-az{index + 1}",
+                }
+                for index, subnet_id in enumerate(_SUBNET_IDS)
+                if subnet_id in SubnetIds
+            ]
+        }
+
+    def describe_spot_price_history(self, **kwargs: object) -> Mapping[str, object]:
+        return {"SpotPriceHistory": []}
+
     def describe_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
         instances: list[Mapping[str, object]] = [
             {
                 "InstanceId": instance_id,
+                "Placement": {"AvailabilityZoneId": "use1-az1"},
                 "State": {"Name": "terminated"},
                 "BlockDeviceMappings": [
                     {"Ebs": {"VolumeId": f"vol-{instance_id.removeprefix('i-')}"}}
@@ -190,6 +224,9 @@ class _Ec2:
 
 
 class _AutoScaling:
+    def describe_scaling_activities(self, **kwargs: object) -> Mapping[str, object]:
+        return {"Activities": []}
+
     def __init__(self) -> None:
         self.exists = False
         self.name = ""
@@ -318,6 +355,27 @@ def test_managed_pool_accepts_fleet_capacity_and_enforces_its_ceiling() -> None:
         _spec(desired_nodes=501, max_nodes=500)
 
 
+def test_managed_pool_rejects_preemptible_capacity_without_an_enforceable_price() -> None:
+    values = _spec().model_dump() | {"preemptible": True}
+    with pytest.raises(ValidationError, match="maximum compute hourly price"):
+        AwsManagedPoolSpec.model_validate(values)
+    with pytest.raises(ValidationError, match="greater than 1000"):
+        AwsManagedPoolSpec.model_validate(values | {"max_compute_hourly_micros": 1_000})
+
+
+def test_managed_pool_rejects_unavailable_zone_before_creating_resources() -> None:
+    ec2 = _Ec2()
+    autoscaling = _AutoScaling()
+    provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
+    spec = _spec().model_copy(update={"availability_zone": "use1-az3"})
+
+    with pytest.raises(AwsManagedPoolProvisioningError, match="no subnet in availability zone"):
+        provisioner.ensure(spec)
+
+    assert not ec2.launch_template
+    assert not autoscaling.exists
+
+
 def _connection_target(
     *,
     network: AwsAccountNetwork | None = None,
@@ -384,7 +442,8 @@ def test_managed_pool_storage_destruction_requires_exact_volume_absence() -> Non
     instance_id = "i-00000000000000001"
     volume_id = "vol-00000000000000001"
 
-    assert provisioner.storage_volume_ids((instance_id,)) == {instance_id: (volume_id,)}
+    details = provisioner.instance_details((instance_id,))[instance_id]
+    assert details.storage_volume_ids == (volume_id,)
     assert not provisioner.machine_storage_destroyed(_spec(), instance_id, (volume_id,))
     assert not provisioner.machine_storage_destroyed(_spec(), instance_id, ())
 
@@ -647,6 +706,30 @@ def test_managed_pool_agent_artifact_change_versions_template_and_updates_group(
     assert isinstance(encoded_user_data, str)
     user_data = base64.b64decode(encoded_user_data).decode()
     assert f"AGENT_SHA256={'c' * 64}" in user_data
+
+
+def test_managed_pool_scale_up_applies_current_spot_purchase_ceiling() -> None:
+    ec2 = _Ec2()
+    autoscaling = _AutoScaling()
+    provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
+    spec = _spec().model_copy(update={"preemptible": True, "max_compute_hourly_micros": 500_000})
+    provisioner.ensure(spec)
+
+    provisioner.scale(
+        spec.model_copy(update={"max_compute_hourly_micros": 250_000}),
+        desired_nodes=2,
+        max_nodes=spec.max_nodes,
+    )
+
+    version = int(str(autoscaling.launch_template["Version"]))
+    _, launch_data = ec2.launch_versions[version]
+    market = launch_data["InstanceMarketOptions"]
+    assert isinstance(market, Mapping)
+    assert market["SpotOptions"] == {
+        "MaxPrice": "0.25",
+        "SpotInstanceType": "one-time",
+        "InstanceInterruptionBehavior": "terminate",
+    }
 
 
 def test_managed_pool_delete_converges_after_asg_instance_cleanup() -> None:

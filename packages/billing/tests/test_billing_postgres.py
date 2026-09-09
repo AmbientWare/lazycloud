@@ -13,6 +13,7 @@ from uuid import uuid4
 import pytest
 from billing.reconciliation import RECONCILIATION_DIVERGENCE_ACTION
 from database.repositories.billing import BillingAccountRepository
+from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_outbox import BillingMeterOutboxRepository
 from database.repositories.identity import (
     UserRepository,
@@ -23,17 +24,19 @@ from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccount
-from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
+from shared.billing_rate_card import ONE_TIME_TRIAL_NANOS, published_plan, subscription_terms
 from shared.errors import ConflictError
 from shared.events import Event, EventLevel
 from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
     ProviderCreditGrant,
+    ProviderCreditGrantBalance,
     ProviderInvoice,
+    ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
-    SubscriptionProration,
+    SubscriptionChangeTiming,
 )
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
@@ -123,14 +126,19 @@ class _RegistrationCountingProvider:
             current_period_started_at=CYCLE_STARTED_AT,
             current_period_ended_at=CYCLE_ENDED_AT,
             plan=plan,
+            terms_version=published_plan(plan).terms_version,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
 
     def set_subscription_plan(
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
         raise AssertionError("provisioning must not change anyone's plan")
 
@@ -146,11 +154,11 @@ class _RegistrationCountingProvider:
         period_ended_at: datetime,
         previous_period_ended_at: datetime | None,
     ) -> ProviderCreditGrant:
-        del provider_customer_id, amount_nanos, previous_period_ended_at
+        del provider_customer_id, previous_period_ended_at
         self.grants.append(account_id)
         return ProviderCreditGrant(
             provider_credit_grant_id=f"credgr_{len(self.grants)}",
-            amount_nanos=FREE_PLAN_INCLUDED_NANOS,
+            amount_nanos=amount_nanos,
             expires_at=period_ended_at,
         )
 
@@ -160,8 +168,18 @@ class _RegistrationCountingProvider:
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("registering must not read invoices")
 
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        return ()
+
+    def paid_subscription_periods(
+        self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        return ()
+
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
         raise AssertionError("registering must not list invoices")
 
@@ -283,9 +301,12 @@ class _UpgradeCountingProvider:
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
+        plan = subscription_terms(terms_version).plan
         del provider_subscription_id
         self.plan_swaps.append(plan.value)
         self.swap_entered.set()
@@ -321,8 +342,32 @@ class _UpgradeCountingProvider:
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("no invoice here has a period that has closed")
 
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        return ()
+
+    def paid_subscription_periods(
+        self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        return (
+            ProviderPaidSubscriptionPeriod(
+                provider_invoice_id=f"in_{self.plan.value}",
+                provider_invoice_line_id=f"il_{self.plan.value}",
+                provider_subscription_id=provider_subscription_id,
+                plan=self.plan,
+                period_started_at=CYCLE_STARTED_AT,
+                period_ended_at=CYCLE_ENDED_AT,
+                prorated=False,
+                amount_nanos=100_000_000_000,
+                invoice_paid_nanos=100_000_000_000,
+                paid_at=utc_now(),
+                terms_version=published_plan(self.plan).terms_version,
+            ),
+        )
+
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
         del provider_customer_id, since, limit
         return ()
@@ -335,6 +380,9 @@ def _subscription(plan: BillingPlanId) -> ProviderSubscription:
         current_period_started_at=CYCLE_STARTED_AT,
         current_period_ended_at=CYCLE_ENDED_AT,
         plan=plan,
+        terms_version=published_plan(plan).terms_version,
+        scheduled_terms_version=None,
+        scheduled_change_at=None,
     )
 
 
@@ -514,12 +562,15 @@ def test_postgresql_two_first_sign_ins_provision_one_account_and_refuse_nobody()
 
         with database.session() as session:
             stored = BillingAccountRepository(session).get_by_user(user_id)
+            assert (
+                BillingCreditRepository(session).balance(user_id=user_id, at=CYCLE_STARTED_AT)
+                == ONE_TIME_TRIAL_NANOS
+            )
 
     assert provider.registrations == [user_id]
     # Named by customer rather than by account, because that is what the provider
     # is asked to subscribe. One entry either way is the count that matters.
     assert provider.subscribes == [first.provider_customer_id]
-    assert provider.grants == [user_id]
     assert stored is not None
     assert first.provider_customer_id == second_account.provider_customer_id
     assert first.provider_subscription_id == second_account.provider_subscription_id
@@ -564,7 +615,12 @@ def test_postgresql_two_upgrades_at_once_reach_the_provider_once() -> None:
         )
 
         with ThreadPoolExecutor(max_workers=1) as executor:
-            first = executor.submit(service.change_plan, user_id=user_id, target=BillingPlanId.Team)
+            first = executor.submit(
+                service.change_plan,
+                user_id=user_id,
+                target=BillingPlanId.Team,
+                target_terms_version=SubscriptionTermsVersion.Team,
+            )
             # The first caller has committed its intent and is inside the
             # provider call. Held here rather than raced, because what the index
             # has to refuse is a second subscribe arriving while the first one's
@@ -573,7 +629,11 @@ def test_postgresql_two_upgrades_at_once_reach_the_provider_once() -> None:
                 "the first upgrade never reached the provider"
             )
             with pytest.raises(ConflictError):
-                service.change_plan(user_id=user_id, target=BillingPlanId.Team)
+                service.change_plan(
+                    user_id=user_id,
+                    target=BillingPlanId.Team,
+                    target_terms_version=published_plan(BillingPlanId.Team).terms_version,
+                )
             provider.swap_release.set()
             upgraded = first.result(timeout=10)
 
@@ -631,11 +691,13 @@ def test_postgresql_one_meter_event_is_claimed_and_settled_by_one_drainer() -> N
                         id=str(uuid4()),
                         workspace_id=workspace_id,
                         identifier=f"{workspace_id}-{index}",
+                        usage_record_id=str(uuid4()),
                         provider_customer_id="cus_test",
                         meter_event_name="lazycloud_compute_runtime",
                         value_nanos=1_000,
                         pricing_version="test.a",
                         occurred_at=now,
+                        metering_ended_at=now + timedelta(seconds=1),
                         status="pending",
                         attempts=0,
                         next_attempt_at=now,

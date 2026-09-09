@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,11 +12,13 @@ import pytest
 from agent.binary import AgentBinarySettings
 from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
+from billing.rate_publication import publish_metered_rate_history
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient, RedisSettings
 from database.context import ServiceContext
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
+from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.identity import (
     UserRepository,
     WorkspaceMemberRepository,
@@ -29,8 +32,13 @@ from identity.auth import TokenIssuer
 from identity.users import UserService
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import NO_CARD_INCLUDED_NANOS
+from shared.billing_credits import CreditGrant, CreditKind
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
+from shared.billing_rate_card import (
+    METERED_RATES_EFFECTIVE_AT,
+    ONE_TIME_TRIAL_NANOS,
+    TRIAL_VALIDITY_DAYS,
+)
 from shared.identity import (
     AuthTokenRecord,
     PlatformRole,
@@ -39,28 +47,45 @@ from shared.identity import (
     WorkspaceStorageConfig,
 )
 from shared.timestamps import utc_now
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
 from storage.volume_filesystem import LocalVolumeFilesystem
 from storage_client.s3 import S3ObjectStoreSettings
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
+from tests.backing_services import postgres_url
 from tests.fakes import FakeObjectClient
 from tests.real_redis import RealRedisActors
 
 
+@pytest.fixture
+def postgres_database_url() -> Iterator[URL]:
+    base_url = postgres_url()
+    database_name = f"lazycloud_test_{uuid4().hex}"
+    database_url = base_url.set(database=database_name)
+    admin = create_engine(
+        base_url,
+        connect_args={"application_name": DatabaseApplicationName.Test.value},
+    )
+    try:
+        with admin.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            identifier = connection.dialect.identifier_preparer.quote_identifier(database_name)
+            connection.execute(text(f"CREATE DATABASE {identifier}"))
+        yield database_url
+    finally:
+        with admin.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            identifier = connection.dialect.identifier_preparer.quote_identifier(database_name)
+            connection.execute(text(f"DROP DATABASE IF EXISTS {identifier} WITH (FORCE)"))
+            remaining = connection.scalar(
+                text("SELECT count(*) FROM pg_database WHERE datname = :database_name"),
+                {"database_name": database_name},
+            )
+            assert remaining == 0
+        admin.dispose()
+
+
 def _fixture_account(database: DatabaseClient, display_name: str) -> str:
-    """An account as sign-in leaves one: a user, and a billing account behind it.
-
-    Both, because production has no account that holds one without the other.
-    Signing in registers the customer, subscribes them to the free plan and grants
-    what it includes before the session exists, and admission refuses an account
-    whose usage would reach no invoice — so a fixture that created only the user
-    would build a workspace nothing in it may run anything in.
-
-    The provider identifiers are this repository's own rather than a payment
-    provider's, which is the one thing here that is not what production wrote.
-    Nothing offline can register a real customer, and what every caller of this
-    reads is the durable row rather than the objects it names.
-    """
+    """A Free signup with its local trial; provider identifiers are fixture-owned."""
 
     with database.session() as session:
         user_id = UserRepository(session).create(display_name=display_name).id
@@ -69,26 +94,37 @@ def _fixture_account(database: DatabaseClient, display_name: str) -> str:
             status=BillingAccountStatus.Active,
             provider_customer_id=f"cus_fixture_{user_id}",
             provider_subscription_id=f"sub_fixture_{user_id}",
-            provider_credit_grant_id=f"credgr_fixture_{user_id}",
+            provider_credit_grant_id="",
             plan=BillingPlanId.Free,
+            subscription_terms_version=SubscriptionTermsVersion.Free,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
-        # The cycle provisioning opens alongside the subscription. Both or
-        # neither: an account holding a subscription with no allowance period is
-        # a shape production never writes, and admission reads it as an account
-        # with nothing left to spend — so every test that starts a container
-        # would be refused for a state the fixture invented.
-        #
-        # Opened far enough back that a test writing its own cycle over this one
-        # is unambiguously the later of the two. Where periods overlap the most
-        # recently begun takes the answer, and a fixture cycle starting near now
-        # would win against a test's by a margin measured in whichever ran first.
         now = utc_now()
-        BillingAllowanceRepository(session).set_subscription_period(
+        allowance = BillingAllowanceRepository(session)
+        allowance.set_subscription_period(
             user_id=user_id,
-            period_started_at=now - timedelta(days=365),
+            period_started_at=now,
             period_ended_at=now + timedelta(days=30),
-            allowance_nanos=NO_CARD_INCLUDED_NANOS,
+            allowance_nanos=0,
             funded=False,
+        )
+        allowance.record_funded_terms(
+            user_id=user_id, period_started_at=now, terms_version=SubscriptionTermsVersion.Free
+        )
+        allowance.confirm_credit(user_id=user_id, period_started_at=now, at=now)
+        credits = BillingCreditRepository(session)
+        credits.prepare_cutover(user_id=user_id, effective_at=now)
+        credits.complete_cutover(user_id=user_id, at=now)
+        credits.issue(
+            user_id=user_id,
+            grant=CreditGrant(
+                source_id=f"trial:{user_id}",
+                kind=CreditKind.Trial,
+                amount_nanos=ONE_TIME_TRIAL_NANOS,
+                effective_at=now,
+                expires_at=now + timedelta(days=TRIAL_VALIDITY_DAYS),
+            ),
         )
         return user_id
 
@@ -160,6 +196,8 @@ def service_graph(
             binary_sha256_by_arch={"amd64": "a" * 64},
         ),
     )
+    with database.session() as session:
+        publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
     services.control_plane_service.set_workspace(
         "default",
         owner_user_id=_fixture_account(services.context.database, "default-workspace-owner"),
@@ -169,6 +207,38 @@ def service_graph(
         yield services
     finally:
         services.close()
+
+
+@pytest.fixture
+def postgres_services(
+    postgres_database_url: URL, tmp_path: Path, real_redis_actors: RealRedisActors
+) -> Iterator[ApiServices]:
+    settings = DatabaseSettings(
+        url=postgres_database_url.render_as_string(hide_password=False),
+        direct_url=postgres_database_url.render_as_string(hide_password=False),
+        application_name=DatabaseApplicationName.Test,
+    )
+    database = DatabaseClient.from_settings(settings)
+    async_io = ApiAsyncIo.from_settings(
+        settings,
+        RedisSettings(
+            url=real_redis_actors.url,
+            key_prefix=real_redis_actors.prefix,
+            socket_timeout_seconds=2.0,
+            health_check_interval_seconds=1,
+        ),
+    )
+    try:
+        with service_graph(
+            database,
+            tmp_path,
+            redis_client=real_redis_actors.client(),
+            binary_redis_client=real_redis_actors.client(decode_responses=False),
+            async_io=async_io,
+        ) as services:
+            yield services
+    finally:
+        asyncio.run(async_io.close())
 
 
 @pytest.fixture
@@ -255,6 +325,33 @@ def unbilled_account(context: ServiceContext) -> tuple[str, str]:
         user_id = UserRepository(session).create(display_name="unprovisioned").id
         workspace_id = WorkspaceRepository(session).create(name=f"unbilled-{uuid4()}").id
         WorkspaceMemberRepository(session).ensure_owner(workspace_id=workspace_id, user_id=user_id)
+    return user_id, workspace_id
+
+
+def legacy_billing_account(
+    context: ServiceContext, *, period_started_at: datetime, period_ended_at: datetime
+) -> tuple[str, str]:
+    """A subscribed account whose local credit migration has not started."""
+    user_id, workspace_id = unbilled_account(context)
+    with context.database.session() as session:
+        BillingAccountRepository(session).upsert(
+            user_id=user_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id=f"cus_fixture_{user_id}",
+            provider_subscription_id=f"sub_fixture_{user_id}",
+            provider_credit_grant_id="",
+            plan=BillingPlanId.Free,
+            subscription_terms_version=SubscriptionTermsVersion.FreeLegacy,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
+        )
+        BillingAllowanceRepository(session).set_subscription_period(
+            user_id=user_id,
+            period_started_at=period_started_at,
+            period_ended_at=period_ended_at,
+            allowance_nanos=0,
+            funded=False,
+        )
     return user_id, workspace_id
 
 

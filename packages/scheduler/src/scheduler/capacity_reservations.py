@@ -132,6 +132,7 @@ class CapacityTerminalReason(StrEnum):
     ReleasedBeforeRegistration = "released_before_registration"
     RegistrationDeadlineExpired = "registration_deadline_expired"
     AcquisitionUnsupported = "acquisition_unsupported"
+    AcquisitionRejected = "acquisition_rejected"
     ReleaseUnconfirmed = "release_unconfirmed"
 
 
@@ -141,10 +142,12 @@ class CapacityAcquisitionStatus(StrEnum):
     AtLimit = "at_limit"
     TemporarilyUnavailable = "temporarily_unavailable"
     Unsupported = "unsupported"
+    Rejected = "rejected"
 
 
 class CapacityRequestShape(ContractModel):
     region: ProductRegion | None = None
+    availability_zone: str = ""
     cpu_millicores: int = Field(ge=0)
     memory_mib: int = Field(ge=0)
     gpu_type: str = ""
@@ -162,6 +165,8 @@ class CapacityRequestShape(ContractModel):
 
     def can_host(self, request: SchedulerWorkerRequest) -> bool:
         if request.region is not None and self.region != request.region:
+            return False
+        if request.availability_zone and self.availability_zone != request.availability_zone:
             return False
         requested_gpu = gpu_count_for_capacity(request.gpu, request.gpu_count)
         if self.cpu_millicores < request.cpu_millicores:
@@ -183,6 +188,7 @@ class CapacityRequestShape(ContractModel):
     def worker_capabilities_match(self, worker: SchedulerWorkerRecord) -> bool:
         return (
             (self.region is None or worker.region == self.region)
+            and (not self.availability_zone or worker.availability_zone == self.availability_zone)
             and worker.total_gpu_count >= self.gpu_count
             and (self.gpu_count == 0 or worker.gpu_type == self.gpu_type)
             and all(runtime in worker.runtime_classes for runtime in self.runtime_classes)
@@ -243,6 +249,7 @@ class CapacityAcquisitionResult(ContractModel):
     reservation_id: str
     operation_id: str
     desired_unit: int = Field(default=0, ge=0)
+    owns_capacity: bool = False
     target_machine_id: str = ""
     retry_delay_seconds: float = Field(default=1.0, ge=0)
     reason: str = ""
@@ -432,6 +439,7 @@ class ComputeUnitCapacityController:
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
         return CapacityRequestShape(
             region=product_region(self.unit.region),
+            availability_zone=self.unit.offer_availability_zone,
             cpu_millicores=self.unit.worker_cpu_millicores,
             memory_mib=self.unit.worker_memory_mib,
             gpu_type=self.unit.worker_gpu_type,
@@ -528,6 +536,7 @@ class ComputeUnitCapacityController:
         if result.status in {
             ComputeCapacityStatus.TemporarilyUnavailable,
             ComputeCapacityStatus.Unsupported,
+            ComputeCapacityStatus.Rejected,
         }:
             return plan.model_copy(
                 update={
@@ -1016,6 +1025,11 @@ class RedisCapacityReservationRepository:
             return reservation
         if reservation.status is CapacityReservationStatus.Released:
             return reservation
+        if (
+            reservation.status is not CapacityReservationStatus.Registered
+            and reservation.acquisition_created
+        ):
+            return reservation
         return self.update(
             reservation.model_copy(
                 update={
@@ -1148,10 +1162,14 @@ class CapacityReservationService:
                 existing_result = self._acquire_from_controller(
                     request, controller, now=current_time
                 )
-                if reservation.acquisition_created or existing_result.status not in {
-                    CapacityAcquisitionStatus.AtLimit,
-                    CapacityAcquisitionStatus.Unsupported,
-                }:
+                if existing_result.status is not CapacityAcquisitionStatus.Rejected and (
+                    reservation.acquisition_created
+                    or existing_result.status
+                    not in {
+                        CapacityAcquisitionStatus.AtLimit,
+                        CapacityAcquisitionStatus.Unsupported,
+                    }
+                ):
                     return existing_result
 
         existing = {
@@ -1482,8 +1500,10 @@ class CapacityReservationService:
                     allocations = self._prune_inactive_allocations(
                         self.reservations.allocations_for(reservation.id)
                     )
-                    if reservation.status is CapacityReservationStatus.Failed and allocations:
-                        reconciled.append(reservation)
+                    if reservation.status is CapacityReservationStatus.Failed:
+                        reconciled.append(
+                            self._release_failed_reservation(reservation, now=current_time)
+                        )
                         continue
                     if not allocations:
                         reconciled.append(
@@ -1661,12 +1681,14 @@ class CapacityReservationService:
     ) -> CapacityProvisioningReservation:
         if reservation.status is CapacityReservationStatus.Registered:
             return self.reservations.release_terminal(reservation.id, now=now) or reservation
-        worker = _registered_worker_for_reservation(
-            reservation,
-            workers,
-            worker_reservations=worker_reservations,
-            allocations=(),
-        )
+        worker = None
+        if reservation.status is not CapacityReservationStatus.Failed:
+            worker = _registered_worker_for_reservation(
+                reservation,
+                workers,
+                worker_reservations=worker_reservations,
+                allocations=(),
+            )
         if worker is not None:
             registered = self.reservations.update(
                 reservation.model_copy(
@@ -1691,9 +1713,9 @@ class CapacityReservationService:
                 controller,
                 now=now,
             )
-            if release_result.status in {
-                CapacityAcquisitionStatus.TemporarilyUnavailable,
-                CapacityAcquisitionStatus.Unsupported,
+            if release_result.status not in {
+                CapacityAcquisitionStatus.ExistingPending,
+                CapacityAcquisitionStatus.Requested,
             }:
                 return self.reservations.update(
                     _unconfirmed_release(reservation, release_result),
@@ -1705,13 +1727,26 @@ class CapacityReservationService:
                     update={
                         "acquisition_created": False,
                         "release_requested": False,
-                        "terminal_reason": None,
                     }
                 ),
                 expected_resource_version=reservation.resource_version,
                 now=now,
             )
         return self.reservations.release_terminal(reservation.id, now=now) or reservation
+
+    def _release_failed_reservation(
+        self,
+        reservation: CapacityProvisioningReservation,
+        *,
+        now: datetime,
+    ) -> CapacityProvisioningReservation:
+        for allocation in self.reservations.allocations_for(reservation.id):
+            self.reservations.release_allocation(
+                allocation.container_id, expected_reservation_id=reservation.id
+            )
+        return self._release_unallocated_reservation(
+            reservation, workers=(), worker_reservations={}, now=now
+        )
 
     def _release_owned_capacity(
         self,
@@ -1727,9 +1762,9 @@ class CapacityReservationService:
                 owner_reservations=owner_reservations,
                 now=now,
             )
-            if release_plan.status in {
-                CapacityAcquisitionStatus.TemporarilyUnavailable,
-                CapacityAcquisitionStatus.Unsupported,
+            if release_plan.status not in {
+                CapacityAcquisitionStatus.ExistingPending,
+                CapacityAcquisitionStatus.Requested,
             }:
                 return reservation, release_plan
             reservation = self.reservations.prepare_release(reservation, now=now)
@@ -1761,24 +1796,30 @@ class CapacityReservationService:
             CapacityAcquisitionStatus.AtLimit: reservation.status,
             CapacityAcquisitionStatus.TemporarilyUnavailable: reservation.status,
             CapacityAcquisitionStatus.Unsupported: CapacityReservationStatus.Failed,
+            CapacityAcquisitionStatus.Rejected: CapacityReservationStatus.Failed,
         }[result.status]
         status = (
             CapacityReservationStatus.Registered
             if reservation.status is CapacityReservationStatus.Registered
             else next_status
         )
-        return self.reservations.update(
+        recorded = self.reservations.update(
             reservation.model_copy(
                 update={
                     "status": status,
                     "desired_unit": result.desired_unit,
                     "acquisition_created": (
                         reservation.acquisition_created
+                        or result.owns_capacity
                         or result.status is CapacityAcquisitionStatus.Requested
                     ),
                     "target_machine_id": result.target_machine_id or reservation.target_machine_id,
                     "terminal_reason": (
-                        CapacityTerminalReason.AcquisitionUnsupported
+                        (
+                            CapacityTerminalReason.AcquisitionRejected
+                            if result.status is CapacityAcquisitionStatus.Rejected
+                            else CapacityTerminalReason.AcquisitionUnsupported
+                        )
                         if status is CapacityReservationStatus.Failed
                         else None
                     ),
@@ -1787,6 +1828,12 @@ class CapacityReservationService:
             expected_resource_version=reservation.resource_version,
             now=now,
         )
+        if (
+            result.status is CapacityAcquisitionStatus.Rejected
+            and recorded.status is CapacityReservationStatus.Failed
+        ):
+            return self._release_failed_reservation(recorded, now=now)
+        return recorded
 
     def _controller_for_owner(
         self,
@@ -1865,6 +1912,7 @@ def _schedulable_shape(
     return reservation.acquisition_shape.model_copy(
         update={
             "region": worker.region,
+            "availability_zone": worker.availability_zone,
             "cpu_millicores": worker.total_cpu_millicores,
             "memory_mib": worker.total_memory_mib,
             "gpu_type": worker.gpu_type if worker.total_gpu_count > 0 else "",
@@ -1927,6 +1975,7 @@ def _compute_acquisition_result(
         reservation_id=result.reservation_id,
         operation_id=reservation.operation_id,
         desired_unit=result.desired_unit,
+        owns_capacity=result.owns_capacity,
         target_machine_id=result.target_machine_id or "",
         reason=result.reason,
     )

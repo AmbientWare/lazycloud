@@ -4,7 +4,7 @@ Connected AWS capacity has four immutable release inputs:
 
 - a standalone Linux `amd64` agent served by the control plane;
 - the exact bundled account-authorization CloudFormation template at an HTTPS
-  R2 URL whose path contains its SHA-256 digest;
+  release URL whose path contains its SHA-256 digest;
 - an anonymously pullable container-worker image addressed by manifest digest.
 - exact CPU and GPU AMI IDs resolved from the independently published host-image
   catalog.
@@ -15,8 +15,10 @@ from the dashboard; platform release and deployment automation owns the assets.
 ## Release account setup
 
 Deploy `cloudformation.yaml` in `us-east-1`. Amazon ECR Public is managed from
-that region. The stack creates the public ECR repository. Terraform in `deploy/cloudflare`
-owns the R2 release bucket and `https://releases.lazycloud.dev`. For local publication with an authenticated AWS profile, leave the
+that region. The stack creates the public ECR repository. Terraform in
+`deploy/platform-deployment` owns the private S3 release bucket and CloudFront
+distribution serving `https://releases.lazycloud.dev`. Pass its `release_bucket`
+output as `ReleaseBucketName` to the release stack. For local publication with an authenticated AWS profile, leave the
 three GitHub publisher parameters empty. For GitHub publication, pass the
 organization, repository, and an existing GitHub Actions OIDC provider ARN
 together; the stack then also creates the release-environment OIDC role.
@@ -28,7 +30,8 @@ AWS_PROFILE=default aws cloudformation deploy \
   --region us-east-1 \
   --stack-name lazycloud-release-assets \
   --template-file deploy/aws-release-assets/cloudformation.yaml \
-  --capabilities CAPABILITY_NAMED_IAM
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides ReleaseBucketName="$OBJECT_STORE_RELEASE_BUCKET"
 ```
 
 Configure these repository variables from the AWS stack outputs and the
@@ -48,18 +51,16 @@ AWS_RELEASE_CONTAINER_WORKER_REPOSITORY_NAME=lazycloud/container-worker
 No AWS access keys are stored in GitHub. The OIDC trust accepts only jobs using
 the repository's `release` environment.
 
-Trusted publishers configure `LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL`,
-`LAZYCLOUD_OBJECT_STORE_REGION_NAME`, `LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE`,
-and the `LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID` /
-`LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY` pair. Store that pair as release and
-deployment environment secrets in GitHub. Local operators may use the same
-pair in the `lazycloud-object-storage` AWS credentials profile. AWS OIDC
-credentials continue to own ECR and AMI operations.
+Trusted publishers configure the regional S3 endpoint and signing settings.
+GitHub uses the release role's OIDC credentials for S3, ECR and AMI operations;
+operators use `AWS_PROFILE=default`. Do not add object-store access-key secrets
+to GitHub. The release role writes and reads only the named release bucket and
+cannot delete its objects or administer it.
 
 Customer authorization uses `lazycloud cloud authorize --profile CUSTOMER_PROFILE`.
 The CLI checks the caller account and submits the API's exact template body and
 named IAM parameters through CloudFormation `CreateStack`. It does not pass an
-R2 URL to CloudFormation. The dashboard keeps the setup instructions visible;
+release URL to CloudFormation. The dashboard keeps the setup instructions visible;
 validate the connection after the stack completes.
 
 Private deployment descriptors are separate from public releases. Publish the
@@ -69,12 +70,12 @@ Terraform `infrastructure_configuration` output, then configure Actions with its
 ```sh
 terraform -chdir=deploy/platform-deployment output -json infrastructure_configuration > /tmp/infrastructure.json
 uv run --group workspace python -m deploy.object_storage publish \
-  --uri s3://lazycloud-prod-deploy/lazycloud-prod/infrastructure.json \
+  --uri "$INFRASTRUCTURE_CONFIG_URI" \
   --file /tmp/infrastructure.json
 ```
 
 The publication command validates the descriptor schema and verifies the bytes
-read back from R2. Deploy CI downloads that same private object before rendering
+read back from S3. Deploy CI downloads that same private object before rendering
 Helm values.
 
 ## Release workflow
@@ -88,7 +89,7 @@ Run the `Ship` workflow from `main`. Its reusable release workflow then:
 4. stages the bundled CloudFormation bytes, agent, image digest, and exact AMI
    IDs into one manifest with `deploy/aws-release-assets/release.py`;
 5. publishes objects with conditional writes and immutable cache headers, then checks their downloaded SHA-256 digests;
-6. downloads every R2 object and inspects the worker image with empty credential
+6. downloads every public release object and inspects the worker image with empty credential
    directories, proving customer nodes can access them anonymously. Baked AMIs
    are private platform images, so the anonymous verify only format-checks them
    and notes the skip; run `release.py verify --aws-cli-verify` with platform

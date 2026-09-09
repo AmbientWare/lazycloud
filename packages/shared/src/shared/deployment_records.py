@@ -14,7 +14,7 @@ from shared.deployments import DeploymentKind
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageSpec
 from shared.lifecycle import LifecycleHooks
-from shared.placement import ProductRegion, validate_region_pool
+from shared.placement import AvailabilityZone, ProductRegion, validate_placement_pool
 from shared.resources import parse_memory_mib
 from shared.tasks import RetryPolicy
 from shared.timestamps import utc_now
@@ -47,10 +47,12 @@ DEFAULT_MAX_PENDING_TASKS = 100
 DEFAULT_POD_CPU = 1.0
 DEFAULT_POD_MEMORY = "128Mi"
 DEFAULT_POD_KEEP_WARM_SECONDS = 600
+DEFAULT_WORKLOAD_PREEMPTIBLE = True
 
 
 class Resources(ContractModel):
     region: ProductRegion | None = None
+    availability_zone: AvailabilityZone = ""
     cpu: CpuRequest | None = None
     memory: MemoryRequest | None = None
     disk: str = DEFAULT_DISK
@@ -61,7 +63,7 @@ class Resources(ContractModel):
     timeout_seconds: int | None = None
     concurrency: int = 1
     keep_warm: int | None = None
-    preemptible: bool = False
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
 
     @field_validator("disk", mode="before")
     @classmethod
@@ -353,7 +355,11 @@ class DeploymentSpec(ContractModel):
         pool = self.metadata.get("pool")
         if isinstance(pool, dict):
             pool = pool.get("name")
-        validate_region_pool(self.resources.region, pool if isinstance(pool, str) else None)
+        validate_placement_pool(
+            self.resources.region,
+            self.resources.availability_zone,
+            pool if isinstance(pool, str) else None,
+        )
         # A schedule fires an invocation, and a function is the only kind that
         # has one. Refused here rather than at the tick, where the schedule
         # exists, fires against a stub that cannot serve it, and records the

@@ -119,6 +119,7 @@ def plan_image_build_container_request(
         container_id=request.session.container_id,
         cpu_millicores=cpu_millicores,
         memory_mib=memory_mib,
+        preemptible=True,
         # One model, deliberately. A build picks the machine an image is baked
         # on, which is a reproducibility question rather than a placement
         # preference, so it does not take an ordered chain.

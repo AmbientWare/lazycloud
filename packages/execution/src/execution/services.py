@@ -35,7 +35,11 @@ class SchedulerSubmissionResult(Protocol):
 
 class ExecutionContainerService(Protocol):
     def reserve_image_build_container(
-        self, *, container_id: str, workspace_id: str, image_id: str
+        self,
+        *,
+        container_id: str,
+        workspace_id: str,
+        image_id: str,
     ) -> ContainerRecord: ...
 
     def reserve_pending(
@@ -52,6 +56,7 @@ class ExecutionContainerService(Protocol):
         gpu: Sequence[str],
         gpu_count: int,
         region: ProductRegion | None = None,
+        availability_zone: str = "",
         stub_id: str | None = None,
     ) -> list[str]: ...
 

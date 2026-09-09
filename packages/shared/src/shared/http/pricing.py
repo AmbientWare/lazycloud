@@ -2,31 +2,32 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import Field
 
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import (
     CONNECTED_CLOUD_MANAGEMENT_FEE,
-    METERED_RATES_EFFECTIVE_AT,
-    NO_CARD_INCLUDED_NANOS,
     NO_CARD_MAX_CPU_CONTAINERS,
     NO_CARD_MAX_GPUS,
-    PRICING_VERSION,
-    PUBLISHED_GPU_RATES,
-    PUBLISHED_PLACEMENT_RATES,
+    ONE_TIME_TRIAL_NANOS,
+    PUBLISHED_METERED_RATE_HISTORY,
     PUBLISHED_PLANS,
-    PUBLISHED_PLATFORM_RATE,
-    PUBLISHED_SHAPE_RATES,
     SECONDS_PER_30_DAY_MONTH,
+    TRIAL_VALIDITY_DAYS,
     AllGpuTypes,
     EntitlementLimit,
     PlanEntitlements,
+    published_metered_rate_card,
+    published_placement_rates,
 )
-from shared.gpu import GpuType
+from shared.credit_payments import MAX_CREDIT_PURCHASE_CENTS, MIN_CREDIT_PURCHASE_CENTS
+from shared.gpu import NO_GPU, PLATFORM_GPU_TYPES, GpuType
 from shared.http.base import HttpModel
 from shared.payments import BILLING_CURRENCY
-from shared.placement import PlacementRateClass, ProductRegion
+from shared.placement import AUTO_RATE_CLASS, PlacementRateClass
+from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageBillingOwner
 
 
@@ -47,6 +48,7 @@ class PlanEntitlementsResponse(HttpModel):
 
 class PublishedPlanResponse(HttpModel):
     id: BillingPlanId
+    terms_version: SubscriptionTermsVersion
     name: str
     summary: str
     monthly_nanos: int = Field(ge=0)
@@ -56,7 +58,6 @@ class PublishedPlanResponse(HttpModel):
 
 
 class NoPaymentMethodTermsResponse(HttpModel):
-    included_nanos: int = Field(ge=0)
     max_concurrent_cpu_containers: int = Field(gt=0)
     max_concurrent_gpus: int = Field(gt=0)
 
@@ -90,13 +91,28 @@ class PlacementComputeRateResponse(HttpModel):
 
 class PublishedPlacementRateResponse(HttpModel):
     rate_class: PlacementRateClass
-    region: ProductRegion | None
+    effective_at: datetime
+    pinned: bool
+    preemptible: bool
     name: str
-    multiplier: Decimal = Field(gt=0)
+    cpu_memory_multiplier: Decimal = Field(gt=0)
+    gpu_multiplier: Decimal = Field(gt=0)
     compute_rates: list[PlacementComputeRateResponse]
 
 
+class CreditPurchaseTermsResponse(HttpModel):
+    minimum_cents: int = Field(gt=0)
+    maximum_cents: int = Field(gt=0)
+
+
+class TrialTermsResponse(HttpModel):
+    amount_nanos: int = Field(gt=0)
+    duration_days: int = Field(gt=0)
+    one_time: Literal[True] = True
+
+
 class PricingCatalogResponse(HttpModel):
+    trial: TrialTermsResponse
     pricing_version: str
     metered_rates_effective_at: datetime
     currency: str = Field(pattern=r"^[A-Z]{3}$")
@@ -107,6 +123,7 @@ class PricingCatalogResponse(HttpModel):
     gpu_rates: list[PublishedGpuRateResponse]
     platform_rate: PublishedPlatformRateResponse
     placement_rates: list[PublishedPlacementRateResponse]
+    credit_purchase: CreditPurchaseTermsResponse
 
 
 def _entitlements_response(entitlements: PlanEntitlements) -> PlanEntitlementsResponse:
@@ -126,20 +143,41 @@ def _entitlements_response(entitlements: PlanEntitlements) -> PlanEntitlementsRe
     )
 
 
-def pricing_catalog_response() -> PricingCatalogResponse:
+def pricing_catalog_response(*, at: datetime | None = None) -> PricingCatalogResponse:
+    moment = to_utc(at) if at is not None else utc_now()
+    active = published_metered_rate_card(moment)
+    platform_rate = active.platform_rate
+    placements = published_placement_rates(active.compute_rates)
+    automatic = tuple(rate for rate in active.compute_rates if rate.rate_class == AUTO_RATE_CLASS)
     fee_percent = CONNECTED_CLOUD_MANAGEMENT_FEE * 100
     if fee_percent != fee_percent.to_integral_value():
         raise ValueError("the connected-cloud fee is not a whole percentage")
     return PricingCatalogResponse(
-        pricing_version=PRICING_VERSION,
-        metered_rates_effective_at=METERED_RATES_EFFECTIVE_AT,
+        trial=TrialTermsResponse(
+            amount_nanos=ONE_TIME_TRIAL_NANOS,
+            duration_days=TRIAL_VALIDITY_DAYS,
+        ),
+        credit_purchase=CreditPurchaseTermsResponse(
+            minimum_cents=MIN_CREDIT_PURCHASE_CENTS,
+            maximum_cents=MAX_CREDIT_PURCHASE_CENTS,
+        ),
+        pricing_version=active.pricing_version,
+        metered_rates_effective_at=active.effective_at,
         currency=BILLING_CURRENCY,
         placement_rates=[
             PublishedPlacementRateResponse(
                 rate_class=placement.rate_class,
-                region=placement.region,
+                effective_at=max(
+                    card.effective_at
+                    for card in PUBLISHED_METERED_RATE_HISTORY
+                    if card.effective_at <= moment
+                    and any(rate.rate_class == placement.rate_class for rate in card.compute_rates)
+                ),
+                pinned=placement.pinned,
+                preemptible=placement.preemptible,
                 name=placement.name,
-                multiplier=placement.multiplier,
+                cpu_memory_multiplier=placement.cpu_memory_multiplier,
+                gpu_multiplier=placement.gpu_multiplier,
                 compute_rates=[
                     PlacementComputeRateResponse(
                         billing_owner=rate.billing_owner,
@@ -150,19 +188,22 @@ def pricing_catalog_response() -> PricingCatalogResponse:
                         nanos_per_gpu_card_hour=rate.nanos_per_gpu_card_hour,
                     )
                     for rate in placement.compute_rates
+                    if rate.billing_owner is not UsageBillingOwner.PlatformFleet
+                    or rate.gpu_type == NO_GPU
+                    or rate.gpu_type in PLATFORM_GPU_TYPES
                 ],
             )
-            for placement in PUBLISHED_PLACEMENT_RATES
+            for placement in placements
         ],
         connected_cloud_management_fee_percent=int(fee_percent),
         no_payment_method=NoPaymentMethodTermsResponse(
-            included_nanos=NO_CARD_INCLUDED_NANOS,
             max_concurrent_cpu_containers=NO_CARD_MAX_CPU_CONTAINERS,
             max_concurrent_gpus=NO_CARD_MAX_GPUS,
         ),
         plans=[
             PublishedPlanResponse(
                 id=plan.id,
+                terms_version=plan.terms_version,
                 name=plan.name,
                 summary=plan.summary,
                 monthly_nanos=plan.monthly_nanos,
@@ -179,20 +220,23 @@ def pricing_catalog_response() -> PricingCatalogResponse:
                 nanos_per_cpu_core_hour=rate.nanos_per_cpu_core_hour,
                 nanos_per_memory_gib_hour=rate.nanos_per_memory_gib_hour,
             )
-            for rate in PUBLISHED_SHAPE_RATES
+            for rate in automatic
+            if rate.gpu_type == NO_GPU
         ],
         gpu_rates=[
             PublishedGpuRateResponse(
-                gpu_type=rate.gpu_type,
+                gpu_type=gpu_type,
                 nanos_per_card_hour={
-                    owner: rate.nanos_per_card_hour(owner) for owner in UsageBillingOwner
+                    rate.billing_owner: rate.nanos_per_gpu_card_hour
+                    for rate in automatic
+                    if rate.gpu_type == gpu_type
                 },
             )
-            for rate in PUBLISHED_GPU_RATES
+            for gpu_type in PLATFORM_GPU_TYPES
         ],
         platform_rate=PublishedPlatformRateResponse(
-            nanos_per_egress_gib=PUBLISHED_PLATFORM_RATE.nanos_per_egress_gib,
-            nanos_per_volume_gib_month=PUBLISHED_PLATFORM_RATE.nanos_per_volume_gib_month,
+            nanos_per_egress_gib=platform_rate.nanos_per_egress_gib,
+            nanos_per_volume_gib_month=platform_rate.nanos_per_volume_gib_month,
             storage_month_seconds=SECONDS_PER_30_DAY_MONTH,
         ),
     )

@@ -103,7 +103,16 @@ def publish_rates(
         with client.session() as session:
             history = publish_metered_rate_history(session, effective_at=moment)
             latest = history[-1]
-            for publication in latest.compute:
+            current_compute = {
+                (
+                    publication.rate.billing_owner,
+                    publication.rate.rate_class,
+                    publication.rate.gpu_type,
+                ): publication
+                for card in history
+                for publication in card.compute
+            }
+            for publication in current_compute.values():
                 rate = publication.rate
                 compute_rates.append(
                     {
@@ -117,7 +126,8 @@ def publish_rates(
                         "state": publication.state.value,
                     }
                 )
-            payload["platform_rate_state"] = latest.platform.value
+            if latest.platform is not None:
+                payload["platform_rate_state"] = latest.platform.value
             payload["history_boundaries"] = [card.effective_at.isoformat() for card in history]
             if confirm:
                 session.commit()

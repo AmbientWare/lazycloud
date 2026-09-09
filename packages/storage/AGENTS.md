@@ -35,3 +35,15 @@ have issued those URLs retain an unmetered cleanup record for their exact ID.
 Recreating a name gets a different ID. Managed bucket retirement removes those
 records; customer bucket cleanup retains its canonical workspace storage authority
 and remains workspace-owned after public workspace access ends.
+
+An empty or negative credit balance starts a 30-day managed-storage grace
+period and queues an email in the same transaction. Its timestamp is durable;
+another sweep cannot restart it. Replenishment before a deletion claim closes
+the period. Storage charges
+inside a grace period are waived through the billing ledger's settlement owner.
+
+After grace, claim individual objects and volume deletion intents under the
+same account lock that protects credit issuance. Skip busy resource locks while
+holding that lock because metering takes its resource lock before billing.
+Existing cleanup owns retries and late-write cleanup. Never retire a workspace,
+delete a whole bucket, or reclaim customer-owned storage for exhausted credit.

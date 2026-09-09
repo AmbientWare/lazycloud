@@ -217,17 +217,17 @@ def _account_network(
         return None
     if not all(supplied):
         raise typer.BadParameter(
-            "give --network-vpc-id, two --network-subnet-id and "
+            "give --network-vpc-id, at least two --network-subnet-id and "
             "--network-security-group-id together, or none of them"
         )
-    if len(subnet_ids) != 2:
+    if len(subnet_ids) < 2:
         raise typer.BadParameter(
-            f"exactly two --network-subnet-id are required, in different "
+            f"at least two --network-subnet-id are required, in different "
             f"availability zones; got {len(subnet_ids)}"
         )
     return AwsAccountNetwork(
         vpc_id=vpc_id or "",
-        subnet_ids=(subnet_ids[0], subnet_ids[1]),
+        subnet_ids=subnet_ids,
         security_group_id=security_group_id or "",
     )
 
@@ -252,7 +252,7 @@ def cloud_connect_aws(
         list[str] | None,
         typer.Option(
             "--network-subnet-id",
-            help="Subnet to launch into. Give exactly two, in different zones.",
+            help="Subnet to launch into. Give at least two spanning different zones.",
         ),
     ] = None,
     network_security_group_id: Annotated[

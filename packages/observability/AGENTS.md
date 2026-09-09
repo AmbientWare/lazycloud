@@ -22,10 +22,9 @@ figure, and the platform charges for it. It exists because the container runs,
 it is small against a gibibyte-second, and netting it out would put a per-runtime
 correction inside a price.
 
-"This window had no measured record" is not an anomaly and raises no durable
-event: every image build has none, and so does every container that stayed under
-its reservation. The `basis` column on each segment answers it instead, per
-container and per window, at the cost of one string.
+A window without a measured record is billed at its reservation floor. The
+`basis` column distinguishes reserved and measured charges. Containers and image
+builds both report measured usage above their reservations.
 
 Pricing runs where metering commits. `MeteredUsagePricer` is built on the
 caller's session so a priced segment lands in the transaction that wrote the
@@ -35,14 +34,9 @@ usage row alone cannot say which happened.
 Metering is never refused. A window no published rate covers still commits its
 usage record, writes no ledger row, invents no zero, and leaves a durable
 `billing.span.unpriced` error naming the dimension, the gap and the reason. That
-event is cluster-scoped: a missing rate is this platform's defect, not something
-to show the customer whose work it failed to price. An explicit rate of zero is
-the opposite case: it writes its segments and its allowance increment, so a free
-dimension reads as metered at $0.00 rather than as unmeasured. It owes the
-payment provider nothing. A zero moves no meter total, and the $0.00 line a
-customer reads comes from the metered price their subscription carries rather
-than from the events against it, so turning a dimension on later is still one
-rate row and nothing else.
+event is cluster-scoped. An explicit zero rate writes a priced segment at $0.00
+and consumes no credit. Local wallet usage never creates Stripe metered charges;
+only usage before the credit cutover reaches the provider meter outbox.
 
 A record the ledger has already priced keeps the cost it froze. Re-recording a
 quantity under an id that was already priced leaves the segments, the allowance

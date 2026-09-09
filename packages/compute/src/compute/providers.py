@@ -17,6 +17,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.contracts import ContractModel
+from shared.network_egress import NetworkEgressRouteEvidence
 from shared.timestamps import to_utc
 from shared.urls import normalize_http_origin
 
@@ -114,6 +115,13 @@ class ProviderUnitInstance(ContractModel):
     billing_quantum_seconds: int | None = Field(default=None, ge=1)
 
 
+class ProviderPurchaseLimit(ContractModel):
+    region: str = Field(min_length=1)
+    instance_type: str = Field(min_length=1)
+    preemptible: bool = False
+    max_hourly_cost_micros: int = Field(gt=0)
+
+
 class ProviderCapacityPolicy(ContractModel):
     default_region: str
     allowed_regions: tuple[str, ...]
@@ -121,7 +129,7 @@ class ProviderCapacityPolicy(ContractModel):
     max_gpu_instances: int | None = Field(default=None, ge=0)
     root_volume_gib: int = Field(default=200, ge=50, le=2048)
     idle_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
-    allowed_instance_types: tuple[str, ...] = ()
+    purchase_limits: tuple[ProviderPurchaseLimit, ...] = ()
     warm_cpu_min: int = Field(default=0, ge=0)
     warm_decrease_after_seconds: int = Field(default=600, ge=60, le=86_400)
 
@@ -131,14 +139,37 @@ class ProviderCapacityPolicy(ContractModel):
             raise ValueError("provider default region must be allowed")
         if self.max_cpu_instances is not None and self.warm_cpu_min > self.max_cpu_instances:
             raise ValueError("provider warm CPU minimum cannot exceed provider capacity limit")
+        identities = {
+            (limit.region, limit.instance_type, limit.preemptible) for limit in self.purchase_limits
+        }
+        if len(identities) != len(self.purchase_limits):
+            raise ValueError("provider purchase limits must be unique per region, type and market")
+        if any(limit.region not in self.allowed_regions for limit in self.purchase_limits):
+            raise ValueError("provider purchase limits must belong to allowed regions")
         return self
 
     def machine_limit(self, *, gpu: bool) -> int | None:
         return self.max_gpu_instances if gpu else self.max_cpu_instances
 
     def accepts(self, offer: ComputeOffer) -> bool:
-        return offer.region in self.allowed_regions and (
-            not self.allowed_instance_types or offer.instance_type in self.allowed_instance_types
+        cost = offer.cost_terms.complete_hourly_cost_micros
+        return (
+            cost is not None
+            and offer.region in self.allowed_regions
+            and any(
+                limit.region == offer.region
+                and limit.instance_type == offer.instance_type
+                and limit.preemptible is offer.preemptible
+                and cost <= limit.max_hourly_cost_micros
+                and (
+                    not offer.preemptible
+                    or (
+                        offer.max_hourly_cost_micros is not None
+                        and cost <= offer.max_hourly_cost_micros <= limit.max_hourly_cost_micros
+                    )
+                )
+                for limit in self.purchase_limits
+            )
         )
 
 
@@ -154,6 +185,7 @@ class ProviderUnitSnapshot(ContractModel):
     desired_machines: int = 0
     max_machines: int = 0
     observed_machines: int = 0
+    last_capacity_failure_at: datetime | None = None
     instances: list[ProviderUnitInstance] = Field(default_factory=list)
     provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)
     current_template_version: str = ""
@@ -195,6 +227,10 @@ class DirectMachineProviderRegistry(Protocol):
 
 
 class PooledCapacityProvider(Protocol):
+    def unbilled_network_destinations(
+        self, unit: ComputeUnitRecord, provider_instance_id: str
+    ) -> NetworkEgressRouteEvidence: ...
+
     def list_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]: ...
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:

@@ -115,7 +115,7 @@ def read[T: StripeObject](
         # shape this platform cannot influence.
         raise UpstreamUnavailableError(
             f"Stripe answered {path} without what this platform reads: {exc.error_count()} problems"
-        ) from exc
+        ) from None
 
 
 def _call(

@@ -41,6 +41,7 @@ from worker.events import ContainerEventPayload, ContainerRequestContext, Worker
 from worker.execution import (
     ContainerNetworkIdentity,
     NetworkAddressMode,
+    OciLinuxResources,
     PortBinding,
     container_port_address_map,
     select_container_network,
@@ -52,7 +53,11 @@ from worker.routes import (
     build_agent_backend_route,
     plan_container_route_registration,
 )
-from worker.runtime_config import RuntimeContainerStatus
+from worker.runtime_config import (
+    RuntimeContainerStatus,
+    prepare_container_accounting_cgroup,
+    release_container_accounting_cgroup,
+)
 from worker.source_code import SourceWorkspaceLifecycle
 
 LOGGER = logging.getLogger(__name__)
@@ -503,6 +508,7 @@ class WorkerFinalizationCleanup:
             raise RuntimeError(result.reason)
 
     def delete_local_state(self, container_id: str) -> None:
+        release_container_accounting_cgroup(container_id)
         if (
             not container_id
             or container_id in {".", ".."}
@@ -559,6 +565,19 @@ class WorkerRuntimeContainerStopper:
     worker_id: str = ""
     graceful_timeout_seconds: float = DEFAULT_GRACEFUL_STOP_TIMEOUT_SECONDS
     poll_interval_seconds: float = DEFAULT_GRACEFUL_STOP_POLL_SECONDS
+
+    def prepare_runtime_resources(self, container_id: str, resources: OciLinuxResources) -> None:
+        if resources.memory is None:
+            raise RuntimeError("runtime requires a hard memory ceiling")
+        directory = prepare_container_accounting_cgroup(container_id)
+        (directory / "cpu.max").write_text(
+            f"{resources.cpu.quota} {resources.cpu.period}", encoding="ascii"
+        )
+        (directory / "memory.max").write_text(str(resources.memory.limit_bytes), encoding="ascii")
+        (directory / "memory.swap.max").write_text(
+            str(max(0, resources.memory.swap_bytes - resources.memory.limit_bytes)),
+            encoding="ascii",
+        )
 
     def stop_container(
         self,

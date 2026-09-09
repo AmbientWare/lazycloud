@@ -1,18 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from pathlib import Path
 from threading import Event
-from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
 from control.apps import DatabaseAppExecutionAdmission
-from control.service import ControlPlaneService
-from coordination.redis_client import RedisClient
 from database.records.apps import AppRecord
 from database.tables.execution import TaskTable
 from database.tables.orchestration import ContainerTable
@@ -21,16 +15,10 @@ from shared.app_identity import FUNCTION_IMAGE
 from shared.app_lifecycle import AppLifecycleState
 from shared.container_requests import ContainerShutdownTarget
 from shared.errors import ConflictError
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from storage.volume_filesystem import LocalVolumeFilesystem
-from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
-from tests.backing_services import postgres_url
-from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import owned_workspace
 
 from control import apps as apps_module
-from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 
 @dataclass(slots=True)
@@ -71,15 +59,14 @@ class _BlockingExecutionAdmission:
 
 
 def test_postgresql_app_execution_admission_serializes_container_creation_and_pause(
-    tmp_path: Path,
+    postgres_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with _postgres_services(tmp_path) as services:
-        _prove_creation_that_holds_the_lock_is_captured(services)
-        _prove_creation_after_lifecycle_begin_is_rejected_without_orphans(
-            services,
-            monkeypatch=monkeypatch,
-        )
+    _prove_creation_that_holds_the_lock_is_captured(postgres_services)
+    _prove_creation_after_lifecycle_begin_is_rejected_without_orphans(
+        postgres_services,
+        monkeypatch=monkeypatch,
+    )
 
 
 def _prove_creation_that_holds_the_lock_is_captured(services: ApiServices) -> None:
@@ -179,47 +166,3 @@ def _execution_row_counts(services: ApiServices, *, app_id: str) -> tuple[int, i
     assert task_count is not None
     assert container_count is not None
     return task_count, container_count
-
-
-@contextmanager
-def _postgres_services(tmp_path: Path) -> Iterator[ApiServices]:
-    base_url = postgres_url()
-    database_name = f"app_admission_{uuid4().hex}"
-    database_url = base_url.set(database=database_name)
-    admin = DatabaseClient.from_settings(
-        DatabaseSettings(
-            url=base_url.render_as_string(hide_password=False),
-            application_name=DatabaseApplicationName.Test,
-        )
-    )
-    services: ApiServices | None = None
-    try:
-        with admin.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            connection.execute(text(f'CREATE DATABASE "{database_name}"'))
-        database = DatabaseClient.from_settings(
-            DatabaseSettings(
-                url=database_url.render_as_string(hide_password=False),
-                pool_size=6,
-                max_overflow=0,
-                application_name=DatabaseApplicationName.Test,
-            )
-        )
-        redis = RedisClient(FakeRedis(), key_prefix=f"app-admission-{uuid4()}")
-        services = ApiServices.create(
-            database,
-            root=tmp_path,
-            redis_client=redis,
-            binary_redis_client=redis.with_key_prefix("binary"),
-            owns_redis_client=False,
-            owns_binary_redis_client=False,
-            workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
-            volume_filesystem=LocalVolumeFilesystem(tmp_path / "volumes"),
-        )
-        owned_workspace(ControlPlaneService(services.context), "default")
-        yield services
-    finally:
-        if services is not None:
-            services.close()
-        with admin.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'))
-        admin.dispose()
