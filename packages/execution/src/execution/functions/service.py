@@ -121,6 +121,7 @@ class FunctionControlService:
                     gpu=config.runtime.gpu,
                     gpu_count=config.runtime.gpu_count,
                     region=config.runtime.region,
+                    availability_zone=config.runtime.availability_zone,
                 )
             self._assert_within_pending_limit(stub.id, config)
             retry_policy = config.effective_retry_policy
@@ -497,7 +498,9 @@ class FunctionControlService:
             stub_workspace_id=stub.workspace_id,
             stub_app_id=stub.app_id,
             region=config.runtime.region,
+            availability_zone=config.runtime.availability_zone,
             eligible_at=eligible_at,
+            preemptible=config.runtime.preemptible,
             authority=authority,
             max_containers=function_container_ceiling(stub.config.autoscaler.max_containers),
         )
@@ -552,6 +555,7 @@ class FunctionControlService:
                 gpu_count=container.gpu_count,
                 pool_selector=config.runtime.pool_selector or "",
                 region=config.runtime.region,
+                availability_zone=config.runtime.availability_zone,
                 runtime=config.runtime.runtime,
                 runtime_class=config.runtime.runtime_class or "",
                 docker_enabled=config.runtime.docker_enabled,
@@ -592,21 +596,6 @@ class FunctionControlService:
                 )
                 self.release_dependents(updated)
         return scheduled
-
-    def assert_may_accept_invocation(self, stub_id: str) -> None:
-        """The backpressure refusal, asked before a streaming response begins.
-
-        A stream sends its status before the generator runs, so this raised from
-        inside one cannot be a refusal — it reaches the caller as a response that
-        breaks mid-flight, which is how a clear limit turns into a gateway error
-        with nothing in it about the limit.
-        """
-
-        stub = self.control_plane.get_stub(stub_id)
-        if stub.kind is not StubKind.Function:
-            return
-        config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
-        self._assert_within_pending_limit(stub.id, config)
 
     def _assert_within_pending_limit(self, stub_id: str, config: FunctionStubConfig) -> None:
         """Refuse work this function has no prospect of getting to.
@@ -801,6 +790,8 @@ class FunctionControlService:
         stub_workspace_id: str,
         stub_app_id: str | None,
         region: ProductRegion | None,
+        availability_zone: str,
+        preemptible: bool,
         eligible_at: datetime | None,
         authority: FunctionContainerStartAuthority,
         max_containers: int,
@@ -859,6 +850,7 @@ class FunctionControlService:
                         gpu=list(container_plan.gpu),
                         gpu_count=container_plan.gpu_count,
                         region=region,
+                        availability_zone=availability_zone,
                     ),
                 )
             except ConflictError:

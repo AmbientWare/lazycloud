@@ -2,7 +2,7 @@
 
 One deployment of the platform: `lazycloud-prod`, and later `lazycloud-staging`
 beside it on the same cluster. This module owns what a deployment cannot share:
-the managed Redis, the R2 buckets, the Secrets Manager documents, the
+the managed Redis, the S3 buckets, the Secrets Manager documents, the
 PlanetScale branch, the fleet network and connection role, the Cloudflare
 tunnel it reads, and every AWS identity its workloads hold. The cluster, the
 image repositories and Argo are `deploy/platform-core`, applied once and read
@@ -13,11 +13,11 @@ See `LIFECYCLE.md` for creation and teardown. The Helm workloads live in
 deployment, from the branch named for it, and the values file Deploy writes
 there.
 
-[Object storage](OBJECT_STORAGE.md) describes the shared credentials, workspace
-access and storage reset. Infrastructure descriptor version 4 names the
-S3-compatible endpoint, signing settings, application bucket and workspace prefix.
+[Object storage](OBJECT_STORAGE.md) describes workload identity, scoped workspace
+access and the application data cutover. Infrastructure descriptor version 5 names
+the S3 endpoint, bucket identities and workspace grant role.
 
-Use the shared [R2 Terraform backend](../terraform-state/README.md):
+Use the shared [S3 Terraform backend](../terraform-state/README.md):
 
 ```sh
 export TF_VAR_terraform_backend_config="$HOME/.lazycloud/operator/terraform-backend.json"
@@ -128,7 +128,7 @@ endpoint. Sharding is not implemented by this module yet.
 Terraform exports `infrastructure_configuration`. Publish that JSON with
 `python -m deploy.object_storage publish` to the `infrastructure_config_uri` output and set
 that URI as the GitHub environment variable `INFRASTRUCTURE_CONFIG_URI`.
-Deploy downloads this descriptor from R2 and records its snapshot in Git.
+Deploy downloads this descriptor from S3 with its OIDC role and records its snapshot in Git.
 
 Prices, Stripe account selection, fleet limits and credential property bindings
 live in Helm. Change them in Git and deploy without applying Terraform.

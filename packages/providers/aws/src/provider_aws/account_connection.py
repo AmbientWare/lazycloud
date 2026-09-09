@@ -24,6 +24,7 @@ from pydantic import (
 )
 from shared.app_identity import ENV_PREFIX
 from shared.aws_connections import (
+    AWS_MANAGED_NETWORK_ZONE_PARAMETERS,
     AwsAccountNetwork,
     AwsConnectionStackAction,
     AwsStackCreateRequest,
@@ -43,7 +44,11 @@ from .provider_control import (
 
 AWS_CONNECTION_PROFILE_ENV = f"{ENV_PREFIX}_AWS_CONNECTION_PROFILE"
 
-AWS_ACCOUNT_CONNECTION_TEMPLATE_VERSION = "2026-09-08.v13"
+AWS_ACCOUNT_CONNECTION_TEMPLATE_VERSION = "2026-09-09.v14"
+_ADDITIONAL_NETWORK_ZONE_SLOTS = tuple(
+    parameter.removeprefix("AvailabilityZone")
+    for parameter in AWS_MANAGED_NETWORK_ZONE_PARAMETERS[2:]
+)
 
 _ACCOUNT_ID_PATTERN = re.compile(r"^[0-9]{12}$")
 _ARN_PATTERN = re.compile(
@@ -876,7 +881,7 @@ class Boto3AwsAccountConnectionValidator:
             node_identity=node_identity,
             network=AwsAccountNetwork(
                 vpc_id=vpc_id,
-                subnet_ids=(subnet_ids[0], subnet_ids[1]),
+                subnet_ids=subnet_ids,
                 security_group_id=security_group_id,
             ),
         )
@@ -943,13 +948,7 @@ def _validate_account_network(
     client: AwsConnectionEc2Client,
     network: AwsAccountNetwork,
 ) -> None:
-    """Confirm a supplied network is real, coherent, and spread across two zones.
-
-    An Auto Scaling group spanning one zone cannot replace a node when that zone
-    is the thing that failed, so two zones is a requirement rather than a
-    preference. Every mismatch here is a value somebody typed, so each one names
-    which value was wrong rather than reporting that the network is invalid.
-    """
+    """Confirm every subnet belongs to the VPC and at least two zones are available."""
     subnets = _validated(
         _DescribeSubnetsResponse,
         client.describe_subnets(SubnetIds=list(network.subnet_ids)),
@@ -974,7 +973,7 @@ def _validate_account_network(
     if len(zones) < 2:
         raise invalid_response_error(
             "validate AWS account network subnets",
-            "both subnets are in one availability zone",
+            "all subnets are in one availability zone",
         )
     groups = _validated(
         _DescribeSecurityGroupsResponse,
@@ -1417,6 +1416,13 @@ def _connection_template() -> dict[str, object]:
     return {
         "AWSTemplateFormatVersion": "2010-09-09",
         "Description": "One-time authorization for customer-owned compute management.",
+        "Mappings": {
+            "ObjectStorageServicePrefix": {
+                "aws": {"Prefix": "com.amazonaws"},
+                "aws-us-gov": {"Prefix": "com.amazonaws"},
+                "aws-cn": {"Prefix": "cn.com.amazonaws"},
+            }
+        },
         "Parameters": {
             "TargetAccountId": {"Type": "String", "AllowedPattern": "^[0-9]{12}$"},
             "PlatformPrincipalArn": {"Type": "String"},
@@ -1426,6 +1432,16 @@ def _connection_template() -> dict[str, object]:
             "NodeInstanceProfileName": {"Type": "String"},
             "AvailabilityZoneA": {"Type": "AWS::EC2::AvailabilityZone::Name"},
             "AvailabilityZoneB": {"Type": "AWS::EC2::AvailabilityZone::Name"},
+            **{
+                f"AvailabilityZone{slot}": {"Type": "String", "Default": ""}
+                for slot in _ADDITIONAL_NETWORK_ZONE_SLOTS
+            },
+        },
+        "Conditions": {
+            f"HasSubnet{slot}": {
+                "Fn::Not": [{"Fn::Equals": [{"Ref": f"AvailabilityZone{slot}"}, ""]}]
+            }
+            for slot in _ADDITIONAL_NETWORK_ZONE_SLOTS
         },
         "Rules": {
             "AvailabilityZonesMustDiffer": {
@@ -1513,6 +1529,51 @@ def _connection_template() -> dict[str, object]:
                     "RouteTableId": {"Ref": "RouteTable"},
                 },
             },
+            **{
+                f"Subnet{slot}": {
+                    **_public_subnet_resource(
+                        f"subnet-{slot.lower()}",
+                        cidr=f"10.86.{index}.0/24",
+                        zone=f"AvailabilityZone{slot}",
+                    ),
+                    "Condition": f"HasSubnet{slot}",
+                }
+                for index, slot in enumerate(_ADDITIONAL_NETWORK_ZONE_SLOTS, start=3)
+            },
+            **{
+                f"Subnet{slot}RouteTableAssociation": {
+                    "Type": "AWS::EC2::SubnetRouteTableAssociation",
+                    "Condition": f"HasSubnet{slot}",
+                    "Properties": {
+                        "SubnetId": {"Ref": f"Subnet{slot}"},
+                        "RouteTableId": {"Ref": "RouteTable"},
+                    },
+                }
+                for slot in _ADDITIONAL_NETWORK_ZONE_SLOTS
+            },
+            "ObjectStorageEndpoint": {
+                "Type": "AWS::EC2::VPCEndpoint",
+                "Properties": {
+                    "VpcEndpointType": "Gateway",
+                    "VpcId": {"Ref": "Vpc"},
+                    "RouteTableIds": [{"Ref": "RouteTable"}],
+                    "ServiceName": {
+                        "Fn::Sub": [
+                            "${Prefix}.${AWS::Region}.s3",
+                            {
+                                "Prefix": {
+                                    "Fn::FindInMap": [
+                                        "ObjectStorageServicePrefix",
+                                        {"Ref": "AWS::Partition"},
+                                        "Prefix",
+                                    ]
+                                }
+                            },
+                        ]
+                    },
+                    "Tags": _network_resource_tags("object-storage-endpoint"),
+                },
+            },
             "NodeSecurityGroup": {
                 "Type": "AWS::EC2::SecurityGroup",
                 "Properties": {
@@ -1582,7 +1643,28 @@ def _connection_template() -> dict[str, object]:
         "Outputs": {
             "ConnectionRoleArn": {"Value": {"Fn::GetAtt": ["ConnectionRole", "Arn"]}},
             "VpcId": {"Value": {"Ref": "Vpc"}},
-            "SubnetIds": {"Value": {"Fn::Join": [",", [{"Ref": "SubnetA"}, {"Ref": "SubnetB"}]]}},
+            "SubnetIds": {
+                "Value": {
+                    "Fn::Join": [
+                        "",
+                        [
+                            {"Ref": "SubnetA"},
+                            ",",
+                            {"Ref": "SubnetB"},
+                            *(
+                                {
+                                    "Fn::If": [
+                                        f"HasSubnet{slot}",
+                                        {"Fn::Join": ["", [",", {"Ref": f"Subnet{slot}"}]]},
+                                        "",
+                                    ]
+                                }
+                                for slot in _ADDITIONAL_NETWORK_ZONE_SLOTS
+                            ),
+                        ],
+                    ]
+                }
+            },
             "SecurityGroupId": {"Value": {"Fn::GetAtt": ["NodeSecurityGroup", "GroupId"]}},
         },
     }

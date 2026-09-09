@@ -66,10 +66,12 @@ from shared.errors import (
     NotFoundError,
     UpstreamUnavailableError,
 )
+from shared.http.worker_network import WorkerEgressPolicy
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
 from shared.routing import BackendRouteTransport, PrivateUnitFallback
 from shared.timestamps import to_utc, utc_now
+from shared.usage import UsageBillingOwner
 
 from compute.aws_connections import AwsAccountPoolDrain
 from compute.context import ComputeContext
@@ -78,6 +80,7 @@ from compute.offers import (
     OfferRequest,
     ReservationStatus,
     choose_offer,
+    record_purchase_terms,
 )
 from compute.provider_machines import (
     _LAUNCH_STATE_INTENT,
@@ -361,12 +364,14 @@ class ComputeService:
                 desired_unit=1,
                 reason="capacity owner is not managed by compute",
             )
+        if operation is not None:
+            _validate_capacity_operation_plan(operation, request)
+            status = _stored_capacity_status(operation.status)
+            if status is CapacityAcquisitionStatus.TemporarilyUnavailable:
+                status = CapacityAcquisitionStatus.Requested
+            return _operation_result(operation, status)
         degraded_reason = unit.provider_state.degraded_reason
         if degraded_reason is not None:
-            # The pool exhausted its launch attempts. Only the reconciler path
-            # used to honour this, so acquisition kept buying machines that
-            # could not become workers — a bounded failure billed as an
-            # unbounded one. Clearing it is an explicit operator mutation.
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.TemporarilyUnavailable,
@@ -386,19 +391,6 @@ class ComputeService:
                 CapacityAcquisitionStatus.Unsupported,
                 desired_unit=max(direct_units, 1),
                 reason="requested unit does not match the capacity owner's fixed worker shape",
-            )
-        if operation is not None:
-            _validate_capacity_operation_plan(operation, request)
-            status = _stored_capacity_status(operation.status)
-            if status is CapacityAcquisitionStatus.TemporarilyUnavailable:
-                status = CapacityAcquisitionStatus.Requested
-            return CapacityAcquisitionResult(
-                status=status,
-                capacity_owner_id=operation.capacity_owner_id,
-                reservation_id=operation.reservation_id,
-                desired_unit=operation.desired_unit,
-                target_machine_id=operation.target_machine_id,
-                reason=operation.last_error,
             )
         if unit.capacity_owner_kind is CapacityOwnerKind.PooledProvider:
             return _plan_next_capacity_unit(
@@ -471,7 +463,6 @@ class ComputeService:
                 pool.workspace_id,
                 pool.capacity_owner_id,
             )
-            offer = self._available_unit_offer(provider, current_pool)
         except (KeyError, RuntimeError, ValueError, UpstreamUnavailableError) as exc:
             return _capacity_result(
                 request,
@@ -490,18 +481,11 @@ class ComputeService:
                 reason="capacity owner is not backed by a pooled provider",
                 desired_unit=desired_unit,
             )
-        if not _offer_matches_capacity_shape(offer, request.shape):
-            return _capacity_result(
-                request,
-                CapacityAcquisitionStatus.Unsupported,
-                reason="requested unit does not match the capacity owner's fixed worker shape",
-                desired_unit=desired_unit,
-            )
-        if provider.policy is None or not provider.policy.accepts(offer):
+        if provider.policy is None:
             return _capacity_result(
                 request,
                 CapacityAcquisitionStatus.TemporarilyUnavailable,
-                reason="provider offer is outside its allowed regions or machine types",
+                reason="capacity provider has no acquisition policy",
                 desired_unit=desired_unit,
             )
         try:
@@ -516,6 +500,37 @@ class ComputeService:
                     exception_type=type(exc).__name__,
                 ),
                 failure_code=CapacityFailureCode.ProviderReconciliationFailed,
+                desired_unit=desired_unit,
+            )
+        requested_provider_units, _ = provider_unit_operational_capacity(
+            current_pool.model_copy(update={"desired_machines": desired_unit})
+        )
+        if snapshot.desired_machines < requested_provider_units:
+            try:
+                offer = self._available_unit_offer(provider, current_pool)
+            except (KeyError, RuntimeError, ValueError, UpstreamUnavailableError) as exc:
+                return _capacity_result(
+                    request,
+                    CapacityAcquisitionStatus.TemporarilyUnavailable,
+                    reason=capacity_failure_message(
+                        CapacityFailureCode.CapacityPlanningFailed,
+                        exception_type=type(exc).__name__,
+                    ),
+                    failure_code=CapacityFailureCode.CapacityPlanningFailed,
+                    desired_unit=desired_unit,
+                )
+            if not provider.policy.accepts(offer):
+                return _capacity_result(
+                    request,
+                    CapacityAcquisitionStatus.TemporarilyUnavailable,
+                    reason="provider offer is outside its approved catalog or purchase ceiling",
+                    desired_unit=desired_unit,
+                )
+        if not _offer_matches_capacity_shape(offer, request.shape):
+            return _capacity_result(
+                request,
+                CapacityAcquisitionStatus.Unsupported,
+                reason="requested unit does not match the capacity owner's fixed worker shape",
                 desired_unit=desired_unit,
             )
         with self.context.database.session() as session:
@@ -544,6 +559,42 @@ class ComputeService:
                         operation,
                         CapacityAcquisitionStatus.Unsupported,
                         reason="released capacity operation cannot be reacquired",
+                    )
+                if operation.status == CapacityAcquisitionStatus.Rejected.value:
+                    return _operation_result(operation, CapacityAcquisitionStatus.Rejected)
+                if (
+                    snapshot.last_capacity_failure_at is not None
+                    and to_utc(snapshot.last_capacity_failure_at) >= to_utc(operation.created_at)
+                    and snapshot.observed_machines < requested_provider_units
+                ):
+                    reason = "provider rejected capacity acquisition"
+                    operations.upsert(
+                        operation.model_copy(
+                            update={
+                                "status": CapacityAcquisitionStatus.Rejected.value,
+                                "last_error": reason,
+                                "failure_code": CapacityFailureCode.ProviderLaunchFailed,
+                                "updated_at": utc_now(),
+                            }
+                        )
+                    )
+                    pools.apply_provider_state(
+                        locked_pool.id,
+                        generation=locked_pool.generation,
+                        observed_machines=locked_pool.observed_machines,
+                        phase=ComputeUnitPhase.Degraded,
+                        provider_state=locked_pool.provider_state.model_copy(
+                            update={
+                                "degraded_reason": "provider_acquisition_rejected",
+                                "degraded_at": utc_now(),
+                            }
+                        ),
+                    )
+                    return _operation_result(
+                        operation,
+                        CapacityAcquisitionStatus.Rejected,
+                        reason=reason,
+                        failure_code=CapacityFailureCode.ProviderLaunchFailed,
                     )
                 if not operation.owns_capacity:
                     return _operation_result(
@@ -631,8 +682,9 @@ class ComputeService:
                     )
                 )
             current_pool = intent_pool if operation.owns_capacity else locked_pool
-        provider_request = self._provider_unit_request(current_pool, offer)
-        if snapshot.desired_machines >= provider_request.desired_machines:
+            if snapshot.desired_machines < requested_provider_units:
+                current_pool = pools.upsert(record_purchase_terms(current_pool, offer))
+        if snapshot.desired_machines >= requested_provider_units:
             with self.context.database.session() as session:
                 repository = ComputeCapacityOperationRepository(session)
                 current = repository.get(
@@ -653,6 +705,7 @@ class ComputeService:
                     )
             return _operation_result(operation, CapacityAcquisitionStatus.ExistingPending)
         try:
+            provider_request = self._provider_unit_request(current_pool, offer)
             updated_snapshot = provider.pooled.set_unit_capacity(
                 provider_request,
                 desired_machines=provider_request.desired_machines,
@@ -1347,7 +1400,9 @@ class ComputeService:
         if policy is None or provider.pooled is None or offer.provider != provider.ref:
             raise InvalidInputError("offer does not belong to a pooled provider")
         if not policy.accepts(offer):
-            raise InvalidInputError("offer is outside the approved provider catalog")
+            raise InvalidInputError(
+                "offer is outside the approved provider catalog or purchase ceiling"
+            )
         return self._prepare_pooled_offer(
             provider=provider,
             offer=offer,
@@ -1539,6 +1594,8 @@ class ComputeService:
                     min_memory_mb=requirements.memory_mb,
                     min_storage_mb=root_volume_gib * 1024,
                     architecture=requirements.architecture or "amd64",
+                    preemptible=requirements.preemptible,
+                    availability_zone=requirements.availability_zone,
                     runtime=requirements.runtime,
                     gpu=requirements.gpu,
                     min_gpu_count=requirements.gpu_count,
@@ -1727,6 +1784,8 @@ class ComputeService:
                 desired_machines=desired,
                 offer_cost_terms=cost_terms,
                 offer_storage_mib=offer.storage_mb,
+                offer_availability_zone=offer.availability_zone,
+                offer_max_hourly_cost_micros=offer.max_hourly_cost_micros,
                 supplier_cpu_unit=offer.supplier_cpu_unit,
                 supplier_cpu_count=offer.supplier_cpu_count,
                 initial_machines=min(max(initial, minimum), maximum),
@@ -1744,9 +1803,7 @@ class ComputeService:
                 worker_gpu_type=offer.gpu or "",
                 worker_gpu_count=offer.gpu_count,
                 worker_runtimes=(offer.runtime,),
-                worker_preemptible=(
-                    str(offer.labels.get("preemptible", "false")).strip().lower() == "true"
-                ),
+                worker_preemptible=offer.preemptible,
                 min_free_cpu_millicores=free_cpu,
                 min_free_memory_mib=free_memory,
                 min_free_gpu_count=free_gpu,
@@ -1897,6 +1954,7 @@ class ComputeService:
     ) -> ComputeUnitRecord:
         current_time = _utc(now)
         verify_provider_zero = False
+        purchase_offer: ComputeOffer | None = None
         with self.context.database.session() as session:
             units = ComputeUnitRepository(session)
             initial = _require_workspace_internal_pooled_unit(
@@ -1921,10 +1979,10 @@ class ComputeService:
             ):
                 raise ConflictError("compute pool still has active workloads")
             if desired_machines > 0 and desired_machines >= unit.desired_machines:
-                offer = self._available_unit_offer(provider, unit)
-                if not provider.policy.accepts(offer):
+                purchase_offer = self._available_unit_offer(provider, unit)
+                if not provider.policy.accepts(purchase_offer):
                     raise ConflictError(
-                        "provider offer is outside its allowed regions or machine types"
+                        "provider offer is outside its approved catalog or purchase ceiling"
                     )
             if unit.provider_state.degraded_reason is not None:
                 # An explicit capacity mutation supersedes the durable degraded
@@ -1997,6 +2055,8 @@ class ComputeService:
                 )
                 if intent is None:
                     raise ConflictError(f"compute pool {unit!r} capacity intent was superseded")
+                if purchase_offer is not None:
+                    intent = units.upsert(record_purchase_terms(intent, purchase_offer))
 
         try:
             provider, offer = self._resolved_internal_unit_provider(intent)
@@ -2018,8 +2078,8 @@ class ComputeService:
                     observed=observed,
                 )
             provider_request = self._provider_unit_request(intent, offer)
-            if desired_machines > 0 and desired_machines >= unit.desired_machines:
-                offer = self._available_unit_offer(provider, intent)
+            if purchase_offer is not None:
+                offer = purchase_offer
                 provider_request = self._provider_unit_request(intent, offer)
             snapshot = provider.pooled.set_unit_capacity(
                 provider_request,
@@ -2072,6 +2132,52 @@ class ComputeService:
             raise RuntimeError("internal compute unit does not use pooled capacity")
         snapshot = provider.pooled.describe_unit(self._provider_unit_request(unit, offer))
         return unit, snapshot
+
+    def worker_availability_zone(self, *, unit: ComputeUnitRecord, machine_id: str) -> str:
+        if unit.capacity_owner_kind is not CapacityOwnerKind.PooledProvider:
+            return ""
+        with self.context.database.session() as session:
+            instance = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+        if instance is None or instance.pool_id != unit.id:
+            raise ConflictError("worker has no provider instance in its capacity unit")
+        zone = instance.metadata.get("availability_zone", "")
+        if not isinstance(zone, str):
+            raise UpstreamUnavailableError("worker provider reported an invalid availability zone")
+        return zone
+
+    def worker_egress_policy(
+        self, *, workspace_id: str, capacity_owner_id: str, machine_id: str
+    ) -> WorkerEgressPolicy:
+        with self.context.database.session() as session:
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(capacity_owner_id)
+        if unit is None or unit.workspace_id != workspace_id:
+            raise ConflictError("worker network policy has no workspace-owned capacity unit")
+        if not unit.platform_fleet:
+            return WorkerEgressPolicy(
+                billing_owner=(
+                    UsageBillingOwner.ConnectedCloud
+                    if unit.provider_connection_id
+                    else UsageBillingOwner.SelfHosted
+                ),
+                verified_at=utc_now(),
+            )
+        with self.context.database.session() as session:
+            bindings = ComputeProviderInstanceRepository(session).machine_bindings_for_pool(unit.id)
+        instances = [instance for instance, machine in bindings.items() if machine == machine_id]
+        if len(instances) != 1:
+            raise ConflictError("worker has no unique provider instance in its capacity unit")
+        provider, _ = self._resolved_internal_unit_provider(unit)
+        if provider.pooled is None:
+            raise UpstreamUnavailableError("worker provider cannot verify its network routes")
+        try:
+            destinations = provider.pooled.unbilled_network_destinations(unit, instances[0])
+        except Exception as exc:
+            raise UpstreamUnavailableError("worker provider route evidence is unavailable") from exc
+        return WorkerEgressPolicy(
+            billing_owner=UsageBillingOwner.PlatformFleet,
+            routes=destinations,
+            verified_at=utc_now(),
+        )
 
     def internal_unit_machine_by_instance(
         self,
@@ -2551,6 +2657,11 @@ class ComputeService:
             degraded = current.provider_state.degraded_reason is not None or not placement_allows
             if not placement_allows:
                 LOGGER.warning("provider placement policy prevents restoring pool %s", current.id)
+            if not degraded:
+                with self.context.database.session() as session:
+                    current = ComputeUnitRepository(session).upsert(
+                        record_purchase_terms(current, offer)
+                    )
             request = self._provider_unit_request(current, offer)
             snapshot = (
                 # A durably degraded pool stopped relaunching: observe and prove
@@ -3160,7 +3271,10 @@ class ComputeService:
         interval.
         """
         state = pool.provider_state
-        if state.degraded_reason != "bootstrap_launch_attempts_exhausted":
+        if state.degraded_reason not in {
+            "bootstrap_launch_attempts_exhausted",
+            "provider_acquisition_rejected",
+        }:
             return pool
         degraded_at = state.degraded_at
         interval = timedelta(seconds=self.reclaim.degraded_relaunch_interval_seconds)
@@ -3305,14 +3419,13 @@ def _offer_matches_capacity_shape(
     offer: ComputeOffer,
     shape: CapacityAcquisitionShape,
 ) -> bool:
-    preemptible = str(offer.labels.get("preemptible", "false")).strip().lower() == "true"
     return (
         offer.cpu_millicores == shape.cpu_millicores
         and offer.memory_mb == shape.memory_mib
         and (offer.gpu or "") == shape.gpu_type
         and offer.gpu_count == shape.gpu_count
         and offer.runtime == shape.runtime
-        and preemptible is shape.preemptible
+        and offer.preemptible is shape.preemptible
     )
 
 
@@ -3434,6 +3547,7 @@ def _operation_result(
         reservation_id=operation.reservation_id,
         desired_unit=operation.desired_unit,
         target_machine_id=operation.target_machine_id,
+        owns_capacity=operation.owns_capacity,
         failure_code=failure_code or operation.failure_code,
         reason=reason or operation.last_error,
     )

@@ -81,6 +81,7 @@ CONTAINER_MEMORY_BURST_CAP_MIB = 8192
 # everything on the node degrades together. Memory is not, which is why the two
 # ceilings are not written the same way.
 CONTAINER_CPU_BURST_CEILING_MILLICORES = 16_000
+DEFAULT_CONTAINER_OOM_THRESHOLD_PERCENT = 95.0
 
 
 DEFAULT_MEMORY_PRESSURE_EVICTION_PERCENT = 1.0
@@ -162,6 +163,29 @@ def container_memory_limit_mib(request_mib: int) -> int:
     return min(proportional, request_mib + CONTAINER_MEMORY_BURST_CAP_MIB)
 
 
+def container_cpu_ceiling_millicores(
+    request_millicores: int, *, limit_millicores: int = 0, node_cpu_millicores: int = 0
+) -> int:
+    if limit_millicores:
+        return limit_millicores
+    ceiling = request_millicores + CONTAINER_CPU_BURST_CEILING_MILLICORES
+    if node_cpu_millicores <= 0:
+        return ceiling
+    return max(min(ceiling, schedulable_capacity(node_cpu_millicores)), request_millicores)
+
+
+def container_memory_ceiling_mib(
+    request_mib: int, *, limit_mib: int = 0, node_memory_mib: int = 0
+) -> int:
+    high_mib = limit_mib or container_memory_limit_mib(request_mib)
+    # The OOM watcher must not kill a container inside its reservation. One MiB
+    # above the quotient keeps the watcher's integer threshold above the floor.
+    floor = math.ceil(request_mib * 100 / DEFAULT_CONTAINER_OOM_THRESHOLD_PERCENT) + 1
+    if node_memory_mib <= 0:
+        return max(high_mib, floor)
+    return max(min(high_mib, schedulable_capacity(node_memory_mib)), floor)
+
+
 class WorkerStartupKind(StringEnum):
     Function = "function"
     Endpoint = "endpoint"
@@ -193,13 +217,7 @@ class StopContainerReason(StringEnum):
     Preempted = "PREEMPTED"
     Admin = "ADMIN"
     Unfunded = "UNFUNDED"
-    """The account has no card on file and has spent what it was given.
-
-    Its own reason rather than `Admin` or `Scheduler`, because this is the one a
-    customer is owed an explanation for: nothing went wrong, nobody intervened,
-    and the work stopped because there is no way to bill for more of it. Recorded
-    as `User` it would look like they stopped it themselves.
-    """
+    """The account cannot fund more execution within its credit and spend limits."""
 
     MemoryEvicted = "MEMORY_EVICTED"
     """The machine ran short of memory and this container was using the most
@@ -384,6 +402,7 @@ __all__ = [
     "DEFAULT_ARTIFACTS_PATH",
     "DEFAULT_ARTIFACTS_PREFIX",
     "DEFAULT_CONTAINER_DISK_LIMIT_BYTES",
+    "DEFAULT_CONTAINER_OOM_THRESHOLD_PERCENT",
     "DEFAULT_MEMORY_PRESSURE_EVICTION_PERCENT",
     "DEFAULT_OBJECTS_PATH",
     "DEFAULT_VOLUMES_PATH",
@@ -404,6 +423,8 @@ __all__ = [
     "WorkerContainerRequestPayload",
     "WorkerStartupKind",
     "capacity_with_overhead",
+    "container_cpu_ceiling_millicores",
+    "container_memory_ceiling_mib",
     "container_memory_limit_mib",
     "schedulable_capacity",
     "select_memory_eviction_candidate",

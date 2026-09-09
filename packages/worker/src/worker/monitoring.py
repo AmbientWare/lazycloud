@@ -67,6 +67,8 @@ def _heartbeat_next_status(plan: WorkerStatusHeartbeatPlan) -> SchedulerContaine
 
 
 class ContainerRuntimeMonitorHandle(Protocol):
+    def runtime_started(self, pid: int) -> None: ...
+
     def stop(self) -> ContainerRuntimeMonitoringResult: ...
 
 
@@ -85,8 +87,6 @@ class ContainerRuntimeMonitor(Protocol):
     def start_monitoring(
         self,
         request: ContainerRequestContext,
-        *,
-        started_pid: int,
     ) -> ContainerRuntimeMonitorHandle: ...
 
 
@@ -101,6 +101,7 @@ class WorkerUsageWindowRecorder(Protocol):
         metering_window_started_at: datetime,
         metering_window_ended_at: datetime,
         evidence: WorkerUsageEvidence | None = None,
+        measurement_complete: bool = False,
     ) -> WorkerUsageEmissionResult: ...
 
 
@@ -114,6 +115,7 @@ class ContainerLifecycleSink(Protocol):
 class ContainerRuntimeMonitoringResult(ContractModel):
     container_id: str
     started_pid: int
+    exited_at: datetime
     duration_ms: int = 0
     metrics_samples: int = 0
     metrics_published: int = 0
@@ -124,6 +126,7 @@ class ContainerRuntimeMonitoringResult(ContractModel):
 class _UsageWindow:
     start_ms: int
     end_ms: int
+    measurement_complete: bool = True
 
     @property
     def duration_ms(self) -> int:
@@ -134,17 +137,7 @@ class ContainerRuntimeMonitorSettings(ContractModel):
     sample_interval_seconds: float = 5.0
     join_timeout_seconds: float = 2.0
     exit_flush_attempts: int = 3
-    """How many times the last drain of a container's life is attempted.
-
-    The sample loop stops at the first refusal and lets the next tick carry the
-    window, which is right while there is a next tick. At exit there is not one:
-    whatever is still held when this returns is never offered again, so a single
-    unlucky write would lose every second since the previous success.
-
-    Bounded rather than persistent because this runs on the teardown path a
-    customer is waiting on, and because a control plane that has refused three
-    times in a row is not about to answer the fourth.
-    """
+    """Bound final usage retries so an unavailable API cannot hold shutdown open."""
 
     exit_flush_retry_seconds: float = 0.5
 
@@ -178,11 +171,9 @@ class WorkerContainerRuntimeMonitor:
     def start_monitoring(
         self,
         request: ContainerRequestContext,
-        *,
-        started_pid: int,
     ) -> ContainerRuntimeMonitorHandle:
         source = (
-            self.metrics_source_factory.metrics_source_for_pid(started_pid)
+            self.metrics_source_factory.metrics_source_for_container(request.container_id)
             if self.metrics is not None and self.metrics_source_factory is not None
             else None
         )
@@ -197,7 +188,6 @@ class WorkerContainerRuntimeMonitor:
         started_at = monotonic()
         handle = _ThreadedContainerRuntimeMonitorHandle(
             request=request,
-            started_pid=started_pid,
             metrics=metrics,
             usage_recorder=self.usage_recorder,
             container_states=self.container_states,
@@ -270,17 +260,19 @@ class AsyncContainerLifecycleSink:
 @dataclass(slots=True)
 class _ThreadedContainerRuntimeMonitorHandle:
     request: ContainerRequestContext
-    started_pid: int
     metrics: WorkerContainerMetricsService | None
     usage_recorder: WorkerUsageWindowRecorder | None
     container_states: ContainerStateHeartbeatRepository | None
     settings: ContainerRuntimeMonitorSettings
     _started_at: float
     _started_at_utc: datetime
+    started_pid: int = 0
     _stop: threading.Event = field(default_factory=threading.Event)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _sample_lock: threading.Lock = field(default_factory=threading.Lock)
     _usage_cursor_ms: int = 0
     _pending_usage_evidence: WorkerUsageEvidence = field(default_factory=WorkerUsageEvidence)
+    _pending_measurement_complete: bool = True
     _held: list[tuple[_UsageWindow, WorkerUsageEvidence]] = field(default_factory=list)
     _previous: ContainerMetricsCounterState | None = None
     _last_sample_at: float | None = None
@@ -290,9 +282,17 @@ class _ThreadedContainerRuntimeMonitorHandle:
     _heartbeat_stopped: bool = False
     _last_heartbeat_at: float = float("-inf")
 
+    def runtime_started(self, pid: int) -> None:
+        if pid <= 0:
+            raise ValueError("runtime process ID must be positive")
+        with self._lock:
+            self.started_pid = pid
+            self._last_heartbeat_at = float("-inf")
+
     def start(self) -> None:
         if self.metrics is None and self.usage_recorder is None and self.container_states is None:
             return
+        self._publish_once(recorded_at=self._started_at)
         self._thread = threading.Thread(
             target=self._run,
             name=f"container-monitor-{self.request.container_id}",
@@ -301,10 +301,10 @@ class _ThreadedContainerRuntimeMonitorHandle:
         self._thread.start()
 
     def stop(self) -> ContainerRuntimeMonitoringResult:
+        current = monotonic()
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=self.settings.join_timeout_seconds)
-        current = monotonic()
         if self.metrics is not None:
             self._publish_once(recorded_at=current)
         duration_ms = max(1, int((current - self._started_at) * 1000))
@@ -312,6 +312,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
         return ContainerRuntimeMonitoringResult(
             container_id=self.request.container_id,
             started_pid=self.started_pid,
+            exited_at=self._started_at_utc + timedelta(milliseconds=duration_ms),
             duration_ms=duration_ms,
             metrics_samples=self._samples,
             metrics_published=self._published,
@@ -319,7 +320,6 @@ class _ThreadedContainerRuntimeMonitorHandle:
         )
 
     def _run(self) -> None:
-        self._publish_once(recorded_at=monotonic())
         while not self._stop.wait(self.settings.sample_interval_seconds):
             current = monotonic()
             self._heartbeat_container_state(recorded_at=current)
@@ -327,11 +327,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
             try:
                 self._record_usage_until(recorded_at=current)
             except Exception:  # pragma: no cover - defensive worker boundary
-                # This thread is the only thing metering this container between
-                # start and exit. Letting an exception out of it ends metering
-                # silently for the rest of the container's life, and the daemon
-                # thread dying is not something anything downstream observes —
-                # the next signal would be a bill that is short.
+                # Keep metering after a failed claim; this is the only sampler.
                 LOGGER.warning(
                     "container usage claim failed",
                     exc_info=True,
@@ -361,6 +357,8 @@ class _ThreadedContainerRuntimeMonitorHandle:
         """
 
         if self.container_states is None or self._heartbeat_stopped:
+            return
+        if self.started_pid == 0:
             return
         if recorded_at - self._last_heartbeat_at < _heartbeat_interval_seconds():
             return
@@ -452,7 +450,19 @@ class _ThreadedContainerRuntimeMonitorHandle:
         return emitted
 
     def _publish_once(self, *, recorded_at: float) -> None:
+        # Shutdown may reach here while the sampler is still in external I/O.
+        # Two reads must never claim a delta from the same previous counter.
+        if not self._sample_lock.acquire(blocking=False):
+            return
+        try:
+            self._publish_sample(recorded_at=recorded_at)
+        finally:
+            self._sample_lock.release()
+
+    def _publish_sample(self, *, recorded_at: float) -> None:
         if self.metrics is None:
+            with self._lock:
+                self._pending_measurement_complete = False
             return
         previous_sample_at = self._last_sample_at
         sample_interval_ms = max(
@@ -470,6 +480,12 @@ class _ThreadedContainerRuntimeMonitorHandle:
                 sample_interval_ms=sample_interval_ms,
             )
         except Exception:  # pragma: no cover - defensive worker boundary
+            with self._lock:
+                self._pending_measurement_complete = False
+                # The missing interval is billed at its reservation. A later
+                # counter delta must not include that interval again.
+                self._previous = None
+                self._last_sample_at = None
             LOGGER.warning(
                 "container metrics sample failed",
                 exc_info=True,
@@ -478,24 +494,27 @@ class _ThreadedContainerRuntimeMonitorHandle:
             return
         with self._lock:
             self._samples += 1
+            if not result.measurement_complete:
+                self._pending_measurement_complete = False
             if result.published:
                 self._published += 1
             self._previous = result.next_state
             self._last_sample_at = recorded_at
             if result.payload is not None:
                 self._pending_usage_evidence = self._pending_usage_evidence.plus(
-                    _usage_evidence_from_metrics(result.payload.metrics)
+                    _usage_evidence_from_metrics(result.payload.metrics).model_copy(
+                        update={
+                            "cpu_used_core_seconds": result.cpu_used_core_seconds,
+                            "memory_rss_byte_seconds": result.memory_rss_byte_seconds,
+                        }
+                    )
+                )
+                self._pending_usage_evidence = self._pending_usage_evidence.plus(
+                    WorkerUsageEvidence(network_egress_bytes=result.network_egress_bytes)
                 )
 
     def _record_usage_until(self, *, recorded_at: float) -> WorkerUsageEmissionResult | None:
-        """Emit every window this container owes the meter, oldest first.
-
-        A window that failed is offered again before any new ground is claimed,
-        so the platform sees the same bounds and the same evidence it saw the
-        first time. Stopping at the first failure leaves the rest of the
-        lifetime unclaimed rather than piling up windows against a control plane
-        that is not answering.
-        """
+        """Retry unchanged windows before claiming new usage; stop on failure."""
 
         recorder = self.usage_recorder
         if recorder is None:
@@ -526,6 +545,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
                 metering_window_ended_at=self._started_at_utc
                 + timedelta(milliseconds=window.end_ms),
                 evidence=evidence,
+                measurement_complete=window.measurement_complete,
             )
         except Exception:  # pragma: no cover - defensive worker boundary
             LOGGER.warning(
@@ -544,21 +564,10 @@ class _ThreadedContainerRuntimeMonitorHandle:
         self,
         recorded_at: float,
     ) -> tuple[_UsageWindow, WorkerUsageEvidence] | None:
-        """The next window owed: one held from a failure, or ground since the cursor.
+        """Claim before writing so the sampler and shutdown cannot bill overlapping windows.
 
-        Claiming before the write rather than after is what keeps two emitters —
-        the sample loop and a `stop()` whose join timed out on a slow write —
-        from offering overlapping windows and billing the same seconds twice.
-
-        A held window is re-offered with the bounds and the evidence it was
-        claimed with, never widened to reach the present. The record ids the
-        platform derives are a function of those bounds, so a write whose reply
-        was lost after it committed is re-sent under the ids it already has and
-        is refused as a duplicate. Widening instead would ask the platform to
-        price ground it had already priced, under ids that cannot collide with
-        the ones holding that charge.
-
-        `None` once nothing is owed, which is how the drain loop ends.
+        Retries retain their bounds and evidence because record IDs derive from
+        those bounds. Widening a retry would charge the same usage under new IDs.
         """
 
         with self._lock:
@@ -574,24 +583,22 @@ class _ThreadedContainerRuntimeMonitorHandle:
             self._usage_cursor_ms = end_ms
             evidence = self._pending_usage_evidence
             self._pending_usage_evidence = WorkerUsageEvidence()
-            return (_UsageWindow(start_ms=start_ms, end_ms=end_ms), evidence)
+            complete = self._pending_measurement_complete and self._last_sample_at == recorded_at
+            self._pending_measurement_complete = True
+            return (
+                _UsageWindow(start_ms=start_ms, end_ms=end_ms, measurement_complete=complete),
+                evidence,
+            )
 
     def _hold_usage_window(
         self,
         window: _UsageWindow,
         evidence: WorkerUsageEvidence,
     ) -> None:
-        """Keep a failed window intact until the next attempt.
+        """Keep failed evidence separate from samples collected since its window.
 
-        The cursor stays past it, so samples taken since accumulate against the
-        ground that follows rather than joining evidence measured over this
-        window. That pairing is what stops a retry from charging current
-        evidence against a window that did not measure it.
-
-        A list because two emitters can be in flight at once — the sample loop
-        and a `stop()` whose join timed out on a slow write — and a slot would
-        let the second failure drop the first window's ground on the floor. It
-        cannot grow past them: no new ground is claimed while anything is held.
+        Both the sampler and shutdown can have a write in flight, so retain both
+        failures. Claim no new window until these have been accepted.
         """
 
         with self._lock:
@@ -607,7 +614,7 @@ def _usage_evidence_from_metrics(metrics: ContainerMetricsData) -> WorkerUsageEv
         disk_used_byte_seconds=metrics.disk_used_bytes * interval_seconds,
         gpu_memory_byte_seconds=metrics.gpu_memory_used_bytes * interval_seconds,
         network_ingress_bytes=metrics.network_recv_bytes,
-        network_egress_bytes=metrics.network_sent_bytes,
+        network_sent_bytes=metrics.network_sent_bytes,
         network_ingress_packets=metrics.network_recv_packets,
         network_egress_packets=metrics.network_sent_packets,
         disk_read_bytes=metrics.disk_read_bytes,

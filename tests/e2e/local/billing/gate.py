@@ -25,10 +25,9 @@ from lazycloud.config import get_profile
 from provider_stripe import StripeBilling, StripeCatalog, StripeSettings
 from provider_stripe.api import StripeObject, read
 from shared.billing_accounts import BillingAccount
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import ContainerShape, LedgerComponent
 from shared.billing_rate_card import PUBLISHED_PLANS
-from shared.http.billing import BillingAllowanceResponse, BillingSummaryResponse
 from shared.http.system import TokenCreateRequest, TokenCreateResponse
 from shared.http.users import UserCreateRequest, UserResponse
 from shared.http.workspaces import WorkspaceCreateRequest, WorkspaceResponse
@@ -292,24 +291,6 @@ def attach_default_card(
     return method_id
 
 
-def plan_allowance(summary: BillingSummaryResponse) -> BillingAllowanceResponse:
-    """The terms of the cycle this account is part-way through.
-
-    Both levels are nullable and mean different things: no plan is an account on
-    no subscription, and a plan with no allowance is the few minutes between a
-    cycle ending and the renewal that opens the next one. A caller here has just
-    put an account on a plan, so either is a failure.
-    """
-
-    if summary.plan is None:
-        raise RuntimeError("the account is on no plan, so it has no allowance to report")
-    if summary.plan.allowance is None:
-        raise RuntimeError(
-            f"the account is on {summary.plan.id.value} with no period covering this instant"
-        )
-    return summary.plan.allowance
-
-
 def _require_published_rates(database: DatabaseClient) -> None:
     """Refuse before creating anything if usage metered now would price at nothing.
 
@@ -365,7 +346,10 @@ def _require_code_under_test(endpoint: str) -> None:
     try:
         response = httpx.post(
             f"{endpoint}{SUBSCRIBE_ROUTE}",
-            json={"plan": BillingPlanId.Team.value},
+            json={
+                "plan": BillingPlanId.Team.value,
+                "terms_version": SubscriptionTermsVersion.Team.value,
+            },
             timeout=15,
         )
     except httpx.HTTPError as exc:
@@ -398,6 +382,5 @@ __all__ = [
     "billing_account",
     "billing_gate",
     "create_run_account",
-    "plan_allowance",
     "register_customer",
 ]

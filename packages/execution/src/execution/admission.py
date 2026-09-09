@@ -37,6 +37,7 @@ class PaymentAdmission(Protocol):
         gpu: Sequence[str],
         gpu_count: int,
         region: ProductRegion | None = None,
+        availability_zone: str = "",
     ) -> list[str]:
         """Refuse a start the account may not make, and say which cards to ask for.
 

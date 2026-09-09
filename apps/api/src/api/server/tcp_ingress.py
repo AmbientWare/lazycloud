@@ -8,8 +8,9 @@ import threading
 import weakref
 from contextlib import suppress
 from dataclasses import dataclass, field
+from ipaddress import IPv4Address, IPv6Address
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
 from control.service import ControlPlaneService, StubKind, StubRecord
 from coordination.redis_client import AsyncRedisClient, redis_text
@@ -17,7 +18,9 @@ from execution.pods.config import PodStubConfig
 from execution.pods.planning import PodProxyProtocol
 from execution.pods.proxy import PodProxySession
 from execution.pods.service import PodControlService
-from pydantic import Field
+from observability.network_transfers import OutboundTransferMeter, TransferAttribution
+from observability.usage import UsageService
+from pydantic import Field, TypeAdapter
 from shared.contracts import ContractModel
 from shared.errors import NotFoundError
 from sqlalchemy.orm import Session
@@ -293,20 +296,10 @@ def _file_signature(certificate_file: Path, key_file: Path) -> tuple[int, int, i
     return (certificate.st_mtime_ns, certificate.st_size, key.st_mtime_ns, key.st_size)
 
 
-class TlsStreamWriter(Protocol):
-    def get_extra_info(
-        self,
-        name: Literal["ssl_object"],
-        default: None = None,
-    ) -> ssl.SSLObject | ssl.SSLSocket | None: ...
-
-    def write(self, data: bytes) -> None: ...
-
-    async def drain(self) -> None: ...
-
-    def close(self) -> None: ...
-
-    async def wait_closed(self) -> None: ...
+type SocketPeer = (
+    tuple[IPv4Address | IPv6Address, int] | tuple[IPv4Address | IPv6Address, int, int, int]
+)
+_SOCKET_PEER: TypeAdapter[SocketPeer] = TypeAdapter(SocketPeer)
 
 
 @dataclass(slots=True)
@@ -316,6 +309,7 @@ class TcpIngressServer:
     tls: ReloadingTlsContext
     host: str
     port: int
+    usage: UsageService
     max_connections: int = 1024
     tls_handshake_timeout_seconds: float = 10.0
     _server: asyncio.Server | None = field(default=None, init=False)
@@ -363,7 +357,7 @@ class TcpIngressServer:
     async def _handle_connection(
         self,
         reader: asyncio.StreamReader,
-        writer: TlsStreamWriter,
+        writer: asyncio.StreamWriter,
     ) -> None:
         if self._active_connections >= self.max_connections:
             await _close_writer(writer)
@@ -371,12 +365,25 @@ class TcpIngressServer:
         self._active_connections += 1
         session: PodProxySession | None = None
         backend: socket.socket | None = None
+        meter: OutboundTransferMeter | None = None
         try:
             ssl_object: ssl.SSLObject | ssl.SSLSocket | None = writer.get_extra_info("ssl_object")
             sni = self.tls.server_name(ssl_object)
             if not sni:
                 raise TcpIngressRouteNotFound("TLS SNI is required")
             route = await self.route_resolver.resolve(sni)
+            peer = _SOCKET_PEER.validate_python(writer.get_extra_info("peername"))
+            meter = OutboundTransferMeter(
+                usage=self.usage,
+                attribution=TransferAttribution(
+                    workspace_id=route.workspace_id,
+                    resource_type="stub",
+                    resource_id=route.stub_id,
+                    stub_id=route.stub_id,
+                ),
+                transport="tcp",
+                billable=peer[0].is_global,
+            )
             session = await self.pod_service.prepare_pod_proxy(
                 stub_id=route.stub_id,
                 port=route.port,
@@ -386,24 +393,33 @@ class TcpIngressServer:
             )
             backend = await self.pod_service.open_pod_proxy_socket(session)
             backend.setblocking(False)
-            await _proxy_bidirectional(reader, writer, backend)
+            await _proxy_bidirectional(reader, writer, backend, meter)
         except TcpIngressError as exc:
             logger.warning("TCP ingress connection rejected: %s", exc)
         except (OSError, RuntimeError, ValueError):
             logger.exception("TCP ingress connection failed")
         finally:
-            if backend is not None:
-                backend.close()
-            if session is not None:
-                await self.pod_service.finish_pod_proxy(session)
-            await _close_writer(writer)
-            self._active_connections -= 1
+            try:
+                if meter is not None:
+                    await meter.flush()
+            finally:
+                try:
+                    if backend is not None:
+                        backend.close()
+                    if session is not None:
+                        await self.pod_service.finish_pod_proxy(session)
+                finally:
+                    try:
+                        await _close_writer(writer)
+                    finally:
+                        self._active_connections -= 1
 
 
 async def _proxy_bidirectional(
     reader: asyncio.StreamReader,
-    writer: TlsStreamWriter,
+    writer: asyncio.StreamWriter,
     backend: socket.socket,
+    meter: OutboundTransferMeter,
 ) -> None:
     loop = asyncio.get_running_loop()
 
@@ -419,6 +435,7 @@ async def _proxy_bidirectional(
         while data := await loop.sock_recv(backend, 64 * 1024):
             writer.write(data)
             await writer.drain()
+            await meter.sent(len(data))
 
     to_backend = asyncio.create_task(client_to_backend())
     to_client = asyncio.create_task(backend_to_client())
@@ -442,7 +459,7 @@ async def _proxy_bidirectional(
                 await task
 
 
-async def _close_writer(writer: TlsStreamWriter) -> None:
+async def _close_writer(writer: asyncio.StreamWriter) -> None:
     writer.close()
     try:
         await writer.wait_closed()
@@ -473,6 +490,7 @@ async def tcp_ingress_server_from_settings(
         tls=await ReloadingTlsContext.create(certificate_file, key_file),
         host=settings.host,
         port=settings.port,
+        usage=services.usage,
         max_connections=settings.max_connections,
         tls_handshake_timeout_seconds=settings.tls_handshake_timeout_seconds,
     )

@@ -4,91 +4,75 @@ from database.repositories.billing_allowance import (
     BillingAllowanceRepository,
     SubscriptionPeriodOutcome,
 )
-from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import account_terms
-from shared.payments import PaymentProvider, ProviderSubscription
+from database.repositories.billing_credits import BillingCreditRepository
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
+from shared.billing_rate_card import subscription_terms
+from shared.errors import UpstreamUnavailableError
+from shared.payments import ProviderSubscription, SubscriptionPaymentProvider
 from sqlalchemy.orm import Session
+
+from billing.credits import fund_subscription_credits
 
 
 def carry_plan_into_cycle(
     session: Session,
-    payments: PaymentProvider,
+    payments: SubscriptionPaymentProvider,
     *,
     account_id: str,
     provider_customer_id: str,
     provider_credit_grant_id: str,
     subscription: ProviderSubscription,
     plan: BillingPlanId,
-    has_payment_method: bool,
 ) -> str:
-    """Give this cycle the terms the plan comes with, and buy them once.
+    """Record this cycle's terms and fund the included credit once.
 
-    Takes the grant the account currently names and returns the grant that funds
-    the cycle once this has run — the same one where nothing was bought, so a
-    caller writes what comes back without having to work out whether it changed.
-
-    The period is written first and what happens to the grants is decided from
-    what that did to it. A renewal and a plan change both reach here by more than
-    one route — a renewal by two deliveries describing one event, a plan change
-    by a retry after a transaction that died — and a grant is money given away,
-    so the period is what settles which caller buys the allowance and which finds
-    it already bought.
-
-    Opening a cycle leaves the outgoing grant alone: that grant is what funds the
-    invoice finalizing at that moment, and expiring it would take back an
-    allowance the customer has already been invoiced against. Re-terming the
-    cycle in progress is the opposite — one plan swapped for another inside a
-    single cycle — and its outgoing grant is expired before the replacement is
-    bought, because two live grants are two allowances for one cycle and nothing
-    downstream can tell which of them a charge was spent on.
-
-    Expiring before buying is deliberate: a failure between the two leaves the
-    cycle unfunded until the next attempt or the next renewal, where the other
-    order would leave the customer holding both and nothing to notice it.
-
-    When the allowance becomes spendable is decided from the cycle before it,
-    which the same write reports. A cycle that follows one keeps its allowance
-    out of reach until the invoice that cycle raises has been settled; an
-    account's first cycle follows nothing, so holding its allowance back would
-    only be a customer denied for three days what they were told they had. The
-    two are told apart by the rows rather than by which caller is asking, for the
-    reason the grant itself is: registration and a plan change and a renewal all
-    reach here, and only the period knows which cycle it is funding.
-
-    What the cycle is worth comes from the plan and from whether anybody can be
-    charged for what is spent past it, because an allowance is credit against a
-    bill and an account with no card has no bill. It is a parameter rather than a
-    read taken here: every caller already holds the account row under lock, and a
-    second read inside would be a different answer from the one the caller is
-    acting on.
-
-    Terms move upwards inside a cycle and never downwards, which the period
-    itself enforces — so this offers the plan's figure and buys whatever the
-    period came back holding. A move onto cheaper terms part-way through leaves
-    the cycle on the allowance it opened with, changes nothing at the provider,
-    and takes effect when the next cycle opens on the smaller plan.
-
-    That is also what makes "a card removed falls back at the end of the period"
-    true without a rule saying so. Terms are only ever written when a cycle opens
-    or is re-termed, so a card detached mid-cycle changes nothing until the next
-    one — and a card *attached* mid-cycle is a re-term, which is the upgrade
-    taking effect at once.
-
-    Every caller holds the account row lock before reaching here, which is what
-    makes the read-then-write inside safe against a delivery arriving mid-change.
+    Callers hold the billing account lock. Local credits require payment evidence
+    for paid plans; legacy periods retain their provider grant until cutover.
     """
 
+    if subscription.terms_version is None:
+        raise UpstreamUnavailableError("subscription terms await a recognized provider price")
+    held_terms = subscription_terms(subscription.terms_version)
+    if held_terms.plan is not plan:
+        raise UpstreamUnavailableError("subscription plan disagrees with its price terms")
+    credits = BillingCreditRepository(session)
+    cutover = credits.cutover(user_id=account_id)
+    local = cutover is not None and subscription.current_period_started_at >= cutover.effective_at
+    if (
+        not local
+        and held_terms.monthly_nanos > 0
+        and subscription.terms_version is not SubscriptionTermsVersion.TeamLegacy
+    ):
+        raise UpstreamUnavailableError(
+            "prepaid subscription terms require the local credit transition"
+        )
     written = BillingAllowanceRepository(session).set_subscription_period(
         user_id=account_id,
         period_started_at=subscription.current_period_started_at,
         period_ended_at=subscription.current_period_ended_at,
-        allowance_nanos=account_terms(plan, has_payment_method=has_payment_method).included_nanos,
-        # An account with no card did not pay for whatever this cycle is holding,
-        # so terms may narrow to what the platform gives away. With a card they
-        # did, and a plan moved down keeps what it opened with.
-        funded=has_payment_method,
+        allowance_nanos=(
+            credits.subscription_issued(
+                user_id=account_id, period_ended_at=subscription.current_period_ended_at
+            )
+            if local
+            else (0 if plan is BillingPlanId.Free else held_terms.included_nanos)
+        ),
+        funded=not local,
     )
-    if written.outcome is SubscriptionPeriodOutcome.Unchanged:
+    if local:
+        confirmed = fund_subscription_credits(
+            session,
+            payments,
+            user_id=account_id,
+            provider_customer_id=provider_customer_id,
+            subscription=subscription,
+        )
+        if not confirmed:
+            raise UpstreamUnavailableError(
+                "paid subscription credits await a matching paid invoice line"
+            )
+        return provider_credit_grant_id
+    if plan is BillingPlanId.Free or written.outcome is SubscriptionPeriodOutcome.Unchanged:
         return provider_credit_grant_id
     if written.outcome is SubscriptionPeriodOutcome.ReTermed and provider_credit_grant_id:
         payments.expire_credit_grant(provider_credit_grant_id=provider_credit_grant_id)

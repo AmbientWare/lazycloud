@@ -54,8 +54,9 @@ from lazycloud.abstractions.function import Function, FunctionOperationError
 from lazycloud.config import reset_settings_cache
 from lazycloud.control import control_workspace_scope
 from provider_stripe.api import read
+from provider_stripe.catalog import plan_line
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.http.billing import BillingSummaryResponse
 from shared.http.errors import HttpApiError
@@ -94,7 +95,6 @@ DELIVERY_POLL_SECONDS = 3.0
 
 PAYMENT_FAILED_EVENT = "invoice.payment_failed"
 CARD_SAVED_EVENT = "payment_method.attached"
-PLAN_PRICE_LOOKUP_KEY = "lazycloud_plan_team_monthly_usd"
 
 
 @dataclass(slots=True)
@@ -189,7 +189,13 @@ def _subscribe(gate: BillingGate, run: _Run) -> dict[str, Any]:
     working = attach_default_card(gate, free.provider_customer_id)
 
     summary = BillingSummaryResponse.model_validate(
-        channel.post(SUBSCRIBE_ROUTE, {"plan": BillingPlanId.Team.value})
+        channel.post(
+            SUBSCRIBE_ROUTE,
+            {
+                "plan": BillingPlanId.Team.value,
+                "terms_version": SubscriptionTermsVersion.Team.value,
+            },
+        )
     )
     if summary.plan is None or summary.plan.id is not BillingPlanId.Team:
         raise RuntimeError(
@@ -299,7 +305,7 @@ def _fail_the_charge(gate: BillingGate, run: _Run) -> dict[str, Any]:
     """
 
     live = subscription(gate, run.provider_subscription_id)
-    plan_item = live.item_for(PLAN_PRICE_LOOKUP_KEY)
+    plan_item = live.item_for(plan_line(SubscriptionTermsVersion.Team).price_lookup_key)
     if plan_item is None:
         raise RuntimeError("the subscription carries no plan line to charge")
     charged = read(

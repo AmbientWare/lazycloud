@@ -42,6 +42,7 @@ from worker.lifecycle import (
     WORKER_SANDBOX_PROCESS_MANAGER_PORT,
     required_container_resolv_conf_source,
 )
+from worker.network_egress import WorkerNetworkEgressCounters
 from worker.network_rules import (
     container_id_from_iptables_rule,
     container_network_comment,
@@ -477,6 +478,7 @@ class AgentBridgeNetworkBackend:
     config: AgentBridgeNetworkConfig = field(default_factory=AgentBridgeNetworkConfig)
     system: CommandNetworkSystem = field(default_factory=CommandNetworkSystem)
     assigned_ips: dict[str, str] = field(default_factory=dict)
+    egress_counters: WorkerNetworkEgressCounters | None = None
     _capabilities: HostNetworkCapabilities | None = None
     _bridge_ready: bool = False
     _bridge_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -568,11 +570,18 @@ class AgentBridgeNetworkBackend:
         ip_address = self.ip_allocator.reserve_container_ip(container_id)
         self.assigned_ips[container_id] = ip_address
         try:
-            return self._setup_assigned_network(
+            result = self._setup_assigned_network(
                 context,
                 ip_address,
                 port_bindings=port_bindings,
             )
+            if self.egress_counters is not None:
+                self.egress_counters.ensure(
+                    container_id,
+                    ipv4_interface=self.capabilities.ipv4_interface,
+                    ipv6_interface=self.capabilities.ipv6_interface,
+                )
+            return result
         except Exception as setup_error:
             try:
                 self.teardown_network(container_id)
@@ -640,6 +649,8 @@ class AgentBridgeNetworkBackend:
         self._remove_container_resources(container_id, release_ip=True)
 
     def _remove_container_resources(self, container_id: str, *, release_ip: bool) -> None:
+        if self.egress_counters is not None:
+            self.egress_counters.remove(container_id)
         self._remove_exposed_ports(container_id)
         self._remove_owned_forward_rules(container_id)
         veth_host, _ = container_veth_names(container_id)

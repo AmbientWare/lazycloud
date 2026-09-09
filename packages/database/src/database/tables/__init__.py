@@ -18,12 +18,20 @@ from database.tables.base import (
 )
 from database.tables.billing import BillingAccountTable
 from database.tables.billing_allowance import BillingAllowancePeriodTable
+from database.tables.billing_credit_adjustments import BillingCreditAdjustmentTable
+from database.tables.billing_credits import (
+    BillingCreditAllocationTable,
+    BillingCreditCutoverTable,
+    BillingCreditLotTable,
+    BillingCreditSettlementTable,
+)
 from database.tables.billing_ledger import (
     BillingLedgerSegmentTable,
     ContainerBillingShapeTable,
 )
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.billing_plan_changes import BillingPlanChangeIntentTable
+from database.tables.billing_preferences import BillingPreferencesTable
 from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
 from database.tables.billing_webhook_events import BillingWebhookEventTable
 from database.tables.compute import (
@@ -39,6 +47,7 @@ from database.tables.compute import (
     WorkspaceComputePolicyTable,
 )
 from database.tables.container_rollouts import ContainerRolloutDrainTable
+from database.tables.credit_purchases import CreditPurchaseTable
 from database.tables.custom_domains import CustomDomainTable
 from database.tables.email_outbox import EmailOutboxTable
 from database.tables.endpoint_dispatch import EndpointDispatchTable
@@ -93,6 +102,8 @@ from database.tables.source_cache import (
     WorkerCacheGenerationTable,
 )
 from database.tables.storage import CacheEntryTable, ObjectTable, VolumeTable
+from database.tables.storage_access import StorageAccessTable
+from database.tables.storage_retention import StorageRetentionPeriodTable
 
 __all__ = [
     "AgentLeaseTable",
@@ -106,9 +117,15 @@ __all__ = [
     "AwsAuthorizationCleanupTombstoneTable",
     "BillingAccountTable",
     "BillingAllowancePeriodTable",
+    "BillingCreditAdjustmentTable",
+    "BillingCreditAllocationTable",
+    "BillingCreditCutoverTable",
+    "BillingCreditLotTable",
+    "BillingCreditSettlementTable",
     "BillingLedgerSegmentTable",
     "BillingMeterOutboxTable",
     "BillingPlanChangeIntentTable",
+    "BillingPreferencesTable",
     "BillingWebhookEventTable",
     "CacheEntryTable",
     "CheckpointTable",
@@ -123,6 +140,7 @@ __all__ = [
     "ContainerRolloutDrainTable",
     "ContainerTable",
     "CredentialTable",
+    "CreditPurchaseTable",
     "CronJobRunTable",
     "CronJobTable",
     "CustomDomainTable",
@@ -150,6 +168,8 @@ __all__ = [
     "RouteTable",
     "SecretTable",
     "SourceCacheCleanupTargetTable",
+    "StorageAccessTable",
+    "StorageRetentionPeriodTable",
     "StubTable",
     "TaskAttemptTable",
     "TaskDependencyTable",

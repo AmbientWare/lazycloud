@@ -57,8 +57,12 @@ class S3Credentials(BaseSettings):
             raise MissingDeploymentSettingError(
                 f"{ENV_PREFIX}_OBJECT_STORE_ENDPOINT_URL", purpose="the object storage endpoint"
             )
-        if not self.access_key_id or not self.secret_access_key:
-            raise ValueError("object-store credentials require both access and secret keys")
+        if bool(self.access_key_id) != bool(self.secret_access_key):
+            raise ValueError(
+                "object-store credentials require both access and secret keys, or neither"
+            )
+        if self.session_token and not self.access_key_id:
+            raise ValueError("an object-store session token requires an access and secret key pair")
         return self
 
     def transport_settings(
@@ -842,7 +846,7 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
                 client.create_bucket(Bucket=target_bucket)
         except ClientError as exc:
             code, _status = _client_error_code_and_status(exc)
-            if code in {"BucketAlreadyOwnedByYou", "BucketAlreadyExists"}:
+            if code == "BucketAlreadyOwnedByYou":
                 return
             raise
 
@@ -1095,8 +1099,8 @@ def _new_s3_client(settings: S3ObjectStoreSettings, endpoint_url: str | None) ->
         "s3",
         endpoint_url=endpoint_url,
         region_name=settings.region_name,
-        aws_access_key_id=settings.access_key_id,
-        aws_secret_access_key=settings.secret_access_key,
+        aws_access_key_id=settings.access_key_id or None,
+        aws_secret_access_key=settings.secret_access_key or None,
         aws_session_token=settings.session_token or None,
         config=s3_config,
     )

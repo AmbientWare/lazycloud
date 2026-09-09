@@ -2,9 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.identity import WorkspaceStorageConfig
-from shared.workspace_storage import WorkspaceStorageGrant, WorkspaceStorageIssuer
+from shared.workspace_storage import (
+    WorkspaceStorageGrant,
+    WorkspaceStorageIssuer,
+    WorkspaceStorageProvider,
+)
 from storage_client.s3 import S3ObjectStoreSettings
+
+
+class WorkspaceStorageIssuerSettings(BaseSettings):
+    issuer: WorkspaceStorageProvider | None = None
+
+    model_config = SettingsConfigDict(env_prefix="LAZYCLOUD_WORKSPACE_STORAGE_")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +71,7 @@ def external_workspace_storage_settings(storage: WorkspaceStorageConfig) -> S3Ob
 
 __all__ = [
     "StoredWorkspaceStorageIssuer",
+    "WorkspaceStorageIssuerSettings",
     "WorkspaceStorageRouter",
     "external_workspace_storage_settings",
 ]

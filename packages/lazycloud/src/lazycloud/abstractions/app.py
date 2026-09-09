@@ -17,6 +17,7 @@ from shared.deployment_records import (
     DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     DEFAULT_HTTP_CPU,
     DEFAULT_HTTP_MEMORY,
+    DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
     DeploymentSpec,
     MemoryRequest,
@@ -137,8 +138,9 @@ class App:
         inputs: SchemaInput = None,
         outputs: SchemaInput = None,
         docker_enabled: bool = False,
-        preemptible: bool = False,
+        preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
+        availability_zone: str = "",
         pool: PoolInput = None,
         metadata: dict[str, Any] | None = None,
     ) -> Function[P, R]: ...
@@ -181,8 +183,9 @@ class App:
         inputs: SchemaInput = None,
         outputs: SchemaInput = None,
         docker_enabled: bool = False,
-        preemptible: bool = False,
+        preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
+        availability_zone: str = "",
         pool: PoolInput = None,
         metadata: dict[str, Any] | None = None,
     ) -> Callable[[Callable[P, R]], Function[P, R]]: ...
@@ -224,8 +227,9 @@ class App:
         inputs: SchemaInput = None,
         outputs: SchemaInput = None,
         docker_enabled: bool = False,
-        preemptible: bool = False,
+        preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
+        availability_zone: str = "",
         pool: PoolInput = None,
         metadata: dict[str, Any] | None = None,
     ) -> Function[P, R] | Callable[[Callable[P, R]], Function[P, R]]:
@@ -297,6 +301,7 @@ class App:
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             region=region,
+            availability_zone=availability_zone,
             pool=pool,
             metadata=metadata,
         )
@@ -341,8 +346,9 @@ class App:
         inputs: SchemaInput = None,
         outputs: SchemaInput = None,
         docker_enabled: bool = False,
-        preemptible: bool = False,
+        preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
+        availability_zone: str = "",
         pool: PoolInput = None,
         metadata: dict[str, Any] | None = None,
     ) -> Endpoint[P, R]: ...
@@ -382,8 +388,9 @@ class App:
         inputs: SchemaInput = None,
         outputs: SchemaInput = None,
         docker_enabled: bool = False,
-        preemptible: bool = False,
+        preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
+        availability_zone: str = "",
         pool: PoolInput = None,
         metadata: dict[str, Any] | None = None,
     ) -> Callable[[Callable[P, R]], Endpoint[P, R]]: ...
@@ -422,8 +429,9 @@ class App:
         inputs: SchemaInput = None,
         outputs: SchemaInput = None,
         docker_enabled: bool = False,
-        preemptible: bool = False,
+        preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
+        availability_zone: str = "",
         pool: PoolInput = None,
         metadata: dict[str, Any] | None = None,
     ) -> Endpoint[P, R] | Callable[[Callable[P, R]], Endpoint[P, R]]:
@@ -487,6 +495,7 @@ class App:
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             region=region,
+            availability_zone=availability_zone,
             pool=pool,
             metadata=metadata,
         )
@@ -522,7 +531,9 @@ class App:
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         task_policy: TaskPolicy | Mapping[str, Any] | None = None,
         checkpoint_enabled: bool = False,
+        preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
+        availability_zone: str = "",
         pool: PoolInput = None,
     ) -> Callable[[Callable[..., Awaitable[Any]] | Callable[..., Any]], ASGI]:
         """Register an ASGI application owned by this app.
@@ -571,7 +582,9 @@ class App:
             autoscaler=autoscaler,
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
+            preemptible=preemptible,
             region=region,
+            availability_zone=availability_zone,
             pool=pool,
         )
         factory = asgi_decorator(_app_slug=self.slug, **kwargs)
@@ -609,7 +622,9 @@ class App:
         autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
         task_policy: TaskPolicy | Mapping[str, Any] | None = None,
         checkpoint_enabled: bool = False,
+        preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
+        availability_zone: str = "",
         pool: PoolInput = None,
     ) -> Callable[[Callable[..., Any]], RealtimeASGI]:
         """Register a realtime WebSocket-style handler owned by this app.
@@ -657,7 +672,9 @@ class App:
             autoscaler=autoscaler,
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
+            preemptible=preemptible,
             region=region,
+            availability_zone=availability_zone,
             pool=pool,
         )
         factory = realtime_decorator(_app_slug=self.slug, **kwargs)
@@ -695,8 +712,9 @@ class App:
         block_network: bool = False,
         allow_list: list[str] | None = None,
         docker_enabled: bool = False,
-        preemptible: bool = False,
+        preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
+        availability_zone: str = "",
         pool: PoolInput = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> Pod:
@@ -753,6 +771,7 @@ class App:
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             region=region,
+            availability_zone=availability_zone,
             pool=pool,
             metadata=dict(metadata or {}),
         )
@@ -777,9 +796,10 @@ class App:
         block_network: bool = False,
         allow_list: Iterable[str] | None = None,
         docker_enabled: bool = False,
-        preemptible: bool = False,
+        preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         ports: Iterable[int] | None = None,
         region: str | None = None,
+        availability_zone: str = "",
         pool: PoolInput = None,
         metadata: Mapping[str, Any] | None = None,
         command: Iterable[str] | None = None,
@@ -823,6 +843,7 @@ class App:
             preemptible=preemptible,
             ports=ports,
             region=region,
+            availability_zone=availability_zone,
             pool=pool,
             metadata=metadata,
             command=command,
@@ -849,6 +870,7 @@ class App:
         keep_warm: int | None = None,
         tcp: bool | None = None,
         region: str | None = None,
+        availability_zone: str | None = None,
         pool: PoolInput = None,
         preemptible: bool | None = None,
         entrypoint: Iterable[str] | None = None,
@@ -885,6 +907,7 @@ class App:
                 keep_warm=keep_warm,
                 tcp=tcp,
                 region=region,
+                availability_zone=availability_zone,
                 pool=pool,
                 preemptible=preemptible,
                 entrypoint=entrypoint,
@@ -1012,6 +1035,7 @@ def _configure_deployable_resource(
     keep_warm: int | None,
     tcp: bool | None,
     region: str | None,
+    availability_zone: str | None,
     pool: PoolInput,
     preemptible: bool | None,
     entrypoint: Iterable[str] | None,
@@ -1036,6 +1060,7 @@ def _configure_deployable_resource(
             env=env,
             secrets=secrets,
             region=region,
+            availability_zone=availability_zone,
             pool=pool,
             preemptible=preemptible,
         )
@@ -1069,6 +1094,8 @@ def _configure_deployable_resource(
             resource.pool = pool
         if region is not None:
             resource.region = region
+        if availability_zone is not None:
+            resource.availability_zone = availability_zone
         if preemptible is not None:
             resource.preemptible = preemptible
         return
@@ -1078,8 +1105,6 @@ def _configure_deployable_resource(
             tcp=tcp,
             entrypoint=entrypoint,
         )
-        if preemptible is not None:
-            unsupported.append("preemptible")
         if unsupported:
             spec = resource.spec()
             _raise_unsupported_overrides(spec, unsupported)
@@ -1103,6 +1128,10 @@ def _configure_deployable_resource(
             resource.pool = pool
         if region is not None:
             resource.region = region
+        if availability_zone is not None:
+            resource.availability_zone = availability_zone
+        if preemptible is not None:
+            resource.preemptible = preemptible
         return
     if isinstance(resource, Pod):
         resource.configure(
@@ -1119,6 +1148,7 @@ def _configure_deployable_resource(
             secrets=list(secrets) if secrets is not None else None,
             tcp=tcp,
             region=region,
+            availability_zone=availability_zone,
             pool=pool,
             preemptible=preemptible,
         )
@@ -1224,6 +1254,7 @@ def _function_options(
     docker_enabled: bool,
     preemptible: bool,
     region: str | None,
+    availability_zone: str,
     pool: PoolInput,
     metadata: dict[str, Any] | None,
 ) -> FunctionOptions:
@@ -1263,6 +1294,7 @@ def _function_options(
         "docker_enabled": docker_enabled,
         "preemptible": preemptible,
         "region": region,
+        "availability_zone": availability_zone,
         "pool": pool,
         "metadata": metadata,
     }
@@ -1302,6 +1334,7 @@ def _endpoint_options(
     docker_enabled: bool,
     preemptible: bool,
     region: str | None,
+    availability_zone: str,
     pool: PoolInput,
     metadata: dict[str, Any] | None,
 ) -> EndpointOptions:
@@ -1338,6 +1371,7 @@ def _endpoint_options(
         "docker_enabled": docker_enabled,
         "preemptible": preemptible,
         "region": region,
+        "availability_zone": availability_zone,
         "pool": pool,
         "metadata": metadata,
     }
@@ -1368,7 +1402,9 @@ def _asgi_options(
     autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None,
     task_policy: TaskPolicy | Mapping[str, Any] | None,
     checkpoint_enabled: bool,
+    preemptible: bool,
     region: str | None,
+    availability_zone: str,
     pool: PoolInput,
 ) -> ASGIOptions:
     return {
@@ -1395,7 +1431,9 @@ def _asgi_options(
         "autoscaler": autoscaler,
         "task_policy": task_policy,
         "checkpoint_enabled": checkpoint_enabled,
+        "preemptible": preemptible,
         "region": region,
+        "availability_zone": availability_zone,
         "pool": pool,
     }
 
@@ -1429,6 +1467,7 @@ def _pod_options(
     docker_enabled: bool,
     preemptible: bool,
     region: str | None,
+    availability_zone: str,
     pool: PoolInput,
     metadata: dict[str, Any],
 ) -> PodOptions:
@@ -1460,6 +1499,7 @@ def _pod_options(
         "docker_enabled": docker_enabled,
         "preemptible": preemptible,
         "region": region,
+        "availability_zone": availability_zone,
         "pool": pool,
         "metadata": metadata,
     }
@@ -1486,6 +1526,7 @@ def _sandbox_options(
     preemptible: bool,
     ports: Iterable[int] | None,
     region: str | None,
+    availability_zone: str,
     pool: PoolInput,
     metadata: Mapping[str, Any] | None,
     command: Iterable[str] | None,
@@ -1510,6 +1551,7 @@ def _sandbox_options(
         "preemptible": preemptible,
         "ports": ports,
         "region": region,
+        "availability_zone": availability_zone,
         "pool": pool,
         "metadata": metadata,
         "command": command,

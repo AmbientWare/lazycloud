@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { billingPlanIdSchema, planEntitlementsSchema } from "./pricing";
+import { billingPlanIdSchema, billingTermsVersionSchema, planEntitlementsSchema } from "./pricing";
 import { userSchema } from "./users";
 
 const timestampSchema = z.string().datetime({ offset: true });
@@ -19,49 +19,80 @@ export const billingHostedSessionResponseSchema = z
   .strict();
 export type BillingHostedSessionResponse = z.infer<typeof billingHostedSessionResponseSchema>;
 
+export const creditPurchaseSchema = z
+  .object({
+    id: z.string().uuid(),
+    amount_nanos: z.number().int().positive(),
+    status: z.enum(["pending", "action_required", "succeeded", "declined", "cancelled"]),
+    checkout_url: z.string().nullable(),
+    funded_at: timestampSchema.nullable(),
+    reversed_nanos: z.number().int().nonnegative(),
+  })
+  .strict();
+export type CreditPurchase = z.infer<typeof creditPurchaseSchema>;
+
+export const creditBalanceSchema = z
+  .object({
+    ready: z.boolean(),
+    balance_nanos: z.number().int(),
+  })
+  .strict();
+export type CreditBalance = z.infer<typeof creditBalanceSchema>;
+
+export const billingPreferencesSchema = z
+  .object({
+    monthly_usage_limit_nanos: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .nullable(),
+    reload_enabled: z.boolean(),
+    reload_threshold_cents: z.number().int().nonnegative(),
+    reload_amount_cents: z.number().int().positive(),
+    reload_monthly_payment_limit_cents: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+export type BillingPreferences = z.infer<typeof billingPreferencesSchema>;
+
+export const automaticReloadStatusSchema = z
+  .object({
+    paused_purchase_id: z.string().uuid().nullable(),
+    pause_reason: z.enum(["declined", "action_required"]).nullable(),
+    pending_purchase_id: z.string().uuid().nullable(),
+    month_started_at: timestampSchema,
+    month_ended_at: timestampSchema,
+    monthly_payment_committed_cents: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const usageBudgetSchema = z
+  .object({
+    month_started_at: timestampSchema,
+    month_ended_at: timestampSchema,
+    limit_nanos: z.number().int().nonnegative().nullable(),
+    spent_nanos: z.number().int().nonnegative(),
+    available_nanos: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+
 export const billingAccountStatuses = ["active", "past_due"] as const;
 export type BillingAccountStatus = (typeof billingAccountStatuses)[number];
 
-/**
- * What this account may spend before the period costs it anything.
- *
- * `allowance_nanos` is what was stamped on the period when it opened, so a
- * change to what the platform grants does not restate the terms of a period
- * somebody is part-way through. `remaining_nanos` is signed and goes negative
- * once the allowance is overspent — clamping it would hide how far past the line
- * an account actually is, which is the one figure worth reading once it is.
- *
- * All three describe usage against this period's terms. None of them is the
- * amount the payment provider will collect, which includes things this platform
- * does not model — a balance carried from a period that fell under the
- * provider's minimum charge, a proration, tax — so nothing rendered from these
- * should be worded as what the invoice will say.
- */
-export const billingAllowanceSchema = z
-  .object({
-    period_started_at: z.string(),
-    period_ended_at: z.string(),
-    allowance_nanos: z.number().int().nonnegative(),
-    spent_nanos: z.number().int().nonnegative(),
-    remaining_nanos: z.number().int(),
-  })
-  .strict();
-export type BillingAllowance = z.infer<typeof billingAllowanceSchema>;
-
-/**
- * The plan an account holds, and what its current cycle came with.
- *
- * `allowance` is null between a cycle ending and the renewal that opens the
- * next, which is a few minutes once a cycle — distinct from an allowance that is
- * spent, and from being on no plan at all.
- */
+/** Verified subscription terms and cycle dates, separate from spendable credit. */
 export const billingPlanSchema = z
   .object({
     id: billingPlanIdSchema,
+    terms_version: billingTermsVersionSchema.nullable(),
+    monthly_nanos: z.number().int().nonnegative().nullable(),
+    included_nanos: z.number().int().nonnegative().nullable(),
+    scheduled_terms_version: billingTermsVersionSchema.nullable(),
+    scheduled_change_at: timestampSchema.nullable(),
     // Sent by the server from the same rate card as the pricing endpoint, so the
     // dashboard needs no local map for a plan name.
     name: z.string(),
-    allowance: billingAllowanceSchema.nullable(),
+    period_started_at: timestampSchema.nullable(),
+    period_ended_at: timestampSchema.nullable(),
   })
   .strict();
 export type BillingPlan = z.infer<typeof billingPlanSchema>;

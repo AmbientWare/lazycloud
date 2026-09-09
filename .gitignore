@@ -39,3 +39,4 @@ secrets-backup/
 *.pem
 *.key
 artifact-changes.md
+/work/

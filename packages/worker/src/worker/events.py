@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import IntEnum, StrEnum
 from math import isfinite
+from threading import Lock
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 from shared.container_requests import (
@@ -102,6 +103,7 @@ class WorkerUsageMetricName(StrEnum):
     MemorySwap = "memory_swap_byte_seconds"
     GpuMemory = "gpu_memory_byte_seconds"
     NetworkIngress = "network_ingress_bytes"
+    NetworkSent = "network_sent_bytes"
     NetworkEgress = "network_egress_bytes"
     NetworkIngressPackets = "network_ingress_packets"
     NetworkEgressPackets = "network_egress_packets"
@@ -232,6 +234,7 @@ class WorkerUsageEvidence(ContractModel):
     disk_used_byte_seconds: float = 0
     gpu_memory_byte_seconds: float = 0
     network_ingress_bytes: int = 0
+    network_sent_bytes: int = 0
     network_egress_bytes: int = 0
     network_ingress_packets: int = 0
     network_egress_packets: int = 0
@@ -246,6 +249,7 @@ class WorkerUsageEvidence(ContractModel):
             self.memory_swap_byte_seconds,
             self.gpu_memory_byte_seconds,
             self.network_ingress_bytes,
+            self.network_sent_bytes,
             self.network_egress_bytes,
             self.network_ingress_packets,
             self.network_egress_packets,
@@ -269,8 +273,21 @@ class WorkerUsageEvidence(ContractModel):
 
 
 @dataclass(slots=True)
+class _BuildCancellation:
+    callback: Callable[[], None] | None = None
+    cancelled: bool = False
+
+
+@dataclass(slots=True)
 class WorkerBuildCancelRegistry:
-    _callbacks: dict[str, Callable[[], None]] = field(default_factory=dict)
+    _callbacks: dict[str, _BuildCancellation] = field(default_factory=dict)
+    _lock: Lock = field(default_factory=Lock)
+
+    def register_pending(self, container_id: str) -> None:
+        if not container_id:
+            raise ValueError("build cancellation requires a container ID")
+        with self._lock:
+            self._callbacks.setdefault(container_id, _BuildCancellation())
 
     def register(self, container_id: str, cancel: Callable[[], None]) -> WorkerBuildCancelResult:
         if not container_id:
@@ -280,8 +297,13 @@ class WorkerBuildCancelRegistry:
                 registered_count=len(self._callbacks),
                 reason="container id is required",
             )
-        replaced = container_id in self._callbacks
-        self._callbacks[container_id] = cancel
+        with self._lock:
+            replaced = container_id in self._callbacks
+            cancellation = self._callbacks.setdefault(container_id, _BuildCancellation())
+            cancellation.callback = cancel
+            cancelled = cancellation.cancelled
+        if cancelled:
+            cancel()
         return WorkerBuildCancelResult(
             action=WorkerBuildCancelAction.Register,
             container_id=container_id,
@@ -292,7 +314,8 @@ class WorkerBuildCancelRegistry:
         )
 
     def unregister(self, container_id: str) -> WorkerBuildCancelResult:
-        found = self._callbacks.pop(container_id, None) is not None
+        with self._lock:
+            found = self._callbacks.pop(container_id, None) is not None
         return WorkerBuildCancelResult(
             action=WorkerBuildCancelAction.Unregister,
             container_id=container_id,
@@ -302,15 +325,20 @@ class WorkerBuildCancelRegistry:
         )
 
     def cancel(self, container_id: str) -> WorkerBuildCancelResult:
-        callback = self._callbacks.get(container_id)
-        if callback is None:
+        with self._lock:
+            cancellation = self._callbacks.get(container_id)
+            if cancellation is not None:
+                cancellation.cancelled = True
+            callback = cancellation.callback if cancellation is not None else None
+        if cancellation is None:
             return WorkerBuildCancelResult(
                 action=WorkerBuildCancelAction.Cancel,
                 container_id=container_id,
                 registered_count=len(self._callbacks),
                 reason="build cancel not registered",
             )
-        callback()
+        if callback is not None:
+            callback()
         return WorkerBuildCancelResult(
             action=WorkerBuildCancelAction.Cancel,
             container_id=container_id,
@@ -566,6 +594,7 @@ def plan_worker_usage_metrics(
     billing_owner: UsageBillingOwner,
     pool_mode: WorkerPoolMode = WorkerPoolMode.Public,
     evidence: WorkerUsageEvidence | None = None,
+    measurement_complete: bool = False,
 ) -> tuple[WorkerUsageMetricPlan, ...]:
     labels: dict[str, JsonValue] = {
         "container_id": request.container_id,
@@ -612,6 +641,7 @@ def plan_worker_usage_metrics(
         (WorkerUsageMetricName.MemorySwap, measured.memory_swap_byte_seconds),
         (WorkerUsageMetricName.GpuMemory, measured.gpu_memory_byte_seconds),
         (WorkerUsageMetricName.NetworkIngress, measured.network_ingress_bytes),
+        (WorkerUsageMetricName.NetworkSent, measured.network_sent_bytes),
         (WorkerUsageMetricName.NetworkEgress, measured.network_egress_bytes),
         (WorkerUsageMetricName.NetworkIngressPackets, measured.network_ingress_packets),
         (WorkerUsageMetricName.NetworkEgressPackets, measured.network_egress_packets),
@@ -622,5 +652,9 @@ def plan_worker_usage_metrics(
         WorkerUsageMetricPlan(name=name, labels=labels, value=float(value))
         for name, value in evidence_values
         if value > 0
+        or (
+            measurement_complete
+            and name in {WorkerUsageMetricName.CpuUsed, WorkerUsageMetricName.MemoryRss}
+        )
     )
-    return tuple(plan for plan in plans if plan.value > 0)
+    return tuple(plans)

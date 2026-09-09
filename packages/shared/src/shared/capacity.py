@@ -104,6 +104,7 @@ class CapacityAcquisitionStatus(StringEnum):
     Requested = "requested"
     AtLimit = "at_limit"
     TemporarilyUnavailable = "temporarily_unavailable"
+    Rejected = "rejected"
     Unsupported = "unsupported"
 
 
@@ -145,6 +146,7 @@ class CapacityAcquisitionResult(ContractModel):
     reservation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     desired_unit: int = Field(ge=1)
     target_machine_id: str | None = None
+    owns_capacity: bool = False
     failure_code: CapacityFailureCode | None = None
     reason: str = Field(default="", max_length=TERMINAL_REASON_MAX_LENGTH)
 

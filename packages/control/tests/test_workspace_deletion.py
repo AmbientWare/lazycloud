@@ -445,11 +445,13 @@ def test_workspace_deletion_keeps_the_priced_ledger_and_the_unsent_meter_events(
                 id=str(uuid4()),
                 workspace_id=workspace.id,
                 identifier=usage_record_id,
+                usage_record_id=usage_record_id,
                 provider_customer_id="cus_test",
                 meter_event_name="compute_runtime",
                 value_nanos=60_000,
                 pricing_version="test-pricing",
                 occurred_at=now,
+                metering_ended_at=now + timedelta(minutes=1),
                 status="pending",
                 next_attempt_at=now,
             )

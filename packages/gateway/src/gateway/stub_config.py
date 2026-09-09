@@ -97,6 +97,9 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
             entrypoint=request.entrypoint,
         ),
         runtime=StubRuntimeConfig(
+            region=request.region,
+            availability_zone=request.availability_zone,
+            preemptible=request.preemptible,
             cpu=resolve_cpu(request.stub_type, request.cpu),
             memory=resolve_memory(request.stub_type, request.memory),
             disk=resolve_disk(request.disk),
@@ -215,6 +218,9 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
             ignore_python=image_config.ignore_python,
         ),
         resources=Resources(
+            region=runtime_config.region,
+            availability_zone=runtime_config.availability_zone,
+            preemptible=runtime_config.preemptible,
             # Carried whole, pair included: this is what a deployment reports back
             # about itself, and a ceiling its author set is part of that.
             cpu=runtime_config.cpu,

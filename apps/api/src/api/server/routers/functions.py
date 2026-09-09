@@ -28,6 +28,7 @@ from api.server.deployed_stubs import (
 )
 from api.server.http import request_query_params
 from api.server.ownership import require_function_stub_workspace, require_task_workspace
+from api.server.public_transfers import attribute_public_transfer
 from api.server.service_dependencies import control_plane_service, function_service
 from api.server.services import ApiServices, FunctionApiService
 
@@ -49,31 +50,41 @@ type HttpFunctionInvocation = Annotated[FunctionJsonInvocation, Depends(_http_in
 @router.post("/invoke", response_model=FunctionInvokeResponse)
 def function_invoke(
     request: FunctionInvokeBody,
+    connection: Request,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> FunctionInvokeResponse:
     require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
-    return service.function_invoke(request)
+    result = service.function_invoke(request)
+    attribute_public_transfer(
+        connection,
+        workspace_id=workspace_id,
+        resource_type="stub",
+        resource_id=request.stub_id,
+        stub_id=request.stub_id,
+    )
+    return result
 
 
 @router.post("/invoke/stream", response_class=StreamingResponse)
 def function_invoke_stream(
     request: FunctionInvokeBody,
+    connection: Request,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> StreamingResponse:
     require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
-    # Asked here rather than left to the service, because a streaming response
-    # sends its status before the generator runs: a refusal raised inside it
-    # cannot be a 402 and reaches the caller as a stream that simply ends,
-    # which reads as the platform losing the request rather than declining it.
-    service.assert_may_accept_invocation(request.stub_id)
-    # Admission is asked inside the invocation below, which runs before the
-    # response begins and knows the cards the function wants. Repeating it here
-    # would be the same question asked without the shape that decides it.
+    # Run admission before streaming starts so refusals retain their HTTP status.
     initial = service.function_invoke(request)
+    attribute_public_transfer(
+        connection,
+        workspace_id=workspace_id,
+        resource_type="stub",
+        resource_id=request.stub_id,
+        stub_id=request.stub_id,
+    )
     return StreamingResponse(
         _function_ndjson(
             service.function_invoke_stream(
@@ -110,6 +121,7 @@ def function_set_result(
 @router.post("/monitor", response_model=FunctionMonitorResponse)
 def function_monitor(
     request: FunctionMonitorRequest,
+    connection: Request,
     workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -117,12 +129,21 @@ def function_monitor(
 ) -> FunctionMonitorResponse:
     require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
     require_task_workspace(services, request.task_id, workspace_id)
-    return service.function_monitor(request)
+    result = service.function_monitor(request)
+    attribute_public_transfer(
+        connection,
+        workspace_id=workspace_id,
+        resource_type="task",
+        resource_id=request.task_id,
+        stub_id=request.stub_id,
+    )
+    return result
 
 
 @router.post("/id/{stub_id}", response_model=FunctionInvokeResponse)
 def deployed_function_invoke_by_id(
     stub_id: str,
+    connection: Request,
     invocation: HttpFunctionInvocation,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
@@ -138,12 +159,13 @@ def deployed_function_invoke_by_id(
         resource_name="function",
         workspace=workspace_id,
     )
-    return _invoke_deployed_function(stub, invocation, service)
+    return _invoke_deployed_function(stub, invocation, service, connection)
 
 
 @router.post("/public/{stub_id}", response_model=FunctionInvokeResponse)
 def deployed_public_function_invoke_by_id(
     stub_id: str,
+    connection: Request,
     invocation: HttpFunctionInvocation,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
@@ -157,12 +179,13 @@ def deployed_public_function_invoke_by_id(
         public=True,
         resource_name="function",
     )
-    return _invoke_deployed_function(stub, invocation, service)
+    return _invoke_deployed_function(stub, invocation, service, connection)
 
 
 @router.post("/{deployment_name}/latest", response_model=FunctionInvokeResponse)
 def deployed_function_invoke_by_latest_path(
     deployment_name: str,
+    connection: Request,
     invocation: HttpFunctionInvocation,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
@@ -176,13 +199,14 @@ def deployed_function_invoke_by_latest_path(
         workspace=workspace_id,
         resource_name="function",
     )
-    return _invoke_deployed_function(stub, invocation, service)
+    return _invoke_deployed_function(stub, invocation, service, connection)
 
 
 @router.post("/{deployment_name}/v{version}", response_model=FunctionInvokeResponse)
 def deployed_function_invoke_by_version(
     deployment_name: str,
     version: int,
+    connection: Request,
     invocation: HttpFunctionInvocation,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
@@ -196,20 +220,29 @@ def deployed_function_invoke_by_version(
         workspace=workspace_id,
         resource_name="function",
     )
-    return _invoke_deployed_function(stub, invocation, service)
+    return _invoke_deployed_function(stub, invocation, service, connection)
 
 
 def _invoke_deployed_function(
     stub: StubRecord,
     invocation: FunctionJsonInvocation,
     service: FunctionApiService,
+    connection: Request,
 ) -> FunctionInvokeResponse:
-    return service.function_invoke(
+    result = service.function_invoke(
         FunctionInvokeBody(
             stub_id=stub.id,
             invocation=invocation,
         )
     )
+    attribute_public_transfer(
+        connection,
+        workspace_id=stub.workspace_id,
+        resource_type="stub",
+        resource_id=stub.id,
+        stub_id=stub.id,
+    )
+    return result
 
 
 async def _function_ndjson(

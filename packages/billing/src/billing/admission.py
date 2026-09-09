@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from database.repositories.billing import BillingAccountRepository
-from database.repositories.billing_allowance import BillingAllowanceRepository
+from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_plan_changes import BillingPlanChangeIntentRepository
 from database.repositories.compute import AwsAccountConnectionRepository
 from database.repositories.custom_domains import CustomDomainRepository
@@ -20,13 +20,11 @@ from shared.billing_rate_card import (
     PlanEntitlements,
     account_terms,
     complimentary_terms,
-    published_placement_rate,
     published_plan,
 )
 from shared.errors import (
     CapacityLimitReachedError,
     ConflictError,
-    InvalidInputError,
     PaymentRequiredError,
 )
 from shared.gpu import GPU_ANY, NO_GPU, normalize_gpu_type
@@ -34,77 +32,39 @@ from shared.placement import ProductRegion
 from shared.timestamps import utc_now
 from sqlalchemy.orm import Session
 
+from billing.preferences import BillingPreferencesService
+
 
 @dataclass(frozen=True, slots=True)
 class DatabaseBillingAdmission:
-    """Whether an account may start more work.
+    """Check account credit and plan entitlements before starting billed work."""
 
-    Asked before a container exists, in the transaction that would create it, so
-    a refusal leaves nothing behind — no row, no published change, and nothing
-    reserved at a provider. This mirrors how a paused app is refused, and for the
-    same reason: a check after the record is written has to undo it, and the
-    version of that which runs after a crash never happens at all.
+    def assert_may_take_on_billed_work(
+        self,
+        session: Session,
+        *,
+        workspace_id: str,
+    ) -> None:
+        resolved = self._billable_account(session, workspace_id=workspace_id)
+        if resolved is None:
+            raise PaymentRequiredError("billed work requires a workspace billing owner")
+        self._assert_funds(session, user_id=resolved[0])
 
-    Only ever refuses *new* work — a container about to start, a volume about to
-    exist. Containers already running are stopped, when they are stopped at all,
-    by the sweep that watches accounts nobody can be charged for, a decision made
-    against the whole account rather than against whichever container happened to
-    start next. A volume that already exists is stopped by nothing, which is why
-    the refusal is the only place it can be caught.
-
-    The two questions below are split by what they ask, not by what is asking.
-    Everything billed asks the first; only a container carries a count, so only a
-    container has a second method.
-
-    The first question is still the only one that matters for an account somebody
-    can bill: will what this runs reach an invoice somebody is paying? For those
-    accounts, how much it costs is not part of it. Every one holds a subscription
-    carrying the metered prices, so overage is billed by the provider and chased
-    through their card — spending past what a plan includes is something to
-    invoice, never something to refuse on.
-
-    An account with no card on file is the case that reasoning does not cover.
-    There is no card to chase and no invoice that will ever be paid, so what it
-    spends past its allowance is not billed later, it is lost. That is the one
-    place an amount decides, and it decides only for accounts in that state:
-    attaching a card moves them onto the plan's terms and out of this check for
-    good.
-
-    Concurrency is refused separately and differently, because an account at its
-    limit owes nothing and paying would not help it. It is a bound on how much a
-    single account can have running before anything notices — the metering
-    interval means spend is always seen slightly late, and the limit is what
-    keeps the size of that blind spot proportional. Two pools rather than one:
-    a container counts against the CPU pool or, when it asks for cards, against
-    the GPU pool by the number of cards, so a plan's GPU allowance can never be
-    spent on web apps and neither figure has to be read as a share of the other.
-
-    Read from local rows rather than from the provider, because this runs on
-    every container start and a network round trip there is a start that fails
-    whenever the provider is slow.
-    """
-
-    def assert_may_take_on_billed_work(self, session: Session, *, workspace_id: str) -> None:
-        """Refuse an account whose next billed thing would reach no invoice.
-
-        Named for the question rather than for what is being created, because the
-        answer does not depend on which resource asks. A volume asks it before it
-        exists; anything else the platform starts charging for asks the same
-        thing and needs no method of its own.
-
-        What this does not cover is worth stating plainly for volumes, which are
-        the one billed thing that keeps costing after everything stops. Only
-        creation is refused, and only the record: an account that made a volume
-        while it still had a fraction of a cent left keeps it, and nothing here
-        or anywhere else bounds how large it grows — uploads are not admitted and
-        there is no size quota. Reaching data that already exists is deliberately
-        not refused, since an account locked out of its own files would be a
-        data-loss incident dressed as a billing control. So this shrinks the
-        window rather than closing it, and closing it needs either a quota or an
-        admission on the write path, neither of which exists yet.
-        """
-
-        self._billable_account(session, workspace_id=workspace_id)
+    def _assert_funds(self, session: Session, *, user_id: str) -> None:
+        account = BillingAccountRepository(session).get_by_user(user_id)
+        if account is not None and account.complimentary_since is not None:
+            return
+        credits = BillingCreditRepository(session)
+        cutover = credits.cutover(user_id=user_id)
+        if cutover is None or cutover.completed_at is None:
+            raise PaymentRequiredError("credit migration must complete before starting billed work")
+        if credits.balance(user_id=user_id, at=utc_now()) <= 0:
+            raise PaymentRequiredError("add credit before starting more billed work")
+        preferences = BillingPreferencesService(session)
+        if preferences.get(user_id=user_id).monthly_usage_limit_nanos is not None:
+            budget = preferences.usage_budget(user_id=user_id)
+            if budget.available_nanos is not None and budget.available_nanos <= 0:
+                raise PaymentRequiredError("the monthly usage limit has been reached")
 
     def admit_container_start(
         self,
@@ -114,26 +74,23 @@ class DatabaseBillingAdmission:
         gpu: Sequence[str],
         gpu_count: int,
         region: ProductRegion | None = None,
+        availability_zone: str = "",
     ) -> list[str]:
-        """The question above, plus what a container's own shape is bounded by.
-
-        Answers with the models to schedule rather than only yes or no, because
-        `any` is a request the plan narrows: a free account asking for whatever
-        the platform has must reach the scheduler naming the cards it may hold,
-        or the first offer taken would be hardware its plan does not sell it.
-        """
+        """Check funds and concurrency, resolving GPU wildcards against plan entitlements."""
 
         resolved = self._billable_account(session, workspace_id=workspace_id)
-        if region is not None:
-            if resolved is not None and not resolved[1].entitlements.region_selection:
-                raise PaymentRequiredError("region selection requires the Team plan")
-            if published_placement_rate(region) is None:
-                raise InvalidInputError(f"region {region.value} is not available for placement")
+        if (
+            (region is not None or availability_zone)
+            and resolved is not None
+            and not resolved[1].entitlements.region_selection
+        ):
+            raise PaymentRequiredError(
+                "region or availability zone selection requires the Team plan"
+            )
         if resolved is None:
-            # No account to judge, so nothing to narrow either: what was asked
-            # for is what gets scheduled.
-            return list(gpu)
+            raise PaymentRequiredError("billed work requires a workspace billing owner")
         owner_user_id, terms = resolved
+        self._assert_funds(session, user_id=owner_user_id)
         containers = ContainerRepository(session)
         if gpu_count == 0 and not gpu:
             live = containers.count_live_cpu_for_owner(owner_user_id=owner_user_id)
@@ -156,14 +113,7 @@ class DatabaseBillingAdmission:
         return models
 
     def assert_may_create_workspace(self, session: Session, *, owner_user_id: str) -> None:
-        """Refuse an account a workspace beyond what its plan comes with.
-
-        The first workspace is allowed before anything is known about the
-        account, because sign-in provisions it before billing exists: gated on
-        terms, a new customer's very first workspace would be refused for an
-        account that is a few statements away from having a subscription, and
-        the sign-in that was meant to create both would leave neither.
-        """
+        """Allow the first workspace before sign-in provisions billing."""
 
         owned = WorkspaceMemberRepository(session).owned_workspace_count(owner_user_id)
         if owned == 0:
@@ -204,14 +154,7 @@ class DatabaseBillingAdmission:
         workspace_id: str,
         email: str,
     ) -> None:
-        """Whether an offer to this address could be honoured if it were accepted now.
-
-        An open offer holds a seat: five invitations against one free seat would
-        send five emails and refuse four people at the door, and the refusal
-        should land on the administrator who can act on it. An address already
-        seated in one of this owner's workspaces takes no new seat, the same
-        allowance adding that account by id gets.
-        """
+        """Count open invitations as seats so acceptance cannot exceed the plan."""
         resolved = self._billable_account(session, workspace_id=workspace_id)
         if resolved is None:
             return
@@ -304,25 +247,13 @@ class DatabaseBillingAdmission:
     def _billable_account(
         self, session: Session, *, workspace_id: str
     ) -> tuple[str, AccountTerms] | None:
-        """Whether this workspace's usage will reach an invoice somebody pays.
-
-        Returns the account and what it is allowed, so the caller that also has a
-        count to check does not read the same rows twice. `None` means there was
-        no account to judge rather than that one passed.
-        """
+        """Resolve the workspace payer and entitlements under the account lock."""
 
         owner = WorkspaceMemberRepository(session).owner(workspace_id)
         if owner is None:
-            # A workspace with no owner row is reachable by nobody, so there is
-            # no account to judge and nothing this can decide.
             return None
         account = BillingAccountRepository(session).get_by_user(owner.user_id, for_update=True)
         if account is not None and account.complimentary_since is not None:
-            # Nothing this runs is owed, so whether it would reach an invoice is
-            # not a question. What is still asked is how much may run at once,
-            # which is a bound on the platform's own exposure rather than on a
-            # bill, and the Team plan's figure is the one every waived account
-            # is held to.
             return owner.user_id, complimentary_terms()
         if account is None or not account.provider_subscription_id or account.plan is None:
             raise PaymentRequiredError(
@@ -336,21 +267,6 @@ class DatabaseBillingAdmission:
             )
         has_card = account.payment_method_attached_at is not None
         terms = account_terms(account.plan, has_payment_method=has_card)
-        if not has_card:
-            spent = BillingAllowanceRepository(session).current_period(
-                user_id=owner.user_id, at=utc_now()
-            )
-            # No period covers this instant only in the seam between a cycle
-            # ending at the provider and the delivery that opens the next one
-            # here. An account with a card is admitted through it and billed for
-            # what it does; one without has no terms to spend against, and
-            # admitting on absent terms is the unbounded-free-compute state this
-            # whole check exists to make unreachable.
-            if spent is None or spent.remaining_nanos <= 0:
-                raise PaymentRequiredError(
-                    "this account has used the compute it gets without a payment method; "
-                    "add a card to keep running work"
-                )
         return owner.user_id, terms
 
     def _account_terms_for_user(self, session: Session, *, user_id: str) -> AccountTerms:
@@ -380,14 +296,7 @@ class DatabaseBillingAdmission:
 
 
 def _admitted_gpu_models(gpu: Sequence[str], entitlements: PlanEntitlements) -> list[str]:
-    """The models a GPU request is to be scheduled with, or a refusal.
-
-    A request for `any` is answered with the plan's own models rather than
-    passed through, so the wildcard is resolved once here instead of by every
-    pool that later has to decide what an account may be offered. A request that
-    names models is answered with those models, because narrowing a stated
-    preference would run something other than what was asked for.
-    """
+    """Expand wildcards to allowed GPUs and reject disallowed explicit models."""
 
     offered = tuple(model.value for model in entitlements.allowed_gpu_types)
     named: list[str] = []
@@ -403,28 +312,20 @@ def _admitted_gpu_models(gpu: Sequence[str], entitlements: PlanEntitlements) -> 
                 f"{', '.join(offered)}. The Team plan runs every model the platform rents."
             )
         named.append(normalized)
-    # A count without a model is the wildcard said another way, and the plan
-    # narrows it the same.
+    # A GPU count without a model requests any allowed model.
     return named or list(offered)
 
 
 def _unofferable_gpu_violations(
     session: Session, *, user_id: str, target: BillingPlanId
 ) -> list[str]:
-    """What this account is running that the plan it is moving to does not sell.
-
-    Counted per model rather than per container, because the model is what the
-    customer has to act on: stopping some of six containers means nothing if the
-    card under them is the one the plan drops.
-    """
+    """Group incompatible running containers by GPU model for the refusal message."""
 
     offered = tuple(model.value for model in published_plan(target).entitlements.allowed_gpu_types)
     running: dict[str, int] = {}
     for record in ContainerRepository(session).live_gpu_containers_for_owner(owner_user_id=user_id):
         for entry in record.gpu:
             normalized = normalize_gpu_type(entry)
-            # A container that named no model, or asked for whatever was going,
-            # is holding a card the target plan can offer by definition.
             if normalized in (NO_GPU, GPU_ANY) or normalized in offered:
                 continue
             running[normalized] = running.get(normalized, 0) + 1

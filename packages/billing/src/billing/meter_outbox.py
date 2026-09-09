@@ -14,7 +14,7 @@ from database.repositories.billing_outbox import BillingMeterOutboxRepository, C
 from shared.billing_quotes import BilledDimension
 from shared.errors import InvalidInputError
 from shared.events import EventLevel
-from shared.payments import METER_EVENT_NAMES, PaymentProvider
+from shared.payments import METER_EVENT_NAMES, SubscriptionPaymentProvider
 from shared.timestamps import to_utc, utc_now
 
 from billing.sweeps import BillingEventSink, next_attempt_at
@@ -36,7 +36,6 @@ a second charge.
 """
 
 CLAIM_TTL = timedelta(minutes=5)
-SENT_RETENTION = timedelta(days=7)
 
 _RETRY_BASE = timedelta(seconds=5)
 _RETRY_CAP = timedelta(seconds=900)
@@ -102,7 +101,7 @@ class BillingMeterOutboxService:
     """
 
     database: DatabaseClient
-    payments: Callable[[], PaymentProvider]
+    payments: Callable[[], SubscriptionPaymentProvider]
     events: BillingEventSink
     batch_limit: int = 200
     max_batches: int = 5
@@ -156,20 +155,6 @@ class BillingMeterOutboxService:
             count, value_nanos = BillingMeterOutboxRepository(session).abandoned_total()
         return AbandonedMeterEvents(count=count, value_nanos=value_nanos)
 
-    def prune(self, *, now: datetime | None = None, limit: int = 1_000) -> int:
-        """Delete acknowledged rows past their retention, in one bounded batch.
-
-        Only the acknowledged ones. An abandoned row is the evidence of money
-        that never left, and it is kept until somebody has answered for it.
-        """
-
-        moment = to_utc(now or utc_now())
-        with self.database.session() as session:
-            return BillingMeterOutboxRepository(session).prune(
-                sent_before=moment - SENT_RETENTION,
-                limit=limit,
-            )
-
     def _reclaim(self, now: datetime) -> None:
         with self.database.session() as session:
             BillingMeterOutboxRepository(session).reclaim(
@@ -179,7 +164,7 @@ class BillingMeterOutboxService:
 
     def _deliver(
         self,
-        payments: PaymentProvider,
+        payments: SubscriptionPaymentProvider,
         claimed: Sequence[ClaimedMeterEvent],
     ) -> list[_Outcome]:
         with ThreadPoolExecutor(
@@ -188,7 +173,7 @@ class BillingMeterOutboxService:
         ) as pool:
             return list(pool.map(partial(self._send, payments), claimed))
 
-    def _send(self, payments: PaymentProvider, event: ClaimedMeterEvent) -> _Outcome:
+    def _send(self, payments: SubscriptionPaymentProvider, event: ClaimedMeterEvent) -> _Outcome:
         """Offer one event, answering with what should become of its row.
 
         Every failure is caught here because the batch is a set of independent
@@ -324,7 +309,6 @@ __all__ = [
     "MAX_ATTEMPTS",
     "METER_EVENT_ABANDONED_ACTION",
     "METER_EVENT_RESOURCE_TYPE",
-    "SENT_RETENTION",
     "AbandonedMeterEvents",
     "BillingMeterOutboxService",
     "MeterEventDrainResult",

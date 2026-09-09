@@ -42,7 +42,24 @@ class BillingAccountTable(IdTable, DatabaseBase):
         # is sized to, so the schema holds the vocabulary rather than trusting
         # every writer to. The empty string is the unprovisioned row, the same
         # way it is for the provider identifiers beside it.
-        CheckConstraint("plan IN ('', 'free', 'team')", name="ck_billing_accounts_plan"),
+        CheckConstraint(
+            "plan IN ('', 'free', 'team', 'business')", name="ck_billing_accounts_plan"
+        ),
+        CheckConstraint(
+            "subscription_terms_version IS NULL OR "
+            "(plan = 'free' AND subscription_terms_version IN ('free-v1', 'free-v2')) OR "
+            "(plan = 'team' AND subscription_terms_version IN ('team-v1', 'team-v2')) OR "
+            "(plan = 'business' AND subscription_terms_version = 'business-v1')",
+            name="ck_billing_accounts_subscription_terms",
+        ),
+        CheckConstraint(
+            "(scheduled_terms_version IS NULL AND scheduled_change_at IS NULL) OR "
+            "(scheduled_terms_version IS NOT NULL AND "
+            "scheduled_terms_version IN "
+            "('free-v1', 'team-v1', 'free-v2', 'team-v2', 'business-v1') "
+            "AND scheduled_change_at IS NOT NULL)",
+            name="ck_billing_accounts_scheduled_terms",
+        ),
         # A customer belongs to one account. Two rows claiming one would make
         # every question asked of the provider about that customer ambiguous, and
         # the answer would be whichever row came back first. Partial because the
@@ -93,6 +110,9 @@ class BillingAccountTable(IdTable, DatabaseBase):
     rather than a read of the provider because the dashboard and an upgrade both
     need it without a round trip, and it is cleared with the subscription so the
     two never disagree about what the account is on."""
+    subscription_terms_version: Mapped[str | None] = mapped_column(String(32))
+    scheduled_terms_version: Mapped[str | None] = mapped_column(String(32))
+    scheduled_change_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     payment_method_attached_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

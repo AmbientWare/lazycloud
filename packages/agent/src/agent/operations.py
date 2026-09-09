@@ -1407,7 +1407,6 @@ def build_agent_worker_config(
             checkpoint_root="/checkpoints",
         ),
         monitoring=WorkerMonitoringConfiguration(
-            metrics_enabled=True,
             metrics_interval_seconds=3.0,
         ),
     )

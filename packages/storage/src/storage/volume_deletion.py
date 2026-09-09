@@ -7,6 +7,7 @@ from typing import Protocol
 
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.storage import VolumeRepository
+from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from shared.containers import LIVE_CONTAINER_STATUSES
 from shared.errors import ConflictError, NotFoundError
@@ -39,21 +40,7 @@ class VolumeDeletionService:
 
     def request(self, name: str, *, workspace_id: str) -> bool:
         with self.context.database.session() as session:
-            WorkspaceRepository(session).lock_storage_accounting_owner(workspace_id)
-            volumes = VolumeRepository(session)
-            row = volumes.lock(name, workspace_id=workspace_id, allow_deleting=True)
-            if row.deletion_requested_at is None:
-                for container in volumes.unreleased_mounts(name, workspace_id=workspace_id):
-                    worker_id = container.runtime_worker_id or container.worker_id
-                    if container.status in LIVE_CONTAINER_STATUSES:
-                        raise ConflictError(
-                            f"stop container {container.id} before deleting volume {name}"
-                        )
-                    if worker_id and not self.worker_absence.is_absent(worker_id):
-                        raise ConflictError(
-                            f"container {container.id} has not released volume {name}"
-                        )
-                row.deletion_requested_at = utc_now()
+            self.request_in_session(session, name, workspace_id=workspace_id)
         self._publish(workspace_id, name, WorkspaceChangeType.Updated)
         try:
             return self.finish(name, workspace_id=workspace_id)
@@ -63,6 +50,27 @@ class VolumeDeletionService:
                 extra={"workspace_id": workspace_id, "volume_name": name},
             )
             return False
+
+    def request_in_session(
+        self,
+        session: DatabaseSession,
+        name: str,
+        *,
+        workspace_id: str,
+        now: datetime | None = None,
+    ) -> None:
+        WorkspaceRepository(session).lock_storage_accounting_owner(workspace_id)
+        volumes = VolumeRepository(session)
+        row = volumes.lock(name, workspace_id=workspace_id, allow_deleting=True)
+        if row.deletion_requested_at is not None:
+            return
+        for container in volumes.unreleased_mounts(name, workspace_id=workspace_id):
+            worker_id = container.runtime_worker_id or container.worker_id
+            if container.status in LIVE_CONTAINER_STATUSES:
+                raise ConflictError(f"stop container {container.id} before deleting volume {name}")
+            if worker_id and not self.worker_absence.is_absent(worker_id):
+                raise ConflictError(f"container {container.id} has not released volume {name}")
+        row.deletion_requested_at = to_utc(now or utc_now())
 
     def finish(self, name: str, *, workspace_id: str) -> bool:
         self.metering.finalize_volume_deletion(name, workspace_id=workspace_id)

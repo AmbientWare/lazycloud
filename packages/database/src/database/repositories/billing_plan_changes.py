@@ -5,7 +5,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from database.tables.billing_plan_changes import BillingPlanChangeIntentTable
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.errors import ConflictError
 from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +37,8 @@ class ClaimedPlanChange:
     provider_customer_id: str
     provider_subscription_id: str
     target_plan: BillingPlanId
+    target_terms_version: SubscriptionTermsVersion
+    created_at: datetime
     attempts: int
 
 
@@ -51,6 +53,7 @@ class BillingPlanChangeIntentRepository:
         provider_customer_id: str,
         provider_subscription_id: str,
         target_plan: BillingPlanId,
+        target_terms_version: SubscriptionTermsVersion,
         now: datetime,
         claim_token: str,
     ) -> ClaimedPlanChange:
@@ -72,6 +75,7 @@ class BillingPlanChangeIntentRepository:
             provider_customer_id=provider_customer_id,
             provider_subscription_id=provider_subscription_id,
             target_plan=target_plan.value,
+            target_terms_version=target_terms_version.value,
             status="settling",
             attempts=1,
             next_attempt_at=now,
@@ -92,6 +96,8 @@ class BillingPlanChangeIntentRepository:
             provider_customer_id=row.provider_customer_id,
             provider_subscription_id=row.provider_subscription_id,
             target_plan=target_plan,
+            target_terms_version=target_terms_version,
+            created_at=row.created_at,
             attempts=row.attempts,
         )
 
@@ -137,6 +143,8 @@ class BillingPlanChangeIntentRepository:
                 BillingPlanChangeIntentTable.provider_customer_id,
                 BillingPlanChangeIntentTable.provider_subscription_id,
                 BillingPlanChangeIntentTable.target_plan,
+                BillingPlanChangeIntentTable.target_terms_version,
+                BillingPlanChangeIntentTable.created_at,
                 BillingPlanChangeIntentTable.attempts,
             )
             .execution_options(synchronize_session=False)
@@ -148,6 +156,8 @@ class BillingPlanChangeIntentRepository:
                 provider_customer_id=row.provider_customer_id,
                 provider_subscription_id=row.provider_subscription_id,
                 target_plan=BillingPlanId(row.target_plan),
+                target_terms_version=SubscriptionTermsVersion(row.target_terms_version),
+                created_at=row.created_at,
                 attempts=row.attempts,
             )
             for row in claimed

@@ -72,7 +72,7 @@ exactly like a connector that is merely unhealthy.
 ## Backend and credentials
 
 Terraform state contains the tunnel secret. Use the shared private
-[R2 state backend](../terraform-state/README.md), whose bucket is owned by the
+[S3 state backend](../terraform-state/README.md), whose bucket is owned by the
 operator. Existing installations transfer their current state before apply.
 Keep Cloudflare credentials out of `*.tfvars`.
 

@@ -26,16 +26,42 @@ from shared.http.volumes import (
     ListVolumesResponse,
     MovePathRequest,
     MovePathResponse,
+    PresignedUrlMethod,
     StatPathRequest,
     StatPathResponse,
 )
+from shared.identity import AuthScope
 
-from api.server.auth import read_access, read_workspace, write_workspace
-from api.server.dependencies import current_services
+from api.server.auth import (
+    read_access,
+    read_workspace,
+    write_transfer,
+    write_workspace,
+)
+from api.server.dependencies import (
+    AuthorizationCredentials,
+    current_services,
+    require_transfer_scope,
+    require_workspace_scope,
+)
 from api.server.service_dependencies import volume_service
 from api.server.services import ApiServices
 
 router = APIRouter(prefix="/api/v1/volumes", tags=["volume"])
+
+
+async def _presigned_url_workspace(
+    request: CreatePresignedUrlRequest,
+    services: ApiServices = Depends(current_services),
+    credentials: AuthorizationCredentials = None,
+    workspace: str | None = None,
+) -> str:
+    continuing_upload = request.method is PresignedUrlMethod.UploadPart
+    scope = AuthScope.Write if continuing_upload else AuthScope.Read
+    workspace_id = await require_workspace_scope(scope)(services, credentials, workspace)
+    if continuing_upload:
+        return workspace_id
+    return await require_transfer_scope(scope)(services, workspace_id)
 
 
 @router.get("", response_model=ListVolumesResponse)
@@ -80,7 +106,7 @@ def get_file_service_info(
 @router.post("/presigned-url", response_model=CreatePresignedUrlResponse)
 def create_presigned_url(
     request: CreatePresignedUrlRequest,
-    workspace_id: read_workspace,
+    workspace_id: str = Depends(_presigned_url_workspace),
     service: VolumeControlService = Depends(volume_service),
 ) -> CreatePresignedUrlResponse:
     return service.create_presigned_url(request, workspace_id=workspace_id)
@@ -89,7 +115,7 @@ def create_presigned_url(
 @router.post("/multipart-upload", response_model=CreateMultipartUploadResponse)
 def create_multipart_upload(
     request: CreateMultipartUploadRequest,
-    workspace_id: write_workspace,
+    workspace_id: write_transfer,
     service: VolumeControlService = Depends(volume_service),
 ) -> CreateMultipartUploadResponse:
     return service.create_multipart_upload(request, workspace_id=workspace_id)
@@ -116,7 +142,7 @@ def abort_multipart_upload(
 @router.post("/copy-path", response_model=CopyPathResponse)
 def copy_path_stream(
     request: CopyPathBody,
-    workspace_id: write_workspace,
+    workspace_id: write_transfer,
     service: VolumeControlService = Depends(volume_service),
 ) -> CopyPathResponse:
     return service.copy_path(

@@ -33,6 +33,7 @@ class WorkerPoolCapacity(ContractModel):
 class SchedulingRequest(ContractModel):
     backfill: bool = False
     region: ProductRegion | None = None
+    availability_zone: str = ""
     id: str
     owner_user_id: str = ""
     """Account that owns the requesting workspace; what private placement compares."""
@@ -56,6 +57,7 @@ class SchedulingRequest(ContractModel):
 
 class WorkerCapacity(ContractModel):
     region: ProductRegion | None = None
+    availability_zone: str = ""
     worker_id: str
     pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     owner_user_id: str = ""
@@ -112,6 +114,8 @@ class WorkerCapacity(ContractModel):
             return "worker is private to another account"
         if request.region is not None and self.region != request.region:
             return "worker is outside the selected region"
+        if request.availability_zone and self.availability_zone != request.availability_zone:
+            return "worker is outside the selected availability zone"
         if request.pool_selector and request.pool_selector != self.pool:
             return f"pool selector {request.pool_selector!r} != pool {self.pool!r}"
         if not request.pool_selector and self.requires_pool_selector:
@@ -136,6 +140,8 @@ class WorkerCapacity(ContractModel):
         if not self.serves_owner(request.owner_user_id):
             return False
         if request.region is not None and self.region != request.region:
+            return False
+        if request.availability_zone and self.availability_zone != request.availability_zone:
             return False
         if request.pool_selector and request.pool_selector != self.pool:
             return False

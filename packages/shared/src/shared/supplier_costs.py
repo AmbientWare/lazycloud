@@ -58,6 +58,7 @@ class SupplierCostTerms(ContractModel):
     currency: Literal["USD"] = "USD"
     source: str | None = Field(default=None, min_length=1)
     observed_at: datetime | None = None
+    effective_at: datetime | None = None
     compute_hourly_micros: int | None = Field(default=None, ge=0)
     root_disk_hourly_micros: int | None = Field(default=None, ge=0)
     public_ipv4_hourly_micros: int | None = Field(default=None, ge=0)

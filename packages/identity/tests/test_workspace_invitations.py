@@ -10,7 +10,7 @@ from database.repositories.identity import UserRepository
 from identity.auth import AuthService
 from identity.invitations import WorkspaceInvitationService
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.errors import ConflictError, NotFoundError
 from shared.identity import AuthTokenRecord, WorkspaceInvitationRole, WorkspaceRole
 from shared.timestamps import utc_now
@@ -72,6 +72,9 @@ def _owner(services: ApiServices, workspace_id: str, email: str) -> tuple[str, A
             provider_subscription_id=f"sub_{owner.user_id}",
             provider_credit_grant_id=f"credgr_{owner.user_id}",
             plan=BillingPlanId.Team,
+            subscription_terms_version=SubscriptionTermsVersion.Team,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
     return _signed_in(services, owner.user_id, "owner", email)
 

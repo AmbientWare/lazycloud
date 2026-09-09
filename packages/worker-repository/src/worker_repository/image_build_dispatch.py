@@ -93,7 +93,9 @@ class DurableImageBuildDispatch:
         if request.container_id != build_id or request.workspace_id != workspace_id:
             raise AuthorizationDeniedError("image build dispatch identity does not match")
         self.containers.reserve_image_build_container(
-            container_id=build_id, workspace_id=workspace_id, image_id=record.image_id or ""
+            container_id=build_id,
+            workspace_id=workspace_id,
+            image_id=record.image_id or "",
         )
         result = self.scheduler.submit(request)
         if not result.accepted:

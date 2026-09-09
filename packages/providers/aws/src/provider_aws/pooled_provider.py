@@ -23,12 +23,14 @@ from shared.compute_policy import (
     ComputeUnitProviderState,
     ComputeUnitRecord,
 )
+from shared.network_egress import NetworkEgressRouteEvidence
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 from shared.timestamps import utc_now
 
 from .account_connection import AwsAccountConnectionTarget
 from .instance_catalog import (
     AWS_INSTANCE_CATALOG,
+    AwsInstanceCatalogEntry,
     AwsInstanceCategory,
     aws_instance_catalog_entry,
 )
@@ -36,12 +38,15 @@ from .managed_pool import (
     AwsManagedPoolBinaries,
     AwsManagedPoolBootstrap,
     AwsManagedPoolClientProvider,
+    AwsManagedPoolInstanceDetails,
     AwsManagedPoolPhase,
     AwsManagedPoolProvisioner,
     AwsManagedPoolResourceIds,
     AwsManagedPoolSnapshot,
     AwsManagedPoolSpec,
 )
+from .network_egress import same_region_storage_destinations
+from .spot_prices import load_aws_spot_quotes
 from .supplier_prices import AwsRegionalPrices
 
 _PHASES = {
@@ -63,13 +68,37 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         default_factory=lambda: dict[str, AwsRegionalPrices]()
     )
 
+    def unbilled_network_destinations(
+        self, unit: ComputeUnitRecord, provider_instance_id: str
+    ) -> NetworkEgressRouteEvidence:
+        network = self.connection.network
+        if network is None:
+            raise ValueError("AWS network evidence requires a configured network")
+        clients = self.client_provider.assume(
+            self.connection.model_copy(update={"region": unit.region})
+        )
+        return same_region_storage_destinations(
+            clients.ec2,
+            region=unit.region,
+            instance_id=provider_instance_id,
+            vpc_id=network.vpc_id,
+            subnet_ids=network.subnet_ids,
+        )
+
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
-        region, separator, instance_type = unit.offer_id.partition(":")
+        parts = unit.offer_id.split(":")
+        region = parts[0]
+        instance_type = parts[1] if len(parts) >= 2 else ""
+        expected = f"{region}:{instance_type}"
+        if unit.worker_preemptible:
+            expected += f":spot:{unit.offer_availability_zone}"
+        elif unit.offer_availability_zone:
+            expected += f":{unit.offer_availability_zone}"
         if (
             unit.provider_ref != self.provider_ref
             or region != unit.region
-            or not separator
             or not instance_type
+            or unit.offer_id != expected
         ):
             raise ValueError("AWS unit has invalid provider offer identity")
         return recorded_unit_offer(unit, cloud="aws", instance_type=instance_type)
@@ -78,9 +107,9 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         offers: list[ComputeOffer] = []
         for region, artifacts in sorted(self.binaries_by_region.items()):
             regional_prices = self.regional_prices.get(region)
+            instances: list[AwsInstanceCatalogEntry] = []
+            on_demand: list[ComputeOffer] = []
             for instance in AWS_INSTANCE_CATALOG:
-                if instance.instance_type not in self.instance_hourly_micros:
-                    continue
                 ami_id = (
                     artifacts.cpu_ami_id
                     if instance.kind is AwsInstanceCategory.Cpu
@@ -88,54 +117,120 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
                 )
                 if ami_id is None:
                     continue
-                capability_key = ":".join(
-                    (
-                        "aws",
-                        region,
-                        instance.instance_type,
-                        DEFAULT_POOLED_NODE_ARCHITECTURE,
-                        DEFAULT_POOLED_NODE_RUNTIME,
+                instances.append(instance)
+                compute_price = self.instance_hourly_micros.get(instance.instance_type)
+                if compute_price is not None:
+                    on_demand.append(
+                        self._offer(
+                            instance,
+                            region=region,
+                            root_volume_gib=root_volume_gib,
+                            cost_terms=SupplierCostTerms(
+                                source="deployment:aws.instance_hourly_micros,aws.regional_prices;gp3:30-day-month",
+                                observed_at=utc_now(),
+                                compute_hourly_micros=compute_price,
+                            ),
+                            regional_prices=regional_prices,
+                        )
                     )
-                )
+            network = self.connection.network
+            if network is None:
+                raise ValueError("AWS account connection has no network for managed pools")
+            clients = self.client_provider.assume(
+                self.connection.model_copy(update={"region": region})
+            )
+            market = load_aws_spot_quotes(
+                clients.ec2,
+                network=network,
+                instance_types=tuple(instance.instance_type for instance in instances),
+            )
+            offers.extend(on_demand)
+            for offer in on_demand:
+                for zone in market.availability_zones:
+                    offers.append(
+                        offer.model_copy(
+                            update={
+                                "id": f"{offer.id}:{zone}",
+                                "availability_zone": zone,
+                                "capability_key": f"{offer.capability_key}:{zone}",
+                            }
+                        )
+                    )
+            for quote in market.quotes:
+                instance = aws_instance_catalog_entry(quote.instance_type)
                 offers.append(
-                    pooled_cloud_offer(
-                        offer_id=f"{region}:{instance.instance_type}",
-                        provider=self.provider_ref,
-                        cloud="aws",
-                        instance_type=instance.instance_type,
+                    self._offer(
+                        instance,
                         region=region,
-                        cpu_millicores=instance.cpu_millicores,
-                        memory_mb=instance.memory_mb,
-                        storage_mb=root_volume_gib * 1024,
+                        root_volume_gib=root_volume_gib,
+                        preemptible=True,
+                        availability_zone=quote.availability_zone,
                         cost_terms=SupplierCostTerms(
-                            source="deployment:aws.instance_hourly_micros,aws.regional_prices;"
-                            "gp3:30-day-month",
-                            observed_at=utc_now(),
-                            compute_hourly_micros=self.instance_hourly_micros[
-                                instance.instance_type
-                            ],
-                            root_disk_hourly_micros=(
-                                regional_prices.root_disk_hourly_micros(root_volume_gib)
-                                if regional_prices is not None
-                                else None
-                            ),
-                            public_ipv4_hourly_micros=(
-                                regional_prices.public_ipv4_hourly_micros
-                                if regional_prices is not None
-                                else None
-                            ),
-                            setup_micros=0,
-                            billing_minimum_seconds=60,
-                            billing_quantum_seconds=1,
+                            source="aws:DescribeSpotPriceHistory;deployment:aws.regional_prices;gp3:30-day-month",
+                            observed_at=quote.observed_at,
+                            effective_at=quote.effective_at,
+                            compute_hourly_micros=quote.compute_hourly_micros,
                         ),
-                        supplier_cpu_unit=SupplierCpuUnit.Vcpu,
-                        supplier_cpu_count=instance.cpu_millicores // 1000,
-                        capability_key=capability_key,
-                        gpu=instance.gpu.value if instance.gpu is not None else None,
-                        gpu_count=instance.gpu_count,
+                        regional_prices=regional_prices,
                     )
                 )
         return offers
+
+    def _offer(
+        self,
+        instance: AwsInstanceCatalogEntry,
+        *,
+        region: str,
+        root_volume_gib: int,
+        cost_terms: SupplierCostTerms,
+        regional_prices: AwsRegionalPrices | None,
+        preemptible: bool = False,
+        availability_zone: str = "",
+    ) -> ComputeOffer:
+        offer_id = f"{region}:{instance.instance_type}"
+        if preemptible:
+            offer_id += f":spot:{availability_zone}"
+        elif availability_zone:
+            offer_id += f":{availability_zone}"
+        return pooled_cloud_offer(
+            offer_id=offer_id,
+            provider=self.provider_ref,
+            cloud="aws",
+            instance_type=instance.instance_type,
+            region=region,
+            availability_zone=availability_zone,
+            preemptible=preemptible,
+            max_hourly_cost_micros=(
+                instance.max_spot_hourly_cost_micros
+                if preemptible
+                else instance.max_hourly_cost_micros
+            ),
+            cpu_millicores=instance.cpu_millicores,
+            memory_mb=instance.memory_mb,
+            storage_mb=root_volume_gib * 1024,
+            cost_terms=cost_terms.model_copy(
+                update={
+                    "root_disk_hourly_micros": regional_prices.root_disk_hourly_micros(
+                        root_volume_gib
+                    )
+                    if regional_prices is not None
+                    else None,
+                    "public_ipv4_hourly_micros": regional_prices.public_ipv4_hourly_micros
+                    if regional_prices is not None
+                    else None,
+                    "setup_micros": 0,
+                    "billing_minimum_seconds": 60,
+                    "billing_quantum_seconds": 1,
+                }
+            ),
+            supplier_cpu_unit=SupplierCpuUnit.Vcpu,
+            supplier_cpu_count=instance.cpu_millicores // 1000,
+            capability_key=":".join(
+                ("aws", offer_id, DEFAULT_POOLED_NODE_ARCHITECTURE, DEFAULT_POOLED_NODE_RUNTIME)
+            ),
+            gpu=instance.gpu.value if instance.gpu is not None else None,
+            gpu_count=instance.gpu_count,
+        )
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
         aws_instance_catalog_entry(request.offer.instance_type)
@@ -219,10 +314,10 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         provisioner: AwsManagedPoolProvisioner,
         snapshot: AwsManagedPoolSnapshot,
     ) -> ProviderUnitSnapshot:
-        volume_ids = provisioner.storage_volume_ids(
+        details = provisioner.instance_details(
             tuple(instance.instance_id for instance in snapshot.instances)
         )
-        return _snapshot(snapshot, volume_ids=volume_ids)
+        return _snapshot(snapshot, details=details)
 
     def _provisioner(self, region: str) -> AwsManagedPoolProvisioner:
         target = self.connection.model_copy(update={"region": region})
@@ -240,11 +335,22 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         network = self.connection.network
         if network is None:
             raise ValueError("AWS account connection has no network for managed pools")
+        compute_ceiling = None
+        if request.offer.preemptible:
+            ceiling = request.offer.max_hourly_cost_micros
+            disk = request.offer.cost_terms.root_disk_hourly_micros
+            ipv4 = request.offer.cost_terms.public_ipv4_hourly_micros
+            if ceiling is None or disk is None or ipv4 is None:
+                raise ValueError("AWS Spot capacity requires complete costs and a purchase ceiling")
+            compute_ceiling = ceiling - disk - ipv4
         return AwsManagedPoolSpec(
             workspace_id=request.workspace_id,
             unit_name=request.unit_name,
             region=request.offer.region,
             instance_type=request.offer.instance_type,
+            preemptible=request.offer.preemptible,
+            availability_zone=request.offer.availability_zone,
+            max_compute_hourly_micros=compute_ceiling,
             ami_id=ami_id,
             desired_nodes=request.desired_machines,
             max_nodes=request.max_machines,
@@ -279,7 +385,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
 def _snapshot(
     snapshot: AwsManagedPoolSnapshot,
     *,
-    volume_ids: Mapping[str, tuple[str, ...]],
+    details: Mapping[str, AwsManagedPoolInstanceDetails],
 ) -> ProviderUnitSnapshot:
     instances = [
         ProviderUnitInstance(
@@ -289,8 +395,8 @@ def _snapshot(
                 if instance.lifecycle_state == "InService" and instance.health_status == "Healthy"
                 else ProviderMachineStatus.Pending
             ),
-            availability_zone=instance.availability_zone,
-            storage_volume_ids=volume_ids.get(instance.instance_id, ()),
+            availability_zone=details[instance.instance_id].availability_zone,
+            storage_volume_ids=details[instance.instance_id].storage_volume_ids,
             booted_template_version=instance.booted_template_version,
         )
         for instance in snapshot.instances
@@ -301,6 +407,7 @@ def _snapshot(
         desired_machines=snapshot.desired_nodes,
         max_machines=snapshot.max_nodes,
         observed_machines=len(instances),
+        last_capacity_failure_at=snapshot.last_capacity_failure_at,
         instances=instances,
         current_template_version=(
             ""

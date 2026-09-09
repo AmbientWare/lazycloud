@@ -6,8 +6,9 @@ from uuid import uuid4
 
 from database.tables.billing_allowance import BillingAllowancePeriodTable
 from database.tables.billing_ledger import BillingLedgerSegmentTable
+from shared.billing_plans import SubscriptionTermsVersion
 from shared.enums import StringEnum
-from shared.errors import InvalidInputError
+from shared.errors import InvalidInputError, NotFoundError
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -74,6 +75,7 @@ class SpentAllowancePeriod:
     ended_at: datetime
     allowance_nanos: int
     spent_nanos: int
+    funded_terms_version: SubscriptionTermsVersion | None = None
 
     @property
     def remaining_nanos(self) -> int:
@@ -106,62 +108,14 @@ class BillingAllowanceRepository:
         allowance_nanos: int,
         funded: bool,
     ) -> WrittenSubscriptionPeriod:
-        """Make this cycle's terms be these, reporting what that did to them.
+        """Record provider cycle bounds under the caller's billing account lock.
 
-        Bounds come from the provider's own cycle rather than a calendar month:
-        the included compute is what the subscription carries, so it has to start
-        and end when the subscription does or a customer gets two part allowances
-        at the seam.
+        Funded legacy periods keep their larger allowance. Local wallet callers
+        pass the amount issued from paid invoices with `funded=False`.
 
-        A cycle already on these terms is left alone, and one whose terms differ
-        — a plan changed part-way through — is re-termed in place so the spend
-        already counted against it survives.
-
-        An allowance a customer paid for is never reduced inside the period it
-        was stamped on. What they were given when the cycle opened is what they
-        spent against while it ran, and re-terming it downwards mid-cycle would
-        put the smaller figure in front of usage that was included when it
-        happened: the credit the provider applies at finalization would fall
-        short of the spend the plan had already covered, and the difference would
-        be invoiced. So a smaller figure is declined and the larger one kept,
-        which is the same rule `BillingAllowanceResponse` states to a customer —
-        the allowance is what the period opened on, not what the plan currently
-        includes. The end of the cycle is the provider's own and always takes the
-        new value.
-
-        `funded` is what separates that from the other reason terms shrink. An
-        account nobody can be charged for did not pay for the larger figure: it
-        was given on the expectation that somebody could be billed for whatever
-        was spent past it, and once that stops being true the platform is not
-        holding to it. Attaching a card and removing it again would otherwise
-        keep the larger allowance for the rest of the cycle — and every cycle
-        after, since each renewal re-terms from a period that still holds it —
-        which is the cardless bound removed by the one action a customer can take
-        freely. So an unfunded cycle takes the figure it is given, downwards
-        included, and a funded one keeps what it opened with.
-
-        The outcome is what the caller pairs with a grant at the provider. One
-        delivered renewal arrives as more than one delivery, so the period is
-        what settles which of them buys the allowance and which finds it already
-        bought — and opening a cycle is a different act from re-terming the one
-        in progress, because only the second has an outgoing grant to void.
-
-        The cycle this one follows is reported beside the outcome, because the
-        allowance bought here must not be reachable by the invoice that cycle
-        raises. These rows are the only record of it: the account row holds the
-        newest grant and forgets the one before, and a cycle re-termed part-way
-        through has an outgoing grant of its own that says nothing about what
-        came earlier.
-
-        A cycle opened for the first time starts with whatever the ledger already
-        priced inside it. Cost is priced on its own schedule and the cycle is
-        opened by a delivery, so usage between a cycle beginning at the provider
-        and this row existing has nowhere to be counted at the moment it is
-        priced; reading it back from the ledger here is what stops that spend
-        from being lost from the figure the customer is shown.
-
-        Concurrent callers are serialized by the account row lock each of them
-        takes first, which is also what makes the read-then-write below safe.
+        Backfill a new period's spend from the ledger because usage can arrive
+        before the renewal webhook. Return the preceding cycle's end so legacy
+        grant issuance can preserve its invoice settlement delay.
         """
 
         if period_ended_at <= period_started_at:
@@ -277,6 +231,7 @@ class BillingAllowanceRepository:
                 BillingAllowancePeriodTable.period_ended_at,
                 BillingAllowancePeriodTable.allowance_nanos,
                 BillingAllowancePeriodTable.spent_nanos,
+                BillingAllowancePeriodTable.funded_terms_version,
             )
             .where(*_covering(user_id, at))
             .order_by(BillingAllowancePeriodTable.period_started_at.desc())
@@ -284,12 +239,73 @@ class BillingAllowanceRepository:
         ).first()
         if row is None:
             return None
-        period_started_at, period_ended_at, allowance_nanos, spent_nanos = row
+        period_started_at, period_ended_at, allowance_nanos, spent_nanos, funded_version = row
         return SpentAllowancePeriod(
             started_at=to_utc(period_started_at),
             ended_at=to_utc(period_ended_at),
             allowance_nanos=allowance_nanos,
             spent_nanos=spent_nanos,
+            funded_terms_version=SubscriptionTermsVersion(funded_version)
+            if funded_version
+            else None,
+        )
+
+    def record_funded_terms(
+        self,
+        *,
+        user_id: str,
+        period_started_at: datetime,
+        terms_version: SubscriptionTermsVersion,
+    ) -> None:
+        row = self.session.scalar(
+            select(BillingAllowancePeriodTable)
+            .where(
+                BillingAllowancePeriodTable.user_id == user_id,
+                BillingAllowancePeriodTable.period_started_at == to_utc(period_started_at),
+            )
+            .with_for_update()
+        )
+        if row is None:
+            raise NotFoundError("the funded subscription period does not exist")
+        row.funded_terms_version = terms_version.value
+        self.session.flush()
+
+    def confirm_credit(self, *, user_id: str, period_started_at: datetime, at: datetime) -> None:
+        self.session.execute(
+            update(BillingAllowancePeriodTable)
+            .where(
+                BillingAllowancePeriodTable.user_id == user_id,
+                BillingAllowancePeriodTable.period_started_at == period_started_at,
+                BillingAllowancePeriodTable.credit_confirmed_at.is_(None),
+            )
+            .values(credit_confirmed_at=to_utc(at))
+        )
+        self.session.flush()
+
+    def unconfirmed_periods(
+        self, *, user_id: str, since: datetime, before: datetime
+    ) -> tuple[SpentAllowancePeriod, ...]:
+        rows = self.session.scalars(
+            select(BillingAllowancePeriodTable)
+            .where(
+                BillingAllowancePeriodTable.user_id == user_id,
+                BillingAllowancePeriodTable.period_started_at >= since,
+                BillingAllowancePeriodTable.period_started_at < before,
+                BillingAllowancePeriodTable.credit_confirmed_at.is_(None),
+            )
+            .order_by(BillingAllowancePeriodTable.period_started_at)
+        ).all()
+        return tuple(
+            SpentAllowancePeriod(
+                to_utc(row.period_started_at),
+                to_utc(row.period_ended_at),
+                row.allowance_nanos,
+                row.spent_nanos,
+                SubscriptionTermsVersion(row.funded_terms_version)
+                if row.funded_terms_version
+                else None,
+            )
+            for row in rows
         )
 
     def _preceding_period_ended_at(

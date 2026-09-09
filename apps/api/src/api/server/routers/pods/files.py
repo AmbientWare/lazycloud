@@ -15,6 +15,7 @@ from shared.http.pods import (
     PodSandboxUploadFileResponse,
 )
 
+from api.server.auth import read_transfer, write_transfer
 from api.server.routers.pods.common import read_container, write_container
 from api.server.service_dependencies import pod_service
 
@@ -26,6 +27,7 @@ def sandbox_upload_file(
     container_id: str,
     request: PodSandboxUploadFileBody,
     _auth: write_container,
+    _transfer: write_transfer,
     service: PodControlService = Depends(pod_service),
 ) -> PodSandboxUploadFileResponse:
     return service.sandbox_upload_file(container_id, request)
@@ -39,6 +41,7 @@ def sandbox_download_file(
     container_id: str,
     container_path: str,
     _auth: read_container,
+    _transfer: read_transfer,
     service: PodControlService = Depends(pod_service),
 ) -> PodSandboxDownloadFileResponse:
     return service.sandbox_download_file(container_id, container_path)
@@ -83,6 +86,7 @@ def sandbox_replace_in_files(
     container_id: str,
     request: PodSandboxReplaceInFilesRequest,
     _auth: write_container,
+    _transfer: write_transfer,
     service: PodControlService = Depends(pod_service),
 ) -> PodSandboxReplaceInFilesResponse:
     return service.sandbox_replace_in_files(container_id, request)
@@ -93,6 +97,7 @@ def sandbox_find_in_files(
     container_id: str,
     request: PodSandboxFindInFilesRequest,
     _auth: read_container,
+    _transfer: read_transfer,
     service: PodControlService = Depends(pod_service),
 ) -> PodSandboxFindInFilesResponse:
     return service.sandbox_find_in_files(container_id, request)

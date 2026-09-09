@@ -54,6 +54,17 @@ def test_worker_stream_event_handler_stops_containers_and_cancels_builds() -> No
     assert ignored.status is WorkerEventHandlingStatus.Ignored
 
 
+def test_build_cancel_before_process_registration_is_not_lost() -> None:
+    cancellations = WorkerBuildCancelRegistry()
+    cancellations.register_pending("starting-build")
+    assert cancellations.cancel("starting-build").invoked
+    stopped: list[str] = []
+    cancellations.register("starting-build", lambda: stopped.append("starting-build"))
+    assert stopped == ["starting-build"]
+    cancellations.unregister("starting-build")
+    assert not cancellations.cancel("starting-build").invoked
+
+
 def test_worker_stream_event_handler_does_not_acknowledge_failed_container_stop() -> None:
     acknowledger = _Acknowledger()
     result = WorkerStreamEventHandler(

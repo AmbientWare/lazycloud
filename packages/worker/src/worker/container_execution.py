@@ -20,6 +20,7 @@ from shared.scheduling import (
     DEFAULT_CONTAINER_STATE_TTL_SECONDS,
     SchedulerContainerStatus,
 )
+from shared.timestamps import utc_now
 from shared.worker_events import WorkerEventRecord
 from storage_client.mounts import StorageMountResult
 
@@ -45,6 +46,7 @@ from worker.execution import (
     MIB,
     ContainerNetworkIdentity,
     ContainerResourceRequest,
+    OciLinuxResources,
     OciMount,
     PortBinding,
     WorkerOomWatcherPlan,
@@ -403,8 +405,15 @@ def enforced_memory_limit_bytes(context: ContainerExecutionContext) -> int | Non
     return resources.memory.limit_bytes
 
 
+class ContainerRuntimeResourcePreparer(Protocol):
+    def prepare_runtime_resources(
+        self, container_id: str, resources: OciLinuxResources
+    ) -> None: ...
+
+
 @dataclass(slots=True)
 class WorkerContainerExecutionService:
+    runtime_resources: ContainerRuntimeResourcePreparer
     address_publisher: WorkerAddressPublisher
     image_loader: ContainerImageLoader
     port_allocator: ContainerPortAllocator
@@ -894,16 +903,22 @@ class WorkerContainerExecutionService:
         holder: dict[str, ContainerRuntimeRunResult],
     ) -> None:
         monitor = _RuntimeMonitorState()
+        self.runtime_resources.prepare_runtime_resources(
+            context.request.container_id,
+            plan_oci_linux_resources(container_resource_request(context)),
+        )
         log_capture = (
             self.container_logs.begin(context.request) if self.container_logs is not None else None
         )
         output_sink = log_capture.process_output_sink if log_capture is not None else None
 
         def monitored_started(pid: int) -> None:
-            monitor.start(self.runtime_monitor, context.request, pid)
             on_started(pid)
+            if monitor.handle is not None:
+                monitor.handle.runtime_started(pid)
 
         try:
+            monitor.start(self.runtime_monitor, context.request)
             restored = (
                 self.checkpoint_restorer.restore(
                     context,
@@ -1142,6 +1157,9 @@ class WorkerContainerExecutionService:
         result.finalization = self.finalizer.finalize(
             ContainerFinalizationRequest(
                 request=context.request,
+                exited_at=result.monitoring.exited_at
+                if result.monitoring is not None
+                else utc_now(),
                 exit_code=exit_code,
                 stop_reason=stop_reason,
                 oom_killed=oom_killed,
@@ -1236,11 +1254,10 @@ class _RuntimeMonitorState:
         self,
         monitor: ContainerRuntimeMonitor | None,
         request: ContainerRequestContext,
-        pid: int,
     ) -> None:
         if monitor is None or self.handle is not None:
             return
-        self.handle = monitor.start_monitoring(request, started_pid=pid)
+        self.handle = monitor.start_monitoring(request)
 
     def stop(self) -> ContainerRuntimeMonitoringResult | None:
         if self.handle is None:

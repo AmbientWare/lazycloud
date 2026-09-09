@@ -1,7 +1,7 @@
 output "infrastructure_configuration" {
   description = "Publish this non-secret descriptor with deploy/object_storage.py."
   value = {
-    schema_version    = 4
+    schema_version    = 5
     deployment        = var.deployment
     region            = var.region
     registry          = local.ecr_registry
@@ -14,17 +14,20 @@ output "infrastructure_configuration" {
       wireguardBootstrap = var.wireguard_bootstrap_service_account
     }
     object_store = {
-      endpoint_url            = "https://${local.cloudflare_account_id}.r2.cloudflarestorage.com"
-      region_name             = "auto"
+      endpoint_url            = "https://s3.${var.region}.${data.aws_partition.current.dns_suffix}"
+      region_name             = var.region
       force_path_style        = true
-      bucket                  = cloudflare_r2_bucket.storage["objects"].name
+      bucket                  = aws_s3_bucket.storage["objects"].id
       workspace_bucket_prefix = local.workspace_bucket_prefix
     }
-    workload_image_repository = local.workload_image_repository
-    control_principal_arn     = aws_iam_role.control_principal.arn
-    public_origin             = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}"
-    redis_host                = aws_elasticache_replication_group.redis.primary_endpoint_address
-    hetzner_node_images       = var.hetzner_node_images
+    workspace_storage_role_arn = aws_iam_role.workspace_storage.arn
+    storage_access_bucket      = aws_s3_bucket.storage_access.id
+    storage_access_queue_url   = aws_sqs_queue.storage_access.url
+    workload_image_repository  = local.workload_image_repository
+    control_principal_arn      = aws_iam_role.control_principal.arn
+    public_origin              = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}"
+    redis_host                 = aws_elasticache_replication_group.redis.primary_endpoint_address
+    hetzner_node_images        = var.hetzner_node_images
     fleet = {
       account_id        = data.aws_caller_identity.current.account_id
       role_arn          = aws_iam_role.fleet_connection.arn
@@ -46,5 +49,5 @@ output "infrastructure_configuration" {
 
 output "infrastructure_config_uri" {
   description = "Set INFRASTRUCTURE_CONFIG_URI on this deployment's GitHub environment."
-  value       = "s3://${cloudflare_r2_bucket.storage["deploy"].name}/${var.deployment}/infrastructure.json"
+  value       = "s3://${aws_s3_bucket.storage["deploy"].id}/${var.deployment}/infrastructure.json"
 }

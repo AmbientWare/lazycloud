@@ -162,7 +162,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
    before they have paid for anything. The rest is disclosure, not pricing. */
 function accountTerm(catalog: PricingCatalog): string {
   const terms = catalog.no_payment_method;
-  return `Without a card, each plan includes ${exactDollars(terms.included_nanos)} of usage, ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once, and ${countLabel(terms.max_concurrent_gpus, "GPU card")}. Once the included usage is spent, containers stop and new volumes cannot be created. Existing volumes remain readable, and you continue to pay for them.`;
+  return `New accounts receive a one-time ${exactDollars(catalog.trial.amount_nanos)} usage credit, valid for ${catalog.trial.duration_days} days. Without a saved card, you can run ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once and ${countLabel(terms.max_concurrent_gpus, "GPU card")}. Further usage needs prepaid credit.`;
 }
 
 const sectionTitle =
@@ -190,6 +190,11 @@ function MarketingPricing() {
 
   const placement = catalog.placement_rates.find((rate) => rate.rate_class === "auto");
   if (!placement) throw new Error("the pricing catalog has no base compute rates");
+  const nonPreemptible = catalog.placement_rates.find((rate) => !rate.pinned && !rate.preemptible);
+  const pinned = catalog.placement_rates.find((rate) => rate.pinned && rate.preemptible);
+  const pinnedNonPreemptible = catalog.placement_rates.find(
+    (rate) => rate.pinned && !rate.preemptible,
+  );
 
   return (
     <MarketingLayout>
@@ -232,6 +237,18 @@ function MarketingPricing() {
                 groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
                 id={fleetRatesId}
               />
+              <p className="mb-3 text-[12.5px] leading-relaxed text-muted-foreground">
+                Compute rates shown allow interruptions and use automatic location selection.
+                {nonPreemptible
+                  ? ` Disabling interruptions costs ${nonPreemptible.cpu_memory_multiplier}x for CPU and memory.`
+                  : ""}
+                {pinned
+                  ? ` Selecting a region or availability zone costs ${pinned.cpu_memory_multiplier}x for CPU and memory and ${pinned.gpu_multiplier}x for GPUs.`
+                  : ""}
+                {pinnedNonPreemptible
+                  ? ` Combining both choices costs ${pinnedNonPreemptible.cpu_memory_multiplier}x for CPU and memory and ${pinnedNonPreemptible.gpu_multiplier}x for GPUs.`
+                  : ""}
+              </p>
               <a
                 className="interactive-link text-[12.5px] text-muted-foreground underline underline-offset-4"
                 href={new URL("/platform/plans#compute-pricing", DOCS_URL).href}
@@ -247,9 +264,9 @@ function MarketingPricing() {
             <div className="mb-6 max-w-[44rem]">
               <h2 className={sectionTitle}>Pricing plans</h2>
             </div>
-            <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
+            <div className="grid grid-cols-3 gap-4 max-md:grid-cols-1">
               {catalog.plans.map((plan) => (
-                <MarketingCard asChild key={plan.id}>
+                <MarketingCard asChild key={plan.terms_version}>
                   <article className="flex flex-col p-5 sm:p-6">
                     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                       <h3 className="font-serif text-[24px] leading-none font-normal">
@@ -267,7 +284,7 @@ function MarketingPricing() {
                     </p>
                     <dl className="mt-4 border-t border-border text-[13px]">
                       <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
-                        <dt className="text-muted-foreground">Usage included</dt>
+                        <dt className="text-muted-foreground">Monthly usage credit</dt>
                         <dd className="font-mono font-medium text-brand">
                           {exactDollars(plan.included_nanos)}{" "}
                           <span className="text-muted-foreground">/ month</span>

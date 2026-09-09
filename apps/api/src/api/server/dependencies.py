@@ -126,6 +126,22 @@ def require_workspace_scope(
     return dependency
 
 
+def require_transfer_scope(scope: AuthScope) -> WorkspaceScopeDependency:
+    async def dependency(
+        services: Annotated[ApiServices, Depends(current_services)],
+        workspace_id: str = Depends(require_workspace_scope(scope)),
+    ) -> str:
+        await services.require_async_io().database.run_transaction(
+            lambda session: services.payment_admission.assert_may_take_on_billed_work(
+                session,
+                workspace_id=workspace_id,
+            )
+        )
+        return workspace_id
+
+    return dependency
+
+
 def authorize_token_workspace(
     services: ApiServices,
     token: AuthTokenRecord,

@@ -20,7 +20,7 @@ from shared.http.objects import (
     PutObjectResponse,
 )
 
-from api.server.auth import read_workspace, write_workspace
+from api.server.auth import read_transfer, read_workspace, write_transfer, write_workspace
 from api.server.dependencies import (
     AuthorizationCredentials,
     authorization_header,
@@ -62,7 +62,7 @@ def head_object(
 @router.post("/objects/stream", response_model=PutObjectResponse)
 async def put_object_stream(
     request: Request,
-    workspace_id: write_workspace,
+    workspace_id: write_transfer,
     name: str = Query("", max_length=1024),
     object_hash: str = Query(
         ...,
@@ -109,7 +109,7 @@ def download_object(
     key: str = Query(...),
     expires_seconds: int = Query(3600, ge=1, le=86_400),
     *,
-    workspace_id: read_workspace,
+    workspace_id: read_transfer,
     service: GatewayControlService = Depends(gateway_service),
 ) -> RedirectResponse:
     return RedirectResponse(

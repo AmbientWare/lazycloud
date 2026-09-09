@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from shared.errors import InvalidInputError
 from shared.payments import PaymentEvent
 
@@ -98,6 +98,8 @@ class _EventObject(BaseModel):
     id: str = ""
     customer: str | None = None
     payment_method: str | None = None
+    payment_intent: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class _EventData(BaseModel):
@@ -134,7 +136,7 @@ def parse_event(body: bytes) -> PaymentEvent:
     except ValidationError as exc:
         raise InvalidInputError(
             f"stripe event is not readable: {exc.error_count()} problems"
-        ) from exc
+        ) from None
     return PaymentEvent(
         id=event.id,
         type=event.type,
@@ -145,6 +147,9 @@ def parse_event(body: bytes) -> PaymentEvent:
         or (event.data.object.id if event.type.startswith("customer.") else ""),
         payment_method_id=event.data.object.payment_method
         or (event.data.object.id if event.type.startswith("payment_method.") else ""),
+        payment_id=event.data.object.payment_intent
+        or (event.data.object.id if event.type.startswith("payment_intent.") else ""),
+        credit_purchase_id=event.data.object.metadata.get("credit_purchase_id", ""),
     )
 
 

@@ -5,9 +5,11 @@ description = "AWS provider adapter package for the compute platform."
 requires-python = ">=3.12"
 dependencies = [
     "lazycloud-shared==0.1.0",
-    "boto3>=1.35,<2",
-    "botocore>=1.35,<2",
+    "boto3>=1.43.69,<2",
+    "botocore>=1.43.69,<2",
     "compute",
+    "pydantic-settings>=2.5,<3",
+    "storage-client",
 ]
 
 [build-system]

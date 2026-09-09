@@ -14,6 +14,7 @@ from pydantic import JsonValue
 from shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
 from shared.deployment_records import (
     DEFAULT_DISK,
+    DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
     DeploymentSpec,
     MemoryRequest,
@@ -236,6 +237,7 @@ class SandboxOptions(TypedDict, total=False):
     preemptible: bool
     ports: Iterable[int] | None
     region: str | None
+    availability_zone: str
     pool: PoolInput
     metadata: Mapping[str, Any] | None
     command: Iterable[str] | None
@@ -1539,8 +1541,9 @@ class Sandbox(ControlClientConfigMixin):
     block_network: bool = False
     allow_list: list[str] | None = None
     docker_enabled: bool = False
-    preemptible: bool = False
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
     region: str | None = None
+    availability_zone: str = ""
     pool: PoolInput = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = ""
@@ -1574,9 +1577,10 @@ class Sandbox(ControlClientConfigMixin):
         block_network: bool = False,
         allow_list: Iterable[str] | None = None,
         docker_enabled: bool = False,
-        preemptible: bool = False,
+        preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         ports: Iterable[int] | None = None,
         region: str | None = None,
+        availability_zone: str = "",
         pool: PoolInput = None,
         metadata: Mapping[str, Any] | None = None,
         command: Iterable[str] | None = None,
@@ -1605,6 +1609,7 @@ class Sandbox(ControlClientConfigMixin):
         self.preemptible = preemptible
         self.pool = pool
         self.region = region
+        self.availability_zone = availability_zone
         self.metadata = dict(metadata or {})
         self.stub_id = ""
         self.image_id = None
@@ -1633,6 +1638,7 @@ class Sandbox(ControlClientConfigMixin):
             image=self.image.spec(),
             resources=Resources(
                 region=ProductRegion(self.region) if self.region is not None else None,
+                availability_zone=self.availability_zone,
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,

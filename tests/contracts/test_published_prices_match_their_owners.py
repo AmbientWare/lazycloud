@@ -10,10 +10,8 @@ is a charge that arrives unannounced. The second is the harder one to see, so th
 figures the page has no line for are asserted here rather than left to whoever
 next reads the card beside the page.
 
-What the card can enforce about itself is not here. A figure that does not divide
-into a whole nanodollar a second, or one too small for the rate column to hold,
-raises from `shared.billing_rate_card` at import — for every consumer, including
-`publish-rates`, which writes the money rates and never renders this page.
+The card rounds per-second prices down to the database's decimal precision and
+rejects a positive price too small to store.
 """
 
 from __future__ import annotations
@@ -69,17 +67,8 @@ def test_the_page_states_every_figure_the_platform_charges() -> None:
 def test_platform_rates_never_charge_more_than_the_figure_they_publish() -> None:
     """The direction the platform rates round in, which is the whole of their design.
 
-    A price per gibibyte-month has no exact rate per byte-second — the divisor
-    carries factors of three — so unlike compute these cannot be published and
-    stored as one number. The published figure is what a customer is quoted, so
-    the stored rate is derived downwards from it and the platform charges
-    fractionally less than the page says.
-
-    Rounding to the nearest representable rate instead reads like an improvement
-    and is the failure: it would charge fractionally more than the published
-    figure, which is a price the platform never stated. Only the volume rate is
-    asserted, because egress is published at zero and a zero rounds to itself in
-    either direction.
+    Storage's monthly price is converted to byte-seconds. Rounding down keeps
+    that conversion from charging more than the customer was quoted.
     """
 
     charged_per_gib_month = (

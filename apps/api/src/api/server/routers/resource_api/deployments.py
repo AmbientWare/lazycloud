@@ -19,7 +19,7 @@ from shared.http.deployments import (
 from shared.http.stubs import StubResponse
 from shared.identity import AuthScope
 
-from api.server.auth import read_token, read_workspace, write_workspace
+from api.server.auth import read_token, read_transfer, read_workspace, write_workspace
 from api.server.dependencies import current_services
 from api.server.identifiers import identifier_filter
 from api.server.response_mapping import actionable_deployment_response
@@ -238,7 +238,7 @@ def deployment_url_by_name(
 )
 def download_deployment_package(
     stub_id: str,
-    workspace_id: read_workspace,
+    workspace_id: read_transfer,
     services: ApiServices = Depends(current_services),
 ) -> Response | DeploymentPackagePlanResponse:
     plan = _management(services).deployment_package(workspace_id, stub_id)

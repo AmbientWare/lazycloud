@@ -13,6 +13,7 @@ from shared.enums import StringEnum
 
 AUTHORIZATION_ERROR_MESSAGE_MAX_LENGTH = 2048
 AWS_CONNECTED_MACHINE_POOL = "aws"
+AWS_MANAGED_NETWORK_ZONE_PARAMETERS = tuple(f"AvailabilityZone{slot}" for slot in "ABCDEF")
 
 
 def _bounded_authorization_error_message(value: object) -> object:
@@ -88,24 +89,16 @@ class AwsAccountConnectionErrorCode(StringEnum):
 
 
 class AwsAccountNetwork(ContractModel):
-    """Where a managed pool launches its nodes in the connected account.
-
-    Exactly two subnets, because one Auto Scaling group spans one region's zones
-    and `AwsManagedPoolSpec` takes that pair. A managed-stack connection reads
-    this back from its authorization stack outputs; an existing-role connection
-    is given it, because nothing in that mode creates a network. Both modes carry
-    it in the same place so placement reads one field rather than branching on
-    how the account was authorized.
-    """
+    """Subnets available to managed capacity in one connected account's VPC."""
 
     vpc_id: str = Field(min_length=1, max_length=128)
-    subnet_ids: tuple[str, str]
+    subnet_ids: tuple[str, ...] = Field(min_length=2)
     security_group_id: str = Field(min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def validate_distinct_subnets(self) -> AwsAccountNetwork:
-        if self.subnet_ids[0] == self.subnet_ids[1]:
-            raise ValueError("AWS account network requires two distinct subnets")
+        if len(set(self.subnet_ids)) != len(self.subnet_ids):
+            raise ValueError("AWS account network requires distinct subnets")
         return self
 
 
@@ -548,6 +541,7 @@ class AwsAccountValidationResult(ContractModel):
 
 __all__ = [
     "AWS_CONNECTED_MACHINE_POOL",
+    "AWS_MANAGED_NETWORK_ZONE_PARAMETERS",
     "AWS_REGION_PATTERN",
     "AwsAccountAuthorizationGeneration",
     "AwsAccountAuthorizationMode",

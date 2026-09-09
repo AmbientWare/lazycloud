@@ -76,3 +76,11 @@ resource "aws_route_table_association" "cluster" {
   subnet_id      = aws_subnet.cluster[count.index].id
   route_table_id = aws_route_table.cluster.id
 }
+
+resource "aws_vpc_endpoint" "object_storage" {
+  vpc_id            = aws_vpc.cluster.id
+  service_name      = "com.amazonaws.${var.region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_route_table.cluster.id]
+  tags              = { Name = "${var.name}-object-storage" }
+}

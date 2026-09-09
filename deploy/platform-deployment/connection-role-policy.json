@@ -3,6 +3,7 @@
     {
       "Action": [
         "autoscaling:DescribeAutoScalingGroups",
+        "autoscaling:DescribeScalingActivities",
         "ec2:DescribeAvailabilityZones",
         "ec2:DescribeInstances",
         "ec2:DescribeInternetGateways",
@@ -10,7 +11,11 @@
         "ec2:DescribeLaunchTemplateVersions",
         "ec2:DescribeRegions",
         "ec2:DescribeRouteTables",
+        "ec2:DescribeVpcEndpoints",
+        "ec2:DescribeManagedPrefixLists",
+        "ec2:GetManagedPrefixListEntries",
         "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSpotPriceHistory",
         "ec2:DescribeSubnets",
         "ec2:DescribeVolumes",
         "ec2:DescribeVpcs",
@@ -152,6 +157,17 @@
       "Effect": "Allow",
       "Resource": "arn:aws:iam::*:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
       "Sid": "CreateAutoScalingServiceRole"
+    },
+    {
+      "Action": "iam:CreateServiceLinkedRole",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "spot.amazonaws.com"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:iam::*:role/aws-service-role/spot.amazonaws.com/AWSServiceRoleForEC2Spot",
+      "Sid": "CreateSpotServiceRole"
     },
     {
       "Action": [

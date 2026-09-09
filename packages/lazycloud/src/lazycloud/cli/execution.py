@@ -80,6 +80,9 @@ def deploy(
     region: Annotated[
         str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
     ] = None,
+    availability_zone: Annotated[
+        str | None, typer.Option("--availability-zone", help="Provider availability zone ID.")
+    ] = None,
     pool: Annotated[str | None, typer.Option("--pool")] = None,
     preemptible: Annotated[
         bool | None,
@@ -102,6 +105,7 @@ def deploy(
         keep_warm=keep_warm,
         tcp=tcp,
         region=region,
+        availability_zone=availability_zone,
         pool=MachinePool(pool) if pool else None,
         preemptible=preemptible,
         entrypoint=entrypoint,
@@ -129,6 +133,7 @@ def deploy(
                 env=overrides.env,
                 secrets=overrides.secrets,
                 region=overrides.region,
+                availability_zone=overrides.availability_zone,
                 pool=overrides.pool,
                 preemptible=overrides.preemptible,
             )
@@ -152,6 +157,7 @@ def deploy(
                 keep_warm=overrides.keep_warm,
                 tcp=overrides.tcp,
                 region=overrides.region,
+                availability_zone=overrides.availability_zone,
                 pool=overrides.pool,
                 preemptible=overrides.preemptible,
                 entrypoint=overrides.entrypoint,
@@ -207,6 +213,9 @@ def run(
     region: Annotated[
         str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
     ] = None,
+    availability_zone: Annotated[
+        str | None, typer.Option("--availability-zone", help="Provider availability zone ID.")
+    ] = None,
     pool: Annotated[str | None, typer.Option("--pool")] = None,
     preemptible: Annotated[
         bool | None,
@@ -232,6 +241,7 @@ def run(
         keep_warm=keep_warm,
         tcp=tcp,
         region=region,
+        availability_zone=availability_zone,
         pool=MachinePool(pool) if pool else None,
         preemptible=preemptible,
         entrypoint=entrypoint,
@@ -259,6 +269,7 @@ def run(
                 env=overrides.env,
                 secrets=overrides.secrets,
                 region=overrides.region,
+                availability_zone=overrides.availability_zone,
                 pool=overrides.pool,
                 preemptible=overrides.preemptible,
             )
@@ -302,6 +313,9 @@ def shell(
     region: Annotated[
         str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
     ] = None,
+    availability_zone: Annotated[
+        str | None, typer.Option("--availability-zone", help="Provider availability zone ID.")
+    ] = None,
     pool: Annotated[str | None, typer.Option("--pool")] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
@@ -331,6 +345,7 @@ def shell(
         keep_warm=keep_warm,
         tcp=tcp,
         region=region,
+        availability_zone=availability_zone,
         pool=MachinePool(pool) if pool else None,
         entrypoint=entrypoint,
         sync_dir=sync_dir,
@@ -567,6 +582,7 @@ def _configure_pod(pod: Pod, overrides: DeploymentOverrides) -> None:
         secrets=overrides.secrets,
         tcp=overrides.tcp,
         region=overrides.region,
+        availability_zone=overrides.availability_zone,
         pool=overrides.pool,
         preemptible=overrides.preemptible,
     )

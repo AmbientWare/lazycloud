@@ -13,7 +13,7 @@ from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageBuildStep
 from shared.lifecycle import LifecycleHooks
 from shared.mounts import MountAuthMode, validate_mount_auth
-from shared.placement import ProductRegion
+from shared.placement import AvailabilityZone, ProductRegion
 from shared.resources import parse_memory_mib
 from shared.tasks import RetryPolicy
 
@@ -79,6 +79,7 @@ class StubImageConfig(ContractModel):
 
 class StubRuntimeConfig(ContractModel):
     region: ProductRegion | None = None
+    availability_zone: AvailabilityZone = ""
     cpu: CpuRequest | None = Field(default=None)
     cpu_millicores: int = Field(default=0, ge=0)
     memory: MemoryRequest | None = None

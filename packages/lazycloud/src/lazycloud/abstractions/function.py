@@ -25,6 +25,7 @@ from shared.deployment_records import (
     DEFAULT_FUNCTION_MEMORY,
     DEFAULT_FUNCTION_RETRIES,
     DEFAULT_FUNCTION_TIMEOUT_SECONDS,
+    DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
     DeploymentSpec,
     MemoryRequest,
@@ -150,6 +151,7 @@ class FunctionOptions(TypedDict, total=False):
     docker_enabled: bool
     preemptible: bool
     region: str | None
+    availability_zone: str
     pool: PoolInput
     metadata: dict[str, Any] | None
 
@@ -191,8 +193,9 @@ class Function(Generic[P, R]):
     inputs: SchemaInput = None
     outputs: SchemaInput = None
     docker_enabled: bool = False
-    preemptible: bool = False
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
     region: str | None = None
+    availability_zone: str = ""
     pool: PoolInput = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
@@ -247,6 +250,7 @@ class Function(Generic[P, R]):
         env: Mapping[str, str] | None = None,
         secrets: Iterable[str] | None = None,
         region: str | None = None,
+        availability_zone: str | None = None,
         pool: PoolInput = None,
         preemptible: bool | None = None,
     ) -> Function[P, R]:
@@ -269,6 +273,8 @@ class Function(Generic[P, R]):
             self.pool = pool
         if region is not None:
             self.region = region
+        if availability_zone is not None:
+            self.availability_zone = availability_zone
         if preemptible is not None:
             self.preemptible = preemptible
         return self
@@ -289,6 +295,7 @@ class Function(Generic[P, R]):
             image=self.image.spec(),
             resources=Resources(
                 region=ProductRegion(self.region) if self.region is not None else None,
+                availability_zone=self.availability_zone,
                 cpu=self.cpu,
                 memory=self.memory,
                 disk=self.disk or DEFAULT_DISK,
@@ -773,8 +780,9 @@ def _function(
     inputs: SchemaInput = None,
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
-    preemptible: bool = False,
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
+    availability_zone: str = "",
     pool: PoolInput = None,
     metadata: dict[str, Any] | None = None,
 ) -> Function[P, R]: ...
@@ -818,8 +826,9 @@ def _function(
     inputs: SchemaInput = None,
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
-    preemptible: bool = False,
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
+    availability_zone: str = "",
     pool: PoolInput = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Function[P, R]]: ...
@@ -862,8 +871,9 @@ def _function(
     inputs: SchemaInput = None,
     outputs: SchemaInput = None,
     docker_enabled: bool = False,
-    preemptible: bool = False,
+    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
+    availability_zone: str = "",
     pool: PoolInput = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Function[P, R]] | Function[P, R]:
@@ -906,6 +916,7 @@ def _function(
             docker_enabled=docker_enabled,
             preemptible=preemptible,
             region=region,
+            availability_zone=availability_zone,
             pool=pool,
             metadata=metadata or {},
         )

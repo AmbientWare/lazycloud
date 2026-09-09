@@ -1,7 +1,7 @@
 terraform {
   required_version = ">= 1.10.0, < 2.0.0"
 
-  # R2 uses the S3 protocol. Coordinates come from the shared operator backend JSON.
+  # Coordinates come from the shared operator backend JSON.
   backend "s3" {}
 
   required_providers {
@@ -25,6 +25,11 @@ terraform {
 }
 
 provider "cloudflare" {}
+
+provider "aws" {
+  alias  = "certificate"
+  region = "us-east-1"
+}
 
 # No Kubernetes or Helm provider. Everything this module puts in the cluster is
 # an AWS association keyed on the cluster's name, so an apply never reaches the

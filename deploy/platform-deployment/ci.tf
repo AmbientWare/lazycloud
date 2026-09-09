@@ -35,6 +35,12 @@ resource "aws_iam_role" "deploy" {
 
 data "aws_iam_policy_document" "deploy" {
   statement {
+    sid       = "ReadDeploymentDescriptor"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.storage["deploy"].arn}/${var.deployment}/infrastructure.json"]
+  }
+
+  statement {
     sid       = "AuthenticateToRegistry"
     actions   = ["ecr:GetAuthorizationToken"]
     resources = ["*"]

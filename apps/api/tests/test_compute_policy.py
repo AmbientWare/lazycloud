@@ -38,7 +38,7 @@ from shared.aws_connections import (
     AwsAccountConnectionPhase,
 )
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
@@ -480,6 +480,9 @@ def _seed_ready_aws_connection(
             provider_subscription_id=f"sub_fixture_{owner_id}",
             provider_credit_grant_id=f"credgr_fixture_{owner_id}",
             plan=BillingPlanId.Team,
+            subscription_terms_version=SubscriptionTermsVersion.Team,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(

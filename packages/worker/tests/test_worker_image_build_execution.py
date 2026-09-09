@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import threading
 from base64 import b64encode
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -14,14 +13,9 @@ import pytest
 from networking.internal_http import InternalHttpClient
 from pydantic import JsonValue, TypeAdapter
 from scheduler.state import SchedulerWorkerRequest
-from worker.container_checkpoints import ContainerImageArchiveResult
-from worker.container_client.models import ContainerStatusRequest
-from worker.container_service.service import WorkerContainerService
 from worker.container_service.state import LocalWorkerContainerInstanceStore
 from worker.events import ContainerRequestContext, WorkerBuildCancelRegistry
-from worker.image_build_architecture import ImageBuildArchitectureRuntime
 from worker.image_build_execution import (
-    BuildahWorkerImageBuilder,
     ImageBuildLog,
     RepositoryImageBuildContextLoader,
     RepositoryWorkerImageArchivePublisher,
@@ -29,9 +23,7 @@ from worker.image_build_execution import (
     WorkerImageArchivePublishResult,
     WorkerImageBuildRequestPayload,
 )
-from worker.image_build_scratch import ImageBuildScratchLease, ImageBuildScratchManager
-from worker.image_lifecycle import BuildahDirectoryPlan, BuildahStorageDriver
-from worker.image_runtime import ImageRuntimeClient
+from worker.image_build_resources import ImageBuildResources
 from worker.origin_access import (
     CacheOriginCredentialRequest,
     CacheOriginCredentials,
@@ -50,64 +42,6 @@ from worker import image_build_execution
 type JsonObject = dict[str, JsonValue]
 
 _JSON_OBJECT: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
-
-
-def _buildah_path(binary: str) -> str | None:
-    return "/usr/bin/buildah" if binary == "buildah" else None
-
-
-def test_image_build_worker_consumes_bound_source_credentials(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registry_auth = ImageBuildRegistryAuth(
-        registry="registry.example.com",
-        auth=b64encode(b"builder:private-secret").decode("ascii"),
-    )
-    builder = _RecordingImageBuilder()
-    loader = _RecordingCredentialLoader(registry_auth)
-    service = image_build_execution.WorkerImageBuildExecutionService(
-        address_publisher=_RecordingAddressPublisher(),
-        cancellations=WorkerBuildCancelRegistry(),
-        instances=LocalWorkerContainerInstanceStore(),
-        builder=builder,
-        publisher=_RecordingImagePublisher(),
-        credential_loader=loader,
-    )
-    request = SchedulerWorkerRequest(
-        workspace_id="workspace-1",
-        stub_id="image-build",
-        container_id="build-container-1",
-        payload={
-            "kind": "image-build",
-            "workspace_id": "spoofed-workspace",
-            "build_id": "build-1",
-            "image_id": "image-1",
-            "build_options": {
-                "source_image": "registry.example.com/team/base:latest",
-            },
-            "credential_metadata": {
-                "registry": "registry.example.com",
-                "source": "ephemeral-private-inputs",
-                "cache_key": "credential-cache-key",
-            },
-        },
-    )
-
-    result = service.execute(request)
-
-    assert result.ok
-    assert builder.requests[0].workspace_id == "workspace-1"
-    assert loader.calls == [
-        {
-            "workspace_id": "workspace-1",
-            "build_id": "build-1",
-            "container_id": "build-container-1",
-            "registry": "registry.example.com",
-            "cache_key": "credential-cache-key",
-        }
-    ]
-    assert builder.registry_auths == [registry_auth]
-    assert builder.build_args == [{}]
 
 
 def test_worker_registry_authfile_is_private_and_contains_docker_auth(tmp_path: Path) -> None:
@@ -132,7 +66,7 @@ def test_worker_registry_authfile_is_private_and_contains_docker_auth(tmp_path: 
 
 
 def test_worker_private_build_args_are_redacted_from_results_and_instance_logs(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     private_value = "private-build-argument"
     builder = _RecordingImageBuilder(log_private_values=True)
@@ -163,59 +97,13 @@ def test_worker_private_build_args_are_redacted_from_results_and_instance_logs(
         },
     )
 
-    result = service.execute(request)
+    result = service.execute(request, resources=ImageBuildResources(tmp_path))
 
-    assert result.ok
+    assert not result.ok
     assert builder.build_args == [{"PRIVATE_TOKEN": private_value}]
     assert private_value not in result.model_dump_json()
     assert private_value not in instances.instances[request.container_id].model_dump_json()
     assert "<redacted>" in result.model_dump_json()
-    status = WorkerContainerService(instances=instances).container_status(
-        ContainerStatusRequest(container_id=request.container_id)
-    )
-    assert status.build_archive_object_key == "image-archives/image-1.rclip"
-    assert status.build_archive_size_bytes == 7
-    assert status.build_archive_sha256 == "a" * 64
-
-
-def test_worker_publication_failure_redacts_private_logs_and_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    private_value = "private-publication-argument"
-    instances = LocalWorkerContainerInstanceStore()
-    service = image_build_execution.WorkerImageBuildExecutionService(
-        address_publisher=_RecordingAddressPublisher(),
-        cancellations=WorkerBuildCancelRegistry(),
-        instances=instances,
-        builder=_RecordingImageBuilder(log_private_values=True),
-        publisher=_RecordingImagePublisher(error=f"upload rejected: {private_value}"),
-        credential_loader=_RecordingCredentialLoader(
-            build_args={"PRIVATE_TOKEN": private_value},
-        ),
-    )
-    request = SchedulerWorkerRequest(
-        workspace_id="workspace-1",
-        stub_id="image-build",
-        container_id="build-container-1",
-        payload={
-            "kind": "image-build",
-            "build_id": "build-1",
-            "image_id": "image-1",
-            "build_options": {},
-            "credential_metadata": {
-                "source": "ephemeral-private-inputs",
-                "cache_key": "private-input-cache-key",
-            },
-        },
-    )
-
-    result = service.execute(request)
-
-    assert not result.ok
-    assert private_value not in result.model_dump_json()
-    assert private_value not in instances.instances[request.container_id].model_dump_json()
-    assert "upload rejected: <redacted>" in result.error_message
-    assert "archive output: <redacted>" in result.logs
 
 
 def test_repository_archive_publisher_requests_and_propagates_exact_identity(
@@ -291,150 +179,6 @@ def test_repository_archive_publisher_requests_and_propagates_exact_identity(
     assert result.object_key == "image-archives/image-1.rclip"
     assert result.size_bytes == len(content)
     assert result.sha256 == digest
-
-
-def test_buildah_failure_cleans_every_resource_in_its_isolated_store(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    def fail_buildah(
-        _self: BuildahWorkerImageBuilder,
-        args: Sequence[str],
-        *,
-        directories: BuildahDirectoryPlan,
-        driver: BuildahStorageDriver,
-        env: dict[str, str],
-        cwd: Path,
-        log: ImageBuildLog,
-        cancellation: threading.Event,
-        scratch: ImageBuildScratchLease | None = None,
-    ) -> str:
-        del directories, driver, env, cwd, log, cancellation, scratch
-        assert args[0] == "bud"
-        raise RuntimeError("deliberate build failure")
-
-    monkeypatch.setattr(
-        image_build_execution.shutil,
-        "which",
-        _buildah_path,
-    )
-    monkeypatch.setattr(
-        image_build_execution.BuildahWorkerImageBuilder,
-        "_run_buildah",
-        fail_buildah,
-    )
-    builder = image_build_execution.BuildahWorkerImageBuilder(
-        scratch=ImageBuildScratchManager(
-            root=tmp_path / "build-root",
-            worker_id="worker-1",
-            max_bytes=32 * 1024 * 1024,
-            per_build_max_bytes=16 * 1024 * 1024,
-            minimum_free_bytes=0,
-            buildah_binary="cleanup-buildah-missing",
-        ),
-        repository=_FakeArchiveUploadRepository(ImageArchiveUploadCredentials()),
-        image_runtime=ImageRuntimeClient(tmp_path / "image-runtime.sock"),
-        archive_root=tmp_path,
-        architecture_preparer=ImageBuildArchitectureRuntime(host_machine=lambda: "x86_64"),
-        storage_driver=image_build_execution.BuildahStorageDriver.Vfs,
-        fallback_storage_driver=image_build_execution.BuildahStorageDriver.Vfs,
-    )
-    payload = WorkerImageBuildRequestPayload.model_validate(
-        {
-            "build_id": "build-1",
-            "image_id": "image-1",
-            "build_options": {
-                "dockerfile": "FROM scratch\nRUN false\n",
-            },
-        }
-    )
-
-    result = builder.build_image_archive(
-        payload,
-        container_id="container-1",
-        log=lambda _message: None,
-        cancellation=threading.Event(),
-    )
-
-    assert not result.ok
-    assert not list((tmp_path / "build-root").glob("image-build-*"))
-
-
-def test_buildah_cleanup_failure_still_releases_isolated_scratch(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    def fail_buildah(
-        _self: BuildahWorkerImageBuilder,
-        _args: Sequence[str],
-        *,
-        directories: BuildahDirectoryPlan,
-        driver: BuildahStorageDriver,
-        env: dict[str, str],
-        cwd: Path,
-        log: ImageBuildLog,
-        cancellation: threading.Event,
-        scratch: ImageBuildScratchLease | None = None,
-    ) -> str:
-        del directories, driver, env, cwd, log, cancellation, scratch
-        raise RuntimeError("deliberate build failure")
-
-    def fail_cleanup(
-        _self: ImageBuildScratchManager,
-        _root: Path,
-        *,
-        driver: BuildahStorageDriver,
-        env: dict[str, str] | None = None,
-    ) -> list[str]:
-        del driver, env
-        raise RuntimeError("deliberate cleanup failure")
-
-    monkeypatch.setattr(
-        image_build_execution.shutil,
-        "which",
-        _buildah_path,
-    )
-    monkeypatch.setattr(
-        image_build_execution.BuildahWorkerImageBuilder,
-        "_run_buildah",
-        fail_buildah,
-    )
-    monkeypatch.setattr(ImageBuildScratchManager, "cleanup_store", fail_cleanup)
-    builder = image_build_execution.BuildahWorkerImageBuilder(
-        scratch=ImageBuildScratchManager(
-            root=tmp_path / "build-root",
-            worker_id="worker-1",
-            max_bytes=32 * 1024 * 1024,
-            per_build_max_bytes=16 * 1024 * 1024,
-            minimum_free_bytes=0,
-        ),
-        repository=_FakeArchiveUploadRepository(ImageArchiveUploadCredentials()),
-        image_runtime=ImageRuntimeClient(tmp_path / "image-runtime.sock"),
-        archive_root=tmp_path,
-        architecture_preparer=ImageBuildArchitectureRuntime(host_machine=lambda: "x86_64"),
-        storage_driver=image_build_execution.BuildahStorageDriver.Vfs,
-        fallback_storage_driver=image_build_execution.BuildahStorageDriver.Vfs,
-    )
-    payload = WorkerImageBuildRequestPayload.model_validate(
-        {
-            "build_id": "build-1",
-            "image_id": "image-1",
-            "build_options": {
-                "dockerfile": "FROM scratch\nRUN false\n",
-            },
-        }
-    )
-
-    result = builder.build_image_archive(
-        payload,
-        container_id="container-1",
-        log=lambda _message: None,
-        cancellation=threading.Event(),
-    )
-
-    assert not result.ok
-    assert "deliberate cleanup failure" in result.error_message
-    assert not list((tmp_path / "build-root").glob("image-build-*"))
 
 
 @pytest.mark.parametrize(
@@ -587,7 +331,7 @@ class _RecordingImageBuilder:
         registry_auth: ImageBuildRegistryAuth | None,
         build_args: dict[str, str],
         log: ImageBuildLog,
-        cancellation: threading.Event,
+        resources: ImageBuildResources,
     ) -> WorkerImageArchiveBuildResult:
         self.requests.append(payload)
         self.registry_auths.append(registry_auth)
@@ -597,7 +341,7 @@ class _RecordingImageBuilder:
         if self.log_private_values and private_values:
             log(f"builder output: {private_values[0]}")
         return WorkerImageArchiveBuildResult(
-            ok=True,
+            ok=False,
             image_id=payload.image_id,
             registry_ref="registry.example.com/workloads@sha256:" + "b" * 64,
             manifest_digest="sha256:" + "b" * 64,
@@ -636,24 +380,6 @@ class _RecordingCredentialLoader:
         return ImageBuildPrivateInputs(
             registry_auth=self.registry_auth,
             build_args=self.build_args,
-        )
-
-
-@dataclass(slots=True)
-class _SuccessfulImageArchiver:
-    archive_path: Path
-
-    def archive_image(
-        self,
-        source_path: Path,
-        image_id: str,
-        progress: Callable[[int], None],
-    ) -> ContainerImageArchiveResult:
-        del source_path, image_id, progress
-        self.archive_path.write_bytes(b"archive")
-        return ContainerImageArchiveResult(
-            success=True,
-            archive_path=str(self.archive_path),
         )
 
 

@@ -22,15 +22,26 @@ locals {
     "invoice.paid",
     "invoice.payment_failed",
   ]
+
+  credit_purchase_events = [
+    "checkout.session.completed",
+    "checkout.session.expired",
+    "payment_intent.succeeded",
+    "payment_intent.payment_failed",
+    "payment_intent.canceled",
+    "payment_intent.requires_action",
+    "charge.refunded",
+    "charge.dispute.created",
+    "charge.dispute.updated",
+    "charge.dispute.closed",
+    "charge.dispute.funds_reinstated",
+    "charge.dispute.funds_withdrawn",
+  ]
 }
 
 resource "stripe_webhook_endpoint" "billing" {
   url = var.webhook_url
-  # Exactly what `BillingWebhookService` acts on, and nothing else. An event not
-  # in this list is delivered and discarded — so a longer list is not harmless,
-  # it is work the endpoint does for no reason, and it tells the next operator
-  # that deliveries this platform ignores are acted on.
-  enabled_events = concat(local.card_events, local.subscription_events)
+  enabled_events = concat(local.card_events, local.subscription_events, local.credit_purchase_events)
   description    = "LazyCloud ${var.environment} billing deliveries"
 
   lifecycle {

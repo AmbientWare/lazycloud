@@ -60,6 +60,7 @@ from api.server.http import (
     websocket_subprotocols,
 )
 from api.server.ownership import require_endpoint_stub_workspace
+from api.server.public_transfers import attribute_public_transfer
 from api.server.service_dependencies import control_plane_service, endpoint_service
 from api.server.services import ApiServices, EndpointApiService
 
@@ -594,6 +595,13 @@ async def _forward_endpoint_request(
 ) -> Response:
     forwarded = await _forwarded_request(stub, request, subpath)
     result = await service.forward_endpoint_request(forwarded)
+    attribute_public_transfer(
+        request,
+        workspace_id=stub.workspace_id,
+        resource_type="stub",
+        resource_id=stub.id,
+        stub_id=stub.id,
+    )
     return forwarded_response(
         status_code=result.status_code, headers=result.headers, body=result.body
     )
@@ -623,6 +631,13 @@ async def _forward_asgi_http_request(
                 error=str(exc),
             )
         return Response(content=str(exc), status_code=status.HTTP_502_BAD_GATEWAY)
+    attribute_public_transfer(
+        request,
+        workspace_id=stub.workspace_id,
+        resource_type="stub",
+        resource_id=stub.id,
+        stub_id=stub.id,
+    )
     return _asgi_streaming_response(service, session, stream)
 
 
@@ -710,6 +725,13 @@ async def _forward_asgi_websocket(
         session = await service.prepare_asgi_websocket(forwarded)
         backend = await _connect_backend_websocket(service, session, forwarded, websocket)
         await websocket.accept(subprotocol=backend.subprotocol)
+        attribute_public_transfer(
+            websocket,
+            workspace_id=stub.workspace_id,
+            resource_type="stub",
+            resource_id=stub.id,
+            stub_id=stub.id,
+        )
         heartbeat = asyncio.create_task(_heartbeat_asgi_websocket(service, session, heartbeat_stop))
         outcome = await _proxy_asgi_websocket(websocket, backend)
         cancelled = outcome.cancelled

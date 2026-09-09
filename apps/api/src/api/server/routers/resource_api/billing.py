@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from urllib.parse import urlparse
+from uuid import UUID
 
+from billing.automatic_reload import AutomaticReloadService
 from billing.costs import (
     MAX_COST_PAGE,
     BillingStanding,
@@ -10,14 +12,16 @@ from billing.costs import (
     UsageCostSeries,
     UsageCostService,
 )
+from billing.preferences import BillingPreferencesService
+from billing.purchases import CreditPurchaseService
 from database.repositories.billing_costs import PayerCostScope
 from fastapi import APIRouter, Depends, Query, status
-from shared.billing_rate_card import published_plan
+from shared.billing_rate_card import published_plan, subscription_terms
+from shared.credit_payments import CreditPurchaseKind
 from shared.errors import InvalidInputError
 from shared.http.billing import (
     BillingAccountAdminListResponse,
     BillingAccountAdminResponse,
-    BillingAllowanceResponse,
     BillingComplimentaryRequest,
     BillingEntitlementUsageResponse,
     BillingHostedSessionRequest,
@@ -25,7 +29,12 @@ from shared.http.billing import (
     BillingPlanChangeRequest,
     BillingPlanResponse,
     BillingSummaryResponse,
+    CreditBalanceResponse,
+    CreditPurchaseRequest,
+    CreditPurchaseResponse,
+    UsageBudgetResponse,
 )
+from shared.http.billing_preferences import AutomaticReloadStatus, BillingPreferences
 from shared.http.pricing import PlanEntitlementsResponse
 from shared.http.usage import (
     UsageCostBucket,
@@ -56,6 +65,111 @@ from billing import (
 )
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
+
+
+@router.get(
+    "/automatic-reload", response_model=AutomaticReloadStatus, operation_id="get_automatic_reload"
+)
+def get_automatic_reload(
+    user_id: read_user,
+    services: ApiServices = Depends(current_services),
+) -> AutomaticReloadStatus:
+    return AutomaticReloadService(services.context.database, services.payment_provider).status(
+        user_id=user_id
+    )
+
+
+@router.post(
+    "/automatic-reload/resume",
+    response_model=AutomaticReloadStatus,
+    operation_id="resume_automatic_reload",
+)
+def resume_automatic_reload(
+    user_id: write_user,
+    services: ApiServices = Depends(current_services),
+) -> AutomaticReloadStatus:
+    return AutomaticReloadService(services.context.database, services.payment_provider).resume(
+        user_id=user_id
+    )
+
+
+@router.get(
+    "/preferences", response_model=BillingPreferences, operation_id="get_billing_preferences"
+)
+def get_billing_preferences(
+    user_id: read_user,
+    services: ApiServices = Depends(current_services),
+) -> BillingPreferences:
+    with services.context.database.session() as session:
+        return BillingPreferencesService(session).get(user_id=user_id)
+
+
+@router.put(
+    "/preferences", response_model=BillingPreferences, operation_id="set_billing_preferences"
+)
+def set_billing_preferences(
+    request: BillingPreferences,
+    user_id: write_user,
+    services: ApiServices = Depends(current_services),
+) -> BillingPreferences:
+    with services.context.database.session() as session:
+        return BillingPreferencesService(session).set(user_id=user_id, preferences=request)
+
+
+@router.get("/usage-budget", response_model=UsageBudgetResponse, operation_id="get_usage_budget")
+def get_usage_budget(
+    user_id: read_user,
+    services: ApiServices = Depends(current_services),
+) -> UsageBudgetResponse:
+    with services.context.database.session() as session:
+        budget = BillingPreferencesService(session).usage_budget(user_id=user_id)
+    return UsageBudgetResponse.model_validate(budget)
+
+
+@router.get("/credits", response_model=CreditBalanceResponse, operation_id="get_credit_balance")
+def get_credit_balance(
+    user_id: read_user,
+    services: ApiServices = Depends(current_services),
+) -> CreditBalanceResponse:
+    with services.context.database.session() as session:
+        summary = BillingStandingService(session).credit_balance(user_id=user_id, at=utc_now())
+    return CreditBalanceResponse(ready=summary.ready, balance_nanos=summary.balance_nanos)
+
+
+@router.post(
+    "/credit-purchases",
+    response_model=CreditPurchaseResponse,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="create_credit_purchase",
+)
+def create_credit_purchase(
+    request: CreditPurchaseRequest,
+    user_id: write_user,
+    services: ApiServices = Depends(current_services),
+) -> CreditPurchaseResponse:
+    return CreditPurchaseService(services.context.database, services.payment_provider).create(
+        user_id=user_id,
+        request_key=str(request.request_key),
+        amount_cents=request.amount_cents,
+        kind=CreditPurchaseKind.Manual,
+        success_url=_own_url(services, request.return_url),
+        cancel_url=_own_url(services, request.cancel_url or request.return_url),
+    )
+
+
+@router.get(
+    "/credit-purchases/{purchase_id}",
+    response_model=CreditPurchaseResponse,
+    operation_id="get_credit_purchase",
+)
+def get_credit_purchase(
+    purchase_id: UUID,
+    user_id: read_user,
+    services: ApiServices = Depends(current_services),
+) -> CreditPurchaseResponse:
+    return CreditPurchaseService(services.context.database, services.payment_provider).get(
+        user_id=user_id, purchase_id=str(purchase_id)
+    )
 
 
 @router.get(
@@ -214,7 +328,7 @@ def change_billing_plan(
         database=services.context.database,
         payments=services.payment_provider,
         events=services.events,
-    ).change_plan(user_id=user_id, target=request.plan)
+    ).change_plan(user_id=user_id, target=request.plan, target_terms_version=request.terms_version)
     with services.context.database.session() as session:
         return _summary(BillingStandingService(session).standing(user_id=user_id, at=utc_now()))
 
@@ -324,6 +438,11 @@ def _series_response(series: UsageCostSeries) -> UsageCostSeriesResponse:
 
 def _summary(standing: BillingStanding) -> BillingSummaryResponse:
     allowance = standing.allowance
+    terms = (
+        subscription_terms(standing.subscription_terms_version)
+        if standing.subscription_terms_version is not None
+        else None
+    )
     return BillingSummaryResponse(
         status=standing.status,
         currency=BILLING_CURRENCY,
@@ -331,17 +450,13 @@ def _summary(standing: BillingStanding) -> BillingSummaryResponse:
             BillingPlanResponse(
                 id=standing.plan,
                 name=published_plan(standing.plan).name,
-                allowance=(
-                    BillingAllowanceResponse(
-                        period_started_at=allowance.started_at,
-                        period_ended_at=allowance.ended_at,
-                        allowance_nanos=allowance.allowance_nanos,
-                        spent_nanos=allowance.spent_nanos,
-                        remaining_nanos=allowance.remaining_nanos,
-                    )
-                    if allowance is not None
-                    else None
-                ),
+                terms_version=standing.subscription_terms_version,
+                monthly_nanos=terms.monthly_nanos if terms else None,
+                included_nanos=terms.included_nanos if terms else None,
+                scheduled_terms_version=standing.scheduled_terms_version,
+                scheduled_change_at=standing.scheduled_change_at,
+                period_started_at=allowance.started_at if allowance else None,
+                period_ended_at=allowance.ended_at if allowance else None,
             )
             if standing.plan is not None
             else None

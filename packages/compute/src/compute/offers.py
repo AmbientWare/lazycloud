@@ -24,6 +24,9 @@ class ComputeOffer(ContractModel):
     cloud: str = ""
     instance_type: str
     region: str
+    availability_zone: str = ""
+    preemptible: bool = False
+    max_hourly_cost_micros: int | None = Field(default=None, gt=0)
     cpu_millicores: int = 0
     memory_mb: int = 0
     storage_mb: int = 0
@@ -60,10 +63,6 @@ class ComputeOffer(ContractModel):
         return self.cost_terms.billing_quantum_seconds
 
 
-# What a pooled cloud node is, independent of whose cloud it is. A provider that
-# restated these would be free to drift from the others, and the drift would show
-# up as a workload that fits on one cloud and not another for reasons nobody
-# chose.
 DEFAULT_POOLED_NODE_STORAGE_MB = 200 * 1024
 DEFAULT_POOLED_NODE_ARCHITECTURE = "amd64"
 DEFAULT_POOLED_NODE_RUNTIME = OciRuntimeName.Runsc.value
@@ -81,6 +80,9 @@ def pooled_cloud_offer(
     memory_mb: int,
     cost_terms: SupplierCostTerms,
     capability_key: str,
+    availability_zone: str = "",
+    preemptible: bool = False,
+    max_hourly_cost_micros: int | None = None,
     supplier_cpu_unit: SupplierCpuUnit = SupplierCpuUnit.Unknown,
     supplier_cpu_count: int | None = None,
     gpu: str | None = None,
@@ -89,19 +91,16 @@ def pooled_cloud_offer(
     architecture: str = DEFAULT_POOLED_NODE_ARCHITECTURE,
     runtime: str = DEFAULT_POOLED_NODE_RUNTIME,
 ) -> ComputeOffer:
-    """One node of pooled capacity, described the same way whoever rents it.
-
-    A provider supplies only what is genuinely its own — the instance type, the
-    region, the price, the hardware. Everything else is a platform decision and
-    lives here, so adding a second cloud cannot quietly disagree with the first
-    about what a node is or which runtime it runs.
-    """
+    """Describe one node with the platform's common capacity conventions."""
     return ComputeOffer(
         id=offer_id,
         provider=provider,
         cloud=cloud,
         instance_type=instance_type,
         region=region,
+        availability_zone=availability_zone,
+        preemptible=preemptible,
+        max_hourly_cost_micros=max_hourly_cost_micros,
         cpu_millicores=cpu_millicores,
         memory_mb=memory_mb,
         storage_mb=storage_mb,
@@ -124,6 +123,8 @@ def pooled_cloud_offer(
 class OfferRequest(ContractModel):
     providers: list[str] = Field(default_factory=list)
     regions: list[str] = Field(default_factory=list)
+    availability_zone: str = ""
+    preemptible: bool = False
     offer_id: str = ""
     min_cpu_millicores: int = 0
     min_memory_mb: int = 0
@@ -151,6 +152,9 @@ def recorded_unit_offer(
         cloud=cloud,
         instance_type=instance_type,
         region=unit.region,
+        availability_zone=unit.offer_availability_zone,
+        preemptible=unit.worker_preemptible,
+        max_hourly_cost_micros=unit.offer_max_hourly_cost_micros,
         cpu_millicores=unit.worker_cpu_millicores,
         memory_mb=unit.worker_memory_mib,
         storage_mb=unit.offer_storage_mib if unit.offer_storage_mib is not None else 0,
@@ -167,6 +171,18 @@ def recorded_unit_offer(
     )
 
 
+def record_purchase_terms(unit: ComputeUnitRecord, offer: ComputeOffer) -> ComputeUnitRecord:
+    if unit.offer_id != offer.id or unit.provider_ref != offer.provider:
+        raise ValueError("purchase terms must belong to the owned offer")
+    return unit.model_copy(
+        update={
+            "offer_cost_terms": offer.cost_terms,
+            "offer_max_hourly_cost_micros": offer.max_hourly_cost_micros,
+            "offer_availability_zone": offer.availability_zone,
+        }
+    )
+
+
 def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[ComputeOffer]:
     required_cpu = capacity_with_overhead(request.min_cpu_millicores)
     required_memory = capacity_with_overhead(request.min_memory_mb)
@@ -177,6 +193,10 @@ def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[Com
         if request.providers and offer.provider not in request.providers:
             continue
         if request.regions and offer.region not in request.regions:
+            continue
+        if request.availability_zone and offer.availability_zone != request.availability_zone:
+            continue
+        if offer.preemptible and not request.preemptible:
             continue
         if offer.cpu_millicores < required_cpu:
             continue

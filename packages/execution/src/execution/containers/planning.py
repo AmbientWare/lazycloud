@@ -24,6 +24,7 @@ DEFAULT_CONTAINER_DISK_MIB = parse_memory_mib(DEFAULT_DISK) or 0
 
 class ContainerSchedulingOptions(ContractModel):
     region: ProductRegion | None = None
+    availability_zone: str = ""
     workspace_name: str = "default"
     stub_type: str = "container"
     startup_kind: WorkerStartupKind = WorkerStartupKind.Pod

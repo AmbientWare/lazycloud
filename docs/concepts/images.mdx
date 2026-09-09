@@ -7,6 +7,11 @@ Every workload runs in an image described by an `Image`. Builds are cached by
 content: the same definition reuses the built image, and a change rebuilds
 only what changed.
 
+New image builds use preemptible capacity. If a worker is interrupted, the build
+fails and reports an error. Rerun the command to submit a new build; interrupted
+builds do not restart automatically. An incomplete archive is never reused as a
+completed image.
+
 ```python
 from lazycloud import Image
 

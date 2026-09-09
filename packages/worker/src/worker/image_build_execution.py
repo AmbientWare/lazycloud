@@ -8,7 +8,6 @@ import re
 import shutil
 import signal
 import stat
-import subprocess
 import tempfile
 import threading
 import time
@@ -24,7 +23,7 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 from networking.internal_http import InternalHttpClient
-from pydantic import Field
+from pydantic import AwareDatetime, Field
 from shared.contracts import ContractModel
 from shared.image_building.credentials import registry_host_for_image
 from shared.scheduling import WorkerExecutionRequest
@@ -49,6 +48,7 @@ from worker.image_build_requests import (
     ImageBuildContainerCredentialMetadata,
     ImageBuildSchedulerCredentialSource,
 )
+from worker.image_build_resources import ImageBuildResources
 from worker.image_build_runtime_credentials import ImageBuildCredentialLoader
 from worker.image_build_scratch import (
     IMAGE_BUILD_SCRATCH_MONITOR_SECONDS,
@@ -62,7 +62,6 @@ from worker.image_lifecycle import (
     plan_buildah_environment,
     plan_buildah_storage_config,
 )
-from worker.image_runtime import ImageRuntimeClient
 from worker.origin_access import (
     CacheOriginCredentialRequest,
     CacheOriginCredentials,
@@ -152,6 +151,7 @@ class WorkerImageBuildExecutionResult(ContractModel):
     container_id: str
     image_id: str
     build_id: str
+    exited_at: AwareDatetime | None = None
     archive_path: str = ""
     object_key: str = ""
     archive_size_bytes: int = 0
@@ -170,7 +170,7 @@ class WorkerImageBuilder(Protocol):
         registry_auth: ImageBuildRegistryAuth | None,
         build_args: dict[str, str],
         log: ImageBuildLog,
-        cancellation: threading.Event,
+        resources: ImageBuildResources,
     ) -> WorkerImageArchiveBuildResult: ...
 
 
@@ -252,7 +252,9 @@ class WorkerImageBuildExecutionService:
         instance = self.instances.get_container_instance(container_id)
         return [] if instance is None else instance.log_messages[after : after + limit]
 
-    def execute(self, request: WorkerExecutionRequest) -> WorkerImageBuildExecutionResult:
+    def execute(
+        self, request: WorkerExecutionRequest, *, resources: ImageBuildResources
+    ) -> WorkerImageBuildExecutionResult:
         payload = WorkerImageBuildRequestPayload.model_validate(request.payload).model_copy(
             update={"workspace_id": request.workspace_id, "stub_id": request.stub_id}
         )
@@ -260,8 +262,7 @@ class WorkerImageBuildExecutionService:
         logs: list[str] = []
         sensitive_values: tuple[str, ...] = ()
         log_lock = threading.Lock()
-        cancellation = threading.Event()
-        self.cancellations.register(request.container_id, cancellation.set)
+        self.cancellations.register(request.container_id, resources.stop)
 
         def log(message: str) -> None:
             clean = _redact_image_build_text(
@@ -277,6 +278,7 @@ class WorkerImageBuildExecutionService:
                 self.instances.save_container_instance(stored)
 
         try:
+            resources.require_valid()
             self.address_publisher.publish_worker_address(_request_context(request, payload))
             self.instances.save_container_instance(instance)
             log("image build worker request accepted")
@@ -289,7 +291,7 @@ class WorkerImageBuildExecutionService:
                 registry_auth=private_inputs.registry_auth,
                 build_args=private_inputs.build_args,
                 log=log,
-                cancellation=cancellation,
+                resources=resources,
             )
             if not build.ok:
                 return self._finish(
@@ -313,6 +315,7 @@ class WorkerImageBuildExecutionService:
                         sensitive_values=sensitive_values,
                     ),
                 )
+            resources.require_valid()
             published = self.publisher.publish_image_archive(
                 image_id=payload.image_id,
                 build_id=payload.build_id,
@@ -348,6 +351,7 @@ class WorkerImageBuildExecutionService:
                         sensitive_values=sensitive_values,
                     ),
                 )
+            resources.require_valid()
             log(
                 "image archive published: "
                 f"{published.bucket}/{published.object_key} ({published.size_bytes} bytes)"
@@ -612,13 +616,14 @@ def _download_image_build_context(
 class BuildahWorkerImageBuilder:
     scratch: ImageBuildScratchManager
     repository: ImageArchiveUploadCredentialClient
-    image_runtime: ImageRuntimeClient
     archive_root: Path
+    index_cache_root: Path
     context_loader: WorkerImageBuildContextLoader | None = None
     architecture_preparer: ImageBuildArchitecturePreparer = field(
         default_factory=ImageBuildArchitectureRuntime
     )
     buildah_binary: str = "buildah"
+    image_runtime_binary: str = "lazycloud-image-runtime"
     storage_driver: BuildahStorageDriver = BuildahStorageDriver.Overlay
     fallback_storage_driver: BuildahStorageDriver = BuildahStorageDriver.Vfs
 
@@ -630,7 +635,7 @@ class BuildahWorkerImageBuilder:
         registry_auth: ImageBuildRegistryAuth | None = None,
         build_args: dict[str, str] | None = None,
         log: ImageBuildLog,
-        cancellation: threading.Event,
+        resources: ImageBuildResources,
     ) -> WorkerImageArchiveBuildResult:
         if not payload.image_id:
             return WorkerImageArchiveBuildResult(
@@ -661,14 +666,14 @@ class BuildahWorkerImageBuilder:
                     payload,
                     container_id=container_id,
                     driver=driver,
-                    cancellation=cancellation,
+                    resources=resources,
                     registry_auth=registry_auth,
                     build_args=build_args or {},
                     log=log,
                 )
             except Exception as exc:
                 log(f"buildah {driver.value} build failed: {type(exc).__name__}: {exc}")
-                if cancellation.is_set() or driver is self._storage_drivers()[-1]:
+                if resources.cancellation.is_set() or driver is self._storage_drivers()[-1]:
                     return WorkerImageArchiveBuildResult(
                         ok=False,
                         image_id=payload.image_id,
@@ -693,7 +698,7 @@ class BuildahWorkerImageBuilder:
         registry_auth: ImageBuildRegistryAuth | None,
         build_args: dict[str, str],
         log: ImageBuildLog,
-        cancellation: threading.Event,
+        resources: ImageBuildResources,
     ) -> WorkerImageArchiveBuildResult:
         lease = self.scratch.acquire(build_id=payload.build_id, container_id=container_id)
         directories = plan_buildah_directories(str(lease.root))
@@ -738,6 +743,8 @@ class BuildahWorkerImageBuilder:
                 log(f"building image {payload.image_id} with buildah {driver.value}")
                 build_command = [
                     "bud",
+                    "--cgroup-parent",
+                    str(resources.root.relative_to("/sys/fs/cgroup")),
                     "--arch",
                     payload.build_options.architecture.value,
                     "--layers",
@@ -759,7 +766,7 @@ class BuildahWorkerImageBuilder:
                     cwd=context_dir,
                     log=log,
                     scratch=lease,
-                    cancellation=cancellation,
+                    resources=resources,
                 )
                 self._run_buildah(
                     [
@@ -776,7 +783,7 @@ class BuildahWorkerImageBuilder:
                     cwd=context_dir,
                     log=log,
                     scratch=lease,
-                    cancellation=cancellation,
+                    resources=resources,
                 )
             elif payload.build_options.source_image:
                 source_image = payload.build_options.source_image
@@ -797,7 +804,7 @@ class BuildahWorkerImageBuilder:
                     cwd=context_dir,
                     log=log,
                     scratch=lease,
-                    cancellation=cancellation,
+                    resources=resources,
                 )
             else:
                 msg = "image build request requires a Dockerfile or source image"
@@ -811,7 +818,7 @@ class BuildahWorkerImageBuilder:
                 cwd=context_dir,
                 log=log,
                 scratch=lease,
-                cancellation=cancellation,
+                resources=resources,
             )
             layout_path = root / "oci-layout"
             self._run_buildah(
@@ -822,7 +829,7 @@ class BuildahWorkerImageBuilder:
                 cwd=context_dir,
                 log=log,
                 scratch=lease,
-                cancellation=cancellation,
+                resources=resources,
             )
             manifest_digest = _oci_layout_manifest_digest(layout_path)
             origin = self._workload_registry_credentials(
@@ -835,6 +842,19 @@ class BuildahWorkerImageBuilder:
                 root,
                 origin.registry_credentials,
             )
+            index_request = root / "index-request.json"
+            _write_private_file(
+                index_request,
+                json.dumps(
+                    {
+                        "image_id": payload.image_id,
+                        "local_layout_path": str(layout_path),
+                        "storage_image_ref": registry_ref,
+                        "output_path": str(index_path),
+                        "architecture": payload.build_options.architecture.value,
+                    }
+                ),
+            )
             with ThreadPoolExecutor(max_workers=2) as executor:
                 push = executor.submit(
                     _push_oci_layout,
@@ -842,19 +862,33 @@ class BuildahWorkerImageBuilder:
                     origin.registry_repository,
                     manifest_digest,
                     workload_auth_file,
+                    resources=resources,
+                    env=env,
+                    log=log,
                 )
                 index = executor.submit(
-                    self.image_runtime.create_index,
-                    image_id=payload.image_id,
-                    local_layout_path=layout_path,
-                    storage_image_ref=registry_ref,
-                    output_path=index_path,
-                    architecture=payload.build_options.architecture.value,
+                    _run_logged_process,
+                    [
+                        self.image_runtime_binary,
+                        "--index",
+                        "--build-root",
+                        str(root),
+                        "--cache-root",
+                        str(self.index_cache_root),
+                    ],
+                    cwd=root,
+                    env=env,
+                    log=log,
+                    resources=resources,
+                    input_file=index_request,
                 )
-                push_output = push.result()
-                index.result()
-            for line in push_output:
-                log(line)
+                try:
+                    push.result()
+                    index.result()
+                except BaseException:
+                    resources.stop()
+                    raise
+            resources.require_valid()
             published_index_path = self.archive_root / f"{payload.image_id}.rclip"
             published_index_path.parent.mkdir(parents=True, exist_ok=True)
             temporary_index_path = published_index_path.with_suffix(
@@ -968,7 +1002,7 @@ class BuildahWorkerImageBuilder:
         cwd: Path,
         log: ImageBuildLog,
         scratch: ImageBuildScratchLease | None = None,
-        cancellation: threading.Event,
+        resources: ImageBuildResources,
     ) -> None:
         command = _buildah_command(
             self.buildah_binary,
@@ -977,7 +1011,7 @@ class BuildahWorkerImageBuilder:
             runroot=directories.runroot,
             driver=driver,
         )
-        if cancellation.is_set():
+        if resources.cancellation.is_set():
             raise RuntimeError("image build was cancelled")
         if scratch is not None:
             scratch.check_capacity()
@@ -987,7 +1021,7 @@ class BuildahWorkerImageBuilder:
             env=env,
             log=log,
             capacity_check=scratch.check_capacity if scratch is not None else None,
-            cancellation=cancellation,
+            resources=resources,
         )
         if scratch is not None:
             scratch.check_capacity()
@@ -1260,7 +1294,11 @@ def _push_oci_layout(
     repository: str,
     manifest_digest: str,
     auth_file: Path | None,
-) -> list[str]:
+    *,
+    resources: ImageBuildResources,
+    env: dict[str, str],
+    log: ImageBuildLog,
+) -> None:
     tag = f"sha256-{manifest_digest.removeprefix('sha256:')}"
     registry = registry_host_for_image(repository)
     insecure = registry.startswith(("localhost:", "127.0.0.1:"))
@@ -1273,8 +1311,16 @@ def _push_oci_layout(
         f"oci:{layout_path}:image",
         f"docker://{repository}:{tag}",
     ]
-    process = subprocess.run(command, text=True, capture_output=True, check=False)
-    if process.returncode != 0:
+    try:
+        _run_logged_process(
+            command,
+            cwd=layout_path.parent,
+            env=env,
+            log=log,
+            resources=resources,
+        )
+    except RuntimeError:
+        resources.require_valid()
         inspect = [
             "skopeo",
             "inspect",
@@ -1282,10 +1328,13 @@ def _push_oci_layout(
             *(["--authfile", str(auth_file)] if auth_file is not None else []),
             f"docker://{repository}@{manifest_digest}",
         ]
-        existing = subprocess.run(inspect, text=True, capture_output=True, check=False)
-        if existing.returncode != 0:
-            raise RuntimeError(_process_error_message(command, process))
-    return _output_lines(process.stdout, process.stderr)
+        _run_logged_process(
+            inspect,
+            cwd=layout_path.parent,
+            env=env,
+            log=log,
+            resources=resources,
+        )
 
 
 def _write_registry_auth_file(
@@ -1371,7 +1420,8 @@ def _run_logged_process(
     log: ImageBuildLog,
     heartbeat_seconds: float = 15.0,
     capacity_check: Callable[[], None] | None = None,
-    cancellation: threading.Event,
+    resources: ImageBuildResources,
+    input_file: Path | None = None,
 ) -> str:
     lines: list[str] = []
     started = time.monotonic()
@@ -1389,14 +1439,12 @@ def _run_logged_process(
 
     read_fd, write_fd = os.pipe()
     try:
-        process: subprocess.Popen[bytes] = subprocess.Popen(
+        process = resources.spawn(
             command,
             cwd=cwd,
             env=env,
-            stdout=write_fd,
-            stderr=write_fd,
-            close_fds=True,
-            start_new_session=True,
+            output_fd=write_fd,
+            input_file=input_file,
         )
     except BaseException:
         os.close(read_fd)
@@ -1408,7 +1456,7 @@ def _run_logged_process(
         last_capacity_check = time.monotonic()
         while not stop_heartbeat.wait(0.25):
             try:
-                if cancellation.is_set():
+                if resources.cancellation.is_set():
                     raise RuntimeError("image build was cancelled")
                 if (
                     capacity_check is not None
@@ -1451,6 +1499,7 @@ def _run_logged_process(
         stop_heartbeat.set()
         heartbeat_thread.join(timeout=1.0)
         capacity_thread.join(timeout=1.0)
+        resources.reap(process)
     if capacity_failures:
         raise capacity_failures[0]
     if return_code != 0:
@@ -1485,18 +1534,6 @@ def _safe_name(value: str) -> str:
 
 def _output_lines(*values: str) -> list[str]:
     return [line for value in values for line in value.splitlines() if line.strip()]
-
-
-def _process_error_message(
-    command: Sequence[str],
-    process: subprocess.CompletedProcess[str],
-) -> str:
-    stderr = process.stderr.strip()
-    stdout = process.stdout.strip()
-    detail = stderr or stdout
-    if detail:
-        return f"{command[0]} exited {process.returncode}: {detail}"
-    return f"{command[0]} exited {process.returncode}"
 
 
 def _command_error_message(command: Sequence[str], return_code: int, output: str) -> str:

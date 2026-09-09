@@ -29,7 +29,7 @@ class MeteredRatePublication:
     effective_at: datetime
     pricing_version: str
     compute: tuple[ComputeRatePublication, ...]
-    platform: RatePublication
+    platform: RatePublication | None
 
 
 def publish_metered_rate_history(
@@ -61,11 +61,15 @@ def publish_metered_rate_history(
             )
             for rate in card.compute_rates
         )
-        state = platform.publish(
-            pricing_version=card.pricing_version,
-            effective_at=card.effective_at,
-            nanos_per_egress_byte=card.platform_rate.nanos_per_egress_byte,
-            nanos_per_volume_byte_second=card.platform_rate.nanos_per_volume_byte_second,
+        state = (
+            platform.publish(
+                pricing_version=card.pricing_version,
+                effective_at=card.effective_at,
+                nanos_per_egress_byte=card.platform_rate.nanos_per_egress_byte,
+                nanos_per_volume_byte_second=card.platform_rate.nanos_per_volume_byte_second,
+            )
+            if card.platform_rate is not None
+            else None
         )
         publications.append(
             MeteredRatePublication(card.effective_at, card.pricing_version, rates, state)

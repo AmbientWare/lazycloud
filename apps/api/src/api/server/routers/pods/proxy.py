@@ -55,6 +55,7 @@ from api.server.http import (
     websocket_query_params,
     websocket_subprotocols,
 )
+from api.server.public_transfers import attribute_public_transfer
 from api.server.service_dependencies import control_plane_service, pod_service
 from api.server.services import ApiServices
 
@@ -515,6 +516,13 @@ async def _forward_proxy_request(
             await result.close()
             await service.finish_pod_proxy(session)
 
+    attribute_public_transfer(
+        request,
+        workspace_id=stub.workspace_id,
+        resource_type="stub",
+        resource_id=stub.id,
+        stub_id=stub.id,
+    )
     return forwarded_streaming_response(
         status_code=result.status_code,
         headers=result.headers,
@@ -555,6 +563,13 @@ async def _forward_pod_websocket(
         backend = await _connect_backend_websocket(service, session, request, websocket)
         await websocket.accept(subprotocol=backend.subprotocol)
         accepted = True
+        attribute_public_transfer(
+            websocket,
+            workspace_id=stub.workspace_id,
+            resource_type="stub",
+            resource_id=stub.id,
+            stub_id=stub.id,
+        )
         await _proxy_pod_websocket(websocket, backend)
     except (PodProxyPortUnavailable, PodProxyUnavailable) as exc:
         if session is not None and not accepted:

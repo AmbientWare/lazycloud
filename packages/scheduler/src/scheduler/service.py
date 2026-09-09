@@ -153,6 +153,10 @@ class SchedulerVolumeMeteringBatch(Protocol):
     def failure_count(self) -> int: ...
 
 
+class SchedulerStorageAccessService(Protocol):
+    def reconcile(self) -> int: ...
+
+
 class SchedulerVolumeMeteringService(Protocol):
     def reconcile_due(
         self,
@@ -213,8 +217,6 @@ class SchedulerMeterOutboxService(Protocol):
 
     def abandoned_backlog(self) -> SchedulerAbandonedMeterEvents: ...
 
-    def prune(self, *, now: datetime | None = None, limit: int = 1_000) -> int: ...
-
 
 class SchedulerPlanChangeBatch(Protocol):
     @property
@@ -254,6 +256,10 @@ class SchedulerBillingReconciliationService(Protocol):
     """The pass that reports where the provider and this platform disagree."""
 
     def reconcile(self, *, now: datetime | None = None) -> SchedulerBillingReconciliationBatch: ...
+
+
+class SchedulerBillingPaymentsService(Protocol):
+    def maintain(self, *, now: datetime | None = None) -> None: ...
 
 
 class SchedulerBillingEnforcementBatch(Protocol):
@@ -443,6 +449,8 @@ class SchedulerCapacityControls:
 
 @dataclass(frozen=True, slots=True)
 class SchedulerMaintenanceControls:
+    billing_payments: SchedulerBillingPaymentsService | None = None
+    storage_access: SchedulerStorageAccessService | None = None
     volume_metering: SchedulerVolumeMeteringService | None = None
     volume_deletion: SchedulerVolumeDeletionService | None = None
     meter_outbox: SchedulerMeterOutboxService | None = None
@@ -480,13 +488,6 @@ class Scheduler:
     last_email_prune_at: datetime | None = field(default=None, init=False)
     event_prune_interval_seconds: float = 3600.0
     last_event_prune_at: datetime | None = field(default=None, init=False)
-    meter_event_prune_interval_seconds: float = 3600.0
-    """Acknowledged outbox rows are deleted on a retention cadence, not on the
-    drain's. A row is settled the moment the provider takes it; how long the
-    evidence of that is kept afterwards is a retention question and nothing the
-    sending loop should spend a query on every tick."""
-
-    last_meter_event_prune_at: datetime | None = field(default=None, init=False)
     last_reported_abandoned_meter_events: int | None = field(default=None, init=False)
     """The outstanding abandoned figure the last line reported.
 
@@ -918,6 +919,14 @@ class Scheduler:
         that decides whether work may start.
         """
 
+        access_observed = None
+        access_failures = 0
+        if self.maintenance.storage_access is not None:
+            try:
+                access_observed = self.maintenance.storage_access.reconcile()
+            except Exception:
+                access_failures = 1
+                LOGGER.exception("storage access ingestion failed; delivery remains unacknowledged")
         if self.maintenance.volume_deletion is not None:
             self.maintenance.volume_deletion.reconcile_due(now=now, limit=container_limit)
         volume_metering_count, volume_metering_failure_count = self._meter_persistent_volumes(
@@ -925,9 +934,13 @@ class Scheduler:
             limit=container_limit,
         )
         meter_events = self._drain_meter_events(now=now)
+        if self.maintenance.billing_payments is not None:
+            try:
+                self.maintenance.billing_payments.maintain(now=now)
+            except Exception:
+                LOGGER.exception("prepaid payment maintenance failed; purchases remain recorded")
         plan_changes = self._settle_plan_changes(now=now)
         billing_reconciliation = self._best_effort_reconcile_billing(now=now)
-        meter_events_pruned = self._best_effort_prune_meter_events(now=now)
         self._best_effort_deliver_email(now=now)
         self._best_effort_reconcile_custom_domains(now=now)
         expired_tokens_pruned = (
@@ -939,6 +952,8 @@ class Scheduler:
         )
         return SchedulerRunResult(
             expired_tokens_pruned=expired_tokens_pruned,
+            storage_access_observed=access_observed,
+            storage_access_failures=access_failures,
             events_pruned=events_pruned,
             volume_metering_count=volume_metering_count,
             volume_metering_failure_count=volume_metering_failure_count,
@@ -947,7 +962,6 @@ class Scheduler:
             meter_events_abandoned_count=meter_events.abandoned_count,
             meter_events_abandoned_outstanding_count=meter_events.abandoned_outstanding_count,
             meter_events_abandoned_outstanding_nanos=meter_events.abandoned_outstanding_nanos,
-            meter_events_pruned=meter_events_pruned,
             plan_changes_applied_count=plan_changes.applied_count,
             plan_changes_not_applied_count=plan_changes.not_applied_count,
             plan_changes_retried_count=plan_changes.retried_count,
@@ -1250,25 +1264,6 @@ class Scheduler:
             LOGGER.exception("scheduler email redaction failed")
             return
         self.last_email_prune_at = current
-
-    def _best_effort_prune_meter_events(self, *, now: datetime | None = None) -> int:
-        meter_outbox = self.maintenance.meter_outbox
-        if meter_outbox is None:
-            return 0
-        current = now or utc_now()
-        if (
-            self.last_meter_event_prune_at is not None
-            and (current - self.last_meter_event_prune_at).total_seconds()
-            < self.meter_event_prune_interval_seconds
-        ):
-            return 0
-        try:
-            pruned = meter_outbox.prune(now=current)
-        except Exception:
-            LOGGER.exception("scheduler meter event pruning failed")
-            return 0
-        self.last_meter_event_prune_at = current
-        return pruned
 
     def _best_effort_retain_artifacts(self, *, now: datetime | None = None) -> tuple[int, int]:
         retention = self.maintenance.retention
@@ -1781,6 +1776,8 @@ class Scheduler:
 
 
 class SchedulerRunResult(ContractModel):
+    storage_access_observed: int | None = None
+    storage_access_failures: int = 0
     app_lifecycle_reconciliations: list[AppRecord] = Field(default_factory=list)
     cron_job_runs: list[CronJobRun] = Field(default_factory=list)
     function_retries: list[Task] = Field(default_factory=list)
@@ -1807,7 +1804,6 @@ class SchedulerRunResult(ContractModel):
     meter_events_abandoned_count: int = 0
     meter_events_abandoned_outstanding_count: int = 0
     meter_events_abandoned_outstanding_nanos: int = 0
-    meter_events_pruned: int = 0
     plan_changes_applied_count: int = 0
     plan_changes_not_applied_count: int = 0
     plan_changes_retried_count: int = 0

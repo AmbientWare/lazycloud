@@ -17,13 +17,14 @@ from database.repositories.billing_costs import (
     LedgerCostRow,
     LedgerCostScope,
 )
+from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_plan_changes import BillingPlanChangeIntentRepository
 from database.repositories.compute import AwsAccountConnectionRepository
 from database.repositories.custom_domains import CustomDomainRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension
 from shared.billing_rate_card import PlanEntitlements, account_terms, complimentary_terms
 from shared.contracts import ContractModel
@@ -75,6 +76,12 @@ class BillingEntitlementUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class BillingCreditSummary:
+    balance_nanos: int
+    ready: bool
+
+
+@dataclass(frozen=True, slots=True)
 class BillingStanding:
     """What an account is on and where it stands.
 
@@ -87,6 +94,9 @@ class BillingStanding:
 
     status: BillingAccountStatus
     plan: BillingPlanId | None
+    subscription_terms_version: SubscriptionTermsVersion | None
+    scheduled_terms_version: SubscriptionTermsVersion | None
+    scheduled_change_at: datetime | None
     portal_available: bool
     allowance: SpentAllowancePeriod | None
     payment_method_on_file: bool
@@ -203,6 +213,16 @@ class BillingStandingService:
 
     session: Session
 
+    def credit_balance(self, *, user_id: str, at: datetime) -> BillingCreditSummary:
+        credits = BillingCreditRepository(self.session)
+        cutover = credits.cutover(user_id=user_id)
+        if cutover is None:
+            return BillingCreditSummary(balance_nanos=0, ready=False)
+        return BillingCreditSummary(
+            balance_nanos=credits.balance(user_id=user_id, at=at),
+            ready=cutover.completed_at is not None,
+        )
+
     def standing(self, *, user_id: str, at: datetime) -> BillingStanding:
         usage = self._entitlement_usage(user_id=user_id)
         account = BillingAccountRepository(self.session).get_by_user(user_id)
@@ -210,6 +230,9 @@ class BillingStandingService:
             return BillingStanding(
                 status=BillingAccountStatus.Active,
                 plan=None,
+                subscription_terms_version=None,
+                scheduled_terms_version=None,
+                scheduled_change_at=None,
                 portal_available=False,
                 allowance=None,
                 payment_method_on_file=False,
@@ -232,6 +255,9 @@ class BillingStandingService:
         return BillingStanding(
             status=account.status,
             plan=account.plan,
+            subscription_terms_version=account.subscription_terms_version,
+            scheduled_terms_version=account.scheduled_terms_version,
+            scheduled_change_at=account.scheduled_change_at,
             portal_available=bool(account.provider_customer_id),
             allowance=BillingAllowanceRepository(self.session).current_period(
                 user_id=user_id,

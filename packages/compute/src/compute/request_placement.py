@@ -79,6 +79,8 @@ class ComputeCapacityPlacementService:
             min_cpu_millicores=requirements.cpu_millicores,
             min_memory_mb=requirements.memory_mb,
             architecture=requirements.architecture or "amd64",
+            preemptible=requirements.preemptible,
+            availability_zone=requirements.availability_zone,
             runtime=requirements.runtime,
             gpu=requirements.gpu,
             min_gpu_count=requirements.gpu_count,
@@ -129,7 +131,8 @@ class ComputeCapacityPlacementService:
                 f"; unavailable providers: {', '.join(sorted(set(failures)))}" if failures else ""
             )
             raise UpstreamUnavailableError(
-                f"no fully priced provider capacity meets the workload requirements{detail}",
+                "no approved provider capacity within purchase ceilings meets "
+                f"the workload requirements{detail}",
                 code="offer_unavailable",
             )
         return tuple(purchases.values())

@@ -42,6 +42,17 @@ class CleanupRepository:
                 {"key": f"artifact-cleanup:{key}"},
             )
 
+    def try_lock_keys(self, keys: set[str]) -> bool:
+        if self.session.bind is None or self.session.bind.dialect.name != "postgresql":
+            return True
+        return all(
+            self.session.scalar(
+                text("SELECT pg_try_advisory_xact_lock(hashtextextended(:key, 0))"),
+                {"key": f"artifact-cleanup:{key}"},
+            )
+            for key in sorted(keys)
+        )
+
     def assert_references_available(
         self,
         *,

@@ -20,6 +20,7 @@ from compute.providers import (
 )
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr
 from shared.compute_policy import ComputeUnitProviderState, ComputeUnitRecord
+from shared.network_egress import NetworkEgressRouteEvidence
 from shared.provider_config import ProviderKind
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit, SupplierNetworkTerms
 from shared.timestamps import utc_now
@@ -53,6 +54,19 @@ class HetznerPooledProvider:
     primary_ipv4_hourly_micros: int
     launch_credentials: ProviderNodeLaunchCredentials
 
+    def unbilled_network_destinations(
+        self, unit: ComputeUnitRecord, provider_instance_id: str
+    ) -> NetworkEgressRouteEvidence:
+        server = self.client.server(_server_id(provider_instance_id))
+        if (
+            server is None
+            or server.labels.get(_UNIT_LABEL) != unit.id
+            or server.labels.get(_PROVIDER_LABEL) != provider_label(self.provider_ref)
+            or server.labels.get(_MANAGED_LABEL) != "true"
+        ):
+            raise ValueError("Hetzner network evidence requires a live owned server")
+        return NetworkEgressRouteEvidence(excluded_destinations=(), verified_ip_versions=(4, 6))
+
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
         location, separator, instance_type = unit.offer_id.partition(":")
         if (
@@ -69,7 +83,10 @@ class HetznerPooledProvider:
             raise ValueError("Hetzner supplier currency conversion must be positive")
         for shape in self.client.server_types():
             if (
-                shape.name not in HETZNER_CAPACITY_POLICY.allowed_instance_types
+                not any(
+                    limit.instance_type == shape.name
+                    for limit in HETZNER_CAPACITY_POLICY.purchase_limits
+                )
                 or shape.architecture != "x86"
             ):
                 continue

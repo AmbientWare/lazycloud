@@ -28,7 +28,6 @@ from shared.scheduling import (
     ContainerSchedulingDirectory,
     SchedulerContainerAddressMap,
     SchedulerContainerStatus,
-    gpu_count_for_capacity,
 )
 from shared.shell_protocol import (
     SHELL_FRAME_HEADER_SIZE,
@@ -45,6 +44,7 @@ from execution.container_clients import (
     SchedulerContainerClientFactory,
 )
 from execution.containers.planning import ContainerSchedulingOptions
+from execution.containers.service import PendingContainerReservation
 from execution.mounts import source_code_mounts
 from execution.services import ExecutionServices
 from execution.shells.planning import (
@@ -137,34 +137,23 @@ class ShellControlService:
         plan = plan_shell_standalone(request)
         env = _env_tuple_to_mapping(plan.env) | {"SHELL_CONTAINER_ID": plan.container_id}
         with self.services.context.database.session() as session:
-            gpu = self.services.containers.admit_container_start(
+            record = self.services.containers.reserve_pending(
                 session,
-                workspace_id=stub.workspace_id,
-                gpu=plan.gpu,
-                gpu_count=plan.gpu_count,
-                region=stub.config.runtime.region,
-                stub_id=stub.id,
-            )
-            record = ContainerRecord(
-                id=plan.container_id,
-                name=f"shell-{stub.name}",
-                image=request.image_id or SHELL_IMAGE,
-                command=list(plan.entrypoint),
-                workspace_id=stub.workspace_id,
-                stub_id=stub.id,
-                app_id=stub.app_id,
-                env=env,
-                ports={"shell": SHELL_WORKER_PORT},
-                status=ContainerStatus.Pending,
-                gpu=gpu,
-                gpu_count=gpu_count_for_capacity(gpu, plan.gpu_count),
-            )
-            ContainerRepository(session).records.upsert(
-                record,
-                key=record.id,
-                workspace_id=record.workspace_id,
-                name=record.name,
-                status=record.status.value,
+                PendingContainerReservation(
+                    id=plan.container_id,
+                    region=stub.config.runtime.region,
+                    availability_zone=stub.config.runtime.availability_zone,
+                    name=f"shell-{stub.name}",
+                    image=request.image_id or SHELL_IMAGE,
+                    command=list(plan.entrypoint),
+                    workspace_id=stub.workspace_id,
+                    stub_id=stub.id,
+                    app_id=stub.app_id,
+                    env=env,
+                    ports={"shell": SHELL_WORKER_PORT},
+                    gpu=list(plan.gpu),
+                    gpu_count=plan.gpu_count,
+                ),
             )
         self.services.containers.publish_lifecycle_change(
             record,
@@ -175,8 +164,10 @@ class ShellControlService:
             record,
             ContainerSchedulingOptions(
                 region=stub.config.runtime.region,
+                availability_zone=stub.config.runtime.availability_zone,
                 workspace_name=workspace.name,
                 stub_type="shell",
+                preemptible=stub.config.runtime.preemptible,
                 startup_kind=WorkerStartupKind.Pod,
                 entrypoint=list(plan.entrypoint),
                 env=env,

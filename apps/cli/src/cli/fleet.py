@@ -63,7 +63,7 @@ def fleet_ensure(
     vpc_id: Annotated[str, typer.Option("--vpc-id", help="VPC pools launch into.")],
     subnet_id: Annotated[
         list[str],
-        typer.Option("--subnet-id", help="Subnet to launch into. Exactly two, in two zones."),
+        typer.Option("--subnet-id", help="Subnet to launch into. At least two, across zones."),
     ],
     security_group_id: Annotated[
         str, typer.Option("--security-group-id", help="Security group nodes join.")
@@ -78,8 +78,8 @@ def fleet_ensure(
     ],
 ) -> None:
     """Ensure the fleet uses the registered AWS infrastructure."""
-    if len(subnet_id) != 2:
-        raise typer.BadParameter("exactly two --subnet-id are required")
+    if len(subnet_id) < 2:
+        raise typer.BadParameter("at least two --subnet-id are required")
     connection = compute_client().ensure_fleet_account(
         AwsFleetEnsureRequest(
             account_id=account_id,
@@ -87,7 +87,7 @@ def fleet_ensure(
             external_id=external_id,
             network=AwsAccountNetwork(
                 vpc_id=vpc_id,
-                subnet_ids=(subnet_id[0], subnet_id[1]),
+                subnet_ids=tuple(subnet_id),
                 security_group_id=security_group_id,
             ),
         )

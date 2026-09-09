@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
+from billing.purchases import CreditPurchaseService
 from fastapi import APIRouter, Depends, Request, Response, status
 from provider_resend import ID_HEADER as RESEND_ID_HEADER
 from provider_resend import SIGNATURE_HEADER as RESEND_SIGNATURE_HEADER
@@ -82,6 +83,7 @@ def receive_stripe_webhook(
     is a resource here to represent.
     """
 
+    CreditPurchaseService(services.context.database, services.payment_provider).apply_event(event)
     with services.context.database.session() as session:
         BillingWebhookService(session, services.payment_provider).apply(event=event)
         # The delivery claim and its effect commit together. A provider retry

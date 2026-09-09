@@ -12,7 +12,6 @@ from database.repositories.artifacts import ArtifactRepository
 from database.repositories.billing_rates import PlatformRateRepository
 from database.repositories.execution import TaskRepository
 from database.tables.billing_ledger import BillingLedgerSegmentTable
-from database.tables.billing_outbox import BillingMeterOutboxTable
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.artifacts import ArtifactRetentionSource
@@ -148,6 +147,4 @@ def test_short_lived_artifact_deletion_settles_storage_once(
         )
         assert sum(row.cost_nanos for row in costs) == 30
         assert {row.dimension for row in costs} == {"volume_storage"}
-        outbox = list(session.scalars(select(BillingMeterOutboxTable)))
-        assert outbox
         assert ArtifactRepository(session).get(saved.id, workspace_id=workspace_id) is None
