@@ -83,6 +83,7 @@ from shared.http.provider_nodes import (
     ProviderNodeCapacity,
     ProviderNodeEnrollmentRequest,
 )
+from shared.network_egress import NetworkEgressRouteEvidence
 from shared.provider_config import ProviderKind
 from shared.supplier_costs import SupplierCostTerms
 from sqlalchemy import create_engine, func, select, text
@@ -149,6 +150,11 @@ class _ReplayGuard:
 
 @dataclass(frozen=True, slots=True)
 class _PooledProvider:
+    def unbilled_network_destinations(
+        self, unit: ComputeUnitRecord, provider_instance_id: str
+    ) -> NetworkEgressRouteEvidence:
+        raise AssertionError("node enrollment must not request network billing evidence")
+
     resource_id: str = _ASG_NAME
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:

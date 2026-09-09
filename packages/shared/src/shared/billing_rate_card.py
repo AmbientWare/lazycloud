@@ -611,13 +611,21 @@ def _published_compute_rates(
 
 
 @dataclass(frozen=True, slots=True)
-class PublishedMeteredRateCard:
+class MeteredRateChange:
     """Changes only the listed compute classes and optional platform prices."""
 
     pricing_version: str
     effective_at: datetime
     compute_rates: tuple[PublishedComputeRate, ...]
     platform_rate: PublishedPlatformRate | None
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedMeteredRateCard:
+    pricing_version: str
+    effective_at: datetime
+    compute_rates: tuple[PublishedComputeRate, ...]
+    platform_rate: PublishedPlatformRate
 
 
 @dataclass(frozen=True, slots=True)
@@ -682,14 +690,14 @@ def _placement_rates(
     return tuple(placements)
 
 
-PUBLISHED_METERED_RATE_HISTORY: tuple[PublishedMeteredRateCard, ...] = (
-    PublishedMeteredRateCard(
+PUBLISHED_METERED_RATE_HISTORY: tuple[MeteredRateChange, ...] = (
+    MeteredRateChange(
         pricing_version="2026-08-18.a",
         effective_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         compute_rates=_published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES),
         platform_rate=_INITIAL_PLATFORM_RATE,
     ),
-    PublishedMeteredRateCard(
+    MeteredRateChange(
         pricing_version="2026-09-09.a",
         effective_at=datetime(2026, 9, 9, tzinfo=timezone.utc),
         compute_rates=tuple(
@@ -702,7 +710,7 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[PublishedMeteredRateCard, ...] = (
         ),
         platform_rate=None,
     ),
-    PublishedMeteredRateCard(
+    MeteredRateChange(
         pricing_version="2026-09-04.a",
         effective_at=datetime(2026, 9, 11, tzinfo=timezone.utc),
         compute_rates=_published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES),
@@ -711,7 +719,7 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[PublishedMeteredRateCard, ...] = (
             nanos_per_volume_gib_month=50_000_000,
         ),
     ),
-    PublishedMeteredRateCard(
+    MeteredRateChange(
         pricing_version="2026-09-12.a",
         effective_at=datetime(2026, 9, 12, tzinfo=timezone.utc),
         compute_rates=tuple(
@@ -755,7 +763,6 @@ METERED_RATES_EFFECTIVE_AT = PUBLISHED_METERED_RATE_HISTORY[-1].effective_at
 _LATEST_METERED_CARD = published_metered_rate_card(METERED_RATES_EFFECTIVE_AT)
 PUBLISHED_COMPUTE_RATES = _LATEST_METERED_CARD.compute_rates
 PUBLISHED_PLATFORM_RATE = _LATEST_METERED_CARD.platform_rate
-assert PUBLISHED_PLATFORM_RATE is not None
 PUBLISHED_SHAPE_RATES = tuple(
     PublishedShapeRate(
         billing_owner=rate.billing_owner,

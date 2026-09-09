@@ -131,8 +131,6 @@ def pricing_catalog_response(*, at: datetime | None = None) -> PricingCatalogRes
     moment = to_utc(at) if at is not None else utc_now()
     active = published_metered_rate_card(moment)
     platform_rate = active.platform_rate
-    if platform_rate is None:
-        raise ValueError("the active rate card has no platform prices")
     placements = published_placement_rates(active.compute_rates)
     automatic = tuple(rate for rate in active.compute_rates if rate.rate_class == AUTO_RATE_CLASS)
     fee_percent = CONNECTED_CLOUD_MANAGEMENT_FEE * 100

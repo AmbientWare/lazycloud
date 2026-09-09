@@ -41,6 +41,7 @@ from shared.compute_policy import (
     MachinePool,
 )
 from shared.http.compute import UnitScaleResponse
+from shared.network_egress import NetworkEgressRouteEvidence
 from shared.supplier_costs import SupplierCostTerms
 from tests.service_fixtures import (
     administrator_credential,
@@ -84,6 +85,11 @@ class _CapacityOwnerMutations:
 
 @dataclass(slots=True)
 class _PooledProvider:
+    def unbilled_network_destinations(
+        self, unit: ComputeUnitRecord, provider_instance_id: str
+    ) -> NetworkEgressRouteEvidence:
+        raise AssertionError("capacity scaling must not request network billing evidence")
+
     desired_machines: int = 1
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
