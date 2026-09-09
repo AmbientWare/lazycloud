@@ -14,6 +14,11 @@ concurrency, terminal failure, publication, and cleanup explicit: a build that
 dies must not leave a half-published image that later loads as though it were
 whole.
 
+New build requests are preemptible. Dispatch retries preserve the submitted
+request's recorded choice. A running build whose worker stops reporting becomes
+failed, queues cleanup and requires a fresh submission to retry; it does not
+restart automatically. Archive publication remains fenced by build ownership.
+
 A build is a container the platform placed, and is admitted, recorded, metered
 and billed as one. It carries the build's own id as its container id, so the
 durable `containers` row, the `container_billing_shapes` placement written
