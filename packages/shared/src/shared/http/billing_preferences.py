@@ -15,7 +15,7 @@ class BillingPreferences(HttpModel):
         default=1000, ge=0, le=MAX_CREDIT_PURCHASE_CENTS, strict=True
     )
     reload_amount_cents: int = Field(
-        default=MIN_CREDIT_PURCHASE_CENTS,
+        default=2000,
         ge=MIN_CREDIT_PURCHASE_CENTS,
         le=MAX_CREDIT_PURCHASE_CENTS,
         strict=True,

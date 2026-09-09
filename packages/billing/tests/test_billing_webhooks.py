@@ -19,14 +19,12 @@ from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
     PaymentEvent,
-    ProviderCreditGrant,
-    ProviderCreditGrantBalance,
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
     SubscriptionChangeTiming,
 )
-from tests.service_fixtures import legacy_billing_account, workspace_owner_user_id
+from tests.service_fixtures import unfunded_billing_account, workspace_owner_user_id
 
 from billing import BillingWebhookService, DatabaseBillingAdmission
 
@@ -44,8 +42,6 @@ class _Provider:
     answer it — the read-back that stops a retried notification about a replaced
     card from putting the old one back."""
 
-    granted: list[int] = field(default_factory=list)
-    expired_grants: list[str] = field(default_factory=list)
     terms_version: SubscriptionTermsVersion = SubscriptionTermsVersion.Team
 
     @property
@@ -124,38 +120,30 @@ class _Provider:
             scheduled_change_at=None,
         )
 
-    def create_credit_grant(
-        self,
-        *,
-        account_id: str,
-        provider_customer_id: str,
-        amount_nanos: int,
-        period_ended_at: datetime,
-        previous_period_ended_at: datetime | None,
-    ) -> ProviderCreditGrant:
-        del account_id, provider_customer_id, previous_period_ended_at
-        self.granted.append(amount_nanos)
-        return ProviderCreditGrant(
-            provider_credit_grant_id=f"credgr_{self.subscription_plan.value}",
-            amount_nanos=amount_nanos,
-            expires_at=period_ended_at,
-        )
-
-    def expire_credit_grant(self, *, provider_credit_grant_id: str) -> None:
-        self.expired_grants.append(provider_credit_grant_id)
-
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("applying a card delivery must not read invoices")
-
-    def credit_grants_for(
-        self, *, provider_customer_id: str
-    ) -> Sequence[ProviderCreditGrantBalance]:
-        return ()
 
     def paid_subscription_periods(
         self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
     ) -> Sequence[ProviderPaidSubscriptionPeriod]:
-        return ()
+        terms = subscription_terms(self.terms_version)
+        if terms.monthly_nanos == 0:
+            return ()
+        return (
+            ProviderPaidSubscriptionPeriod(
+                provider_invoice_id="in_plan_paid",
+                provider_invoice_line_id="il_plan_paid",
+                provider_subscription_id=provider_subscription_id,
+                plan=terms.plan,
+                terms_version=terms.version,
+                period_started_at=CYCLE_STARTED_AT,
+                period_ended_at=CYCLE_ENDED_AT,
+                prorated=False,
+                amount_nanos=terms.monthly_nanos,
+                invoice_paid_nanos=terms.monthly_nanos,
+                paid_at=CYCLE_STARTED_AT,
+            ),
+        )
 
     def invoices_for(
         self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
@@ -186,7 +174,6 @@ def test_a_saved_card_becomes_the_one_charges_are_taken_from(
             status=BillingAccountStatus.Active,
             provider_customer_id="cus_webhook",
             provider_subscription_id="",
-            provider_credit_grant_id="",
             plan=None,
             subscription_terms_version=None,
             scheduled_terms_version=None,
@@ -269,7 +256,6 @@ def test_a_failed_payment_leaves_the_account_admission_refuses(
             status=BillingAccountStatus.Active,
             provider_customer_id="cus_webhook",
             provider_subscription_id="sub_webhook",
-            provider_credit_grant_id="credgr_webhook",
             plan=BillingPlanId.Team,
             subscription_terms_version=published_plan(BillingPlanId.Team).terms_version,
             scheduled_terms_version=None,
@@ -290,8 +276,6 @@ def test_a_failed_payment_leaves_the_account_admission_refuses(
 
     # A payment that failed buys nothing and voids nothing: the terms of the
     # cycle the customer is part-way through are not what went wrong.
-    assert provider.granted == []
-    assert provider.expired_grants == []
 
     with (
         isolated_services.context.database.session() as session,
@@ -321,7 +305,7 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
     provider = _Provider()
     provider.terms_version = SubscriptionTermsVersion.TeamLegacy
     provider.cards_on_file.add("cus_webhook")
-    user_id, _ = legacy_billing_account(
+    user_id, _ = unfunded_billing_account(
         isolated_services.context,
         period_started_at=CYCLE_STARTED_AT,
         period_ended_at=CYCLE_ENDED_AT,
@@ -332,7 +316,6 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
             status=BillingAccountStatus.Active,
             provider_customer_id="cus_webhook",
             provider_subscription_id="sub_webhook",
-            provider_credit_grant_id="credgr_free",
             plan=BillingPlanId.Free,
             subscription_terms_version=SubscriptionTermsVersion.FreeLegacy,
             scheduled_terms_version=None,
@@ -350,7 +333,6 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
             period_started_at=CYCLE_STARTED_AT,
             period_ended_at=CYCLE_ENDED_AT,
             allowance_nanos=subscription_terms(SubscriptionTermsVersion.FreeLegacy).included_nanos,
-            funded=True,
         )
         session.commit()
 
@@ -371,10 +353,8 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
             user_id=user_id, at=CYCLE_STARTED_AT
         )
 
-    assert provider.expired_grants == ["credgr_free"]
     assert account is not None
     assert account.plan is BillingPlanId.Team
-    assert account.provider_credit_grant_id == "credgr_team"
     assert allowance is not None
     assert allowance.started_at == CYCLE_STARTED_AT
     assert (
@@ -409,7 +389,6 @@ def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
             status=BillingAccountStatus.Active,
             provider_customer_id="cus_webhook",
             provider_subscription_id="sub_webhook",
-            provider_credit_grant_id="credgr_final",
             plan=BillingPlanId.Team,
             subscription_terms_version=published_plan(BillingPlanId.Team).terms_version,
             scheduled_terms_version=None,
@@ -437,7 +416,6 @@ def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
     assert account.status is BillingAccountStatus.Active
     # Left naming the grant, which funds the final invoice this cancellation
     # raises for the part-cycle it ends.
-    assert account.provider_credit_grant_id == "credgr_final"
 
     with (
         isolated_services.context.database.session() as session,
@@ -465,7 +443,6 @@ def test_a_saved_card_preserves_existing_credit_without_replenishment(
             status=BillingAccountStatus.Active,
             provider_customer_id="cus_webhook",
             provider_subscription_id="sub_webhook",
-            provider_credit_grant_id="credgr_cardless",
             plan=BillingPlanId.Free,
             subscription_terms_version=published_plan(BillingPlanId.Free).terms_version,
             scheduled_terms_version=None,
@@ -476,7 +453,6 @@ def test_a_saved_card_preserves_existing_credit_without_replenishment(
             period_started_at=CYCLE_STARTED_AT,
             period_ended_at=CYCLE_ENDED_AT,
             allowance_nanos=1_000_000_000,
-            funded=True,
         )
         BillingAllowanceRepository(session).increment(
             user_id=user_id, at=CYCLE_STARTED_AT, cost_nanos=400_000_000
@@ -506,6 +482,3 @@ def test_a_saved_card_preserves_existing_credit_without_replenishment(
     assert allowance is not None
     assert allowance.allowance_nanos == 1_000_000_000
     assert allowance.spent_nanos == 400_000_000
-    assert provider.granted == []
-    assert provider.expired_grants == []
-    assert account.provider_credit_grant_id == "credgr_cardless"

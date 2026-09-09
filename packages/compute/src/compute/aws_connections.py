@@ -273,7 +273,7 @@ class AwsAccountConnectionService:
         return connection
 
     def ensure_fleet(self, request: AwsFleetEnsureRequest, *, user_id: str) -> AwsAccountConnection:
-        """Register or verify the platform account's infrastructure."""
+        """Register platform infrastructure and validate additive subnet changes."""
         if self.current(user_id=user_id) is None:
             try:
                 self.connect(request, user_id=user_id, platform_fleet=True)
@@ -303,7 +303,7 @@ class AwsAccountConnectionService:
                 )
                 or network is None
                 or network.vpc_id != request.network.vpc_id
-                or set(network.subnet_ids) != set(request.network.subnet_ids)
+                or not set(network.subnet_ids).issubset(request.network.subnet_ids)
                 or network.security_group_id != request.network.security_group_id
             ):
                 raise ConflictError(
@@ -317,7 +317,48 @@ class AwsAccountConnectionService:
                 AwsAccountConnectionPhase.Degraded,
             }:
                 raise ConflictError("Fleet authorization transition must finish before deploying")
-            return current
+            if set(network.subnet_ids) == set(request.network.subnet_ids):
+                return current
+            active = current.active_authorization
+            if (
+                current.phase is not AwsAccountConnectionPhase.Ready
+                or active is None
+                or active.authorization_mode is not AwsAccountAuthorizationMode.ExistingRole
+                or current.pending_authorization is not None
+                or current.retiring_authorization is not None
+            ):
+                raise ConflictError("Fleet authorization must be ready before adding subnets")
+
+        candidate = current.model_copy(update={"network": request.network})
+        try:
+            result = self.validator.validate(candidate, active)
+            self._validate_result(candidate, active, result)
+        except AwsAccountConnectionValidationError as exc:
+            raise UpstreamUnavailableError(exc.message) from exc
+        if (
+            result.network != request.network
+            or result.node_role_arn != current.node_role_arn
+            or result.node_instance_profile_arn != current.node_instance_profile_arn
+        ):
+            raise UpstreamUnavailableError(
+                "AWS validation changed the fleet network or node identity"
+            )
+
+        with self.context.database.session() as session:
+            repository = AwsAccountConnectionRepository(session)
+            durable = repository.get_for_user(user_id, for_update=True)
+            if durable is None or durable.id != current.id or durable.revision != current.revision:
+                raise ConflictError("Fleet connection changed while validating additional subnets")
+            updated = durable.model_copy(
+                update={
+                    "network": result.network,
+                    "revision": durable.revision + 1,
+                    "updated_at": utc_now(),
+                }
+            )
+            repository.save(updated)
+        self._publish(updated, WorkspaceChangeType.Updated)
+        return updated
 
     def validate(self, *, user_id: str) -> AwsAccountConnection:
         started_at = utc_now()

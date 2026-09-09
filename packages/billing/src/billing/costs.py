@@ -215,12 +215,10 @@ class BillingStandingService:
 
     def credit_balance(self, *, user_id: str, at: datetime) -> BillingCreditSummary:
         credits = BillingCreditRepository(self.session)
-        cutover = credits.cutover(user_id=user_id)
-        if cutover is None:
-            return BillingCreditSummary(balance_nanos=0, ready=False)
+        account = BillingAccountRepository(self.session).get_by_user(user_id)
         return BillingCreditSummary(
             balance_nanos=credits.balance(user_id=user_id, at=at),
-            ready=cutover.completed_at is not None,
+            ready=account is not None and bool(account.provider_subscription_id),
         )
 
     def standing(self, *, user_id: str, at: datetime) -> BillingStanding:

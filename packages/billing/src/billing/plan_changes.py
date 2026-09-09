@@ -9,7 +9,6 @@ from uuid import uuid4
 
 from database.client import DatabaseClient
 from database.repositories.billing import BillingAccountRepository
-from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_plan_changes import (
     BillingPlanChangeIntentRepository,
     ClaimedPlanChange,
@@ -129,16 +128,6 @@ class BillingPlanChangeService:
                 raise PaymentRequiredError(
                     "add a payment method before upgrading your subscription"
                 )
-            if (
-                not keeping_current
-                and timing is SubscriptionChangeTiming.Immediate
-                and subscription_terms(target_terms_version).monthly_nanos > 0
-            ):
-                cutover = BillingCreditRepository(session).cutover(user_id=user_id)
-                if cutover is None or cutover.completed_at is None:
-                    raise ConflictError(
-                        "subscription credit migration must finish before a paid upgrade"
-                    )
             intent = BillingPlanChangeIntentRepository(session).open(
                 user_id=user_id,
                 provider_customer_id=account.provider_customer_id,
@@ -328,12 +317,11 @@ class BillingPlanChangeService:
                         f"{intent.provider_subscription_id}, which this account is no longer on"
                     ),
                 )
-            grant_id = carry_plan_into_cycle(
+            carry_plan_into_cycle(
                 session,
                 payments,
                 account_id=account.user_id,
                 provider_customer_id=account.provider_customer_id,
-                provider_credit_grant_id=account.provider_credit_grant_id,
                 subscription=held,
                 plan=held.plan,
             )
@@ -342,7 +330,6 @@ class BillingPlanChangeService:
                 status=account.status,
                 provider_customer_id=account.provider_customer_id,
                 provider_subscription_id=held.provider_subscription_id,
-                provider_credit_grant_id=grant_id,
                 plan=held.plan,
                 subscription_terms_version=held.terms_version,
                 scheduled_terms_version=held.scheduled_terms_version,

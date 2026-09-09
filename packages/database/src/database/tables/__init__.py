@@ -21,7 +21,6 @@ from database.tables.billing_allowance import BillingAllowancePeriodTable
 from database.tables.billing_credit_adjustments import BillingCreditAdjustmentTable
 from database.tables.billing_credits import (
     BillingCreditAllocationTable,
-    BillingCreditCutoverTable,
     BillingCreditLotTable,
     BillingCreditSettlementTable,
 )
@@ -119,7 +118,6 @@ __all__ = [
     "BillingAllowancePeriodTable",
     "BillingCreditAdjustmentTable",
     "BillingCreditAllocationTable",
-    "BillingCreditCutoverTable",
     "BillingCreditLotTable",
     "BillingCreditSettlementTable",
     "BillingLedgerSegmentTable",

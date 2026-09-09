@@ -122,25 +122,22 @@ class BillingAccountService:
             )
         initialize_local_credits(
             self.session,
-            payments,
             user_id=user_id,
-            provider_customer_id=customer_id,
             effective_at=subscription.current_period_started_at,
+        )
+        carry_plan_into_cycle(
+            self.session,
+            payments,
+            account_id=user_id,
+            provider_customer_id=customer_id,
+            subscription=subscription,
+            plan=plan,
         )
         return BillingAccountRepository(self.session).upsert(
             user_id=user_id,
             status=existing.status,
             provider_customer_id=customer_id,
             provider_subscription_id=subscription.provider_subscription_id,
-            provider_credit_grant_id=carry_plan_into_cycle(
-                self.session,
-                payments,
-                account_id=user_id,
-                provider_customer_id=customer_id,
-                provider_credit_grant_id=existing.provider_credit_grant_id,
-                subscription=subscription,
-                plan=plan,
-            ),
             plan=plan,
             subscription_terms_version=subscription.terms_version,
             scheduled_terms_version=subscription.scheduled_terms_version,
@@ -164,7 +161,6 @@ class BillingAccountService:
             status=locked.status,
             provider_customer_id=locked.provider_customer_id,
             provider_subscription_id=locked.provider_subscription_id,
-            provider_credit_grant_id=locked.provider_credit_grant_id,
             plan=locked.plan,
             subscription_terms_version=held.terms_version,
             scheduled_terms_version=held.scheduled_terms_version,

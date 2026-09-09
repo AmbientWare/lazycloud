@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -12,7 +12,6 @@ from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_rates import ComputeRateRepository, PlatformRateRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.tables.base import DatabaseBase
-from database.tables.billing import BillingAccountTable
 from database.tables.billing_ledger import (
     BillingLedgerSegmentTable,
     ContainerBillingShapeTable,
@@ -39,9 +38,8 @@ from shared.billing_quotes import (
     reserved_quantity,
 )
 from shared.errors import ConflictError
-from shared.payments import METER_EVENT_NAMES
 from shared.placement import AUTO_RATE_CLASS
-from shared.timestamps import to_utc, utc_now
+from shared.timestamps import to_utc
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
     METERING_WINDOW_STARTED_AT_METADATA_KEY,
@@ -65,7 +63,7 @@ def _insert(session: Session, table: type[DatabaseBase]) -> PostgresInsert | Sql
 
     Only the dialect's own constructor carries `on_conflict_do_nothing`, and
     every write below relies on it: a placement is decided once, a segment is
-    frozen once, and a record owes the provider one meter event.
+    frozen once.
     """
 
     if session.get_bind().dialect.name == "postgresql":
@@ -130,19 +128,15 @@ class _RecordedSegments:
 
     count: int
     cost_nanos: int
-    pricing_versions: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class FrozenSpan:
     """What the ledger already holds for a record it was asked to price again.
 
-    Segments are append-only, so a record priced once is priced: what a customer
-    was shown and what the provider was metered is `cost_nanos`, whatever a later
-    computation over the same record makes of it. `recomputed_cost_nanos` is that
-    later figure and charges nothing — it is carried only so a disagreement can be
-    named, which is what a quantity re-sent under an id that was already priced
-    produces.
+    Segments are append-only. `cost_nanos` is the customer's recorded cost;
+    `recomputed_cost_nanos` detects a quantity re-sent under an already priced ID
+    without charging the difference.
     """
 
     dimension: BilledDimension
@@ -229,7 +223,7 @@ class BillingLedgerRepository:
 
         `FrozenSpan` where the ledger already held segments for this record. The
         answer is then what is on disk rather than what was just computed, and
-        neither the allowance nor the meter outbox moves again. The two figures
+        neither the allowance nor a completed settlement moves again. The two figures
         agreeing is the ordinary idempotent path; them disagreeing means a
         quantity was re-sent under an id that was already priced, and the caller
         records that.
@@ -302,12 +296,6 @@ class BillingLedgerRepository:
                 reason=UnpricedReason.NoAccountOwner,
             )
         BillingAccountRepository(self.session).get_by_user(owner.user_id, for_update=True)
-        cutover = BillingCreditRepository(self.session).cutover(user_id=owner.user_id)
-        if cutover is not None:
-            priced = [
-                (span, _split_credit_boundary(pricing, cutover.effective_at))
-                for span, pricing in priced
-            ]
         recorded = self._insert_segments(
             record=record,
             priced=priced,
@@ -330,29 +318,6 @@ class BillingLedgerRepository:
             cost_nanos=recorded.cost_nanos,
         )
         self._settle_local_credit(usage_record_id=record.id, owner_user_id=owner.user_id)
-        legacy_segments = tuple(
-            segment
-            for _, pricing in priced
-            for segment in pricing.segments
-            if cutover is None or segment.started_at < cutover.effective_at
-        )
-        if legacy_segments:
-            self._queue_meter_event(
-                workspace_id=record.workspace_id,
-                usage_record_id=record.id,
-                identifier=record.id,
-                dimension=billed.dimension,
-                occurred_at=started_at,
-                ended_at=max(segment.ended_at for segment in legacy_segments),
-                recorded=_RecordedSegments(
-                    count=len(legacy_segments),
-                    cost_nanos=sum(segment.cost_nanos for segment in legacy_segments),
-                    pricing_versions=tuple(
-                        dict.fromkeys(segment.quote.pricing_version for segment in legacy_segments)
-                    ),
-                ),
-                owner_user_id=owner.user_id,
-            )
         return whole
 
     def settle_pending_credits(self, *, owner_user_id: str) -> None:
@@ -362,24 +327,19 @@ class BillingLedgerRepository:
             self._settle_local_credit(usage_record_id=record_id, owner_user_id=owner_user_id)
 
     def _settle_local_credit(self, *, usage_record_id: str, owner_user_id: str) -> None:
-        credits = BillingCreditRepository(self.session)
-        cutover = credits.cutover(user_id=owner_user_id)
-        if cutover is None:
-            return
-        segments = self.session.scalars(
-            select(BillingLedgerSegmentTable)
-            .where(
-                BillingLedgerSegmentTable.usage_record_id == usage_record_id,
-                BillingLedgerSegmentTable.segment_started_at >= cutover.effective_at,
+        if (
+            self.session.scalar(
+                select(BillingMeterOutboxTable.id).where(
+                    BillingMeterOutboxTable.usage_record_id == usage_record_id,
+                )
             )
-            .order_by(BillingLedgerSegmentTable.segment_started_at, BillingLedgerSegmentTable.id)
-        ).all()
-        if not segments:
+            is not None
+        ):
             return
         account = BillingAccountRepository(self.session).get_by_user(owner_user_id, for_update=True)
         if account is None:
             raise ConflictError("priced usage has no billing account for credit settlement")
-        credits.settle(
+        BillingCreditRepository(self.session).settle(
             user_id=owner_user_id,
             usage_record_id=usage_record_id,
             waived=account.complimentary_since is not None,
@@ -428,111 +388,14 @@ class BillingLedgerRepository:
                 ]
             )
             .returning(
-                BillingLedgerSegmentTable.segment_index,
                 BillingLedgerSegmentTable.cost_nanos,
-                BillingLedgerSegmentTable.pricing_version,
             )
         ).all()
         self.session.flush()
-        # By segment index, which is chronological, so the versions read out in
-        # the order they took effect rather than in whatever order the insert
-        # returned them. Components share an index where they share a rate row,
-        # which is every time: one row publishes all four figures.
-        ordered = sorted(inserted, key=lambda row: int(row.segment_index))
         return _RecordedSegments(
-            count=len(ordered),
-            cost_nanos=sum(int(row.cost_nanos) for row in ordered),
-            pricing_versions=tuple(dict.fromkeys(str(row.pricing_version) for row in ordered)),
+            count=len(inserted),
+            cost_nanos=sum(int(row.cost_nanos) for row in inserted),
         )
-
-    def _queue_meter_event(
-        self,
-        *,
-        workspace_id: str,
-        usage_record_id: str,
-        identifier: str,
-        dimension: BilledDimension,
-        occurred_at: datetime,
-        ended_at: datetime,
-        recorded: _RecordedSegments,
-        owner_user_id: str,
-    ) -> None:
-        """Queue the frozen payable amount for one settlement interval.
-
-        Only usage before the wallet cutover reaches the provider. The stable
-        identifier deduplicates retries. Waivers retain their gross value.
-        """
-
-        if recorded.cost_nanos == 0:
-            return
-        account = self.session.execute(
-            select(
-                BillingAccountTable.provider_customer_id,
-                BillingAccountTable.complimentary_since,
-            ).where(BillingAccountTable.user_id == owner_user_id)
-        ).first()
-        if account is None or not account[0]:
-            return
-        provider_customer_id = str(account[0])
-        waived = account[1] is not None
-        now = utc_now()
-        self.session.execute(
-            _insert(self.session, BillingMeterOutboxTable)
-            .values(
-                id=str(uuid4()),
-                workspace_id=workspace_id,
-                identifier=identifier,
-                usage_record_id=usage_record_id,
-                provider_customer_id=provider_customer_id,
-                meter_event_name=METER_EVENT_NAMES[dimension],
-                value_nanos=recorded.cost_nanos,
-                # Every published version the span drew on. A span that crossed a
-                # rate change was priced under both, and naming only one of them
-                # is the provider's copy disagreeing with the segments behind it.
-                pricing_version=",".join(recorded.pricing_versions),
-                occurred_at=occurred_at,
-                metering_ended_at=ended_at,
-                status="waived" if waived else "pending",
-                attempts=0,
-                next_attempt_at=now,
-            )
-            .on_conflict_do_nothing(index_elements=[BillingMeterOutboxTable.identifier])
-        )
-        self.session.flush()
-
-
-def _split_credit_boundary(pricing: PricedSpan, boundary: datetime) -> PricedSpan:
-    segments: list[PricedSegment] = []
-    for segment in pricing.segments:
-        if not segment.started_at < boundary < segment.ended_at:
-            segments.append(replace(segment, index=len(segments)))
-            continue
-        duration = (segment.ended_at - segment.started_at) // timedelta(microseconds=1)
-        before = (boundary - segment.started_at) // timedelta(microseconds=1)
-        quantity = segment.quantity * Decimal(before) / Decimal(duration)
-        cost = segment.cost_nanos * before // duration
-        duration_ms = segment.duration_ms * before // duration
-        segments.extend(
-            (
-                replace(
-                    segment,
-                    index=len(segments),
-                    ended_at=boundary,
-                    duration_ms=duration_ms,
-                    quantity=quantity,
-                    cost_nanos=cost,
-                ),
-                replace(
-                    segment,
-                    index=len(segments) + 1,
-                    started_at=boundary,
-                    duration_ms=segment.duration_ms - duration_ms,
-                    quantity=segment.quantity - quantity,
-                    cost_nanos=segment.cost_nanos - cost,
-                ),
-            )
-        )
-    return PricedSpan(tuple(segments))
 
 
 def _compute_spans(

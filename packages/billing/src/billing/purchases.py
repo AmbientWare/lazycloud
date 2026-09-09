@@ -82,9 +82,6 @@ class CreditPurchaseService:
         account = BillingAccountRepository(session).get_by_user(user_id, for_update=True)
         if account is None or not account.provider_customer_id:
             raise ConflictError("billing registration must finish before buying credit")
-        cutover = BillingCreditRepository(session).cutover(user_id=user_id)
-        if cutover is None or cutover.completed_at is None:
-            raise ConflictError("billing credit migration must finish before buying credit")
         purchases = CreditPurchaseRepository(session)
         row = purchases.by_request(user_id=user_id, request_key=request_key)
         if row is not None:

@@ -3,68 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import httpx
-import pytest
 from provider_stripe import API_BASE_URL, StripeBilling
-from pydantic import JsonValue
 from shared.billing_plans import BillingPlanId
-from shared.errors import UpstreamUnavailableError
-from shared.payments import ProviderCreditApplicability
-
-
-def test_grant_history_preserves_unspent_balances_and_restricted_scope_across_pages() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/credit_grants"):
-            second = bool(request.url.params.get("starting_after"))
-            scope: dict[str, JsonValue] = {"price_type": "metered"}
-            if second:
-                scope = {"prices": [{"id": "price_restricted"}]}
-            return httpx.Response(
-                200,
-                json={
-                    "data": [
-                        {
-                            "id": "grant_restricted" if second else "grant_used",
-                            "customer": "cus_owner",
-                            "amount": {"monetary": {"currency": "usd", "value": 1000}},
-                            "created": 1788220800,
-                            "effective_at": 1788220800,
-                            "expires_at": None,
-                            "category": "promotional",
-                            "applicability_config": {"scope": scope},
-                        }
-                    ],
-                    "has_more": not second,
-                },
-            )
-        used = request.url.params["filter[credit_grant]"] == "grant_used"
-        return httpx.Response(
-            200,
-            json={
-                "customer": "cus_owner",
-                "balances": [
-                    {
-                        "available_balance": {
-                            "monetary": {"currency": "usd", "value": 250 if used else 1000}
-                        },
-                        "ledger_balance": {
-                            "monetary": {"currency": "usd", "value": 300 if used else 1000}
-                        },
-                    }
-                ],
-            },
-        )
-
-    with httpx.Client(base_url=API_BASE_URL, transport=httpx.MockTransport(handler)) as client:
-        grants = StripeBilling(client).credit_grants_for(provider_customer_id="cus_owner")
-    assert [grant.provider_credit_grant_id for grant in grants] == [
-        "grant_used",
-        "grant_restricted",
-    ]
-    assert grants[0].amount_nanos == 10_000_000_000
-    assert grants[0].available_balance_nanos == 2_500_000_000
-    assert grants[0].ledger_balance_nanos == 3_000_000_000
-    assert grants[0].applicability is ProviderCreditApplicability.AllMetered
-    assert grants[1].applicability is ProviderCreditApplicability.Restricted
 
 
 def test_paid_plan_proof_uses_paginated_subscription_lines_including_paid_proration() -> None:
@@ -176,16 +116,3 @@ def test_paid_plan_proof_uses_paginated_subscription_lines_including_paid_prorat
     assert periods[0].prorated
     assert periods[0].amount_nanos == periods[0].invoice_paid_nanos == 29_000_000_000
     assert periods[0].period_started_at == datetime(2026, 9, 2, tzinfo=UTC)
-
-
-def test_incomplete_provider_history_cannot_look_like_no_credit() -> None:
-    with (
-        httpx.Client(
-            base_url=API_BASE_URL,
-            transport=httpx.MockTransport(
-                lambda _: httpx.Response(200, json={"data": [], "has_more": True})
-            ),
-        ) as client,
-        pytest.raises(UpstreamUnavailableError, match="incomplete or repeated"),
-    ):
-        StripeBilling(client).credit_grants_for(provider_customer_id="cus_owner")

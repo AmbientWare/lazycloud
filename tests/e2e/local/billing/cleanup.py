@@ -1,25 +1,15 @@
 """Remove exactly what one sandbox billing run created, and prove none of it is left.
 
-Independently callable, and named rather than searched: the workspace and the
-account are passed in by identifier, and the only thing this ever lists is what
-hangs off the run's own customer — the subscriptions it holds, the allowances it
-was granted and the invoices it was issued, none of which a run can name in
-advance because the platform buys a fresh grant on every renewal and Stripe
-raises an invoice whenever a period closes.
-
-The published catalog — the three meters, the five products, the five prices and
-the webhook endpoint — belongs to the account and not to any run, and is never
-touched here. Neither is a paid invoice: that one is the record that money moved,
-and deleting records of charges is not cleanup. An invoice still open is the
-opposite — an obligation nobody will ever collect, and one Stripe would go on
-chasing — so it is voided.
+The workspace and account are passed by identifier. Provider cleanup lists only
+the run's customer subscriptions and invoices. Published catalog entries and paid
+invoices remain; open invoices are voided so Stripe stops collecting them.
 
 Run against the sandbox account it was told to expect:
 
 ```sh
 uv run python -m tests.e2e.local.billing.cleanup --live \
   --confirm-account acct_... --user-id ... --workspace-id ... \
-  --customer-id cus_... --subscription-id sub_... --credit-grant-id credgr_...
+  --customer-id cus_... --subscription-id sub_...
 ```
 
 Re-running it is safe and is how "zero remaining" is proven: every step reads
@@ -50,8 +40,6 @@ from shared.identity import UserStatus, WorkspaceStatus
 from tests.e2e._support.process import LivePrerequisiteError, blocked
 from tests.e2e.local.billing.ledger import (
     Customer,
-    Grant,
-    GrantList,
     Invoice,
     InvoiceList,
     Subscription,
@@ -84,7 +72,6 @@ class RunResources:
     workspace_id: str = ""
     provider_customer_id: str = ""
     provider_subscription_id: str = ""
-    provider_credit_grant_id: str = ""
 
 
 def run_cleanup(
@@ -94,25 +81,13 @@ def run_cleanup(
 ) -> dict[str, Any]:
     """Settle every object this run made and report what the account holds now.
 
-    Ordered so each step's outcome is still readable by the next: the grants are
-    expired and the subscriptions cancelled while the customer still exists, the
-    invoices are settled and the account re-read for residue before the customer
-    goes, and the workspace is deleted last because its ledger rows are what the
-    provider was metered for.
-
-    Whether the customer is still there is established first, because a second
-    run of this — which is how "nothing is left" is demonstrated — happens after
-    the first one deleted them, and Stripe refuses to list allowances against a
-    customer that no longer exists. The objects the run recorded are still
-    readable by their own ids, so they are still checked.
+    Cancel subscriptions and settle invoices before deleting their customer.
+    Named objects remain readable for cleanup retries after customer deletion.
     """
 
     reachable = _customer_reachable(client, resources.provider_customer_id)
     live_customer_id = resources.provider_customer_id if reachable else ""
     report: dict[str, Any] = {
-        "credit_grants": _expire_credit_grants(
-            client, live_customer_id, resources.provider_credit_grant_id
-        ),
         "subscriptions": _cancel_subscriptions(
             client, live_customer_id, resources.provider_subscription_id
         ),
@@ -130,9 +105,6 @@ def _remaining(report: dict[str, Any]) -> list[str]:
     """Everything this run created that the account or platform still holds live."""
 
     remaining: list[str] = []
-    active_grants = report["credit_grants"].get("active", [])
-    if active_grants:
-        remaining.append(f"credit grants still active: {', '.join(active_grants)}")
     live_subscriptions = report["subscriptions"].get("live", [])
     if live_subscriptions:
         remaining.append(f"subscriptions still live: {', '.join(live_subscriptions)}")
@@ -151,77 +123,13 @@ def _remaining(report: dict[str, Any]) -> list[str]:
     return remaining
 
 
-def _expire_credit_grants(
-    client: httpx.Client, customer_id: str, named_grant_id: str
-) -> dict[str, Any]:
-    """End every allowance this run was granted, not only the one it recorded.
-
-    The account row holds the newest grant, and a run whose subscription renewed
-    has been given more than one — the platform buys a fresh allowance each
-    period and the row forgets the last. Listing them off the run's own customer
-    is the only way to name all of them, and it can reach nobody else's.
-
-    Expired where Stripe allows it and voided where it does not. An allowance
-    bought for a cycle that has not opened yet is not yet effective, and Stripe
-    refuses to expire one of those — so cleanup that only knew how to expire
-    would abandon every object of a run whose grant was too new, which is every
-    run that upgraded a plan the day it registered. Voiding says the stronger
-    thing anyway: the allowance is invalid rather than merely over.
-    """
-
-    grant_ids = list(_customer_grant_ids(client, customer_id))
-    if named_grant_id and named_grant_id not in grant_ids:
-        grant_ids.append(named_grant_id)
-    if not grant_ids:
-        return {"grants": [], "active": []}
-    settled: list[dict[str, Any]] = []
-    active: list[str] = []
-    for grant_id in grant_ids:
-        grant = read(Grant, client, "GET", f"/billing/credit_grants/{grant_id}")
-        refusals: list[str] = []
-        for action in ("expire", "void"):
-            if grant.settled:
-                break
-            try:
-                grant = read(Grant, client, "POST", f"/billing/credit_grants/{grant_id}/{action}")
-            except (InvalidInputError, UpstreamUnavailableError) as exc:
-                refusals.append(f"{action}: {exc}")
-        entry: dict[str, Any] = {
-            "id": grant_id,
-            "expires_at": grant.expires_at,
-            "voided_at": grant.voided_at,
-        }
-        if refusals:
-            entry["refused"] = refusals
-        settled.append(entry)
-        if not grant.settled:
-            active.append(grant_id)
-    return {"grants": settled, "active": active}
-
-
-def _customer_grant_ids(client: httpx.Client, customer_id: str) -> tuple[str, ...]:
-    if not customer_id:
-        return ()
-    listed = read(
-        GrantList,
-        client,
-        "GET",
-        "/billing/credit_grants",
-        params=[("customer", customer_id), ("limit", "100")],
-    )
-    return tuple(grant.id for grant in listed.data)
-
-
 def _cancel_subscriptions(
     client: httpx.Client, customer_id: str, named_subscription_id: str
 ) -> dict[str, Any]:
     """End every subscription this run's customer holds, not only the one it named.
 
-    Listed off the customer for the same reason the allowances are: an account is
-    put on a subscription the moment it reaches a billing surface, so a run that
-    never recorded one still has one to cancel, and a run whose scenario is not
-    about subscribing at all would otherwise leave a live subscription behind and
-    report itself failed for it. The listing can reach nobody else's customer.
+    Provisioning may create the subscription before the scenario records its ID.
+    Listing this customer's subscriptions also cleans up that partial setup.
 
     `invoice_now=false` because Stripe otherwise raises a final invoice for
     whatever usage has not been billed yet, and a cleanup that creates an invoice
@@ -313,11 +221,7 @@ def _customer_invoices(client: httpx.Client, customer_id: str) -> tuple[Invoice,
 def _customer_residue(client: httpx.Client, customer_id: str) -> dict[str, list[str]]:
     """Everything still live on the run's customer, read after every step ran.
 
-    Read again rather than inferred from what each step returned: a step reports
-    what it did, and this reports what is there. Allowances are absent because
-    they are the one thing this cannot ask a customer for once that customer is
-    gone; `credit_grants` above reads each of them by id and says which are still
-    active.
+    Read independently of each mutation's response before deleting the customer.
     """
 
     if not customer_id:
@@ -422,7 +326,6 @@ def build_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--workspace-id", default="")
     parser.add_argument("--customer-id", default="")
     parser.add_argument("--subscription-id", default="")
-    parser.add_argument("--credit-grant-id", default="")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -464,7 +367,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 workspace_id=args.workspace_id,
                 provider_customer_id=args.customer_id,
                 provider_subscription_id=args.subscription_id,
-                provider_credit_grant_id=args.credit_grant_id,
             ),
         )
     except (HttpApiError, InvalidInputError, UpstreamUnavailableError) as exc:

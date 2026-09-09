@@ -32,11 +32,9 @@ class BillingAccount(ContractModel):
     relationship, and a record per workspace would be three cards to keep in
     step. `shared.aws_connections` resolves the same way, through the owner.
 
-    A row is written when an account signs in, before its session exists, and
-    carries the customer, the subscription and the grant that registration
-    created. One that never signed in — an account that exists to own tokens —
-    holds none of them, and `plan` is how a reader tells that apart from an
-    account on the cheapest plan there is.
+    A row is written when an account signs in, before its session exists.
+    It records the provider customer and any paid subscription. `plan` is
+    `None` when the account has no recorded plan.
     """
 
     id: str = Field(pattern=_UUID_PATTERN)
@@ -50,11 +48,7 @@ class BillingAccount(ContractModel):
     created.
     """
     provider_subscription_id: str = Field(default="", max_length=255)
-    """The subscription carrying the plan price and the metered prices, empty
-    until the account is provisioned."""
-    provider_credit_grant_id: str = Field(default="", max_length=255)
-    """The grant carrying the included allowance for the current period, empty
-    until one is issued."""
+    """The paid plan subscription, empty when the account has none."""
     plan: BillingPlanId | None = None
     """Which plan this account is on, `None` when it is on none.
 
@@ -72,43 +66,17 @@ class BillingAccount(ContractModel):
     scheduled_terms_version: SubscriptionTermsVersion | None = None
     scheduled_change_at: datetime | None = None
     payment_method_attached_at: datetime | None = None
-    """When this account's card was put on file, `None` while it holds none.
+    """When the current saved-card state began; `None` when no card is saved.
 
-    What an account may spend before anyone can be charged is decided from this,
-    so it has to be answerable without asking the provider: admission runs on the
-    path that starts every container, and a network call there would let the
-    provider's availability decide whether work runs.
-
-    Set when a card is saved and cleared when the last one is removed, so it
-    answers "is there a card now" rather than "was there ever one" — an account
-    that attaches a card, spends against the larger allowance it buys and then
-    detaches would otherwise keep that allowance for good.
-
-    An instant rather than a flag because the sizing decision is made at a cycle
-    boundary and a reader needs to know whether the card predates the cycle it is
-    asking about. What it must not be read as is permission to spend *now*:
-    allowance is a term of a period, and a card removed mid-cycle does not shrink
-    the period already funded.
-
-    `None` is not a judgement about whether the account can pay. An account that
-    holds a card and cannot pay is `PastDue`, a different fact recorded beside
-    this one.
+    Purchases and automatic reload require a saved card. Its presence does not
+    grant credit or bypass admission; the balance and payment standing decide that.
     """
     complimentary_since: datetime | None = None
-    """When an administrator waived this account's bill, `None` while nobody has.
+    """When an administrator waived usage charges; `None` without a waiver.
 
-    A standing rather than a plan. What the account gets is the Team plan's terms
-    as if a card were on file, and what it owes is nothing. Its usage is priced
-    into the ledger like anyone else's, and the meter event that would carry it
-    to the provider is written as waived instead of sent. The subscription the
-    account holds is left alone, so withdrawing this puts it back on that
-    subscription's own terms with nothing to provision.
-
-    Held here and not on the user, and never read off the platform role. Whether
-    somebody pays is a billing fact; whether they administer the platform is an
-    authorization fact; and an administrator demoted to member must not have
-    their bill switched on by the same write. An instant rather than a flag so a
-    reviewer can place it beside the usage it waived.
+    Complimentary accounts receive Team entitlements. Usage retains its ledger
+    price and a waived settlement. The held subscription remains unchanged.
+    Platform authorization roles never grant or revoke this billing status.
     """
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

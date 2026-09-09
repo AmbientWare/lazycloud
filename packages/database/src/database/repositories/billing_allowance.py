@@ -7,60 +7,10 @@ from uuid import uuid4
 from database.tables.billing_allowance import BillingAllowancePeriodTable
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from shared.billing_plans import SubscriptionTermsVersion
-from shared.enums import StringEnum
 from shared.errors import InvalidInputError, NotFoundError
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
-
-
-class SubscriptionPeriodOutcome(StringEnum):
-    """What writing a subscription's cycle did to the terms already held.
-
-    The three are decided apart because the grant that funds a cycle is bought
-    per cycle and expiring one is irreversible. A cycle opened for the first time
-    leaves the previous cycle's grant alone — that grant is what funds the
-    invoice finalizing at that moment. A cycle re-termed in place is one plan
-    swapped for another inside it, and its outgoing grant has to go or the
-    customer holds two allowances for one cycle.
-
-    `Unchanged` is a write that left the row as it stood, which covers a repeat
-    of terms already written and a smaller allowance the period declines to take
-    — both leave the grant that funds the cycle exactly where it is, so they are
-    one answer to the only question the caller asks.
-    """
-
-    Unchanged = "unchanged"
-    Opened = "opened"
-    ReTermed = "re_termed"
-
-
-@dataclass(frozen=True, slots=True)
-class WrittenSubscriptionPeriod:
-    """What writing a subscription's cycle did, and what cycle it followed.
-
-    All three answers decide what happens to the grant that funds the cycle, and
-    all three are read at the moment the cycle is written, under the lock its
-    caller holds.
-    """
-
-    outcome: SubscriptionPeriodOutcome
-    previous_period_ended_at: datetime | None
-    """When the cycle before this one ended, `None` where none precedes it.
-
-    An instant rather than a verdict: a cycle keeps claiming credit for a while
-    after it ends, and how long that is belongs to the provider whose invoice is
-    doing the claiming. An account's first cycle has nothing behind it, which is
-    what makes its allowance spendable the moment it is bought.
-    """
-
-    allowance_nanos: int
-    """What the period holds now, which is not always what was asked for.
-
-    The figure a grant has to be bought at, because the period row is what the
-    customer is shown and a grant sized to anything else would fund a different
-    allowance from the one they are reading.
-    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,25 +56,16 @@ class BillingAllowanceRepository:
         period_started_at: datetime,
         period_ended_at: datetime,
         allowance_nanos: int,
-        funded: bool,
-    ) -> WrittenSubscriptionPeriod:
+    ) -> None:
         """Record provider cycle bounds under the caller's billing account lock.
 
-        Funded legacy periods keep their larger allowance. Local wallet callers
-        pass the amount issued from paid invoices with `funded=False`.
-
-        Backfill a new period's spend from the ledger because usage can arrive
-        before the renewal webhook. Return the preceding cycle's end so legacy
-        grant issuance can preserve its invoice settlement delay.
+        Backfill spend from the ledger when usage precedes the renewal webhook.
         """
 
         if period_ended_at <= period_started_at:
             raise InvalidInputError("an allowance period must end after it starts")
         if allowance_nanos < 0:
             raise InvalidInputError("an allowance is never negative")
-        previous_period_ended_at = self._preceding_period_ended_at(
-            user_id=user_id, period_started_at=period_started_at
-        )
         existing = self.session.execute(
             select(
                 BillingAllowancePeriodTable.id,
@@ -151,37 +92,23 @@ class BillingAllowanceRepository:
                 )
             )
             self.session.flush()
-            return WrittenSubscriptionPeriod(
-                outcome=SubscriptionPeriodOutcome.Opened,
-                previous_period_ended_at=previous_period_ended_at,
-                allowance_nanos=allowance_nanos,
-            )
+            return
         period_id, existing_ended_at, existing_allowance_nanos = existing
-        held_nanos = max(existing_allowance_nanos, allowance_nanos) if funded else allowance_nanos
         if (
             to_utc(existing_ended_at) == to_utc(period_ended_at)
-            and held_nanos == existing_allowance_nanos
+            and allowance_nanos == existing_allowance_nanos
         ):
-            return WrittenSubscriptionPeriod(
-                outcome=SubscriptionPeriodOutcome.Unchanged,
-                previous_period_ended_at=previous_period_ended_at,
-                allowance_nanos=existing_allowance_nanos,
-            )
+            return
         self.session.execute(
             update(BillingAllowancePeriodTable)
             .where(BillingAllowancePeriodTable.id == period_id)
             .values(
                 period_ended_at=period_ended_at,
-                allowance_nanos=held_nanos,
+                allowance_nanos=allowance_nanos,
                 updated_at=utc_now(),
             )
         )
         self.session.flush()
-        return WrittenSubscriptionPeriod(
-            outcome=SubscriptionPeriodOutcome.ReTermed,
-            previous_period_ended_at=previous_period_ended_at,
-            allowance_nanos=held_nanos,
-        )
 
     def increment(self, *, user_id: str, at: datetime, cost_nanos: int) -> None:
         """Add a cost to the period that covers `at`, if one does.
@@ -308,27 +235,6 @@ class BillingAllowanceRepository:
             for row in rows
         )
 
-    def _preceding_period_ended_at(
-        self, *, user_id: str, period_started_at: datetime
-    ) -> datetime | None:
-        """When the latest cycle beginning before this one ended.
-
-        The latest rather than any, because it is the only one whose invoice can
-        still be settling, and cycles meet without overlapping so there is one
-        answer. `None` is an account's first cycle, which follows nothing.
-        """
-
-        ended_at = self.session.scalars(
-            select(BillingAllowancePeriodTable.period_ended_at)
-            .where(
-                BillingAllowancePeriodTable.user_id == user_id,
-                BillingAllowancePeriodTable.period_started_at < period_started_at,
-            )
-            .order_by(BillingAllowancePeriodTable.period_started_at.desc())
-            .limit(1)
-        ).first()
-        return to_utc(ended_at) if ended_at is not None else None
-
     def _priced_within(self, *, user_id: str, started_at: datetime, ended_at: datetime) -> int:
         """What the ledger already holds for this payer inside a cycle's bounds.
 
@@ -360,6 +266,4 @@ def _covering(user_id: str, at: datetime):
 __all__ = [
     "BillingAllowanceRepository",
     "SpentAllowancePeriod",
-    "SubscriptionPeriodOutcome",
-    "WrittenSubscriptionPeriod",
 ]

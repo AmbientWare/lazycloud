@@ -178,23 +178,6 @@ USAGE_LINES: tuple[UsageLine, ...] = (
 METERED_PRICE_LOOKUP_KEYS: tuple[str, ...] = tuple(line.price_lookup_key for line in USAGE_LINES)
 
 
-def subscription_price_lookup_keys(plan: BillingPlanId) -> tuple[str, ...]:
-    """Every price one subscription carries: the plan's, then one per dimension.
-
-    All three usage prices ride on every subscription, including the two priced
-    at zero and including the free plan's. A customer seeing a $0.00 egress line
-    is seeing that it is measured and free, where a customer seeing no line at
-    all cannot tell that from not being measured — and on the free plan it is
-    load-bearing beyond presentation: without the metered prices, usage past what
-    the plan includes reaches no invoice at all.
-    """
-
-    return (
-        plan_line(published_plan(plan).terms_version).price_lookup_key,
-        *METERED_PRICE_LOOKUP_KEYS,
-    )
-
-
 class CatalogObjectKind(StringEnum):
     Meter = "meter"
     Product = "product"
@@ -548,6 +531,5 @@ __all__ = [
     "UsageLine",
     "cents",
     "plan_line",
-    "subscription_price_lookup_keys",
     "terms_for_price_lookup_key",
 ]

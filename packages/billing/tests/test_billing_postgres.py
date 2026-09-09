@@ -31,8 +31,6 @@ from shared.events import Event, EventLevel
 from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
-    ProviderCreditGrant,
-    ProviderCreditGrantBalance,
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
@@ -73,7 +71,6 @@ class _RegistrationCountingProvider:
 
     registrations: list[str] = field(default_factory=list)
     subscribes: list[str] = field(default_factory=list)
-    grants: list[str] = field(default_factory=list)
 
     cards_on_file: set[str] = field(default_factory=set)
     """Customers the provider says hold something chargeable."""
@@ -145,33 +142,8 @@ class _RegistrationCountingProvider:
     def subscription(self, *, provider_subscription_id: str) -> ProviderSubscription:
         raise AssertionError("provisioning already holds what the provider returned")
 
-    def create_credit_grant(
-        self,
-        *,
-        account_id: str,
-        provider_customer_id: str,
-        amount_nanos: int,
-        period_ended_at: datetime,
-        previous_period_ended_at: datetime | None,
-    ) -> ProviderCreditGrant:
-        del provider_customer_id, previous_period_ended_at
-        self.grants.append(account_id)
-        return ProviderCreditGrant(
-            provider_credit_grant_id=f"credgr_{len(self.grants)}",
-            amount_nanos=amount_nanos,
-            expires_at=period_ended_at,
-        )
-
-    def expire_credit_grant(self, *, provider_credit_grant_id: str) -> None:
-        raise AssertionError("provisioning must not expire an allowance")
-
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("registering must not read invoices")
-
-    def credit_grants_for(
-        self, *, provider_customer_id: str
-    ) -> Sequence[ProviderCreditGrantBalance]:
-        return ()
 
     def paid_subscription_periods(
         self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
@@ -243,8 +215,6 @@ class _UpgradeCountingProvider:
     swap_entered: ThreadEvent = field(default_factory=ThreadEvent)
     swap_release: ThreadEvent = field(default_factory=ThreadEvent)
     plan_swaps: list[str] = field(default_factory=list)
-    grants: list[int] = field(default_factory=list)
-    expired_grants: list[str] = field(default_factory=list)
     subscription_reads: int = 0
     plan: BillingPlanId = BillingPlanId.Free
     """What the provider currently holds, which a settle and a reconciliation
@@ -319,33 +289,8 @@ class _UpgradeCountingProvider:
         self.subscription_reads += 1
         return _subscription(self.plan)
 
-    def create_credit_grant(
-        self,
-        *,
-        account_id: str,
-        provider_customer_id: str,
-        amount_nanos: int,
-        period_ended_at: datetime,
-        previous_period_ended_at: datetime | None,
-    ) -> ProviderCreditGrant:
-        del account_id, provider_customer_id, previous_period_ended_at
-        self.grants.append(amount_nanos)
-        return ProviderCreditGrant(
-            provider_credit_grant_id=f"credgr_{len(self.grants)}",
-            amount_nanos=amount_nanos,
-            expires_at=period_ended_at,
-        )
-
-    def expire_credit_grant(self, *, provider_credit_grant_id: str) -> None:
-        self.expired_grants.append(provider_credit_grant_id)
-
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("no invoice here has a period that has closed")
-
-    def credit_grants_for(
-        self, *, provider_customer_id: str
-    ) -> Sequence[ProviderCreditGrantBalance]:
-        return ()
 
     def paid_subscription_periods(
         self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime

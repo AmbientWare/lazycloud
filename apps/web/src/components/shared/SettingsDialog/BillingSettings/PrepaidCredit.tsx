@@ -1,9 +1,9 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useId, useState } from "react";
 
-import { Panel } from "@/components/shared/Panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { creditBalanceQueryOptions, purchaseCredit } from "@/lib/queries/billing";
 import { formatCostNanos } from "@/lib/money";
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
@@ -25,9 +25,31 @@ export function PrepaidCredit() {
     cents <= terms.maximum_cents;
 
   return (
-    <Panel title="Prepaid credit">
+    <section
+      className="grid gap-4 border-b border-border pb-4 sm:grid-cols-[1fr_auto] sm:items-center"
+      aria-label="Prepaid credit"
+    >
+      <div className="min-w-0">
+        <h2 className="text-sm text-muted-foreground">Available balance</h2>
+        {balance.data?.ready ? (
+          <p className="mt-1 font-mono text-3xl font-medium tracking-tight" aria-live="polite">
+            {formatCostNanos(balance.data.balance_nanos)}
+          </p>
+        ) : balance.isPending ? (
+          <Skeleton className="my-2 h-8 w-28" aria-label="Loading balance" />
+        ) : !balance.error ? (
+          <p role="status" className="mt-1 text-sm">
+            Your balance is not available yet.
+          </p>
+        ) : null}
+        {balance.data?.ready && balance.data.balance_nanos <= 0 ? (
+          <p className="mt-1 text-xs text-destructive">
+            Add credit to resume work. New credit covers any negative balance first.
+          </p>
+        ) : null}
+      </div>
       <form
-        className="flex flex-col gap-3 p-4"
+        className="flex min-w-0 flex-col gap-1.5 sm:w-72"
         onSubmit={(event) => {
           event.preventDefault();
           if (valid && balance.data?.ready && !purchase.isPending) {
@@ -35,29 +57,13 @@ export function PrepaidCredit() {
           }
         }}
       >
-        <p className="text-sm text-muted-foreground">
-          Add credit for compute, storage and transfer. Purchased credit does not expire.
-        </p>
-        {balance.data?.ready ? (
-          <div className="text-sm">
-            <p>Credit balance: {formatCostNanos(balance.data.balance_nanos)}.</p>
-            {balance.data.balance_nanos <= 0 ? (
-              <p className="text-destructive">
-                Add credit to resume work. New credit covers any negative balance first.
-              </p>
-            ) : null}
-          </div>
-        ) : balance.isPending ? (
-          <p role="status">Loading credit balance…</p>
-        ) : !balance.error ? (
-          <p role="status">Credit purchases are not available for this account yet.</p>
-        ) : null}
         <label htmlFor={inputId} className="text-sm">
           Amount in USD
         </label>
         <div className="flex gap-2">
           <Input
             id={inputId}
+            className="min-w-0"
             inputMode="decimal"
             value={dollars}
             disabled={!terms || purchase.isPending}
@@ -67,13 +73,18 @@ export function PrepaidCredit() {
               purchase.reset();
             }}
           />
-          <Button type="submit" disabled={!valid || !balance.data?.ready || purchase.isPending}>
+          <Button
+            type="submit"
+            className="shrink-0"
+            disabled={!valid || !balance.data?.ready || purchase.isPending}
+          >
             {purchase.isPending ? "Opening checkout…" : "Add credit"}
           </Button>
         </div>
         {terms && (
           <p className="text-xs text-muted-foreground">
-            ${terms.minimum_cents / 100}–${terms.maximum_cents / 100} per purchase.
+            ${terms.minimum_cents / 100} to ${terms.maximum_cents / 100}. Purchased credit never
+            expires.
           </p>
         )}
         {purchase.error || pricing.error || balance.error ? (
@@ -89,6 +100,6 @@ export function PrepaidCredit() {
           </p>
         ) : null}
       </form>
-    </Panel>
+    </section>
   );
 }

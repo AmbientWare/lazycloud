@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
-from database.tables.billing_credits import BillingCreditCutoverTable
+from database.tables.billing import BillingAccountTable
 from database.tables.identity import WorkspaceMemberTable, WorkspaceTable
 from database.tables.storage import ObjectTable, VolumeTable
 from database.tables.storage_retention import StorageRetentionPeriodTable
@@ -55,9 +55,7 @@ class StorageRetentionRepository:
     def account_ids(self) -> tuple[str, ...]:
         return tuple(
             self.session.scalars(
-                select(BillingCreditCutoverTable.user_id)
-                .where(BillingCreditCutoverTable.completed_at.is_not(None))
-                .order_by(BillingCreditCutoverTable.user_id)
+                select(BillingAccountTable.user_id).order_by(BillingAccountTable.user_id)
             )
         )
 

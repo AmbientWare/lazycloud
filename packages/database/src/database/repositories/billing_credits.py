@@ -11,7 +11,6 @@ from database.repositories.storage_retention import StorageRetentionRepository
 from database.tables.billing_credit_adjustments import BillingCreditAdjustmentTable
 from database.tables.billing_credits import (
     BillingCreditAllocationTable,
-    BillingCreditCutoverTable,
     BillingCreditLotTable,
     BillingCreditSettlementTable,
 )
@@ -30,13 +29,6 @@ from sqlalchemy.orm import Session
 
 
 @dataclass(frozen=True, slots=True)
-class CreditCutover:
-    effective_at: datetime
-    completed_at: datetime | None
-    blocked_reason: str
-
-
-@dataclass(frozen=True, slots=True)
 class CreditAdjustments:
     credited_nanos: int = 0
     unsettled_nanos: int = 0
@@ -48,64 +40,16 @@ class CreditAdjustments:
 class BillingCreditRepository:
     session: Session
 
-    def cutover(self, *, user_id: str) -> CreditCutover | None:
-        row = self.session.get(BillingCreditCutoverTable, user_id)
-        if row is None:
-            return None
-        return CreditCutover(
-            effective_at=to_utc(row.effective_at),
-            completed_at=to_utc(row.completed_at) if row.completed_at else None,
-            blocked_reason=row.blocked_reason,
-        )
-
-    def prepare_cutover(self, *, user_id: str, effective_at: datetime) -> CreditCutover:
-        self._lock(user_id)
-        existing = self.cutover(user_id=user_id)
-        if existing is not None:
-            return existing
-        boundary = to_utc(effective_at)
-        exported = self.session.scalar(
-            select(BillingLedgerSegmentTable.id)
-            .where(
-                BillingLedgerSegmentTable.owner_user_id == user_id,
-                BillingLedgerSegmentTable.segment_ended_at > boundary,
+    def has_grant(self, *, user_id: str, source_id: str) -> bool:
+        return (
+            self.session.scalar(
+                select(BillingCreditLotTable.id).where(
+                    BillingCreditLotTable.user_id == user_id,
+                    BillingCreditLotTable.source_id == source_id,
+                )
             )
-            .limit(1)
+            is not None
         )
-        if exported is not None:
-            raise ConflictError(
-                "gross usage already exists at or after the proposed credit cutover"
-            )
-        self.session.add(
-            BillingCreditCutoverTable(
-                user_id=user_id, effective_at=boundary, completed_at=None, blocked_reason=""
-            )
-        )
-        self.session.flush()
-        return CreditCutover(boundary, None, "")
-
-    def complete_cutover(self, *, user_id: str, at: datetime) -> None:
-        self._lock(user_id)
-        row = self.session.get(BillingCreditCutoverTable, user_id)
-        if row is None:
-            raise NotFoundError("the billing account has no prepared credit cutover")
-        if row.completed_at is not None:
-            return
-        moment = to_utc(at)
-        if moment < to_utc(row.effective_at):
-            raise ConflictError("credit cutover cannot complete before its settlement boundary")
-        row.completed_at = moment
-        row.blocked_reason = ""
-        self.session.flush()
-
-    def block_cutover(self, *, user_id: str, reason: str) -> None:
-        self._lock(user_id)
-        row = self.session.get(BillingCreditCutoverTable, user_id)
-        if row is None:
-            raise NotFoundError("the billing account has no prepared credit cutover")
-        if row.completed_at is None:
-            row.blocked_reason = reason[:1024]
-            self.session.flush()
 
     def issue(self, *, user_id: str, grant: CreditGrant) -> str:
         self._lock(user_id)
@@ -211,9 +155,7 @@ class BillingCreditRepository:
             )
         )
 
-    def settle(
-        self, *, user_id: str, usage_record_id: str, waived: bool
-    ) -> CreditSettlement | None:
+    def settle(self, *, user_id: str, usage_record_id: str, waived: bool) -> CreditSettlement:
         self._lock(user_id)
         existing = self.session.get(BillingCreditSettlementTable, usage_record_id)
         if existing is not None:
@@ -221,14 +163,10 @@ class BillingCreditRepository:
                 raise ConflictError("usage settlement belongs to a different billing account")
             if existing.settled_at is not None:
                 return _settlement(existing)
-        cutover = self.cutover(user_id=user_id)
-        if cutover is None:
-            raise ConflictError("usage has no local credit settlement boundary")
         segments = self.session.scalars(
             select(BillingLedgerSegmentTable)
             .where(
                 BillingLedgerSegmentTable.usage_record_id == usage_record_id,
-                BillingLedgerSegmentTable.segment_started_at >= cutover.effective_at,
             )
             .order_by(BillingLedgerSegmentTable.segment_started_at, BillingLedgerSegmentTable.id)
         ).all()
@@ -238,7 +176,6 @@ class BillingCreditRepository:
             self.session.scalar(
                 select(BillingMeterOutboxTable.id).where(
                     BillingMeterOutboxTable.usage_record_id == usage_record_id,
-                    BillingMeterOutboxTable.occurred_at >= cutover.effective_at,
                 )
             )
             is not None
@@ -252,8 +189,6 @@ class BillingCreditRepository:
             )
             self.session.add(existing)
             self.session.flush()
-        if not waived and cutover.completed_at is None:
-            return None
         credited = 0
         waived_cost = existing.gross_nanos if waived else self.retained_storage_cost(list(segments))
         for segment in () if waived else segments:
@@ -353,6 +288,17 @@ class BillingCreditRepository:
             BillingLedgerSegmentTable.segment_started_at >= start,
             BillingLedgerSegmentTable.segment_started_at < end,
         )
+        local_segment = (
+            ~select(BillingMeterOutboxTable.id)
+            .where(
+                BillingMeterOutboxTable.usage_record_id
+                == BillingLedgerSegmentTable.usage_record_id,
+                BillingMeterOutboxTable.occurred_at <= BillingLedgerSegmentTable.segment_started_at,
+                BillingMeterOutboxTable.metering_ended_at
+                >= BillingLedgerSegmentTable.segment_ended_at,
+            )
+            .exists()
+        )
         allocated = {
             row[0]: row[1]
             for row in self.session.execute(
@@ -380,15 +326,10 @@ class BillingCreditRepository:
                     BillingCreditSettlementTable.usage_record_id
                     == BillingLedgerSegmentTable.usage_record_id,
                 )
-                .join(
-                    BillingCreditCutoverTable,
-                    BillingCreditCutoverTable.user_id == BillingCreditSettlementTable.user_id,
-                )
                 .where(
                     *window,
+                    local_segment,
                     BillingCreditSettlementTable.settled_at.is_(None),
-                    BillingLedgerSegmentTable.segment_started_at
-                    >= BillingCreditCutoverTable.effective_at,
                 )
                 .group_by(BillingLedgerSegmentTable.dimension)
             ).all()
@@ -415,15 +356,10 @@ class BillingCreditRepository:
                 BillingCreditSettlementTable.usage_record_id
                 == BillingLedgerSegmentTable.usage_record_id,
             )
-            .join(
-                BillingCreditCutoverTable,
-                BillingCreditCutoverTable.user_id == BillingLedgerSegmentTable.owner_user_id,
-            )
             .outerjoin(spent, spent.c.ledger_segment_id == BillingLedgerSegmentTable.id)
             .where(
                 *window,
-                BillingLedgerSegmentTable.segment_started_at
-                >= BillingCreditCutoverTable.effective_at,
+                local_segment,
             )
         ).all():
             waived_cost = (
@@ -467,10 +403,6 @@ class BillingCreditRepository:
         return list(
             self.session.scalars(
                 select(BillingCreditSettlementTable)
-                .join(
-                    BillingCreditCutoverTable,
-                    BillingCreditCutoverTable.user_id == BillingCreditSettlementTable.user_id,
-                )
                 .where(
                     BillingCreditSettlementTable.user_id == user_id,
                     BillingCreditSettlementTable.settled_at.is_not(None),
@@ -479,8 +411,6 @@ class BillingCreditRepository:
                     .where(
                         BillingMeterOutboxTable.usage_record_id
                         == BillingCreditSettlementTable.usage_record_id,
-                        BillingMeterOutboxTable.occurred_at
-                        >= BillingCreditCutoverTable.effective_at,
                     )
                     .exists(),
                 )
@@ -518,14 +448,8 @@ class BillingCreditRepository:
             remaining = settlement.payable_nanos or 0
             segments = self.session.scalars(
                 select(BillingLedgerSegmentTable)
-                .join(
-                    BillingCreditCutoverTable,
-                    BillingCreditCutoverTable.user_id == BillingLedgerSegmentTable.owner_user_id,
-                )
                 .where(
                     BillingLedgerSegmentTable.usage_record_id == settlement.usage_record_id,
-                    BillingLedgerSegmentTable.segment_started_at
-                    >= BillingCreditCutoverTable.effective_at,
                 )
                 .order_by(
                     BillingLedgerSegmentTable.segment_started_at, BillingLedgerSegmentTable.id
@@ -660,4 +584,4 @@ def _allocation_share(row: BillingCreditAllocationTable, start: datetime, end: d
     )
 
 
-__all__ = ["BillingCreditRepository", "CreditAdjustments", "CreditCutover"]
+__all__ = ["BillingCreditRepository", "CreditAdjustments"]

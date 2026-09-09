@@ -102,7 +102,6 @@ class _Run:
     account: RunAccount
     provider_customer_id: str = ""
     provider_subscription_id: str = ""
-    provider_credit_grant_id: str = ""
     failing_card: str = ""
     unpaid_invoice_id: str = ""
 
@@ -112,7 +111,6 @@ class _Run:
             workspace_id=self.account.workspace_id,
             provider_customer_id=self.provider_customer_id,
             provider_subscription_id=self.provider_subscription_id,
-            provider_credit_grant_id=self.provider_credit_grant_id,
         )
 
     def identifiers(self) -> dict[str, str]:
@@ -122,7 +120,6 @@ class _Run:
             "user_id": self.account.user_id,
             "customer_id": self.provider_customer_id,
             "subscription_id": self.provider_subscription_id,
-            "credit_grant_id": self.provider_credit_grant_id,
             "failing_card": self.failing_card,
             "unpaid_invoice_id": self.unpaid_invoice_id,
         }
@@ -205,7 +202,6 @@ def _subscribe(gate: BillingGate, run: _Run) -> dict[str, Any]:
     if account is None or account.plan is not BillingPlanId.Team:
         raise RuntimeError("subscribing did not record the Team plan on the account row")
     run.provider_subscription_id = account.provider_subscription_id
-    run.provider_credit_grant_id = account.provider_credit_grant_id
     live = subscription(gate, run.provider_subscription_id)
     if live.status != "active":
         raise RuntimeError(f"Stripe reports the subscription {live.status}, not active")

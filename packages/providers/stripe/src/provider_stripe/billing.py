@@ -6,18 +6,15 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 import httpx
-from pydantic import ConfigDict, Field
+from pydantic import Field
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
-from shared.billing_rate_card import subscription_terms
+from shared.billing_rate_card import published_plan, subscription_terms
 from shared.credit_payments import CreditPayment, CreditPaymentStatus, CreditPurchaseCheckout
 from shared.errors import InvalidInputError, PaymentRequiredError, UpstreamUnavailableError
 from shared.payments import (
     BILLING_CURRENCY,
     HostedPaymentSession,
     PaymentCustomer,
-    ProviderCreditApplicability,
-    ProviderCreditGrant,
-    ProviderCreditGrantBalance,
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
@@ -31,38 +28,8 @@ from provider_stripe.catalog import (
     PLAN_LINES,
     cents,
     plan_line,
-    subscription_price_lookup_keys,
     terms_for_price_lookup_key,
 )
-
-CREDIT_GRANT_NAME = "Included usage"
-"""What the customer sees the allowance called on their invoice."""
-
-CREDIT_GRANT_SETTLEMENT_GRACE = timedelta(days=3)
-"""How long a cycle can still be claiming credit after it has ended.
-
-Stripe applies credit when an invoice is *finalized*, not when it is raised, and
-a subscription invoice finalizes about an hour after the period ends. A grant
-expiring exactly at the boundary is therefore already gone when the invoice it
-was bought for asks for it, and the next period's grant pays the last period's
-arrears — so a customer's included usage silently shrinks by whatever they
-overran the month before. Observed against a real account: the credit
-transaction for cycle one named the grant issued for cycle two. Every grant's
-expiry is shifted this far past its own cycle for that reason.
-
-The same span is what a grant bought for the *next* cycle has to stay out of
-reach for. Left spendable at the boundary, it is live at the moment the previous
-cycle's invoice finalizes, and an invoice that overran its own allowance takes
-the difference out of it. Overrun is the design here rather than an edge case, so
-that is the ordinary path and not a rare one. That is a fact about the cycle
-before, though, and never about the cycle being funded: an allowance nothing
-precedes is held back from nobody, and the account that has just been opened is
-exactly the one with no predecessor to avoid.
-
-Days rather than hours because the cost of being late is a customer billed
-against the wrong month's allowance, and an hour is what Stripe takes to finalize
-on a good day rather than a bound anyone stated.
-"""
 
 METER_EVENT_BACKFILL_DAYS = 35
 """How far back Stripe accepts a meter event's timestamp.
@@ -88,24 +55,6 @@ sends meter events has to fit under.
 """
 
 _CUSTOMER_REGISTRATION_KEY_PREFIX = "customer-registration-"
-_CREDIT_GRANT_KEY_PREFIX = "credit-grant-"
-"""What each write's idempotency key is namespaced by.
-
-A key is unique across everything one credential does at Stripe rather than per
-endpoint, so an account id sent bare would collide with the same id used to key
-a different operation for the same account.
-
-Stripe keeps a key for a day, which is what these protect against: a request
-whose answer never arrived, retried inside that window. They are not the durable
-protection — the account row and the lock held over it are — and past the window
-a retry writes again.
-
-A key is only ever derived from something that changes whenever the write is
-meant to happen again. Subscribing has no such value, so it is made idempotent by
-reading first instead: keyed on the account alone, a customer whose subscription
-had ended would be answered for a whole day with the subscription that ended
-rather than the new one they asked for.
-"""
 
 
 class _Customer(StripeObject):
@@ -261,56 +210,6 @@ class _SubscriptionList(StripeObject):
 
 class _PriceList(StripeObject):
     data: list[_Price] = Field(default_factory=list)
-
-
-class _Monetary(StripeObject):
-    value: int
-    currency: str = ""
-
-
-class _GrantAmount(StripeObject):
-    monetary: _Monetary | None = None
-
-
-class _CreditGrant(StripeObject):
-    id: str
-    amount: _GrantAmount
-    expires_at: int | None = None
-    voided_at: int | None = None
-
-
-class _CreditScope(StripeObject):
-    model_config = ConfigDict(extra="allow")
-    price_type: str | None = None
-
-
-class _CreditApplicability(StripeObject):
-    scope: _CreditScope
-
-
-class _CreditGrantEvidence(_CreditGrant):
-    customer: str
-    created: int
-    effective_at: int | None
-    category: str
-    name: str | None = None
-    metadata: dict[str, str] = Field(default_factory=dict)
-    applicability_config: _CreditApplicability
-
-
-class _CreditGrantList(StripeObject):
-    data: list[_CreditGrantEvidence]
-    has_more: bool
-
-
-class _CreditBalance(StripeObject):
-    available_balance: _GrantAmount
-    ledger_balance: _GrantAmount
-
-
-class _CreditBalanceSummary(StripeObject):
-    customer: str
-    balances: list[_CreditBalance]
 
 
 class _LinePeriod(StripeObject):
@@ -741,38 +640,19 @@ class StripeBilling:
     def create_subscription(
         self, *, provider_customer_id: str, plan: BillingPlanId
     ) -> ProviderSubscription:
-        """Put a customer on a named plan and its metered prices.
-
-        The lines are this package's own published catalog, resolved by lookup
-        key rather than by identifier so nothing here stores what Stripe
-        generated. Resolving them on the way in is also what makes an unpublished
-        catalog fail at the subscribe rather than as a subscription missing a line
-        nobody notices until the invoice.
-
-        The convergence the protocol asks for is a read of the customer's live
-        subscriptions rather than an idempotency key, which Stripe remembers for
-        only a day where the account it protects lasts.
-        """
+        """Subscribe to the licensed plan, reusing an existing live subscription."""
 
         live = self._live_subscription(provider_customer_id)
         if live is not None:
             return self._subscription_state(live)
-        lookup_keys = subscription_price_lookup_keys(plan)
-        prices = self._price_ids(lookup_keys)
-        fields: list[tuple[str, str]] = [
+        line = plan_line(published_plan(plan).terms_version)
+        price_id = self._price_ids((line.price_lookup_key,))[line.price_lookup_key]
+        fields = [
             ("customer", provider_customer_id),
-            # Refuse rather than leave an `incomplete` subscription behind. A
-            # first payment that cannot be taken otherwise produces a record that
-            # looks subscribed for 23 hours and then expires, and a customer who
-            # believes they subscribed and a platform that agrees are the worst
-            # possible pair of beliefs about an account with no working card.
             ("payment_behavior", "error_if_incomplete"),
+            ("billing_mode[type]", "flexible"),
+            ("items[0][price]", price_id),
         ]
-        # Ordered, because `items[0]`, `items[1]` is the order the lines appear
-        # in on the subscription and therefore on the invoice.
-        fields.extend(
-            (f"items[{index}][price]", prices[key]) for index, key in enumerate(lookup_keys)
-        )
         return self._subscription_state(
             read(_Subscription, self.client, "POST", "/subscriptions", data=fields)
         )
@@ -1007,130 +887,6 @@ class StripeBilling:
             )
         return verified
 
-    def create_credit_grant(
-        self,
-        *,
-        account_id: str,
-        provider_customer_id: str,
-        amount_nanos: int,
-        period_ended_at: datetime,
-        previous_period_ended_at: datetime | None,
-    ) -> ProviderCreditGrant:
-        """Give a customer the usage their plan includes.
-
-        Scoped to metered prices, which is how "spent against usage before
-        anything is charged" is stated to Stripe.
-
-        The caller states the cycle boundaries and this adapter turns them into
-        the window Stripe will actually apply the grant in, which is the
-        provider's own timing and the only thing this side knows it. The expiry
-        is always `CREDIT_GRANT_SETTLEMENT_GRACE` past the cycle's end, because
-        credit is applied when an invoice is *finalized* rather than when it is
-        raised and a grant has to outlive its own cycle to reach its invoice.
-
-        The start is held back only for the cycle before it, and only while that
-        cycle can still be finalizing. A grant nothing precedes says nothing to
-        Stripe about when it starts: they stamp it themselves, on the clock the
-        customer's own subscription runs on, and the allowance is spendable from
-        that moment. Sending an instant instead would be sending one this host
-        computed — Stripe refuses any `effective_at` at or before their own now,
-        so it is not a value that can be sent late, and a customer on a test
-        clock would be given a start a month into their own future.
-
-        Stripe grants in cents where everything on this side counts nanodollars,
-        so the conversion happens here and refuses a figure it cannot express
-        exactly rather than granting a rounded one.
-
-        The idempotency key is derived from the account with the amount and the
-        expiry rather than from the account alone, so a replay can never disagree
-        with its key — and a plan change, which buys a *different* grant inside
-        the same cycle, is not mistaken for the retry of the one it replaces.
-        """
-
-        amount_cents = cents(amount_nanos)
-        expiry = _epoch(period_ended_at + CREDIT_GRANT_SETTLEMENT_GRACE, "period_ended_at")
-        fields: list[tuple[str, str]] = [
-            ("customer", provider_customer_id),
-            ("name", CREDIT_GRANT_NAME),
-            # Included with the plan rather than bought, which is what the
-            # provider's reporting divides these on.
-            ("category", "promotional"),
-            ("amount[type]", "monetary"),
-            ("amount[monetary][currency]", BILLING_CURRENCY.lower()),
-            ("amount[monetary][value]", str(amount_cents)),
-            ("applicability_config[scope][price_type]", "metered"),
-            ("expires_at", expiry),
-        ]
-        if previous_period_ended_at is not None:
-            settled_by = previous_period_ended_at + CREDIT_GRANT_SETTLEMENT_GRACE
-            # The comparison decides whether the previous cycle can still reach
-            # this allowance, never what instant is sent: a delivery retried past
-            # that moment, or a cycle re-termed long after it opened, has nothing
-            # left to be held back from.
-            if settled_by > utc_now():
-                fields.append(("effective_at", _epoch(settled_by, "previous_period_ended_at")))
-        grant = read(
-            _CreditGrant,
-            self.client,
-            "POST",
-            "/billing/credit_grants",
-            data=fields,
-            idempotency_key=(f"{_CREDIT_GRANT_KEY_PREFIX}{account_id}-{amount_cents}-{expiry}"),
-        )
-        if grant.amount.monetary is None or grant.expires_at is None:
-            raise UpstreamUnavailableError(
-                "Stripe recorded an allowance without an amount or an expiry"
-            )
-        return ProviderCreditGrant(
-            provider_credit_grant_id=grant.id,
-            amount_nanos=grant.amount.monetary.value * NANOS_PER_CENT,
-            expires_at=datetime.fromtimestamp(grant.expires_at, tz=UTC),
-        )
-
-    def expire_credit_grant(self, *, provider_credit_grant_id: str) -> None:
-        """End an allowance now, so nothing further is spent against it.
-
-        Read first, because Stripe refuses to expire a grant that is already over
-        and the caller reaching here twice is the ordinary case: a plan change
-        that died after expiring the outgoing grant has to converge on retry
-        rather than fail on the work it already did.
-
-        Expiring is tried before voiding and never the other way round. Stripe
-        will not expire a grant that has not become effective yet — which is what
-        a plan change inside the settlement window of the cycle before finds the
-        outgoing allowance to be — and voiding is the only way to stop one of
-        those; nothing can have been spent from it, so calling it invalid rather
-        than over costs the customer nothing. A grant that has already funded an
-        invoice takes the first branch and keeps what it paid for.
-
-        Nothing here may raise on the ordinary path: the caller has already taken
-        the customer's money for the plan whose allowance this is replacing, and
-        a refusal at this point is a charge with no plan recorded against it.
-        """
-
-        grant = read(
-            _CreditGrant,
-            self.client,
-            "GET",
-            f"/billing/credit_grants/{provider_credit_grant_id}",
-        )
-        if grant.voided_at is not None:
-            return
-        if grant.expires_at is not None and grant.expires_at <= int(utc_now().timestamp()):
-            return
-        try:
-            send(
-                self.client,
-                "POST",
-                f"/billing/credit_grants/{provider_credit_grant_id}/expire",
-            )
-        except InvalidInputError:
-            send(
-                self.client,
-                "POST",
-                f"/billing/credit_grants/{provider_credit_grant_id}/void",
-            )
-
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         """Paged, because an invoice's lines are a list Stripe truncates."""
 
@@ -1210,65 +966,6 @@ class StripeBilling:
                     return
             if not page.has_more:
                 return
-
-    def credit_grants_for(
-        self, *, provider_customer_id: str
-    ) -> Sequence[ProviderCreditGrantBalance]:
-        grants: list[ProviderCreditGrantBalance] = []
-        starting_after = ""
-        seen: set[str] = set()
-        while True:
-            params = [("customer", provider_customer_id), ("limit", "100")]
-            if starting_after:
-                params.append(("starting_after", starting_after))
-            page = read(
-                _CreditGrantList, self.client, "GET", "/billing/credit_grants", params=params
-            )
-            starting_after = _page_cursor([grant.id for grant in page.data], page.has_more, seen)
-            for grant in page.data:
-                if grant.customer != provider_customer_id:
-                    raise UpstreamUnavailableError(
-                        "Stripe credit grant belongs to another customer"
-                    )
-                summary = read(
-                    _CreditBalanceSummary,
-                    self.client,
-                    "GET",
-                    "/billing/credit_balance_summary",
-                    params=[
-                        ("customer", provider_customer_id),
-                        ("filter[type]", "credit_grant"),
-                        ("filter[credit_grant]", grant.id),
-                    ],
-                )
-                if summary.customer != provider_customer_id or len(summary.balances) != 1:
-                    raise UpstreamUnavailableError("Stripe grant balance is missing or ambiguous")
-                balance = summary.balances[0]
-                scope = grant.applicability_config.scope
-                extra = scope.model_extra or {}
-                applicability = ProviderCreditApplicability.Unknown
-                if "prices" in extra:
-                    applicability = ProviderCreditApplicability.Restricted
-                elif scope.price_type == "metered" and not extra:
-                    applicability = ProviderCreditApplicability.AllMetered
-                grants.append(
-                    ProviderCreditGrantBalance(
-                        provider_credit_grant_id=grant.id,
-                        amount_nanos=_monetary_nanos(grant.amount),
-                        available_balance_nanos=_monetary_nanos(balance.available_balance),
-                        ledger_balance_nanos=_monetary_nanos(balance.ledger_balance),
-                        created_at=datetime.fromtimestamp(grant.created, tz=UTC),
-                        effective_at=_optional_timestamp(grant.effective_at),
-                        expires_at=_optional_timestamp(grant.expires_at),
-                        voided_at=_optional_timestamp(grant.voided_at),
-                        category=grant.category,
-                        name=grant.name or "",
-                        applicability=applicability,
-                        metadata=grant.metadata,
-                    )
-                )
-            if not page.has_more:
-                return grants
 
     def paid_subscription_periods(
         self,
@@ -1394,16 +1091,6 @@ def _credit_checkout(session: _CreditCheckout) -> CreditPurchaseCheckout:
     )
 
 
-def _monetary_nanos(amount: _GrantAmount) -> int:
-    if amount.monetary is None or amount.monetary.currency != BILLING_CURRENCY.lower():
-        raise UpstreamUnavailableError("Stripe credit amount is not denominated in USD")
-    return amount.monetary.value * NANOS_PER_CENT
-
-
-def _optional_timestamp(timestamp: int | None) -> datetime | None:
-    return datetime.fromtimestamp(timestamp, tz=UTC) if timestamp is not None else None
-
-
 def _terms_for_price(price: _Price) -> SubscriptionTermsVersion | None:
     line = terms_for_price_lookup_key(price.lookup_key or "")
     if line is None:
@@ -1504,7 +1191,6 @@ def _epoch(value: datetime, field: str) -> str:
 
 
 __all__ = [
-    "CREDIT_GRANT_NAME",
     "METER_EVENT_BACKFILL_DAYS",
     "METER_EVENT_DEDUPLICATION_HOURS",
     "StripeBilling",

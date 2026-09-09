@@ -25,11 +25,9 @@ class BillingAccountTable(IdTable, DatabaseBase):
     once, and a row per workspace would be several payment methods to keep in
     step by hand.
 
-    A row appears when an account first signs in, before its session exists, and
-    names the provider's customer, subscription and grant from the moment that
-    provisioning finishes. An empty `plan` means an account on no subscription —
-    one that has never reached a billing surface, or one whose subscription the
-    provider says has ended — and so does the absence of a row.
+    A row appears when an account first signs in, before its session exists.
+    It records the provider customer and any paid subscription. An empty `plan`
+    means the account has no recorded plan.
     """
 
     __tablename__ = "billing_accounts"
@@ -79,13 +77,6 @@ class BillingAccountTable(IdTable, DatabaseBase):
             postgresql_where=text("provider_subscription_id <> ''"),
             sqlite_where=text("provider_subscription_id <> ''"),
         ),
-        Index(
-            "uq_billing_accounts_provider_credit_grant",
-            "provider_credit_grant_id",
-            unique=True,
-            postgresql_where=text("provider_credit_grant_id <> ''"),
-            sqlite_where=text("provider_credit_grant_id <> ''"),
-        ),
     )
 
     user_id: Mapped[str] = mapped_column(
@@ -100,11 +91,7 @@ class BillingAccountTable(IdTable, DatabaseBase):
     """A column rather than payload-only because a webhook names the customer and
     nothing else, so resolving one back to an account has to filter on it."""
     provider_subscription_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
-    """The subscription that carries the plan price and the metered prices, empty
-    until the account is provisioned."""
-    provider_credit_grant_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
-    """The grant that carries the included allowance for the current period,
-    empty until one is issued."""
+    """The paid plan subscription, empty when the account has none."""
     plan: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     """Which plan that subscription is on, empty while there is none. A column
     rather than a read of the provider because the dashboard and an upgrade both

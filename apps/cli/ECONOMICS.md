@@ -18,7 +18,8 @@ turn a reconciled financial result into an estimate.
 The report follows existing billing attribution. It includes each whole ledger
 segment whose start is in `[from, to)`, including its credit allocations, and
 checks settlements against all local-credit segments of their parent records.
-Payment delivery windows keep charges on either side of credit cutover separate.
+Historical payment delivery windows distinguish provider charges from local
+wallet settlements.
 Crossing segment counts and gross amounts describe boundary exposure; they are
 not extra revenue.
 Expense statements must reconcile to this attribution before being supplied.

@@ -17,23 +17,6 @@ from sqlalchemy.sql.schema import SchemaItem
 from database.tables.base import DatabaseBase, TimestampMixin, uuid_type
 
 
-class BillingCreditCutoverTable(TimestampMixin, DatabaseBase):
-    __tablename__ = "billing_credit_cutovers"
-    __table_args__: tuple[SchemaItem, ...] = (
-        CheckConstraint(
-            "completed_at IS NULL OR completed_at >= effective_at",
-            name="ck_billing_credit_cutovers_completion",
-        ),
-    )
-
-    user_id: Mapped[str] = mapped_column(
-        uuid_type, ForeignKey("users.id", ondelete="RESTRICT"), primary_key=True
-    )
-    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    blocked_reason: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
-
-
 class BillingCreditLotTable(TimestampMixin, DatabaseBase):
     __tablename__ = "billing_credit_lots"
     __table_args__: tuple[SchemaItem, ...] = (
@@ -112,7 +95,6 @@ class BillingCreditSettlementTable(TimestampMixin, DatabaseBase):
 
 __all__ = [
     "BillingCreditAllocationTable",
-    "BillingCreditCutoverTable",
     "BillingCreditLotTable",
     "BillingCreditSettlementTable",
 ]

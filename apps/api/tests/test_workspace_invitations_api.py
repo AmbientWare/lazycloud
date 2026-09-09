@@ -50,7 +50,6 @@ def _owner(services: ApiServices, workspace_id: str, email: str) -> tuple[str, d
             status=BillingAccountStatus.Active,
             provider_customer_id=f"cus_{owner.user_id}",
             provider_subscription_id=f"sub_{owner.user_id}",
-            provider_credit_grant_id=f"credgr_{owner.user_id}",
             plan=BillingPlanId.Team,
             subscription_terms_version=SubscriptionTermsVersion.Team,
             scheduled_terms_version=None,

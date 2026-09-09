@@ -93,7 +93,6 @@ def _fixture_account(database: DatabaseClient, display_name: str) -> str:
             status=BillingAccountStatus.Active,
             provider_customer_id=f"cus_fixture_{user_id}",
             provider_subscription_id=f"sub_fixture_{user_id}",
-            provider_credit_grant_id="",
             plan=BillingPlanId.Free,
             subscription_terms_version=SubscriptionTermsVersion.Free,
             scheduled_terms_version=None,
@@ -106,15 +105,12 @@ def _fixture_account(database: DatabaseClient, display_name: str) -> str:
             period_started_at=now,
             period_ended_at=now + timedelta(days=30),
             allowance_nanos=0,
-            funded=False,
         )
         allowance.record_funded_terms(
             user_id=user_id, period_started_at=now, terms_version=SubscriptionTermsVersion.Free
         )
         allowance.confirm_credit(user_id=user_id, period_started_at=now, at=now)
         credits = BillingCreditRepository(session)
-        credits.prepare_cutover(user_id=user_id, effective_at=now)
-        credits.complete_cutover(user_id=user_id, at=now)
         credits.issue(
             user_id=user_id,
             grant=CreditGrant(
@@ -327,10 +323,10 @@ def unbilled_account(context: ServiceContext) -> tuple[str, str]:
     return user_id, workspace_id
 
 
-def legacy_billing_account(
+def unfunded_billing_account(
     context: ServiceContext, *, period_started_at: datetime, period_ended_at: datetime
 ) -> tuple[str, str]:
-    """A subscribed account whose local credit migration has not started."""
+    """A subscribed account without local credit grants."""
     user_id, workspace_id = unbilled_account(context)
     with context.database.session() as session:
         BillingAccountRepository(session).upsert(
@@ -338,7 +334,6 @@ def legacy_billing_account(
             status=BillingAccountStatus.Active,
             provider_customer_id=f"cus_fixture_{user_id}",
             provider_subscription_id=f"sub_fixture_{user_id}",
-            provider_credit_grant_id="",
             plan=BillingPlanId.Free,
             subscription_terms_version=SubscriptionTermsVersion.FreeLegacy,
             scheduled_terms_version=None,
@@ -349,7 +344,6 @@ def legacy_billing_account(
             period_started_at=period_started_at,
             period_ended_at=period_ended_at,
             allowance_nanos=0,
-            funded=False,
         )
     return user_id, workspace_id
 

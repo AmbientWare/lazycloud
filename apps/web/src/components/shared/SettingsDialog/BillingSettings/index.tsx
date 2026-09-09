@@ -1,8 +1,6 @@
-import { CreditCard, ExternalLink, LoaderCircle, Sparkles } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
-import { Panel } from "@/components/shared/Panel";
-import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { BillingSummary } from "@/lib/api/schemas";
@@ -13,8 +11,7 @@ import { cn } from "@/lib/utils";
 import { useBillingSettingsController } from "./controller";
 import { PlanDialog } from "./PlanDialog";
 import { PrepaidCredit } from "./PrepaidCredit";
-import { UsageBudget } from "./UsageBudget";
-import { AutomaticReload } from "./AutomaticReload";
+import { BillingPreferences } from "./BillingPreferences";
 
 export function BillingSettings({
   planOpen,
@@ -29,8 +26,9 @@ export function BillingSettings({
 
   return (
     <>
-      <Panel title="Plan" action={summary ? <StandingChip summary={summary} /> : null}>
-        <div className="flex flex-col gap-4 p-4">
+      <div className="space-y-4">
+        {summary && !complimentary ? <PrepaidCredit /> : null}
+        <div className="flex flex-col gap-2">
           {controller.isLoading ? (
             <div className="space-y-2" aria-hidden="true">
               <Skeleton className="h-4 w-56" />
@@ -49,92 +47,83 @@ export function BillingSettings({
                 </p>
               ) : !summary.plan ? (
                 <p className="text-sm text-muted-foreground">Choose a plan to start workloads.</p>
-              ) : summary.plan.included_nanos === 0 ? (
-                <p className="text-sm text-muted-foreground">This plan has no recurring credit.</p>
               ) : null}
-              {summary.plan || complimentary ? (
-                <div className="flex flex-col gap-1">
-                  <ConcurrencyLine
-                    running={summary.usage.concurrent_cpu_containers}
-                    limit={summary.entitlements?.max_concurrent_cpu_containers ?? 0}
-                    noun="CPU container"
-                    state="running or queued"
-                    atLimitNote="Stop a container or raise your plan limit before starting another."
-                  />
-                  <ConcurrencyLine
-                    running={summary.usage.concurrent_gpus}
-                    limit={summary.entitlements?.max_concurrent_gpus ?? 0}
-                    noun="GPU card"
-                    state="in use"
-                    atLimitNote="Release GPU capacity or raise your plan limit before starting more."
-                  />
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                {complimentary ? null : <SubscriptionTerms summary={summary} />}
+                {summary.status === "past_due" ? (
+                  <p className="text-sm text-warning">Payment past due</p>
+                ) : null}
+                <div className="flex flex-wrap gap-1">
+                  {complimentary ? null : (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={controller.busy}
+                        onClick={controller.openPlan}
+                      >
+                        Change plan
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={controller.busy}
+                        onClick={controller.startCard}
+                      >
+                        {controller.leaving === "card" ? (
+                          <LoaderCircle className="size-4 animate-spin" />
+                        ) : null}
+                        {summary.payment_method_on_file ? "Payment method" : "Add payment method"}
+                      </Button>
+                    </>
+                  )}
+                  {summary.portal_available ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={controller.busy}
+                      onClick={controller.openPortal}
+                    >
+                      {controller.leaving === "portal" ? (
+                        <LoaderCircle className="size-4 animate-spin" />
+                      ) : null}
+                      Invoices
+                    </Button>
+                  ) : null}
                 </div>
+              </div>
+              {summary.plan || complimentary ? (
+                <details className="text-xs text-muted-foreground">
+                  <summary className="cursor-pointer">Plan limits</summary>
+                  <div className="mt-2 space-y-1">
+                    <ConcurrencyLine
+                      running={summary.usage.concurrent_cpu_containers}
+                      limit={summary.entitlements?.max_concurrent_cpu_containers ?? 0}
+                      noun="CPU container"
+                      state="running or queued"
+                      atLimitNote="Stop a container or raise your plan limit before starting another."
+                    />
+                    <ConcurrencyLine
+                      running={summary.usage.concurrent_gpus}
+                      limit={summary.entitlements?.max_concurrent_gpus ?? 0}
+                      noun="GPU card"
+                      state="in use"
+                      atLimitNote="Release GPU capacity or raise your plan limit before starting more."
+                    />
+                    <EntitlementUsage summary={summary} />
+                  </div>
+                </details>
               ) : null}
-              <EntitlementUsage summary={summary} />
-              {complimentary ? null : <SubscriptionTerms summary={summary} />}
               {controller.settling ? (
                 <p className="text-sm text-warning">
                   Your plan change is processing. The current plan stays active until it finishes.
                 </p>
               ) : null}
-              {complimentary ? null : (
-                <p className="text-sm text-muted-foreground">
-                  Usage consumes your prepaid credit. Add credit before your balance runs out to
-                  keep workloads running.
-                </p>
-              )}
-              <div className="flex flex-wrap gap-2">
-                {complimentary ? null : (
-                  <>
-                    <Button size="sm" disabled={controller.busy} onClick={controller.openPlan}>
-                      <Sparkles className="size-4" />
-                      Manage subscription
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={controller.busy}
-                      onClick={controller.startCard}
-                    >
-                      {controller.leaving === "card" ? (
-                        <LoaderCircle className="size-4 animate-spin" />
-                      ) : (
-                        <CreditCard className="size-4" />
-                      )}
-                      {summary.payment_method_on_file
-                        ? "Change payment method"
-                        : "Add payment method"}
-                    </Button>
-                  </>
-                )}
-                {summary.portal_available ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={controller.busy}
-                    onClick={controller.openPortal}
-                  >
-                    {controller.leaving === "portal" ? (
-                      <LoaderCircle className="size-4 animate-spin" />
-                    ) : (
-                      <ExternalLink className="size-4" />
-                    )}
-                    Manage billing
-                  </Button>
-                ) : null}
-              </div>
-              {!summary.payment_method_on_file && !complimentary ? (
-                <p className="text-xs text-muted-foreground">
-                  New payment methods may take a few seconds to appear.
-                </p>
-              ) : null}
             </>
           )}
         </div>
-      </Panel>
-      {summary && !complimentary ? <PrepaidCredit /> : null}
-      {summary && !complimentary ? <AutomaticReload /> : null}
-      {summary && !complimentary ? <UsageBudget /> : null}
+        {summary && !complimentary ? <BillingPreferences /> : null}
+      </div>
       <PlanDialog controller={controller} />
     </>
   );
@@ -185,13 +174,13 @@ function SubscriptionTerms({ summary }: { summary: BillingSummary }) {
     );
   }
   return (
-    <div className="space-y-1 text-sm text-muted-foreground">
+    <div className="space-y-1 text-sm">
       <p>
-        Your {plan.name} subscription costs {exactDollars(plan.monthly_nanos)} per month
-        {plan.included_nanos > 0
-          ? ` and includes ${exactDollars(plan.included_nanos)} of usage credit`
-          : ""}
-        .
+        <span className="font-medium">{plan.name}</span>{" "}
+        <span className="text-muted-foreground">
+          {exactDollars(plan.monthly_nanos)} / month
+          {plan.included_nanos > 0 ? ` with ${exactDollars(plan.included_nanos)} credit` : ""}
+        </span>
       </p>
       {plan.scheduled_change_at ? (
         <p>
@@ -201,17 +190,4 @@ function SubscriptionTerms({ summary }: { summary: BillingSummary }) {
       ) : null}
     </div>
   );
-}
-
-function StandingChip({ summary }: { summary: BillingSummary }) {
-  if (summary.complimentary_since) {
-    return <StatusChip status="Complimentary" />;
-  }
-  if (summary.status === "past_due") {
-    return <StatusChip status="past due" />;
-  }
-  if (!summary.plan) {
-    return <StatusChip status="No plan" />;
-  }
-  return <StatusChip status={summary.plan.name} />;
 }
