@@ -104,7 +104,9 @@ def test_a_boundary_republished_unchanged_writes_nothing_and_one_republished_oth
             )
 
     with isolated_services.context.database.session() as session:
-        rows = session.scalars(select(PlatformRateTable)).all()
+        rows = session.scalars(
+            select(PlatformRateTable).where(PlatformRateTable.effective_at == effective_at)
+        ).all()
     assert [row.nanos_per_egress_byte for row in rows] == [Decimal(1)]
 
 
