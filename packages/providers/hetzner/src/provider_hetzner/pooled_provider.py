@@ -3,13 +3,14 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, Decimal
+from hashlib import sha256
 
 from compute.node_bootstrap import (
     NodeBootstrapSettings,
     provider_bootstrap_script,
 )
 from compute.offers import ComputeOffer, pooled_cloud_offer, recorded_unit_offer
-from compute.provider_launches import ProviderNodeLaunchCredential, ProviderNodeLaunchCredentials
+from compute.provider_launches import ProviderNodeLaunchCredentials
 from compute.providers import (
     ProviderCapacityPhase,
     ProviderMachineStatus,
@@ -17,7 +18,7 @@ from compute.providers import (
     ProviderUnitRequest,
     ProviderUnitSnapshot,
 )
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr
 from shared.compute_policy import ComputeUnitProviderState, ComputeUnitRecord
 from shared.provider_config import ProviderKind
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit, SupplierNetworkTerms
@@ -194,7 +195,9 @@ class HetznerPooledProvider:
                 "public_net": {"enable_ipv4": True, "enable_ipv6": False},
                 "start_after_create": True,
                 "automount": False,
-                "user_data": bootstrap_script(request, launch),
+                "user_data": bootstrap_script(
+                    request, launch_id=launch.launch_id, bootstrap_token=launch.bootstrap_token
+                ),
             }
             try:
                 server = self.client.create_server(body)
@@ -337,8 +340,14 @@ class HetznerPooledProvider:
             _UNIT_LABEL: request.unit_id,
             _PROVIDER_LABEL: provider_label(self.provider_ref),
             _GENERATION_LABEL: str(request.generation),
-            _RELEASE_LABEL: self.images_by_location[request.offer.region].recipe_sha256[:63],
+            _RELEASE_LABEL: self._template_version(request),
         }
+
+    def _template_version(self, request: ProviderUnitRequest) -> str:
+        image = self.images_by_location[request.offer.region]
+        # Per-node credentials do not change the host configuration the pool should run.
+        script = bootstrap_script(request, launch_id="", bootstrap_token=SecretStr(""))
+        return sha256((image.model_dump_json() + "\n" + script).encode()).hexdigest()[:63]
 
     @staticmethod
     def _selector(request: ProviderUnitRequest) -> str:
@@ -374,9 +383,7 @@ class HetznerPooledProvider:
             observed_machines=len(servers),
             instances=instances,
             provider_state=ComputeUnitProviderState(resource_id=request.unit_id),
-            current_template_version=self.images_by_location[request.offer.region].recipe_sha256[
-                :63
-            ],
+            current_template_version=self._template_version(request),
         )
 
 
@@ -396,7 +403,9 @@ def _status(status: str) -> str:
     return ProviderMachineStatus.Unknown
 
 
-def bootstrap_script(request: ProviderUnitRequest, launch: ProviderNodeLaunchCredential) -> str:
+def bootstrap_script(
+    request: ProviderUnitRequest, *, launch_id: str, bootstrap_token: SecretStr
+) -> str:
     return provider_bootstrap_script(
         NodeBootstrapSettings(
             control_plane_url=request.bootstrap.control_plane_url,
@@ -406,8 +415,8 @@ def bootstrap_script(request: ProviderUnitRequest, launch: ProviderNodeLaunchCre
         ),
         provider=ProviderKind.Hetzner,
         region=request.offer.region,
-        launch_id=launch.launch_id,
-        bootstrap_token=launch.bootstrap_token,
+        launch_id=launch_id,
+        bootstrap_token=bootstrap_token,
         instance_identity_shell=_IDENTITY_SHELL,
         values={},
     )
