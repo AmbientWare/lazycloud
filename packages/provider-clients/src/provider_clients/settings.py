@@ -6,7 +6,7 @@ from decimal import Decimal
 from urllib.parse import urlparse
 
 from agent.binary import AgentBinarySettings
-from provider_aws import AwsManagedPoolBinaries
+from provider_aws import AwsManagedPoolBinaries, AwsRegionalPrices
 from provider_hetzner import HetznerNodeImage
 from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
@@ -125,15 +125,10 @@ class AwsAccountConnectionSettings(BaseModel):
 
 
 class AwsCapacityEnvironmentSettings(BaseSettings):
-    """The managed-capacity value no release can publish.
-
-    What an instance hour costs is the deployment's own decision. The worker
-    image, agent artifact URL, and both host AMI catalogs are facts of the release
-    it points at. A deployment naming its own would split the worker and the host
-    recipe across two sources.
-    """
+    """Deployment-owned supplier rates, separate from released host artifacts."""
 
     instance_hourly_micros: dict[str, int] = Field(default_factory=dict)
+    regional_prices: dict[str, AwsRegionalPrices] = Field(default_factory=dict)
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_AWS_CAPACITY_",
@@ -149,6 +144,7 @@ class AwsCapacitySettings(BaseModel):
     cpu_ami_ids: dict[str, str] = Field(default_factory=dict)
     gpu_ami_ids: dict[str, str] = Field(default_factory=dict)
     instance_hourly_micros: dict[str, int] = Field(default_factory=dict)
+    regional_prices: dict[str, AwsRegionalPrices] = Field(default_factory=dict)
 
     @field_validator("worker_image_digest")
     @classmethod
@@ -206,15 +202,7 @@ class AwsCapacitySettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_atomic_configuration(self) -> AwsCapacitySettings:
-        """Managed AWS capacity is all five values or none of them.
-
-        The release always carries the artifacts, so their presence would make
-        this rule true for every deployment pointing at one and would hide a pool
-        that can never launch. Intent is therefore read from the one value only a
-        deployment can author — what an instance hour costs. Authoring it demands
-        the rest; leaving it out keeps managed capacity off whatever the release
-        published.
-        """
+        """Configured instance prices require host artifacts and complete regional prices."""
 
         if not self.instance_hourly_micros:
             return self
@@ -232,6 +220,14 @@ class AwsCapacitySettings(BaseModel):
                 "AWS capacity configuration is incomplete: "
                 f"the release at {RELEASE_MANIFEST_URL_ENV} published no "
                 + ", ".join(missing_from_release)
+            )
+        missing_prices = (
+            self.cpu_ami_ids.keys() | self.gpu_ami_ids.keys()
+        ) - self.regional_prices.keys()
+        if missing_prices:
+            raise ValueError(
+                f"{ENV_PREFIX}_AWS_CAPACITY_REGIONAL_PRICES has no storage and IPv4 prices for "
+                + ", ".join(sorted(missing_prices))
             )
         return self
 

@@ -129,7 +129,8 @@ manifests are immutable, so it stays in the document.
 
 What no release can know stays authored beside the deployment: the local
 agent-binary mount (`LAZYCLOUD_COMPOSE_AGENT_BINARY_DIR`), instance price estimates
-(`LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS`), and the connected-AWS
+(`LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS`), regional gp3 and IPv4 prices
+(`LAZYCLOUD_AWS_CAPACITY_REGIONAL_PRICES`), and the connected-AWS
 control principal (`LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN`). Managed
 capacity requires those settings and all three release pins, and a
 deployment missing either half fails at startup naming which half it is.

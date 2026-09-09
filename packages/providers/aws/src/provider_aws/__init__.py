@@ -108,6 +108,7 @@ from .provider_node_proof import (
     AwsInstanceMetadataTransport,
     AwsProviderNodeProofError,
 )
+from .supplier_prices import AwsRegionalPrices
 
 __all__ = [
     "AWS_ACCOUNT_CONNECTION_TEMPLATE_VERSION",
@@ -173,6 +174,7 @@ __all__ = [
     "AwsProviderNodeReplayGuard",
     "AwsProviderNodeReplayGuardError",
     "AwsProviderSettings",
+    "AwsRegionalPrices",
     "AwsService",
     "AwsSessionOptions",
     "AwsSpotInterruptionAction",

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from agent.binary import AgentBinaryEnvironmentSettings
-from provider_aws import aws_account_connection_template_identity
+from provider_aws import AwsRegionalPrices, aws_account_connection_template_identity
 from provider_clients.release import deployment_release
 from provider_clients.release_manifest import (
     AGENT_AMD64_FILENAME,
@@ -100,6 +100,11 @@ def test_worker_release_does_not_change_host_launch_identity() -> None:
         agent_binaries=AgentBinaryEnvironmentSettings(binary_dir=Path("/var/lib/lazycloud/agent")),
         aws_capacity=AwsCapacityEnvironmentSettings(
             instance_hourly_micros={"m7i.xlarge": 340_000},
+            regional_prices={
+                "us-east-1": AwsRegionalPrices(
+                    gp3_gib_monthly_micros=80_000, public_ipv4_hourly_micros=5_000
+                )
+            },
         ),
         aws_connections=AwsAccountConnectionEnvironmentSettings(
             control_principal_arn="arn:aws:iam::123456789012:role/control-plane",

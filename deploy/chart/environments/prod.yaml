@@ -9,6 +9,8 @@ runtime:
     }]
   LAZYCLOUD_STRIPE_ACCOUNT_ID: acct_1U3MzaLpRGtVfZdq
   LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: wg.lazycloud.dev:51820
+  LAZYCLOUD_AWS_CAPACITY_REGIONAL_PRICES: |-
+    {"us-east-1":{"gp3_gib_monthly_micros":80000,"public_ipv4_hourly_micros":5000}}
   # Existing us-east-1 on-demand rates. Update deliberately because these rank offers.
   LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS: |-
     {

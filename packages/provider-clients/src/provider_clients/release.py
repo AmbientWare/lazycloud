@@ -146,6 +146,7 @@ def deployment_release(
             cpu_ami_ids={} if host_manifest is None else host_manifest.capacity_cpu_ami_ids,
             gpu_ami_ids={} if host_manifest is None else host_manifest.capacity_gpu_ami_ids,
             instance_hourly_micros=aws_capacity.instance_hourly_micros,
+            regional_prices=aws_capacity.regional_prices,
         ),
         aws_connections=AwsAccountConnectionSettings(
             template_url=(

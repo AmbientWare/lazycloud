@@ -52,10 +52,18 @@ sync after the migration and new application processes are healthy.
 `fleet-ensure` registers and validates the cloud account through the API.
 The values renderer combines Hetzner's Terraform image catalog with deployment
 credentials and supplier prices, and composition resolves the provider registry.
-It needs no separate
-capacity-configuration command or manually copied workspace UUID. The bootstrap
-workspace reference resolves only when capacity is used, after administrator
-bootstrap has created it. Keep that configured workspace identity stable.
+It needs no separate capacity-configuration command or manually copied workspace
+UUID. The bootstrap workspace reference resolves only when capacity is used,
+after administrator bootstrap has created it. Keep that configured workspace
+identity stable.
+
+AWS quotes also require `LAZYCLOUD_AWS_CAPACITY_REGIONAL_PRICES`, keyed by region,
+with `gp3_gib_monthly_micros` and `public_ipv4_hourly_micros`. Each node quote
+includes its requested gp3 disk size and one public IPv4 address. Disk estimates
+use a 30-day month, matching the normalization in [AWS's EBS pricing examples](https://aws.amazon.com/ebs/pricing/),
+and round upward to whole hourly USD micros. The production us-east-1 inputs
+are $0.08/GiB-month and [$0.005/public-IP-hour](https://aws.amazon.com/vpc/pricing/),
+verified on 2026-09-09. Missing regional prices fail deployment validation.
 
 The default deployment requires a verified Ashburn image catalog and a
 `hetzner:platform` token. Missing images fail Terraform validation; missing

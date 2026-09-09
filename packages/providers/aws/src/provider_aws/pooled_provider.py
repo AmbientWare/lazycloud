@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from compute.offers import (
     DEFAULT_POOLED_NODE_ARCHITECTURE,
@@ -42,6 +42,7 @@ from .managed_pool import (
     AwsManagedPoolSnapshot,
     AwsManagedPoolSpec,
 )
+from .supplier_prices import AwsRegionalPrices
 
 _PHASES = {
     AwsManagedPoolPhase.Provisioning: ProviderCapacityPhase.Provisioning,
@@ -58,6 +59,9 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     binaries_by_region: Mapping[str, AwsManagedPoolBinaries]
     instance_hourly_micros: Mapping[str, int]
     client_provider: AwsManagedPoolClientProvider
+    regional_prices: Mapping[str, AwsRegionalPrices] = field(
+        default_factory=lambda: dict[str, AwsRegionalPrices]()
+    )
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
         region, separator, instance_type = unit.offer_id.partition(":")
@@ -73,6 +77,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     def list_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
         offers: list[ComputeOffer] = []
         for region, artifacts in sorted(self.binaries_by_region.items()):
+            regional_prices = self.regional_prices.get(region)
             for instance in AWS_INSTANCE_CATALOG:
                 if instance.instance_type not in self.instance_hourly_micros:
                     continue
@@ -103,11 +108,22 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
                         memory_mb=instance.memory_mb,
                         storage_mb=root_volume_gib * 1024,
                         cost_terms=SupplierCostTerms(
-                            source="deployment:aws.instance_hourly_micros",
+                            source="deployment:aws.instance_hourly_micros,aws.regional_prices;"
+                            "gp3:30-day-month",
                             observed_at=utc_now(),
                             compute_hourly_micros=self.instance_hourly_micros[
                                 instance.instance_type
                             ],
+                            root_disk_hourly_micros=(
+                                regional_prices.root_disk_hourly_micros(root_volume_gib)
+                                if regional_prices is not None
+                                else None
+                            ),
+                            public_ipv4_hourly_micros=(
+                                regional_prices.public_ipv4_hourly_micros
+                                if regional_prices is not None
+                                else None
+                            ),
                             setup_micros=0,
                             billing_minimum_seconds=60,
                             billing_quantum_seconds=1,
