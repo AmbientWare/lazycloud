@@ -24,8 +24,8 @@ from shared.scheduling import (
     SchedulerContainerAddressMap,
     SchedulerContainerState,
 )
+from tests.domain_fixtures import owned_workspace
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import owned_workspace
 
 CONTAINER_ID = "00000000-0000-4000-8000-000000000101"
 
@@ -60,13 +60,16 @@ def test_wait_for_container_client_reloads_durable_terminal_state(
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
+    stub = ControlPlaneService(isolated_services.context).create_stub(
+        "sandbox-stub", workspace=workspace_id, kind=StubKind.Sandbox
+    )
     container = ContainerRecord(
         id=CONTAINER_ID,
         name="sandbox-failed",
         image="image",
         command=["sleep", "300"],
         workspace_id=workspace_id,
-        stub_id="sandbox-stub",
+        stub_id=stub.id,
     )
     with isolated_services.context.database.session() as session:
         ContainerRepository(session).upsert(container)

@@ -70,13 +70,10 @@ from shared.http.gateway import AgentCapacityInterruptionRequest
 from shared.identity import TokenKind, WorkspaceStatus
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
+from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import (
-    administrator_credential,
-    owned_workspace,
-    workspace_owner_user_id,
-)
+from tests.service_fixtures import administrator_credential
 from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
 

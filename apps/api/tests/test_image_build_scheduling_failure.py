@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from api.server.async_io import ApiAsyncIo
+from billing.rate_publication import publish_metered_rate_history
 from coordination.redis_client import RedisSettings
 from database.migrations import bootstrap_database
 from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
@@ -40,6 +41,8 @@ def test_scheduling_failure_finishes_image_build_stream_and_cleans_execution(
             settings,
             RedisSettings(url=real_redis_actors.url, key_prefix=real_redis_actors.prefix),
         )
+        with database.session() as session:
+            publish_metered_rate_history(session)
         with service_graph(
             database,
             tmp_path,

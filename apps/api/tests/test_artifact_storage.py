@@ -22,9 +22,7 @@ from shared.tasks import Task
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import select
 from storage.artifact_metering import meter_artifact
-from tests.service_fixtures import isolated_services, owned_workspace
-
-__all__ = ["isolated_services"]
+from tests.domain_fixtures import owned_workspace
 
 
 def test_artifact_retention_and_access_survive_task_deletion_without_crossing_workspaces(

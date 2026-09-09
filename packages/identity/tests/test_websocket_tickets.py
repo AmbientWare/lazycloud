@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
-from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from coordination.redis_client import RedisClient, RedisSettings, RedisWireScalar, redis_text
+from coordination.redis_client import RedisClient, RedisWireScalar, redis_text
 from database.tables.identity import TokenTable
 from identity.auth import AuthError, AuthorizationDeniedError, AuthService
 from identity.websocket_tickets import (
@@ -20,8 +18,9 @@ from identity.websocket_tickets import (
     WebSocketTicketStoreError,
 )
 from shared.identity import AuthScope
+from tests.domain_fixtures import owned_workspace
+from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import owned_workspace
 
 
 def _ticket_service(isolated_services: ApiServices) -> tuple[WebSocketTicketService, FakeRedis]:
@@ -276,34 +275,22 @@ def test_ticket_mint_removes_uncertain_write_and_hides_store_details(
     assert not fake.values
 
 
-@pytest.mark.skipif(
-    not os.environ.get("LAZYCLOUD_TEST_REDIS_URL"),
-    reason="set LAZYCLOUD_TEST_REDIS_URL to run real Redis ticket semantics",
-)
-def test_real_redis_getdel_is_atomic_and_expiry_is_terminal() -> None:
-    redis = RedisClient.from_settings(
-        RedisSettings(
-            url=os.environ["LAZYCLOUD_TEST_REDIS_URL"],
-            key_prefix=f"ticket-real-{uuid4()}",
-        )
-    )
+def test_real_redis_getdel_is_atomic_and_expiry_is_terminal(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
     key = redis.key("single-use")
     expiring_key = redis.key("expires")
-    try:
-        assert redis.set_single_use(key, "payload", ttl_seconds=30)
+    assert redis.set_single_use(key, "payload", ttl_seconds=30)
 
-        def consume_once(_index: int) -> str | None:
-            return redis.getdel(key)
+    def consume_once(_index: int) -> str | None:
+        return redis.getdel(key)
 
-        with ThreadPoolExecutor(max_workers=12) as executor:
-            results = list(executor.map(consume_once, range(24)))
-        assert results.count("payload") == 1
-        assert results.count(None) == 23
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        results = list(executor.map(consume_once, range(24)))
+    assert results.count("payload") == 1
+    assert results.count(None) == 23
 
-        assert redis.set_single_use(expiring_key, "payload", ttl_seconds=1)
-        time.sleep(1.1)
-        assert redis.getdel(expiring_key) is None
-    finally:
-        redis.delete(key)
-        redis.delete(expiring_key)
-        redis.close()
+    assert redis.set_single_use(expiring_key, "payload", ttl_seconds=1)
+    time.sleep(1.1)
+    assert redis.getdel(expiring_key) is None

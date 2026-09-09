@@ -11,6 +11,7 @@ from database.repositories.billing_costs import (
     WorkspaceCostScope,
 )
 from database.repositories.billing_rates import PlatformRateRepository
+from shared.billing_rate_card import PUBLISHED_METERED_RATE_HISTORY
 from shared.http.usage import UsageCostGroupKey
 from shared.timestamps import utc_now
 from shared.usage import (
@@ -39,7 +40,7 @@ def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
     whole group key drops between pages.
     """
 
-    now = utc_now()
+    now = max(utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY))
     started_at = now + _WINDOW_AT
     ended_at = started_at + _WINDOW
     with isolated_services.context.database.session() as session:
@@ -102,7 +103,7 @@ def test_app_level_costs_keep_image_builds_apart_from_other_unattributed_usage(
     """Image builds reach no app, and still are not the same thing as the rest of
     what reached no app: a build is work someone asked for, a volume byte-second
     is storage sitting there. Grouped by app they come back as two rows."""
-    now = utc_now()
+    now = max(utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY))
     started_at = now + _WINDOW_AT
     ended_at = started_at + _WINDOW
     with isolated_services.context.database.session() as session:

@@ -67,7 +67,7 @@ from shared.http.compute_policy import (
 from shared.identity import TokenKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.supplier_costs import SupplierCostTerms
-from tests.service_fixtures import owned_workspace, workspace_owner_user_id
+from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
 
 
 def _workspace_owner_id(services: ApiServices) -> str:

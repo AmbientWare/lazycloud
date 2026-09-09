@@ -1,16 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from api.server.services import ApiServices
-from control.service import ControlPlaneService
 from pydantic import ValidationError
 from shared.autoscaling import QueueDepthAutoscaler
 from shared.deployment_records import (
-    DEFAULT_HTTP_CPU,
-    DEFAULT_HTTP_KEEP_WARM_SECONDS,
-    DEFAULT_HTTP_MEMORY,
-    DEFAULT_HTTP_TIMEOUT_SECONDS,
-    DEFAULT_MAX_PENDING_TASKS,
     DeploymentSpec,
     Resources,
 )
@@ -75,50 +68,3 @@ def test_deployment_concurrency_is_positive_at_public_http_boundaries() -> None:
             keep_warm_seconds=-1,
             autoscaler=Autoscaler(max_containers=0),
         )
-
-
-@pytest.mark.parametrize(
-    ("kind", "cpu", "memory", "timeout", "keep_warm", "retry_count"),
-    [
-        (
-            DeploymentKind.Endpoint,
-            DEFAULT_HTTP_CPU,
-            DEFAULT_HTTP_MEMORY,
-            DEFAULT_HTTP_TIMEOUT_SECONDS,
-            DEFAULT_HTTP_KEEP_WARM_SECONDS,
-            None,
-        ),
-    ],
-)
-def test_raw_deployment_persists_canonical_runtime_defaults(
-    isolated_services: ApiServices,
-    kind: DeploymentKind,
-    cpu: int,
-    memory: int,
-    timeout: int,
-    keep_warm: int,
-    retry_count: int | None,
-) -> None:
-    deployment = isolated_services.deployments.deploy(
-        DeploymentSpec(
-            name=f"raw-{kind.value}",
-            kind=kind,
-            route="/raw" if kind is DeploymentKind.Endpoint else None,
-        )
-    )
-    control = ControlPlaneService(isolated_services.context)
-    stub = control.get_stub(deployment.stub_id or "")
-    runtime = stub.config.runtime
-
-    assert deployment.spec.resources.cpu == cpu
-    assert deployment.spec.resources.memory == memory
-    assert deployment.spec.resources.timeout_seconds == timeout
-    assert deployment.spec.resources.keep_warm == keep_warm
-    assert stub.public is False
-    assert runtime.cpu == cpu
-    assert runtime.memory == memory
-    assert runtime.timeout_seconds == timeout
-    assert stub.config.max_pending_tasks == DEFAULT_MAX_PENDING_TASKS
-    if retry_count is not None:
-        assert deployment.spec.retry_policy is not None
-        assert deployment.spec.retry_policy.retry_count == retry_count

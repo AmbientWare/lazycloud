@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 from identity.auth import TokenIssuer
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.identity import TokenKind
-from tests.service_fixtures import administrator_credential, workspace_owner_user_id
+from tests.domain_fixtures import workspace_owner_user_id
+from tests.service_fixtures import administrator_credential
 
 
 @pytest.fixture

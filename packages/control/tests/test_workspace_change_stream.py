@@ -21,9 +21,10 @@ from shared.http.workspace_changes import (
     WorkspaceChangeTopic,
     WorkspaceChangeType,
 )
+from tests.domain_fixtures import owned_workspace
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import administrator_credential, owned_workspace
+from tests.service_fixtures import administrator_credential
 
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 

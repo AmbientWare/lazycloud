@@ -18,15 +18,16 @@ from shared.http.billing_preferences import BillingPreferences
 from shared.identity import TokenKind
 from shared.tasks import Task
 from shared.timestamps import utc_now
-from tests.service_fixtures import legacy_billing_account, postgres_database_url, postgres_services
+from tests.domain_fixtures import legacy_billing_account
+from tests.service_fixtures import isolated_services
 
-__all__ = ["postgres_database_url", "postgres_services"]
+__all__ = ["isolated_services"]
 
 
 def test_empty_credit_blocks_new_transfers_but_preserves_management_and_top_up_recovery(
-    postgres_services: ApiServices, client_stack: ExitStack
+    isolated_services: ApiServices, client_stack: ExitStack
 ) -> None:
-    services = postgres_services
+    services = isolated_services
     now = utc_now()
     user_id, workspace_id = legacy_billing_account(
         services.context, period_started_at=now, period_ended_at=now + timedelta(days=30)

@@ -33,7 +33,7 @@ from sqlalchemy import select
 
 @pytest.mark.parametrize("existing_installation", [False, True])
 def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
-    postgres_services: ApiServices, existing_installation: bool
+    isolated_services: ApiServices, existing_installation: bool
 ) -> None:
     old = PUBLISHED_METERED_RATE_HISTORY[0]
     assert old.platform_rate is not None
@@ -42,8 +42,8 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
         for card in PUBLISHED_METERED_RATE_HISTORY
         if card.platform_rate is not None and card.platform_rate.nanos_per_egress_gib > 0
     )
-    with postgres_services.context.database.session() as session:
-        workspace_id = postgres_services.context.default_workspace_id(session)
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
         if existing_installation:
             PlatformRateRepository(session).publish(
                 pricing_version=old.pricing_version,
@@ -71,8 +71,8 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
             ).isoformat(),
         },
     )
-    postgres_services.usage.append(before)
-    with postgres_services.context.database.session() as session:
+    isolated_services.usage.append(before)
+    with isolated_services.context.database.session() as session:
         publish_metered_rate_history(session)
 
     after = before.model_copy(
@@ -86,8 +86,8 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
             },
         }
     )
-    postgres_services.usage.append(after)
-    with postgres_services.context.database.session() as session:
+    isolated_services.usage.append(after)
+    with isolated_services.context.database.session() as session:
         old_segment = session.scalar(
             select(BillingLedgerSegmentTable).where(
                 BillingLedgerSegmentTable.usage_record_id == before.id
@@ -124,14 +124,14 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
     ],
 )
 def test_published_execution_choices_price_each_resource_and_preserve_customer_cloud_fees(
-    postgres_services: ApiServices,
+    isolated_services: ApiServices,
     pinned: bool,
     preemptible: bool,
     cpu_memory_multiplier: str,
     gpu_multiplier: str,
 ) -> None:
     started_at = datetime(2026, 9, 9, 1, tzinfo=UTC)
-    with postgres_services.context.database.session() as session:
+    with isolated_services.context.database.session() as session:
         publish_metered_rate_history(session)
         rates = ComputeRateRepository(session)
         for owner in (UsageBillingOwner.PlatformFleet, UsageBillingOwner.ConnectedCloud):
@@ -170,10 +170,10 @@ def test_published_execution_choices_price_each_resource_and_preserve_customer_c
 
 
 def test_price_cutover_matches_quotes_and_preserves_customer_gpu_prices(
-    postgres_services: ApiServices,
+    isolated_services: ApiServices,
 ) -> None:
     boundary = datetime(2026, 9, 12, tzinfo=UTC)
-    with postgres_services.context.database.session() as session:
+    with isolated_services.context.database.session() as session:
         publish_metered_rate_history(session)
         rates = ComputeRateRepository(session)
         for at, expected_cpu in (

@@ -45,7 +45,7 @@ from shared.payments import (
 )
 from shared.timestamps import utc_now
 from sqlalchemy import select
-from tests.service_fixtures import (
+from tests.domain_fixtures import (
     carded_account,
     owned_workspace,
     unbilled_account,
@@ -309,11 +309,11 @@ def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
 
 
 def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
-    postgres_services: ApiServices,
+    isolated_services: ApiServices,
 ) -> None:
     provider = _Provider()
-    user_id, workspace_id = unbilled_account(postgres_services.context)
-    with postgres_services.context.database.session() as session:
+    user_id, workspace_id = unbilled_account(isolated_services.context)
+    with isolated_services.context.database.session() as session:
         service = BillingAccountService(session)
         first = service.billing_account_for(provider, user_id=user_id, workspace_id=workspace_id)
         again = service.billing_account_for(provider, user_id=user_id, workspace_id=workspace_id)
@@ -336,7 +336,7 @@ def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
 
     provider.cycle_started_at = CYCLE_ENDED_AT
     provider.cycle_ended_at = CYCLE_ENDED_AT + timedelta(days=30)
-    with postgres_services.context.database.session() as session:
+    with isolated_services.context.database.session() as session:
         subscription = provider.subscription(
             provider_subscription_id=first.provider_subscription_id
         )

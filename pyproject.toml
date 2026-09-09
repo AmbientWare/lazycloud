@@ -49,12 +49,16 @@ workspace = [
 ]
 dev = [
     { include-group = "workspace" },
+    { include-group = "lint" },
     "aiosqlite>=0.21,<1",
     "basedpyright>=1.39.9",
     "boto3-stubs[autoscaling,cloudformation,ec2,s3,sts]>=1.40,<2",
     "httpx2>=2.4.0",
     "lupa>=2.8",
     "pytest>=9,<10",
+    "pytest-xdist>=3.8,<4",
+]
+lint = [
     "ruff>=0.6",
 ]
 
@@ -160,7 +164,7 @@ testpaths = [
 norecursedirs = [
     "tests/e2e",
 ]
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib --dist=worksteal --durations=30"
 # Pydantic reports a value whose type contradicts its own field annotation as a
 # plain UserWarning, so a record could drift, serialize to correct JSON, and fail
 # only on an identity comparison somewhere else entirely. Failing the suite is

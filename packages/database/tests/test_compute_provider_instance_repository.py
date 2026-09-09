@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import uuid4
 
-from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.compute import (
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
@@ -22,10 +22,10 @@ from sqlalchemy import update
 
 
 def test_provider_instance_machine_binding_is_idempotent_and_fenced(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         pool = ComputeUnitRecord(
             id=str(uuid4()),
             workspace_id=workspace_id,
@@ -61,15 +61,15 @@ def test_provider_instance_machine_binding_is_idempotent_and_fenced(
 
 
 def test_unbinding_releases_only_the_machine_it_names(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """A machine torn down after binding must leave no reference behind.
 
     The reference outlives the machine row otherwise, and every later pool sync
     fails its foreign key — which takes enrollment down for the whole pool.
     """
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         pool = ComputeUnitRecord(
             id=str(uuid4()),
             workspace_id=workspace_id,
@@ -114,10 +114,10 @@ def test_unbinding_releases_only_the_machine_it_names(
 
 
 def test_reconciliation_preserves_unproved_cleanup_and_reappearing_instances(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         pool = ComputeUnitRecord(
             id=str(uuid4()),
             workspace_id=workspace_id,
@@ -184,10 +184,10 @@ def test_reconciliation_preserves_unproved_cleanup_and_reappearing_instances(
 
 
 def test_pool_sizing_counts_retiring_capacity_until_release_is_terminal(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         pool = ComputeUnitRecord(
             id=str(uuid4()),
             workspace_id=workspace_id,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.identity import (
     DeviceAuthorizationRepository,
 )
@@ -16,10 +16,10 @@ from sqlalchemy.exc import IntegrityError
 
 
 def test_device_authorization_unique_collision_preserves_transaction(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     expires_at = utc_now() + timedelta(minutes=15)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = DeviceAuthorizationRepository(session)
         first = repository.create_pending(
             device_code_hash="first-device-hash",
@@ -56,16 +56,16 @@ def test_device_authorization_unique_collision_preserves_transaction(
     ),
 )
 def test_device_authorization_constraints_reject_invalid_state(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     status: DeviceAuthorizationStatus,
     user: str | None,
     consumed: bool,
 ) -> None:
-    approver = UserService(isolated_services.context).create(
+    approver = UserService(service_context).create(
         display_name="device-invariant-owner",
     )
     expires_at = utc_now() + timedelta(minutes=15)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         created = DeviceAuthorizationRepository(session).create_pending(
             device_code_hash=f"device-invariant-{status.value}-{user}-{consumed}",
             user_code="BCDF-GHJK",
@@ -84,5 +84,5 @@ def test_device_authorization_constraints_reject_invalid_state(
     )
     if consumed:
         statement = statement.values(consumed_at=utc_now())
-    with pytest.raises(IntegrityError), isolated_services.context.database.session() as session:
+    with pytest.raises(IntegrityError), service_context.database.session() as session:
         session.execute(statement)

@@ -25,7 +25,7 @@ from shared.identity import (
 )
 from shared.timestamps import utc_now
 from sqlalchemy import update
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 
 
 def _signed_in_user(

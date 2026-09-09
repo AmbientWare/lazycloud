@@ -3,14 +3,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.identity import TokenRepository
 from database.tables.identity import TokenTable
 from shared.identity import TokenKind, TokenStatus
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 
 
 @pytest.mark.parametrize(
@@ -21,15 +21,13 @@ from tests.service_fixtures import owned_workspace
     ),
 )
 def test_consumed_token_requires_terminal_revocation(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     status: TokenStatus,
     revoked_at: datetime | None,
 ) -> None:
-    workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context), "consumed-token-invariant"
-    )
+    workspace = owned_workspace(ControlPlaneService(service_context), "consumed-token-invariant")
     consumed_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         created = TokenRepository(session).create(
             name="invalid-consumed-token",
             token_hash="pbkdf2_sha256$consumed$digest",
@@ -39,7 +37,7 @@ def test_consumed_token_requires_terminal_revocation(
             reusable=False,
         )
 
-    with pytest.raises(IntegrityError), isolated_services.context.database.session() as session:
+    with pytest.raises(IntegrityError), service_context.database.session() as session:
         session.execute(
             update(TokenTable)
             .where(TokenTable.id == created.id)
@@ -50,7 +48,7 @@ def test_consumed_token_requires_terminal_revocation(
             )
         )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         retained = session.get(TokenTable, created.id)
         assert retained is not None
         assert retained.status == TokenStatus.Active.value

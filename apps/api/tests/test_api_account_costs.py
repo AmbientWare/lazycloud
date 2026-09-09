@@ -21,7 +21,7 @@ from shared.usage import (
     UsageRecord,
     UsageUnit,
 )
-from tests.service_fixtures import owned_workspace, workspace_owner_user_id
+from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
 
 _RATE_AT = timedelta(minutes=1)
 _WINDOW_AT = timedelta(minutes=2)

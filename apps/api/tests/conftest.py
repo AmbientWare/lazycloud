@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from contextlib import ExitStack
 from pathlib import Path
@@ -16,10 +17,13 @@ from execution.collections.redis import (
 )
 from provider_aws import AwsRegionalPrices
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
+from storage.volume_filesystem import LocalVolumeFilesystem
+from tests.domain_fixtures import owned_workspace
+from tests.fakes import FakeObjectClient
 from tests.real_redis import RealRedisActors
-from tests.service_fixtures import _InMemoryWorkspaceBuckets, owned_workspace
+from tests.service_fixtures import _InMemoryWorkspaceBuckets
 
-from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
+from database import DatabaseClient
 
 
 @pytest.fixture
@@ -31,22 +35,15 @@ def client_stack() -> Iterator[ExitStack]:
 @pytest.fixture
 def isolated_services(
     tmp_path: Path,
+    database: DatabaseClient,
     real_redis_actors: RealRedisActors,
 ) -> Iterator[ApiServices]:
     redis = real_redis_actors.client()
     binary_redis = real_redis_actors.client(decode_responses=False)
     maps = RedisMapService(binary_redis)
     simple_queues = RedisSimpleQueueService(binary_redis)
-    database_path = tmp_path / "api.sqlite3"
-    database_settings = DatabaseSettings(
-        url=f"sqlite+pysqlite:///{database_path}",
-        application_name=DatabaseApplicationName.Test,
-    )
     async_io = ApiAsyncIo.from_settings(
-        DatabaseSettings(
-            url=f"sqlite+aiosqlite:///{database_path}",
-            application_name=DatabaseApplicationName.Test,
-        ),
+        database.settings,
         RedisSettings(
             url=real_redis_actors.url,
             key_prefix=real_redis_actors.prefix,
@@ -56,7 +53,10 @@ def isolated_services(
     )
 
     services = ApiServices.create(
-        DatabaseClient.from_settings(database_settings),
+        database,
+        create_schema=False,
+        object_store_client=FakeObjectClient(),
+        volume_filesystem=LocalVolumeFilesystem(tmp_path / "volumes"),
         root=tmp_path,
         redis_client=redis,
         binary_redis_client=binary_redis,
@@ -92,4 +92,7 @@ def isolated_services(
     try:
         yield services
     finally:
-        services.close()
+        try:
+            services.close()
+        finally:
+            asyncio.run(async_io.close())

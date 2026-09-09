@@ -26,7 +26,7 @@ from shared.payments import (
     ProviderSubscription,
     SubscriptionChangeTiming,
 )
-from tests.service_fixtures import legacy_billing_account, workspace_owner_user_id
+from tests.domain_fixtures import legacy_billing_account, workspace_owner_user_id
 
 from billing import BillingWebhookService, DatabaseBillingAdmission
 

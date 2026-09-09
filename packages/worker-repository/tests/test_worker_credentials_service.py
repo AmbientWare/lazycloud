@@ -8,7 +8,7 @@ from shared.container_requests import RequestMount, RequestMountPointConfig, Req
 from shared.identity import TokenKind, WorkspaceStorageConfig
 from shared.mounts import MountAuthMode
 from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 from worker.container_execution import ContainerExecutionContext
 from worker.credential_hydration import WorkerCredentialHydrator
 from worker.credential_payloads import WorkerCredentialPrincipal

@@ -7,7 +7,7 @@ from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from shared.errors import NotFoundError
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 

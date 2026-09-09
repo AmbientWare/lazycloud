@@ -6,7 +6,10 @@ on:
       - ".github/workflows/ci.yml"
       - "apps/**/*.py"
       - "packages/**/*.py"
-      - "tests/**/*.py"
+      - "tests/**"
+      - "conftest.py"
+      - "compose.test.yaml"
+      - ".python-version"
       - "benchmarks/**/*.py"
       - "deploy/**/*.py"
       - "examples/**/*.py"
@@ -21,7 +24,10 @@ on:
       - ".github/workflows/ci.yml"
       - "apps/**/*.py"
       - "packages/**/*.py"
-      - "tests/**/*.py"
+      - "tests/**"
+      - "conftest.py"
+      - "compose.test.yaml"
+      - ".python-version"
       - "benchmarks/**/*.py"
       - "deploy/**/*.py"
       - "examples/**/*.py"
@@ -32,6 +38,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: python-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -52,26 +62,48 @@ jobs:
           enable-cache: true
           version: "0.11.21"
 
-      - name: Sync workspace
-        run: uv sync --locked --group dev
+      - name: Install lint tools
+        run: uv sync --locked --only-group lint
 
       - name: Ruff lint
-        run: uv run --group dev ruff check .
+        run: uv run --only-group lint ruff check .
 
       - name: Ruff format
-        run: uv run --group dev ruff format --check .
-
-      # The committed policy and the generator that owns it drift silently, and
-      # they drift into a role missing an action the control plane started
-      # calling. That surfaces as a launch denial naming an API call.
-      - name: Connection role policy is current
-        run: uv run --group workspace python deploy/render_connection_policy.py --check
+        run: uv run --only-group lint ruff format --check .
 
       # The worker image refuses a lock whose metadata digest disagrees with the
       # managed packages, and it does so twenty minutes into a release. A rename
       # in a pyproject is caught here instead.
       - name: Managed runtime locks are current
         run: uv run --no-project python deploy/managed-runtime/locks.py check
+
+      - name: Validate test service definition
+        run: docker compose -f compose.test.yaml config --quiet
+
+      - name: Validate blind exception handlers
+        run: uv run --no-project python .github/scripts/validate_blind_handlers.py
+
+  types:
+    name: Changed Python types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          enable-cache: true
+          version: "0.11.21"
+      - run: uv sync --locked --group dev
+      - name: Check changed Python types
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: uv run --group dev python .github/scripts/validate_changed_scope.py --base "${BASE_SHA}" --check types
+      - name: Connection role policy is current
+        run: uv run --group dev python deploy/render_connection_policy.py --check
 
   # The customer package claims Python 3.10 through 3.14, and the two wheels
   # it ships are all a customer gets. Installing them into an empty environment
@@ -183,10 +215,18 @@ jobs:
       - name: Sync workspace
         run: uv sync --locked --group dev
 
-      - name: Validate changed scope
+      - name: Test changed scope
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: uv run --group dev python .github/scripts/validate_changed_scope.py --base "${BASE_SHA}"
+        run: >-
+          uv run --group dev python .github/scripts/validate_changed_scope.py
+          --base "${BASE_SHA}" --check tests --workers 2
+          --junitxml test-results/python.xml
 
-      - name: Validate blind exception handlers
-        run: uv run --group dev python .github/scripts/validate_blind_handlers.py
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-test-results
+          path: test-results/python.xml
+          retention-days: 14

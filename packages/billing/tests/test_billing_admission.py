@@ -23,7 +23,7 @@ from shared.gpu import GPU_ANY, SUPPORTED_GPU_TYPES
 from shared.http.volumes import GetOrCreateVolumeRequest
 from shared.timestamps import utc_now
 from sqlalchemy import func, select
-from tests.service_fixtures import legacy_billing_account, unbilled_account, workspace_owner_user_id
+from tests.domain_fixtures import legacy_billing_account, unbilled_account, workspace_owner_user_id
 
 from billing import DatabaseBillingAdmission
 

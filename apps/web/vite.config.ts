@@ -6,7 +6,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { transform } from "lightningcss";
 import type { Plugin } from "vite";
-import { defineConfig } from "vitest/config";
+import { defineConfig } from "vite";
 
 import { viteEnv } from "./env.config";
 
@@ -241,14 +241,5 @@ export default defineConfig({
   },
   preview: {
     host: "127.0.0.1",
-  },
-  test: {
-    environment: "jsdom",
-    setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
-    coverage: {
-      provider: "v8",
-      reporter: ["text"],
-    },
   },
 });

@@ -33,8 +33,8 @@ from shared.image_building.records import ImageRecord
 from storage.service import OBJECT_SHA256_METADATA_KEY, ObjectStorage
 from storage.workspace_storage_issuers import external_workspace_storage_settings
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings
+from tests.domain_fixtures import owned_workspace
 from tests.fakes import FakeObjectClient
-from tests.service_fixtures import owned_workspace
 
 
 def test_external_storage_never_inherits_platform_credentials(

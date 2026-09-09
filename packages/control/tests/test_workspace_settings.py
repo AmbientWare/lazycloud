@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from pydantic import JsonValue, TypeAdapter
 from shared.identity import AuthScope
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 

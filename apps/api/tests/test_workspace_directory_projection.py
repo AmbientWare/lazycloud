@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.http.workspaces import WorkspaceListResponse
 from shared.identity import WorkspaceStatus
-from tests.service_fixtures import administrator_credential, owned_workspace
+from tests.domain_fixtures import owned_workspace
+from tests.service_fixtures import administrator_credential
 
 
 def test_admin_current_workspace_honors_explicit_workspace_override(
