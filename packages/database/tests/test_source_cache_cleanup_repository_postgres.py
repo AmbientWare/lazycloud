@@ -24,15 +24,13 @@ from database import (
     DatabaseApplicationName,
     DatabaseClient,
     DatabaseSettings,
-    bootstrap_database,
 )
 
 
 def test_postgresql_source_cache_cleanup_lifecycle_is_fenced_and_restart_safe(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
+    database_url = migrated_database_url.render_as_string(hide_password=False)
     database = _client(database_url, pool_size=2)
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
     generation_id = str(uuid4())
@@ -323,10 +321,9 @@ def test_postgresql_source_cache_cleanup_lifecycle_is_fenced_and_restart_safe(
 
 
 def test_postgresql_cleanup_targets_only_global_and_matching_private_generations(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
+    database_url = migrated_database_url.render_as_string(hide_password=False)
     database = _client(database_url, pool_size=2)
     now = datetime(2026, 7, 21, 13, tzinfo=UTC)
     source_object_id = str(uuid4())
@@ -382,10 +379,9 @@ def test_postgresql_cleanup_targets_only_global_and_matching_private_generations
 
 
 def test_postgresql_cleanup_claims_are_disjoint_and_tombstones_survive_workspace_purge(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
+    database_url = migrated_database_url.render_as_string(hide_password=False)
     database = _client(database_url, pool_size=2)
     started_at = datetime(2026, 7, 21, 14, tzinfo=UTC)
     generation_id = str(uuid4())

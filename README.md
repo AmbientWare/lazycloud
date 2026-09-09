@@ -49,6 +49,7 @@ Pytest uses this PostgreSQL and Redis stack automatically. Database fixtures
 clone an isolated database on demand and delete it after the test. Each worker
 migrates its template once; service tests also reuse an immutable pricing seed.
 Tests keep real commits, independent connections, and PostgreSQL constraints.
+The disposable PostgreSQL files live in memory and vanish when its container stops.
 Migration tests receive an empty database. Redis keys use a unique test prefix.
 Tests that need neither service create no database or Redis client.
 
@@ -68,9 +69,9 @@ uv run --group dev basedpyright packages/scheduler
 uv run --group dev pytest -x -q packages/scheduler/tests
 ```
 
-For a larger owner scope, add `-n 2` or `-n 4`. Work stealing balances the tests
-across workers; a single file usually starts faster without workers. To run the
-same selection as CI, including uncommitted changes:
+For a larger owner scope, add `-n 2` or `-n 4`. Small scheduled batches balance the
+workers and stop promptly on failure; a single file usually starts faster without
+workers. To run the same selection as CI, including uncommitted changes:
 
 ```bash
 uv run --group dev python .github/scripts/validate_changed_scope.py --base origin/main --list

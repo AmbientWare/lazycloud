@@ -19,15 +19,13 @@ from database import (
     DatabaseApplicationName,
     DatabaseClient,
     DatabaseSettings,
-    bootstrap_database,
 )
 
 
 def test_pod_url_upsert_preserves_identity_timestamps_port_and_cascade(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
+    database_url = migrated_database_url.render_as_string(hide_password=False)
     database = _client(database_url)
     try:
         container_id = _seed_container(database)
@@ -74,10 +72,9 @@ def test_pod_url_upsert_preserves_identity_timestamps_port_and_cascade(
 
 
 def test_postgresql_concurrent_pod_url_upsert_preserves_one_identity(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
+    database_url = migrated_database_url.render_as_string(hide_password=False)
     seed = _client(database_url)
     try:
         container_id = _seed_container(seed)

@@ -18,7 +18,6 @@ from database import (
     DatabaseApplicationName,
     DatabaseClient,
     DatabaseSettings,
-    bootstrap_database,
 )
 
 
@@ -84,10 +83,9 @@ def test_secret_repository_isolates_same_name_and_cascades_workspace_delete(
 
 
 def test_postgresql_secret_concurrency_and_current_schema(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
+    database_url = migrated_database_url.render_as_string(hide_password=False)
     database = DatabaseClient.from_settings(
         DatabaseSettings(
             url=database_url,

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -41,8 +40,8 @@ from shared.payments import (
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
 from sqlalchemy import text
+from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
-from tests.backing_services import postgres_url
 
 from billing import (
     BillingAccountService,
@@ -50,12 +49,6 @@ from billing import (
     BillingReconciliationService,
 )
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
-
-# Every one of these invariants is enforced by PostgreSQL and by nothing in
-# Python, so the in-memory SQLite the rest of this package's tests run on accepts
-# the state each of them exists to make impossible: it has no range exclusion
-# constraint, it ignores `FOR UPDATE` and `FOR UPDATE SKIP LOCKED`, and it
-# serializes sessions behind one lock so no two writers ever meet.
 
 CYCLE_STARTED_AT = datetime(2026, 8, 13, 9, 30, tzinfo=UTC)
 CYCLE_ENDED_AT = datetime(2026, 9, 13, 9, 30, tzinfo=UTC)
@@ -386,39 +379,25 @@ def _subscription(plan: BillingPlanId) -> ProviderSubscription:
     )
 
 
-@contextmanager
-def _postgres_database() -> Iterator[DatabaseClient]:
-    base_url = postgres_url()
-    database_name = f"billing_invariants_{uuid4().hex}"
-    admin = DatabaseClient.from_settings(
+@pytest.fixture
+def database(migrated_database_url: URL) -> Iterator[DatabaseClient]:
+    client = DatabaseClient.from_settings(
         DatabaseSettings(
-            url=base_url.render_as_string(hide_password=False),
+            url=migrated_database_url.render_as_string(hide_password=False),
+            pool_size=6,
+            max_overflow=0,
             application_name=DatabaseApplicationName.Test,
         )
     )
-    database: DatabaseClient | None = None
     try:
-        with admin.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            connection.execute(text(f'CREATE DATABASE "{database_name}"'))
-        database = DatabaseClient.from_settings(
-            DatabaseSettings(
-                url=base_url.set(database=database_name).render_as_string(hide_password=False),
-                pool_size=6,
-                max_overflow=0,
-                application_name=DatabaseApplicationName.Test,
-            )
-        )
-        database.create_schema()
-        yield database
+        yield client
     finally:
-        if database is not None:
-            database.dispose()
-        with admin.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'))
-        admin.dispose()
+        client.dispose()
 
 
-def test_postgresql_refuses_two_rate_rows_in_force_at_the_same_instant() -> None:
+def test_postgresql_refuses_two_rate_rows_in_force_at_the_same_instant(
+    database: DatabaseClient,
+) -> None:
     """Overlapping validity windows would make "the rate at t" a row-order answer.
 
     Two rows covering one instant is a wrong charge with no error behind it, so
@@ -427,66 +406,63 @@ def test_postgresql_refuses_two_rate_rows_in_force_at_the_same_instant() -> None
     """
 
     at = datetime(2027, 1, 1, tzinfo=UTC)
-    with _postgres_database() as database:
-        with database.session() as session:
-            session.add(
-                ComputeRateTable(
-                    id=str(uuid4()),
-                    billing_owner=UsageBillingOwner.PlatformFleet.value,
-                    gpu_type="",
-                    pricing_version="test.a",
-                    effective_at=at,
-                    valid_until=at + timedelta(days=30),
-                    nanos_per_container_second=Decimal(1),
-                    nanos_per_cpu_core_second=Decimal(0),
-                    nanos_per_memory_gib_second=Decimal(0),
-                    nanos_per_gpu_card_second=Decimal(0),
-                )
+    with database.session() as session:
+        session.add(
+            ComputeRateTable(
+                id=str(uuid4()),
+                billing_owner=UsageBillingOwner.PlatformFleet.value,
+                gpu_type="",
+                pricing_version="test.a",
+                effective_at=at,
+                valid_until=at + timedelta(days=30),
+                nanos_per_container_second=Decimal(1),
+                nanos_per_cpu_core_second=Decimal(0),
+                nanos_per_memory_gib_second=Decimal(0),
+                nanos_per_gpu_card_second=Decimal(0),
             )
-            session.add(
-                PlatformRateTable(
-                    id=str(uuid4()),
-                    pricing_version="test.a",
-                    effective_at=at,
-                    valid_until=at + timedelta(days=30),
-                    nanos_per_egress_byte=Decimal(0),
-                    nanos_per_volume_byte_second=Decimal(0),
-                )
+        )
+        session.add(
+            PlatformRateTable(
+                id=str(uuid4()),
+                pricing_version="test.a",
+                effective_at=at,
+                valid_until=at + timedelta(days=30),
+                nanos_per_egress_byte=Decimal(0),
+                nanos_per_volume_byte_second=Decimal(0),
             )
-
-        with (
-            pytest.raises(IntegrityError, match="ex_billing_compute_rates_window"),
-            database.session() as session,
-        ):
-            session.add(
-                ComputeRateTable(
-                    id=str(uuid4()),
-                    billing_owner=UsageBillingOwner.PlatformFleet.value,
-                    gpu_type="",
-                    pricing_version="test.b",
-                    effective_at=at + timedelta(days=1),
-                    valid_until=None,
-                    nanos_per_container_second=Decimal(2),
-                    nanos_per_cpu_core_second=Decimal(0),
-                    nanos_per_memory_gib_second=Decimal(0),
-                    nanos_per_gpu_card_second=Decimal(0),
-                )
+        )
+    with (
+        pytest.raises(IntegrityError, match="ex_billing_compute_rates_window"),
+        database.session() as session,
+    ):
+        session.add(
+            ComputeRateTable(
+                id=str(uuid4()),
+                billing_owner=UsageBillingOwner.PlatformFleet.value,
+                gpu_type="",
+                pricing_version="test.b",
+                effective_at=at + timedelta(days=1),
+                valid_until=None,
+                nanos_per_container_second=Decimal(2),
+                nanos_per_cpu_core_second=Decimal(0),
+                nanos_per_memory_gib_second=Decimal(0),
+                nanos_per_gpu_card_second=Decimal(0),
             )
-
-        with (
-            pytest.raises(IntegrityError, match="ex_billing_platform_rates_window"),
-            database.session() as session,
-        ):
-            session.add(
-                PlatformRateTable(
-                    id=str(uuid4()),
-                    pricing_version="test.b",
-                    effective_at=at + timedelta(days=1),
-                    valid_until=None,
-                    nanos_per_egress_byte=Decimal(1),
-                    nanos_per_volume_byte_second=Decimal(0),
-                )
+        )
+    with (
+        pytest.raises(IntegrityError, match="ex_billing_platform_rates_window"),
+        database.session() as session,
+    ):
+        session.add(
+            PlatformRateTable(
+                id=str(uuid4()),
+                pricing_version="test.b",
+                effective_at=at + timedelta(days=1),
+                valid_until=None,
+                nanos_per_egress_byte=Decimal(1),
+                nanos_per_volume_byte_second=Decimal(0),
             )
+        )
 
 
 def _await_lock_wait(database: DatabaseClient, registration: Future[BillingAccount]) -> None:
@@ -513,7 +489,9 @@ def _await_lock_wait(database: DatabaseClient, registration: Future[BillingAccou
     raise AssertionError("the second registration never reached anything it had to wait on")
 
 
-def test_postgresql_two_first_sign_ins_provision_one_account_and_refuse_nobody() -> None:
+def test_postgresql_two_first_sign_ins_provision_one_account_and_refuse_nobody(
+    database: DatabaseClient,
+) -> None:
     """Nobody is turned away from signing in for having raced themselves.
 
     Provisioning happens on the sign-in path, so two of them for one account
@@ -529,43 +507,41 @@ def test_postgresql_two_first_sign_ins_provision_one_account_and_refuse_nobody()
     came back with them.
     """
 
-    with _postgres_database() as database:
+    with database.session() as session:
+        user_id = UserRepository(session).create(display_name="registration-race").id
+        workspace_id = WorkspaceRepository(session).create(name=f"register-{uuid4()}").id
+    provider = _RegistrationCountingProvider()
+
+    def register() -> BillingAccount:
         with database.session() as session:
-            user_id = UserRepository(session).create(display_name="registration-race").id
-            workspace_id = WorkspaceRepository(session).create(name=f"register-{uuid4()}").id
-        provider = _RegistrationCountingProvider()
-
-        def register() -> BillingAccount:
-            with database.session() as session:
-                account = BillingAccountService(session).billing_account_for(
-                    provider,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                )
-                session.commit()
-                return account
-
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            with database.session() as first_session:
-                first = BillingAccountService(first_session).billing_account_for(
-                    provider,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                )
-                second = executor.submit(register)
-                # The row above is inserted and locked but uncommitted. Held here
-                # until the second call is provably waiting on it, because a
-                # commit before it got that far would let it read the finished
-                # provisioning and prove nothing about racing one.
-                _await_lock_wait(database, second)
-            second_account = second.result(timeout=10)
-
-        with database.session() as session:
-            stored = BillingAccountRepository(session).get_by_user(user_id)
-            assert (
-                BillingCreditRepository(session).balance(user_id=user_id, at=CYCLE_STARTED_AT)
-                == ONE_TIME_TRIAL_NANOS
+            account = BillingAccountService(session).billing_account_for(
+                provider,
+                user_id=user_id,
+                workspace_id=workspace_id,
             )
+            session.commit()
+            return account
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with database.session() as first_session:
+            first = BillingAccountService(first_session).billing_account_for(
+                provider,
+                user_id=user_id,
+                workspace_id=workspace_id,
+            )
+            second = executor.submit(register)
+            # The row above is inserted and locked but uncommitted. Held here
+            # until the second call is provably waiting on it, because a
+            # commit before it got that far would let it read the finished
+            # provisioning and prove nothing about racing one.
+            _await_lock_wait(database, second)
+        second_account = second.result(timeout=10)
+    with database.session() as session:
+        stored = BillingAccountRepository(session).get_by_user(user_id)
+        assert (
+            BillingCreditRepository(session).balance(user_id=user_id, at=CYCLE_STARTED_AT)
+            == ONE_TIME_TRIAL_NANOS
+        )
 
     assert provider.registrations == [user_id]
     # Named by customer rather than by account, because that is what the provider
@@ -579,7 +555,7 @@ def test_postgresql_two_first_sign_ins_provision_one_account_and_refuse_nobody()
     assert stored.plan is BillingPlanId.Free
 
 
-def test_postgresql_two_upgrades_at_once_reach_the_provider_once() -> None:
+def test_postgresql_two_upgrades_at_once_reach_the_provider_once(database: DatabaseClient) -> None:
     """One button, two clicks, one proration.
 
     The intent is committed before the provider is called, so no transaction
@@ -590,75 +566,69 @@ def test_postgresql_two_upgrades_at_once_reach_the_provider_once() -> None:
     for each.
     """
 
-    with _postgres_database() as database:
-        with database.session() as session:
-            user_id = UserRepository(session).create(display_name="upgrade-race").id
-            workspace_id = WorkspaceRepository(session).create(name=f"upgrade-{uuid4()}").id
-            WorkspaceMemberRepository(session).ensure_owner(
-                workspace_id=workspace_id, user_id=user_id
-            )
-        provider = _UpgradeCountingProvider()
-        with database.session() as session:
-            BillingAccountService(session).billing_account_for(
-                provider, user_id=user_id, workspace_id=workspace_id
-            )
-            # Carded before the race: subscribing without one is refused before
-            # an intent is opened, so a cardless account would never reach the
-            # collision this test is about.
-            BillingAccountRepository(session).set_payment_method_present(
-                user_id=user_id, present=True, at=utc_now()
-            )
-        service = BillingPlanChangeService(
-            database=database,
-            payments=lambda: provider,
-            events=_RefusingEventSink(),
+    with database.session() as session:
+        user_id = UserRepository(session).create(display_name="upgrade-race").id
+        workspace_id = WorkspaceRepository(session).create(name=f"upgrade-{uuid4()}").id
+        WorkspaceMemberRepository(session).ensure_owner(workspace_id=workspace_id, user_id=user_id)
+    provider = _UpgradeCountingProvider()
+    with database.session() as session:
+        BillingAccountService(session).billing_account_for(
+            provider, user_id=user_id, workspace_id=workspace_id
         )
-
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            first = executor.submit(
-                service.change_plan,
+        # Carded before the race: subscribing without one is refused before
+        # an intent is opened, so a cardless account would never reach the
+        # collision this test is about.
+        BillingAccountRepository(session).set_payment_method_present(
+            user_id=user_id, present=True, at=utc_now()
+        )
+    service = BillingPlanChangeService(
+        database=database,
+        payments=lambda: provider,
+        events=_RefusingEventSink(),
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(
+            service.change_plan,
+            user_id=user_id,
+            target=BillingPlanId.Team,
+            target_terms_version=SubscriptionTermsVersion.Team,
+        )
+        # The first caller has committed its intent and is inside the
+        # provider call. Held here rather than raced, because what the index
+        # has to refuse is a second subscribe arriving while the first one's
+        # money is still moving.
+        assert provider.swap_entered.wait(timeout=10), (
+            "the first upgrade never reached the provider"
+        )
+        with pytest.raises(ConflictError):
+            service.change_plan(
                 user_id=user_id,
                 target=BillingPlanId.Team,
-                target_terms_version=SubscriptionTermsVersion.Team,
+                target_terms_version=published_plan(BillingPlanId.Team).terms_version,
             )
-            # The first caller has committed its intent and is inside the
-            # provider call. Held here rather than raced, because what the index
-            # has to refuse is a second subscribe arriving while the first one's
-            # money is still moving.
-            assert provider.swap_entered.wait(timeout=10), (
-                "the first upgrade never reached the provider"
-            )
-            with pytest.raises(ConflictError):
-                service.change_plan(
-                    user_id=user_id,
-                    target=BillingPlanId.Team,
-                    target_terms_version=published_plan(BillingPlanId.Team).terms_version,
-                )
-            provider.swap_release.set()
-            upgraded = first.result(timeout=10)
-
-        with database.session() as session:
-            stored = BillingAccountRepository(session).get_by_user(user_id)
-        # The winning settle used the subscription the swap answered with, and
-        # the loser never reached one.
-        reads_the_upgrade_cost = provider.subscription_reads
-
-        # Both sweeps then read this same database, because SQLite answers
-        # queries PostgreSQL refuses — a keyset cursor standing for "before every
-        # id" is a string there and an unparseable UUID here — and a sweep that
-        # raises on every pass is money nobody is watching.
-        settled = BillingPlanChangeService(
-            database=database,
-            payments=lambda: provider,
-            events=_RefusingEventSink(),
-        ).settle_open()
-        provider.plan = BillingPlanId.Free
-        reconciler_events = _RecordingEventSink()
-        reconciled = BillingReconciliationService(
-            database=database,
-            payments=lambda: provider,
-            events=reconciler_events,
-        ).reconcile()
+        provider.swap_release.set()
+        upgraded = first.result(timeout=10)
+    with database.session() as session:
+        stored = BillingAccountRepository(session).get_by_user(user_id)
+    # The winning settle used the subscription the swap answered with, and
+    # the loser never reached one.
+    reads_the_upgrade_cost = provider.subscription_reads
+    # Both sweeps then read this same database, because SQLite answers
+    # queries PostgreSQL refuses — a keyset cursor standing for "before every
+    # id" is a string there and an unparseable UUID here — and a sweep that
+    # raises on every pass is money nobody is watching.
+    settled = BillingPlanChangeService(
+        database=database,
+        payments=lambda: provider,
+        events=_RefusingEventSink(),
+    ).settle_open()
+    provider.plan = BillingPlanId.Free
+    reconciler_events = _RecordingEventSink()
+    reconciled = BillingReconciliationService(
+        database=database,
+        payments=lambda: provider,
+        events=reconciler_events,
+    ).reconcile()
 
     assert provider.plan_swaps == [BillingPlanId.Team.value]
     assert upgraded.plan is BillingPlanId.Team
@@ -672,7 +642,9 @@ def test_postgresql_two_upgrades_at_once_reach_the_provider_once() -> None:
     assert reconciler_events.actions == [RECONCILIATION_DIVERGENCE_ACTION]
 
 
-def test_postgresql_one_meter_event_is_claimed_and_settled_by_one_drainer() -> None:
+def test_postgresql_one_meter_event_is_claimed_and_settled_by_one_drainer(
+    database: DatabaseClient,
+) -> None:
     """Two drainers never hold the same row, and neither settles the other's.
 
     A meter event sent twice outside the provider's deduplication window is a
@@ -682,65 +654,61 @@ def test_postgresql_one_meter_event_is_claimed_and_settled_by_one_drainer() -> N
     """
 
     now = utc_now()
-    with _postgres_database() as database:
-        with database.session() as session:
-            workspace_id = WorkspaceRepository(session).create(name=f"outbox-{uuid4()}").id
-            for index in range(2):
-                session.add(
-                    BillingMeterOutboxTable(
-                        id=str(uuid4()),
-                        workspace_id=workspace_id,
-                        identifier=f"{workspace_id}-{index}",
-                        usage_record_id=str(uuid4()),
-                        provider_customer_id="cus_test",
-                        meter_event_name="lazycloud_compute_runtime",
-                        value_nanos=1_000,
-                        pricing_version="test.a",
-                        occurred_at=now,
-                        metering_ended_at=now + timedelta(seconds=1),
-                        status="pending",
-                        attempts=0,
-                        next_attempt_at=now,
-                    )
+    with database.session() as session:
+        workspace_id = WorkspaceRepository(session).create(name=f"outbox-{uuid4()}").id
+        for index in range(2):
+            session.add(
+                BillingMeterOutboxTable(
+                    id=str(uuid4()),
+                    workspace_id=workspace_id,
+                    identifier=f"{workspace_id}-{index}",
+                    usage_record_id=str(uuid4()),
+                    provider_customer_id="cus_test",
+                    meter_event_name="lazycloud_compute_runtime",
+                    value_nanos=1_000,
+                    pricing_version="test.a",
+                    occurred_at=now,
+                    metering_ended_at=now + timedelta(seconds=1),
+                    status="pending",
+                    attempts=0,
+                    next_attempt_at=now,
                 )
-
-        second_claim: list[str] = []
-
-        def claim_second() -> None:
-            with database.session() as session:
-                claimed = BillingMeterOutboxRepository(session).claim(
-                    now=now,
-                    limit=2,
-                    claim_token="22222222-2222-4222-8222-222222222222",
-                )
-                second_claim.extend(event.id for event in claimed)
-
-        with (
-            ThreadPoolExecutor(max_workers=1) as executor,
-            database.session() as first_session,
-        ):
-            first_claim = BillingMeterOutboxRepository(first_session).claim(
-                now=now,
-                limit=1,
-                claim_token="11111111-1111-4111-8111-111111111111",
             )
-            second = executor.submit(claim_second)
-            second.result(timeout=10)
+    second_claim: list[str] = []
 
-        assert len(first_claim) == 1
-        assert len(second_claim) == 1
-        assert first_claim[0].id not in second_claim
-
+    def claim_second() -> None:
         with database.session() as session:
-            outbox = BillingMeterOutboxRepository(session)
-            stolen = outbox.mark_sent(
-                event_id=second_claim[0],
-                claim_token="11111111-1111-4111-8111-111111111111",
+            claimed = BillingMeterOutboxRepository(session).claim(
                 now=now,
-            )
-            settled = outbox.mark_sent(
-                event_id=second_claim[0],
+                limit=2,
                 claim_token="22222222-2222-4222-8222-222222222222",
-                now=now,
             )
-        assert (stolen, settled) == (False, True)
+            second_claim.extend(event.id for event in claimed)
+
+    with (
+        ThreadPoolExecutor(max_workers=1) as executor,
+        database.session() as first_session,
+    ):
+        first_claim = BillingMeterOutboxRepository(first_session).claim(
+            now=now,
+            limit=1,
+            claim_token="11111111-1111-4111-8111-111111111111",
+        )
+        second = executor.submit(claim_second)
+        second.result(timeout=10)
+    assert len(first_claim) == 1
+    assert len(second_claim) == 1
+    assert first_claim[0].id not in second_claim
+    with database.session() as session:
+        outbox = BillingMeterOutboxRepository(session)
+        stolen = outbox.mark_sent(
+            event_id=second_claim[0],
+            claim_token="11111111-1111-4111-8111-111111111111",
+            now=now,
+        )
+        settled = outbox.mark_sent(
+            event_id=second_claim[0],
+            claim_token="22222222-2222-4222-8222-222222222222",
+            now=now,
+        )
+    assert (stolen, settled) == (False, True)

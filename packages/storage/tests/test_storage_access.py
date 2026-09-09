@@ -21,11 +21,11 @@ from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 
 def test_storage_observations_dedupe_survive_deletion_and_exclude_customer_storage(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     database = DatabaseClient.from_settings(
         DatabaseSettings(
-            url=postgres_database_url.render_as_string(hide_password=False),
+            url=migrated_database_url.render_as_string(hide_password=False),
             application_name=DatabaseApplicationName.Test,
         )
     )
@@ -36,7 +36,6 @@ def test_storage_observations_dedupe_survive_deletion_and_exclude_customer_stora
         region_name="us-east-1",
     )
     try:
-        database.create_schema()
         with database.session() as session:
             user = UserRepository(session).create(display_name="storage accounting")
             workspace = WorkspaceRepository(session).create(name="storage accounting")

@@ -80,13 +80,18 @@ def _client(url: URL) -> DatabaseClient:
 
 
 @pytest.fixture
-def database(postgres_admin: Engine, migrated_template_url: URL) -> Iterator[DatabaseClient]:
+def migrated_database_url(postgres_admin: Engine, migrated_template_url: URL) -> Iterator[URL]:
     with temporary_database(postgres_admin, template=migrated_template_url) as url:
-        client = _client(url)
-        try:
-            yield client
-        finally:
-            client.dispose()
+        yield url
+
+
+@pytest.fixture
+def database(migrated_database_url: URL) -> Iterator[DatabaseClient]:
+    client = _client(migrated_database_url)
+    try:
+        yield client
+    finally:
+        client.dispose()
 
 
 @pytest.fixture

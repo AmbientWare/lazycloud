@@ -9,19 +9,16 @@ from identity.auth import AuthError, AuthService, IdentityDatabaseContext
 from shared.identity import TokenKind
 from worker_bootstrap_app.main import write_worker_token
 
-from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
+from database import DatabaseClient
 
 
 def test_worker_token_waits_for_admin_and_retries_without_leaking_credentials(
+    database: DatabaseClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_url = f"sqlite+pysqlite:///{tmp_path / 'worker-token.db'}"
+    database_url = database.settings.url
     monkeypatch.setenv("LAZYCLOUD_DATABASE_URL", database_url)
-    database = DatabaseClient.from_settings(
-        DatabaseSettings(application_name=DatabaseApplicationName.Test)
-    )
-    database.create_schema()
     output = tmp_path / "worker-token"
 
     with pytest.raises(AuthError, match="bootstrap must complete"):
@@ -58,4 +55,3 @@ def test_worker_token_waits_for_admin_and_retries_without_leaking_credentials(
             kind=TokenKind.Worker,
         )
     assert [item.id for item in owned] == [record.id]
-    database.dispose()

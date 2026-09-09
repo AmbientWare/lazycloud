@@ -18,7 +18,7 @@ def _mapping(value: JsonValue, context: str) -> dict[str, JsonValue]:
 
 def test_compose_keeps_wireguard_private_keys_out_of_environment() -> None:
     rendered = subprocess.run(
-        ["docker", "compose", "--profile", "tools", "config"],
+        ["docker", "compose", "--env-file", "tests/env.test", "--profile", "tools", "config"],
         cwd=ROOT,
         check=True,
         capture_output=True,

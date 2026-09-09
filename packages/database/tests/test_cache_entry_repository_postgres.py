@@ -14,15 +14,13 @@ from database import (
     DatabaseApplicationName,
     DatabaseClient,
     DatabaseSettings,
-    bootstrap_database,
 )
 
 
 def test_postgresql_concurrent_cache_upsert_preserves_one_canonical_row(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
+    database_url = migrated_database_url.render_as_string(hide_password=False)
     database = _client(database_url, pool_size=2)
     created_at = datetime(2026, 7, 19, 13, tzinfo=UTC)
     candidates = (
@@ -67,10 +65,9 @@ def test_postgresql_concurrent_cache_upsert_preserves_one_canonical_row(
 
 
 def test_postgresql_cache_hit_increment_is_atomic(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
+    database_url = migrated_database_url.render_as_string(hide_password=False)
     database = _client(database_url, pool_size=8)
     created_at = datetime(2026, 7, 19, 14, tzinfo=UTC)
     record = CacheEntry(
