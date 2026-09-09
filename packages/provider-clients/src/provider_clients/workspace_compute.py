@@ -9,7 +9,6 @@ from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.provider_launches import ProviderNodeLaunchCredentials
 from compute.providers import (
     ComputeProviderResolver,
-    PooledCapacityProvider,
     ResolvedComputeProvider,
     ResolvedProviderPolicy,
 )
@@ -30,12 +29,6 @@ from provider_aws import (
 from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
 from provider_hetzner.client import HetznerClient
 from provider_hetzner.pooled_provider import HetznerPooledProvider
-from provider_hyperstack.capacity_policy import HYPERSTACK_CAPACITY_POLICY
-from provider_hyperstack.client import HyperstackClient
-from provider_hyperstack.pooled_provider import HyperstackPooledProvider
-from provider_ovh.capacity_policy import OVH_CAPACITY_POLICY
-from provider_ovh.client import OvhClient
-from provider_ovh.pooled_provider import OvhPooledProvider
 from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationPhase,
@@ -56,7 +49,7 @@ def configured_platform_compute_providers(
     capacity_workspace: Callable[[str], str],
     redis: RedisClient,
 ) -> PlatformProviderLoader:
-    adapters: dict[str, PooledCapacityProvider] = {
+    adapters = {
         binding.ref: HetznerPooledProvider(
             provider_ref=binding.ref,
             client=HetznerClient(
@@ -70,38 +63,6 @@ def configured_platform_compute_providers(
         )
         for binding in settings.hetzner
     }
-    adapters.update(
-        {
-            binding.ref: HyperstackPooledProvider(
-                provider_ref=binding.ref,
-                client=HyperstackClient(settings.hyperstack_tokens[binding.ref]),
-                deployments_by_region=binding.deployments_by_region,
-                launch_credentials=launch_credentials,
-            )
-            for binding in settings.hyperstack
-        }
-    )
-    adapters.update(
-        {
-            binding.ref: OvhPooledProvider(
-                provider_ref=binding.ref,
-                client=OvhClient(
-                    application_key=settings.ovh_credentials[binding.ref].application_key,
-                    application_secret=settings.ovh_credentials[binding.ref].application_secret,
-                    consumer_key=settings.ovh_credentials[binding.ref].consumer_key,
-                    project_id=binding.project_id,
-                ),
-                images_by_region=binding.images_by_region,
-                launch_credentials=launch_credentials,
-            )
-            for binding in settings.ovh
-        }
-    )
-    bindings = (
-        *((binding, HETZNER_CAPACITY_POLICY) for binding in settings.hetzner),
-        *((binding, HYPERSTACK_CAPACITY_POLICY) for binding in settings.hyperstack),
-        *((binding, OVH_CAPACITY_POLICY) for binding in settings.ovh),
-    )
 
     def providers() -> tuple[ResolvedComputeProvider, ...]:
         # Administrator bootstrap creates the capacity workspace after composing
@@ -111,14 +72,14 @@ def configured_platform_compute_providers(
                 ref=binding.ref,
                 capacity_mode=ComputeCapacityMode.Pooled,
                 policy=ResolvedProviderPolicy(
-                    **policy.model_dump(),
+                    **HETZNER_CAPACITY_POLICY.model_dump(),
                     workspace_id=capacity_workspace(binding.workspace),
                     pool=MachinePool(LAZYCLOUD_MACHINE_POOL),
                     platform_fleet=True,
                 ),
                 pooled=adapters[binding.ref],
             )
-            for binding, policy in bindings
+            for binding in settings.hetzner
         )
 
     return providers

@@ -9,7 +9,6 @@ from shared.enums import StringEnum
 
 class ProductRegion(StringEnum):
     UsEast = "us-east"
-    UsCentral = "us-central"
     UsWest = "us-west"
     EuCentral = "eu-central"
     EuNorth = "eu-north"
@@ -26,9 +25,6 @@ _PROVIDER_REGIONS: dict[str, ProductRegion] = {
     "us-east-2": ProductRegion.UsEast,
     "us-west-1": ProductRegion.UsWest,
     "us-west-2": ProductRegion.UsWest,
-    "US-1": ProductRegion.UsCentral,
-    "US-EAST-VA-1": ProductRegion.UsEast,
-    "US-WEST-OR-1": ProductRegion.UsWest,
     "eu-central-1": ProductRegion.EuCentral,
     "eu-central-2": ProductRegion.EuCentral,
     "eu-north-1": ProductRegion.EuNorth,

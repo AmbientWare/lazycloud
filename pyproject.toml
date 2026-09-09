@@ -41,8 +41,6 @@ workspace = [
     "worker-bootstrap-app",
     "provider-aws",
     "provider-hetzner",
-    "provider-hyperstack",
-    "provider-ovh",
     "provider-cloudflare",
     "provider-garage",
     "provider-github",
@@ -101,8 +99,6 @@ members = [
     "packages/billing",
     "packages/providers/aws",
     "packages/providers/hetzner",
-    "packages/providers/hyperstack",
-    "packages/providers/ovh",
     "packages/providers/cloudflare",
     "packages/providers/garage",
     "packages/providers/github",
@@ -151,8 +147,6 @@ worker-repository = { workspace = true }
 worker-bootstrap-app = { workspace = true }
 provider-aws = { workspace = true }
 provider-hetzner = { workspace = true }
-provider-hyperstack = { workspace = true }
-provider-ovh = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = [

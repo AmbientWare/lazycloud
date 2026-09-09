@@ -9,11 +9,6 @@ from agent.binary import AgentBinarySettings
 from provider_aws import AwsManagedPoolBinaries
 from provider_hetzner import HetznerNodeImage
 from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
-from provider_hyperstack.capacity_policy import HYPERSTACK_CAPACITY_POLICY
-from provider_hyperstack.pooled_provider import HyperstackDeployment
-from provider_ovh.capacity_policy import OVH_CAPACITY_POLICY
-from provider_ovh.client import OvhApiCredentials
-from provider_ovh.pooled_provider import OvhNodeImage
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
@@ -287,44 +282,9 @@ class HetznerCapacityBinding(BaseModel):
         return self
 
 
-class HyperstackCapacityBinding(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
-
-    ref: str = Field(pattern=r"^hyperstack:[a-z0-9][a-z0-9-]{0,119}$")
-    workspace: str = Field(default="default", min_length=1)
-    deployments_by_region: dict[str, HyperstackDeployment]
-
-    @model_validator(mode="after")
-    def validate_regions(self) -> HyperstackCapacityBinding:
-        if set(self.deployments_by_region) != set(HYPERSTACK_CAPACITY_POLICY.allowed_regions):
-            raise ValueError(f"{self.ref} requires a deployment for each approved region")
-        return self
-
-
-class OvhCapacityBinding(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
-
-    ref: str = Field(pattern=r"^ovh:[a-z0-9][a-z0-9-]{0,119}$")
-    workspace: str = Field(default="default", min_length=1)
-    project_id: str = Field(pattern=r"^[a-f0-9]{32}$")
-    images_by_region: dict[str, OvhNodeImage]
-
-    @model_validator(mode="after")
-    def validate_regions(self) -> OvhCapacityBinding:
-        if not self.images_by_region or not set(self.images_by_region) <= set(
-            OVH_CAPACITY_POLICY.allowed_regions
-        ):
-            raise ValueError(f"{self.ref} requires node images in approved OVH regions")
-        return self
-
-
 class PlatformCapacitySettings(BaseSettings):
     hetzner: tuple[HetznerCapacityBinding, ...] = ()
     hetzner_tokens: dict[str, SecretStr] = Field(default_factory=dict, repr=False)
-    hyperstack: tuple[HyperstackCapacityBinding, ...] = ()
-    hyperstack_tokens: dict[str, SecretStr] = Field(default_factory=dict, repr=False)
-    ovh: tuple[OvhCapacityBinding, ...] = ()
-    ovh_credentials: dict[str, OvhApiCredentials] = Field(default_factory=dict, repr=False)
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_PLATFORM_CAPACITY_",
@@ -334,10 +294,9 @@ class PlatformCapacitySettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_bindings(self) -> PlatformCapacitySettings:
-        bindings = (*self.hetzner, *self.hyperstack, *self.ovh)
-        if len({binding.ref for binding in bindings}) != len(bindings):
+        if len({binding.ref for binding in self.hetzner}) != len(self.hetzner):
             raise ValueError("platform provider refs must be unique")
-        if len({binding.workspace for binding in bindings}) > 1:
+        if len({binding.workspace for binding in self.hetzner}) > 1:
             raise ValueError("platform providers require one capacity workspace")
         for binding in self.hetzner:
             token = self.hetzner_tokens.get(binding.ref)
@@ -345,26 +304,11 @@ class PlatformCapacitySettings(BaseSettings):
                 raise ValueError(f"{binding.ref} requires a provider token")
         if HETZNER_CAPACITY_POLICY.warm_cpu_min > 0 and len(self.hetzner) > 1:
             raise ValueError("only one platform provider may own the automatic warm floor")
-        for binding in self.hyperstack:
-            token = self.hyperstack_tokens.get(binding.ref)
-            if token is None or not token.get_secret_value().strip():
-                raise ValueError(f"{binding.ref} requires a provider token")
-        for binding in self.ovh:
-            credentials = self.ovh_credentials.get(binding.ref)
-            if credentials is None or any(
-                not value.get_secret_value().strip()
-                for value in (
-                    credentials.application_key,
-                    credentials.application_secret,
-                    credentials.consumer_key,
-                )
-            ):
-                raise ValueError(f"{binding.ref} requires OVH application and consumer credentials")
         return self
 
     @property
     def configured(self) -> bool:
-        return bool(self.hetzner or self.hyperstack or self.ovh)
+        return bool(self.hetzner)
 
 
 __all__ = [
@@ -376,7 +320,5 @@ __all__ = [
     "AwsCapacityReconciliationSettings",
     "AwsCapacitySettings",
     "HetznerCapacityBinding",
-    "HyperstackCapacityBinding",
-    "OvhCapacityBinding",
     "PlatformCapacitySettings",
 ]

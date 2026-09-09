@@ -17,7 +17,6 @@ from shared.compute_enrollment import ComputeMachineEnrollmentStatus
 from shared.compute_policy import ENDED_UNIT_PHASES, ComputeUnitRecord
 from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
 from shared.http.provider_nodes import ProviderNodeIdentityRequest
-from shared.provider_config import ProviderKind
 from shared.timestamps import to_utc, utc_now
 
 from compute.agent_control import hash_compute_token, hash_machine_fingerprint
@@ -48,11 +47,6 @@ class ProviderNodeLaunchStatus:
     expires_at: datetime
     redeemed: bool
     revoked: bool
-    creation_attempted: bool
-    server_name: str
-    generation: int
-    provider_operation_id: str | None
-    provider_resource_id: str | None
 
 
 class ProviderNodeLaunchCredentials(Protocol):
@@ -62,14 +56,6 @@ class ProviderNodeLaunchCredentials(Protocol):
 
     def for_server(
         self, request: ProviderUnitRequest, server_name: str
-    ) -> ProviderNodeLaunchStatus | None: ...
-
-    def for_unit(self, request: ProviderUnitRequest) -> tuple[ProviderNodeLaunchStatus, ...]: ...
-
-    def for_instance(
-        self,
-        request: ProviderUnitRequest,
-        provider_instance_id: str,
     ) -> ProviderNodeLaunchStatus | None: ...
 
     def bind(
@@ -82,14 +68,9 @@ class ProviderNodeLaunchCredentials(Protocol):
         server_name: str,
         region: str,
         generation: int,
-        provider_resource_id: str | None = None,
     ) -> None: ...
 
     def revoke(self, launch_id: str) -> None: ...
-
-    def mark_creation_attempt(self, launch_id: str) -> bool: ...
-
-    def record_creation_operation(self, launch_id: str, operation_id: str) -> None: ...
 
 
 @dataclass(slots=True)
@@ -127,8 +108,7 @@ class ProviderNodeLaunchService:
                 or pool.generation != request.generation
                 or pool.phase in ENDED_UNIT_PHASES
                 or not pool.platform_fleet
-                or pool.provider_ref.partition(":")[0]
-                not in {ProviderKind.Hetzner, ProviderKind.Hyperstack, ProviderKind.Ovh}
+                or not pool.provider_ref.startswith("hetzner:")
             ):
                 raise InvalidInputError("provider launch does not match an active platform unit")
             launch = repository.active_slot(pool.id, server_name)
@@ -174,82 +154,13 @@ class ProviderNodeLaunchService:
                 return None
             if launch.provider_ref != request.provider_ref:
                 raise InvalidInputError("provider launch belongs to another binding")
-            return _status(launch)
-
-    def for_unit(self, request: ProviderUnitRequest) -> tuple[ProviderNodeLaunchStatus, ...]:
-        with self.database.session() as session:
-            launches = ProviderNodeLaunchRepository(session).active_for_unit(request.unit_id)
-            if any(
-                launch.workspace_id != request.workspace_id
-                or launch.provider_ref != request.provider_ref
-                for launch in launches
-            ):
-                raise InvalidInputError("provider launches belong to another binding")
-            return tuple(_status(launch) for launch in launches)
-
-    def mark_creation_attempt(self, launch_id: str) -> bool:
-        now = utc_now()
-        with self.database.session() as session:
-            repository = ProviderNodeLaunchRepository(session)
-            pending = repository.get(launch_id)
-            if pending is None:
-                raise InvalidInputError("provider launch creation authorization is unavailable")
-            WorkspaceRepository(session).lock_active_owner(pending.workspace_id)
-            repository.lock_unit(pending.unit_id)
-            pool = ComputeUnitRepository(session).get(pending.unit_id)
-            launch = repository.get(launch_id, for_update=True)
-            if (
-                launch is None
-                or pool is None
-                or pool.phase in ENDED_UNIT_PHASES
-                or pool.generation != launch.generation
-                or pool.provider_ref != launch.provider_ref
-                or pool.region != launch.region
-                or pool.workspace_id != launch.workspace_id
-                or launch.revoked_at is not None
-                or launch.redeemed_at is not None
-                or to_utc(launch.expires_at) <= now
-            ):
-                raise InvalidInputError("provider launch creation authorization is unavailable")
-            if launch.creation_attempted_at is not None or launch.provider_instance_id is not None:
-                return False
-            launch.creation_attempted_at = now
-            repository.save(launch)
-            return True
-
-    def for_instance(
-        self,
-        request: ProviderUnitRequest,
-        provider_instance_id: str,
-    ) -> ProviderNodeLaunchStatus | None:
-        with self.database.session() as session:
-            launch = ProviderNodeLaunchRepository(session).for_instance(
-                request.unit_id,
-                request.provider_ref,
-                provider_instance_id,
+            return ProviderNodeLaunchStatus(
+                launch.id,
+                launch.provider_instance_id,
+                to_utc(launch.expires_at),
+                launch.redeemed_at is not None,
+                launch.revoked_at is not None,
             )
-            if launch is None:
-                return None
-            if launch.workspace_id != request.workspace_id:
-                raise InvalidInputError("provider launch belongs to another workspace")
-            return _status(launch)
-
-    def record_creation_operation(self, launch_id: str, operation_id: str) -> None:
-        if not operation_id or len(operation_id) > 128:
-            raise InvalidInputError("provider creation requires an operation identity")
-        with self.database.session() as session:
-            repository = ProviderNodeLaunchRepository(session)
-            launch = repository.get(launch_id, for_update=True)
-            if (
-                launch is None
-                or launch.revoked_at is not None
-                or launch.creation_attempted_at is None
-            ):
-                raise InvalidInputError("provider launch creation is unavailable")
-            if launch.provider_operation_id not in {None, operation_id}:
-                raise ConflictError("provider launch already has another creation operation")
-            launch.provider_operation_id = operation_id
-            repository.save(launch)
 
     def bind(
         self,
@@ -261,12 +172,7 @@ class ProviderNodeLaunchService:
         server_name: str,
         region: str,
         generation: int,
-        provider_resource_id: str | None = None,
     ) -> None:
-        if provider_resource_id is not None and (
-            not provider_resource_id or len(provider_resource_id) > 128
-        ):
-            raise InvalidInputError("provider launch requires a valid resource identity")
         with self.database.session() as session:
             launch = ProviderNodeLaunchRepository(session).get(launch_id, for_update=True)
             if (
@@ -281,16 +187,9 @@ class ProviderNodeLaunchService:
                 raise InvalidInputError("provider launch binding is unavailable")
             if launch.provider_instance_id not in {None, provider_instance_id}:
                 raise ConflictError("provider launch is already bound to another instance")
-            if provider_resource_id is not None and launch.provider_resource_id not in {
-                None,
-                provider_resource_id,
-            }:
-                raise ConflictError("provider launch is already bound to another resource")
             if not provider_instance_id:
                 raise InvalidInputError("provider launch requires an instance identity")
             launch.provider_instance_id = provider_instance_id
-            if provider_resource_id is not None:
-                launch.provider_resource_id = provider_resource_id
             ProviderNodeLaunchRepository(session).save(launch)
 
     def revoke(self, launch_id: str) -> None:
@@ -379,18 +278,3 @@ def _require_launch(
 
 def _cipher_name(launch_id: str) -> str:
     return f"provider-node-bootstrap:{launch_id}"
-
-
-def _status(launch: ProviderNodeLaunchTable) -> ProviderNodeLaunchStatus:
-    return ProviderNodeLaunchStatus(
-        launch_id=launch.id,
-        provider_instance_id=launch.provider_instance_id,
-        expires_at=to_utc(launch.expires_at),
-        redeemed=launch.redeemed_at is not None,
-        revoked=launch.revoked_at is not None,
-        creation_attempted=launch.creation_attempted_at is not None,
-        server_name=launch.server_name,
-        generation=launch.generation,
-        provider_operation_id=launch.provider_operation_id,
-        provider_resource_id=launch.provider_resource_id,
-    )

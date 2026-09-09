@@ -27,22 +27,6 @@ class ProviderNodeLaunchTable(DatabaseBase):
             postgresql_where=text("revoked_at IS NULL AND provider_instance_id IS NOT NULL"),
             sqlite_where=text("revoked_at IS NULL AND provider_instance_id IS NOT NULL"),
         ),
-        Index(
-            "uq_provider_node_launches_active_operation",
-            "provider_ref",
-            "provider_operation_id",
-            unique=True,
-            postgresql_where=text("revoked_at IS NULL AND provider_operation_id IS NOT NULL"),
-            sqlite_where=text("revoked_at IS NULL AND provider_operation_id IS NOT NULL"),
-        ),
-        Index(
-            "uq_provider_node_launches_active_resource",
-            "provider_ref",
-            "provider_resource_id",
-            unique=True,
-            postgresql_where=text("revoked_at IS NULL AND provider_resource_id IS NOT NULL"),
-            sqlite_where=text("revoked_at IS NULL AND provider_resource_id IS NOT NULL"),
-        ),
         CheckConstraint("expires_at > created_at", name="ck_provider_node_launches_expiry"),
         CheckConstraint("generation > 0", name="ck_provider_node_launches_generation"),
         CheckConstraint(
@@ -65,14 +49,11 @@ class ProviderNodeLaunchTable(DatabaseBase):
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
     server_name: Mapped[str] = mapped_column(String(255), nullable=False)
     provider_instance_id: Mapped[str | None] = mapped_column(String(128))
-    provider_resource_id: Mapped[str | None] = mapped_column(String(128))
-    provider_operation_id: Mapped[str | None] = mapped_column(String(128))
     bootstrap_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     bootstrap_token_ciphertext: Mapped[str | None] = mapped_column(Text)
     node_token_hash: Mapped[str | None] = mapped_column(String(64))
     fingerprint_hash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    creation_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     redeemed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

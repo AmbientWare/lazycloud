@@ -29,10 +29,6 @@ from provider_aws import (
 )
 from provider_hetzner.client import HetznerClient
 from provider_hetzner.identity import verify_node as verify_hetzner_node
-from provider_hyperstack.client import HyperstackClient
-from provider_hyperstack.identity import verify_node as verify_hyperstack_node
-from provider_ovh.client import OvhClient
-from provider_ovh.identity import verify_node as verify_ovh_node
 from pydantic import SecretStr
 from shared.aws_connections import AwsAccountConnection
 from shared.compute_policy import ComputeUnitRecord
@@ -341,22 +337,6 @@ def configured_provider_node_identity_registry(
             HetznerClient(
                 platform_settings.hetzner_tokens[binding.ref],
                 cooldown=RedisRequestCooldown(redis, binding.ref),
-            ),
-        )
-    for binding in platform_settings.hyperstack:
-        bootstrap_nodes[binding.ref] = partial(
-            verify_hyperstack_node,
-            HyperstackClient(platform_settings.hyperstack_tokens[binding.ref]),
-        )
-    for binding in platform_settings.ovh:
-        credentials = platform_settings.ovh_credentials[binding.ref]
-        bootstrap_nodes[binding.ref] = partial(
-            verify_ovh_node,
-            OvhClient(
-                application_key=credentials.application_key,
-                application_secret=credentials.application_secret,
-                consumer_key=credentials.consumer_key,
-                project_id=binding.project_id,
             ),
         )
     return ProviderNodeIdentityRegistry(aws=aws, bootstrap_nodes=bootstrap_nodes)

@@ -14,9 +14,7 @@ class ProviderNodeLaunchRepository:
     def get(self, launch_id: str, *, for_update: bool = False) -> ProviderNodeLaunchTable | None:
         statement = select(ProviderNodeLaunchTable).where(ProviderNodeLaunchTable.id == launch_id)
         if for_update:
-            statement = statement.with_for_update(nowait=True).execution_options(
-                populate_existing=True
-            )
+            statement = statement.with_for_update(nowait=True)
         try:
             return self.session.scalar(statement)
         except OperationalError as exc:
@@ -46,37 +44,6 @@ class ProviderNodeLaunchRepository:
                 ProviderNodeLaunchTable.revoked_at.is_(None),
             )
         )
-
-    def active_for_unit(self, unit_id: str) -> tuple[ProviderNodeLaunchTable, ...]:
-        return tuple(
-            self.session.scalars(
-                select(ProviderNodeLaunchTable)
-                .where(
-                    ProviderNodeLaunchTable.unit_id == unit_id,
-                    ProviderNodeLaunchTable.revoked_at.is_(None),
-                )
-                .order_by(ProviderNodeLaunchTable.created_at, ProviderNodeLaunchTable.id)
-            )
-        )
-
-    def for_instance(
-        self,
-        unit_id: str,
-        provider_ref: str,
-        provider_instance_id: str,
-    ) -> ProviderNodeLaunchTable | None:
-        launches = tuple(
-            self.session.scalars(
-                select(ProviderNodeLaunchTable).where(
-                    ProviderNodeLaunchTable.unit_id == unit_id,
-                    ProviderNodeLaunchTable.provider_ref == provider_ref,
-                    ProviderNodeLaunchTable.provider_instance_id == provider_instance_id,
-                )
-            )
-        )
-        if len(launches) > 1:
-            raise ConflictError("provider instance has ambiguous launch ownership")
-        return launches[0] if launches else None
 
     def save(self, launch: ProviderNodeLaunchTable) -> None:
         self.session.add(launch)

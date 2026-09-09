@@ -167,8 +167,6 @@ class ProviderInstanceIdentityMode(StrEnum):
 _PROVIDER_IDENTITY_MODES = {
     ProviderKind.Aws: ProviderInstanceIdentityMode.ImdsV2,
     ProviderKind.Hetzner: ProviderInstanceIdentityMode.Bootstrap,
-    ProviderKind.Hyperstack: ProviderInstanceIdentityMode.Bootstrap,
-    ProviderKind.Ovh: ProviderInstanceIdentityMode.Bootstrap,
 }
 
 
