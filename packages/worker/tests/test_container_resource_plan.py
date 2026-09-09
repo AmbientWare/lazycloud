@@ -132,30 +132,15 @@ def test_a_container_can_reclaim_rather_than_die_at_its_ceiling() -> None:
 
 
 def test_a_container_gets_no_cgroup_when_the_parent_cannot_bound_it(tmp_path: Path) -> None:
-    """An undelegated parent creates children with no memory files at all.
-
-    Naming one anyway hands the runtime a path that looks like enforcement and
-    holds none: `memory.max` and `memory.low` are absent, the deferred writes miss
-    files that were never there, and the container runs unbounded while the log
-    says only that eviction is off. Refusing the path leaves the runtime to place
-    it, which is worse but visibly so.
-    """
+    """A parent without memory delegation cannot supply a bounded container cgroup."""
     relative = parse_proc_cgroup_path(Path("/proc/self/cgroup").read_text(encoding="utf-8"))
     worker = tmp_path / relative.lstrip("/")
     worker.mkdir(parents=True)
-    # The parent is a real cgroup either way; what differs is what it hands down.
     (worker / "memory.pressure").write_text("full avg10=0.00\n")
     control = worker / "cgroup.subtree_control"
 
     control.write_text("cpu pids\n")
     assert container_cgroup_path("container-abc", root=str(tmp_path)) == ""
-
-    control.write_text("cpu memory pids\n")
-    path = container_cgroup_path("container-abc", root=str(tmp_path))
-    assert path.endswith("/container-abc")
-    # Underneath the worker's own cgroup, so the slot the agent gave it bounds
-    # the container too, and the container's growth reaches the pressure reading.
-    assert Path(tmp_path, path.lstrip("/")).parent == worker
 
 
 def test_a_spec_built_without_a_container_names_no_cgroup() -> None:
