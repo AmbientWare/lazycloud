@@ -14,7 +14,7 @@ from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.errors import ConflictError, NotFoundError
 from shared.identity import AuthTokenRecord, WorkspaceInvitationRole, WorkspaceRole
 from shared.timestamps import utc_now
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 
 from billing import DatabaseBillingAdmission
 

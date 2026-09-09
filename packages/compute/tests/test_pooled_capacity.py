@@ -91,7 +91,7 @@ from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.supplier_costs import SupplierCostTerms
-from tests.service_fixtures import workspace_owner_user_id
+from tests.domain_fixtures import workspace_owner_user_id
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 

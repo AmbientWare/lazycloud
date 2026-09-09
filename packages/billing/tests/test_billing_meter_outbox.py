@@ -21,7 +21,7 @@ from shared.payments import (
 )
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import select
-from tests.service_fixtures import workspace_owner_user_id
+from tests.domain_fixtures import workspace_owner_user_id
 
 ACCEPTED = "usage-accepted"
 UNREACHABLE = "usage-unreachable"

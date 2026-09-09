@@ -13,15 +13,13 @@ from database import (
     DatabaseApplicationName,
     DatabaseClient,
     DatabaseSettings,
-    bootstrap_database,
 )
 
 
 def test_postgresql_concurrent_autoscaler_upsert_keeps_one_state(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
+    database_url = migrated_database_url.render_as_string(hide_password=False)
     database = DatabaseClient.from_settings(
         DatabaseSettings(
             url=database_url,

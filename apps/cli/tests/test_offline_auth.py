@@ -25,6 +25,7 @@ def _token() -> str:
 
 
 def test_offline_bootstrap_publishes_a_private_credential_and_fails_loudly_without_storage(
+    database: DatabaseClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -38,14 +39,9 @@ def test_offline_bootstrap_publishes_a_private_credential_and_fails_loudly_witho
     payload claiming the workspace is ready. The success path's exact-once
     replay is proven by the identity owner.
     """
-    database_url = f"sqlite+pysqlite:///{tmp_path / 'bootstrap.db'}"
+    database_url = database.settings.url
     monkeypatch.setenv("LAZYCLOUD_DATABASE_URL", database_url)
     monkeypatch.setenv("LAZYCLOUD_DATABASE_DIRECT_URL", database_url)
-    database = DatabaseClient.from_settings(
-        DatabaseSettings(application_name=DatabaseApplicationName.Test)
-    )
-    database.create_schema()
-    database.dispose()
     output = tmp_path / "admin-token"
 
     created = CliRunner().invoke(
@@ -84,11 +80,6 @@ def test_offline_recovery_refuses_non_postgresql_authority(
     database_url = f"sqlite+pysqlite:///{tmp_path / 'recovery.db'}"
     monkeypatch.setenv("LAZYCLOUD_DATABASE_URL", database_url)
     monkeypatch.setenv("LAZYCLOUD_DATABASE_DIRECT_URL", database_url)
-    database = DatabaseClient.from_settings(
-        DatabaseSettings(application_name=DatabaseApplicationName.Test)
-    )
-    database.create_schema()
-    database.dispose()
     output = tmp_path / "recovery-token"
 
     result = CliRunner().invoke(
@@ -111,17 +102,13 @@ def test_offline_recovery_refuses_non_postgresql_authority(
 
 
 def test_offline_bootstrap_accepts_configured_token_only_through_private_file(
+    database: DatabaseClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_url = f"sqlite+pysqlite:///{tmp_path / 'configured-bootstrap.db'}"
+    database_url = database.settings.url
     monkeypatch.setenv("LAZYCLOUD_DATABASE_URL", database_url)
     monkeypatch.setenv("LAZYCLOUD_DATABASE_DIRECT_URL", database_url)
-    database = DatabaseClient.from_settings(
-        DatabaseSettings(application_name=DatabaseApplicationName.Test)
-    )
-    database.create_schema()
-    database.dispose()
     configured = _token()
     token_file = tmp_path / "configured-token"
     token_file.write_text(f"{configured}\n", encoding="utf-8")

@@ -10,6 +10,7 @@ from database.repositories.observability import UsageRepository
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.storage import VolumeTable
 from shared.billing_quotes import BilledDimension, LedgerComponent
+from shared.billing_rate_card import PUBLISHED_METERED_RATE_HISTORY
 from shared.timestamps import utc_now
 from shared.usage import (
     METERING_OBSERVATION_ERROR_TYPE_METADATA_KEY,
@@ -175,7 +176,7 @@ def test_a_metered_volume_window_prices_byte_seconds_exactly(
     """Small storage rates retain exact costs over large byte-second quantities."""
 
     rate = Decimal("0.000000017965")
-    now = utc_now()
+    now = max(utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY))
     started_at = now + timedelta(minutes=2)
     observed_at = started_at + timedelta(hours=1)
     record = isolated_services.volumes.get_or_create("priced-data", admit=None)

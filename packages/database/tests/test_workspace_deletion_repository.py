@@ -35,7 +35,7 @@ from database import (
 
 
 def test_postgresql_workspace_name_belongs_to_one_live_workspace(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     """A name is held while a workspace exists and released when it stops existing.
 
@@ -46,11 +46,10 @@ def test_postgresql_workspace_name_belongs_to_one_live_workspace(
     """
     database = DatabaseClient.from_settings(
         DatabaseSettings(
-            url=postgres_database_url.render_as_string(hide_password=False),
+            url=migrated_database_url.render_as_string(hide_password=False),
             application_name=DatabaseApplicationName.Test,
         )
     )
-    database.create_schema()
     try:
         with database.session() as session:
             original = WorkspaceRepository(session).create(name="tenant")
@@ -79,9 +78,9 @@ def test_postgresql_workspace_name_belongs_to_one_live_workspace(
 
 
 def test_postgresql_workspace_deletion_serializes_complete_attempts(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database = _postgres_database(postgres_database_url)
+    database = _postgres_database(migrated_database_url)
     same_replica = DatabaseClient.from_settings(database.settings)
     other_replica = DatabaseClient.from_settings(database.settings)
     first_id = _create_workspace(database, "attempt-first")
@@ -127,8 +126,8 @@ def test_postgresql_workspace_deletion_serializes_complete_attempts(
         database.dispose()
 
 
-def test_postgresql_workspace_deletion_fences_owned_write_races(postgres_database_url: URL) -> None:
-    database = _postgres_database(postgres_database_url)
+def test_postgresql_workspace_deletion_fences_owned_write_races(migrated_database_url: URL) -> None:
+    database = _postgres_database(migrated_database_url)
     writer_first_workspace_id = _create_workspace(database, "writer-first")
     deletion_first_workspace_id = _create_workspace(database, "deletion-first")
     release_writer = Event()
@@ -154,9 +153,9 @@ def test_postgresql_workspace_deletion_fences_owned_write_races(postgres_databas
 
 
 def test_postgresql_same_object_location_in_sibling_workspaces_does_not_serialize(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database = _postgres_database(postgres_database_url)
+    database = _postgres_database(migrated_database_url)
     first_id = _create_workspace(database, "object-first")
     second_id = _create_workspace(database, "object-second")
     first_claimed = Event()
@@ -298,7 +297,6 @@ def _postgres_database(database_url: URL) -> DatabaseClient:
             application_name=DatabaseApplicationName.Test,
         )
     )
-    database.create_schema()
     return database
 
 
@@ -334,7 +332,7 @@ def _autoscaler_state(workspace_id: str, target_id: str) -> AutoscalerStateRecor
 
 
 def test_postgresql_contended_volume_name_settles_on_the_constraint(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     """Two containers mounting one new volume name both get the volume.
 
@@ -351,7 +349,7 @@ def test_postgresql_contended_volume_name_settles_on_the_constraint(
     workspace change is announced and whether billing is asked for a new volume.
     """
 
-    database = _postgres_database(postgres_database_url)
+    database = _postgres_database(migrated_database_url)
     workspace_id = _create_workspace(database, "volume-race")
     started = Event()
 
@@ -381,7 +379,7 @@ def test_postgresql_contended_volume_name_settles_on_the_constraint(
 
 
 def test_postgresql_released_claim_returns_to_exactly_one_other_container(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     """A stopped container gives its invocation back, and one container takes it.
 
@@ -396,7 +394,7 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container(
     invocation in front of two containers.
     """
 
-    database = _postgres_database(postgres_database_url)
+    database = _postgres_database(migrated_database_url)
     workspace_id = _create_workspace(database, "claim-release")
     stub_id = str(uuid4())
     contenders = 8
@@ -479,7 +477,7 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container(
 
 
 def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     """A container stopping after its call finished must not rerun the call.
 
@@ -489,7 +487,7 @@ def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release(
     container and deliver the second answer over the first.
     """
 
-    database = _postgres_database(postgres_database_url)
+    database = _postgres_database(migrated_database_url)
     workspace_id = _create_workspace(database, "late-release")
     stub_id = str(uuid4())
     container_id = str(uuid4())
@@ -548,7 +546,7 @@ def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release(
 
 
 def test_postgresql_claimable_task_is_taken_by_exactly_one_container(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     """A runnable task goes to one container, however many ask at once.
 
@@ -563,7 +561,7 @@ def test_postgresql_claimable_task_is_taken_by_exactly_one_container(
     report this passing whether or not the clause were there.
     """
 
-    database = _postgres_database(postgres_database_url)
+    database = _postgres_database(migrated_database_url)
     workspace_id = _create_workspace(database, "task-claim")
     stub_id = str(uuid4())
     contenders = 8

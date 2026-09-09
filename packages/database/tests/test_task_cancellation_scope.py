@@ -3,17 +3,18 @@ from __future__ import annotations
 from uuid import uuid4
 
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.records.apps import AppRecord
 from database.repositories.apps import AppRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.orchestration import ContainerRepository
 from shared.containers import ContainerRecord
 from shared.tasks import Task, TaskStatus
-from tests.service_fixtures import ApiServices, owned_workspace
+from tests.domain_fixtures import owned_workspace
 
 
 def test_deleting_an_app_retires_its_queued_work_and_nothing_else(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Cancellation stops at the queue of the app being deleted.
 
@@ -22,13 +23,13 @@ def test_deleting_an_app_retires_its_queued_work_and_nothing_else(
     task a container is already running, and a task that finished long ago.
     """
 
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "task-cancellation")
     doomed_app = str(uuid4())
     other_app = str(uuid4())
     container_id = str(uuid4())
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         apps = AppRepository(session)
         apps.upsert(AppRecord(id=doomed_app, workspace_id=workspace.id, name="doomed"))
         apps.upsert(AppRecord(id=other_app, workspace_id=workspace.id, name="other"))
@@ -62,7 +63,7 @@ def test_deleting_an_app_retires_its_queued_work_and_nothing_else(
                 workspace_id=workspace.id,
             )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         cancelled = TaskRepository(session).cancel_queued_for_app(
             workspace_id=workspace.id,
             app_id=doomed_app,
@@ -73,7 +74,7 @@ def test_deleting_an_app_retires_its_queued_work_and_nothing_else(
     assert all(task.status is TaskStatus.Cancelled for task in cancelled)
     assert all(task.finished_at is not None for task in cancelled)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         surviving = {
             task.name: task.status
             for task in TaskRepository(session).list(workspace_id=workspace.id)

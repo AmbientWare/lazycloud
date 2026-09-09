@@ -17,16 +17,15 @@ from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 
 def test_rollout_admission_preserves_claimed_work_and_bounds_replacement_capacity(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     database = DatabaseClient.from_settings(
         DatabaseSettings(
-            url=postgres_database_url.render_as_string(hide_password=False),
+            url=migrated_database_url.render_as_string(hide_password=False),
             application_name=DatabaseApplicationName.Test,
         )
     )
     try:
-        database.create_schema()
         now = utc_now()
         with database.session() as session:
             workspace = WorkspaceRepository(session).create(name="rollout-admission")

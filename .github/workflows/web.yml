@@ -5,15 +5,21 @@ on:
     paths:
       - ".github/workflows/web.yml"
       - "apps/web/**"
+      - "tests/contracts/http_contract_cases.json"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/web.yml"
       - "apps/web/**"
+      - "tests/contracts/http_contract_cases.json"
 
 permissions:
   contents: read
+
+concurrency:
+  group: web-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate:
@@ -38,5 +44,13 @@ jobs:
           bun run format:check
           bun run lint
           bun run typecheck
-          bun run test
+          bun run test --reporter=default --reporter=junit --outputFile=test-results/vitest.xml
           bun run build
+
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-test-results
+          path: apps/web/test-results/vitest.xml
+          retention-days: 14

@@ -37,7 +37,8 @@ from shared.http.aws_connections import (
     AwsConnectionResponse,
     AwsFleetEnsureRequest,
 )
-from tests.service_fixtures import administrator_credential, workspace_owner_user_id
+from tests.domain_fixtures import workspace_owner_user_id
+from tests.service_fixtures import administrator_credential
 
 ACCOUNT_ID = "123456789012"
 VALIDATED_AT = datetime(2026, 7, 15, 12, tzinfo=UTC)

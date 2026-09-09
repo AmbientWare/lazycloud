@@ -30,7 +30,7 @@ from shared.payments import (
     ProviderSubscription,
     SubscriptionChangeTiming,
 )
-from tests.service_fixtures import unbilled_account, workspace_owner_user_id
+from tests.domain_fixtures import unbilled_account, workspace_owner_user_id
 
 CYCLE_STARTED_AT = datetime(2026, 8, 13, 9, 30, tzinfo=UTC)
 CYCLE_ENDED_AT = datetime(2026, 9, 13, 9, 30, tzinfo=UTC)

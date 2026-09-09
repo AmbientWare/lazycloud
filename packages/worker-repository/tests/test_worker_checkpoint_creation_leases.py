@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from tests.domain_fixtures import owned_workspace
 from tests.real_redis import RealRedisActors
-from tests.service_fixtures import owned_workspace
 from worker.checkpoints import (
     CheckpointStateOperation,
     CheckpointStatePayload,
@@ -22,32 +22,35 @@ def test_automatic_checkpoint_creation_lease_serializes_first_creator(
 ) -> None:
     redis = real_redis_actors.client()
     service = AutomaticCheckpointCreationLeaseService(isolated_services.context, redis)
+    control = ControlPlaneService(isolated_services.context)
+    workspace = owned_workspace(control, "checkpoint-owner")
+    stub = control.create_stub("checkpoint-lease", workspace=workspace.id)
 
     first = service.acquire(
-        workspace_id="workspace-1",
-        stub_id="stub-1",
+        workspace_id=workspace.id,
+        stub_id=stub.id,
         owner_token="container-1",
         ttl_seconds=2400,
     )
     second = service.acquire(
-        workspace_id="workspace-1",
-        stub_id="stub-1",
+        workspace_id=workspace.id,
+        stub_id=stub.id,
         owner_token="container-2",
         ttl_seconds=2400,
     )
-    key = redis.key(AUTOMATIC_CHECKPOINT_LEASE_NAMESPACE, "workspace-1", "stub-1")
+    key = redis.key(AUTOMATIC_CHECKPOINT_LEASE_NAMESPACE, workspace.id, stub.id)
 
     assert first.acquired
     assert not second.acquired
-    assert redis.ttl(key) == 2400
+    assert 0 < redis.ttl(key) <= 2400
     assert not service.release(
-        workspace_id="workspace-1",
-        stub_id="stub-1",
+        workspace_id=workspace.id,
+        stub_id=stub.id,
         owner_token="container-2",
     )
     assert service.release(
-        workspace_id="workspace-1",
-        stub_id="stub-1",
+        workspace_id=workspace.id,
+        stub_id=stub.id,
         owner_token="container-1",
     )
     assert redis.get(key) is None

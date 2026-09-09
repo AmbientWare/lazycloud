@@ -36,7 +36,7 @@ from shared.http.functions import (
     FunctionSetResultResponse,
 )
 from starlette.routing import BaseRoute, Mount, Route
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 from tests.url_constants import TEST_URL
 
 BASE_URL = TEST_URL

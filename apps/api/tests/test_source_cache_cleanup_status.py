@@ -12,7 +12,8 @@ from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.http.source_cache_cleanup import SourceCacheCleanupStatusResponse
 from shared.identity import TokenKind
-from tests.service_fixtures import administrator_credential, owned_workspace
+from tests.domain_fixtures import owned_workspace
+from tests.service_fixtures import administrator_credential
 
 
 def test_source_cache_cleanup_status_is_admin_only_and_bounded(

@@ -43,11 +43,8 @@ from shared.compute_policy import (
 from shared.http.compute import UnitScaleResponse
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.supplier_costs import SupplierCostTerms
-from tests.service_fixtures import (
-    administrator_credential,
-    owned_workspace,
-    workspace_owner_user_id,
-)
+from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
+from tests.service_fixtures import administrator_credential
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 _OFFER_ID = "us-east-1:m7i.large"

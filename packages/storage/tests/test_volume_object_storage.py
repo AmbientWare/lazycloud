@@ -24,7 +24,7 @@ from storage.volume_filesystem import (
     WorkspaceVolumeStore,
 )
 from storage_client.s3 import S3ObjectInfo
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 
 
 def test_volume_control_isolates_same_name_by_stable_workspace_and_volume_ids(

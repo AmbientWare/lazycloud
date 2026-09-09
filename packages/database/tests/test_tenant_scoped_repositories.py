@@ -3,8 +3,8 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.records.apps import AppRecord
 from database.repositories.apps import AppRepository
 from database.repositories.identity import SecretRepository, TokenRepository
@@ -17,19 +17,19 @@ from shared.errors import NotFoundError
 from shared.identity import TokenKind
 from shared.image_building.records import ImageRecord
 from shared.timestamps import utc_now
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 
 
 def test_cross_workspace_reads_and_deletes_are_denied_by_construction(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     owner = owned_workspace(control, "tenant-owner")
     intruder = owned_workspace(control, "tenant-intruder")
 
     app_id = str(uuid4())
     container_id = str(uuid4())
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         apps = AppRepository(session)
         apps.upsert(AppRecord(id=app_id, workspace_id=owner.id, name="owned-app"))
         secrets = SecretRepository(session)
@@ -60,7 +60,7 @@ def test_cross_workspace_reads_and_deletes_are_denied_by_construction(
             )
         )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         apps = AppRepository(session)
         assert apps.get(app_id, workspace_id=intruder.id) is None
         assert apps.get(app_id, workspace_id=owner.id) is not None
@@ -97,7 +97,7 @@ def test_cross_workspace_reads_and_deletes_are_denied_by_construction(
 
 
 def test_one_global_archive_serves_every_authorized_workspace(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Two workspaces share one archive, and losing one leaves the other resolving it.
 
@@ -106,7 +106,7 @@ def test_one_global_archive_serves_every_authorized_workspace(
     `images` row, and deleting that row must free nothing the sibling still needs.
     """
 
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     owner = owned_workspace(control, "image-archive-owner")
     sibling = owned_workspace(control, "image-archive-sibling")
     stranger = owned_workspace(control, "image-archive-stranger")
@@ -114,7 +114,7 @@ def test_one_global_archive_serves_every_authorized_workspace(
     manifest_digest = "sha256:" + "c" * 64
     registry_ref = f"registry.example.com/workloads@{manifest_digest}"
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         archives = ImageArchiveRepository(session)
         archive, reserved = archives.reserve(
             image_id,
@@ -147,7 +147,7 @@ def test_one_global_archive_serves_every_authorized_workspace(
         images.upsert(ImageRecord(workspace_id=owner.id, image_id=image_id))
         images.upsert(ImageRecord(workspace_id=sibling.id, image_id=image_id))
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         archives = ImageArchiveRepository(session)
         for workspace in (owner, sibling):
             resolved = archives.get_authorized(image_id, workspace_id=workspace.id)
@@ -157,7 +157,7 @@ def test_one_global_archive_serves_every_authorized_workspace(
 
         assert ImageRepository(session).delete(image_id, workspace_id=owner.id)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         archives = ImageArchiveRepository(session)
         assert archives.get_authorized(image_id, workspace_id=owner.id) is None
         surviving = archives.get_authorized(image_id, workspace_id=sibling.id)
@@ -166,15 +166,15 @@ def test_one_global_archive_serves_every_authorized_workspace(
 
 
 def test_container_shutdown_targets_include_only_active_workspace_rows(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "shutdown-target-owner")
     sibling = owned_workspace(control, "shutdown-target-sibling")
     compute_worker_id = str(uuid4())
     ids_by_name: dict[str, str] = {}
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         WorkerRepository(session).upsert(
             Worker(id=compute_worker_id),
             workspace_id=workspace.id,

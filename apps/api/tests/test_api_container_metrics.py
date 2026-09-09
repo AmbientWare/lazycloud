@@ -35,11 +35,8 @@ from shared.usage import (
     UsageRecord,
     UsageUnit,
 )
-from tests.service_fixtures import (
-    administrator_credential,
-    owned_workspace,
-    workspace_owner_user_id,
-)
+from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
+from tests.service_fixtures import administrator_credential
 
 
 def _seed_container(services: ApiServices) -> ContainerRecord:

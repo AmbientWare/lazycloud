@@ -20,7 +20,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
-from tests.service_fixtures import postgres_database_url, unfunded_billing_account
+from tests.domain_fixtures import unfunded_billing_account
 
 from database import AsyncDatabaseClient, DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
@@ -87,6 +87,3 @@ def test_only_verified_public_response_bytes_reach_charges(
         asyncio.run(exercise())
     finally:
         database.dispose()
-
-
-__all__ = ["postgres_database_url"]

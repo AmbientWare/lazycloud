@@ -38,14 +38,13 @@ from shared.usage import (
 from sqlalchemy import func, select
 from sqlalchemy.engine import URL
 
-from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings, bootstrap_database
+from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 
 def test_wallet_debits_without_a_subscription_and_never_rebills_expired_debt(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(url)
+    url = migrated_database_url.render_as_string(hide_password=False)
     database = DatabaseClient.from_settings(
         DatabaseSettings(url=url, application_name=DatabaseApplicationName.Test)
     )
@@ -181,10 +180,9 @@ def test_wallet_debits_without_a_subscription_and_never_rebills_expired_debt(
 
 
 def test_historical_provider_usage_is_not_debited_but_new_late_usage_is(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(url)
+    url = migrated_database_url.render_as_string(hide_password=False)
     database = DatabaseClient.from_settings(
         DatabaseSettings(url=url, application_name=DatabaseApplicationName.Test)
     )

@@ -29,7 +29,8 @@ from shared.identity import (
     WorkspaceMemberRecord,
     WorkspaceRole,
 )
-from tests.service_fixtures import administrator_credential, owned_workspace
+from tests.domain_fixtures import owned_workspace
+from tests.service_fixtures import administrator_credential
 
 
 def test_auth_service_records_token_kind_and_checks_scopes(

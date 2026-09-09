@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import socket
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack
 from dataclasses import replace
@@ -111,10 +112,10 @@ from shared.usage import (
 )
 from storage.image_archive import ImageArchiveSettings
 from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
+from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 from tests.scheduler_composition import scheduler_request_service_for_redis
-from tests.service_fixtures import owned_workspace, workspace_owner_user_id
 from worker.checkpoints import (
     CheckpointStateOperation,
     CheckpointStatePayload,
@@ -336,20 +337,20 @@ def test_managed_image_build_credentials_use_assigned_workspace(
 ) -> None:
     redis = real_redis_actors.client()
     service = _worker_repository_service(isolated_services, redis)
-    workspace_id = "tenant-workspace"
-    container_id = "build-container-tenant"
+    workspace_id = owned_workspace(isolated_services.control_plane_service, "tenant-workspace").id
+    container_id = str(uuid4())
     service.containers.set_container_state(
         SchedulerContainerState(
             container_id=container_id,
             stub_id="image-build",
             workspace_id=workspace_id,
             worker_id="worker-1",
-            image_build_id="build-tenant",
+            image_build_id=container_id,
         )
     )
     request = GetImageBuildCredentialsRequest(
         workspace_id=workspace_id,
-        build_id="build-tenant",
+        build_id=container_id,
         container_id=container_id,
         registry="registry.example.com",
         cache_key="",
@@ -402,7 +403,7 @@ def test_managed_container_credentials_use_assigned_workspace(
 ) -> None:
     redis = real_redis_actors.client()
     service = _worker_repository_service(isolated_services, redis)
-    workspace_id = "tenant-workspace"
+    workspace_id = owned_workspace(isolated_services.control_plane_service, "tenant-workspace").id
     container_id = "tenant-container"
     service.containers.set_container_state(
         SchedulerContainerState(
@@ -2390,23 +2391,26 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
             route=route,
         )
     )
-    response = gateway.update_agent_route_status(
-        UpdateAgentRouteStatusRequest(
-            agent_token=agent_token,
-            route_id=route.route_id,
-            state=BackendRouteState.Ready,
-            proxy_target="agent.private:34399",
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        target = f"127.0.0.1:{listener.getsockname()[1]}"
+        response = gateway.update_agent_route_status(
+            UpdateAgentRouteStatusRequest(
+                agent_token=agent_token,
+                route_id=route.route_id,
+                state=BackendRouteState.Ready,
+                proxy_target=target,
+            )
         )
-    )
-    resolved = SchedulerBackendRouteResolver(
-        isolated_services.routes,
-        containers,
-    ).get_backend_route(route.route_id)
+        resolved = SchedulerBackendRouteResolver(
+            isolated_services.routes,
+            containers,
+        ).get_backend_route(route.route_id)
 
-    assert response.route_id == route.route_id
-    assert resolved is not None
-    assert resolved.state == BackendRouteState.Ready.value
-    assert resolved.proxy_target == "agent.private:34399"
+        assert response.route_id == route.route_id
+        assert resolved is not None
+        assert resolved.state == BackendRouteState.Ready.value
+        assert resolved.proxy_target == target
+        gateway.route_prewarmer.close()
 
 
 def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(

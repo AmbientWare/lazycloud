@@ -5,7 +5,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Barrier
-from uuid import uuid4
 
 from database.context import ServiceContext
 from database.recovery import ControlPlaneRecoveryFence
@@ -21,70 +20,38 @@ from identity.credential_files import CredentialFilePublication
 from identity.device_auth import DeviceAuthorizationService
 from shared.errors import ConflictError
 from shared.http.workspaces import WorkspaceAuditAction
-from sqlalchemy import create_engine, select
-from sqlalchemy.engine import make_url
-from sqlalchemy.schema import CreateSchema, DropSchema
-from tests.backing_services import postgres_dsn
+from sqlalchemy import select
+from sqlalchemy.engine import URL
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 
 @contextmanager
-def _postgres_test_schema() -> Iterator[str]:
-    database_url = postgres_dsn()
-
-    schema = f"atomic_auth_{uuid4().hex}"
-    admin_engine = create_engine(database_url)
-    try:
-        with admin_engine.begin() as connection:
-            connection.execute(CreateSchema(schema))
-    finally:
-        admin_engine.dispose()
-
-    try:
-        isolated_url = (
-            make_url(database_url)
-            .update_query_dict({"options": f"-csearch_path={schema}"})
-            .render_as_string(hide_password=False)
-        )
-        yield isolated_url
-    finally:
-        _drop_postgres_test_schema(database_url, schema)
-
-
-@contextmanager
 def _postgres_test_context(
     tmp_path: Path,
+    migrated_database_url: URL,
 ) -> Iterator[tuple[ServiceContext, DatabaseClient]]:
-    with _postgres_test_schema() as isolated_url:
-        database = DatabaseClient.from_settings(
-            DatabaseSettings(
-                url=isolated_url,
-                direct_url=isolated_url,
-                pool_size=12,
-                max_overflow=0,
-                statement_timeout_ms=0,
-                application_name=DatabaseApplicationName.Test,
-            )
+    url = migrated_database_url.render_as_string(hide_password=False)
+    database = DatabaseClient.from_settings(
+        DatabaseSettings(
+            url=url,
+            direct_url=url,
+            pool_size=12,
+            max_overflow=0,
+            statement_timeout_ms=0,
+            application_name=DatabaseApplicationName.Test,
         )
-        try:
-            database.create_schema()
-            yield ServiceContext.create(database, root=tmp_path, create_schema=False), database
-        finally:
-            database.dispose()
-
-
-def _drop_postgres_test_schema(database_url: str, schema: str) -> None:
-    engine = create_engine(database_url)
+    )
     try:
-        with engine.begin() as connection:
-            connection.execute(DropSchema(schema, cascade=True))
+        yield ServiceContext.create(database, root=tmp_path, create_schema=False), database
     finally:
-        engine.dispose()
+        database.dispose()
 
 
-def test_postgresql_authorization_claims_are_atomic(tmp_path: Path) -> None:
-    with _postgres_test_context(tmp_path) as (context, database):
+def test_postgresql_authorization_claims_are_atomic(
+    tmp_path: Path, migrated_database_url: URL
+) -> None:
+    with _postgres_test_context(tmp_path, migrated_database_url) as (context, database):
         bootstrap_barrier = Barrier(8)
 
         def bootstrap(index: int) -> tuple[bool, str]:
@@ -166,8 +133,9 @@ def test_postgresql_authorization_claims_are_atomic(tmp_path: Path) -> None:
 
 def test_postgresql_non_reusable_token_has_exactly_one_authenticated_claimant(
     tmp_path: Path,
+    migrated_database_url: URL,
 ) -> None:
-    with _postgres_test_context(tmp_path) as (context, database):
+    with _postgres_test_context(tmp_path, migrated_database_url) as (context, database):
         with database.session() as session:
             WorkspaceRepository(session).ensure_named("default")
         raw_token, created = AuthService(context).create_token(
@@ -207,8 +175,9 @@ def test_postgresql_non_reusable_token_has_exactly_one_authenticated_claimant(
 
 def test_postgresql_offline_recovery_requires_stopped_control_plane_and_replays(
     tmp_path: Path,
+    migrated_database_url: URL,
 ) -> None:
-    with _postgres_test_context(tmp_path) as (context, database):
+    with _postgres_test_context(tmp_path, migrated_database_url) as (context, database):
         auth = AuthService(context)
         auth.bootstrap_administrator(
             request_id="bootstrap:postgres-recovery-owner",

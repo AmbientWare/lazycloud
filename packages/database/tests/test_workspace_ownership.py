@@ -1,32 +1,32 @@
 from __future__ import annotations
 
 import pytest
-from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.identity import WorkspaceMemberRepository
 from identity.users import UserService
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole
 
 
-def test_a_workspace_has_at_most_one_owner(isolated_services: ApiServices) -> None:
+def test_a_workspace_has_at_most_one_owner(service_context: ServiceContext) -> None:
     """The owner is who the connected compute and the domains resolve through.
 
     A second one would make "whose account backs this workspace" have two answers.
     Adding members stays open, so the refusal has to be specific to the owner role
     rather than to membership.
     """
-    users = UserService(isolated_services.context)
+    users = UserService(service_context)
     first = users.create(display_name="first-owner")
     second = users.create(display_name="second-owner")
-    workspace = ControlPlaneService(isolated_services.context).set_workspace(
+    workspace = ControlPlaneService(service_context).set_workspace(
         "sole-owner",
         owner_user_id=first.id,
     )
 
     with (
         pytest.raises(ConflictError, match="already has an owner"),
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
     ):
         WorkspaceMemberRepository(session).add(
             workspace_id=workspace.id,
@@ -34,7 +34,7 @@ def test_a_workspace_has_at_most_one_owner(isolated_services: ApiServices) -> No
             role=WorkspaceRole.Owner,
         )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = WorkspaceMemberRepository(session)
         repository.add(
             workspace_id=workspace.id,

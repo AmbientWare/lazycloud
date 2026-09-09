@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from pydantic import JsonValue
 from shared.identity import TokenKind
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 
 
 @pytest.mark.parametrize(

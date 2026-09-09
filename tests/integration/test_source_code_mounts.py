@@ -26,7 +26,7 @@ from shared.errors import UpstreamUnavailableError
 from shared.identity import WorkspaceStorageConfig
 from storage.service import ObjectStorage
 from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 from worker.events import ContainerRequestContext
 from worker.execution import stub_code_cache_key
 from worker.source_code import SourceCodePackageMaterializer

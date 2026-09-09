@@ -19,7 +19,7 @@ from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.observability import UsageRecordTable
 from observability.usage_pricing import REPRICE_REFUSED_ACTION, UNPRICED_SPAN_ACTION
 from shared.billing_quotes import ContainerShape, LedgerBasis, LedgerComponent
-from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS
+from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS, PUBLISHED_METERED_RATE_HISTORY
 from shared.containers import ContainerRecord
 from shared.errors import InvalidInputError
 from shared.events import EventLevel
@@ -33,7 +33,7 @@ from shared.usage import (
     UsageUnit,
 )
 from sqlalchemy import select
-from tests.service_fixtures import unfunded_billing_account
+from tests.domain_fixtures import unfunded_billing_account
 
 # Rates only ever take effect in the future, so the usage they price is later
 # still. The offsets are the smallest that keep both facts true for a run.
@@ -130,7 +130,9 @@ def _cost_of(segments: Sequence[BillingLedgerSegmentTable], component: LedgerCom
 def test_compute_usage_crossing_a_rate_change_prices_as_tiling_segments(
     isolated_services: ApiServices,
 ) -> None:
-    now = utc_now()
+    now = max(
+        utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
+    ) + timedelta(days=1)
     shape = ContainerShape(
         billing_owner=UsageBillingOwner.PlatformFleet,
         gpu_type="",
@@ -206,7 +208,9 @@ def test_a_window_bills_the_greater_of_the_capacity_held_and_the_capacity_used(
     total is what the window actually consumed.
     """
 
-    now = utc_now()
+    now = max(
+        utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
+    ) + timedelta(days=1)
     workspace_id, container_id = _shaped_container(
         isolated_services,
         shape=ContainerShape(
@@ -283,7 +287,9 @@ def test_a_window_with_no_measured_record_bills_the_capacity_it_held(
     window that measured nothing still bills every resource it held.
     """
 
-    now = utc_now()
+    now = max(
+        utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
+    ) + timedelta(days=1)
     workspace_id, container_id = _shaped_container(
         isolated_services,
         shape=ContainerShape(
@@ -341,7 +347,9 @@ def test_a_window_with_no_measured_record_bills_the_capacity_it_held(
 def test_egress_is_metered_and_priced_at_an_explicit_zero(
     isolated_services: ApiServices,
 ) -> None:
-    now = utc_now()
+    now = max(
+        utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
+    ) + timedelta(days=1)
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
         PlatformRateRepository(session).publish(
@@ -375,7 +383,9 @@ def test_egress_is_metered_and_priced_at_an_explicit_zero(
 def test_unclassified_interface_traffic_does_not_become_an_egress_charge(
     isolated_services: ApiServices,
 ) -> None:
-    now = utc_now()
+    now = max(
+        utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
+    ) + timedelta(days=1)
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
         PlatformRateRepository(session).publish(
@@ -410,7 +420,9 @@ def test_a_re_recorded_quantity_keeps_the_frozen_cost_and_is_reported(
     disagreement is a durable error rather than a figure nobody compared.
     """
 
-    now = utc_now()
+    now = max(
+        utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
+    ) + timedelta(days=1)
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
         owner_user_id = WorkspaceMemberRepository(session).owner_user_id(workspace_id)
@@ -471,7 +483,9 @@ def test_a_re_recorded_quantity_keeps_the_frozen_cost_and_is_reported(
 def test_usage_no_published_rate_covers_is_recorded_without_cost_and_reported(
     isolated_services: ApiServices,
 ) -> None:
-    now = utc_now()
+    now = max(
+        utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
+    ) + timedelta(days=1)
     shape = ContainerShape(
         billing_owner=UsageBillingOwner.PlatformFleet,
         gpu_type="",
@@ -520,7 +534,9 @@ def test_a_rate_may_cover_unpriced_instants_but_not_ones_the_ledger_froze(
     frozen edge rather than the clock.
     """
 
-    now = utc_now()
+    now = max(
+        utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
+    ) + timedelta(days=1)
     shape = ContainerShape(
         billing_owner=UsageBillingOwner.PlatformFleet,
         gpu_type="",
@@ -661,7 +677,9 @@ def test_cost_priced_in_the_renewal_gap_lands_on_the_period_that_opens_over_it(
 ) -> None:
     """A delayed renewal must recover spend already recorded in its new period."""
 
-    now = utc_now()
+    now = max(
+        utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
+    ) + timedelta(days=1)
     owner_user_id, workspace_id = unfunded_billing_account(
         isolated_services.context,
         period_started_at=now - timedelta(days=30),

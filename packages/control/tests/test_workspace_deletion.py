@@ -64,12 +64,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from storage.service import ObjectStorage
 from storage_client.s3 import S3ObjectInfo
+from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
 from tests.fakes import FakeObjectClient
-from tests.service_fixtures import (
-    administrator_credential,
-    owned_workspace,
-    workspace_owner_user_id,
-)
+from tests.service_fixtures import administrator_credential
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 

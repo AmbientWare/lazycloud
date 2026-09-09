@@ -48,17 +48,16 @@ from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 
 def test_refunded_spent_credit_and_promotional_debt_payment_reconcile(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     database = DatabaseClient.from_settings(
         DatabaseSettings(
-            url=postgres_database_url.render_as_string(hide_password=False),
+            url=migrated_database_url.render_as_string(hide_password=False),
             application_name=DatabaseApplicationName.Test,
         )
     )
     start = utc_now() - timedelta(seconds=2)
     try:
-        database.create_schema()
         with database.session() as session:
             user = UserRepository(session).create(display_name="refund economics")
             workspace = WorkspaceRepository(session).create(name="refund economics")
@@ -166,11 +165,11 @@ def test_refunded_spent_credit_and_promotional_debt_payment_reconcile(
 
 
 def test_report_keeps_cash_out_of_revenue_and_requires_reconciled_actual_costs(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     database = DatabaseClient.from_settings(
         DatabaseSettings(
-            url=postgres_database_url.render_as_string(hide_password=False),
+            url=migrated_database_url.render_as_string(hide_password=False),
             application_name=DatabaseApplicationName.Test,
         )
     )
@@ -180,7 +179,6 @@ def test_report_keeps_cash_out_of_revenue_and_requires_reconciled_actual_costs(
     gross = 9_007_199_254_740_999
     usage_id, segment_id = str(uuid4()), str(uuid4())
     try:
-        database.create_schema()
         with database.session() as session:
             user = UserRepository(session).create(display_name="economics")
             workspace = WorkspaceRepository(session).create(name="economics")

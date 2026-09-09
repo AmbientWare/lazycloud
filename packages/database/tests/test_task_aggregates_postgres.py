@@ -11,12 +11,11 @@ from database import (
     DatabaseApplicationName,
     DatabaseClient,
     DatabaseSettings,
-    bootstrap_database,
 )
 
 
 def test_task_aggregates_run_against_postgresql_column_types(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     """The aggregates have to survive the types the real backend enforces.
 
@@ -26,8 +25,7 @@ def test_task_aggregates_run_against_postgresql_column_types(
     this shipped, so the proof belongs on the backend that has an opinion.
     """
 
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
+    database_url = migrated_database_url.render_as_string(hide_password=False)
     database = DatabaseClient.from_settings(
         DatabaseSettings(url=database_url, application_name=DatabaseApplicationName.Test)
     )

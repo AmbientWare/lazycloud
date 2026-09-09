@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.compute import (
     ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRepository,
@@ -16,12 +16,12 @@ from shared.timestamps import utc_now
 
 
 def test_active_capacity_interruptions_return_planned_drains_and_preemptions(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     pool = MachinePool("interruption-test")
     now = utc_now()
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         owner = WorkspaceMemberRepository(session).owner(workspace_id)
         assert owner is not None
         machines = MachineRepository(session)

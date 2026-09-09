@@ -11,11 +11,11 @@ from shared.tasks import TaskStatus
 from sqlalchemy import insert
 from sqlalchemy.engine import URL
 
-from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings, bootstrap_database
+from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 
 def test_the_hourly_summary_counts_success_rather_than_inferring_it(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     """What the app card paints each hour with.
 
@@ -24,8 +24,7 @@ def test_the_hourly_summary_counts_success_rather_than_inferring_it(
     trusts, and a cancelled or unrecognised task counted into it reports work
     that nobody finished as work that came out fine.
     """
-    dsn = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(dsn)
+    dsn = migrated_database_url.render_as_string(hide_password=False)
     database = DatabaseClient.from_settings(
         DatabaseSettings(
             url=dsn,

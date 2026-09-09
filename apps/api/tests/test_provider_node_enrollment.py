@@ -17,6 +17,7 @@ import httpx
 import pytest
 from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
+from billing.rate_publication import publish_metered_rate_history
 from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
@@ -89,8 +90,9 @@ from shared.supplier_costs import SupplierCostTerms
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import ProgrammingError
 from tests.backing_services import postgres_url
+from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
 from tests.real_redis import RealRedisActors
-from tests.service_fixtures import owned_workspace, service_graph, workspace_owner_user_id
+from tests.service_fixtures import service_graph
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings, bootstrap_database
 
@@ -439,6 +441,8 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
             RedisSettings(url=real_redis_actors.url, key_prefix=real_redis_actors.prefix),
         )
         try:
+            with database.session() as session:
+                publish_metered_rate_history(session)
             with service_graph(
                 database,
                 tmp_path,

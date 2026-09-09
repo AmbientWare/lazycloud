@@ -20,16 +20,15 @@ from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 
 def test_build_dispatch_is_atomic_and_expired_owner_cannot_acknowledge(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     database = DatabaseClient.from_settings(
         DatabaseSettings(
-            url=postgres_database_url.render_as_string(hide_password=False),
+            url=migrated_database_url.render_as_string(hide_password=False),
             application_name=DatabaseApplicationName.Test,
         )
     )
     try:
-        database.create_schema()
         with database.session() as session:
             workspace = WorkspaceRepository(session).create(name="dispatch-owner")
         record = ImageBuildRecord(
@@ -76,16 +75,15 @@ def test_build_dispatch_is_atomic_and_expired_owner_cannot_acknowledge(
 
 
 def test_build_logs_replay_by_sequence_without_repeating_or_skipping_output(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     database = DatabaseClient.from_settings(
         DatabaseSettings(
-            url=postgres_database_url.render_as_string(hide_password=False),
+            url=migrated_database_url.render_as_string(hide_password=False),
             application_name=DatabaseApplicationName.Test,
         )
     )
     try:
-        database.create_schema()
         with database.session() as session:
             workspace = WorkspaceRepository(session).create(name="log-owner")
             record = ImageBuildRecord(
@@ -124,16 +122,15 @@ def test_build_logs_replay_by_sequence_without_repeating_or_skipping_output(
 
 
 def test_publication_commits_current_image_metadata_with_terminal_build(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
     database = DatabaseClient.from_settings(
         DatabaseSettings(
-            url=postgres_database_url.render_as_string(hide_password=False),
+            url=migrated_database_url.render_as_string(hide_password=False),
             application_name=DatabaseApplicationName.Test,
         )
     )
     try:
-        database.create_schema()
         with database.session() as session:
             workspace = WorkspaceRepository(session).create(name="publication-owner")
             build = ImageBuildRecord(

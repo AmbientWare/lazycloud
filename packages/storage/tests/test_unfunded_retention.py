@@ -21,10 +21,10 @@ from storage import unfunded_retention
 
 
 def test_only_positive_balance_ends_retention_and_prevents_a_concurrent_claim(
-    postgres_services: ApiServices,
+    isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    services = postgres_services
+    services = isolated_services
     volume = services.volumes.get_or_create("keep-on-topup", admit=None)
     current = utc_now() + timedelta(days=31)
     with services.database.session() as session:
@@ -93,10 +93,10 @@ def test_only_positive_balance_ends_retention_and_prevents_a_concurrent_claim(
 
 
 def test_retention_restarts_after_observed_recovery_and_claims_only_managed_data(
-    postgres_services: ApiServices,
+    isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    services = postgres_services
+    services = isolated_services
     volume = services.volumes.get_or_create("managed-expiry", admit=None)
     current = utc_now() + timedelta(days=31)
     with services.database.session() as session:

@@ -9,7 +9,7 @@ from shared.identity import TokenKind
 from shared.image_building.records import ImageArchiveRecord, ImageRecord
 from storage.image_archive import ImageArchiveSettings
 from storage_client.s3 import S3PresignedUpload
-from tests.service_fixtures import owned_workspace
+from tests.domain_fixtures import owned_workspace
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.image_lifecycle import ImageRegistryStore
 from worker.origin_access import (

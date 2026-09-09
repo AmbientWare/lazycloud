@@ -28,15 +28,13 @@ from database import (
     DatabaseApplicationName,
     DatabaseClient,
     DatabaseSettings,
-    bootstrap_database,
 )
 
 
 def test_log_pages_are_workspace_scoped_and_resume_by_row_identity(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
 ) -> None:
-    database_url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(database_url)
+    database_url = migrated_database_url.render_as_string(hide_password=False)
     database = DatabaseClient.from_settings(
         DatabaseSettings(url=database_url, application_name=DatabaseApplicationName.Test)
     )
@@ -106,11 +104,10 @@ def test_log_pages_are_workspace_scoped_and_resume_by_row_identity(
 
 
 def test_log_retention_deletes_only_expired_rows_under_each_owners_plan(
-    postgres_database_url: URL,
+    migrated_database_url: URL,
     tmp_path: Path,
 ) -> None:
-    url = postgres_database_url.render_as_string(hide_password=False)
-    bootstrap_database(url)
+    url = migrated_database_url.render_as_string(hide_password=False)
     database = DatabaseClient.from_settings(
         DatabaseSettings(url=url, application_name=DatabaseApplicationName.Test)
     )
