@@ -1,6 +1,6 @@
 from enum import StrEnum
 
-from provider_cloudflare.workspace_storage import CloudflareWorkspaceStorageIssuer
+from provider_aws.workspace_storage import AwsWorkspaceStorageIssuer, AwsWorkspaceStorageSettings
 from provider_garage.workspace_storage import GarageSettings, GarageWorkspaceStorageIssuer
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.deployment_settings import MissingDeploymentSettingError
@@ -9,7 +9,7 @@ from storage_client.s3 import S3ObjectStoreSettings
 
 
 class WorkspaceStorageProvider(StrEnum):
-    Cloudflare = "cloudflare"
+    Aws = "aws"
     Garage = "garage"
 
 
@@ -21,8 +21,8 @@ class WorkspaceStorageIssuerSettings(BaseSettings):
 
 def managed_workspace_storage_issuer(settings: S3ObjectStoreSettings) -> WorkspaceStorageIssuer:
     match WorkspaceStorageIssuerSettings().issuer:
-        case WorkspaceStorageProvider.Cloudflare:
-            return CloudflareWorkspaceStorageIssuer(settings)
+        case WorkspaceStorageProvider.Aws:
+            return AwsWorkspaceStorageIssuer(settings, AwsWorkspaceStorageSettings())
         case WorkspaceStorageProvider.Garage:
             return GarageWorkspaceStorageIssuer(settings, GarageSettings())
         case None:

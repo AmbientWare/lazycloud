@@ -1,10 +1,7 @@
 # Cloudflare provider
 
-R2 owns application object storage and temporary credentials scoped to one
-workspace bucket. One deployment settings object supplies its account and parent
-credential pair. Parent credentials stay inside the control plane; workers receive
-only expiring workspace grants. Custom hostnames use a separate zone API token
-because their permissions differ from R2 storage administration.
+This adapter owns customer hostnames through a scoped zone API token.
+Object storage belongs to the storage domain and its selected provider.
 
 - Act on the hostname identifier the provider assigned, not on the hostname itself.
   The name belongs to the customer and can be registered again by someone else; the
