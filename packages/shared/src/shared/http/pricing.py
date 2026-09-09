@@ -14,6 +14,7 @@ from shared.billing_rate_card import (
     NO_CARD_MAX_GPUS,
     PRICING_VERSION,
     PUBLISHED_GPU_RATES,
+    PUBLISHED_METERED_RATE_HISTORY,
     PUBLISHED_PLACEMENT_RATES,
     PUBLISHED_PLANS,
     PUBLISHED_PLATFORM_RATE,
@@ -26,7 +27,7 @@ from shared.billing_rate_card import (
 from shared.gpu import GpuType
 from shared.http.base import HttpModel
 from shared.payments import BILLING_CURRENCY
-from shared.placement import PlacementRateClass, ProductRegion
+from shared.placement import PlacementRateClass
 from shared.usage import UsageBillingOwner
 
 
@@ -90,9 +91,12 @@ class PlacementComputeRateResponse(HttpModel):
 
 class PublishedPlacementRateResponse(HttpModel):
     rate_class: PlacementRateClass
-    region: ProductRegion | None
+    effective_at: datetime
+    pinned: bool
+    preemptible: bool
     name: str
-    multiplier: Decimal = Field(gt=0)
+    cpu_memory_multiplier: Decimal = Field(gt=0)
+    gpu_multiplier: Decimal = Field(gt=0)
     compute_rates: list[PlacementComputeRateResponse]
 
 
@@ -137,9 +141,16 @@ def pricing_catalog_response() -> PricingCatalogResponse:
         placement_rates=[
             PublishedPlacementRateResponse(
                 rate_class=placement.rate_class,
-                region=placement.region,
+                effective_at=max(
+                    card.effective_at
+                    for card in PUBLISHED_METERED_RATE_HISTORY
+                    if any(rate.rate_class == placement.rate_class for rate in card.compute_rates)
+                ),
+                pinned=placement.pinned,
+                preemptible=placement.preemptible,
                 name=placement.name,
-                multiplier=placement.multiplier,
+                cpu_memory_multiplier=placement.cpu_memory_multiplier,
+                gpu_multiplier=placement.gpu_multiplier,
                 compute_rates=[
                     PlacementComputeRateResponse(
                         billing_owner=rate.billing_owner,

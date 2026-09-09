@@ -20,6 +20,17 @@ PlacementRateClass = Annotated[
 ]
 AUTO_RATE_CLASS: PlacementRateClass = "auto"
 
+PINNED_RATE_CLASS: PlacementRateClass = "pinned"
+NON_PREEMPTIBLE_RATE_CLASS: PlacementRateClass = "non_preemptible"
+PINNED_NON_PREEMPTIBLE_RATE_CLASS: PlacementRateClass = "pinned_non_preemptible"
+
+
+def placement_rate_class(*, pinned: bool, preemptible: bool) -> PlacementRateClass:
+    if preemptible:
+        return PINNED_RATE_CLASS if pinned else AUTO_RATE_CLASS
+    return PINNED_NON_PREEMPTIBLE_RATE_CLASS if pinned else NON_PREEMPTIBLE_RATE_CLASS
+
+
 _PROVIDER_REGIONS: dict[str, ProductRegion] = {
     "us-east-1": ProductRegion.UsEast,
     "us-east-2": ProductRegion.UsEast,

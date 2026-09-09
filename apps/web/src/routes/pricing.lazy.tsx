@@ -190,6 +190,11 @@ function MarketingPricing() {
 
   const placement = catalog.placement_rates.find((rate) => rate.rate_class === "auto");
   if (!placement) throw new Error("the pricing catalog has no base compute rates");
+  const nonPreemptible = catalog.placement_rates.find((rate) => !rate.pinned && !rate.preemptible);
+  const pinned = catalog.placement_rates.find((rate) => rate.pinned && rate.preemptible);
+  const pinnedNonPreemptible = catalog.placement_rates.find(
+    (rate) => rate.pinned && !rate.preemptible,
+  );
 
   return (
     <MarketingLayout>
@@ -232,6 +237,18 @@ function MarketingPricing() {
                 groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
                 id={fleetRatesId}
               />
+              <p className="mb-3 text-[12.5px] leading-relaxed text-muted-foreground">
+                Compute rates shown allow interruptions and use automatic location selection.
+                {nonPreemptible
+                  ? ` Disabling interruptions costs ${nonPreemptible.cpu_memory_multiplier}x for CPU and memory.`
+                  : ""}
+                {pinned
+                  ? ` Selecting a region or availability zone costs ${pinned.cpu_memory_multiplier}x for CPU and memory and ${pinned.gpu_multiplier}x for GPUs.`
+                  : ""}
+                {pinnedNonPreemptible
+                  ? ` Combining both choices costs ${pinnedNonPreemptible.cpu_memory_multiplier}x for CPU and memory and ${pinnedNonPreemptible.gpu_multiplier}x for GPUs.`
+                  : ""}
+              </p>
               <a
                 className="interactive-link text-[12.5px] text-muted-foreground underline underline-offset-4"
                 href={new URL("/platform/plans#compute-pricing", DOCS_URL).href}

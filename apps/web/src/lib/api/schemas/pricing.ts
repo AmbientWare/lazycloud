@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { productRegionSchema } from "./placement";
 
 export const billingPlanIdSchema = z.enum(["free", "team"]);
 export type BillingPlanId = z.infer<typeof billingPlanIdSchema>;
@@ -85,9 +84,15 @@ export const publishedPlacementRateSchema = z
       .min(1)
       .max(64)
       .regex(/^[a-z][a-z0-9_-]*$/),
-    region: productRegionSchema.nullable(),
+    effective_at: z.string().datetime({ offset: true }),
+    pinned: z.boolean(),
+    preemptible: z.boolean(),
     name: z.string(),
-    multiplier: z
+    cpu_memory_multiplier: z
+      .string()
+      .regex(/^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/)
+      .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0),
+    gpu_multiplier: z
       .string()
       .regex(/^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/)
       .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0),

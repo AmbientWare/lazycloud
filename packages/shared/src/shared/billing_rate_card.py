@@ -9,10 +9,10 @@ from typing import Literal, TypeAlias
 from shared.billing_plans import BillingPlanId
 from shared.billing_quotes import BYTES_PER_GIB, NANOS_PER_USD
 from shared.gpu import NO_GPU, SUPPORTED_GPU_TYPES, GpuType
-from shared.placement import AUTO_RATE_CLASS, PlacementRateClass, ProductRegion
+from shared.placement import AUTO_RATE_CLASS, PlacementRateClass, placement_rate_class
 from shared.usage import UsageBillingOwner
 
-PRICING_VERSION = "2026-09-07.a"
+PRICING_VERSION = "2026-09-09.a"
 """The version of the plans, entitlements, and rates exposed to customers."""
 
 FREE_PLAN_MONTHLY_NANOS = 0
@@ -141,28 +141,7 @@ the two together is `tests/contracts`, which reads the column and compares."""
 
 
 def _stored_rate(exact: Decimal) -> Decimal:
-    """A rate the column holds exactly, at or below the figure it came from.
-
-    A price per gibibyte-month has no exact rate per byte-second: the divisor
-    carries factors of three, so the quotient does not terminate and no amount of
-    column precision would make it. Compute never meets this because a per-hour
-    figure divides by 3600 into a whole nanodollar, which the card holds as a
-    term rather than a coincidence.
-
-    So the published figure is the one this card owns and the stored rate is
-    derived from it downwards. The direction is the whole of it. Rounding up
-    would charge fractionally more than the page states, which is a price the
-    platform never published; rounding down charges fractionally less, which is a
-    rounding artefact in the customer's favour and costs eighteen millionths of
-    the bill.
-
-    Down has a floor, and reaching it is refused rather than rounded to. A price
-    small enough to land under the column's last step would be stored as zero,
-    and a zero here is indistinguishable from the stated zero that means free —
-    so the page would publish a price and the platform would bill nothing at all,
-    which no comparison against the published figure can catch because charging
-    nothing is charging no more than it says.
-    """
+    """Round toward the customer without turning a positive price into free usage."""
 
     stored = exact.quantize(STORED_RATE_STEP, rounding=ROUND_DOWN)
     if stored == 0 and exact != 0:
@@ -189,50 +168,15 @@ def _management_fee(fleet_nanos_per_hour: int) -> int:
 
 
 def _exact_per_second(nanos_per_hour: int) -> Decimal:
-    """An hourly price as the per-second rate the ledger multiplies, or nothing.
-
-    Compute refuses where the platform rates round: an hourly figure is chosen by
-    whoever prices the card, so one that does not divide into a whole nanodollar
-    a second is a figure to correct rather than a quotient to truncate. Rounding
-    it down here would quietly sell a processor for less than the page says
-    forever, and letting it through unrounded hands the decision to the rate
-    column, which may round it up.
-
-    Whole nanodollars, not merely a figure the column can hold. Those are
-    different tests and the weaker one is not enough: 55_126_809 an hour is
-    15313.0025 a second, which `NUMERIC(30, 12)` stores exactly and the pricing
-    page still refuses, because per-second is a unit the page publishes rather
-    than only a number the database keeps.
-    """
-
-    if nanos_per_hour % _SECONDS_PER_HOUR != 0:
-        raise ValueError(
-            f"{nanos_per_hour} nanodollars an hour is not a whole number of nanodollars a "
-            f"second; every published figure divides by {_SECONDS_PER_HOUR}, and one "
-            "that does not has no per-second price to publish"
-        )
-    return Decimal(nanos_per_hour) / _SECONDS_PER_HOUR
+    exact = Decimal(nanos_per_hour) / _SECONDS_PER_HOUR
+    if _stored_rate(exact) != exact:
+        raise ValueError("the hourly compute rate exceeds stored per-second precision")
+    return exact
 
 
 @dataclass(frozen=True, slots=True)
 class PublishedComputeRate:
-    """One shape class's figures, in the units they are published in.
-
-    Published per hour and per whole unit — a core, a gibibyte, a card — because
-    that is what a customer compares against every other cloud. The database
-    stores the per-second figures derived below, and the derivation is exact
-    division rather than a rounded conversion, so the figure on the page and the
-    figure in the rate row are the same number said twice.
-
-    Every figure on this card divides by 3600 to a whole nanodollar, which is
-    what lets a per-second rate reach `NUMERIC(30, 12)` unrounded. That
-    divisibility is load-bearing rather than incidental, and `_exact_per_second`
-    holds it here rather than leaving it to the contract test: a price that broke
-    it would otherwise reach the rate column as a 28-digit quotient and be
-    rounded by the database — in whichever direction the database chose, which
-    may be upward, and a rate above the published figure is a price the platform
-    never stated.
-    """
+    """Hourly resource prices with exact per-second values at ledger precision."""
 
     billing_owner: UsageBillingOwner
     gpu_type: str
@@ -660,10 +604,74 @@ def _published_compute_rates(
 
 @dataclass(frozen=True, slots=True)
 class PublishedMeteredRateCard:
+    """Changes only the listed compute classes and optional platform prices."""
+
     pricing_version: str
     effective_at: datetime
     compute_rates: tuple[PublishedComputeRate, ...]
-    platform_rate: PublishedPlatformRate
+    platform_rate: PublishedPlatformRate | None
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedPlacementRate:
+    rate_class: PlacementRateClass
+    pinned: bool
+    preemptible: bool
+    name: str
+    cpu_memory_multiplier: Decimal
+    gpu_multiplier: Decimal
+    compute_rates: tuple[PublishedComputeRate, ...]
+
+
+def _multiplied_hourly_rate(nanos_per_hour: int, multiplier: Decimal) -> int:
+    amount = nanos_per_hour * multiplier
+    if amount != amount.to_integral_value():
+        raise ValueError("a multiplied hourly rate must remain an exact number of nanodollars")
+    return int(amount)
+
+
+def _placement_rates(
+    rates: tuple[PublishedComputeRate, ...],
+) -> tuple[PublishedPlacementRate, ...]:
+    placements: list[PublishedPlacementRate] = []
+    for pinned, preemptible, name in (
+        (False, True, "Automatic"),
+        (True, True, "Selected location"),
+        (False, False, "Automatic, non-preemptible"),
+        (True, False, "Selected location, non-preemptible"),
+    ):
+        rate_class = placement_rate_class(pinned=pinned, preemptible=preemptible)
+        location = Decimal("1.5") if pinned else Decimal(1)
+        cpu_memory = location * (1 if preemptible else 3)
+        placements.append(
+            PublishedPlacementRate(
+                rate_class=rate_class,
+                pinned=pinned,
+                preemptible=preemptible,
+                name=name,
+                cpu_memory_multiplier=cpu_memory,
+                gpu_multiplier=location,
+                compute_rates=tuple(
+                    replace(
+                        rate,
+                        rate_class=rate_class,
+                        nanos_per_cpu_core_hour=_multiplied_hourly_rate(
+                            rate.nanos_per_cpu_core_hour, cpu_memory
+                        ),
+                        nanos_per_memory_gib_hour=_multiplied_hourly_rate(
+                            rate.nanos_per_memory_gib_hour, cpu_memory
+                        ),
+                        nanos_per_gpu_card_hour=_multiplied_hourly_rate(
+                            rate.nanos_per_gpu_card_hour, location
+                        ),
+                    )
+                    if rate.billing_owner is UsageBillingOwner.PlatformFleet
+                    else replace(rate, rate_class=rate_class)
+                    for rate in rates
+                ),
+            )
+        )
+    return tuple(placements)
 
 
 PUBLISHED_METERED_RATE_HISTORY: tuple[PublishedMeteredRateCard, ...] = (
@@ -672,6 +680,19 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[PublishedMeteredRateCard, ...] = (
         effective_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         compute_rates=_published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES),
         platform_rate=_INITIAL_PLATFORM_RATE,
+    ),
+    PublishedMeteredRateCard(
+        pricing_version="2026-09-09.a",
+        effective_at=datetime(2026, 9, 9, tzinfo=timezone.utc),
+        compute_rates=tuple(
+            rate
+            for placement in _placement_rates(
+                _published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES)
+            )
+            if placement.rate_class != AUTO_RATE_CLASS
+            for rate in placement.compute_rates
+        ),
+        platform_rate=None,
     ),
     PublishedMeteredRateCard(
         pricing_version="2026-09-04.a",
@@ -685,11 +706,22 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[PublishedMeteredRateCard, ...] = (
 )
 """Reviewed price history. Existing cards retain their original figures and dates."""
 
+
 _CURRENT_METERED_CARD = PUBLISHED_METERED_RATE_HISTORY[-1]
 METERED_RATE_VERSION = _CURRENT_METERED_CARD.pricing_version
 METERED_RATES_EFFECTIVE_AT = _CURRENT_METERED_CARD.effective_at
-PUBLISHED_COMPUTE_RATES = _CURRENT_METERED_CARD.compute_rates
-PUBLISHED_PLATFORM_RATE = _CURRENT_METERED_CARD.platform_rate
+PUBLISHED_COMPUTE_RATES = tuple(
+    {
+        (rate.billing_owner, rate.rate_class, rate.gpu_type): rate
+        for card in PUBLISHED_METERED_RATE_HISTORY
+        for rate in card.compute_rates
+    }.values()
+)
+PUBLISHED_PLATFORM_RATE = next(
+    card.platform_rate
+    for card in reversed(PUBLISHED_METERED_RATE_HISTORY)
+    if card.platform_rate is not None
+)
 PUBLISHED_SHAPE_RATES = tuple(
     PublishedShapeRate(
         billing_owner=rate.billing_owner,
@@ -709,34 +741,9 @@ PUBLISHED_GPU_RATES = tuple(
 )
 
 
-@dataclass(frozen=True, slots=True)
-class PublishedPlacementRate:
-    rate_class: PlacementRateClass
-    region: ProductRegion | None
-    name: str
-    multiplier: Decimal
-    compute_rates: tuple[PublishedComputeRate, ...]
-
-    def __post_init__(self) -> None:
-        if self.multiplier <= 0 or not self.compute_rates:
-            raise ValueError("a placement class requires a positive multiplier and compute rates")
-        if any(rate.rate_class != self.rate_class for rate in self.compute_rates):
-            raise ValueError("placement compute rates must belong to their published class")
-
-
-PUBLISHED_PLACEMENT_RATES: tuple[PublishedPlacementRate, ...] = (
-    PublishedPlacementRate(
-        rate_class=AUTO_RATE_CLASS,
-        region=None,
-        name="Automatic",
-        multiplier=Decimal(1),
-        compute_rates=PUBLISHED_COMPUTE_RATES,
-    ),
+PUBLISHED_PLACEMENT_RATES = _placement_rates(
+    _published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES)
 )
-
-
-def published_placement_rate(region: ProductRegion | None) -> PublishedPlacementRate | None:
-    return next((rate for rate in PUBLISHED_PLACEMENT_RATES if rate.region == region), None)
 
 
 if tuple(rate.gpu_type for rate in PUBLISHED_GPU_RATES) != SUPPORTED_GPU_TYPES:
@@ -787,6 +794,5 @@ __all__ = [
     "PublishedShapeRate",
     "account_terms",
     "complimentary_terms",
-    "published_placement_rate",
     "published_plan",
 ]

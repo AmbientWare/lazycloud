@@ -7,14 +7,6 @@ import type { Deployment } from "@/lib/api/schemas";
 import { formatDuration, resourceAllocation } from "@/lib/format";
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 
-/**
- * What the current version was provisioned with: the container it gets, and
- * the limits work runs under.
- *
- * Split in two because the halves answer different questions — "what is it
- * running on" and "how hard is it allowed to run" — and a single row of eight
- * readings truncated its own labels rather than saying either.
- */
 export function WorkloadConfiguration({
   deployment,
   kind,
@@ -25,7 +17,7 @@ export function WorkloadConfiguration({
   const resources = deployment.spec.resources;
   const pricing = useQuery(pricingCatalogQueryOptions());
   const placement = pricing.data?.placement_rates.find(
-    (rate) => rate.region === (resources.region ?? null),
+    (rate) => rate.pinned === Boolean(resources.region) && rate.preemptible === resources.preemptible,
   );
   // A Pod holds connections rather than executing tasks, so per-task
   // concurrency and timeout describe nothing it does.
@@ -43,19 +35,36 @@ export function WorkloadConfiguration({
           />
         ) : null}
         <Fact label="Pool" value={deployment.spec.pool || "Not reported"} />
-        <Fact label="Region" value={placement?.name ?? resources.region ?? "Automatic"} />
+        <Fact label="Region" value={resources.region || "Automatic"} />
         <Fact
-          label="Current region multiplier"
+          label="Platform CPU and memory multiplier"
           value={
-            placement ? `${placement.multiplier}x` : pricing.isPending ? "Loading" : "Unavailable"
+            placement
+              ? `${placement.cpu_memory_multiplier}x`
+              : pricing.isPending
+                ? "Loading"
+                : "Unavailable"
           }
         />
+        {resources.gpu.length > 0 ? (
+          <Fact
+            label="Platform GPU multiplier"
+            value={
+              placement
+                ? `${placement.gpu_multiplier}x`
+                : pricing.isPending
+                  ? "Loading"
+                  : "Unavailable"
+            }
+          />
+        ) : null}
       </ConfigurationGroup>
       <p className="text-xs leading-relaxed text-muted-foreground lg:col-span-2">
         {resources.region
           ? "This workload is restricted to its selected region. New starts require region selection on the account's plan."
-          : "Automatic region selection follows your compute pool policy at its base rate."}{" "}
-        Set the region in your SDK deployment configuration before deploying a new version.
+          : "Automatic region selection follows your compute pool policy without a location premium."}{" "}
+        Set the region in your SDK configuration before deploying a new
+        version.
       </p>
 
       <ConfigurationGroup title="Execution">

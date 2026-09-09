@@ -13,10 +13,8 @@ from compute.request_placement import ComputeCapacityPurchase
 from coordination.wake_signal import WakeSignalPublisher
 from pydantic import JsonValue
 from shared.billing_quotes import ContainerShape
-from shared.billing_rate_card import published_placement_rate
 from shared.contracts import ContractModel
-from shared.errors import InvalidInputError
-from shared.placement import PlacementRateClass
+from shared.placement import PlacementRateClass, placement_rate_class
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
     SchedulerContainerCancellationResult,
@@ -1215,10 +1213,10 @@ class SchedulerContainerRequestService:
 
 
 def _request_rate_class(request: SchedulerWorkerRequest) -> PlacementRateClass:
-    rate = published_placement_rate(request.region)
-    if rate is None:
-        raise InvalidInputError("selected region has no published compute rate")
-    return rate.rate_class
+    return placement_rate_class(
+        pinned=request.region is not None,
+        preemptible=request.preemptible,
+    )
 
 
 def _container_state(

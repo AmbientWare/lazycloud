@@ -45,6 +45,7 @@ export const deploymentSchema = z.object({
           timeout_seconds: z.number().nullish(),
           concurrency: z.number().default(1),
           keep_warm: z.number().nullish(),
+          preemptible: z.boolean().optional(),
         })
         .default({ gpu: [], gpu_count: 0, concurrency: 1 }),
       route: z.string().nullish(),
