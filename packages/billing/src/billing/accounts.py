@@ -63,6 +63,8 @@ class BillingAccountService:
         # transaction open across a provider it never calls.
         registered = accounts.get_by_user(user_id)
         if registered is not None and _provisioned(registered):
+            if registered.subscription_terms_version is None:
+                return self._verify_terms(payments, registered)
             return registered
         # Provisioning is serialized on the account's own row, which is created
         # first so that there is a row to serialize on. The lock is deliberately
@@ -100,7 +102,11 @@ class BillingAccountService:
         """
 
         if _provisioned(existing):
-            return existing
+            return (
+                self._verify_terms(payments, existing)
+                if existing.subscription_terms_version is None
+                else existing
+            )
         customer_id = self._customer_id(
             payments, existing, user_id=user_id, workspace_id=workspace_id
         )
@@ -136,6 +142,33 @@ class BillingAccountService:
                 plan=plan,
             ),
             plan=plan,
+            subscription_terms_version=subscription.terms_version,
+            scheduled_terms_version=subscription.scheduled_terms_version,
+            scheduled_change_at=subscription.scheduled_change_at,
+        )
+
+    def _verify_terms(
+        self, payments: SubscriptionPaymentProvider, account: BillingAccount
+    ) -> BillingAccount:
+        accounts = BillingAccountRepository(self.session)
+        locked = accounts.get_by_user(account.user_id, for_update=True)
+        if locked is None:
+            raise NotFoundError("billing account disappeared while verifying subscription terms")
+        if locked.subscription_terms_version is not None:
+            return locked
+        held = payments.subscription(provider_subscription_id=locked.provider_subscription_id)
+        if held.terms_version is None or held.plan is not locked.plan:
+            raise UpstreamUnavailableError("subscription terms require billing reconciliation")
+        return accounts.upsert(
+            user_id=locked.user_id,
+            status=locked.status,
+            provider_customer_id=locked.provider_customer_id,
+            provider_subscription_id=locked.provider_subscription_id,
+            provider_credit_grant_id=locked.provider_credit_grant_id,
+            plan=locked.plan,
+            subscription_terms_version=held.terms_version,
+            scheduled_terms_version=held.scheduled_terms_version,
+            scheduled_change_at=held.scheduled_change_at,
         )
 
     def _customer_id(

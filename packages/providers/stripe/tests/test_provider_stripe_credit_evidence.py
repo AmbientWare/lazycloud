@@ -83,7 +83,14 @@ def test_paid_plan_proof_uses_paginated_subscription_lines_including_paid_prorat
                                 "price": {
                                     "id": "price_plan_old",
                                     "product": "lazycloud_plan_team",
-                                    "lookup_key": None,
+                                    "lookup_key": "lazycloud_plan_team_monthly_usd",
+                                    "currency": "usd",
+                                    "unit_amount": 10000,
+                                    "recurring": {
+                                        "interval": "month",
+                                        "interval_count": 1,
+                                        "usage_type": "licensed",
+                                    },
                                 },
                                 "current_period_start": 1788220800,
                                 "current_period_end": 1790812800,
@@ -128,7 +135,14 @@ def test_paid_plan_proof_uses_paginated_subscription_lines_including_paid_prorat
                                     "price": {
                                         "id": "price_plan_old",
                                         "product": "lazycloud_plan_team",
-                                        "lookup_key": None,
+                                        "lookup_key": "lazycloud_plan_team_monthly_usd",
+                                        "currency": "usd",
+                                        "unit_amount": 10000,
+                                        "recurring": {
+                                            "interval": "month",
+                                            "interval_count": 1,
+                                            "usage_type": "licensed",
+                                        },
                                     }
                                 }
                             },

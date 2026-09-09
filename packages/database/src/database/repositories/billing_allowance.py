@@ -6,8 +6,9 @@ from uuid import uuid4
 
 from database.tables.billing_allowance import BillingAllowancePeriodTable
 from database.tables.billing_ledger import BillingLedgerSegmentTable
+from shared.billing_plans import SubscriptionTermsVersion
 from shared.enums import StringEnum
-from shared.errors import InvalidInputError
+from shared.errors import InvalidInputError, NotFoundError
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -74,6 +75,7 @@ class SpentAllowancePeriod:
     ended_at: datetime
     allowance_nanos: int
     spent_nanos: int
+    funded_terms_version: SubscriptionTermsVersion | None = None
 
     @property
     def remaining_nanos(self) -> int:
@@ -277,6 +279,7 @@ class BillingAllowanceRepository:
                 BillingAllowancePeriodTable.period_ended_at,
                 BillingAllowancePeriodTable.allowance_nanos,
                 BillingAllowancePeriodTable.spent_nanos,
+                BillingAllowancePeriodTable.funded_terms_version,
             )
             .where(*_covering(user_id, at))
             .order_by(BillingAllowancePeriodTable.period_started_at.desc())
@@ -284,13 +287,36 @@ class BillingAllowanceRepository:
         ).first()
         if row is None:
             return None
-        period_started_at, period_ended_at, allowance_nanos, spent_nanos = row
+        period_started_at, period_ended_at, allowance_nanos, spent_nanos, funded_version = row
         return SpentAllowancePeriod(
             started_at=to_utc(period_started_at),
             ended_at=to_utc(period_ended_at),
             allowance_nanos=allowance_nanos,
             spent_nanos=spent_nanos,
+            funded_terms_version=SubscriptionTermsVersion(funded_version)
+            if funded_version
+            else None,
         )
+
+    def record_funded_terms(
+        self,
+        *,
+        user_id: str,
+        period_started_at: datetime,
+        terms_version: SubscriptionTermsVersion,
+    ) -> None:
+        row = self.session.scalar(
+            select(BillingAllowancePeriodTable)
+            .where(
+                BillingAllowancePeriodTable.user_id == user_id,
+                BillingAllowancePeriodTable.period_started_at == to_utc(period_started_at),
+            )
+            .with_for_update()
+        )
+        if row is None:
+            raise NotFoundError("the funded subscription period does not exist")
+        row.funded_terms_version = terms_version.value
+        self.session.flush()
 
     def confirm_credit(self, *, user_id: str, period_started_at: datetime, at: datetime) -> None:
         self.session.execute(
@@ -323,6 +349,9 @@ class BillingAllowanceRepository:
                 to_utc(row.period_ended_at),
                 row.allowance_nanos,
                 row.spent_nanos,
+                SubscriptionTermsVersion(row.funded_terms_version)
+                if row.funded_terms_version
+                else None,
             )
             for row in rows
         )

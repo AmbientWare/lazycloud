@@ -143,6 +143,9 @@ def test_destroyed_worker_releases_unknown_hold_and_waives_late_usage(
             provider_subscription_id="",
             provider_credit_grant_id="",
             plan=None,
+            subscription_terms_version=None,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         assert BillingFundingRepository(session).recovery_accounts(
             after_user_id=None, expired_before=at + timedelta(seconds=100), limit=20

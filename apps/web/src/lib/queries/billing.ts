@@ -11,6 +11,7 @@ import {
   automaticReloadStatusSchema,
   type BillingPreferences,
   type BillingPlanId,
+  type BillingTermsVersion,
   type BillingSummary,
 } from "@/lib/api/schemas";
 
@@ -23,17 +24,8 @@ import { accountQueryKeys } from "./workspace-keys";
  * person, and somebody holding three workspaces holds one payment relationship,
  * so switching workspace cannot change the answer.
  */
-const CARDLESS_SUMMARY_POLL_INTERVAL_MS = 5_000;
-/**
- * How often the summary is re-read while the account still has no card.
- *
- * Saving a card happens at the provider and reaches this platform as a delivery,
- * several hops after the customer has already been sent back here. Without a
- * poll the page they land on says they have no card — the state they just left
- * to fix — until something else happens to refetch. Polling only while the
- * answer can still change is the same shape the connected-cloud account uses
- * while it waits for a stack to finish.
- */
+const BILLING_SUMMARY_POLL_INTERVAL_MS = 5_000;
+// Provider callbacks can arrive after the hosted page redirects back.
 
 export function billingSummaryQueryOptions() {
   return queryOptions({
@@ -41,8 +33,11 @@ export function billingSummaryQueryOptions() {
     queryFn: () => apiRequest("/api/v1/billing/summary", billingSummarySchema),
     staleTime: 30_000,
     refetchInterval: (query) =>
-      query.state.data?.payment_method_on_file === false
-        ? CARDLESS_SUMMARY_POLL_INTERVAL_MS
+      query.state.data?.payment_method_on_file === false ||
+      query.state.data?.plan_change_pending ||
+      query.state.data?.plan?.terms_version === null ||
+      Boolean(query.state.data?.plan?.scheduled_change_at)
+        ? BILLING_SUMMARY_POLL_INTERVAL_MS
         : false,
   });
 }
@@ -151,9 +146,12 @@ export async function purchaseCredit(request: { requestKey: string; amountCents:
  * no cache key of its own, and the caller writes the answer into the summary it
  * already reads.
  */
-export function changeBillingPlan(plan: BillingPlanId): Promise<BillingSummary> {
+export function changeBillingPlan(selection: {
+  plan: BillingPlanId;
+  terms_version: BillingTermsVersion;
+}): Promise<BillingSummary> {
   return apiRequest("/api/v1/billing/subscription", billingSummarySchema, {
     method: "POST",
-    body: JSON.stringify({ plan }),
+    body: JSON.stringify(selection),
   });
 }

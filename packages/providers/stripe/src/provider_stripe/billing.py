@@ -7,7 +7,8 @@ from decimal import Decimal, InvalidOperation
 
 import httpx
 from pydantic import ConfigDict, Field
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
+from shared.billing_rate_card import subscription_terms
 from shared.credit_payments import CreditPayment, CreditPaymentStatus, CreditPurchaseCheckout
 from shared.errors import InvalidInputError, PaymentRequiredError, UpstreamUnavailableError
 from shared.payments import (
@@ -20,18 +21,18 @@ from shared.payments import (
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
-    SubscriptionProration,
+    SubscriptionChangeTiming,
 )
-from shared.timestamps import utc_now
+from shared.timestamps import to_utc, utc_now
 
 from provider_stripe.api import FormFields, StripeObject, read, send
 from provider_stripe.catalog import (
     NANOS_PER_CENT,
     PLAN_LINES,
     cents,
-    plan_for_price_lookup_key,
     plan_line,
     subscription_price_lookup_keys,
+    terms_for_price_lookup_key,
 )
 
 CREDIT_GRANT_NAME = "Included usage"
@@ -84,18 +85,6 @@ METER_EVENT_DEDUPLICATION_HOURS = 24
 At-least-once delivery is safe only inside this window: a resend after it has
 passed is counted a second time. It is the ceiling every retry schedule that
 sends meter events has to fit under.
-"""
-
-_PRORATION_BEHAVIORS: Mapping[SubscriptionProration, str] = {
-    SubscriptionProration.ChargeDifferenceNow: "always_invoice",
-    SubscriptionProration.KeepWhatWasPaidFor: "none",
-}
-"""Stripe's word for each of the two directions a plan change can go.
-
-Total over the enum, so a direction added to the protocol fails here by key
-rather than by silently taking whichever behaviour was written as a default —
-and a default in this particular dictionary is a customer charged or refunded
-without anybody choosing it.
 """
 
 _CUSTOMER_REGISTRATION_KEY_PREFIX = "customer-registration-"
@@ -194,6 +183,9 @@ class _PaymentMethodList(StripeObject):
 
 class _Recurring(StripeObject):
     meter: str | None = None
+    interval: str
+    interval_count: int
+    usage_type: str
 
 
 class _Price(StripeObject):
@@ -207,6 +199,8 @@ class _Price(StripeObject):
     id: str
     lookup_key: str | None = None
     product: str = ""
+    currency: str
+    unit_amount: int | None = None
     recurring: _Recurring | None = None
 
 
@@ -215,6 +209,7 @@ class _SubscriptionItem(StripeObject):
     price: _Price
     current_period_start: int
     current_period_end: int
+    quantity: int | None = None
 
 
 class _SubscriptionItems(StripeObject):
@@ -226,6 +221,38 @@ class _Subscription(StripeObject):
     status: str
     items: _SubscriptionItems
     customer: str = ""
+    schedule: str | None = None
+
+
+class _SchedulePhaseItem(StripeObject):
+    price: _Price
+    quantity: int | None = None
+
+
+class _ScheduleDiscount(StripeObject):
+    discount: str | None = None
+    coupon: str | None = None
+    promotion_code: str | None = None
+
+
+class _SchedulePhase(StripeObject):
+    start_date: int
+    end_date: int
+    items: list[_SchedulePhaseItem]
+    metadata: dict[str, str] = Field(default_factory=dict)
+    discounts: list[_ScheduleDiscount] | None = None
+    default_tax_rates: list[str] = Field(default_factory=list)
+
+
+class _CreatedSchedule(StripeObject):
+    id: str
+    subscription: str | None
+    status: str
+
+
+class _SubscriptionSchedule(_CreatedSchedule):
+    phases: list[_SchedulePhase]
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class _SubscriptionList(StripeObject):
@@ -738,7 +765,7 @@ class StripeBilling:
 
         live = self._live_subscription(provider_customer_id)
         if live is not None:
-            return _subscription(live)
+            return self._subscription_state(live)
         lookup_keys = subscription_price_lookup_keys(plan)
         prices = self._price_ids(lookup_keys)
         fields: list[tuple[str, str]] = [
@@ -755,7 +782,7 @@ class StripeBilling:
         fields.extend(
             (f"items[{index}][price]", prices[key]) for index, key in enumerate(lookup_keys)
         )
-        return _subscription(
+        return self._subscription_state(
             read(_Subscription, self.client, "POST", "/subscriptions", data=fields)
         )
 
@@ -763,57 +790,231 @@ class StripeBilling:
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
-        """Move an existing subscription onto another plan's price.
-
-        The swap is by item id, and whether it is needed at all is read off that
-        item's price lookup key — which is what makes a retry after a transaction
-        that died converge rather than charge a second proration.
-
-        Charging the difference raises the invoice inside this call and refuses
-        rather than leaving an unpaid balance behind: a customer who cannot pay
-        for the plan they asked for must not end up on it. Keeping what was paid
-        for asks Stripe for no proration at all — the cycle stays invoiced as it
-        was, nothing is credited back, and the new price is what the next invoice
-        carries. `error_if_incomplete` rides on both because it costs nothing
-        where there is no balance to settle and is the whole guarantee where
-        there is.
-        """
-
-        line = plan_line(plan)
         current = read(
             _Subscription, self.client, "GET", f"/subscriptions/{provider_subscription_id}"
         )
         licensed = _plan_item(current)
         if licensed is None:
+            raise UpstreamUnavailableError("the subscription has no recognized licensed price")
+        held_version = _terms_for_price(licensed.price)
+        if held_version == terms_version:
+            if current.schedule:
+                schedule = self._read_schedule(current.schedule)
+                self._require_owned_schedule(schedule, current.id)
+                read(
+                    _CreatedSchedule,
+                    self.client,
+                    "POST",
+                    f"/subscription_schedules/{schedule.id}/release",
+                )
+            return self.subscription(provider_subscription_id=current.id)
+        if current.status not in {"active", "trialing", "past_due", "unpaid"}:
+            return self._subscription_state(current)
+        if timing is SubscriptionChangeTiming.Immediate and to_utc(utc_now()) - to_utc(
+            operation_created_at
+        ) >= timedelta(hours=20):
             raise UpstreamUnavailableError(
-                f"Stripe subscription {provider_subscription_id} carries no plan price "
-                "this platform published"
+                "unconfirmed subscription upgrade exceeded its retry window"
             )
-        if licensed.price.lookup_key == line.price_lookup_key:
-            return _subscription(current)
-        price_id = self._price_ids((line.price_lookup_key,))[line.price_lookup_key]
-        return _subscription(
+        if timing is SubscriptionChangeTiming.AtRenewal:
+            return self._schedule_plan_change(
+                current,
+                terms_version=terms_version,
+                operation_id=operation_id,
+                operation_created_at=operation_created_at,
+            )
+        if current.schedule:
+            schedule = self._read_schedule(current.schedule)
+            self._require_owned_schedule(schedule, current.id)
             read(
-                _Subscription,
+                _CreatedSchedule,
                 self.client,
                 "POST",
-                f"/subscriptions/{provider_subscription_id}",
-                data=[
-                    ("items[0][id]", licensed.id),
-                    ("items[0][price]", price_id),
-                    ("proration_behavior", _PRORATION_BEHAVIORS[proration]),
-                    ("payment_behavior", "error_if_incomplete"),
-                ],
+                f"/subscription_schedules/{schedule.id}/release",
             )
+        line = plan_line(terms_version)
+        price_id = self._price_ids((line.price_lookup_key,))[line.price_lookup_key]
+        changed = read(
+            _Subscription,
+            self.client,
+            "POST",
+            f"/subscriptions/{current.id}",
+            data=[
+                ("items[0][id]", licensed.id),
+                ("items[0][price]", price_id),
+                ("proration_behavior", "always_invoice"),
+                ("payment_behavior", "error_if_incomplete"),
+            ],
+            idempotency_key=f"subscription-change-{operation_id}",
         )
+        return self._subscription_state(changed)
 
     def subscription(self, *, provider_subscription_id: str) -> ProviderSubscription:
-        return _subscription(
+        return self._subscription_state(
             read(_Subscription, self.client, "GET", f"/subscriptions/{provider_subscription_id}")
         )
+
+    def _read_schedule(self, schedule_id: str) -> _SubscriptionSchedule:
+        return read(
+            _SubscriptionSchedule,
+            self.client,
+            "GET",
+            f"/subscription_schedules/{schedule_id}",
+            params=[("expand[]", "phases.items.price")],
+        )
+
+    @staticmethod
+    def _require_owned_schedule(schedule: _SubscriptionSchedule, subscription_id: str) -> None:
+        if (
+            schedule.subscription != subscription_id
+            or schedule.metadata.get("lazycloud_subscription") != subscription_id
+            or schedule.status not in {"active", "not_started"}
+        ):
+            raise UpstreamUnavailableError(
+                "subscription schedule ownership requires reconciliation"
+            )
+
+    def _subscription_state(self, payload: _Subscription) -> ProviderSubscription:
+        result = _subscription(payload)
+        if payload.schedule is None:
+            return result
+        schedule = self._read_schedule(payload.schedule)
+        self._require_owned_schedule(schedule, payload.id)
+        future = [
+            phase
+            for phase in schedule.phases
+            if phase.start_date >= int(result.current_period_ended_at.timestamp())
+        ]
+        if not future:
+            return result
+        if len(future) != 1 or future[0].start_date != int(
+            result.current_period_ended_at.timestamp()
+        ):
+            raise UpstreamUnavailableError("subscription schedule has an unexpected future phase")
+        versions = [
+            version
+            for item in future[0].items
+            if (version := _terms_for_price(item.price)) is not None
+        ]
+        if len(versions) != 1:
+            raise UpstreamUnavailableError("scheduled subscription terms are ambiguous")
+        current_usage = sorted(
+            (item.price.id, item.quantity)
+            for item in payload.items.data
+            if _terms_for_price(item.price) is None
+        )
+        scheduled_usage = sorted(
+            (item.price.id, item.quantity)
+            for item in future[0].items
+            if _terms_for_price(item.price) is None
+        )
+        if current_usage != scheduled_usage:
+            raise UpstreamUnavailableError("subscription schedule changes its metered items")
+        return result.model_copy(
+            update={
+                "scheduled_terms_version": versions[0],
+                "scheduled_change_at": datetime.fromtimestamp(future[0].start_date, tz=UTC),
+            }
+        )
+
+    def _schedule_plan_change(
+        self,
+        current: _Subscription,
+        *,
+        terms_version: SubscriptionTermsVersion,
+        operation_id: str,
+        operation_created_at: datetime,
+    ) -> ProviderSubscription:
+        schedule = self._read_schedule(current.schedule) if current.schedule else None
+        if schedule is None or schedule.metadata.get("lazycloud_subscription") != current.id:
+            if to_utc(utc_now()) - to_utc(operation_created_at) >= timedelta(hours=20):
+                raise UpstreamUnavailableError(
+                    "unconfirmed subscription schedule creation exceeded its retry window"
+                )
+            created = read(
+                _CreatedSchedule,
+                self.client,
+                "POST",
+                "/subscription_schedules",
+                data=[("from_subscription", current.id)],
+                idempotency_key=f"subscription-schedule-{operation_id}",
+            )
+            if (
+                created.subscription != current.id
+                or created.status != "active"
+                or (current.schedule is not None and created.id != current.schedule)
+            ):
+                raise UpstreamUnavailableError(
+                    "created subscription schedule does not match the pending operation"
+                )
+            schedule = self._read_schedule(created.id)
+        else:
+            self._require_owned_schedule(schedule, current.id)
+        held = _subscription(current)
+        phases = [
+            phase
+            for phase in schedule.phases
+            if phase.start_date <= int(held.current_period_started_at.timestamp()) < phase.end_date
+        ]
+        if len(phases) != 1:
+            raise UpstreamUnavailableError("subscription schedule has no unique current phase")
+        phase = phases[0]
+        line = plan_line(terms_version)
+        price_id = self._price_ids((line.price_lookup_key,))[line.price_lookup_key]
+        fields = [
+            ("end_behavior", "release"),
+            ("proration_behavior", "none"),
+            ("metadata[lazycloud_subscription]", current.id),
+            ("phases[0][start_date]", str(phase.start_date)),
+            ("phases[0][end_date]", str(int(held.current_period_ended_at.timestamp()))),
+            ("phases[0][proration_behavior]", "none"),
+            ("phases[1][duration][interval]", "month"),
+            ("phases[1][duration][interval_count]", "1"),
+            ("phases[1][proration_behavior]", "none"),
+        ]
+        for phase_index in (0, 1):
+            for index, item in enumerate(phase.items):
+                price = (
+                    price_id
+                    if phase_index == 1 and _terms_for_price(item.price) is not None
+                    else item.price.id
+                )
+                fields.append((f"phases[{phase_index}][items][{index}][price]", price))
+                if item.quantity is not None:
+                    fields.append(
+                        (f"phases[{phase_index}][items][{index}][quantity]", str(item.quantity))
+                    )
+            for key, value in phase.metadata.items():
+                fields.append((f"phases[{phase_index}][metadata][{key}]", value))
+            for index, rate in enumerate(phase.default_tax_rates):
+                fields.append((f"phases[{phase_index}][default_tax_rates][{index}]", rate))
+            for index, discount in enumerate(phase.discounts or ()):
+                for key, value in (
+                    ("discount", discount.discount),
+                    ("coupon", discount.coupon),
+                    ("promotion_code", discount.promotion_code),
+                ):
+                    if value:
+                        fields.append((f"phases[{phase_index}][discounts][{index}][{key}]", value))
+        read(
+            _CreatedSchedule,
+            self.client,
+            "POST",
+            f"/subscription_schedules/{schedule.id}",
+            data=fields,
+            idempotency_key=f"subscription-schedule-phases-{operation_id}",
+        )
+        verified = self.subscription(provider_subscription_id=current.id)
+        if verified.scheduled_terms_version != terms_version:
+            raise UpstreamUnavailableError(
+                "subscription schedule does not hold the requested terms"
+            )
+        return verified
 
     def create_credit_grant(
         self,
@@ -1109,8 +1310,10 @@ class StripeBilling:
                 details = parent.subscription_item_details
                 if details is None or details.subscription != provider_subscription_id:
                     continue
-                plan = _plan_for_price(line.pricing.price_details.price) if line.pricing else None
-                if plan is None:
+                version = (
+                    _terms_for_price(line.pricing.price_details.price) if line.pricing else None
+                )
+                if version is None:
                     continue
                 if (
                     line.period is None
@@ -1129,7 +1332,8 @@ class StripeBilling:
                         provider_invoice_id=invoice.id,
                         provider_invoice_line_id=line.id,
                         provider_subscription_id=provider_subscription_id,
-                        plan=plan,
+                        plan=subscription_terms(version).plan,
+                        terms_version=version,
                         period_started_at=datetime.fromtimestamp(line.period.start, tz=UTC),
                         period_ended_at=datetime.fromtimestamp(line.period.end, tz=UTC),
                         prorated=details.proration,
@@ -1209,16 +1413,29 @@ def _optional_timestamp(timestamp: int | None) -> datetime | None:
     return datetime.fromtimestamp(timestamp, tz=UTC) if timestamp is not None else None
 
 
-def _plan_for_price(price: _Price) -> BillingPlanId | None:
-    product_plan = next(
-        (line.plan for line in PLAN_LINES if line.product_id == price.product), None
-    )
-    lookup_plan = plan_for_price_lookup_key(price.lookup_key or "")
-    if price.product and product_plan is None:
+def _terms_for_price(price: _Price) -> SubscriptionTermsVersion | None:
+    line = terms_for_price_lookup_key(price.lookup_key or "")
+    if line is None:
+        if any(item.product_id == price.product for item in PLAN_LINES):
+            raise UpstreamUnavailableError(
+                f"Stripe price {price.id} has unknown subscription terms"
+            )
         return None
-    if product_plan is not None and lookup_plan is not None and product_plan is not lookup_plan:
-        raise UpstreamUnavailableError("Stripe plan price and product identify different plans")
-    return product_plan or lookup_plan
+    terms = subscription_terms(line.terms_version)
+    recurring = price.recurring
+    if (
+        price.product != line.product_id
+        or price.currency != BILLING_CURRENCY.lower()
+        or price.unit_amount != terms.monthly_nanos // NANOS_PER_CENT
+        or recurring is None
+        or recurring.interval != "month"
+        or recurring.interval_count != 1
+        or recurring.usage_type != "licensed"
+    ):
+        raise UpstreamUnavailableError(
+            f"Stripe price {price.id} disagrees with its subscription terms"
+        )
+    return line.terms_version
 
 
 def _subscription(payload: _Subscription) -> ProviderSubscription:
@@ -1229,6 +1446,7 @@ def _subscription(payload: _Subscription) -> ProviderSubscription:
     # The billing period belongs to the items rather than to the subscription.
     # Every item created together shares one cycle, so its span across them is
     # that cycle whatever order they came back in.
+    version = _terms_for_price(licensed.price) if licensed is not None else None
     return ProviderSubscription(
         provider_subscription_id=payload.id,
         status=payload.status,
@@ -1238,7 +1456,10 @@ def _subscription(payload: _Subscription) -> ProviderSubscription:
         current_period_ended_at=datetime.fromtimestamp(
             max(item.current_period_end for item in items), tz=UTC
         ),
-        plan=_plan_for_price(licensed.price) if licensed is not None else None,
+        plan=subscription_terms(version).plan if version is not None else None,
+        terms_version=version,
+        scheduled_terms_version=None,
+        scheduled_change_at=None,
     )
 
 
@@ -1252,7 +1473,7 @@ def _plan_item(payload: _Subscription) -> _SubscriptionItem | None:
     """
 
     for item in payload.items.data:
-        if _plan_for_price(item.price) is not None:
+        if _terms_for_price(item.price) is not None:
             return item
     return None
 

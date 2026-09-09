@@ -24,9 +24,9 @@ from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccount
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension
-from shared.billing_rate_card import ONE_TIME_TRIAL_NANOS
+from shared.billing_rate_card import ONE_TIME_TRIAL_NANOS, published_plan, subscription_terms
 from shared.errors import ConflictError
 from shared.events import Event, EventLevel
 from shared.payments import (
@@ -37,7 +37,7 @@ from shared.payments import (
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
-    SubscriptionProration,
+    SubscriptionChangeTiming,
 )
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
@@ -127,14 +127,19 @@ class _RegistrationCountingProvider:
             current_period_started_at=CYCLE_STARTED_AT,
             current_period_ended_at=CYCLE_ENDED_AT,
             plan=plan,
+            terms_version=published_plan(plan).terms_version,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
 
     def set_subscription_plan(
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
         raise AssertionError("provisioning must not change anyone's plan")
 
@@ -297,9 +302,12 @@ class _UpgradeCountingProvider:
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
+        plan = subscription_terms(terms_version).plan
         del provider_subscription_id
         self.plan_swaps.append(plan.value)
         self.swap_entered.set()
@@ -355,6 +363,7 @@ class _UpgradeCountingProvider:
                 amount_nanos=100_000_000_000,
                 invoice_paid_nanos=100_000_000_000,
                 paid_at=utc_now(),
+                terms_version=published_plan(self.plan).terms_version,
             ),
         )
 
@@ -372,6 +381,9 @@ def _subscription(plan: BillingPlanId) -> ProviderSubscription:
         current_period_started_at=CYCLE_STARTED_AT,
         current_period_ended_at=CYCLE_ENDED_AT,
         plan=plan,
+        terms_version=published_plan(plan).terms_version,
+        scheduled_terms_version=None,
+        scheduled_change_at=None,
     )
 
 
@@ -610,7 +622,12 @@ def test_postgresql_two_upgrades_at_once_reach_the_provider_once() -> None:
         )
 
         with ThreadPoolExecutor(max_workers=1) as executor:
-            first = executor.submit(service.change_plan, user_id=user_id, target=BillingPlanId.Team)
+            first = executor.submit(
+                service.change_plan,
+                user_id=user_id,
+                target=BillingPlanId.Team,
+                target_terms_version=SubscriptionTermsVersion.Team,
+            )
             # The first caller has committed its intent and is inside the
             # provider call. Held here rather than raced, because what the index
             # has to refuse is a second subscribe arriving while the first one's
@@ -619,7 +636,11 @@ def test_postgresql_two_upgrades_at_once_reach_the_provider_once() -> None:
                 "the first upgrade never reached the provider"
             )
             with pytest.raises(ConflictError):
-                service.change_plan(user_id=user_id, target=BillingPlanId.Team)
+                service.change_plan(
+                    user_id=user_id,
+                    target=BillingPlanId.Team,
+                    target_terms_version=published_plan(BillingPlanId.Team).terms_version,
+                )
             provider.swap_release.set()
             upgraded = first.result(timeout=10)
 

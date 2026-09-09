@@ -237,6 +237,17 @@ class BillingCreditRepository:
             or 0
         )
 
+    def subscription_sources(self, *, user_id: str, period_ended_at: datetime) -> frozenset[str]:
+        return frozenset(
+            self.session.scalars(
+                select(BillingCreditLotTable.source_id).where(
+                    BillingCreditLotTable.user_id == user_id,
+                    BillingCreditLotTable.kind == CreditKind.Subscription.value,
+                    BillingCreditLotTable.expires_at == period_ended_at,
+                )
+            )
+        )
+
     def settle(
         self, *, user_id: str, usage_record_id: str, funding_confirmed: bool, waived: bool
     ) -> CreditSettlement | None:

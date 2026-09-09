@@ -6,7 +6,8 @@ from uuid import UUID
 from pydantic import Field
 
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_credits import CreditScope
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.credit_payments import (
     MAX_CREDIT_PURCHASE_CENTS,
     MIN_CREDIT_PURCHASE_CENTS,
@@ -86,62 +87,14 @@ class UsageBudgetResponse(HttpModel):
 
 
 class BillingPlanChangeRequest(HttpModel):
-    """Which published plan this account is asking to be put on.
-
-    A plan id from the closed set the platform publishes, never a price: the
-    caller names what they chose from the card they were shown, and the server
-    resolves what it costs from that same card. A body carrying money would be a
-    browser quoting a figure back at the platform that published it.
-
-    One field rather than a direction, because a direction is derived from what
-    the account is on and what the target costs — and a caller that could state
-    it separately could state one that disagrees.
-    """
+    """The exact published terms selected by the customer."""
 
     plan: BillingPlanId
-
-
-class BillingAllowanceResponse(HttpModel):
-    """What this account may spend before this period costs it anything.
-
-    The period is a pair of instants rather than a month name: it runs with the
-    subscription's own cycle, which starts on the day the account was registered,
-    and a calendar label would put a cost in the wrong one for every account that
-    did not start on the first.
-
-    `allowance_nanos` is the figure stamped on the period when it opened, not
-    what the plan currently includes — changing what the platform grants must not
-    restate the terms of a period a customer is already part-way through.
-    """
-
-    period_started_at: datetime
-    period_ended_at: datetime
-    allowance_nanos: int = Field(ge=0)
-    spent_nanos: int = Field(ge=0)
-    remaining_nanos: int
-    """Signed, and negative once the allowance is overspent.
-
-    Clamping it at zero would erase how far past the line an account is, which is
-    what a customer watching their usage most wants to know once they are.
-
-    It is not what the invoice will ask for, and nothing here should present it
-    that way. This is usage against the terms this period opened on, measured
-    from the priced ledger. What is actually collected is the payment provider's
-    answer and includes things this platform never models — a balance carried
-    from a period whose invoice fell under their minimum charge, a proration from
-    a plan change, tax. Those are small and bounded, which is why they are not
-    mirrored here; the reason not to restate them is that a second computation of
-    somebody else's total is one that disagrees with it eventually.
-    """
+    terms_version: SubscriptionTermsVersion
 
 
 class BillingPlanResponse(HttpModel):
-    """The plan an account holds, and the allowance its current cycle came with.
-
-    One object rather than two fields, because the allowance is the plan's: the
-    period is opened from the subscription's own cycle and stamped with what that
-    plan includes, so an account on no plan has no period to report either.
-    """
+    """Purchased subscription terms and the current billing period."""
 
     id: BillingPlanId
     name: str
@@ -150,14 +103,15 @@ class BillingPlanResponse(HttpModel):
     Sent rather than mapped in the browser, so the account summary needs no local
     plan-name map beside the catalog it fetches."""
 
-    allowance: BillingAllowanceResponse | None = None
-    """`None` between a cycle ending and the renewal that opens the next one.
+    terms_version: SubscriptionTermsVersion | None
+    monthly_nanos: int | None = Field(ge=0)
+    included_nanos: int | None = Field(ge=0)
+    credit_scope: CreditScope | None
+    scheduled_terms_version: SubscriptionTermsVersion | None
+    scheduled_change_at: datetime | None
 
-    Distinct from a spent allowance and from no plan: the account is on a plan
-    and no period covers this instant, which is a few minutes once a cycle. An
-    empty period reported as a zero allowance would read as terms the customer is
-    held to, when it is the absence of any.
-    """
+    period_started_at: datetime | None
+    period_ended_at: datetime | None
 
 
 class BillingEntitlementUsageResponse(HttpModel):
@@ -265,7 +219,6 @@ class BillingComplimentaryRequest(HttpModel):
 __all__ = [
     "BillingAccountAdminListResponse",
     "BillingAccountAdminResponse",
-    "BillingAllowanceResponse",
     "BillingComplimentaryRequest",
     "BillingEntitlementUsageResponse",
     "BillingHostedSessionRequest",

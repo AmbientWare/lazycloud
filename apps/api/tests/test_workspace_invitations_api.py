@@ -10,7 +10,7 @@ from database.repositories.identity import UserRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.identity import WorkspaceRole
 from shared.timestamps import utc_now
 from tests.service_fixtures import owned_workspace
@@ -52,6 +52,9 @@ def _owner(services: ApiServices, workspace_id: str, email: str) -> tuple[str, d
             provider_subscription_id=f"sub_{owner.user_id}",
             provider_credit_grant_id=f"credgr_{owner.user_id}",
             plan=BillingPlanId.Team,
+            subscription_terms_version=SubscriptionTermsVersion.Team,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
     return _credential(services, owner.user_id, "owner", email)
 

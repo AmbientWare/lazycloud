@@ -9,14 +9,14 @@ from uuid import uuid4
 
 from database.client import DatabaseClient
 from database.repositories.billing import BillingAccountRepository
-from database.repositories.billing_allowance import BillingAllowanceRepository
+from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_plan_changes import (
     BillingPlanChangeIntentRepository,
     ClaimedPlanChange,
 )
 from shared.billing_accounts import BillingAccount
-from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import published_plan
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
+from shared.billing_rate_card import published_plan, subscription_terms
 from shared.errors import (
     ConflictError,
     NotFoundError,
@@ -24,9 +24,12 @@ from shared.errors import (
     UpstreamUnavailableError,
 )
 from shared.events import EventLevel
-from shared.payments import ProviderSubscription, SubscriptionPaymentProvider, SubscriptionProration
+from shared.payments import (
+    ProviderSubscription,
+    SubscriptionChangeTiming,
+    SubscriptionPaymentProvider,
+)
 from shared.timestamps import to_utc, utc_now
-from sqlalchemy.orm import Session
 
 from billing.accounts import BillingAccountService, owned_workspace_id
 from billing.admission import DatabaseBillingAdmission
@@ -109,94 +112,16 @@ class _Settlement:
 
 @dataclass(frozen=True, slots=True)
 class BillingPlanChangeService:
-    """Move an account between published plans, and finish the moves that stopped.
-
-    The provider cannot join a transaction here, so a plan change is recorded
-    before it is attempted and settled from what the provider says afterwards.
-    That is the whole of the design: moving onto dearer terms raises and collects
-    the proration inside `set_subscription_plan`, so anything failing between the
-    charge and the account row naming the new plan leaves a customer who has paid
-    for a plan this platform still judges them off. With the intent row there is
-    something to find, and the subscription itself is what answers it.
-
-    Asking the provider settles it definitively rather than probably, though what
-    the answer proves is directional. Upwards, the swap is sent refusing to
-    complete unpaid, so the subscription carries the new price only if the money
-    was taken: "the item is on this plan" and "the difference was collected" are
-    one fact, readable in one request. Downwards there is nothing to collect —
-    the cycle was invoiced when it opened and stays invoiced — so the plan being
-    there is the whole of what happened.
-
-    Moving down is a price swapped back, never a subscription ended. Ending one
-    clears the metered prices with it, and this account's usage would go on
-    running and reach no invoice at all; the account row is cleared for exactly
-    that state, so new work would then be refused as well. The subscription id,
-    the anniversary and the three metered items survive every direction.
-
-    What the provider's answer does not say is whether the subscription is still
-    the one this account is on, and a plan carries no meaning apart from the
-    subscription holding it. So a change is written back only onto a live
-    subscription the account still names, and one that has ended underneath it
-    is kept as evidence for an operator instead of handed to an account as terms
-    nothing bills.
-    """
+    """Apply paid upgrades and schedule cheaper terms at renewal."""
 
     database: DatabaseClient
     payments: Callable[[], SubscriptionPaymentProvider]
     events: BillingEventSink
     batch_limit: int = 100
 
-    def change_plan(self, *, user_id: str, target: BillingPlanId) -> BillingAccount:
-        """Move this account onto a published plan, in either direction.
-
-        A price swapped on the subscription it already holds, not a second
-        subscription and never a cancellation: the identifier, the billing
-        anniversary and the three metered items survive, so the usage already
-        recorded this cycle stays where it is and is billed on the invoice it
-        belongs to.
-
-        The open period is re-termed in place rather than replaced, keeping what
-        has been spent against it, and the grant that funded the smaller
-        allowance is expired so that one grant covers the cycle. A customer
-        neither loses the allowance they already had nor holds both. Moving onto
-        cheaper terms re-terms nothing at all — a period never takes a smaller
-        allowance than the one it opened on — so the cycle keeps what it was
-        bought with, the grant funding it is left alone, and the smaller plan
-        applies from the next cycle. The customer is charged neither more nor
-        less for the month already invoiced.
-
-        A change landing in the seam between a cycle ending and its invoice
-        finalizing is a different act, and `carry_plan_into_cycle` is what tells
-        them apart: the cycle the provider answers with is a new one, so the
-        outgoing grant is left to fund the invoice it was bought for rather than
-        voided out from under it.
-
-        A refusal is not an answer, so it settles nothing on its own: the
-        subscription is read back, and only a provider that already holds the
-        plan decides the change inside this request. Anything else is paced for
-        the sweep to ask again.
-
-        An account already on the target costs no intent and reaches no provider,
-        so the second of two clicks changes nothing and cannot collide with the
-        first.
-
-        A monthly plan is refused here rather than at the provider when nobody
-        can be charged for it. The provider would refuse it too — the swap is
-        sent `error_if_incomplete`, so a proration nobody can pay cannot complete
-        — but that refusal arrives after the intent has been committed, and a
-        committed intent is expensive to leave behind: it holds the account's one
-        open-change slot until its claim expires, is retried on a schedule that
-        costs a provider read each time, and ends in an error-level abandonment
-        that asks an operator to account for money which never moved. Refusing
-        before the row is written turns all of that into one answer the customer
-        can act on. It keys on the target's price rather than on which plan it
-        is, so a move *off* a paid plan is never refused for want of a card —
-        somebody whose card has gone is exactly who needs that move.
-        """
-
-        # Asked before the provider is even resolved, let alone provisioning,
-        # which registers a customer there: a request that is refused must not
-        # leave one behind, and must not need a provider to be refused.
+    def change_plan(
+        self, *, user_id: str, target: BillingPlanId, target_terms_version: SubscriptionTermsVersion
+    ) -> BillingAccount:
         with self.database.session() as session:
             waived = BillingAccountRepository(session).get_by_user(user_id)
         if waived is not None and waived.complimentary_since is not None:
@@ -205,80 +130,89 @@ class BillingPlanChangeService:
         claim_token = str(uuid4())
         with self.database.session() as session:
             account = BillingAccountService(session).billing_account_for(
-                payments,
-                user_id=user_id,
-                workspace_id=owned_workspace_id(session, user_id),
+                payments, user_id=user_id, workspace_id=owned_workspace_id(session, user_id)
             )
-            if account.plan is target:
+            if account.subscription_terms_version is None:
+                raise UpstreamUnavailableError("subscription terms await verification")
+            keeping_current = (
+                account.plan is target
+                and account.subscription_terms_version is target_terms_version
+            )
+            if keeping_current and account.scheduled_terms_version is None:
                 return account
-            DatabaseBillingAdmission().assert_plan_change_fits(
-                session,
-                user_id=user_id,
-                target=target,
-            )
             if (
-                published_plan(target).monthly_nanos > 0
+                not keeping_current
+                and published_plan(target).terms_version is not target_terms_version
+            ):
+                raise ConflictError("these subscription terms are no longer offered")
+            if subscription_terms(target_terms_version).plan is not target:
+                raise ConflictError("subscription terms do not belong to this plan")
+            timing = _change_timing(account.subscription_terms_version, target_terms_version)
+            if timing is SubscriptionChangeTiming.Immediate and not keeping_current:
+                DatabaseBillingAdmission().assert_plan_change_fits(
+                    session, user_id=user_id, target=target
+                )
+            if (
+                not keeping_current
+                and timing is SubscriptionChangeTiming.Immediate
+                and subscription_terms(target_terms_version).monthly_nanos > 0
                 and account.payment_method_attached_at is None
             ):
                 raise PaymentRequiredError(
-                    "this plan is billed monthly and cannot be started without a card; "
-                    "add a payment method and subscribe again"
+                    "add a payment method before upgrading your subscription"
                 )
-            # What the cycle was already invoiced at, not what the account is on
-            # now. A move down leaves the period holding the terms it was paid
-            # for, so moving back up inside the same cycle is a reversal rather
-            # than a purchase — and charging it as a purchase would take the
-            # prorated month a second time, since the move down credited nothing.
-            paid_for_nanos = _allowance_paid_for(session, user_id=user_id)
-            proration = _proration_onto(
-                target, from_plan=account.plan, paid_for_nanos=paid_for_nanos
-            )
+            if (
+                not keeping_current
+                and timing is SubscriptionChangeTiming.Immediate
+                and subscription_terms(target_terms_version).monthly_nanos > 0
+            ):
+                cutover = BillingCreditRepository(session).cutover(user_id=user_id)
+                if cutover is None or cutover.completed_at is None:
+                    raise ConflictError(
+                        "subscription credit migration must finish before a paid upgrade"
+                    )
             intent = BillingPlanChangeIntentRepository(session).open(
                 user_id=user_id,
                 provider_customer_id=account.provider_customer_id,
                 provider_subscription_id=account.provider_subscription_id,
                 target_plan=target,
+                target_terms_version=target_terms_version,
                 now=utc_now(),
                 claim_token=claim_token,
             )
         try:
-            subscription = payments.set_subscription_plan(
-                provider_subscription_id=intent.provider_subscription_id,
-                plan=intent.target_plan,
-                proration=proration,
-            )
+            subscription = self._apply(payments, intent)
         except Exception:
             settlement = self._settle_after_refusal(payments, intent, claim_token=claim_token)
             if settlement is None or settlement.verdict is not _Verdict.Applied:
                 raise
-            # The swap landed despite the refusal, which is what carrying the
-            # plan proves. Reporting the failure would tell a customer who has
-            # already been moved — and, upwards, already paid — that neither
-            # happened.
             return settlement.account
         return self._decide(
             payments, intent, claim_token=claim_token, subscription=subscription
         ).account
 
+    def _apply(
+        self, payments: SubscriptionPaymentProvider, intent: ClaimedPlanChange
+    ) -> ProviderSubscription:
+        with self.database.session() as session:
+            account = BillingAccountRepository(session).get_by_user(intent.user_id)
+        if (
+            account is None
+            or account.provider_subscription_id != intent.provider_subscription_id
+            or account.provider_customer_id != intent.provider_customer_id
+        ):
+            raise ConflictError("the plan-change subscription is no longer held by this account")
+        if account.subscription_terms_version is None:
+            raise UpstreamUnavailableError("subscription terms await verification")
+        return payments.set_subscription_plan(
+            provider_subscription_id=intent.provider_subscription_id,
+            terms_version=intent.target_terms_version,
+            timing=_change_timing(account.subscription_terms_version, intent.target_terms_version),
+            operation_id=intent.id,
+            operation_created_at=intent.created_at,
+        )
+
     def settle_open(self, *, now: datetime | None = None) -> PlanChangeSettleResult:
-        """Finish the plan changes whose outcome nobody recorded.
-
-        Every intent is one question to the provider: does the subscription
-        carry the plan the change was for? It does, so the cycle and the row are
-        given those terms — and where the move was upwards, the provider holding
-        the plan is also what says the difference was collected. It does not, and
-        nothing happened, so nothing is written.
-
-        A third answer is neither, and it is the one an operator has to see: the
-        plan is there on a subscription that has ended, or on one this account is
-        no longer on. Money may have been taken and there are no terms to give
-        for it, so the intent is kept as the evidence and the disagreement is
-        recorded rather than resolved.
-
-        The credential is resolved before anything is claimed, because a claim
-        spends an attempt and no number of retries fixes a key this process
-        cannot read.
-        """
 
         moment = to_utc(now or utc_now())
         payments = self.payments()
@@ -299,7 +233,10 @@ class BillingPlanChangeService:
         for intent in claimed:
             try:
                 settlement = self._decide(
-                    payments, intent, claim_token=claim_token, subscription=None
+                    payments,
+                    intent,
+                    claim_token=claim_token,
+                    subscription=self._apply(payments, intent),
                 )
             except Exception as error:
                 LOGGER.warning(
@@ -346,24 +283,11 @@ class BillingPlanChangeService:
     def _settle_after_refusal(
         self, payments: SubscriptionPaymentProvider, intent: ClaimedPlanChange, *, claim_token: str
     ) -> _Settlement | None:
-        """Decide a refused change only where the provider already holds the plan.
-
-        A refusal says nothing certain: `error_if_incomplete` can fail after the
-        invoice was raised, and a read taken milliseconds behind a call that
-        timed out cannot tell a provider that never moved from one still moving.
-        Closing the intent on that read is the one outcome nothing recovers from
-        — a swap that lands afterwards is a charge with no record that anybody
-        meant it — so the plan already being there is the only answer taken here.
-
-        Everything else is paced instead: the sweep asks again once the provider
-        has stopped moving, and a customer whose card was refused gets their
-        button back a schedule later rather than a conflict forever.
-        """
 
         moment = utc_now()
         try:
             held = payments.subscription(provider_subscription_id=intent.provider_subscription_id)
-            if held.plan is intent.target_plan:
+            if _holds_target(held, intent):
                 return self._decide(payments, intent, claim_token=claim_token, subscription=held)
             outcome = f"the provider does not hold the {intent.target_plan.value} plan"
         except Exception as error:
@@ -380,12 +304,6 @@ class BillingPlanChangeService:
         claim_token: str,
         subscription: ProviderSubscription | None,
     ) -> _Settlement:
-        """Settle one intent, and report an outcome nobody here can act on.
-
-        The event is recorded outside the transaction that settled the intent:
-        the sink opens its own session, and one written from inside would claim
-        a settlement that has not committed.
-        """
 
         settlement = self._settle(
             payments, intent, claim_token=claim_token, subscription=subscription
@@ -402,29 +320,6 @@ class BillingPlanChangeService:
         claim_token: str,
         subscription: ProviderSubscription | None,
     ) -> _Settlement:
-        """Decide one intent from the subscription, and write what it decided.
-
-        The account row lock is taken before anything is decided, which is what
-        `carry_plan_into_cycle` requires of every caller and what makes two
-        settlers safe: the second waits, finds the cycle already on these terms,
-        and buys nothing.
-
-        The plan written down is the subscription's rather than the intent's,
-        the same rule a delivery follows. The two agree here by construction —
-        that is what makes this branch the applied one — and reading it off the
-        provider is what keeps one place deciding what an account is on.
-
-        Two things stop a change being recorded even where the provider holds
-        the plan, and they are one fact twice: the subscription the money was
-        taken on is not the subscription this account is on. A provider that
-        says it has ended, or an account since provisioned onto another one,
-        would otherwise be written back onto the row along with a fresh
-        allowance bought against a dead cycle — a plan and a subscription
-        admission reads as live while the usage they admit reaches no invoice,
-        which is the state this sweep exists to prevent rather than to create.
-        Neither is decidable from here, so the intent is kept as the evidence
-        and an operator is told.
-        """
 
         held = subscription or payments.subscription(
             provider_subscription_id=intent.provider_subscription_id
@@ -445,7 +340,7 @@ class BillingPlanChangeService:
                     "on a price this platform did not publish, so there is no plan change to "
                     "settle"
                 )
-            if held.plan is not intent.target_plan:
+            if not _holds_target(held, intent):
                 return _Settlement(
                     account=account,
                     verdict=_Verdict.NotApplied,
@@ -493,6 +388,9 @@ class BillingPlanChangeService:
                 provider_subscription_id=held.provider_subscription_id,
                 provider_credit_grant_id=grant_id,
                 plan=held.plan,
+                subscription_terms_version=held.terms_version,
+                scheduled_terms_version=held.scheduled_terms_version,
+                scheduled_change_at=held.scheduled_change_at,
             )
             return _Settlement(
                 account=written,
@@ -580,56 +478,22 @@ class BillingPlanChangeService:
             )
 
 
-def _allowance_paid_for(session: Session, *, user_id: str) -> int:
-    """What the cycle in progress is stamped at, or zero where none is open.
-
-    The period row is the record of what this cycle was invoiced for: it is
-    written when the cycle opens and re-termed when a plan is bought inside it,
-    and a move down deliberately leaves the larger figure standing because the
-    customer paid for it. So it answers the one question proration needs and the
-    account row cannot — what has already been charged for these days.
-    """
-
-    period = BillingAllowanceRepository(session).current_period(user_id=user_id, at=utc_now())
-    return period.allowance_nanos if period is not None else 0
-
-
-def _proration_onto(
-    target: BillingPlanId, *, from_plan: BillingPlanId | None, paid_for_nanos: int
-) -> SubscriptionProration:
-    """What this move does about the stretch of cycle already invoiced.
-
-    Read from the published prices rather than from which plan is which, so a
-    plan added to the card is priced into this without the rule being edited.
-
-    Dearer takes the difference now, which is what makes the provider's answer
-    proof that the money was collected. Anything else takes nothing and returns
-    nothing: the month was invoiced when the cycle opened, the allowance stamped
-    on that cycle is the allowance it keeps, and the smaller price is what the
-    next invoice asks for. Refunding a part-month instead would hand back money
-    for compute the account was free to spend and mostly has.
-
-    An account naming no plan holds no subscription anybody has paid for, so
-    moving it onto one that costs money is money not yet taken.
-
-    `paid_for_nanos` is what the cycle in progress is stamped at, which is the
-    only record of what these days have already been charged for. Without it a
-    customer who moved down and back up inside one cycle pays the prorated month
-    twice — the move down credits nothing back, so nothing offsets the second
-    charge, and the period is already stamped at the target's terms so no
-    allowance is bought with it either.
-    """
-
-    if published_plan(target).included_nanos <= paid_for_nanos:
-        # These days already carry at least this plan's terms, so there is
-        # nothing left to buy for them. Reached by moving down and back up inside
-        # one cycle, where the move down took nothing back.
-        return SubscriptionProration.KeepWhatWasPaidFor
-    paid_monthly_nanos = published_plan(from_plan).monthly_nanos if from_plan is not None else 0
+def _change_timing(
+    held: SubscriptionTermsVersion, target: SubscriptionTermsVersion
+) -> SubscriptionChangeTiming:
     return (
-        SubscriptionProration.ChargeDifferenceNow
-        if published_plan(target).monthly_nanos > paid_monthly_nanos
-        else SubscriptionProration.KeepWhatWasPaidFor
+        SubscriptionChangeTiming.AtRenewal
+        if subscription_terms(target).monthly_nanos < subscription_terms(held).monthly_nanos
+        else SubscriptionChangeTiming.Immediate
+    )
+
+
+def _holds_target(held: ProviderSubscription, intent: ClaimedPlanChange) -> bool:
+    return (
+        held.terms_version is intent.target_terms_version and held.scheduled_terms_version is None
+    ) or (
+        held.scheduled_terms_version is intent.target_terms_version
+        and held.scheduled_change_at == held.current_period_ended_at
     )
 
 

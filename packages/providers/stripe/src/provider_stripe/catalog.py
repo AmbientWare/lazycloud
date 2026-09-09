@@ -6,8 +6,9 @@ from decimal import Decimal
 
 import httpx
 from pydantic import Field
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import NANOS_PER_USD, BilledDimension
+from shared.billing_rate_card import published_plan
 from shared.enums import StringEnum
 from shared.errors import ConflictError, InvalidInputError
 from shared.payments import BILLING_CURRENCY, METER_EVENT_NAMES
@@ -54,6 +55,7 @@ class PlanLine:
     """
 
     plan: BillingPlanId
+    terms_version: SubscriptionTermsVersion
     product_id: str
     product_name: str
     price_lookup_key: str
@@ -62,17 +64,44 @@ class PlanLine:
 PLAN_LINES: tuple[PlanLine, ...] = (
     PlanLine(
         plan=BillingPlanId.Free,
+        terms_version=SubscriptionTermsVersion.Free,
         product_id="lazycloud_plan_free",
         product_name="LazyCloud Free",
-        price_lookup_key="lazycloud_plan_free_monthly_usd",
+        price_lookup_key="lazycloud_plan_free_v2_monthly_usd",
     ),
     PlanLine(
         plan=BillingPlanId.Team,
+        terms_version=SubscriptionTermsVersion.Team,
         product_id="lazycloud_plan_team",
         product_name="LazyCloud Team",
-        price_lookup_key="lazycloud_plan_team_monthly_usd",
+        price_lookup_key="lazycloud_plan_team_v2_monthly_usd",
+    ),
+    PlanLine(
+        plan=BillingPlanId.Business,
+        terms_version=SubscriptionTermsVersion.Business,
+        product_id="lazycloud_plan_business",
+        product_name="LazyCloud Business",
+        price_lookup_key="lazycloud_plan_business_v1_monthly_usd",
     ),
 )
+
+_LEGACY_PLAN_LINES = (
+    PlanLine(
+        BillingPlanId.Free,
+        SubscriptionTermsVersion.FreeLegacy,
+        "lazycloud_plan_free",
+        "LazyCloud Free",
+        "lazycloud_plan_free_monthly_usd",
+    ),
+    PlanLine(
+        BillingPlanId.Team,
+        SubscriptionTermsVersion.TeamLegacy,
+        "lazycloud_plan_team",
+        "LazyCloud Team",
+        "lazycloud_plan_team_monthly_usd",
+    ),
+)
+_PLAN_LINES_BY_VERSION = {line.terms_version: line for line in (*_LEGACY_PLAN_LINES, *PLAN_LINES)}
 
 _PLAN_LINES_BY_PLAN: Mapping[BillingPlanId, PlanLine] = {line.plan: line for line in PLAN_LINES}
 
@@ -82,12 +111,12 @@ if _PLAN_LINES_BY_PLAN.keys() != set(BillingPlanId):
     )
 
 
-_PLANS_BY_PRICE_LOOKUP_KEY: Mapping[str, BillingPlanId] = {
-    line.price_lookup_key: line.plan for line in PLAN_LINES
+_PLAN_LINES_BY_LOOKUP_KEY = {
+    line.price_lookup_key: line for line in (*_LEGACY_PLAN_LINES, *PLAN_LINES)
 }
 
 
-def plan_line(plan: BillingPlanId) -> PlanLine:
+def plan_line(version: SubscriptionTermsVersion) -> PlanLine:
     """The product and price one plan is sold through.
 
     Total over the enum, held so by the check above: a plan a caller can ask for
@@ -95,15 +124,15 @@ def plan_line(plan: BillingPlanId) -> PlanLine:
     provider with nothing here able to say why.
     """
 
-    return _PLAN_LINES_BY_PLAN[plan]
+    return _PLAN_LINES_BY_VERSION[version]
 
 
-def plan_for_price_lookup_key(lookup_key: str) -> BillingPlanId | None:
+def terms_for_price_lookup_key(lookup_key: str) -> PlanLine | None:
     """The way back from `plan_line`, kept beside it so the correspondence
     between a plan and the price it is sold through is stated once. `None` for a
     price this catalog did not publish."""
 
-    return _PLANS_BY_PRICE_LOOKUP_KEY.get(lookup_key)
+    return _PLAN_LINES_BY_LOOKUP_KEY.get(lookup_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +189,10 @@ def subscription_price_lookup_keys(plan: BillingPlanId) -> tuple[str, ...]:
     the plan includes reaches no invoice at all.
     """
 
-    return (plan_line(plan).price_lookup_key, *METERED_PRICE_LOOKUP_KEYS)
+    return (
+        plan_line(published_plan(plan).terms_version).price_lookup_key,
+        *METERED_PRICE_LOOKUP_KEYS,
+    )
 
 
 class CatalogObjectKind(StringEnum):
@@ -333,25 +365,13 @@ class StripeCatalog:
         return PublishedCatalog(account_id=self.account_id(), entries=tuple(entries))
 
     def publish(self, *, plan_prices: Mapping[BillingPlanId, int]) -> PublishedCatalog:
-        """Make the account agree with the rate card this repository publishes.
+        """Create missing catalog objects without changing published terms."""
 
-        Idempotent by name: a run against an account that already agrees writes
-        nothing. A plan whose amount has changed is republished, because a
-        price cannot be edited at the provider. A new one is created carrying the
-        same lookup key and the old one is retired, so whatever resolves a plan
-        by lookup key finds the current figure.
-
-        Subscriptions already open are left on the price they were opened
-        against. They hold a provider identifier rather than a lookup key, so
-        nothing here reaches them, and that is the intended limit: moving an
-        account onto a different figure changes what somebody is charged, and it
-        is not something a deploy should do on the way past.
-
-        Every plan named in `plan_prices` is published. A plan absent from it is
-        left alone rather than assumed free, because a plan price is the one
-        figure this command must never invent.
-        """
-
+        for plan, nanos in plan_prices.items():
+            if nanos != published_plan(plan).monthly_nanos:
+                raise ConflictError(
+                    "subscription prices must match their immutable published terms"
+                )
         plan_price_cents = {plan: cents(nanos) for plan, nanos in plan_prices.items()}
         meters = self._meters()
         for line in USAGE_LINES:
@@ -385,7 +405,7 @@ class StripeCatalog:
             if published is None:
                 self._create_plan_price(plan_product, plan_price_cents=amount_cents)
             elif published.unit_amount != amount_cents:
-                self._reprice_plan(plan_product, published, plan_price_cents=amount_cents)
+                raise ConflictError("a published subscription terms version cannot be repriced")
         for line in USAGE_LINES:
             existing = prices.get(line.price_lookup_key)
             if existing is None:
@@ -445,35 +465,6 @@ class StripeCatalog:
                 ("recurring[usage_type]", "licensed"),
             ],
         ).id
-
-    def _reprice_plan(self, line: PlanLine, current: _Price, *, plan_price_cents: int) -> str:
-        """Publish the current figure under the key, and retire the old price.
-
-        The key moves first. Between the two calls the account holds a price
-        nothing resolves to rather than two that both answer to one name, which
-        is the ordering that fails safe if the second call does not happen.
-        """
-
-        created = read(
-            _Price,
-            self.client,
-            "POST",
-            "/prices",
-            data=[
-                ("currency", BILLING_CURRENCY.lower()),
-                ("product", line.product_id),
-                ("lookup_key", line.price_lookup_key),
-                ("transfer_lookup_key", "true"),
-                ("unit_amount", str(plan_price_cents)),
-                ("billing_scheme", "per_unit"),
-                ("recurring[interval]", "month"),
-                ("recurring[usage_type]", "licensed"),
-            ],
-        ).id
-        # Retired rather than deleted, which the provider does not offer. Open
-        # subscriptions name it directly and go on billing against it.
-        read(_Price, self.client, "POST", f"/prices/{current.id}", data=[("active", "false")])
-        return created
 
     @staticmethod
     def _plan_price_disagreement(
@@ -556,7 +547,7 @@ __all__ = [
     "StripeCatalog",
     "UsageLine",
     "cents",
-    "plan_for_price_lookup_key",
     "plan_line",
     "subscription_price_lookup_keys",
+    "terms_for_price_lookup_key",
 ]

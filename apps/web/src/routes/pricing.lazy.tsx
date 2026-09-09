@@ -264,9 +264,9 @@ function MarketingPricing() {
             <div className="mb-6 max-w-[44rem]">
               <h2 className={sectionTitle}>Pricing plans</h2>
             </div>
-            <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
+            <div className="grid grid-cols-3 gap-4 max-md:grid-cols-1">
               {catalog.plans.map((plan) => (
-                <MarketingCard asChild key={plan.id}>
+                <MarketingCard asChild key={plan.terms_version}>
                   <article className="flex flex-col p-5 sm:p-6">
                     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                       <h3 className="font-serif text-[24px] leading-none font-normal">
@@ -284,7 +284,9 @@ function MarketingPricing() {
                     </p>
                     <dl className="mt-4 border-t border-border text-[13px]">
                       <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
-                        <dt className="text-muted-foreground">Monthly compute credit</dt>
+                        <dt className="text-muted-foreground">
+                          Monthly {plan.credit_scope === "compute" ? "compute" : "usage"} credit
+                        </dt>
                         <dd className="font-mono font-medium text-brand">
                           {exactDollars(plan.included_nanos)}{" "}
                           <span className="text-muted-foreground">/ month</span>

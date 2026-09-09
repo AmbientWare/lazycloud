@@ -63,38 +63,18 @@ admission decision, credit funding and migration, and the sweep.
 - Every account holds a subscription, and the Free plan is a $0 one. Its metered
   items remain when the licensed plan price changes. Local credits fund usage;
   the provider subscription does not authorize unfunded compute.
-- A plan change never creates a subscription, and moving down never ends one.
-  The licensed item's price is swapped in place in both directions, so the
-  subscription id, the billing anniversary and the three metered items survive
-  and the usage already recorded this cycle is billed where it belongs. Ending
-  the subscription instead would take the metered prices with it, so containers
-  still running would meter onto meters no subscription item references and reach
-  no invoice at all. The account row cleared for an ended subscription then
-  refuses every new container, so a paying customer who pressed cancel would be
-  locked out within seconds and put back on a fresh subscription by the next
-  billing route they touched. "Cancel" is the free plan's price, and it is the
-  same request as any other change.
-- Which direction a change goes in decides what happens to the part of the cycle
-  already invoiced, and the caller states it rather than the adapter guessing.
-  Dearer invoices the difference at once; local credit still requires the paid
-  invoice line as evidence. Cheaper takes nothing and returns
-  nothing: the month was invoiced when the cycle opened, and refunding part of it
-  would hand back money for compute the account was free to spend and mostly has.
-  So a move down is cancel-at-period-end in economic effect with no scheduling
-  machinery. The price swaps now, the next invoice is the smaller one.
-- An allowance is never reduced inside the period it was stamped on, whichever
-  caller writes that period. What a customer was given when the cycle opened is
-  what they spent against while it ran, and re-terming it downwards mid-cycle
-  would leave the smaller figure standing in front of usage that was included
-  when it happened. The provider applies credit at finalization, so the invoice
-  would ask for the difference and bill somebody for compute their plan had
-  already covered. The cycle keeps its terms and its spend, nothing is expired,
-  nothing is bought, and the smaller plan applies from the next cycle. How much
-  may run at once is not stamped on the period and is read live, so that does
-  drop at once; the asymmetry is stated to the customer rather than smoothed
-  over. It is also what makes the grant idempotency key unreachable for a grant
-  that was expired: expiry happens only on a re-term, and a re-term now implies a
-  different amount or a different expiry.
+- Subscription terms are immutable versions. Existing subscriptions and paid
+  invoice lines use their verified version, not today's published offer. Unknown
+  prices leave terms unavailable until reconciled. Delayed invoices retain the
+  amount and eligibility of the terms they paid for.
+- Paid upgrades take effect after the provider collects the prorated difference.
+  Included credits are prorated across the same covered interval, net of the old
+  plan's credited interval. Issue each paid invoice increment once and preserve
+  prior lots. A full renewal grants the full included credit for its exact terms.
+- Cheaper terms are scheduled at renewal. Keep paid entitlements through the
+  current period. Choosing the held version cancels the scheduled change,
+  including a legacy version no longer sold to new subscribers. Preserve the
+  subscription, anniversary and metered items in either direction.
 - The swap is this platform's own because the provider's hosted portal cannot do
   it. Their portal refuses to *update* a subscription that carries multiple
   products or usage-based prices, and this one carries both by design; the plan

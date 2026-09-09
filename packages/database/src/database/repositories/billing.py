@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from database.tables.billing import BillingAccountTable
 from shared.billing_accounts import BillingAccount, BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.errors import ConflictError
 from shared.timestamps import to_utc
 from sqlalchemy import select
@@ -145,6 +145,9 @@ class BillingAccountRepository:
         provider_subscription_id: str,
         provider_credit_grant_id: str,
         plan: BillingPlanId | None,
+        subscription_terms_version: SubscriptionTermsVersion | None,
+        scheduled_terms_version: SubscriptionTermsVersion | None,
+        scheduled_change_at: datetime | None,
     ) -> BillingAccount:
         """Write the account for a user, creating it on the first write.
 
@@ -187,6 +190,13 @@ class BillingAccountRepository:
         row.provider_subscription_id = provider_subscription_id
         row.provider_credit_grant_id = provider_credit_grant_id
         row.plan = plan.value if plan is not None else ""
+        row.subscription_terms_version = (
+            subscription_terms_version.value if subscription_terms_version is not None else None
+        )
+        row.scheduled_terms_version = (
+            scheduled_terms_version.value if scheduled_terms_version is not None else None
+        )
+        row.scheduled_change_at = to_utc(scheduled_change_at) if scheduled_change_at else None
         try:
             self.session.flush()
         except IntegrityError as exc:
@@ -270,6 +280,17 @@ def _account(row: BillingAccountTable) -> BillingAccount:
         provider_subscription_id=row.provider_subscription_id,
         provider_credit_grant_id=row.provider_credit_grant_id,
         plan=BillingPlanId(row.plan) if row.plan else None,
+        subscription_terms_version=(
+            SubscriptionTermsVersion(row.subscription_terms_version)
+            if row.subscription_terms_version is not None
+            else None
+        ),
+        scheduled_terms_version=(
+            SubscriptionTermsVersion(row.scheduled_terms_version)
+            if row.scheduled_terms_version is not None
+            else None
+        ),
+        scheduled_change_at=to_utc(row.scheduled_change_at) if row.scheduled_change_at else None,
         payment_method_attached_at=(
             to_utc(row.payment_method_attached_at) if row.payment_method_attached_at else None
         ),

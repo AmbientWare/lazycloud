@@ -5,7 +5,10 @@ from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from uuid import uuid4
 
+import httpx
+import pytest
 from api.server.services import ApiServices
+from billing.credits import fund_subscription_credits
 from billing.rate_publication import publish_metered_rate_history
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_credits import BillingCreditRepository
@@ -18,9 +21,12 @@ from database.tables.billing_credits import (
 )
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_outbox import BillingMeterOutboxTable
+from provider_stripe.billing import StripeBilling
 from shared.billing_credits import CreditGrant, CreditKind, CreditScope
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension
 from shared.billing_rate_card import METERED_RATES_EFFECTIVE_AT
+from shared.payments import ProviderPaidSubscriptionPeriod, ProviderSubscription
 from shared.timestamps import to_utc
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
@@ -31,6 +37,212 @@ from shared.usage import (
 )
 from sqlalchemy import func, select
 from tests.service_fixtures import workspace_owner_user_id
+
+
+def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
+    postgres_services: ApiServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start = datetime(2027, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=30)
+    with postgres_services.context.database.session() as session:
+        workspace_id = postgres_services.context.default_workspace_id(session)
+        user_id = workspace_owner_user_id(postgres_services.context, workspace_id)
+        credits = BillingCreditRepository(session)
+        credits.prepare_cutover(user_id=user_id, effective_at=start)
+        credits.complete_cutover(user_id=user_id, at=start)
+        BillingAllowanceRepository(session).set_subscription_period(
+            user_id=user_id,
+            period_started_at=start,
+            period_ended_at=end,
+            allowance_nanos=0,
+            funded=False,
+        )
+    subscription = ProviderSubscription(
+        provider_subscription_id="sub_proration",
+        status="active",
+        current_period_started_at=start,
+        current_period_ended_at=end,
+        plan=BillingPlanId.Business,
+        terms_version=SubscriptionTermsVersion.Business,
+        scheduled_terms_version=None,
+        scheduled_change_at=None,
+    )
+    evidence = (
+        ProviderPaidSubscriptionPeriod(
+            provider_invoice_id="in_last_minute",
+            provider_invoice_line_id="il_business",
+            provider_subscription_id=subscription.provider_subscription_id,
+            plan=BillingPlanId.Business,
+            terms_version=SubscriptionTermsVersion.Business,
+            period_started_at=end - timedelta(minutes=1),
+            period_ended_at=end,
+            prorated=True,
+            amount_nanos=10_000_000,
+            invoice_paid_nanos=10_000_000,
+            paid_at=end - timedelta(minutes=1),
+        ),
+    )
+
+    def receipts(
+        self: StripeBilling,
+        *,
+        provider_customer_id: str,
+        provider_subscription_id: str,
+        since: datetime,
+    ) -> tuple[ProviderPaidSubscriptionPeriod, ...]:
+        return evidence
+
+    monkeypatch.setattr(StripeBilling, "paid_subscription_periods", receipts)
+    with httpx.Client() as client:
+        payments = StripeBilling(client)
+
+        def fund() -> None:
+            with postgres_services.context.database.session() as session:
+                assert fund_subscription_credits(
+                    session,
+                    payments,
+                    user_id=user_id,
+                    provider_customer_id="cus_proration",
+                    subscription=subscription,
+                )
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(fund) for _ in range(4)]
+            for future in futures:
+                future.result()
+        with postgres_services.context.database.session() as session:
+            lots = session.scalars(
+                select(BillingCreditLotTable).where(
+                    BillingCreditLotTable.user_id == user_id,
+                    BillingCreditLotTable.kind == CreditKind.Subscription.value,
+                )
+            ).all()
+            assert len(lots) == 1
+            assert lots[0].amount_nanos == 50_000_000_000 // (30 * 24 * 60)
+            period = BillingAllowanceRepository(session).current_period(user_id=user_id, at=start)
+            assert period is not None and period.allowance_nanos == lots[0].amount_nanos
+
+        start, end = end, end + timedelta(days=30)
+        subscription = subscription.model_copy(
+            update={
+                "current_period_started_at": start,
+                "current_period_ended_at": end,
+            }
+        )
+        evidence = (
+            evidence[0].model_copy(
+                update={
+                    "provider_invoice_id": "in_renewal",
+                    "provider_invoice_line_id": "il_renewal",
+                    "period_started_at": start,
+                    "period_ended_at": end,
+                    "prorated": False,
+                    "amount_nanos": 249_000_000_000,
+                    "invoice_paid_nanos": 249_000_000_000,
+                    "paid_at": start,
+                }
+            ),
+        )
+        with postgres_services.context.database.session() as session:
+            BillingAllowanceRepository(session).set_subscription_period(
+                user_id=user_id,
+                period_started_at=start,
+                period_ended_at=end,
+                allowance_nanos=0,
+                funded=False,
+            )
+        fund()
+        fund()
+        with postgres_services.context.database.session() as session:
+            assert (
+                BillingCreditRepository(session).subscription_issued(
+                    user_id=user_id,
+                    period_ended_at=end,
+                )
+                == 50_000_000_000
+            )
+
+        start, end = end, end + timedelta(days=30)
+        middle = start + timedelta(days=15)
+        subscription = subscription.model_copy(
+            update={
+                "current_period_started_at": start,
+                "current_period_ended_at": end,
+            }
+        )
+        evidence = (
+            evidence[0].model_copy(
+                update={
+                    "provider_invoice_id": "in_legacy",
+                    "provider_invoice_line_id": "il_legacy",
+                    "plan": BillingPlanId.Team,
+                    "terms_version": SubscriptionTermsVersion.TeamLegacy,
+                    "period_started_at": start,
+                    "period_ended_at": end,
+                    "paid_at": start,
+                    "amount_nanos": 100_000_000_000,
+                    "invoice_paid_nanos": 100_000_000_000,
+                }
+            ),
+            evidence[0].model_copy(
+                update={
+                    "provider_invoice_id": "in_upgrade",
+                    "provider_invoice_line_id": "il_new",
+                    "period_started_at": middle,
+                    "period_ended_at": end,
+                    "paid_at": middle,
+                    "amount_nanos": 124_500_000_000,
+                    "invoice_paid_nanos": 74_500_000_000,
+                    "prorated": True,
+                }
+            ),
+            evidence[0].model_copy(
+                update={
+                    "provider_invoice_id": "in_upgrade",
+                    "provider_invoice_line_id": "il_old",
+                    "plan": BillingPlanId.Team,
+                    "terms_version": SubscriptionTermsVersion.TeamLegacy,
+                    "period_started_at": middle,
+                    "period_ended_at": end,
+                    "paid_at": middle,
+                    "amount_nanos": -50_000_000_000,
+                    "invoice_paid_nanos": 74_500_000_000,
+                    "prorated": True,
+                }
+            ),
+        )
+        with postgres_services.context.database.session() as session:
+            BillingAllowanceRepository(session).set_subscription_period(
+                user_id=user_id,
+                period_started_at=start,
+                period_ended_at=end,
+                allowance_nanos=30_000_000_000,
+                funded=True,
+            )
+            BillingCreditRepository(session).issue(
+                user_id=user_id,
+                grant=CreditGrant(
+                    source_id="subscription:in_legacy:il_legacy",
+                    kind=CreditKind.Subscription,
+                    scope=CreditScope.AllMetered,
+                    amount_nanos=30_000_000_000,
+                    effective_at=start,
+                    expires_at=end,
+                ),
+            )
+        fund()
+        fund()
+        with postgres_services.context.database.session() as session:
+            lots = session.execute(
+                select(
+                    BillingCreditLotTable.amount_nanos,
+                    BillingCreditLotTable.scope,
+                ).where(
+                    BillingCreditLotTable.user_id == user_id,
+                    BillingCreditLotTable.expires_at == end,
+                )
+            ).all()
+            assert set(lots) == {(30_000_000_000, "all_metered"), (10_000_000_000, "compute")}
 
 
 def test_credit_expiry_and_start_split_a_frozen_charge_and_preserve_purchased_funds(

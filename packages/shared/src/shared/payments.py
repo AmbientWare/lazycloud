@@ -6,7 +6,7 @@ from typing import Protocol
 
 from pydantic import Field
 
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension
 from shared.contracts import ContractModel
 from shared.credit_payments import CreditPayment, CreditPurchaseCheckout
@@ -35,24 +35,9 @@ makes a line priced at zero visible as metered-and-free rather than absent.
 """
 
 
-class SubscriptionProration(StringEnum):
-    """What a plan change does about the stretch of cycle already invoiced.
-
-    Stated by the caller because it is a money decision and only the caller knows
-    which direction the change goes in. Moving onto dearer terms takes the
-    difference at once, which is what makes "the subscription carries the plan"
-    and "the money was taken" one fact. Moving onto cheaper ones takes nothing
-    and gives nothing back: the cycle was invoiced when it opened, the allowance
-    it opened with is the allowance it keeps, and the smaller price is what the
-    next invoice asks for.
-
-    Protocol-neutral by name: a provider maps these onto whatever it calls
-    proration, and no caller has to hold that vocabulary to change somebody's
-    plan.
-    """
-
-    ChargeDifferenceNow = "charge_difference_now"
-    KeepWhatWasPaidFor = "keep_what_was_paid_for"
+class SubscriptionChangeTiming(StringEnum):
+    Immediate = "immediate"
+    AtRenewal = "at_renewal"
 
 
 class PaymentCustomer(ContractModel):
@@ -115,6 +100,9 @@ class ProviderSubscription(ContractModel):
     current_period_started_at: datetime
     current_period_ended_at: datetime
     plan: BillingPlanId | None = None
+    terms_version: SubscriptionTermsVersion | None
+    scheduled_terms_version: SubscriptionTermsVersion | None
+    scheduled_change_at: datetime | None
     """Which published plan the subscription's licensed price names.
 
     `None` where it names a price this platform did not publish, which is a
@@ -169,6 +157,7 @@ class ProviderPaidSubscriptionPeriod(ContractModel):
     provider_invoice_line_id: str = Field(min_length=1)
     provider_subscription_id: str = Field(min_length=1)
     plan: BillingPlanId
+    terms_version: SubscriptionTermsVersion
     period_started_at: datetime
     period_ended_at: datetime
     prorated: bool
@@ -372,26 +361,17 @@ class SubscriptionPaymentProvider(Protocol):
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
-        """Move an existing subscription onto another plan's price.
+        """Change exact subscription terms, preserving its cycle and metered items.
 
-        The subscription, its identifier and its cycle survive: only the licensed
-        price changes, so the metered prices keep the usage already recorded
-        against them and the customer's billing anniversary does not move. That
-        is what a plan change is here, and it is never a subscription ended and
-        another created — ending one takes the metered prices with it and leaves
-        the account's usage reaching no invoice at all.
-
-        The swap refuses rather than completing unpaid, so where `proration`
-        charges the difference the plan is carried only if the money was taken.
-        Where it does not, there is nothing to collect and nothing that could
-        have failed to.
-
-        Idempotent — a subscription already on the plan is returned unchanged —
-        because the caller is a transaction that can die between changing this
-        and recording it, and its retry must converge rather than charge again.
+        Immediate changes require payment for the proration. Renewal changes
+        retain current paid terms until their recorded boundary. Selecting the
+        held version cancels a scheduled change. The durable operation identity
+        fences retries across provider calls and local commits.
         """
         ...
 
@@ -501,6 +481,6 @@ __all__ = [
     "ProviderInvoice",
     "ProviderPaidSubscriptionPeriod",
     "ProviderSubscription",
+    "SubscriptionChangeTiming",
     "SubscriptionPaymentProvider",
-    "SubscriptionProration",
 ]

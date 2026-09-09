@@ -8,7 +8,7 @@ from uuid import uuid4
 from api.server.services import ApiServices
 from billing.meter_outbox import METER_EVENT_ABANDONED_ACTION, BillingMeterOutboxService
 from database.tables.billing_outbox import BillingMeterOutboxTable
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.payments import (
@@ -19,7 +19,7 @@ from shared.payments import (
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
-    SubscriptionProration,
+    SubscriptionChangeTiming,
 )
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import select
@@ -93,8 +93,10 @@ class _Provider:
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
         raise AssertionError("draining the outbox must not change anyone's plan")
 

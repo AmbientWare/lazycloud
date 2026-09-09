@@ -24,7 +24,7 @@ from database.repositories.custom_domains import CustomDomainRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension
 from shared.billing_rate_card import PlanEntitlements, account_terms, complimentary_terms
 from shared.contracts import ContractModel
@@ -98,6 +98,9 @@ class BillingStanding:
 
     status: BillingAccountStatus
     plan: BillingPlanId | None
+    subscription_terms_version: SubscriptionTermsVersion | None
+    scheduled_terms_version: SubscriptionTermsVersion | None
+    scheduled_change_at: datetime | None
     portal_available: bool
     allowance: SpentAllowancePeriod | None
     payment_method_on_file: bool
@@ -235,6 +238,9 @@ class BillingStandingService:
             return BillingStanding(
                 status=BillingAccountStatus.Active,
                 plan=None,
+                subscription_terms_version=None,
+                scheduled_terms_version=None,
+                scheduled_change_at=None,
                 portal_available=False,
                 allowance=None,
                 payment_method_on_file=False,
@@ -257,6 +263,9 @@ class BillingStandingService:
         return BillingStanding(
             status=account.status,
             plan=account.plan,
+            subscription_terms_version=account.subscription_terms_version,
+            scheduled_terms_version=account.scheduled_terms_version,
+            scheduled_change_at=account.scheduled_change_at,
             portal_available=bool(account.provider_customer_id),
             allowance=BillingAllowanceRepository(self.session).current_period(
                 user_id=user_id,

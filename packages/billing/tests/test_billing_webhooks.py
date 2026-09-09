@@ -9,10 +9,11 @@ from api.server.services import ApiServices
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import (
     FREE_PLAN_INCLUDED_NANOS,
     TEAM_PLAN_INCLUDED_NANOS,
+    published_plan,
 )
 from shared.errors import PaymentRequiredError
 from shared.payments import (
@@ -24,7 +25,7 @@ from shared.payments import (
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
-    SubscriptionProration,
+    SubscriptionChangeTiming,
 )
 from tests.service_fixtures import workspace_owner_user_id
 
@@ -101,8 +102,10 @@ class _Provider:
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
         raise AssertionError("applying a delivery must not change anyone's plan")
 
@@ -113,6 +116,9 @@ class _Provider:
             current_period_started_at=CYCLE_STARTED_AT,
             current_period_ended_at=CYCLE_ENDED_AT,
             plan=self.subscription_plan,
+            terms_version=published_plan(self.subscription_plan).terms_version,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
 
     def create_credit_grant(
@@ -179,6 +185,9 @@ def test_a_saved_card_becomes_the_one_charges_are_taken_from(
             provider_subscription_id="",
             provider_credit_grant_id="",
             plan=None,
+            subscription_terms_version=None,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         session.commit()
 
@@ -259,6 +268,9 @@ def test_a_failed_payment_leaves_the_account_admission_refuses(
             provider_subscription_id="sub_webhook",
             provider_credit_grant_id="credgr_webhook",
             plan=BillingPlanId.Team,
+            subscription_terms_version=published_plan(BillingPlanId.Team).terms_version,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         session.commit()
 
@@ -317,6 +329,9 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
             provider_subscription_id="sub_webhook",
             provider_credit_grant_id="credgr_free",
             plan=BillingPlanId.Free,
+            subscription_terms_version=published_plan(BillingPlanId.Free).terms_version,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         # Carded: a plan's own terms are what an account gets once somebody can be
         # charged past them, so without this the cycle would be re-termed onto the
@@ -388,6 +403,9 @@ def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
             provider_subscription_id="sub_webhook",
             provider_credit_grant_id="credgr_final",
             plan=BillingPlanId.Team,
+            subscription_terms_version=published_plan(BillingPlanId.Team).terms_version,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         session.commit()
 
@@ -441,6 +459,9 @@ def test_a_saved_card_preserves_existing_credit_without_replenishment(
             provider_subscription_id="sub_webhook",
             provider_credit_grant_id="credgr_cardless",
             plan=BillingPlanId.Free,
+            subscription_terms_version=published_plan(BillingPlanId.Free).terms_version,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         BillingAllowanceRepository(session).set_subscription_period(
             user_id=user_id,

@@ -17,6 +17,15 @@ class BillingPlanId(StringEnum):
 
     Free = "free"
     Team = "team"
+    Business = "business"
 
 
-__all__ = ["BillingPlanId"]
+class SubscriptionTermsVersion(StringEnum):
+    FreeLegacy = "free-v1"
+    TeamLegacy = "team-v1"
+    Free = "free-v2"
+    Team = "team-v2"
+    Business = "business-v1"
+
+
+__all__ = ["BillingPlanId", "SubscriptionTermsVersion"]

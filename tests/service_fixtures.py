@@ -29,7 +29,7 @@ from identity.auth import TokenIssuer
 from identity.users import UserService
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS
 from shared.identity import (
     AuthTokenRecord,
@@ -100,6 +100,9 @@ def _fixture_account(database: DatabaseClient, display_name: str) -> str:
             provider_subscription_id=f"sub_fixture_{user_id}",
             provider_credit_grant_id=f"credgr_fixture_{user_id}",
             plan=BillingPlanId.Free,
+            subscription_terms_version=SubscriptionTermsVersion.Free,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         # The cycle provisioning opens alongside the subscription. Both or
         # neither: an account holding a subscription with no allowance period is

@@ -16,14 +16,13 @@ from billing.funding import BillingFundingService
 from billing.purchases import CreditPurchaseService
 from database.repositories.billing_costs import PayerCostScope
 from fastapi import APIRouter, Depends, Query, status
-from shared.billing_rate_card import published_plan
+from shared.billing_rate_card import published_plan, subscription_terms
 from shared.credit_payments import CreditPurchaseKind
 from shared.errors import InvalidInputError
 from shared.funding import FundingBalance
 from shared.http.billing import (
     BillingAccountAdminListResponse,
     BillingAccountAdminResponse,
-    BillingAllowanceResponse,
     BillingComplimentaryRequest,
     BillingEntitlementUsageResponse,
     BillingHostedSessionRequest,
@@ -346,7 +345,7 @@ def change_billing_plan(
         database=services.context.database,
         payments=services.payment_provider,
         events=services.events,
-    ).change_plan(user_id=user_id, target=request.plan)
+    ).change_plan(user_id=user_id, target=request.plan, target_terms_version=request.terms_version)
     with services.context.database.session() as session:
         return _summary(BillingStandingService(session).standing(user_id=user_id, at=utc_now()))
 
@@ -456,6 +455,11 @@ def _series_response(series: UsageCostSeries) -> UsageCostSeriesResponse:
 
 def _summary(standing: BillingStanding) -> BillingSummaryResponse:
     allowance = standing.allowance
+    terms = (
+        subscription_terms(standing.subscription_terms_version)
+        if standing.subscription_terms_version is not None
+        else None
+    )
     return BillingSummaryResponse(
         status=standing.status,
         currency=BILLING_CURRENCY,
@@ -463,17 +467,14 @@ def _summary(standing: BillingStanding) -> BillingSummaryResponse:
             BillingPlanResponse(
                 id=standing.plan,
                 name=published_plan(standing.plan).name,
-                allowance=(
-                    BillingAllowanceResponse(
-                        period_started_at=allowance.started_at,
-                        period_ended_at=allowance.ended_at,
-                        allowance_nanos=allowance.allowance_nanos,
-                        spent_nanos=allowance.spent_nanos,
-                        remaining_nanos=allowance.remaining_nanos,
-                    )
-                    if allowance is not None
-                    else None
-                ),
+                terms_version=standing.subscription_terms_version,
+                monthly_nanos=terms.monthly_nanos if terms else None,
+                included_nanos=terms.included_nanos if terms else None,
+                credit_scope=terms.credit_scope if terms else None,
+                scheduled_terms_version=standing.scheduled_terms_version,
+                scheduled_change_at=standing.scheduled_change_at,
+                period_started_at=allowance.started_at if allowance else None,
+                period_ended_at=allowance.ended_at if allowance else None,
             )
             if standing.plan is not None
             else None

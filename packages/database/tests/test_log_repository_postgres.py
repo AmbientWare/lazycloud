@@ -16,6 +16,7 @@ from database.tables.execution import LogTable
 from observability.log_retention import LogRetentionService
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
+from shared.billing_rate_card import published_plan
 from shared.logs import LogEntry
 from shared.realtime.streams import LogStreamQuery
 from shared.tasks import Task
@@ -134,6 +135,9 @@ def test_log_retention_deletes_only_expired_rows_under_each_owners_plan(
                     provider_subscription_id=f"subscription-{owner.id}",
                     provider_credit_grant_id="",
                     plan=plan,
+                    subscription_terms_version=published_plan(plan).terms_version,
+                    scheduled_terms_version=None,
+                    scheduled_change_at=None,
                 )
                 task = TaskRepository(session).upsert(
                     Task(id=str(uuid4()), name=plan.value, workspace_id=workspace.id),

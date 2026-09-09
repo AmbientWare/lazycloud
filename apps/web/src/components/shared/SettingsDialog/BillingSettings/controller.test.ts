@@ -46,12 +46,20 @@ describe("billing settings controller", () => {
 
     act(() => result.current.confirmChange());
     await waitFor(() =>
-      expect(requests.posts("/api/v1/billing/subscription")).toEqual([{ plan: "team" }]),
+      expect(requests.posts("/api/v1/billing/subscription")).toEqual([
+        { plan: "team", terms_version: "team-v2" },
+      ]),
     );
   });
 
   it("confirms before moving down, then sends the plan that was confirmed", async () => {
-    const moved = summary({ plan: plan("free", "Free") });
+    const moved = summary({
+      plan: {
+        ...plan("team", "Team"),
+        scheduled_terms_version: "free-v2",
+        scheduled_change_at: "2026-09-01T00:00:00Z",
+      },
+    });
     const requests = recordRequests(
       summary({ payment_method_on_file: true, plan: plan("team", "Team") }),
       moved,
@@ -59,7 +67,7 @@ describe("billing settings controller", () => {
     const { result } = await mountedController();
 
     const free = result.current.offers.find((offer) => offer.id === "free");
-    expect(free?.action).toBe("cancel");
+    expect(free?.action).toBe("downgrade");
     act(() => result.current.choose(free!));
 
     // Asking is not doing: nothing has been sent yet.
@@ -68,8 +76,73 @@ describe("billing settings controller", () => {
 
     act(() => result.current.confirmChange());
     await waitFor(() =>
-      expect(requests.posts("/api/v1/billing/subscription")).toEqual([{ plan: "free" }]),
+      expect(requests.posts("/api/v1/billing/subscription")).toEqual([
+        { plan: "free", terms_version: "free-v2" },
+      ]),
     );
+    await waitFor(() =>
+      expect(result.current.summary?.plan?.scheduled_terms_version).toBe("free-v2"),
+    );
+    expect(result.current.summary?.plan?.id).toBe("team");
+  });
+
+  it("compares verified legacy terms and can cancel a scheduled move to the new version", async () => {
+    const legacy = {
+      ...plan("team", "Team"),
+      terms_version: "team-v1" as const,
+      monthly_nanos: 100_000_000_000,
+      included_nanos: 30_000_000_000,
+      credit_scope: "all_metered" as const,
+    };
+    const requests = recordRequests(
+      summary({ payment_method_on_file: true, plan: legacy }),
+      summary({
+        payment_method_on_file: true,
+        plan: {
+          ...legacy,
+          scheduled_terms_version: "team-v2",
+          scheduled_change_at: "2026-09-01T00:00:00Z",
+        },
+      }),
+    );
+    const { result } = await mountedController();
+    const team = result.current.offers.find((offer) => offer.id === "team");
+    expect(team?.action).toBe("downgrade");
+    act(() => result.current.choose(team!));
+    act(() => result.current.confirmChange());
+    await waitFor(() =>
+      expect(result.current.summary?.plan?.scheduled_terms_version).toBe("team-v2"),
+    );
+    expect(result.current.summary?.plan?.monthly_nanos).toBe(100_000_000_000);
+    act(() => result.current.cancelScheduledChange());
+    await waitFor(() =>
+      expect(requests.posts("/api/v1/billing/subscription")).toEqual([
+        { plan: "team", terms_version: "team-v2" },
+        { plan: "team", terms_version: "team-v1" },
+      ]),
+    );
+  });
+
+  it("does not offer a plan change against unverified subscription terms", async () => {
+    const requests = recordRequests(
+      summary({
+        payment_method_on_file: true,
+        plan: {
+          ...plan("team", "Team"),
+          terms_version: null,
+          monthly_nanos: null,
+          included_nanos: null,
+          credit_scope: null,
+        },
+      }),
+    );
+    const { result } = await mountedController();
+    const free = result.current.offers.find((offer) => offer.id === "free");
+    expect(free?.action).toBe("unverified");
+    act(() => result.current.choose(free!));
+    act(() => result.current.confirmChange());
+    expect(result.current.confirmingChangeTo).toBeNull();
+    expect(requests.posts("/api/v1/billing/subscription")).toEqual([]);
   });
 });
 
@@ -130,17 +203,18 @@ function stubNavigation() {
   return assign;
 }
 
-function plan(id: "free" | "team", name: string): BillingSummary["plan"] {
+function plan(id: "free" | "team", name: string): NonNullable<BillingSummary["plan"]> {
   return {
     id,
     name,
-    allowance: {
-      period_started_at: "2026-08-01T00:00:00Z",
-      period_ended_at: "2026-09-01T00:00:00Z",
-      allowance_nanos: 5_000_000_000,
-      spent_nanos: 1_000_000_000,
-      remaining_nanos: 4_000_000_000,
-    },
+    terms_version: id === "free" ? "free-v2" : "team-v2",
+    monthly_nanos: id === "free" ? 0 : 49_000_000_000,
+    included_nanos: id === "free" ? 0 : 10_000_000_000,
+    credit_scope: "compute",
+    scheduled_terms_version: null,
+    scheduled_change_at: null,
+    period_started_at: "2026-08-01T00:00:00Z",
+    period_ended_at: "2026-09-01T00:00:00Z",
   };
 }
 
@@ -196,19 +270,23 @@ function pricingCatalog(): PricingCatalog {
     plans: [
       {
         id: "free",
+        terms_version: "free-v2",
+        credit_scope: "compute",
         name: "Free",
         summary: "Free plan",
         monthly_nanos: 0,
-        included_nanos: 5_000_000_000,
+        included_nanos: 0,
         entitlements: entitlements(),
         terms: [],
       },
       {
         id: "team",
+        terms_version: "team-v2",
+        credit_scope: "compute",
         name: "Team",
         summary: "Team plan",
-        monthly_nanos: 100_000_000_000,
-        included_nanos: 30_000_000_000,
+        monthly_nanos: 49_000_000_000,
+        included_nanos: 10_000_000_000,
         entitlements: {
           ...entitlements(),
           max_concurrent_cpu_containers: 1_000,

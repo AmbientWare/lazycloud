@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from decimal import ROUND_DOWN, Decimal
 from typing import Literal, TypeAlias
 
-from shared.billing_plans import BillingPlanId
+from shared.billing_credits import CreditScope
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BYTES_PER_GIB, NANOS_PER_USD
 from shared.gpu import NO_GPU, SUPPORTED_GPU_TYPES, GpuType
 from shared.placement import AUTO_RATE_CLASS, PlacementRateClass, placement_rate_class
@@ -88,15 +89,66 @@ NO_CARD_MAX_GPUS = 1
 """One card, because the spending cap above stops it inside an hour on any model
 the free plan may ask for, and none is an account that can never see a GPU work."""
 
-TEAM_PLAN_MONTHLY_NANOS = 100 * NANOS_PER_USD
+TEAM_PLAN_MONTHLY_NANOS = 49 * NANOS_PER_USD
 """The subscription, charged by the payment provider as a flat monthly price."""
 
-TEAM_PLAN_INCLUDED_NANOS = 30 * NANOS_PER_USD
-"""What the subscription comes with, issued as a credit grant each period.
+TEAM_PLAN_INCLUDED_NANOS = 10 * NANOS_PER_USD
+BUSINESS_PLAN_MONTHLY_NANOS = 249 * NANOS_PER_USD
+BUSINESS_PLAN_INCLUDED_NANOS = 50 * NANOS_PER_USD
 
-Stated in nanodollars like every other figure here; the provider's grant is in
-cents, and 30 USD converts exactly.
-"""
+
+@dataclass(frozen=True, slots=True)
+class SubscriptionTerms:
+    version: SubscriptionTermsVersion
+    plan: BillingPlanId
+    monthly_nanos: int
+    included_nanos: int
+    credit_scope: CreditScope
+
+
+SUBSCRIPTION_TERMS: tuple[SubscriptionTerms, ...] = (
+    SubscriptionTerms(
+        SubscriptionTermsVersion.FreeLegacy,
+        BillingPlanId.Free,
+        0,
+        5 * NANOS_PER_USD,
+        CreditScope.AllMetered,
+    ),
+    SubscriptionTerms(
+        SubscriptionTermsVersion.TeamLegacy,
+        BillingPlanId.Team,
+        100 * NANOS_PER_USD,
+        30 * NANOS_PER_USD,
+        CreditScope.AllMetered,
+    ),
+    SubscriptionTerms(
+        SubscriptionTermsVersion.Free,
+        BillingPlanId.Free,
+        FREE_PLAN_MONTHLY_NANOS,
+        FREE_PLAN_INCLUDED_NANOS,
+        CreditScope.Compute,
+    ),
+    SubscriptionTerms(
+        SubscriptionTermsVersion.Team,
+        BillingPlanId.Team,
+        TEAM_PLAN_MONTHLY_NANOS,
+        TEAM_PLAN_INCLUDED_NANOS,
+        CreditScope.Compute,
+    ),
+    SubscriptionTerms(
+        SubscriptionTermsVersion.Business,
+        BillingPlanId.Business,
+        BUSINESS_PLAN_MONTHLY_NANOS,
+        BUSINESS_PLAN_INCLUDED_NANOS,
+        CreditScope.Compute,
+    ),
+)
+_SUBSCRIPTION_TERMS_BY_VERSION = {terms.version: terms for terms in SUBSCRIPTION_TERMS}
+
+
+def subscription_terms(version: SubscriptionTermsVersion) -> SubscriptionTerms:
+    return _SUBSCRIPTION_TERMS_BY_VERSION[version]
+
 
 _SECONDS_PER_HOUR = 3_600
 
@@ -306,8 +358,7 @@ class PublishedPlan:
     summary: str
     """The one line under the name, saying what this plan is."""
 
-    monthly_nanos: int
-    included_nanos: int
+    terms_version: SubscriptionTermsVersion
     entitlements: PlanEntitlements
     terms: tuple[str, ...]
     """What this plan promises beyond its figures, one clause each.
@@ -320,6 +371,18 @@ class PublishedPlan:
     and repeating it per plan is how two plans start describing the platform
     differently.
     """
+
+    @property
+    def monthly_nanos(self) -> int:
+        return subscription_terms(self.terms_version).monthly_nanos
+
+    @property
+    def included_nanos(self) -> int:
+        return subscription_terms(self.terms_version).included_nanos
+
+    @property
+    def credit_scope(self) -> CreditScope:
+        return subscription_terms(self.terms_version).credit_scope
 
 
 @dataclass(frozen=True, slots=True)
@@ -483,8 +546,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
         id=BillingPlanId.Free,
         name="Free",
         summary="What an account costs before it has agreed to anything.",
-        monthly_nanos=FREE_PLAN_MONTHLY_NANOS,
-        included_nanos=FREE_PLAN_INCLUDED_NANOS,
+        terms_version=SubscriptionTermsVersion.Free,
         entitlements=PlanEntitlements(
             max_concurrent_cpu_containers=FREE_PLAN_MAX_CPU_CONTAINERS,
             max_concurrent_gpus=FREE_PLAN_MAX_GPUS,
@@ -506,8 +568,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
         id=BillingPlanId.Team,
         name="Team",
         summary="A monthly subscription that comes with compute included.",
-        monthly_nanos=TEAM_PLAN_MONTHLY_NANOS,
-        included_nanos=TEAM_PLAN_INCLUDED_NANOS,
+        terms_version=SubscriptionTermsVersion.Team,
         entitlements=PlanEntitlements(
             max_concurrent_cpu_containers=TEAM_PLAN_MAX_CPU_CONTAINERS,
             max_concurrent_gpus=TEAM_PLAN_MAX_GPUS,
@@ -525,6 +586,25 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             "Every GPU model the platform rents, and as many workspaces and members as you need.",
             "One account and invoice for every workspace it owns.",
         ),
+    ),
+    PublishedPlan(
+        id=BillingPlanId.Business,
+        name="Business",
+        summary="Higher concurrency and longer log retention.",
+        terms_version=SubscriptionTermsVersion.Business,
+        entitlements=PlanEntitlements(
+            max_concurrent_cpu_containers=2_000,
+            max_concurrent_gpus=100,
+            gpu_types="all",
+            max_workspaces="unlimited",
+            max_members="unlimited",
+            connected_cloud=True,
+            region_selection=True,
+            custom_domains=True,
+            self_hosted=True,
+            log_retention_days=90,
+        ),
+        terms=("The same metered rates and capabilities as Team, with higher account limits.",),
     ),
 )
 """Every plan an account can be on, cheapest first."""
@@ -776,6 +856,8 @@ if tuple(rate.gpu_type for rate in PUBLISHED_GPU_RATES) != SUPPORTED_GPU_TYPES:
 
 
 __all__ = [
+    "BUSINESS_PLAN_INCLUDED_NANOS",
+    "BUSINESS_PLAN_MONTHLY_NANOS",
     "CONNECTED_CLOUD_MANAGEMENT_FEE",
     "FREE_PLAN_GPU_TYPES",
     "FREE_PLAN_INCLUDED_NANOS",
@@ -797,6 +879,7 @@ __all__ = [
     "PUBLISHED_SHAPE_RATES",
     "SECONDS_PER_30_DAY_MONTH",
     "STORED_RATE_STEP",
+    "SUBSCRIPTION_TERMS",
     "TEAM_PLAN_INCLUDED_NANOS",
     "TEAM_PLAN_MAX_CPU_CONTAINERS",
     "TEAM_PLAN_MAX_GPUS",
@@ -814,9 +897,11 @@ __all__ = [
     "PublishedPlan",
     "PublishedPlatformRate",
     "PublishedShapeRate",
+    "SubscriptionTerms",
     "account_terms",
     "complimentary_terms",
     "published_metered_rate_card",
     "published_placement_rates",
     "published_plan",
+    "subscription_terms",
 ]

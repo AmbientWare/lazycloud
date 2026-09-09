@@ -1,7 +1,16 @@
 import { z } from "zod";
 
-export const billingPlanIdSchema = z.enum(["free", "team"]);
+export const billingPlanIdSchema = z.enum(["free", "team", "business"]);
 export type BillingPlanId = z.infer<typeof billingPlanIdSchema>;
+export const billingTermsVersionSchema = z.enum([
+  "free-v1",
+  "team-v1",
+  "free-v2",
+  "team-v2",
+  "business-v1",
+]);
+export type BillingTermsVersion = z.infer<typeof billingTermsVersionSchema>;
+export const creditScopeSchema = z.enum(["compute", "all_metered"]);
 
 export const entitlementLimitSchema = z.union([
   z.number().int().positive(),
@@ -41,6 +50,8 @@ export type PlanEntitlements = z.infer<typeof planEntitlementsSchema>;
 export const publishedPlanSchema = z
   .object({
     id: billingPlanIdSchema,
+    terms_version: billingTermsVersionSchema,
+    credit_scope: creditScopeSchema,
     name: z.string(),
     summary: z.string(),
     monthly_nanos: z.number().int().nonnegative(),

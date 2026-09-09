@@ -18,7 +18,7 @@ from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.observability import UsageRecordTable
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension, LedgerBasis, LedgerComponent
 from shared.billing_rate_card import published_plan
 from shared.events import EventLevel
@@ -30,7 +30,7 @@ from shared.payments import (
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
-    SubscriptionProration,
+    SubscriptionChangeTiming,
 )
 from tests.service_fixtures import unbilled_account, workspace_owner_user_id
 
@@ -64,6 +64,11 @@ class _Provider:
             current_period_started_at=CYCLE_STARTED_AT,
             current_period_ended_at=CYCLE_ENDED_AT,
             plan=self.plan,
+            terms_version=published_plan(self.plan).terms_version
+            if self.plan is not None
+            else None,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
 
     def credit_grants_for(
@@ -131,8 +136,10 @@ class _Provider:
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
         raise AssertionError("reconciling must not change anyone's plan")
 
@@ -364,6 +371,9 @@ def _account_row(services: ApiServices, user_id: str, plan: BillingPlanId) -> No
             provider_subscription_id=f"sub_{user_id}",
             provider_credit_grant_id=f"credgr_{user_id}",
             plan=plan,
+            subscription_terms_version=published_plan(plan).terms_version,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         BillingAllowanceRepository(session).set_subscription_period(
             user_id=user_id,

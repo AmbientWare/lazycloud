@@ -9,7 +9,7 @@ from database.tables.orchestration import ContainerTable
 from execution.functions.service import FunctionControlService
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccountStatus
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.errors import PaymentRequiredError
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody
@@ -88,6 +88,9 @@ def _past_due(services: ApiServices, workspace_id: str) -> None:
             provider_subscription_id="sub_gate",
             provider_credit_grant_id="credgr_gate",
             plan=BillingPlanId.Team,
+            subscription_terms_version=SubscriptionTermsVersion.Team,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         session.commit()
 

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import type {
-  BillingPlanId,
+  BillingTermsVersion,
   BillingSummary,
   PricingCatalog,
   PublishedPlan,
@@ -24,7 +24,7 @@ import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
  * can charge is not a change that fails — it is a card that has to exist first,
  * and the two are different actions rather than one action with a retry.
  */
-type PlanOfferAction = "current" | "card" | "switch" | "cancel";
+type PlanOfferAction = "current" | "card" | "switch" | "downgrade" | "unverified";
 
 /** One published plan as it is offered to this account. */
 export type PlanOffer = PublishedPlan & { action: PlanOfferAction };
@@ -41,42 +41,42 @@ function planOffers(
   catalog: PricingCatalog | undefined,
 ): readonly PlanOffer[] {
   if (!catalog) return [];
-  const currentId = summary?.plan?.id;
-  const currentMonthlyNanos =
-    catalog.plans.find((plan) => plan.id === currentId)?.monthly_nanos ?? 0;
-  const cardOnFile = summary?.payment_method_on_file ?? false;
-  return catalog.plans.map((published) => {
-    return {
-      ...published,
-      action: offerAction(published, { currentId, currentMonthlyNanos, cardOnFile }),
-    };
-  });
+  return catalog.plans.map((published) => ({
+    ...published,
+    action: offerAction(published, summary),
+  }));
 }
 
 function offerAction(
   published: PublishedPlan,
-  {
-    currentId,
-    currentMonthlyNanos,
-    cardOnFile,
-  }: {
-    currentId: BillingPlanId | undefined;
-    currentMonthlyNanos: number;
-    cardOnFile: boolean;
-  },
+  summary: BillingSummary | undefined,
 ): PlanOfferAction {
-  if (published.id === currentId) return "current";
+  if (!summary || heldTermsUnverified(summary)) return "unverified";
+  const current = summary.plan;
+  if (published.id === current?.id && published.terms_version === current.terms_version) {
+    return "current";
+  }
   // A monthly plan with nobody to charge is a card first and a plan change
   // afterwards, and the two stay separate presses. The server refuses this
   // combination outright, so starting the change here would spend the account's
   // one open-change slot on a request that was never going to work — and
   // returning from the hosted card page must never be what authorises a monthly
   // charge nobody pressed a second time for.
-  if (published.monthly_nanos > 0 && !cardOnFile) return "card";
-  // Read off the published prices rather than off which plan is which: moving
-  // down takes nothing back and stops the next charge, which is a different
-  // promise from moving up and is confirmed before it happens.
-  return published.monthly_nanos < currentMonthlyNanos ? "cancel" : "switch";
+  if (published.monthly_nanos > 0 && !summary.payment_method_on_file) return "card";
+  return current?.monthly_nanos != null && published.monthly_nanos < current.monthly_nanos
+    ? "downgrade"
+    : "switch";
+}
+
+function heldTermsUnverified(summary: BillingSummary | undefined): boolean {
+  const held = summary?.plan;
+  return Boolean(
+    held &&
+    (held.terms_version === null ||
+      held.monthly_nanos === null ||
+      held.included_nanos === null ||
+      held.credit_scope === null),
+  );
 }
 
 export type BillingSettingsController = {
@@ -85,13 +85,15 @@ export type BillingSettingsController = {
   loadError: Error | null;
   offers: readonly PlanOffer[];
   settling: boolean;
+  termsUnverified: boolean;
+  cancelScheduledChange: () => void;
   /** An administrator has waived this account's bill; nothing here is for sale to it. */
   complimentary: boolean;
   planOpen: boolean;
   openPlan: () => void;
   closePlan: () => void;
   choose: (offer: PlanOffer) => void;
-  changingTo: BillingPlanId | null;
+  changingTo: BillingTermsVersion | null;
   changeError: Error | null;
   confirmingChangeTo: PlanOffer | null;
   confirmChange: () => void;
@@ -135,6 +137,7 @@ export function useBillingSettingsController({
 
   const settling = query.data?.plan_change_pending ?? false;
   const complimentary = Boolean(query.data?.complimentary_since);
+  const termsUnverified = heldTermsUnverified(query.data);
   const busy = change.isPending || leaving !== null;
 
   const go = (which: "card" | "portal") => {
@@ -153,14 +156,18 @@ export function useBillingSettingsController({
   };
 
   const choose = (offer: PlanOffer) => {
-    if (busy || settling || complimentary || offer.action === "current") return;
+    if (
+      busy ||
+      settling ||
+      complimentary ||
+      offer.action === "current" ||
+      offer.action === "unverified"
+    )
+      return;
     if (offer.action === "card") {
       go("card");
       return;
     }
-    // Both directions confirm. The move down was already behind one because it
-    // gives something up; the move up takes an immediate prorated charge on the
-    // card, which is the one a person is entitled to be asked about twice.
     setConfirmingChangeTo(offer);
   };
 
@@ -170,6 +177,20 @@ export function useBillingSettingsController({
     loadError: query.error ?? catalog.error,
     offers: planOffers(query.data, catalog.data),
     settling,
+    termsUnverified,
+    cancelScheduledChange: () => {
+      const held = query.data?.plan;
+      if (
+        busy ||
+        settling ||
+        complimentary ||
+        termsUnverified ||
+        !held?.terms_version ||
+        !held.scheduled_terms_version
+      )
+        return;
+      change.mutate({ plan: held.id, terms_version: held.terms_version });
+    },
     complimentary,
     planOpen,
     openPlan: () => onPlanOpenChange(true),
@@ -180,12 +201,15 @@ export function useBillingSettingsController({
       change.reset();
     },
     choose,
-    changingTo: change.isPending ? change.variables : null,
+    changingTo: change.isPending ? change.variables.terms_version : null,
     changeError: change.error,
     confirmingChangeTo,
     confirmChange: () => {
-      if (busy || settling || complimentary || !confirmingChangeTo) return;
-      change.mutate(confirmingChangeTo.id);
+      if (busy || settling || complimentary || termsUnverified || !confirmingChangeTo) return;
+      change.mutate({
+        plan: confirmingChangeTo.id,
+        terms_version: confirmingChangeTo.terms_version,
+      });
     },
     dismissChange: () => {
       if (change.isPending) return;

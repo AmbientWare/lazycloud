@@ -2,15 +2,14 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 
 import { countLabel } from "@/lib/format";
-import { formatCostNanos } from "@/lib/money";
 import { billingSummaryQueryOptions } from "@/lib/queries/billing";
 import { cn } from "@/lib/utils";
 
 /**
  * Why a container here was refused, when the reason belongs to the account.
  *
- * This page is one workspace's spend; the ceiling and the allowance are the
- * account's, and the containers filling either may be in a workspace nobody is
+ * This page is one workspace's spend; concurrency limits belong to the
+ * account, and the containers filling them may be in a workspace nobody is
  * looking at. Without this line the page has no answer to the only billing
  * question somebody asks while reading it. Everything that can be changed —
  * the plan, the card, the invoices — lives in settings, and this links there
@@ -35,15 +34,11 @@ export function AccountCeilingLine() {
   const gpuLimit = data.entitlements?.max_concurrent_gpus ?? 0;
   const atLimit =
     data.usage.concurrent_cpu_containers >= cpuLimit || data.usage.concurrent_gpus >= gpuLimit;
-  const overspent = (data.plan.allowance?.remaining_nanos ?? 0) < 0;
 
   return (
-    <p className={cn("text-xs", atLimit || overspent ? "text-warning" : "text-muted-foreground")}>
+    <p className={cn("text-xs", atLimit ? "text-warning" : "text-muted-foreground")}>
       {data.usage.concurrent_cpu_containers}/{countLabel(cpuLimit, "CPU container")} and{" "}
       {data.usage.concurrent_gpus}/{countLabel(gpuLimit, "GPU card")} in use account-wide
-      {overspent && data.plan.allowance
-        ? ` · ${formatCostNanos(-data.plan.allowance.remaining_nanos, data.currency)} over included usage this period`
-        : null}
       {". "}
       <Link
         to="."

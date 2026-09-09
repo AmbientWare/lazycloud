@@ -1,14 +1,11 @@
 # Stripe provider
 
-The payment relationship behind one billing account: the customer, the catalog
-they are sold from, the subscription and allowance they hold, the usage reported
-against them, and the signature on what Stripe sends back.
+Stripe payments, subscriptions, invoices, catalog publication and signed
+webhook delivery live here. Billing owns local credits and their allocations.
 
-- Stripe owns the money side of the relationship: the subscription a customer is
-  on, the allowance it comes with, the invoice, and the retries when a card is
-  refused. Collection machinery written here would be a second implementation of
-  a system that already exists, and the three audits that found starvation,
-  unpaced retries and dropped months were all reading ours rather than theirs.
+- Stripe owns payment confirmation, subscription state and invoices. PostgreSQL
+  credit lots and allocations own spendable funds after the recorded cutover;
+  provider balances remain evidence for legacy-credit migration.
 - What this platform owns is metering, the rate card that turns it into money,
   the ledger that attributes a cost to an app, and admission. Metering is what
   ran, on whose hardware, and how many core-seconds, gibibyte-seconds and
@@ -18,30 +15,20 @@ against them, and the signature on what Stripe sends back.
   observe: their meters are aggregates per customer and cannot say which app
   spent the money, and a balance call in the admission path would be a network
   round trip on every container start.
-- Every object is addressed by a name this repository chose: a product id, a
-  price lookup key, a meter event name. Nothing stores an identifier Stripe
-  generated, so there is no lookup table to keep in step with the account and no
-  way for one process to be pointed at a different price than another. The
-  constants are constants for that reason. An environment variable is how the
-  publisher, the drainer and the reconciler come to disagree.
+- Catalog objects use repository-owned product IDs, versioned price lookup keys
+  and meter event names. Customer, payment, subscription and schedule IDs are
+  provider-issued identities recorded by their durable owners. Do not add
+  environment variables that let catalog consumers resolve different objects.
 - The catalog is published by a command rather than declared in Terraform. The
   Terraform provider marks a product's id computed and cannot set one, which
   would leave the account holding Stripe-assigned identifiers this repository
   would then have to store, precisely the lookup table the naming above exists
   to avoid. `deploy/stripe` keeps only the webhook endpoint, the one object whose
   creation returns a secret that has to survive somewhere.
-- Publishing reads before it writes and creates only what is missing. It never
-  deletes, and it never edits, because a price's amount cannot be changed at
-  Stripe. A plan whose amount has moved is republished instead: a new price
-  carrying the same lookup key, and the old one retired. The key moves first, so
-  a failure between the two calls leaves the account holding a price nothing
-  resolves to rather than two answering to one name.
-- Publishing never reaches a subscription that is already open. Those hold a
-  price identifier rather than a lookup key, so a republished figure applies to
-  the next subscription and not to anyone already on the old one. That limit is
-  deliberate. Moving an account onto a different figure changes what a person is
-  charged, and it is a decision with customers on the other side of it rather
-  than a step a deploy takes on the way past.
+- Publishing creates missing products and versioned prices. Each lookup key
+  identifies immutable terms; an amount mismatch refuses publication. Never
+  transfer a lookup key or retire an existing subscription's price to publish
+  a new offer. Existing subscriptions retain their price IDs and terms.
 - The rate card is the only place a figure is written down, and almost none of it
   reaches Stripe. Every metered price is a fixed conversion of one nanodollar to
   money, and the rate card is applied here before usage is reported, so changing
@@ -49,20 +36,18 @@ against them, and the signature on what Stripe sends back.
   object at Stripe touched at all. A plan's monthly fee is the single exception,
   because it is a real amount on a real price, and it is the only figure a
   catalog run has anything to publish for.
-- A meter event carries the ledger segment's `cost_nanos` verbatim, and the
-  metered prices are one nanodollar per unit. Nothing is rederived on the way
-  out, so an invoice and the ledger behind it compare as exact integers and a
-  difference is a fact rather than a rounding argument. That comparison is the
-  only guard that what was sent is what was billed, and it changes nothing at
-  Stripe.
+- Gross ledger charges remain immutable. After local-credit cutover, only the
+  uncovered settlement amount is sent through the meter outbox. Earlier gross
+  exports remain unchanged. Metered prices convert one nanodollar per unit;
+  this adapter never reprices usage or allocates credits.
 - Invoice history comes from Stripe. `invoices_for` accepts a bounded count for
   routine reconciliation and `None` for complete history within the requested
   date window. Credit migration reads every page and every invoice status;
   missing status, wrong customer identity, or incomplete pagination refuses the
   evidence read. Invoice line periods, subscription identity, and published plan
-  products establish paid plan evidence. Card attachment establishes none of
-  these facts. Retired prices retain their product identity after a lookup key
-  moves to a new price.
+  prices and verified immutable versions establish paid plan evidence. Card
+  attachment establishes none of these facts. A product alone cannot identify
+  historical included-credit rights.
 - Grant evidence includes the original amount, available balance, ledger
   balance, expiry, and applicability. These amounts are distinct. A category or
   metadata label is not a payment receipt. Unknown or restricted applicability
@@ -84,13 +69,14 @@ against them, and the signature on what Stripe sends back.
   to sell a plan. Every subscription carries all three metered prices whatever
   plan it is on, including the plan priced at zero; without them there is
   nowhere for that account's overage to land.
-- A plan change is `set_subscription_plan`, which swaps the price on the existing
-  licensed item by item id and prorates it onto an invoice raised immediately. It
-  is never a second subscription: that would carry the same metered prices, and a
-  customer's usage counted onto two invoices is a charge nobody can explain. It
-  is idempotent by reading first, so a subscription already on the plan comes
-  back unchanged, because the caller is a transaction that can die between
-  changing the plan and recording it.
+- Immediate upgrades replace the licensed item with paid proration. Downgrades
+  use an owned subscription schedule with unchanged metered items and take
+  effect at renewal. Selecting held terms releases the schedule.
+- Stripe cannot attach metadata atomically when creating a schedule from a
+  subscription. Recover that partial creation only by replaying the durable
+  intent's exact idempotency key within 20 hours and matching the attached ID.
+  Once ownership metadata is attached, normal schedule recovery uses that
+  identity. Never adopt an unrelated or unverified schedule.
 - Registering a customer and granting an allowance carry an idempotency key. The
   customer's is the account id; a grant's is the account with the amount and
   expiry, because a plan change buys a different grant inside the same cycle and
@@ -105,8 +91,8 @@ against them, and the signature on what Stripe sends back.
   value here that changes exactly when a second subscription is wanted, which is
   the only kind a key may be derived from. Reading also outlives the day Stripe
   remembers a key, which the crash it protects against does not.
-- A credit grant expires `CREDIT_GRANT_SETTLEMENT_GRACE` after the cycle it
-  funds. Credit is applied when an invoice is finalized rather than when it is
+- A legacy provider credit grant expires `CREDIT_GRANT_SETTLEMENT_GRACE` after
+  the cycle it funds. Credit is applied when an invoice is finalized rather than when it is
   raised, so a grant has to outlive its own period to reach its invoice.
 - When a grant becomes spendable is a fact about the cycle *before* it and never
   about the cycle it funds. One bought for a cycle that follows another is held

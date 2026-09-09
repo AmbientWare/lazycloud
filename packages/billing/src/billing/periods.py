@@ -5,8 +5,9 @@ from database.repositories.billing_allowance import (
     SubscriptionPeriodOutcome,
 )
 from database.repositories.billing_credits import BillingCreditRepository
+from shared.billing_credits import CreditScope
 from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import published_plan
+from shared.billing_rate_card import subscription_terms
 from shared.errors import UpstreamUnavailableError
 from shared.payments import ProviderSubscription, SubscriptionPaymentProvider
 from sqlalchemy.orm import Session
@@ -30,23 +31,42 @@ def carry_plan_into_cycle(
     for paid plans; legacy periods retain their provider grant until cutover.
     """
 
+    if subscription.terms_version is None:
+        raise UpstreamUnavailableError("subscription terms await a recognized provider price")
+    held_terms = subscription_terms(subscription.terms_version)
+    if held_terms.plan is not plan:
+        raise UpstreamUnavailableError("subscription plan disagrees with its price terms")
+    credits = BillingCreditRepository(session)
+    cutover = credits.cutover(user_id=account_id)
+    local = cutover is not None and subscription.current_period_started_at >= cutover.effective_at
+    if (
+        not local
+        and held_terms.monthly_nanos > 0
+        and held_terms.credit_scope is CreditScope.Compute
+    ):
+        raise UpstreamUnavailableError(
+            "compute-only subscription terms require the local credit transition"
+        )
     written = BillingAllowanceRepository(session).set_subscription_period(
         user_id=account_id,
         period_started_at=subscription.current_period_started_at,
         period_ended_at=subscription.current_period_ended_at,
-        allowance_nanos=published_plan(plan).included_nanos,
-        funded=True,
+        allowance_nanos=(
+            credits.subscription_issued(
+                user_id=account_id, period_ended_at=subscription.current_period_ended_at
+            )
+            if local
+            else (0 if plan is BillingPlanId.Free else held_terms.included_nanos)
+        ),
+        funded=not local,
     )
-    cutover = BillingCreditRepository(session).cutover(user_id=account_id)
-    if cutover is not None and subscription.current_period_started_at >= cutover.effective_at:
+    if local:
         confirmed = fund_subscription_credits(
             session,
             payments,
             user_id=account_id,
             provider_customer_id=provider_customer_id,
             subscription=subscription,
-            plan=plan,
-            allowance_nanos=written.allowance_nanos,
         )
         if not confirmed:
             raise UpstreamUnavailableError(

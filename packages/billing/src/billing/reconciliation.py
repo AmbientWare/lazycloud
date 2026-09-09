@@ -187,6 +187,41 @@ class BillingReconciliationService:
             )
             return None
         kinds: set[BillingDivergence] = set()
+        if (
+            subscription.terms_version is not None
+            and subscription.status in RUNNING_SUBSCRIPTION_STATUSES
+        ):
+            with self.database.session() as session:
+                accounts = BillingAccountRepository(session)
+                held = accounts.get_by_user(account.user_id, for_update=True)
+                if (
+                    held is not None
+                    and held.provider_subscription_id == subscription.provider_subscription_id
+                    and held.provider_customer_id == account.provider_customer_id
+                    and (
+                        (
+                            held.plan is subscription.plan
+                            and held.subscription_terms_version
+                            in {None, subscription.terms_version}
+                        )
+                        or (
+                            held.scheduled_terms_version is subscription.terms_version
+                            and held.scheduled_change_at is not None
+                            and subscription.current_period_started_at >= held.scheduled_change_at
+                        )
+                    )
+                ):
+                    account = accounts.upsert(
+                        user_id=held.user_id,
+                        status=held.status,
+                        provider_customer_id=held.provider_customer_id,
+                        provider_subscription_id=held.provider_subscription_id,
+                        provider_credit_grant_id=held.provider_credit_grant_id,
+                        plan=subscription.plan,
+                        subscription_terms_version=subscription.terms_version,
+                        scheduled_terms_version=subscription.scheduled_terms_version,
+                        scheduled_change_at=subscription.scheduled_change_at,
+                    )
         data: dict[str, JsonValue] = {
             "user_id": account.user_id,
             "provider_subscription_id": account.provider_subscription_id,
@@ -230,7 +265,10 @@ class BillingReconciliationService:
                 "billing: credit reconciliation failed for %s: %s", account.user_id, error
             )
             return None
-        if subscription.plan is not account.plan:
+        if (
+            subscription.plan is not account.plan
+            or subscription.terms_version is not account.subscription_terms_version
+        ):
             kinds.add(BillingDivergence.PlanDisagrees)
         if subscription.status in ENDED_SUBSCRIPTION_STATUSES:
             kinds.add(BillingDivergence.SubscriptionEnded)

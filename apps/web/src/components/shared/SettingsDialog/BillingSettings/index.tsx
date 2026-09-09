@@ -5,12 +5,12 @@ import { Panel } from "@/components/shared/Panel";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { BillingPlan, BillingSummary } from "@/lib/api/schemas";
+import type { BillingSummary } from "@/lib/api/schemas";
 import { usagePhrase } from "@/lib/entitlements";
-import { exactDollars, formatCostNanos } from "@/lib/money";
+import { exactDollars } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
-import { useBillingSettingsController, type PlanOffer } from "./controller";
+import { useBillingSettingsController } from "./controller";
 import { PlanDialog } from "./PlanDialog";
 import { PrepaidCredit } from "./PrepaidCredit";
 import { UsageBudget } from "./UsageBudget";
@@ -56,13 +56,9 @@ export function BillingSettings({
                 </p>
               ) : !summary.plan ? (
                 <p className="text-sm text-muted-foreground">Choose a plan to start workloads.</p>
-              ) : !summary.plan.allowance ? (
-                <p className="text-sm text-muted-foreground">
-                  Your next usage allowance will appear when renewal finishes.
-                </p>
-              ) : (
-                <AllowanceMeter allowance={summary.plan.allowance} currency={summary.currency} />
-              )}
+              ) : summary.plan.included_nanos === 0 ? (
+                <p className="text-sm text-muted-foreground">This plan has no recurring credit.</p>
+              ) : null}
               {summary.plan || complimentary ? (
                 <div className="flex flex-col gap-1">
                   <ConcurrencyLine
@@ -82,9 +78,7 @@ export function BillingSettings({
                 </div>
               ) : null}
               <EntitlementUsage summary={summary} />
-              {complimentary ? null : (
-                <RetainedTermsLine summary={summary} offers={controller.offers} />
-              )}
+              {complimentary ? null : <SubscriptionTerms summary={summary} />}
               {controller.settling ? (
                 <p className="text-sm text-warning">
                   Your plan change is processing. The current plan stays active until it finishes.
@@ -201,32 +195,38 @@ function EntitlementUsage({ summary }: { summary: BillingSummary }) {
   );
 }
 
-/**
- * Said only where the period is richer than the plan now on the row.
- *
- * Which is what a move onto cheaper terms leaves behind: the allowance is
- * stamped when the cycle opens and is never reduced inside it, so the customer
- * keeps what they bought and the smaller plan starts at the next cycle. Absent
- * for an account with no card, whose stamped figure is below every plan's.
- */
-function RetainedTermsLine({
-  summary,
-  offers,
-}: {
-  summary: BillingSummary;
-  offers: readonly PlanOffer[];
-}) {
+function SubscriptionTerms({ summary }: { summary: BillingSummary }) {
   const plan = summary.plan;
-  const allowance = plan?.allowance;
-  if (!plan || !allowance) return null;
-  const published = offers.find((offer) => offer.id === plan.id);
-  if (!published || allowance.allowance_nanos <= published.included_nanos) return null;
+  if (!plan) return null;
+  if (
+    plan.terms_version === null ||
+    plan.monthly_nanos === null ||
+    plan.included_nanos === null ||
+    plan.credit_scope === null
+  ) {
+    return (
+      <p className="text-sm text-warning">
+        Your subscription terms are being verified. Plan changes are paused until verification
+        finishes.
+      </p>
+    );
+  }
   return (
-    <p className="text-sm text-muted-foreground">
-      This period keeps its current allowance. The {published.name} plan&apos;s{" "}
-      {exactDollars(published.included_nanos)} allowance starts{" "}
-      <LiveRelativeTime value={allowance.period_ended_at} />.
-    </p>
+    <div className="space-y-1 text-sm text-muted-foreground">
+      <p>
+        Your {plan.name} subscription costs {exactDollars(plan.monthly_nanos)} per month
+        {plan.included_nanos > 0
+          ? ` and includes ${exactDollars(plan.included_nanos)} of ${plan.credit_scope === "compute" ? "compute" : "usage"} credit`
+          : ""}
+        .
+      </p>
+      {plan.scheduled_change_at ? (
+        <p>
+          A plan change is scheduled for <LiveRelativeTime value={plan.scheduled_change_at} />. Your
+          current benefits remain active until then.
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -241,60 +241,4 @@ function StandingChip({ summary }: { summary: BillingSummary }) {
     return <StatusChip status="No plan" />;
   }
   return <StatusChip status={summary.plan.name} />;
-}
-
-function AllowanceMeter({
-  allowance,
-  currency,
-}: {
-  allowance: NonNullable<BillingPlan["allowance"]>;
-  currency: string;
-}) {
-  const filled = allowance.allowance_nanos
-    ? Math.min(100, (allowance.spent_nanos / allowance.allowance_nanos) * 100)
-    : 100;
-  const overspent = allowance.remaining_nanos < 0;
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <p className="font-mono text-lg">
-          {formatCostNanos(allowance.spent_nanos, currency)}
-          <span className="text-sm text-muted-foreground">
-            {" "}
-            of {formatCostNanos(allowance.allowance_nanos, currency)} included
-          </span>
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Ends <LiveRelativeTime value={allowance.period_ended_at} />
-        </p>
-      </div>
-      <div
-        role="meter"
-        aria-label="Included allowance spent"
-        aria-valuemin={0}
-        aria-valuemax={allowance.allowance_nanos}
-        aria-valuenow={allowance.spent_nanos}
-        className="h-2 w-full overflow-hidden rounded-full bg-muted"
-      >
-        <div
-          className={cn("h-full rounded-full", overspent ? "bg-destructive" : "bg-brand")}
-          style={{ width: `${filled}%` }}
-        />
-      </div>
-      {/* Usage against this period's terms, and worded as nothing more. The
-          figures are ours and exact — they read the priced ledger — but what is
-          collected is the payment provider's answer, and it carries things this
-          platform never models: a balance carried from a period that fell under
-          their minimum charge, a proration, tax. Small and bounded, which is why
-          the numbers stay; promising them as the invoice total is what has to
-          go, because that promise is wrong for exactly the accounts that drift a
-          little past the line. The invoice itself is one button away. */}
-      <p className="text-xs text-muted-foreground">
-        {overspent
-          ? `${formatCostNanos(-allowance.remaining_nanos, currency)} over the included amount this period. Your invoice shows the final total.`
-          : `${formatCostNanos(allowance.remaining_nanos, currency)} of included usage remaining.`}
-      </p>
-    </div>
-  );
 }

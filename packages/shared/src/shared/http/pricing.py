@@ -6,7 +6,8 @@ from typing import Literal
 
 from pydantic import Field
 
-from shared.billing_plans import BillingPlanId
+from shared.billing_credits import CreditScope
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import (
     CONNECTED_CLOUD_MANAGEMENT_FEE,
     NO_CARD_MAX_CPU_CONTAINERS,
@@ -48,6 +49,8 @@ class PlanEntitlementsResponse(HttpModel):
 
 class PublishedPlanResponse(HttpModel):
     id: BillingPlanId
+    terms_version: SubscriptionTermsVersion
+    credit_scope: CreditScope
     name: str
     summary: str
     monthly_nanos: int = Field(ge=0)
@@ -203,6 +206,8 @@ def pricing_catalog_response(*, at: datetime | None = None) -> PricingCatalogRes
         plans=[
             PublishedPlanResponse(
                 id=plan.id,
+                terms_version=plan.terms_version,
+                credit_scope=plan.credit_scope,
                 name=plan.name,
                 summary=plan.summary,
                 monthly_nanos=plan.monthly_nanos,

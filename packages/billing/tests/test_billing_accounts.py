@@ -20,7 +20,7 @@ from database.repositories.orchestration import ContainerRepository
 from database.tables.billing_credits import BillingCreditLotTable
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_credits import CreditKind, CreditScope
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension
 from shared.billing_rate_card import (
     FREE_PLAN_INCLUDED_NANOS,
@@ -28,6 +28,8 @@ from shared.billing_rate_card import (
     ONE_TIME_TRIAL_NANOS,
     TEAM_PLAN_INCLUDED_NANOS,
     TRIAL_VALIDITY_DAYS,
+    published_plan,
+    subscription_terms,
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import CapacityLimitReachedError, PaymentRequiredError, UpstreamUnavailableError
@@ -40,7 +42,7 @@ from shared.payments import (
     ProviderInvoice,
     ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
-    SubscriptionProration,
+    SubscriptionChangeTiming,
 )
 from shared.timestamps import utc_now
 from sqlalchemy import select
@@ -145,15 +147,21 @@ class _Provider:
             current_period_started_at=self.cycle_started_at,
             current_period_ended_at=self.cycle_ended_at,
             plan=plan,
+            terms_version=published_plan(plan).terms_version,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
 
     def set_subscription_plan(
         self,
         *,
         provider_subscription_id: str,
-        plan: BillingPlanId,
-        proration: SubscriptionProration,
+        terms_version: SubscriptionTermsVersion,
+        timing: SubscriptionChangeTiming,
+        operation_id: str,
+        operation_created_at: datetime,
     ) -> ProviderSubscription:
+        plan = subscription_terms(terms_version).plan
         if plan is not self.plan:
             self.plan_changes.append(plan)
             self.plan = plan
@@ -166,6 +174,11 @@ class _Provider:
             current_period_started_at=self.cycle_started_at,
             current_period_ended_at=self.cycle_ended_at,
             plan=self.plan,
+            terms_version=published_plan(self.plan).terms_version
+            if self.plan is not None
+            else None,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
 
     def subscription(self, *, provider_subscription_id: str) -> ProviderSubscription:
@@ -175,6 +188,11 @@ class _Provider:
             current_period_started_at=self.cycle_started_at,
             current_period_ended_at=self.cycle_ended_at,
             plan=self.plan,
+            terms_version=published_plan(self.plan).terms_version
+            if self.plan is not None
+            else None,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
 
     def create_credit_grant(
@@ -223,6 +241,7 @@ class _Provider:
                 amount_nanos=100_000_000_000,
                 invoice_paid_nanos=100_000_000_000,
                 paid_at=utc_now(),
+                terms_version=published_plan(self.plan).terms_version,
             ),
         )
 
@@ -270,6 +289,9 @@ def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
             provider_subscription_id="sub_paying",
             provider_credit_grant_id="credgr_paying",
             plan=BillingPlanId.Team,
+            subscription_terms_version=published_plan(BillingPlanId.Team).terms_version,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         WorkspaceMemberRepository(session).add(
             workspace_id=stranger.id,
@@ -354,6 +376,9 @@ def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
             provider_subscription_id="",
             provider_credit_grant_id="",
             plan=None,
+            subscription_terms_version=None,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         BillingAccountService(session).billing_account_for(
             provider, user_id=user_id, workspace_id=workspace_id
@@ -413,7 +438,9 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
         session.commit()
 
     upgraded = _plan_changes(isolated_services, provider).change_plan(
-        user_id=user_id, target=BillingPlanId.Team
+        user_id=user_id,
+        target=BillingPlanId.Team,
+        target_terms_version=published_plan(BillingPlanId.Team).terms_version,
     )
 
     with isolated_services.context.database.session() as session:
@@ -441,7 +468,9 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
         )
 
     again = _plan_changes(isolated_services, provider).change_plan(
-        user_id=user_id, target=BillingPlanId.Team
+        user_id=user_id,
+        target=BillingPlanId.Team,
+        target_terms_version=published_plan(BillingPlanId.Team).terms_version,
     )
 
     assert again.provider_subscription_id == "sub_1"
@@ -467,7 +496,11 @@ def test_paid_plan_credit_waits_for_invoice_payment_and_recovers_the_existing_in
         )
     changes = _plan_changes(isolated_services, provider)
     with pytest.raises(UpstreamUnavailableError, match="matching paid invoice"):
-        changes.change_plan(user_id=user_id, target=BillingPlanId.Team)
+        changes.change_plan(
+            user_id=user_id,
+            target=BillingPlanId.Team,
+            target_terms_version=published_plan(BillingPlanId.Team).terms_version,
+        )
     with isolated_services.context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
         assert account is not None and account.plan is BillingPlanId.Free
@@ -520,7 +553,9 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
     provider.cycle_ended_at = CYCLE_ENDED_AT + (CYCLE_ENDED_AT - CYCLE_STARTED_AT)
 
     _plan_changes(isolated_services, provider).change_plan(
-        user_id=user_id, target=BillingPlanId.Team
+        user_id=user_id,
+        target=BillingPlanId.Team,
+        target_terms_version=published_plan(BillingPlanId.Team).terms_version,
     )
 
     with isolated_services.context.database.session() as session:
@@ -588,6 +623,9 @@ def test_an_account_with_no_subscription_cannot_start_work(
             provider_subscription_id="",
             provider_credit_grant_id="",
             plan=None,
+            subscription_terms_version=None,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         session.commit()
 
@@ -626,6 +664,9 @@ def test_the_container_limit_counts_every_workspace_the_account_owns(
             provider_subscription_id=f"sub_{user_id}",
             provider_credit_grant_id=f"credgr_{user_id}",
             plan=BillingPlanId.Free,
+            subscription_terms_version=published_plan(BillingPlanId.Free).terms_version,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         BillingAllowanceRepository(session).set_subscription_period(
             user_id=user_id,

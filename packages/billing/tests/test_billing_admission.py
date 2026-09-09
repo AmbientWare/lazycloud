@@ -12,7 +12,7 @@ from database.tables.orchestration import ContainerTable
 from database.tables.storage import VolumeTable
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_credits import CreditGrant, CreditKind, CreditScope
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import FREE_PLAN_GPU_TYPES
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.custom_domains import CustomDomain
@@ -145,6 +145,9 @@ def test_an_account_behind_on_payment_cannot_start_work_and_leaves_no_container(
             provider_subscription_id="sub_gate",
             provider_credit_grant_id="credgr_gate",
             plan=BillingPlanId.Team,
+            subscription_terms_version=SubscriptionTermsVersion.Team,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         session.commit()
 
@@ -352,6 +355,9 @@ def test_a_plan_change_names_the_gpu_model_the_target_plan_does_not_offer(
             provider_subscription_id=f"sub_{user_id}",
             provider_credit_grant_id=f"credgr_{user_id}",
             plan=BillingPlanId.Team,
+            subscription_terms_version=SubscriptionTermsVersion.Team,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
         )
         session.commit()
     _hold_gpu_cards(isolated_services, workspace_id=workspace_id, cards=1, model="H100")

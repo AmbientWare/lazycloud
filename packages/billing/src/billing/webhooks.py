@@ -193,6 +193,9 @@ class BillingWebhookService:
                 provider_subscription_id=account.provider_subscription_id,
                 provider_credit_grant_id=account.provider_credit_grant_id,
                 plan=account.plan,
+                subscription_terms_version=account.subscription_terms_version,
+                scheduled_terms_version=account.scheduled_terms_version,
+                scheduled_change_at=account.scheduled_change_at,
             )
             LOGGER.info("billing: %s is past due on its subscription", account.user_id)
             return True
@@ -208,6 +211,9 @@ class BillingWebhookService:
                 # provider raises for the part-cycle this ends.
                 provider_credit_grant_id=account.provider_credit_grant_id,
                 plan=None,
+                subscription_terms_version=None,
+                scheduled_terms_version=None,
+                scheduled_change_at=None,
             )
             LOGGER.info("billing: %s is no longer subscribed", account.user_id)
             return True
@@ -285,6 +291,9 @@ class BillingWebhookService:
             provider_subscription_id=subscription.provider_subscription_id,
             provider_credit_grant_id=grant_id,
             plan=subscription.plan,
+            subscription_terms_version=subscription.terms_version,
+            scheduled_terms_version=subscription.scheduled_terms_version,
+            scheduled_change_at=subscription.scheduled_change_at,
         )
         return True
 
