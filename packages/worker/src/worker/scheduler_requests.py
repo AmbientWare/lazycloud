@@ -602,10 +602,12 @@ class WorkerSchedulerRequestProcessor:
             return
         self._cleanup_after = now + 5
         try:
+            with self._image_build_result_lock:
+                pending_results = set(self._pending_image_build_results)
             container_ids = [
                 container_id
                 for container_id in self.containers.list_pending_storage_cleanup()
-                if container_id not in self._background
+                if container_id not in self._background and container_id not in pending_results
             ]
             self.execution.recover_cleanup(container_ids)
         except Exception:

@@ -4,7 +4,7 @@ from collections.abc import Iterator, Mapping
 
 from pydantic import JsonValue
 from shared.compute_policy import MachinePool
-from shared.scheduling import WorkerExecutionRecord
+from shared.scheduling import WorkerExecutionRecord, WorkerExecutionRequest
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.origin_access import CacheOriginCredentialRequest, CacheOriginCredentials
 from worker.repository_client import (
@@ -14,6 +14,8 @@ from worker.repository_client import (
 from worker.repository_payloads import (
     AddWorkerRequest,
     GetContainerCredentialsResponse,
+    GetNextContainerRequestRequest,
+    GetNextContainerRequestResponse,
     WorkerCacheSession,
     WorkerRecordResponse,
 )
@@ -23,6 +25,31 @@ from worker.tools import (
 )
 
 _CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def test_idle_worker_request_response_returns_control_to_maintenance() -> None:
+    transport = _FakeWorkerRepositoryTransport(
+        streams={
+            "/worker-repository/get-next-container-request": [
+                GetNextContainerRequestResponse().model_dump(mode="json"),
+                GetNextContainerRequestResponse(
+                    container_request=WorkerExecutionRequest(
+                        workspace_id="workspace-1",
+                        stub_id="stub-1",
+                        container_id="next-container",
+                    )
+                ).model_dump(mode="json"),
+            ]
+        }
+    )
+    response = WorkerRepositoryHttpClient(transport).get_next_container_request(
+        GetNextContainerRequestRequest(
+            worker_id="worker-1",
+            cache_generation_id="13f4ff1a-2562-47e7-9f08-964588090ee0",
+            cache_session_fence=1,
+        )
+    )
+    assert response.container_request is None
 
 
 def test_worker_repository_client_preserves_session_auth_and_scoped_credentials() -> None:

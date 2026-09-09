@@ -49,6 +49,78 @@ from worker.worker_lifecycle import WorkerLifecycleOrchestrator
 _CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
 
 
+def test_cleanup_preserves_build_assignment_until_result_is_acknowledged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+    monkeypatch.setattr("worker.scheduler_requests.monotonic", lambda: clock[0])
+
+    class PendingContainers(_ContainerRepository):
+        def list_pending_storage_cleanup(self) -> list[str]:
+            return [
+                container_id
+                for container_id, state in self.states.items()
+                if state.status is SchedulerContainerStatus.Complete
+            ]
+
+    class CleanupExecution(_ExecutionService):
+        def recover_cleanup(self, container_ids: Sequence[str]) -> None:
+            for container_id in container_ids:
+                containers.delete_container_state(container_id, storage_released=True)
+
+    class RetryingReporter(_ImageBuildResultReporter):
+        acknowledged = False
+
+        def report_image_build_result(
+            self, request: WorkerExecutionRequest, result: WorkerImageBuildExecutionResult
+        ) -> None:
+            if containers.get_container_state(request.container_id) is None:
+                raise WorkerRepositoryClientError("build assignment is missing")
+            containers.update_container_status(
+                request.container_id, SchedulerContainerStatus.Complete, ttl_seconds=300
+            )
+            if not self.acknowledged:
+                raise WorkerRepositoryClientError("result committed but response was lost")
+            super().report_image_build_result(request, result)
+
+    request = _request(
+        payload={"kind": "image-build", "build_id": "build-1", "image_id": "image-1"}
+    )
+    containers = PendingContainers(
+        states={"ctr-1": _state(request, status=SchedulerContainerStatus.Pending)}
+    )
+    workers = _WorkerRepository(requests=[request])
+    reporter = RetryingReporter()
+    finished = threading.Event()
+    finished.set()
+    lifecycle = WorkerLifecycleOrchestrator(worker_id="worker-1")
+    processor = WorkerSchedulerRequestProcessor(
+        worker_id="worker-1",
+        workers=workers,
+        containers=containers,
+        execution=CleanupExecution(),
+        worker_gpu_type="",
+        image_builds=_ImageBuildExecutionService(finished),
+        image_build_results=reporter,
+        usage_recorder=_UsageWindowRecorder(),
+        lifecycle=lifecycle,
+    )
+    processor.run_once()
+    assert _wait_for_background_result(processor, "ctr-1").image_build_report_pending
+    clock[0] = 10.0
+    assert processor.run_once().image_build_report_pending
+    assert containers.get_container_state("ctr-1") is not None
+    assert lifecycle.active_container_ids() == ["ctr-1"]
+
+    reporter.acknowledged = True
+    clock[0] = 20.0
+    assert processor.run_once().capacity_released
+    assert lifecycle.active_container_ids() == []
+    clock[0] = 30.0
+    processor.run_once()
+    assert containers.get_container_state("ctr-1") is None
+
+
 def test_worker_scheduler_request_processor_executes_and_releases_capacity() -> None:
     request = _request(payload={"image_id": "image-1", "startup_kind": "function"})
     workers = _WorkerRepository(requests=[request])
