@@ -25,26 +25,16 @@ Argo's Application does. It declares nothing cluster-scoped: the storage class
 its claims name belongs to `deploy/platform-core`, because two deployments
 syncing a chart that declared it would each claim it.
 
-`billing.ratesEffectiveAt` is the exception, and it is authored here on purpose.
-No infrastructure output knows the instant a rate card starts applying, and
-nothing may derive one, because a rate boundary is a figure customers are charged
-either side of. It changes in the same commit as the figures in
-`packages/shared/src/shared/billing_rate_card.py`.
+The billing bootstrap publishes the reviewed history from
+`packages/shared/src/shared/billing_rate_card.py`. That history owns both prices
+and effective dates; Helm has no rate-date setting.
 
-The reviewed cutover is September 11, 2026 at 00:00 UTC. Egress becomes
-$0.13/GiB then. Compute and storage prices stay unchanged. The public catalog
-states that effective date. `billing publish-rates` requires the same boundary
-and publishes the reviewed history in one transaction. A fresh installation
-gets the previous rates through the cutover, so starting before September 11
-does not create unpriced usage. Existing rate rows are verified and preserved;
-completed ledger segments are never changed.
-
-Before deployment, preview with `lazycloud-admin billing publish-rates
---effective-at 2026-09-11T00:00:00Z`. The bootstrap Job adds `--confirm` during
-sync. If deployment is delayed beyond the cutover and usage has already been
-priced after it, publication refuses. Choose a new future date in the reviewed
-rate card and this value before deploying. Do not change an existing rate
-boundary or ledger row to make the sync pass.
+Before deployment, preview with `lazycloud-admin billing publish-rates`.
+The bootstrap Job adds `--confirm`
+during sync and publishes the reviewed history in one transaction. Existing
+rates and completed ledger segments are preserved. If publication conflicts
+with usage already priced, review a new future card before deploying. Do not
+change an existing rate boundary or ledger row to make the sync pass.
 
 ## The order the bootstrap runs in
 

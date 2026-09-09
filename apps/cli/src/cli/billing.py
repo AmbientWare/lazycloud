@@ -13,6 +13,7 @@ from provider_stripe import METER_EVENT_BACKFILL_DAYS, PublishedCatalog, StripeS
 from rich.console import Group
 from shared.billing_rate_card import (
     METERED_RATE_VERSION,
+    METERED_RATES_EFFECTIVE_AT,
     PUBLISHED_PLANS,
     PUBLISHED_PLATFORM_RATE,
 )
@@ -32,13 +33,6 @@ billing_app = typer.Typer(
 @billing_app.command("publish-rates")
 def publish_rates(
     ctx: typer.Context,
-    effective_at: Annotated[
-        str,
-        typer.Option(
-            "--effective-at",
-            help="The instant these rates start applying, ISO-8601 with an offset (…Z or +00:00).",
-        ),
-    ],
     confirm: Annotated[
         bool,
         typer.Option(
@@ -48,9 +42,8 @@ def publish_rates(
 ) -> None:
     """Write the published rate card into the tables pricing reads.
 
-    `--effective-at` must match the latest reviewed card's effective date. All
-    reviewed historical cards are published too, so a fresh installation prices
-    usage before a scheduled change at the original rate.
+    Prices and effective dates come from the reviewed rate history. A fresh
+    installation prices usage before a scheduled change at the original rate.
 
     The rates themselves are refused if they would reach back over usage the
     ledger has already frozen, so the operator cannot reprice a figure a customer
@@ -66,7 +59,7 @@ def publish_rates(
     having.
     """
 
-    moment = _instant(effective_at)
+    moment = METERED_RATES_EFFECTIVE_AT
     client = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.Admin).direct()
     )
@@ -101,8 +94,7 @@ def publish_rates(
         # not carry out and exit zero doing so. The operator running this before
         # a cutover is asking exactly that question.
         with client.session() as session:
-            history = publish_metered_rate_history(session, effective_at=moment)
-            latest = history[-1]
+            history = publish_metered_rate_history(session)
             current_compute = {
                 (
                     publication.rate.billing_owner,
@@ -126,8 +118,9 @@ def publish_rates(
                         "state": publication.state.value,
                     }
                 )
-            if latest.platform is not None:
-                payload["platform_rate_state"] = latest.platform.value
+            payload["platform_rate_state"] = next(
+                card.platform.value for card in reversed(history) if card.platform is not None
+            )
             payload["history_boundaries"] = [card.effective_at.isoformat() for card in history]
             if confirm:
                 session.commit()

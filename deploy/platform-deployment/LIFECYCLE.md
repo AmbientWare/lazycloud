@@ -224,15 +224,11 @@ published account gets nothing new, and a price whose amount disagrees with the
 repository fails the Job instead of being edited, because customers are already
 billed against the published one.
 
-The rate card runs the same way, in a wave of its own behind the schema it
-writes into. Its boundary is `billing.ratesEffectiveAt` in `deploy/chart/values.yaml`
-rather than the clock: a rate is a figure customers are charged either side of,
-and one taken from whenever a sync ran would open a new boundary on every sync.
-A card already published at that instant is left alone, and figures that disagree
-with it fail the Job. Without this the deployment meters usage it cannot price
-and fills its event log with `billing.span.unpriced` at ERROR, several a second,
-while nothing is billable. Changing what a customer pays is this value and the
-rate card in `packages/shared` moving together in one commit.
+The rate card runs in its own wave after the schema. The publication service
+reads prices and effective dates from the reviewed rate history in
+`packages/shared/src/shared/billing_rate_card.py`. A card already published at
+that instant is verified; conflicting figures fail the Job. Prices and their
+effective dates change together in the shared rate card.
 
 Watch it rather than assume it:
 
