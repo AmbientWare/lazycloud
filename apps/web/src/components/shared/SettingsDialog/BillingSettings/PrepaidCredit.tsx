@@ -51,8 +51,8 @@ export function PrepaidCredit() {
             </p>
             {balance.data.compute.debt_nanos > 0 ? (
               <p className="text-destructive">
-                {formatCostNanos(balance.data.compute.debt_nanos)} is owed after a payment reversal.
-                Add credit to resume work.
+                Outstanding balance: {formatCostNanos(balance.data.compute.debt_nanos)}. Add credit
+                to resume work.
               </p>
             ) : null}
           </div>
