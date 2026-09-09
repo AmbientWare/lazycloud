@@ -139,6 +139,40 @@ class ProviderCreditGrant(ContractModel):
     """
 
 
+class ProviderCreditApplicability(StringEnum):
+    AllMetered = "all_metered"
+    Restricted = "restricted"
+    Unknown = "unknown"
+
+
+class ProviderCreditGrantBalance(ContractModel):
+    provider_credit_grant_id: str = Field(min_length=1)
+    amount_nanos: int = Field(ge=0)
+    available_balance_nanos: int
+    ledger_balance_nanos: int
+    created_at: datetime
+    effective_at: datetime | None
+    expires_at: datetime | None
+    voided_at: datetime | None
+    category: str
+    name: str
+    applicability: ProviderCreditApplicability
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class ProviderPaidSubscriptionPeriod(ContractModel):
+    provider_invoice_id: str = Field(min_length=1)
+    provider_invoice_line_id: str = Field(min_length=1)
+    provider_subscription_id: str = Field(min_length=1)
+    plan: BillingPlanId
+    period_started_at: datetime
+    period_ended_at: datetime
+    prorated: bool
+    amount_nanos: int
+    invoice_paid_nanos: int = Field(ge=0)
+    paid_at: datetime
+
+
 class ProviderInvoice(ContractModel):
     """One bill the provider raised, and the window it covers.
 
@@ -403,17 +437,25 @@ class PaymentProvider(Protocol):
         ...
 
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
-        """The customer's recent bills, newest the caller can find among them.
+        """Customer invoices since an instant; None exhausts every page in the window."""
+        ...
 
-        What the guard above needs to be usable without an invoice identifier
-        arriving from somewhere: nothing here stores one, because an invoice is
-        the provider's record and keeping a copy of their list is a second
-        ledger to hold in step. Bounded by a window and a count, since a
-        reconciliation pass reads this per account and an unbounded list would
-        be a walk over a customer's whole history every time.
-        """
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        """All customer grants with provider balances and applicability evidence."""
+        ...
+
+    def paid_subscription_periods(
+        self,
+        *,
+        provider_customer_id: str,
+        provider_subscription_id: str,
+        since: datetime,
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        """Paid invoice plan lines linked to the customer's current subscription."""
         ...
 
 
@@ -424,8 +466,11 @@ __all__ = [
     "PaymentCustomer",
     "PaymentEvent",
     "PaymentProvider",
+    "ProviderCreditApplicability",
     "ProviderCreditGrant",
+    "ProviderCreditGrantBalance",
     "ProviderInvoice",
+    "ProviderPaidSubscriptionPeriod",
     "ProviderSubscription",
     "SubscriptionProration",
 ]

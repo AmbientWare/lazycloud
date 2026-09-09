@@ -37,6 +37,7 @@ class BillingMeterOutboxTable(TimestampMixin, DatabaseBase):
             name="ck_billing_meter_outbox_status",
         ),
         CheckConstraint("value_nanos >= 0", name="ck_billing_meter_outbox_value"),
+        CheckConstraint("metering_ended_at > occurred_at", name="ck_billing_meter_outbox_window"),
         CheckConstraint("attempts >= 0", name="ck_billing_meter_outbox_attempts"),
         # A claimed row cannot exist without its claim, and a claim cannot leak
         # onto an unclaimed one — otherwise a stale drainer's acknowledgement
@@ -59,6 +60,7 @@ class BillingMeterOutboxTable(TimestampMixin, DatabaseBase):
             sqlite_where=text("status = 'sending'"),
         ),
         Index("ix_billing_meter_outbox_settled", "status", "updated_at"),
+        Index("ix_billing_meter_outbox_usage", "usage_record_id"),
         # What the reconciler reads: one customer's window, to subtract what has
         # not reached the provider yet from the ledger it compares an invoice
         # against.
@@ -79,9 +81,10 @@ class BillingMeterOutboxTable(TimestampMixin, DatabaseBase):
     removing the workspace row must fail rather than silently drop the debt."""
 
     identifier: Mapped[str] = mapped_column(String(255), nullable=False)
-    """The usage record's own id, which is already deterministic per metering
-    window. Doubles as the provider's deduplication key, which is what makes
-    at-least-once delivery safe without an exactly-once protocol."""
+    """The provider's deterministic deduplication key for this settlement."""
+
+    usage_record_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
+    """The immutable ledger source, retained after raw usage expires."""
 
     provider_customer_id: Mapped[str] = mapped_column(String(255), nullable=False)
     """Captured at write time and never re-resolved. The row is a durable
@@ -96,6 +99,7 @@ class BillingMeterOutboxTable(TimestampMixin, DatabaseBase):
     only one would be the provider's copy disagreeing with the segments."""
 
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    metering_ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

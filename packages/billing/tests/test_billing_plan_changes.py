@@ -9,6 +9,7 @@ from api.server.services import ApiServices
 from billing.plan_changes import CLAIM_TTL, PLAN_CHANGE_ABANDONED_ACTION
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
+from database.repositories.billing_credits import BillingCreditRepository
 from database.tables.billing_plan_changes import BillingPlanChangeIntentTable
 from shared.billing_accounts import BillingAccount
 from shared.billing_plans import BillingPlanId
@@ -19,7 +20,9 @@ from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
     ProviderCreditGrant,
+    ProviderCreditGrantBalance,
     ProviderInvoice,
+    ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
     SubscriptionProration,
 )
@@ -51,7 +54,7 @@ class _Provider:
     status: str = "active"
     swap_error: Exception | None = None
     read_error: Exception | None = None
-    grant_error: Exception | None = None
+    credit_evidence_error: Exception | None = None
 
     cards_on_file: set[str] = field(default_factory=set)
     """Customers the provider says hold something chargeable."""
@@ -141,8 +144,8 @@ class _Provider:
         previous_period_ended_at: datetime | None,
     ) -> ProviderCreditGrant:
         del account_id, provider_customer_id, previous_period_ended_at
-        if self.grant_error is not None:
-            raise self.grant_error
+        if self.credit_evidence_error is not None:
+            raise self.credit_evidence_error
         self.grants.append(amount_nanos)
         return ProviderCreditGrant(
             provider_credit_grant_id=f"credgr_{len(self.grants)}",
@@ -160,8 +163,33 @@ class _Provider:
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("settling a plan change must not read invoices")
 
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        return ()
+
+    def paid_subscription_periods(
+        self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        if self.credit_evidence_error is not None:
+            raise self.credit_evidence_error
+        return (
+            ProviderPaidSubscriptionPeriod(
+                provider_invoice_id=f"in_{self.plan.value}",
+                provider_invoice_line_id=f"il_{self.plan.value}",
+                provider_subscription_id=provider_subscription_id,
+                plan=self.plan,
+                period_started_at=CYCLE_STARTED_AT,
+                period_ended_at=CYCLE_ENDED_AT,
+                prorated=False,
+                amount_nanos=100_000_000_000,
+                invoice_paid_nanos=100_000_000_000,
+                paid_at=utc_now(),
+            ),
+        )
+
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
         raise AssertionError("settling a plan change must not list invoices")
 
@@ -186,16 +214,15 @@ def test_a_plan_change_the_provider_took_is_finished_by_the_sweep(
     and shown the subscribe button again. Nothing recovers that without a record
     that the change was attempted, and no delivery is guaranteed to arrive.
 
-    Here the failure lands between the outgoing grant being expired and the
-    replacement being bought, which is the worst version of it: the customer has
-    paid and holds no allowance at all.
+    The paid invoice cannot be read after the upgrade. The existing credit stays
+    intact until a retry confirms and issues the upgrade increment.
     """
 
     provider, user_id = _provisioned_account(isolated_services)
     _spend(isolated_services, user_id, 2_000_000_000)
     service = _plan_changes(isolated_services, provider)
 
-    provider.grant_error = UpstreamUnavailableError("the provider stopped answering")
+    provider.credit_evidence_error = UpstreamUnavailableError("the provider stopped answering")
     with pytest.raises(UpstreamUnavailableError):
         service.change_plan(user_id=user_id, target=BillingPlanId.Team)
 
@@ -205,7 +232,7 @@ def test_a_plan_change_the_provider_took_is_finished_by_the_sweep(
     assert _account(isolated_services, user_id).plan is BillingPlanId.Free
     assert _intent(isolated_services).status == "settling"
 
-    provider.grant_error = None
+    provider.credit_evidence_error = None
     result = service.settle_open(now=utc_now() + CLAIM_TTL + timedelta(seconds=1))
 
     account = _account(isolated_services, user_id)
@@ -222,9 +249,13 @@ def test_a_plan_change_the_provider_took_is_finished_by_the_sweep(
     # What was spent while the account was free survives: the usage is on the
     # same invoice the prorated plan fee lands on.
     assert period.spent_nanos == 2_000_000_000
-    assert provider.grants == [FREE_PLAN_INCLUDED_NANOS, TEAM_PLAN_INCLUDED_NANOS]
-    assert provider.expired_grants == ["credgr_1"]
-    assert provider.live_grants == [account.provider_credit_grant_id] == ["credgr_2"]
+    with isolated_services.context.database.session() as session:
+        assert (
+            BillingCreditRepository(session).subscription_issued(
+                user_id=user_id, period_ended_at=CYCLE_ENDED_AT
+            )
+            == TEAM_PLAN_INCLUDED_NANOS
+        )
     # One swap reached the provider across both attempts: the sweep settles from
     # what the subscription says and never asks for the change again. One read is
     # the whole of what settling costs, and the request path spent none of it —
@@ -274,7 +305,13 @@ def test_a_plan_change_the_provider_never_took_writes_nothing(
     assert account.plan is BillingPlanId.Free
     assert period is not None
     assert period.allowance_nanos == FREE_PLAN_INCLUDED_NANOS
-    assert provider.grants == [FREE_PLAN_INCLUDED_NANOS]
+    with isolated_services.context.database.session() as session:
+        assert (
+            BillingCreditRepository(session).subscription_issued(
+                user_id=user_id, period_ended_at=CYCLE_ENDED_AT
+            )
+            == FREE_PLAN_INCLUDED_NANOS
+        )
     assert provider.expired_grants == []
 
 
@@ -297,7 +334,7 @@ def test_a_plan_change_whose_subscription_ended_is_never_written_back(
 
     provider, user_id = _provisioned_account(isolated_services)
     service = _plan_changes(isolated_services, provider)
-    provider.grant_error = UpstreamUnavailableError("the provider stopped answering")
+    provider.credit_evidence_error = UpstreamUnavailableError("the provider stopped answering")
     with pytest.raises(UpstreamUnavailableError):
         service.change_plan(user_id=user_id, target=BillingPlanId.Team)
 
@@ -305,7 +342,7 @@ def test_a_plan_change_whose_subscription_ended_is_never_written_back(
     # anything settles the change, and no delivery has arrived to say so.
     before = _account(isolated_services, user_id)
     provider.status = "canceled"
-    provider.grant_error = None
+    provider.credit_evidence_error = None
     result = service.settle_open(now=utc_now() + CLAIM_TTL + timedelta(seconds=1))
 
     assert (result.applied_count, result.abandoned_count, result.open_count) == (0, 1, 0)
@@ -314,7 +351,13 @@ def test_a_plan_change_whose_subscription_ended_is_never_written_back(
     assert _account(isolated_services, user_id) == before
     # And the allowance the plan includes was not handed out against a cycle
     # nothing will invoice.
-    assert provider.grants == [FREE_PLAN_INCLUDED_NANOS]
+    with isolated_services.context.database.session() as session:
+        assert (
+            BillingCreditRepository(session).subscription_issued(
+                user_id=user_id, period_ended_at=CYCLE_ENDED_AT
+            )
+            == FREE_PLAN_INCLUDED_NANOS
+        )
     assert _intent(isolated_services).status == "abandoned"
     reported = isolated_services.events.list(
         workspace_id=None,
@@ -360,11 +403,13 @@ def test_moving_to_a_cheaper_plan_keeps_the_allowance_this_cycle_opened_with(
         TEAM_PLAN_INCLUDED_NANOS,
         40_000_000_000,
     )
-    # The upgrade bought the second grant; the move back bought nothing and ended
-    # nothing, so the customer still holds what this cycle was funded with.
-    assert provider.grants == [FREE_PLAN_INCLUDED_NANOS, TEAM_PLAN_INCLUDED_NANOS]
-    assert provider.expired_grants == ["credgr_1"]
-    assert account.provider_credit_grant_id == "credgr_2"
+    with isolated_services.context.database.session() as session:
+        assert (
+            BillingCreditRepository(session).subscription_issued(
+                user_id=user_id, period_ended_at=CYCLE_ENDED_AT
+            )
+            == TEAM_PLAN_INCLUDED_NANOS
+        )
     assert provider.plan_changes == [BillingPlanId.Team, BillingPlanId.Free]
     assert provider.prorations == [
         SubscriptionProration.ChargeDifferenceNow,

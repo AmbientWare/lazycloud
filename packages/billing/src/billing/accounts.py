@@ -10,6 +10,7 @@ from shared.errors import NotFoundError, UpstreamUnavailableError
 from shared.payments import PaymentProvider
 from sqlalchemy.orm import Session
 
+from billing.credits import initialize_local_credits
 from billing.periods import carry_plan_into_cycle
 
 
@@ -117,6 +118,13 @@ class BillingAccountService:
                 f"the payment provider holds a subscription for {user_id} on a price this "
                 "platform did not publish, so there are no terms to open its cycle on"
             )
+        initialize_local_credits(
+            self.session,
+            payments,
+            user_id=user_id,
+            provider_customer_id=customer_id,
+            effective_at=subscription.current_period_started_at,
+        )
         return BillingAccountRepository(self.session).upsert(
             user_id=user_id,
             status=existing.status,

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
+from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_rates import ComputeRateRepository, PlatformRateRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.tables.base import DatabaseBase
@@ -45,6 +47,7 @@ from shared.usage import (
     METERING_WINDOW_STARTED_AT_METADATA_KEY,
     UsageBillingOwner,
     UsageRecord,
+    usage_record_id,
 )
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import Insert as PostgresInsert
@@ -299,6 +302,13 @@ class BillingLedgerRepository:
                 gap_ended_at=ended_at,
                 reason=UnpricedReason.NoAccountOwner,
             )
+        BillingAccountRepository(self.session).get_by_user(owner.user_id, for_update=True)
+        cutover = BillingCreditRepository(self.session).cutover(user_id=owner.user_id)
+        if cutover is not None:
+            priced = [
+                (span, _split_credit_boundary(pricing, cutover.effective_at))
+                for span, pricing in priced
+            ]
         recorded = self._insert_segments(
             record=record,
             priced=priced,
@@ -309,6 +319,7 @@ class BillingLedgerRepository:
             segments=tuple(segment for _, pricing in priced for segment in pricing.segments)
         )
         if recorded.count == 0:
+            self._queue_local_credit(usage_record_id=record.id, owner_user_id=owner.user_id)
             return FrozenSpan(
                 dimension=billed.dimension,
                 cost_nanos=self._frozen_cost_nanos(record.id),
@@ -319,14 +330,85 @@ class BillingLedgerRepository:
             at=started_at,
             cost_nanos=recorded.cost_nanos,
         )
-        self._queue_meter_event(
-            record=record,
-            dimension=billed.dimension,
-            occurred_at=started_at,
-            recorded=recorded,
-            owner_user_id=owner.user_id,
+        self._queue_local_credit(usage_record_id=record.id, owner_user_id=owner.user_id)
+        legacy_segments = tuple(
+            segment
+            for _, pricing in priced
+            for segment in pricing.segments
+            if cutover is None or segment.started_at < cutover.effective_at
         )
+        if legacy_segments:
+            self._queue_meter_event(
+                workspace_id=record.workspace_id,
+                usage_record_id=record.id,
+                identifier=record.id,
+                dimension=billed.dimension,
+                occurred_at=started_at,
+                ended_at=max(segment.ended_at for segment in legacy_segments),
+                recorded=_RecordedSegments(
+                    count=len(legacy_segments),
+                    cost_nanos=sum(segment.cost_nanos for segment in legacy_segments),
+                    pricing_versions=tuple(
+                        dict.fromkeys(segment.quote.pricing_version for segment in legacy_segments)
+                    ),
+                ),
+                owner_user_id=owner.user_id,
+            )
         return whole
+
+    def settle_pending_credits(self, *, owner_user_id: str) -> None:
+        for record_id in BillingCreditRepository(self.session).pending_records(
+            user_id=owner_user_id
+        ):
+            self._queue_local_credit(usage_record_id=record_id, owner_user_id=owner_user_id)
+
+    def _queue_local_credit(self, *, usage_record_id: str, owner_user_id: str) -> bool:
+        credits = BillingCreditRepository(self.session)
+        cutover = credits.cutover(user_id=owner_user_id)
+        if cutover is None:
+            return False
+        segments = self.session.scalars(
+            select(BillingLedgerSegmentTable)
+            .where(
+                BillingLedgerSegmentTable.usage_record_id == usage_record_id,
+                BillingLedgerSegmentTable.segment_started_at >= cutover.effective_at,
+            )
+            .order_by(BillingLedgerSegmentTable.segment_started_at, BillingLedgerSegmentTable.id)
+        ).all()
+        if not segments:
+            return False
+        account = BillingAccountRepository(self.session).get_by_user(owner_user_id, for_update=True)
+        if account is None:
+            raise ConflictError("priced usage has no billing account for credit settlement")
+        occurred_at = to_utc(segments[0].segment_started_at)
+        settled = credits.settle(
+            user_id=owner_user_id,
+            usage_record_id=usage_record_id,
+            funding_confirmed=BillingAllowanceRepository(self.session).credit_confirmed(
+                user_id=owner_user_id,
+                started_at=occurred_at,
+                ended_at=max(to_utc(segment.segment_ended_at) for segment in segments),
+            ),
+            waived=account.complimentary_since is not None,
+        )
+        if settled is not None:
+            self._queue_meter_event(
+                workspace_id=segments[0].workspace_id,
+                usage_record_id=usage_record_id,
+                identifier=_credit_meter_identifier(usage_record_id),
+                dimension=BilledDimension(segments[0].dimension),
+                occurred_at=occurred_at,
+                ended_at=max(to_utc(segment.segment_ended_at) for segment in segments),
+                recorded=_RecordedSegments(
+                    count=len(segments),
+                    cost_nanos=settled.payable_nanos,
+                    pricing_versions=tuple(
+                        dict.fromkeys(segment.pricing_version for segment in segments)
+                    ),
+                ),
+                owner_user_id=owner_user_id,
+            )
+        return True
 
     def _shape(self, record: UsageRecord) -> ContainerShape | None:
         if record.resource_type != _CONTAINER_SUBJECT or not _is_uuid(record.resource_id):
@@ -391,39 +473,20 @@ class BillingLedgerRepository:
     def _queue_meter_event(
         self,
         *,
-        record: UsageRecord,
+        workspace_id: str,
+        usage_record_id: str,
+        identifier: str,
         dimension: BilledDimension,
         occurred_at: datetime,
+        ended_at: datetime,
         recorded: _RecordedSegments,
         owner_user_id: str,
     ) -> None:
-        """Owe the provider one event per priced record, or owe it nothing.
+        """Queue the frozen payable amount for one settlement interval.
 
-        One event however many components the record wrote: a dimension is one
-        meter at the provider, and every component of one record belongs to one
-        dimension.
-
-        Owed is what was written, never what was computed beside it, so the
-        figure the provider adds up and the figure the ledger holds are one
-        number sent twice.
-
-        Nothing is owed for zero. The provider sums these values into a meter, so
-        a zero moves no total there, and the $0.00 line a customer reads comes
-        from the metered price their subscription carries rather than from events
-        against it. A zero row would buy a claim, a request and a retry schedule
-        for a charge nobody makes. That a dimension was metered and free is held
-        where it decides something: a ledger segment at an explicit rate of zero,
-        which a dimension no rate covered never gets.
-
-        An account named nowhere at the provider has nothing to meter there, so
-        its ledger is complete without a row here.
-
-        An account whose bill an administrator has waived still gets its row,
-        written as waived rather than left out. Every priced record then owes
-        exactly one row whatever the account's standing was when it was priced,
-        and the row is what says afterwards that this usage was never owed.
-        The waiver on the account can be withdrawn, and once it is, nothing else
-        would tell reconciliation why this window reached no invoice.
+        Its identifier deduplicates retries at the provider. A cutover-crossing
+        record has separate legacy and local intervals with the same ledger source.
+        Waivers retain gross value as evidence; zero payable needs no event.
         """
 
         if recorded.cost_nanos == 0:
@@ -443,8 +506,9 @@ class BillingLedgerRepository:
             _insert(self.session, BillingMeterOutboxTable)
             .values(
                 id=str(uuid4()),
-                workspace_id=record.workspace_id,
-                identifier=record.id,
+                workspace_id=workspace_id,
+                identifier=identifier,
+                usage_record_id=usage_record_id,
                 provider_customer_id=provider_customer_id,
                 meter_event_name=METER_EVENT_NAMES[dimension],
                 value_nanos=recorded.cost_nanos,
@@ -453,6 +517,7 @@ class BillingLedgerRepository:
                 # is the provider's copy disagreeing with the segments behind it.
                 pricing_version=",".join(recorded.pricing_versions),
                 occurred_at=occurred_at,
+                metering_ended_at=ended_at,
                 status="waived" if waived else "pending",
                 attempts=0,
                 next_attempt_at=now,
@@ -460,6 +525,44 @@ class BillingLedgerRepository:
             .on_conflict_do_nothing(index_elements=[BillingMeterOutboxTable.identifier])
         )
         self.session.flush()
+
+
+def _credit_meter_identifier(record_id: str) -> str:
+    return usage_record_id("credit-settlement", record_id)
+
+
+def _split_credit_boundary(pricing: PricedSpan, boundary: datetime) -> PricedSpan:
+    segments: list[PricedSegment] = []
+    for segment in pricing.segments:
+        if not segment.started_at < boundary < segment.ended_at:
+            segments.append(replace(segment, index=len(segments)))
+            continue
+        duration = (segment.ended_at - segment.started_at) // timedelta(microseconds=1)
+        before = (boundary - segment.started_at) // timedelta(microseconds=1)
+        quantity = segment.quantity * Decimal(before) / Decimal(duration)
+        cost = segment.cost_nanos * before // duration
+        duration_ms = segment.duration_ms * before // duration
+        segments.extend(
+            (
+                replace(
+                    segment,
+                    index=len(segments),
+                    ended_at=boundary,
+                    duration_ms=duration_ms,
+                    quantity=quantity,
+                    cost_nanos=cost,
+                ),
+                replace(
+                    segment,
+                    index=len(segments) + 1,
+                    started_at=boundary,
+                    duration_ms=segment.duration_ms - duration_ms,
+                    quantity=segment.quantity - quantity,
+                    cost_nanos=segment.cost_nanos - cost,
+                ),
+            )
+        )
+    return PricedSpan(tuple(segments))
 
 
 def _compute_spans(

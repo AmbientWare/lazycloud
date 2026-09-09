@@ -292,6 +292,63 @@ class BillingAllowanceRepository:
             spent_nanos=spent_nanos,
         )
 
+    def confirm_credit(self, *, user_id: str, period_started_at: datetime, at: datetime) -> None:
+        self.session.execute(
+            update(BillingAllowancePeriodTable)
+            .where(
+                BillingAllowancePeriodTable.user_id == user_id,
+                BillingAllowancePeriodTable.period_started_at == period_started_at,
+                BillingAllowancePeriodTable.credit_confirmed_at.is_(None),
+            )
+            .values(credit_confirmed_at=to_utc(at))
+        )
+        self.session.flush()
+
+    def unconfirmed_periods(
+        self, *, user_id: str, since: datetime, before: datetime
+    ) -> tuple[SpentAllowancePeriod, ...]:
+        rows = self.session.scalars(
+            select(BillingAllowancePeriodTable)
+            .where(
+                BillingAllowancePeriodTable.user_id == user_id,
+                BillingAllowancePeriodTable.period_started_at >= since,
+                BillingAllowancePeriodTable.period_started_at < before,
+                BillingAllowancePeriodTable.credit_confirmed_at.is_(None),
+            )
+            .order_by(BillingAllowancePeriodTable.period_started_at)
+        ).all()
+        return tuple(
+            SpentAllowancePeriod(
+                to_utc(row.period_started_at),
+                to_utc(row.period_ended_at),
+                row.allowance_nanos,
+                row.spent_nanos,
+            )
+            for row in rows
+        )
+
+    def credit_confirmed(self, *, user_id: str, started_at: datetime, ended_at: datetime) -> bool:
+        periods = self.session.scalars(
+            select(BillingAllowancePeriodTable)
+            .where(
+                BillingAllowancePeriodTable.user_id == user_id,
+                BillingAllowancePeriodTable.period_started_at < ended_at,
+                BillingAllowancePeriodTable.period_ended_at > started_at,
+            )
+            .order_by(BillingAllowancePeriodTable.period_started_at)
+        ).all()
+        covered_until = to_utc(started_at)
+        for period in periods:
+            if (
+                to_utc(period.period_started_at) > covered_until
+                or period.credit_confirmed_at is None
+            ):
+                return False
+            covered_until = max(covered_until, to_utc(period.period_ended_at))
+            if covered_until >= to_utc(ended_at):
+                return True
+        return False
+
     def _preceding_period_ended_at(
         self, *, user_id: str, period_started_at: datetime
     ) -> datetime | None:

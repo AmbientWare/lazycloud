@@ -1,20 +1,23 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 import httpx
-from pydantic import Field
+from pydantic import ConfigDict, Field
 from shared.billing_plans import BillingPlanId
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.payments import (
     BILLING_CURRENCY,
     HostedPaymentSession,
     PaymentCustomer,
+    ProviderCreditApplicability,
     ProviderCreditGrant,
+    ProviderCreditGrantBalance,
     ProviderInvoice,
+    ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
     SubscriptionProration,
 )
@@ -23,6 +26,7 @@ from shared.timestamps import utc_now
 from provider_stripe.api import FormFields, StripeObject, read, send
 from provider_stripe.catalog import (
     NANOS_PER_CENT,
+    PLAN_LINES,
     cents,
     plan_for_price_lookup_key,
     plan_line,
@@ -144,6 +148,7 @@ class _Price(StripeObject):
 
     id: str
     lookup_key: str | None = None
+    product: str = ""
     recurring: _Recurring | None = None
 
 
@@ -162,6 +167,7 @@ class _Subscription(StripeObject):
     id: str
     status: str
     items: _SubscriptionItems
+    customer: str = ""
 
 
 class _SubscriptionList(StripeObject):
@@ -174,6 +180,7 @@ class _PriceList(StripeObject):
 
 class _Monetary(StripeObject):
     value: int
+    currency: str = ""
 
 
 class _GrantAmount(StripeObject):
@@ -185,6 +192,55 @@ class _CreditGrant(StripeObject):
     amount: _GrantAmount
     expires_at: int | None = None
     voided_at: int | None = None
+
+
+class _CreditScope(StripeObject):
+    model_config = ConfigDict(extra="allow")
+    price_type: str | None = None
+
+
+class _CreditApplicability(StripeObject):
+    scope: _CreditScope
+
+
+class _CreditGrantEvidence(_CreditGrant):
+    customer: str
+    created: int
+    effective_at: int | None
+    category: str
+    name: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
+    applicability_config: _CreditApplicability
+
+
+class _CreditGrantList(StripeObject):
+    data: list[_CreditGrantEvidence]
+    has_more: bool
+
+
+class _CreditBalance(StripeObject):
+    available_balance: _GrantAmount
+    ledger_balance: _GrantAmount
+
+
+class _CreditBalanceSummary(StripeObject):
+    customer: str
+    balances: list[_CreditBalance]
+
+
+class _LinePeriod(StripeObject):
+    start: int
+    end: int
+
+
+class _SubscriptionLineParent(StripeObject):
+    subscription: str | None
+    proration: bool
+
+
+class _LineParent(StripeObject):
+    type: str
+    subscription_item_details: _SubscriptionLineParent | None = None
 
 
 class _PriceDetails(StripeObject):
@@ -199,6 +255,10 @@ class _InvoiceLine(StripeObject):
     id: str
     quantity_decimal: str | None = None
     pricing: _LinePricing | None = None
+    parent: _LineParent | None = None
+    period: _LinePeriod | None = None
+    amount: int | None = None
+    currency: str = ""
 
 
 class _InvoiceLines(StripeObject):
@@ -211,10 +271,19 @@ class _Invoice(StripeObject):
     status: str = ""
     period_start: int
     period_end: int
+    customer: str
+    currency: str
+    amount_paid: int
+    status_transitions: _InvoiceStatusTransitions
+
+
+class _InvoiceStatusTransitions(StripeObject):
+    paid_at: int | None = None
 
 
 class _InvoiceList(StripeObject):
     data: list[_Invoice] = Field(default_factory=list)
+    has_more: bool
 
 
 class _Meter(StripeObject):
@@ -625,7 +694,18 @@ class StripeBilling:
 
         totals: dict[str, int] = {}
         event_names: dict[str, str] = {}
+        for line in self._invoice_lines(provider_invoice_id):
+            meter_id = _meter_id(line)
+            if not meter_id:
+                continue
+            event_name = event_names.get(meter_id) or self._meter_event_name(meter_id)
+            event_names[meter_id] = event_name
+            totals[event_name] = totals.get(event_name, 0) + _line_quantity(line)
+        return totals
+
+    def _invoice_lines(self, provider_invoice_id: str) -> Iterator[_InvoiceLine]:
         starting_after = ""
+        seen: set[str] = set()
         while True:
             params: list[tuple[str, str]] = [
                 ("limit", "100"),
@@ -640,42 +720,15 @@ class StripeBilling:
                 f"/invoices/{provider_invoice_id}/lines",
                 params=params,
             )
-            for line in page.data:
-                meter_id = _meter_id(line)
-                if not meter_id:
-                    continue
-                event_name = event_names.get(meter_id) or self._meter_event_name(meter_id)
-                event_names[meter_id] = event_name
-                totals[event_name] = totals.get(event_name, 0) + _line_quantity(line)
-            if not page.has_more or not page.data:
-                return totals
-            starting_after = page.data[-1].id
+            starting_after = _page_cursor([line.id for line in page.data], page.has_more, seen)
+            yield from page.data
+            if not page.has_more:
+                return
 
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
-        """This customer's bills raised since an instant, newest first.
-
-        One page and no paging loop: the caller reconciles the most recent
-        closed period, and a customer with more than `limit` invoices inside the
-        window has a cycle far shorter than any this platform sells.
-
-        An invoice carrying no status is skipped rather than guessed at —
-        nothing here can say whether it counts as billed — which keeps the
-        vocabulary Stripe owns from having to be complete on this side.
-        """
-
-        listed = read(
-            _InvoiceList,
-            self.client,
-            "GET",
-            "/invoices",
-            params=[
-                ("customer", provider_customer_id),
-                ("created[gte]", _epoch(since, "since")),
-                ("limit", str(limit)),
-            ],
-        )
+        """List invoices newest first; None exhausts the requested history."""
         return [
             ProviderInvoice(
                 provider_invoice_id=invoice.id,
@@ -683,9 +736,159 @@ class StripeBilling:
                 period_started_at=datetime.fromtimestamp(invoice.period_start, tz=UTC),
                 period_ended_at=datetime.fromtimestamp(invoice.period_end, tz=UTC),
             )
-            for invoice in listed.data
-            if invoice.status
+            for invoice in self._invoices(provider_customer_id, since=since, limit=limit)
         ]
+
+    def _invoices(
+        self, provider_customer_id: str, *, since: datetime, limit: int | None
+    ) -> Iterator[_Invoice]:
+        if limit is not None and limit <= 0:
+            raise ValueError("invoice limit must be positive")
+        starting_after = ""
+        seen: set[str] = set()
+        count = 0
+        while True:
+            params = [
+                ("customer", provider_customer_id),
+                ("created[gte]", _epoch(since, "since")),
+                ("limit", str(min(limit - count, 100) if limit is not None else 100)),
+            ]
+            if starting_after:
+                params.append(("starting_after", starting_after))
+            page = read(_InvoiceList, self.client, "GET", "/invoices", params=params)
+            starting_after = _page_cursor(
+                [invoice.id for invoice in page.data], page.has_more, seen
+            )
+            for invoice in page.data:
+                if invoice.customer != provider_customer_id or not invoice.status:
+                    raise UpstreamUnavailableError("Stripe invoice ownership or status is missing")
+                yield invoice
+                count += 1
+                if limit is not None and count >= limit:
+                    return
+            if not page.has_more:
+                return
+
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        grants: list[ProviderCreditGrantBalance] = []
+        starting_after = ""
+        seen: set[str] = set()
+        while True:
+            params = [("customer", provider_customer_id), ("limit", "100")]
+            if starting_after:
+                params.append(("starting_after", starting_after))
+            page = read(
+                _CreditGrantList, self.client, "GET", "/billing/credit_grants", params=params
+            )
+            starting_after = _page_cursor([grant.id for grant in page.data], page.has_more, seen)
+            for grant in page.data:
+                if grant.customer != provider_customer_id:
+                    raise UpstreamUnavailableError(
+                        "Stripe credit grant belongs to another customer"
+                    )
+                summary = read(
+                    _CreditBalanceSummary,
+                    self.client,
+                    "GET",
+                    "/billing/credit_balance_summary",
+                    params=[
+                        ("customer", provider_customer_id),
+                        ("filter[type]", "credit_grant"),
+                        ("filter[credit_grant]", grant.id),
+                    ],
+                )
+                if summary.customer != provider_customer_id or len(summary.balances) != 1:
+                    raise UpstreamUnavailableError("Stripe grant balance is missing or ambiguous")
+                balance = summary.balances[0]
+                scope = grant.applicability_config.scope
+                extra = scope.model_extra or {}
+                applicability = ProviderCreditApplicability.Unknown
+                if "prices" in extra:
+                    applicability = ProviderCreditApplicability.Restricted
+                elif scope.price_type == "metered" and not extra:
+                    applicability = ProviderCreditApplicability.AllMetered
+                grants.append(
+                    ProviderCreditGrantBalance(
+                        provider_credit_grant_id=grant.id,
+                        amount_nanos=_monetary_nanos(grant.amount),
+                        available_balance_nanos=_monetary_nanos(balance.available_balance),
+                        ledger_balance_nanos=_monetary_nanos(balance.ledger_balance),
+                        created_at=datetime.fromtimestamp(grant.created, tz=UTC),
+                        effective_at=_optional_timestamp(grant.effective_at),
+                        expires_at=_optional_timestamp(grant.expires_at),
+                        voided_at=_optional_timestamp(grant.voided_at),
+                        category=grant.category,
+                        name=grant.name or "",
+                        applicability=applicability,
+                        metadata=grant.metadata,
+                    )
+                )
+            if not page.has_more:
+                return grants
+
+    def paid_subscription_periods(
+        self,
+        *,
+        provider_customer_id: str,
+        provider_subscription_id: str,
+        since: datetime,
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        subscription = read(
+            _Subscription, self.client, "GET", f"/subscriptions/{provider_subscription_id}"
+        )
+        if (
+            subscription.customer != provider_customer_id
+            or _subscription(subscription).plan is None
+        ):
+            raise UpstreamUnavailableError("Stripe subscription has no matching customer and plan")
+        periods: list[ProviderPaidSubscriptionPeriod] = []
+        for invoice in self._invoices(provider_customer_id, since=since, limit=None):
+            if invoice.status != "paid":
+                continue
+            if (
+                invoice.currency != BILLING_CURRENCY.lower()
+                or invoice.status_transitions.paid_at is None
+            ):
+                raise UpstreamUnavailableError("Stripe paid invoice has no USD payment evidence")
+            for line in self._invoice_lines(invoice.id):
+                parent = line.parent
+                if parent is None or parent.type != "subscription_item_details":
+                    continue
+                details = parent.subscription_item_details
+                if details is None or details.subscription != provider_subscription_id:
+                    continue
+                plan = _plan_for_price(line.pricing.price_details.price) if line.pricing else None
+                if plan is None:
+                    continue
+                if (
+                    line.period is None
+                    or line.amount is None
+                    or line.currency != BILLING_CURRENCY.lower()
+                ):
+                    raise UpstreamUnavailableError(
+                        "Stripe paid plan line has incomplete billing evidence"
+                    )
+                if line.period.end <= line.period.start:
+                    raise UpstreamUnavailableError(
+                        "Stripe paid plan line has an invalid billing period"
+                    )
+                periods.append(
+                    ProviderPaidSubscriptionPeriod(
+                        provider_invoice_id=invoice.id,
+                        provider_invoice_line_id=line.id,
+                        provider_subscription_id=provider_subscription_id,
+                        plan=plan,
+                        period_started_at=datetime.fromtimestamp(line.period.start, tz=UTC),
+                        period_ended_at=datetime.fromtimestamp(line.period.end, tz=UTC),
+                        prorated=details.proration,
+                        amount_nanos=line.amount * NANOS_PER_CENT,
+                        invoice_paid_nanos=invoice.amount_paid * NANOS_PER_CENT,
+                        paid_at=datetime.fromtimestamp(invoice.status_transitions.paid_at, tz=UTC),
+                    )
+                )
+        return periods
 
     def _live_subscription(self, provider_customer_id: str) -> _Subscription | None:
         """The subscription this customer is already on, if any.
@@ -725,6 +928,35 @@ class StripeBilling:
         return read(_Meter, self.client, "GET", f"/billing/meters/{meter_id}").event_name
 
 
+def _page_cursor(ids: list[str], has_more: bool, seen: set[str]) -> str:
+    if (has_more and not ids) or len(set(ids)) != len(ids) or seen.intersection(ids):
+        raise UpstreamUnavailableError("Stripe returned an incomplete or repeated history page")
+    seen.update(ids)
+    return ids[-1] if ids else ""
+
+
+def _monetary_nanos(amount: _GrantAmount) -> int:
+    if amount.monetary is None or amount.monetary.currency != BILLING_CURRENCY.lower():
+        raise UpstreamUnavailableError("Stripe credit amount is not denominated in USD")
+    return amount.monetary.value * NANOS_PER_CENT
+
+
+def _optional_timestamp(timestamp: int | None) -> datetime | None:
+    return datetime.fromtimestamp(timestamp, tz=UTC) if timestamp is not None else None
+
+
+def _plan_for_price(price: _Price) -> BillingPlanId | None:
+    product_plan = next(
+        (line.plan for line in PLAN_LINES if line.product_id == price.product), None
+    )
+    lookup_plan = plan_for_price_lookup_key(price.lookup_key or "")
+    if price.product and product_plan is None:
+        return None
+    if product_plan is not None and lookup_plan is not None and product_plan is not lookup_plan:
+        raise UpstreamUnavailableError("Stripe plan price and product identify different plans")
+    return product_plan or lookup_plan
+
+
 def _subscription(payload: _Subscription) -> ProviderSubscription:
     items = payload.items.data
     if not items:
@@ -742,9 +974,7 @@ def _subscription(payload: _Subscription) -> ProviderSubscription:
         current_period_ended_at=datetime.fromtimestamp(
             max(item.current_period_end for item in items), tz=UTC
         ),
-        plan=plan_for_price_lookup_key(licensed.price.lookup_key or "")
-        if licensed is not None
-        else None,
+        plan=_plan_for_price(licensed.price) if licensed is not None else None,
     )
 
 
@@ -758,7 +988,7 @@ def _plan_item(payload: _Subscription) -> _SubscriptionItem | None:
     """
 
     for item in payload.items.data:
-        if plan_for_price_lookup_key(item.price.lookup_key or "") is not None:
+        if _plan_for_price(item.price) is not None:
             return item
     return None
 

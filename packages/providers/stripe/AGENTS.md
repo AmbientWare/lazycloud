@@ -55,17 +55,18 @@ against them, and the signature on what Stripe sends back.
   difference is a fact rather than a rounding argument. That comparison is the
   only guard that what was sent is what was billed, and it changes nothing at
   Stripe.
-- Invoices are listed, never stored. `invoices_for` reads one page of a
-  customer's recent bills so the comparison above can be made without an invoice
-  identifier arriving from somewhere: an invoice is Stripe's record, and keeping
-  a copy of their list here would be a second ledger to hold in step with theirs.
-  It is bounded by a window and a count because the reconciler reads it per
-  account, and the reconciler takes one invoice from it, the newest whose period
-  has closed and covers a span, since a period still being assembled has a total
-  that has not stopped moving, and one raised for a proration covers an instant
-  that no usage falls inside. An invoice Stripe listed without a status is
-  skipped: nothing here can classify one, and their vocabulary is theirs to
-  extend.
+- Invoice history comes from Stripe. `invoices_for` accepts a bounded count for
+  routine reconciliation and `None` for complete history within the requested
+  date window. Credit migration reads every page and every invoice status;
+  missing status, wrong customer identity, or incomplete pagination refuses the
+  evidence read. Invoice line periods, subscription identity, and published plan
+  products establish paid plan evidence. Card attachment establishes none of
+  these facts. Retired prices retain their product identity after a lookup key
+  moves to a new price.
+- Grant evidence includes the original amount, available balance, ledger
+  balance, expiry, and applicability. These amounts are distinct. A category or
+  metadata label is not a payment receipt. Unknown or restricted applicability
+  stays explicit so migration cannot silently broaden a grant.
 - Money crosses this boundary in nanodollars, because that is the only unit the
   rest of the platform counts in. Usage crosses as nanodollars through the
   metered prices; the two flat figures Stripe insists on in cents, a plan price

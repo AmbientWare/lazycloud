@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -10,6 +10,7 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
+from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.identity import (
     WorkspaceMemberRepository,
     WorkspaceRepository,
@@ -24,13 +25,15 @@ from shared.billing_rate_card import (
     TEAM_PLAN_INCLUDED_NANOS,
 )
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.errors import CapacityLimitReachedError, PaymentRequiredError
+from shared.errors import CapacityLimitReachedError, PaymentRequiredError, UpstreamUnavailableError
 from shared.identity import WorkspaceRole
 from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
     ProviderCreditGrant,
+    ProviderCreditGrantBalance,
     ProviderInvoice,
+    ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
     SubscriptionProration,
 )
@@ -65,6 +68,7 @@ class _Provider:
 
     expired_grants: list[str] = field(default_factory=list)
     plan: BillingPlanId = BillingPlanId.Free
+    invoice_paid: bool = True
     cycle_started_at: datetime = CYCLE_STARTED_AT
     cycle_ended_at: datetime = CYCLE_ENDED_AT
     """The cycle the provider currently says the subscription is in.
@@ -159,7 +163,13 @@ class _Provider:
         )
 
     def subscription(self, *, provider_subscription_id: str) -> ProviderSubscription:
-        raise AssertionError("subscribing already holds what the provider returned")
+        return ProviderSubscription(
+            provider_subscription_id=provider_subscription_id,
+            status="active",
+            current_period_started_at=self.cycle_started_at,
+            current_period_ended_at=self.cycle_ended_at,
+            plan=self.plan,
+        )
 
     def create_credit_grant(
         self,
@@ -185,8 +195,33 @@ class _Provider:
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("subscribing must not read invoices")
 
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        return ()
+
+    def paid_subscription_periods(
+        self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        if not self.invoice_paid:
+            return ()
+        return (
+            ProviderPaidSubscriptionPeriod(
+                provider_invoice_id=f"in_{self.plan.value}",
+                provider_invoice_line_id=f"il_{self.plan.value}",
+                provider_subscription_id=provider_subscription_id,
+                plan=self.plan,
+                period_started_at=self.cycle_started_at,
+                period_ended_at=self.cycle_ended_at,
+                prorated=False,
+                amount_nanos=100_000_000_000,
+                invoice_paid_nanos=100_000_000_000,
+                paid_at=utc_now(),
+            ),
+        )
+
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
         raise AssertionError("subscribing must not list invoices")
 
@@ -280,10 +315,13 @@ def test_provisioning_an_account_twice_leaves_one_customer_and_one_subscription(
     assert first.provider_subscription_id == again.provider_subscription_id == "sub_1"
     assert provider.customers == [workspace_id]
     assert provider.subscriptions == [BillingPlanId.Free]
-    # The cardless figure, not the free plan's: signing in provisions a
-    # subscription before anybody has said how they will pay, and what a plan
-    # includes is credit against a bill nobody can raise yet.
-    assert provider.grants == [NO_CARD_INCLUDED_NANOS]
+    with isolated_services.context.database.session() as session:
+        assert (
+            BillingCreditRepository(session).subscription_issued(
+                user_id=user_id, period_ended_at=CYCLE_ENDED_AT
+            )
+            == NO_CARD_INCLUDED_NANOS
+        )
 
 
 def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
@@ -346,13 +384,13 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
     assert allowance.spent_nanos == 2_000_000_000
     assert provider.subscriptions == [BillingPlanId.Free]
     assert provider.plan_changes == [BillingPlanId.Team]
-    assert provider.grants == [FREE_PLAN_INCLUDED_NANOS, TEAM_PLAN_INCLUDED_NANOS]
-    assert provider.expired_grants == ["credgr_1"]
-    assert provider.live_grants == [account.provider_credit_grant_id] == ["credgr_2"]
-    # Neither allowance follows a cycle, because this account has held only one.
-    # Held back for a predecessor that does not exist, the plan somebody just
-    # paid for would include nothing until three days after they bought it.
-    assert provider.grant_predecessors == [None, None]
+    with isolated_services.context.database.session() as session:
+        assert (
+            BillingCreditRepository(session).subscription_issued(
+                user_id=user_id, period_ended_at=CYCLE_ENDED_AT
+            )
+            == TEAM_PLAN_INCLUDED_NANOS
+        )
 
     again = _plan_changes(isolated_services, provider).change_plan(
         user_id=user_id, target=BillingPlanId.Team
@@ -361,8 +399,47 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
     assert again.provider_subscription_id == "sub_1"
     assert provider.subscriptions == [BillingPlanId.Free]
     assert provider.plan_changes == [BillingPlanId.Team]
-    assert provider.grants == [FREE_PLAN_INCLUDED_NANOS, TEAM_PLAN_INCLUDED_NANOS]
-    assert provider.expired_grants == ["credgr_1"]
+    with isolated_services.context.database.session() as session:
+        assert (
+            BillingCreditRepository(session).subscription_issued(
+                user_id=user_id, period_ended_at=CYCLE_ENDED_AT
+            )
+            == TEAM_PLAN_INCLUDED_NANOS
+        )
+
+
+def test_paid_plan_credit_waits_for_invoice_payment_and_recovers_the_existing_intent(
+    isolated_services: ApiServices,
+) -> None:
+    provider = _Provider(invoice_paid=False)
+    user_id, workspace_id = carded_account(isolated_services.context)
+    with isolated_services.context.database.session() as session:
+        BillingAccountService(session).billing_account_for(
+            provider, user_id=user_id, workspace_id=workspace_id
+        )
+    changes = _plan_changes(isolated_services, provider)
+    with pytest.raises(UpstreamUnavailableError, match="matching paid invoice"):
+        changes.change_plan(user_id=user_id, target=BillingPlanId.Team)
+    with isolated_services.context.database.session() as session:
+        account = BillingAccountRepository(session).get_by_user(user_id)
+        assert account is not None and account.plan is BillingPlanId.Free
+        assert (
+            BillingCreditRepository(session).subscription_issued(
+                user_id=user_id, period_ended_at=CYCLE_ENDED_AT
+            )
+            == FREE_PLAN_INCLUDED_NANOS
+        )
+    provider.invoice_paid = True
+    recovered = changes.settle_open(now=utc_now() + timedelta(hours=1))
+    assert recovered.applied_count == 1
+    with isolated_services.context.database.session() as session:
+        assert (
+            BillingCreditRepository(session).subscription_issued(
+                user_id=user_id, period_ended_at=CYCLE_ENDED_AT
+            )
+            == TEAM_PLAN_INCLUDED_NANOS
+        )
+    assert provider.plan_changes == [BillingPlanId.Team]
 
 
 def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice(
@@ -409,12 +486,16 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
 
     assert provider.expired_grants == []
     assert account is not None
-    assert provider.live_grants == ["credgr_1", "credgr_2"]
-    assert account.provider_credit_grant_id == "credgr_2"
-    # Both grants are live at once here, which is the whole hazard: the second is
-    # bought for the cycle that opened at the seam and must stay out of reach
-    # until the invoice the first one funds has been settled.
-    assert provider.grant_predecessors == [None, CYCLE_ENDED_AT]
+    with isolated_services.context.database.session() as session:
+        credits = BillingCreditRepository(session)
+        assert (
+            credits.subscription_issued(user_id=user_id, period_ended_at=CYCLE_ENDED_AT)
+            == FREE_PLAN_INCLUDED_NANOS
+        )
+        assert (
+            credits.subscription_issued(user_id=user_id, period_ended_at=provider.cycle_ended_at)
+            == TEAM_PLAN_INCLUDED_NANOS
+        )
     # The closed period keeps the free terms it was granted and spent against,
     # and the new one opens on Team's.
     assert closing is not None

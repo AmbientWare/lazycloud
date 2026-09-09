@@ -13,6 +13,7 @@ from uuid import uuid4
 import pytest
 from billing.reconciliation import RECONCILIATION_DIVERGENCE_ACTION
 from database.repositories.billing import BillingAccountRepository
+from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_outbox import BillingMeterOutboxRepository
 from database.repositories.identity import (
     UserRepository,
@@ -31,7 +32,9 @@ from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
     ProviderCreditGrant,
+    ProviderCreditGrantBalance,
     ProviderInvoice,
+    ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
     SubscriptionProration,
 )
@@ -160,8 +163,18 @@ class _RegistrationCountingProvider:
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("registering must not read invoices")
 
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        return ()
+
+    def paid_subscription_periods(
+        self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        return ()
+
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
         raise AssertionError("registering must not list invoices")
 
@@ -321,8 +334,31 @@ class _UpgradeCountingProvider:
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("no invoice here has a period that has closed")
 
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        return ()
+
+    def paid_subscription_periods(
+        self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        return (
+            ProviderPaidSubscriptionPeriod(
+                provider_invoice_id=f"in_{self.plan.value}",
+                provider_invoice_line_id=f"il_{self.plan.value}",
+                provider_subscription_id=provider_subscription_id,
+                plan=self.plan,
+                period_started_at=CYCLE_STARTED_AT,
+                period_ended_at=CYCLE_ENDED_AT,
+                prorated=False,
+                amount_nanos=100_000_000_000,
+                invoice_paid_nanos=100_000_000_000,
+                paid_at=utc_now(),
+            ),
+        )
+
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
         del provider_customer_id, since, limit
         return ()
@@ -514,12 +550,17 @@ def test_postgresql_two_first_sign_ins_provision_one_account_and_refuse_nobody()
 
         with database.session() as session:
             stored = BillingAccountRepository(session).get_by_user(user_id)
+            assert (
+                BillingCreditRepository(session).subscription_issued(
+                    user_id=user_id, period_ended_at=CYCLE_ENDED_AT
+                )
+                > 0
+            )
 
     assert provider.registrations == [user_id]
     # Named by customer rather than by account, because that is what the provider
     # is asked to subscribe. One entry either way is the count that matters.
     assert provider.subscribes == [first.provider_customer_id]
-    assert provider.grants == [user_id]
     assert stored is not None
     assert first.provider_customer_id == second_account.provider_customer_id
     assert first.provider_subscription_id == second_account.provider_subscription_id
@@ -631,11 +672,13 @@ def test_postgresql_one_meter_event_is_claimed_and_settled_by_one_drainer() -> N
                         id=str(uuid4()),
                         workspace_id=workspace_id,
                         identifier=f"{workspace_id}-{index}",
+                        usage_record_id=str(uuid4()),
                         provider_customer_id="cus_test",
                         meter_event_name="lazycloud_compute_runtime",
                         value_nanos=1_000,
                         pricing_version="test.a",
                         occurred_at=now,
+                        metering_ended_at=now + timedelta(seconds=1),
                         status="pending",
                         attempts=0,
                         next_attempt_at=now,

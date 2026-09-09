@@ -21,7 +21,9 @@ from shared.payments import (
     PaymentCustomer,
     PaymentEvent,
     ProviderCreditGrant,
+    ProviderCreditGrantBalance,
     ProviderInvoice,
+    ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
     SubscriptionProration,
 )
@@ -137,8 +139,18 @@ class _Provider:
     def invoice_metered_totals(self, *, provider_invoice_id: str) -> Mapping[str, int]:
         raise AssertionError("applying a card delivery must not read invoices")
 
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        return ()
+
+    def paid_subscription_periods(
+        self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        return ()
+
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
         raise AssertionError("applying a delivery must not list invoices")
 

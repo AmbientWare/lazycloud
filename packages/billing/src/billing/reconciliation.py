@@ -9,6 +9,7 @@ from database.client import DatabaseClient
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_costs import BillingLedgerCostRepository
+from database.repositories.billing_credits import BillingCreditRepository, CreditAdjustments
 from database.repositories.billing_outbox import (
     BillingMeterOutboxRepository,
     UndeliveredMeterTotals,
@@ -16,10 +17,13 @@ from database.repositories.billing_outbox import (
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccount, BillingAccountStatus
 from shared.enums import StringEnum
+from shared.errors import UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.payments import METER_EVENT_NAMES, PaymentProvider, ProviderInvoice
 from shared.timestamps import to_utc, utc_now
 
+from billing.credits import reconcile_credit_cutover
+from billing.periods import carry_plan_into_cycle
 from billing.sweeps import BillingEventSink
 from billing.webhooks import (
     ENDED_SUBSCRIPTION_STATUSES,
@@ -64,6 +68,8 @@ class BillingDivergence(StringEnum):
     PeriodDisagrees = "period_disagrees"
     MeteredUsageDisagrees = "metered_usage_disagrees"
     UsageNotDelivered = "usage_not_delivered"
+    CreditMigrationBlocked = "credit_migration_blocked"
+    CreditSettlementPending = "credit_settlement_pending"
     UsageAbandoned = "usage_abandoned"
     """Priced usage the outbox gave up on delivering.
 
@@ -88,15 +94,9 @@ class BillingReconciliationResult:
 class BillingReconciliationService:
     """Compare what the provider holds against what this platform recorded.
 
-    Reports and never corrects. The plan-change sweep finishes a transaction
-    this platform started and wrote a durable intent for, so it knows what was
-    meant and may complete it. Nothing here has an intent behind it: a
-    difference may be a delivery that never arrived or a deliberate change made
-    in the provider's own dashboard, and quietly making the two agree would be a
-    money write on a guess. A loud disagreement is the cheaper failure.
-
-    Nothing on this path writes to `billing_accounts`, the allowance periods or
-    the ledger, on any branch.
+    Advances the recorded credit cutover and retries funding supported by paid
+    invoices. Other plan and standing differences are reported for their owners
+    to resolve. Gross ledger history is never rewritten.
     """
 
     database: DatabaseClient
@@ -195,6 +195,42 @@ class BillingReconciliationService:
             "status": account.status.value,
             "provider_status": subscription.status,
         }
+        try:
+            with self.database.session() as session:
+                credit_gap = reconcile_credit_cutover(
+                    session, payments, account=account, subscription=subscription, at=now
+                )
+                cutover = BillingCreditRepository(session).cutover(user_id=account.user_id)
+                if cutover is not None:
+                    data["credit_cutover_at"] = cutover.effective_at.isoformat()
+                    data["credit_cutover_completed"] = cutover.completed_at is not None
+                    data["credit_cutover_blocked_reason"] = cutover.blocked_reason
+                    if (
+                        subscription.current_period_started_at >= cutover.effective_at
+                        and subscription.plan is not None
+                        and subscription.status in RUNNING_SUBSCRIPTION_STATUSES
+                    ):
+                        try:
+                            carry_plan_into_cycle(
+                                session,
+                                payments,
+                                account_id=account.user_id,
+                                provider_customer_id=account.provider_customer_id,
+                                provider_credit_grant_id=account.provider_credit_grant_id,
+                                subscription=subscription,
+                                plan=subscription.plan,
+                                has_payment_method=account.payment_method_attached_at is not None,
+                            )
+                        except UpstreamUnavailableError:
+                            kinds.add(BillingDivergence.CreditSettlementPending)
+                            data["credit_funding_pending"] = True
+                if credit_gap:
+                    kinds.add(BillingDivergence.CreditMigrationBlocked)
+        except Exception as error:
+            LOGGER.warning(
+                "billing: credit reconciliation failed for %s: %s", account.user_id, error
+            )
+            return None
         if subscription.plan is not account.plan:
             kinds.add(BillingDivergence.PlanDisagrees)
         if subscription.status in ENDED_SUBSCRIPTION_STATUSES:
@@ -279,24 +315,36 @@ class BillingReconciliationService:
                 started_at=invoice.period_started_at,
                 ended_at=invoice.period_ended_at,
             )
+            credit_adjustments = BillingCreditRepository(session).account_adjustments(
+                user_id=account.user_id,
+                start=invoice.period_started_at,
+                end=invoice.period_ended_at,
+            )
         kinds: set[BillingDivergence] = set()
         meters: dict[str, JsonValue] = {}
         for dimension, event_name in METER_EVENT_NAMES.items():
             ledger_nanos = priced.get(dimension, 0)
+            credits = credit_adjustments.get(dimension, CreditAdjustments())
             outstanding = undelivered.get(event_name, UndeliveredMeterTotals())
             invoiced_nanos = invoiced.get(event_name, 0)
             figures: dict[str, JsonValue] = {
                 "ledger_nanos": ledger_nanos,
+                "credited_nanos": credits.credited_nanos,
+                "unsettled_nanos": credits.unsettled_nanos,
                 "undelivered_nanos": outstanding.waiting_nanos,
                 "abandoned_nanos": outstanding.abandoned_nanos,
                 "waived_nanos": outstanding.waived_nanos,
                 "invoiced_nanos": invoiced_nanos,
             }
             meters[event_name] = figures
+            if credits.unsettled_nanos:
+                kinds.add(BillingDivergence.CreditSettlementPending)
             if outstanding.abandoned_nanos:
                 kinds.add(BillingDivergence.UsageAbandoned)
             if (
                 ledger_nanos
+                - credits.credited_nanos
+                - credits.unsettled_nanos
                 - outstanding.waiting_nanos
                 - outstanding.abandoned_nanos
                 - outstanding.waived_nanos

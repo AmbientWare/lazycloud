@@ -26,7 +26,9 @@ from shared.payments import (
     HostedPaymentSession,
     PaymentCustomer,
     ProviderCreditGrant,
+    ProviderCreditGrantBalance,
     ProviderInvoice,
+    ProviderPaidSubscriptionPeriod,
     ProviderSubscription,
     SubscriptionProration,
 )
@@ -64,8 +66,18 @@ class _Provider:
             plan=self.plan,
         )
 
+    def credit_grants_for(
+        self, *, provider_customer_id: str
+    ) -> Sequence[ProviderCreditGrantBalance]:
+        return ()
+
+    def paid_subscription_periods(
+        self, *, provider_customer_id: str, provider_subscription_id: str, since: datetime
+    ) -> Sequence[ProviderPaidSubscriptionPeriod]:
+        return ()
+
     def invoices_for(
-        self, *, provider_customer_id: str, since: datetime, limit: int = 12
+        self, *, provider_customer_id: str, since: datetime, limit: int | None = 12
     ) -> Sequence[ProviderInvoice]:
         del since, limit
         return self.invoices if provider_customer_id == self.billed_customer_id else ()
@@ -327,11 +339,13 @@ def _abandoned_delivery(
                 id=str(uuid4()),
                 workspace_id=workspace_id,
                 identifier=str(uuid4()),
+                usage_record_id=str(uuid4()),
                 provider_customer_id=f"cus_{user_id}",
                 meter_event_name="lazycloud_compute_cost_nanos",
                 value_nanos=value_nanos,
                 pricing_version="2026-08-13.a",
                 occurred_at=PREVIOUS_STARTED_AT + timedelta(hours=1),
+                metering_ended_at=PREVIOUS_STARTED_AT + timedelta(hours=2),
                 status="abandoned",
                 attempts=12,
                 next_attempt_at=PREVIOUS_STARTED_AT,

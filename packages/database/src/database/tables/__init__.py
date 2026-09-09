@@ -18,6 +18,12 @@ from database.tables.base import (
 )
 from database.tables.billing import BillingAccountTable
 from database.tables.billing_allowance import BillingAllowancePeriodTable
+from database.tables.billing_credits import (
+    BillingCreditAllocationTable,
+    BillingCreditCutoverTable,
+    BillingCreditLotTable,
+    BillingCreditSettlementTable,
+)
 from database.tables.billing_ledger import (
     BillingLedgerSegmentTable,
     ContainerBillingShapeTable,
@@ -106,6 +112,10 @@ __all__ = [
     "AwsAuthorizationCleanupTombstoneTable",
     "BillingAccountTable",
     "BillingAllowancePeriodTable",
+    "BillingCreditAllocationTable",
+    "BillingCreditCutoverTable",
+    "BillingCreditLotTable",
+    "BillingCreditSettlementTable",
     "BillingLedgerSegmentTable",
     "BillingMeterOutboxTable",
     "BillingPlanChangeIntentTable",

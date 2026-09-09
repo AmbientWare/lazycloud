@@ -70,6 +70,7 @@ class BillingAllowancePeriodTable(TimestampMixin, DatabaseBase):
     Republishing what a plan includes must not restate the terms of a period a
     customer is part-way through; only a plan change does, and it writes here."""
     spent_nanos: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    credit_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 __all__ = ["BillingAllowancePeriodTable"]

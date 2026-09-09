@@ -6,7 +6,32 @@ them, and the delivery of what they owe.
 The payment provider protocol lives in `shared.payments`; the metering this is
 billed from lives in `observability`; the rates, the priced ledger and the rows
 waiting to be sent live in `database`. This package owns the account, the
-admission decision, and the sweep.
+admission decision, credit funding and migration, and the sweep.
+
+- Local credit lots and their ledger allocations own spendable credit after an
+  account's recorded cutover. Purchased funds do not expire. Subscription and
+  trial grants have explicit eligibility and expiry. Allocate expiring credits
+  first, under the same account lock that serializes issuance and settlement.
+- A credit allocation must lie inside its grant's effective interval. Split a
+  frozen ledger segment at credit boundaries and apportion its integer cost
+  cumulatively so the slices retain the exact gross total.
+- Gross ledger charges remain immutable. Local settlement records the credit
+  consumed and the uncovered amount sent through the existing meter outbox.
+  Fully covered usage needs no meter event. Waived usage consumes no credits.
+- A confirmed paid invoice line funds paid subscription credits. A saved card or
+  an active subscription is not payment evidence. Repeated receipts and renewals
+  cannot issue another grant for terms already funded. Upgrade increments do not
+  rewrite prior exports or remove purchased funds.
+- Migration uses one fixed renewal boundary per account. Preserve prior gross
+  exports and Stripe grants until those invoices reconcile. Hold later net
+  settlement durably until migration and period funding complete. Existing
+  purchased Stripe credit requires payment and consumption evidence before any
+  transfer; unknown value is a named blocker, never zero.
+- Reconciliation advances this recorded credit transition and retries confirmed
+  period funding. It reports unrelated plan or standing differences. Grant
+  retirement is restricted to the account's recorded promotional allowance,
+  after legacy invoices and exports agree. Historical grant rules below apply
+  only to periods before the recorded cutover.
 
 - One billing account per user, never per workspace. Someone running dev, staging
   and prod holds three workspaces and one payment relationship, and resolution
@@ -50,8 +75,8 @@ admission decision, and the sweep.
   same request as any other change.
 - Which direction a change goes in decides what happens to the part of the cycle
   already invoiced, and the caller states it rather than the adapter guessing.
-  Dearer takes the difference at once, which is what makes the provider holding
-  the plan proof that the money was collected. Cheaper takes nothing and returns
+  Dearer invoices the difference at once; local credit still requires the paid
+  invoice line as evidence. Cheaper takes nothing and returns
   nothing: the month was invoiced when the cycle opened, and refunding part of it
   would hand back money for compute the account was free to spend and mostly has.
   So a move down is cancel-at-period-end in economic effect with no scheduling
@@ -93,16 +118,9 @@ admission decision, and the sweep.
   row is what makes that window recoverable: it is committed first, the provider
   is called, and the outcome is written against the claim the intent was taken
   under.
-- Asking the provider settles it, and the answer is definitive rather than
-  likely. The swap is sent refusing to complete without payment, so where it
-  charges a difference the subscription carries the new plan's price only if the
-  money was taken: "the item is on Team" and "the proration was collected" are
-  one fact, readable in one request, with no invoice search and no timing window.
-  Downwards there is nothing to collect and so nothing that could have failed to,
-  and the plan being there is the whole of what happened. Either way the sweep
-  can decide an intent nobody recorded an outcome for. The provider holds the
-  plan, so the cycle and the row are given those terms; or it does not, so
-  nothing happened and nothing is written.
+- A plan-change intent settles against the subscription it changed. Paid credit
+  issuance additionally reads the paid invoice and its matching plan line.
+  Missing payment evidence leaves credit funding pending.
 - The plan is not the whole of the answer, because a subscription that has ended
   keeps the items it ended holding. A change is written back only onto the
   subscription it was made on and only while the provider still calls that
@@ -127,18 +145,10 @@ admission decision, and the sweep.
   those are two prorations charged for one upgrade. The second caller is refused
   with a conflict, which is a button that says so rather than a bill that does
   not.
-- A plan change corrects and reconciliation only reports, and the difference is
-  the intent. The plan-change sweep is finishing a transaction this platform
-  started and wrote down, so it knows what was meant and may complete it.
-  Reconciliation observes objects nothing here recorded an intent about: a
-  difference there may be a delivery that never arrived or a change somebody
-  made in the provider's own dashboard, and making the two agree would be a
-  money write on a guess. It writes to no billing table on any branch, and says
-  what disagrees instead: plan, standing, cycle, and the last closed invoice's
-  metered totals against the ledger less whatever the outbox has not delivered.
-  One durable event per account per divergence, re-emitted only when what it
-  disagrees about changes, because an hourly pass that reported every account
-  every time would bury the report it exists to make.
+- Plan-change and credit-transition intents authorize their respective recovery
+  workflows. Other differences remain reports. Invoice reconciliation subtracts
+  allocated credits, unsettled credit records, waived charges and undelivered
+  outbox amounts from gross ledger cost. It reports when a divergence changes.
 - The invoice it compares is the newest finalized one covering a period there is
   usage in. A plan change is prorated onto an invoice raised there and then,
   which carries no metered line and covers no span; taken as the newest closed
