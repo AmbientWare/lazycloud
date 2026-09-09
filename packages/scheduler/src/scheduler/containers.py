@@ -595,7 +595,10 @@ class SchedulerContainerRequestService:
                 )
                 continue
             if outcome.decision is not SchedulingDecision.WaitForWorker:
-                recovered = self._recover_gpu_backfill(
+                if not claim.request.preemptible and worker.preemptible:
+                remaining.append(claim)
+                continue
+            recovered = self._recover_gpu_backfill(
                     claim,
                     schedulable_workers,
                     owner_user_id=owners_by_workspace_id[request.workspace_id],
@@ -736,6 +739,9 @@ class SchedulerContainerRequestService:
                 remaining.append(claim)
                 continue
             if claim.request.region is not None and worker.region != claim.request.region:
+                remaining.append(claim)
+                continue
+            if not claim.request.preemptible and worker.preemptible:
                 remaining.append(claim)
                 continue
             recovered = self._recover_gpu_backfill(

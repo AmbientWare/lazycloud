@@ -21,6 +21,7 @@ from scheduler.capacity_reservations import (
     CapacityReservationService,
     CapacityReservationStateTransitionError,
     CapacityReservationStatus,
+    CapacityTerminalReason,
     ComputeUnitCapacityController,
     RedisCapacityReservationRepository,
     reservation_shape_for_request,
@@ -138,6 +139,7 @@ class _Controller:
     hourly_cost_micros: int | None = None
     health: CapacityPoolOperationalHealth = CapacityPoolOperationalHealth.Healthy
     target_machine_id: str = ""
+    owns_capacity: bool = False
     default_eligible: bool = True
 
     def operational_health(self, *, now: datetime) -> CapacityPoolOperationalHealth:
@@ -232,6 +234,7 @@ class _Controller:
             reservation_id=reservation.id,
             operation_id=reservation.operation_id,
             desired_unit=1,
+            owns_capacity=self.owns_capacity,
             target_machine_id=self.target_machine_id,
         )
 
@@ -607,6 +610,75 @@ def test_unpinned_acquisition_fails_over_from_at_limit_pool_in_priority_order(
     primary_reservation = repository.get(primary.ensure_calls[0])
     assert primary_reservation is not None
     assert primary_reservation.status is CapacityReservationStatus.Released
+
+
+def test_rejected_acquisition_reassigns_requests_and_retries_owned_cleanup(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    repository = _repository(real_redis_actors)
+    primary = _Controller(priority=20)
+    fallback = _Controller(capacity_owner_id=OTHER_OWNER_ID)
+    service = CapacityReservationService(repository, lambda: [primary, fallback])
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    request = _request("rejected")
+    acquired = service.acquire(request, purchases=lambda: _purchases(service), now=now)
+    primary.ensure_status = CapacityAcquisitionStatus.Rejected
+    primary.release_status = CapacityAcquisitionStatus.TemporarilyUnavailable
+
+    service.reconcile([], now=now + timedelta(seconds=1))
+
+    failed = repository.get(acquired.reservation_id)
+    assert failed is not None
+    assert failed.status is CapacityReservationStatus.Failed
+    assert failed.acquisition_created and failed.release_requested
+    assert repository.allocation_for_request(request.container_id) is None
+    assert repository.release_terminal(failed.id, now=now) == failed
+
+    moved = service.acquire(
+        request,
+        purchases=lambda: tuple(
+            candidate
+            for candidate in _purchases(service)
+            if candidate.capacity_owner_id == OTHER_OWNER_ID
+        ),
+        now=now + timedelta(seconds=2),
+    )
+    assert moved.capacity_owner_id == OTHER_OWNER_ID
+    late_worker = _worker(OWNER_ID, created_at=now + timedelta(seconds=3))
+    primary.release_status = CapacityAcquisitionStatus.ExistingPending
+
+    service.reconcile([late_worker], now=now + timedelta(seconds=4))
+
+    released = repository.get(acquired.reservation_id)
+    assert released is not None
+    assert released.status is CapacityReservationStatus.Released
+    assert not released.acquisition_created
+    assert not released.release_requested
+    allocation = repository.allocation_for_request(request.container_id)
+    assert allocation is not None and allocation.reservation_id == moved.reservation_id
+    assert fallback.release_calls == []
+
+
+def test_rejected_first_response_retains_provider_reported_ownership_until_cleanup(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    repository = _repository(real_redis_actors)
+    controller = _Controller(
+        ensure_status=CapacityAcquisitionStatus.Rejected,
+        owns_capacity=True,
+    )
+    service = CapacityReservationService(repository, lambda: [controller])
+    acquired = service.acquire(
+        _request("recovered-rejection"),
+        purchases=lambda: _purchases(service),
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    reservation = repository.get(acquired.reservation_id)
+    assert reservation is not None
+    assert controller.release_calls == [reservation.id]
+    assert reservation.status is CapacityReservationStatus.Released
+    assert reservation.terminal_reason is CapacityTerminalReason.AcquisitionRejected
+    assert not reservation.acquisition_created
 
 
 def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() -> None:

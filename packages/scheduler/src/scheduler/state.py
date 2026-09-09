@@ -3502,6 +3502,14 @@ def plan_worker_capacity_change(
             accepted=False,
             reason="worker is outside the selected region",
         )
+    if not request.preemptible and worker.preemptible:
+        return WorkerCapacityPlan(
+            worker=worker,
+            change=change,
+            request=request,
+            accepted=False,
+            reason="worker is preemptible but request is not",
+        )
     if (
         gpu_count == 0
         and worker.total_gpu_count > 0

@@ -49,6 +49,7 @@ def _capacity_request(request: SchedulerWorkerRequest) -> ComputeCapacityPlaceme
             gpu=list(request.gpu) if gpu_count > 0 else [],
             gpu_count=gpu_count,
             architecture=request.architecture,
+            preemptible=request.preemptible,
             runtime=request.provider_runtime,
         ),
     )
