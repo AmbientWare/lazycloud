@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from agent.binary import AgentBinarySettings
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
@@ -24,6 +24,7 @@ from provider_aws import (
     AwsConnectedAccountPooledProvider,
     AwsInstanceCategory,
     AwsManagedPoolBinaries,
+    AwsRegionalPrices,
     Boto3AwsManagedPoolClientProvider,
 )
 from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
@@ -136,6 +137,9 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
     client_provider: Boto3AwsManagedPoolClientProvider
     capacity_workspace: Callable[[AwsAccountConnection], str]
     platform_providers: PlatformProviderLoader = tuple
+    regional_prices: Mapping[str, AwsRegionalPrices] = field(
+        default_factory=lambda: dict[str, AwsRegionalPrices]()
+    )
 
     def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
         providers = self.platform_providers()
@@ -210,6 +214,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
                 connection=target,
                 binaries_by_region=self.binaries_by_region,
                 instance_hourly_micros=self.instance_hourly_micros,
+                regional_prices=self.regional_prices,
                 client_provider=self.client_provider,
             ),
         )
@@ -242,6 +247,7 @@ def workspace_compute_provider_resolver(
         platform_providers=platform_providers,
         binaries_by_region=artifacts,
         instance_hourly_micros=capacity_settings.instance_hourly_micros,
+        regional_prices=capacity_settings.regional_prices,
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
     )
 

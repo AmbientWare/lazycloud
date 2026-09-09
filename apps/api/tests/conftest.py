@@ -14,6 +14,7 @@ from execution.collections.redis import (
     RedisMapService,
     RedisSimpleQueueService,
 )
+from provider_aws import AwsRegionalPrices
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
 from tests.real_redis import RealRedisActors
 from tests.service_fixtures import _InMemoryWorkspaceBuckets, owned_workspace
@@ -78,6 +79,11 @@ def isolated_services(
             cpu_ami_ids={"us-east-1": "ami-00000000000000000"},
             gpu_ami_ids={"us-east-1": "ami-00000000000000000"},
             instance_hourly_micros={"test.instance": 1},
+            regional_prices={
+                "us-east-1": AwsRegionalPrices(
+                    gp3_gib_monthly_micros=80_000, public_ipv4_hourly_micros=5_000
+                )
+            },
         ),
         map_service=maps,
         simple_queue_service=simple_queues,

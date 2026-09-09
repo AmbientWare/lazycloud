@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from provider_aws import AwsRegionalPrices
 from provider_clients.settings import (
     AwsAccountConnectionSettings,
     AwsCapacitySettings,
@@ -73,6 +74,11 @@ def test_a_deployment_that_wants_no_gpus_can_still_use_aws() -> None:
         ),
         cpu_ami_ids={"us-east-1": "ami-0123456789abcdef0"},
         instance_hourly_micros={"m7i.xlarge": 340_000},
+        regional_prices={
+            "us-east-1": AwsRegionalPrices(
+                gp3_gib_monthly_micros=80_000, public_ipv4_hourly_micros=5_000
+            )
+        },
     )
 
     assert capacity.configured
