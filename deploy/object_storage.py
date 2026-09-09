@@ -1,36 +1,14 @@
-"""Publish and download private deployment descriptors using operator S3-compatible credentials."""
+"""Publish and download deployment objects using the caller's storage identity."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import boto3
 from botocore.exceptions import ClientError
 from storage_client.s3 import S3Credentials, S3ObjectStoreClient
-
-
-def operator_credentials() -> S3Credentials:
-    if os.environ.get("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID") or os.environ.get(
-        "LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"
-    ):
-        return S3Credentials()
-    credentials = boto3.Session(profile_name="lazycloud-object-storage").get_credentials()
-    if credentials is None:
-        raise ValueError("the lazycloud-object-storage operator profile has no credentials")
-    frozen = credentials.get_frozen_credentials()
-    if not frozen.access_key or not frozen.secret_key:
-        raise ValueError(
-            "the lazycloud-object-storage operator profile must contain both access and secret keys"
-        )
-    return S3Credentials(
-        access_key_id=frozen.access_key,
-        secret_access_key=frozen.secret_key,
-        session_token=frozen.token or "",
-    )
 
 
 def put_object(
@@ -43,7 +21,7 @@ def put_object(
     immutable: bool,
 ) -> None:
     store = S3ObjectStoreClient.from_settings(
-        operator_credentials().transport_settings(bucket=bucket)
+        S3Credentials().transport_settings(bucket=bucket)
     )
     payload = source.read_bytes()
     try:
@@ -103,7 +81,7 @@ def main() -> None:
         )
     else:
         store = S3ObjectStoreClient.from_settings(
-            operator_credentials().transport_settings(bucket=location.netloc)
+            S3Credentials().transport_settings(bucket=location.netloc)
         )
         try:
             store.download_file(location.path.lstrip("/"), args.file)

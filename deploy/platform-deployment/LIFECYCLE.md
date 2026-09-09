@@ -6,7 +6,7 @@ most of operating it.
 | owner | what it owns |
 |---|---|
 | `deploy/platform-core` (Terraform, once) | the VPC, the cluster, the image repositories, the OIDC provider, the storage class, and Argo CD |
-| `deploy/platform-deployment` (Terraform, per deployment) | Redis, S3, secret containers, the PlanetScale branch, the fleet network, and every identity the deployment's workloads hold |
+| `deploy/platform-deployment` (Terraform, per deployment) | Redis, S3, release delivery, secret containers, the PlanetScale branch, the fleet network, and every identity the deployment's workloads hold |
 | Argo CD, from `main` and from the deployment's branch | everything that runs in the cluster |
 | The scheduler, at runtime | the Auto Scaling group and launch template for each compute unit |
 
@@ -64,7 +64,7 @@ terraform -chdir=deploy/platform-core init \
 terraform -chdir=deploy/platform-core apply
 ```
 
-Create the shared [R2 state backend](../terraform-state/README.md) first. Existing
+Create the shared [S3 state backend](../terraform-state/README.md) first. Existing
 installations transfer their current state before applying these roots.
 
 Its `terraform.tfvars` carries `cluster_api_cidrs`, which must include the
@@ -167,8 +167,7 @@ gh variable set INFRASTRUCTURE_CONFIG_URI --env prod \
 Required reviewers on the `prod` environment are the approval gate for
 `promote.yml`; the run pauses at the deploy job until someone approves.
 
-Set repository secrets `LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID` and
-`LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY`. Set the repository variables
+Use GitHub OIDC for storage access. Set the repository variables
 `LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL`, `LAZYCLOUD_OBJECT_STORE_REGION_NAME` and
 `LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE` to the platform store's signing settings.
 Export `infrastructure_configuration` as JSON and publish it with

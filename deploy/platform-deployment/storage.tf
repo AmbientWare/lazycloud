@@ -24,7 +24,7 @@ removed {
 }
 
 resource "aws_s3_bucket" "storage" {
-  for_each = toset(["objects", "deploy"])
+  for_each = toset(["objects", "deploy", "releases"])
   bucket   = "${var.deployment}-${each.key}-${data.aws_caller_identity.current.account_id}"
 
   lifecycle { prevent_destroy = true }

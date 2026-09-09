@@ -110,6 +110,38 @@ successful coordinate commit. Keep the database backup and R2 source data until
 the new installation passes acceptance. Old worker caches and mounts must be
 discarded through worker retirement before they can rejoin the installation.
 
+## Release hostname cutover
+
+The deployment owns a private S3 release bucket and a CloudFront distribution
+with origin access control. ACM validates its certificate in us-east-1 through
+the existing Cloudflare zone. The public hostname and every object path remain
+unchanged, so published manifests and old worker bootstrap URLs remain valid.
+
+1. Migrate Terraform backends as described in the state runbook. Apply the
+   Cloudflare root's reviewed removal blocks and zone-id output. They retain the
+   R2 bucket and its active custom-domain binding.
+2. Prepare the new release bucket, certificate, distribution and bucket policy.
+   For this migration only, review a targeted deployment plan for
+   `aws_cloudfront_distribution.releases` and `aws_s3_bucket_policy.releases`.
+   Do not apply `cloudflare_dns_record.releases` while R2 owns that hostname.
+3. Pause release publishers. Copy every release object and metadata, then compare
+   content hashes. Verify the distribution directly before changing DNS.
+4. Remove only the inventoried R2 custom-domain binding, retaining the bucket and
+   data. Apply the reviewed deployment plan to create the same hostname's CNAME.
+   This binding transition is a cutover window; do not claim continuous service
+   while DNS caches and the old binding are changing.
+5. Update the existing release CloudFormation stack with the new `ReleaseBucketName`
+   parameter, preserving all existing publisher identity parameters and its role
+   identity. Update GitHub's bucket and regional endpoint variables. Its OIDC role
+   supplies credentials; remove the old object-store secret bindings.
+6. Download retained manifests and every referenced binary/template anonymously,
+   publish and verify a new release, then resume publishers. Review a normal
+   Terraform plan after any targeted apply. Retain R2 until these checks pass.
+
+Retire an R2 bucket and its credentials only after all readers and writers have
+switched and data verification passes. Inventory exact deletion targets and
+handle retirement separately. Cloudflare DNS and ingress remain.
+
 Acceptance covers SDK uploads/downloads, mounted writes and credential refresh,
-cross-workspace denial, image builds and cold-worker execution, checksums and
-multipart cleanup.
+cross-workspace denial, image builds and cold-worker execution, checksums,
+multipart cleanup, release downloads and Terraform locking.

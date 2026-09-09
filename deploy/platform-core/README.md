@@ -20,7 +20,7 @@ terraform -chdir=deploy/platform-core init \
 terraform -chdir=deploy/platform-core apply
 ```
 
-Use the shared [R2 state configuration](../terraform-state/README.md). An existing
+Use the shared [S3 state configuration](../terraform-state/README.md). An existing
 installation transfers its current state with `init -migrate-state` before apply.
 
 `terraform.tfvars` carries `cluster_api_cidrs`, which must include the address

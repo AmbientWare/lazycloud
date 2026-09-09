@@ -106,7 +106,7 @@ variable "github_repository" {
 }
 
 variable "terraform_backend_config" {
-  description = "Absolute path to the operator's R2 backend JSON used by terraform init and remote state readers. Contains coordinates and profile, never credentials."
+  description = "Absolute path to the operator's S3 backend JSON used by terraform init and remote state readers. Contains coordinates and profile, never credentials."
   type        = string
 
   validation {

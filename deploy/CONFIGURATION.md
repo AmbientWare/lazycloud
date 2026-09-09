@@ -2,9 +2,9 @@
 
 Terraform owns resource identities, networks, IAM, secret documents and the
 database server ceiling. It exports a non-secret infrastructure descriptor.
-The operator publishes that output to the private R2 deployment bucket with
-`python -m deploy.object_storage publish`. Deploy downloads it with the shared storage credentials;
-its AWS role grants registry access and has no object-storage permissions.
+The operator publishes that output to the private S3 deployment bucket with
+`python -m deploy.object_storage publish`. Deploy downloads its exact descriptor
+with its OIDC role, which has no Terraform-state access.
 
 Helm owns application defaults, environment policy, fleet ceilings and secret
 property bindings. Edit `chart/values.yaml` or `chart/environments/prod.yaml` and

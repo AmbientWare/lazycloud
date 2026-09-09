@@ -116,10 +116,11 @@ stack. `connected-aws/customer_stack.py` accepts it as `--execution-role-arn`.
 The acceptance host may run AWS CLI v1: never pass v2-only flags such as
 `--no-cli-pager`. Set `AWS_PAGER=""` in the subprocess environment instead.
 
-Release binaries, templates, catalogs, and deployment descriptors use R2.
+Release binaries, templates, catalogs, and deployment descriptors use S3.
 `aws-release-assets/release.py` and `ami/catalog.py` publish through `deploy.object_storage`,
-which uses the canonical object-store credentials, conditional writes, and a
-SHA-256 check of the downloaded object. AWS CLI remains responsible for ECR,
+which uses the caller's AWS identity, conditional writes, and a
+SHA-256 check of the downloaded object. CloudFront serves public release URLs.
+AWS CLI remains responsible for ECR,
 AMI inspection, and customer CloudFormation operations.
 
 Customer authorization discovers two enabled standard availability zones through

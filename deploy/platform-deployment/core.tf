@@ -18,14 +18,15 @@ data "terraform_remote_state" "core" {
   lifecycle {
     precondition {
       condition = try(
-        can(regex("^https://[a-zA-Z0-9.-]+$", local.terraform_backend_config.endpoints.s3)) &&
-        local.terraform_backend_config.profile == "lazycloud-object-storage" &&
+        local.terraform_backend_config.profile == "default" &&
         length(local.terraform_backend_config.region) > 0 &&
         local.terraform_backend_config.use_lockfile == true &&
+        local.terraform_backend_config.encrypt == true &&
+        !contains(keys(local.terraform_backend_config), "endpoints") &&
         length(setintersection(toset(keys(local.terraform_backend_config)), toset(["access_key", "secret_key", "token"]))) == 0,
         false
       )
-      error_message = "Terraform state requires an explicit HTTPS endpoint, signing region, lazycloud-object-storage credential profile and locking in the shared backend JSON, without embedded credentials."
+      error_message = "Terraform state requires AWS S3 with the default operator profile, region, encryption and locking, without custom endpoints or embedded credentials."
     }
 
     postcondition {

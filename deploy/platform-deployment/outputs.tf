@@ -88,9 +88,9 @@ output "cloudflare_tunnel_id" {
   value       = data.terraform_remote_state.cloudflare.outputs.tunnel_id
 }
 output "release_bucket" {
-  value = data.terraform_remote_state.cloudflare.outputs.release_bucket
+  value = aws_s3_bucket.storage["releases"].id
 }
 
 output "release_public_url" {
-  value = data.terraform_remote_state.cloudflare.outputs.release_public_url
+  value = "https://${local.release_hostname}"
 }

@@ -2,6 +2,10 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: Immutable public release assets used by connected AWS capacity.
 
 Parameters:
+  ReleaseBucketName:
+    Type: String
+    Description: Existing deployment-owned S3 bucket for release publication.
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
   GitHubOrganization:
     Type: String
     Default: ""
@@ -72,6 +76,21 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              - Sid: PublishReleaseObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListMultipartUploadParts
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ReleaseBucketName}/*"
+              - Sid: InspectReleaseBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ReleaseBucketName}"
               - Sid: AuthenticatePublicRegistry
                 Effect: Allow
                 Action:
