@@ -367,15 +367,8 @@ services:
       dockerfile: docker/Dockerfile.control-plane
       target: cli
       args: *lazycloud-build-args
-    entrypoint: ["python", "-c"]
-    command:
-      - |
-        import subprocess
-        from shared.billing_rate_card import METERED_RATES_EFFECTIVE_AT
-        subprocess.run([
-            "lazycloud-admin", "--json", "billing", "publish-rates",
-            "--effective-at", METERED_RATES_EFFECTIVE_AT.isoformat(), "--confirm",
-        ], check=True)
+    entrypoint: ["lazycloud-admin"]
+    command: ["--json", "billing", "publish-rates", "--confirm"]
     environment: *database-bootstrap-env
     depends_on:
       database-bootstrap:

@@ -212,19 +212,6 @@ bootstrap:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 512Mi }
 
-# The instant the published rate card takes effect, which the bootstrap Job
-# publishes it at. Authored here rather than rendered with the rest of the
-# values, because a rate boundary is a figure customers are charged either side
-# of. It is a decision a commit records, not one the infrastructure derives.
-#
-# In the past, because the first rate ever published has to reach the usage
-# already metered under it. A window no rate covers is measured, refused a price
-# and never charged. Changing the card's figures moves this instant in the same
-# commit; publishing different figures at an instant already published for is
-# refused rather than repricing what a customer was shown.
-billing:
-  ratesEffectiveAt: "2026-09-11T00:00:00Z"
-
 # Exported by platform-core through the infrastructure descriptor.
 storage:
   className: ""

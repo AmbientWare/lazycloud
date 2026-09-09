@@ -15,7 +15,6 @@ from database.repositories.billing_rates import (
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from shared.billing_quotes import ContainerShape, LedgerComponent
 from shared.billing_rate_card import (
-    METERED_RATES_EFFECTIVE_AT,
     PUBLISHED_METERED_RATE_HISTORY,
     STORED_RATE_STEP,
 )
@@ -53,7 +52,7 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
                 nanos_per_volume_byte_second=old.platform_rate.nanos_per_volume_byte_second,
             )
         else:
-            publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
+            publish_metered_rate_history(session)
 
     before = UsageRecord(
         id=str(uuid4()),
@@ -74,7 +73,7 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
     )
     postgres_services.usage.append(before)
     with postgres_services.context.database.session() as session:
-        publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
+        publish_metered_rate_history(session)
 
     after = before.model_copy(
         update={
@@ -103,7 +102,7 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
         assert old_segment.pricing_version == old.pricing_version
         assert new_segment is not None and new_segment.cost_nanos == 130_000_000
         assert new_segment.rate_class == "auto"
-        repeated = publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
+        repeated = publish_metered_rate_history(session)
         assert all(
             card.platform is None or card.platform is RatePublication.AlreadyPublished
             for card in repeated
@@ -133,7 +132,7 @@ def test_published_execution_choices_price_each_resource_and_preserve_customer_c
 ) -> None:
     started_at = datetime(2026, 9, 9, 1, tzinfo=UTC)
     with postgres_services.context.database.session() as session:
-        publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
+        publish_metered_rate_history(session)
         rates = ComputeRateRepository(session)
         for owner in (UsageBillingOwner.PlatformFleet, UsageBillingOwner.ConnectedCloud):
             for component, multiplier in (
@@ -175,7 +174,7 @@ def test_price_cutover_matches_quotes_and_preserves_customer_gpu_prices(
 ) -> None:
     boundary = datetime(2026, 9, 12, tzinfo=UTC)
     with postgres_services.context.database.session() as session:
-        publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
+        publish_metered_rate_history(session)
         rates = ComputeRateRepository(session)
         for at, expected_cpu in (
             (boundary - timedelta(seconds=1), 55_126_800),

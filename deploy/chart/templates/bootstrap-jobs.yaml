@@ -203,28 +203,9 @@ spec:
             {{- toYaml .Values.bootstrap.resources | nindent 12 }}
 ---
 {{/*
-The rate card, every sync rather than once, in a wave of its own behind the
-schema it writes into.
-
-Metering does not wait for a rate. Usage is priced as it is recorded, and a
-window no published rate covers is recorded as an error and charged nothing, so a
-deployment serving before this has run is measuring money it cannot bill and
-saying so several times a second. A Job rather than a runbook step, because a
-runbook step is no evidence that anybody ran it.
-
-The instant is a value rather than the clock. A rate boundary is a figure
-customers are charged either side of, so one taken from whenever a sync happened
-to run is a boundary nobody can explain afterwards, and a fresh one each sync is
-a fresh row each sync. Pinned in the chart, it is a decision a commit records and
-a reviewer sees. It is in the past because the first rate ever published has to
-reach the usage already metered under it.
-
-Additive and idempotent by boundary: a run finding this card already published at
-this instant writes nothing, which is what makes running it every sync safe. What
-it will not do is edit. A figure disagreeing with the one published at the same
-instant fails the Job, because the published one is what customers have been
-charged against. New figures are a later boundary, which is this value and the
-rate card moving in the same commit. There is no un-publish.
+Publish the code-owned rate history after schema migration and before serving
+billable work. Repeated publication verifies existing rows; conflicting prices
+fail instead of rewriting rates already used for customer charges.
 */}}
 apiVersion: batch/v1
 kind: Job
@@ -253,8 +234,6 @@ spec:
             - --json
             - billing
             - publish-rates
-            - --effective-at
-            - {{ required "billing.ratesEffectiveAt is required: a rate boundary is not inferred" .Values.billing.ratesEffectiveAt | quote }}
             - --confirm
           env:
             {{- include "lazycloud.env" (list . "billingRates") | nindent 12 }}
