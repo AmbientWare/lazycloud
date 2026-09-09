@@ -55,9 +55,7 @@ class BillingPreferencesTable(TimestampMixin, DatabaseBase):
     reload_threshold_cents: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("1000")
     )
-    reload_amount_cents: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("2000")
-    )
+    reload_amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     reload_monthly_payment_limit_cents: Mapped[int | None] = mapped_column(BigInteger)
     reload_paused_purchase_id: Mapped[str | None] = mapped_column(
         uuid_type,
