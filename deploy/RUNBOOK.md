@@ -40,8 +40,8 @@ uv run lazycloud-admin billing publish-catalog --confirm-account acct_... --conf
 
 # Rates, at or before the first billable second. The dry run attempts the write
 # and rolls it back, so it answers whether the boundary would be accepted.
-uv run lazycloud-admin billing publish-rates --effective-at 2026-01-01T00:00:00Z
-uv run lazycloud-admin billing publish-rates --effective-at 2026-01-01T00:00:00Z --confirm
+uv run lazycloud-admin billing publish-rates
+uv run lazycloud-admin billing publish-rates --confirm
 ```
 
 Both are additive and idempotent, and both refuse rather than edit when what is

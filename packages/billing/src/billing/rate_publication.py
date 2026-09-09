@@ -9,12 +9,9 @@ from database.repositories.billing_rates import (
     RatePublication,
 )
 from shared.billing_rate_card import (
-    METERED_RATES_EFFECTIVE_AT,
     PUBLISHED_METERED_RATE_HISTORY,
     PublishedComputeRate,
 )
-from shared.errors import InvalidInputError
-from shared.timestamps import to_utc
 from sqlalchemy.orm import Session
 
 
@@ -32,14 +29,7 @@ class MeteredRatePublication:
     platform: RatePublication | None
 
 
-def publish_metered_rate_history(
-    session: Session, *, effective_at: datetime
-) -> tuple[MeteredRatePublication, ...]:
-    if to_utc(effective_at) != METERED_RATES_EFFECTIVE_AT:
-        raise InvalidInputError(
-            "the rate boundary must match the reviewed rate card: "
-            f"{METERED_RATES_EFFECTIVE_AT.isoformat()}"
-        )
+def publish_metered_rate_history(session: Session) -> tuple[MeteredRatePublication, ...]:
     compute = ComputeRateRepository(session)
     platform = PlatformRateRepository(session)
     publications: list[MeteredRatePublication] = []

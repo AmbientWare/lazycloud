@@ -471,15 +471,6 @@
         }
       }
     },
-    "billing": {
-      "type": "object",
-      "properties": {
-        "ratesEffectiveAt": {
-          "type": "string",
-          "minLength": 1
-        }
-      }
-    },
     "tunnel": {
       "type": "object",
       "properties": {

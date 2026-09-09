@@ -30,7 +30,6 @@ from provider_stripe.billing import StripeBilling
 from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension
-from shared.billing_rate_card import METERED_RATES_EFFECTIVE_AT
 from shared.payments import ProviderPaidSubscriptionPeriod, ProviderSubscription
 from shared.timestamps import to_utc
 from shared.usage import (
@@ -485,7 +484,7 @@ def test_credit_expiry_and_start_split_a_frozen_charge_and_preserve_purchased_fu
         postgres_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
     )
     with postgres_services.context.database.session() as session:
-        publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
+        publish_metered_rate_history(session)
         credits = BillingCreditRepository(session)
         credits.prepare_cutover(user_id=user_id, effective_at=at)
         credits.complete_cutover(user_id=user_id, at=at)
@@ -560,7 +559,7 @@ def test_crossing_cutover_keeps_legacy_export_and_resumes_net_settlement_once(
         postgres_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
     )
     with postgres_services.context.database.session() as session:
-        publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
+        publish_metered_rate_history(session)
         credits = BillingCreditRepository(session)
         credits.prepare_cutover(user_id=user_id, effective_at=boundary)
         credits.issue(
@@ -639,7 +638,7 @@ def test_waived_usage_preserves_purchased_credit_and_records_the_gross_waiver(
         postgres_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
     )
     with postgres_services.context.database.session() as session:
-        publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
+        publish_metered_rate_history(session)
         account = session.scalar(
             select(BillingAccountTable).where(BillingAccountTable.user_id == user_id)
         )

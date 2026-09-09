@@ -35,7 +35,6 @@ from shared.billing_accounts import BillingAccountStatus
 from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import (
-    METERED_RATES_EFFECTIVE_AT,
     ONE_TIME_TRIAL_NANOS,
     TRIAL_VALIDITY_DAYS,
 )
@@ -197,7 +196,7 @@ def service_graph(
         ),
     )
     with database.session() as session:
-        publish_metered_rate_history(session, effective_at=METERED_RATES_EFFECTIVE_AT)
+        publish_metered_rate_history(session)
     services.control_plane_service.set_workspace(
         "default",
         owner_user_id=_fixture_account(services.context.database, "default-workspace-owner"),
