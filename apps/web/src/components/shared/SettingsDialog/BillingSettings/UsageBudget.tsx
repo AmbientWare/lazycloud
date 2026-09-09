@@ -88,8 +88,8 @@ function BudgetForm({ preferences }: { preferences: BillingPreferences }) {
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        Leave blank for no limit. Set $0 to stop further billable work. Lowering the limit stops new
-        work and stops running work when its current funded period ends.
+        Leave blank for no limit. Set $0 to block new compute. Running compute stops when its
+        current funding expires. Stored data and existing transfer access can still incur charges.
       </p>
       {save.error ? (
         <p role="alert" className="text-sm text-destructive">
