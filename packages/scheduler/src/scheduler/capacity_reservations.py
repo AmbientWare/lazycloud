@@ -11,6 +11,7 @@ from threading import Event, Thread, local
 from typing import Protocol
 from uuid import uuid4
 
+from compute.request_placement import ComputeCapacityPurchase
 from coordination.redis_client import RedisClient, redis_text
 from coordination.token_lock import (
     release_token_lock,
@@ -60,6 +61,27 @@ from scheduler.state import (
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CAPACITY_MUTATION_LOCK_SECONDS = 300
+
+_STORE_ALLOCATION_SCRIPT = """
+local current = redis.call("GET", KEYS[1])
+if current and current ~= ARGV[1] then return 0 end
+if ARGV[5] == "1" then
+    redis.call("SET", KEYS[2], ARGV[2])
+    redis.call("SADD", KEYS[3], ARGV[1])
+    redis.call("SADD", KEYS[4], ARGV[1])
+end
+redis.call("SET", KEYS[5], ARGV[3])
+redis.call("SET", KEYS[1], ARGV[1])
+redis.call("SADD", KEYS[6], ARGV[4])
+return 1
+"""
+
+_RELEASE_ALLOCATION_SCRIPT = """
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call("DEL", KEYS[1], KEYS[2])
+redis.call("SREM", KEYS[3], ARGV[2])
+return 1
+"""
 
 
 class _HeldOwnerLeases(local):
@@ -271,9 +293,6 @@ class CapacityAcquisitionController(Protocol):
     @property
     def priority(self) -> int: ...
 
-    @property
-    def hourly_cost_micros(self) -> int | None: ...
-
     def accepts(self, request: SchedulerWorkerRequest) -> bool: ...
 
     def operational_health(
@@ -371,11 +390,6 @@ class ComputeUnitCapacityController:
     @property
     def priority(self) -> int:
         return self.unit.priority
-
-    @property
-    def hourly_cost_micros(self) -> int | None:
-        terms = self.unit.offer_cost_terms
-        return terms.known_hourly_cost_micros if terms is not None else None
 
     def operational_health(
         self,
@@ -809,15 +823,21 @@ class RedisCapacityReservationRepository:
         if existing is not None:
             reservation = self.get(existing.reservation_id)
             if reservation is not None and reservation.open:
+                if reservation.capacity_owner_id != capacity_owner_id:
+                    raise CapacityReservationConflictError(
+                        "request already belongs to another capacity owner"
+                    )
                 return CapacityReservationDecision(
                     reservation=reservation,
                     allocation=existing,
                 )
-            self.release_allocation(request.container_id)
+            self.release_allocation(
+                request.container_id, expected_reservation_id=existing.reservation_id
+            )
             if reservation is not None:
                 self.release_terminal(reservation.id, now=current_time)
 
-        reservation = self._compatible_open_reservation(capacity_owner_id, request)
+        reservation = self.compatible_open_reservation(capacity_owner_id, request)
         created = reservation is None
         if reservation is None:
             reservation_id = str(uuid4())
@@ -966,16 +986,24 @@ class RedisCapacityReservationRepository:
         self.redis.set(self.keys.reservation(prepared.id), prepared.model_dump_json())
         return prepared
 
-    def release_allocation(self, container_id: str) -> bool:
+    def release_allocation(self, container_id: str, *, expected_reservation_id: str) -> bool:
         allocation = self.allocation_for_request(container_id)
         if allocation is None:
             return False
-        pipeline = self.redis.pipeline(transaction=True)
-        pipeline.delete(self.keys.request_reservation(container_id))
-        pipeline.delete(self.keys.allocation(allocation.reservation_id, container_id))
-        pipeline.set_remove(self.keys.allocations(allocation.reservation_id), container_id)
-        pipeline.execute()
-        return True
+        if allocation.reservation_id != expected_reservation_id:
+            return False
+        return (
+            self.redis.eval_int(
+                _RELEASE_ALLOCATION_SCRIPT,
+                3,
+                self.keys.request_reservation(container_id),
+                self.keys.allocation(allocation.reservation_id, container_id),
+                self.keys.allocations(allocation.reservation_id),
+                allocation.reservation_id,
+                container_id,
+            )
+            == 1
+        )
 
     def release_terminal(
         self,
@@ -1023,12 +1051,15 @@ class RedisCapacityReservationRepository:
             removed.append(reservation.id)
         return removed
 
-    def _compatible_open_reservation(
+    def compatible_open_reservation(
         self,
         capacity_owner_id: str,
         request: SchedulerWorkerRequest,
     ) -> CapacityProvisioningReservation | None:
-        for reservation in self.list_for_owner(capacity_owner_id):
+        for reservation in sorted(
+            self.list_for_owner(capacity_owner_id),
+            key=lambda item: not (item.acquisition_created or item.desired_unit > 0),
+        ):
             if not reservation.accepting_allocations or not reservation.allocation_shape.can_host(
                 request
             ):
@@ -1054,21 +1085,25 @@ class RedisCapacityReservationRepository:
         *,
         created: bool,
     ) -> None:
-        pipeline = self.redis.pipeline(transaction=True)
-        if created:
-            pipeline.set(self.keys.reservation(reservation.id), reservation.model_dump_json())
-            pipeline.set_add(self.keys.reservation_index(), reservation.id)
-            pipeline.set_add(
-                self.keys.owner_reservations(reservation.capacity_owner_id),
-                reservation.id,
-            )
-        pipeline.set(
+        stored = self.redis.eval_int(
+            _STORE_ALLOCATION_SCRIPT,
+            6,
+            self.keys.request_reservation(allocation.container_id),
+            self.keys.reservation(reservation.id),
+            self.keys.reservation_index(),
+            self.keys.owner_reservations(reservation.capacity_owner_id),
             self.keys.allocation(reservation.id, allocation.container_id),
+            self.keys.allocations(reservation.id),
+            reservation.id,
+            reservation.model_dump_json(),
             allocation.model_dump_json(),
+            allocation.container_id,
+            int(created),
         )
-        pipeline.set(self.keys.request_reservation(allocation.container_id), reservation.id)
-        pipeline.set_add(self.keys.allocations(reservation.id), allocation.container_id)
-        pipeline.execute()
+        if stored != 1:
+            raise CapacityReservationConflictError(
+                "request was allocated by another capacity owner"
+            )
 
 
 @dataclass(slots=True)
@@ -1091,22 +1126,112 @@ class CapacityReservationService:
         self,
         request: SchedulerWorkerRequest,
         *,
+        purchases: Callable[[], Sequence[ComputeCapacityPurchase]],
         now: datetime | None = None,
     ) -> CapacityAcquisitionResult:
-        controllers = self._controllers_for_request(request)
-        if not controllers:
-            return _unsupported_result(request, "no capacity owner accepts the request")
         current_time = now or utc_now()
+        existing_result: CapacityAcquisitionResult | None = None
+        allocation = self.reservations.allocation_for_request(request.container_id)
+        if allocation is not None:
+            reservation = self.reservations.get(allocation.reservation_id)
+            if reservation is not None and reservation.open:
+                controller = self._controller_for_owner(reservation.capacity_owner_id)
+                if controller is None or not controller.accepts(request):
+                    return CapacityAcquisitionResult(
+                        status=CapacityAcquisitionStatus.TemporarilyUnavailable,
+                        capacity_owner_id=reservation.capacity_owner_id,
+                        reservation_id=reservation.id,
+                        operation_id=reservation.operation_id,
+                        desired_unit=reservation.desired_unit,
+                        reason="existing capacity owner is unavailable",
+                    )
+                existing_result = self._acquire_from_controller(
+                    request, controller, now=current_time
+                )
+                if reservation.acquisition_created or existing_result.status not in {
+                    CapacityAcquisitionStatus.AtLimit,
+                    CapacityAcquisitionStatus.Unsupported,
+                }:
+                    return existing_result
+
+        existing = {
+            controller.capacity_owner_id: controller
+            for controller in self.controllers()
+            if controller.accepts(request)
+        }
+        for controller in sorted(
+            existing.values(),
+            key=lambda item: capacity_pool_selection_key(
+                health=item.operational_health(now=current_time),
+                priority=item.priority,
+                purchase_order=0,
+                capacity_owner_id=item.capacity_owner_id,
+            ),
+        ):
+            if (
+                existing_result is not None
+                and controller.capacity_owner_id == existing_result.capacity_owner_id
+            ):
+                continue
+            reusable = self.reservations.compatible_open_reservation(
+                controller.capacity_owner_id, request
+            )
+            if reusable is None or not (reusable.acquisition_created or reusable.desired_unit > 0):
+                continue
+            if existing_result is not None:
+                self._release_failed_failover_allocation(existing_result, request, now=current_time)
+                existing_result = None
+            with self.reservations.mutation_lock(controller.capacity_owner_id):
+                reusable = self.reservations.compatible_open_reservation(
+                    controller.capacity_owner_id, request
+                )
+                if reusable is not None and (
+                    reusable.acquisition_created or reusable.desired_unit > 0
+                ):
+                    return self._acquire_from_controller(request, controller, now=current_time)
+
+        candidates = sorted(
+            enumerate(purchases()),
+            key=lambda item: capacity_pool_selection_key(
+                health=(
+                    existing[item[1].capacity_owner_id].operational_health(now=current_time)
+                    if item[1].capacity_owner_id in existing
+                    else CapacityPoolOperationalHealth.Healthy
+                ),
+                priority=(
+                    existing[item[1].capacity_owner_id].priority
+                    if item[1].capacity_owner_id in existing
+                    else 0
+                ),
+                purchase_order=item[0],
+                capacity_owner_id=item[1].capacity_owner_id,
+            ),
+        )
         last_result: CapacityAcquisitionResult | None = None
         contention: CapacityReservationConflictError | None = None
-        for index, controller in enumerate(controllers):
-            remaining = controllers[index + 1 :]
+        for index, (_, candidate) in enumerate(candidates):
+            remaining = candidates[index + 1 :]
             try:
-                result = self._acquire_from_controller(
-                    request,
-                    controller,
-                    now=current_time,
-                )
+                if (
+                    existing_result is not None
+                    and candidate.capacity_owner_id == existing_result.capacity_owner_id
+                ):
+                    result = existing_result
+                else:
+                    candidate.prepare()
+                    controller = self._controller_for_owner(candidate.capacity_owner_id)
+                    if controller is None or not controller.accepts(request):
+                        continue
+                    if existing_result is not None:
+                        self._release_failed_failover_allocation(
+                            existing_result, request, now=current_time
+                        )
+                        existing_result = None
+                    result = self._acquire_from_controller(
+                        request,
+                        controller,
+                        now=current_time,
+                    )
             except CapacityReservationConflictError as exc:
                 # Another scheduler holds this unit's mutation lease. Trying the
                 # next unit is worth doing, but the contention has to survive the
@@ -1115,19 +1240,20 @@ class CapacityReservationService:
                 contention = contention or exc
                 continue
             except Exception:
-                # One broken owner must not sink a request other owners can
-                # serve, but a unit that fails every attempt would otherwise be
-                # indistinguishable from one that never accepted the request.
                 LOGGER.exception(
-                    "capacity owner %s failed to serve container %s; trying the next candidate",
-                    controller.capacity_owner_id,
+                    "capacity owner %s failed to serve container %s",
+                    candidate.capacity_owner_id,
                     request.container_id,
                 )
+                # A provider may have accepted a purchase before its response failed.
+                if self.reservations.allocation_for_request(request.container_id) is not None:
+                    raise
                 continue
             last_result = result
             if result.status in {
                 CapacityAcquisitionStatus.ExistingPending,
                 CapacityAcquisitionStatus.Requested,
+                CapacityAcquisitionStatus.TemporarilyUnavailable,
             }:
                 return result
             if remaining:
@@ -1153,6 +1279,17 @@ class CapacityReservationService:
         now: datetime,
     ) -> CapacityAcquisitionResult:
         with self.reservations.mutation_lock(controller.capacity_owner_id):
+            allocation = self.reservations.allocation_for_request(request.container_id)
+            if allocation is not None:
+                existing = self.reservations.get(allocation.reservation_id)
+                if (
+                    existing is not None
+                    and existing.open
+                    and existing.capacity_owner_id != controller.capacity_owner_id
+                ):
+                    raise CapacityReservationConflictError(
+                        "request already belongs to another capacity owner"
+                    )
             releasing = next(
                 (
                     reservation
@@ -1200,11 +1337,14 @@ class CapacityReservationService:
         *,
         now: datetime,
     ) -> None:
-        allocation = self.reservations.allocation_for_request(request.container_id)
-        if allocation is None or allocation.reservation_id != result.reservation_id:
-            return
-        self.reservations.release_allocation(request.container_id)
-        self.reservations.release_terminal(result.reservation_id, now=now)
+        with self.reservations.mutation_lock(result.capacity_owner_id):
+            allocation = self.reservations.allocation_for_request(request.container_id)
+            if allocation is None or allocation.reservation_id != result.reservation_id:
+                return
+            self.reservations.release_allocation(
+                request.container_id, expected_reservation_id=result.reservation_id
+            )
+            self.reservations.release_terminal(result.reservation_id, now=now)
 
     def registered_worker_id(self, container_id: str) -> str:
         allocation = self.reservations.allocation_for_request(container_id)
@@ -1291,10 +1431,14 @@ class CapacityReservationService:
             return
         reservation = self.reservations.get(allocation.reservation_id)
         if reservation is None:
-            self.reservations.release_allocation(container_id)
+            self.reservations.release_allocation(
+                container_id, expected_reservation_id=allocation.reservation_id
+            )
             return
         with self.reservations.mutation_lock(reservation.capacity_owner_id):
-            self.reservations.release_allocation(container_id)
+            self.reservations.release_allocation(
+                container_id, expected_reservation_id=allocation.reservation_id
+            )
             if self.reservations.allocations_for(reservation.id):
                 return
             self._release_unallocated_reservation(
@@ -1468,7 +1612,9 @@ class CapacityReservationService:
             ):
                 active.append(allocation)
                 continue
-            self.reservations.release_allocation(allocation.container_id)
+            self.reservations.release_allocation(
+                allocation.container_id, expected_reservation_id=allocation.reservation_id
+            )
         return active
 
     def _reconcile_pool_sizing(
@@ -1641,26 +1787,6 @@ class CapacityReservationService:
             expected_resource_version=reservation.resource_version,
             now=now,
         )
-
-    def _controllers_for_request(
-        self,
-        request: SchedulerWorkerRequest,
-    ) -> list[CapacityAcquisitionController]:
-        candidates = [
-            controller for controller in self.controllers() if controller.accepts(request)
-        ]
-        if not candidates:
-            return []
-        current_time = utc_now()
-        candidates.sort(
-            key=lambda controller: capacity_pool_selection_key(
-                health=controller.operational_health(now=current_time),
-                priority=controller.priority,
-                hourly_cost_micros=controller.hourly_cost_micros,
-                capacity_owner_id=controller.capacity_owner_id,
-            )
-        )
-        return candidates
 
     def _controller_for_owner(
         self,

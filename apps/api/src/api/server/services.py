@@ -851,7 +851,7 @@ class ApiServices(ApiServiceCore):
                 presigned_origin=object_store_config.endpoint_url,
                 backend_route=resolved_backend_route_settings,
             )
-            if aws_account_connection_config.configured or platform_capacity_config.hetzner
+            if aws_account_connection_config.configured or platform_capacity_config.configured
             else None
         )
 

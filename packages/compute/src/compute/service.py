@@ -1313,6 +1313,51 @@ class ComputeService:
             )
         return connection is not None and connection.hosts_workloads
 
+    def pooled_offer_owner_id(self, provider: ResolvedComputeProvider, offer: ComputeOffer) -> str:
+        policy = provider.policy
+        if policy is None or provider.pooled is None or offer.provider != provider.ref:
+            raise InvalidInputError("offer does not belong to a pooled provider")
+        with self.context.database.session() as session:
+            current = ComputeUnitRepository(session).get_by_identity(
+                workspace_id=policy.workspace_id,
+                provider_ref=provider.ref,
+                region=offer.region,
+                capability_key=offer.capability_key,
+                root_volume_gib=policy.root_volume_gib,
+            )
+        if current is not None:
+            return current.capacity_owner_id
+        owner_id, _ = internal_unit_identity(
+            workspace_id=policy.workspace_id,
+            provider_ref=provider.ref,
+            region=offer.region,
+            capability_key=offer.capability_key,
+            root_volume_gib=policy.root_volume_gib,
+        )
+        return owner_id
+
+    def prepare_pooled_offer(
+        self,
+        *,
+        provider: ResolvedComputeProvider,
+        offer: ComputeOffer,
+        requirements: ComputeResourceRequirements,
+    ) -> ComputeUnitRecord:
+        policy = provider.policy
+        if policy is None or provider.pooled is None or offer.provider != provider.ref:
+            raise InvalidInputError("offer does not belong to a pooled provider")
+        if not policy.accepts(offer):
+            raise InvalidInputError("offer is outside the approved provider catalog")
+        return self._prepare_pooled_offer(
+            provider=provider,
+            offer=offer,
+            requirements=requirements,
+            desired_machines=0,
+            root_volume_gib=policy.root_volume_gib,
+            idle_timeout_seconds=policy.idle_timeout_seconds,
+            baseline=None,
+        )
+
     def reconcile_aws_default_capacity(
         self,
         *,
@@ -1506,6 +1551,27 @@ class ComputeService:
                 code="offer_unavailable",
             ) from exc
         provider = next(item for item in providers if item.ref == offer.provider)
+        return self._prepare_pooled_offer(
+            provider=provider,
+            offer=offer,
+            requirements=requirements,
+            desired_machines=desired_machines,
+            root_volume_gib=root_volume_gib,
+            idle_timeout_seconds=idle_timeout_seconds,
+            baseline=baseline,
+        )
+
+    def _prepare_pooled_offer(
+        self,
+        *,
+        provider: ResolvedComputeProvider,
+        offer: ComputeOffer,
+        requirements: ComputeResourceRequirements,
+        desired_machines: int,
+        root_volume_gib: int,
+        idle_timeout_seconds: int,
+        baseline: _PooledCapacityBaseline | None,
+    ) -> ComputeUnitRecord:
         if provider.policy is None or provider.pooled is None:
             raise ManagedComputeLaunchError(
                 "pooled compute provider policy is unavailable",

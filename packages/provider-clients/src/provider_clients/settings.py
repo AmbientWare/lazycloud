@@ -306,6 +306,10 @@ class PlatformCapacitySettings(BaseSettings):
             raise ValueError("only one platform provider may own the automatic warm floor")
         return self
 
+    @property
+    def configured(self) -> bool:
+        return bool(self.hetzner)
+
 
 __all__ = [
     "AWS_CONNECTION_CONTROL_PRINCIPAL_ENV",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,42 +14,9 @@ from cli.agent_install import (
     install_agent_service,
     plan_agent_service_install,
 )
-from cli.main import build_admin_cli
-from fastapi.testclient import TestClient
-from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import AGENT_NAME
 from shared.compute_policy import MachinePool
-from shared.http_transport import HttpChannel
 from tests.url_constants import EXAMPLE_COM_URL
-
-cli = build_admin_cli()
-
-_JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
-
-
-class _TestClientHttpChannel(HttpChannel):
-    def __init__(self, client: TestClient, *, token: str) -> None:
-        super().__init__(token=token)
-        self._client = client
-
-    def request(
-        self,
-        method: str,
-        path: str,
-        *,
-        payload: Mapping[str, JsonValue] | None = None,
-    ) -> JsonValue:
-        headers = {"Authorization": f"Bearer {self.token}"}
-        response = self._client.request(
-            method,
-            path,
-            headers=headers,
-            json=dict(payload) if payload is not None else None,
-        )
-        assert response.status_code < 400, response.text
-        if response.status_code == 204:
-            return None
-        return _JSON_VALUE_ADAPTER.validate_python(response.json())
 
 
 @dataclass(slots=True)

@@ -335,7 +335,7 @@ def test_pool_selection_survives_supplier_failure_until_capacity_is_needed(
 
     assert placement.place(request).pool == LAZYCLOUD_MACHINE_POOL
     with pytest.raises(UpstreamUnavailableError, match="supplier unavailable"):
-        placement.prepare_capacity(request)
+        placement.purchase_candidates(request)
 
 
 def test_placement_defaults_to_the_platform_pool_without_a_connection(
