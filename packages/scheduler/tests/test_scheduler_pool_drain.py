@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
+import pytest
 from compute.providers import (
     ProviderCapacityPhase,
     ProviderUnitInstance,
@@ -67,6 +68,7 @@ class _Compute:
     desired_machines: int | None = None
     replacement_machine_id: str = ""
     replacement_template_version: str = ""
+    interrupted_deadlines: dict[str, datetime] = field(default_factory=dict)
 
     def _logical_desired(self) -> int:
         if self.desired_machines is not None:
@@ -129,6 +131,14 @@ class _Compute:
     ) -> dict[str, datetime]:
         _ = workspace_id, capacity_owner_id
         return dict(self.draining_since)
+
+    def internal_unit_interrupted_machines(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+    ) -> dict[str, datetime]:
+        _ = workspace_id, capacity_owner_id
+        return dict(self.interrupted_deadlines)
 
     def begin_internal_unit_replacement(
         self,
@@ -526,6 +536,60 @@ def test_replacement_surges_before_it_drains_anything(
     assert compute.replacement_started == [("machine-i-old", "2")]
     assert compute.cordoned == []
     assert compute.released == []
+
+
+@pytest.mark.parametrize("busy", [False, True])
+def test_interrupted_warm_machine_is_replaced_before_retirement(
+    real_redis_actors: _RealRedisActors,
+    busy: bool,
+) -> None:
+    redis = real_redis_actors.client()
+    compute_states = RedisComputeStateRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    compute = _Compute(
+        instances=[("i-old", "")],
+        desired_machines=1,
+        draining_since={"machine-i-old": NOW},
+        interrupted_deadlines={"machine-i-old": NOW + timedelta(seconds=120)},
+    )
+    _seed_pool_state(
+        compute_states, capacity_owner_id=PROVIDER_OWNER_ID, active_machines=1, min_machines=1
+    )
+    _add_worker(
+        workers, "worker-old", NOW, machine_id="machine-i-old", capacity_owner_id=PROVIDER_OWNER_ID
+    )
+    workers.update_worker_status("worker-old", SchedulerWorkerStatus.Draining, now=NOW)
+    if busy:
+        _add_container(redis, "container-running", "worker-old")
+    drain = _drain_service(redis, compute, compute_states, workers)
+
+    [started] = drain.reconcile(now=NOW)
+    assert started.action is WorkerPoolDrainAction.SurgeReplacementMachine
+    assert compute.released == []
+    drain.reconcile(now=NOW + timedelta(seconds=1))
+    assert compute.replacement_started == [("machine-i-old", "")]
+
+    compute.instances.append(("i-new", ""))
+    _add_worker(
+        workers, "worker-new", NOW, machine_id="machine-i-new", capacity_owner_id=PROVIDER_OWNER_ID
+    )
+    _seed_pool_state(
+        compute_states, capacity_owner_id=PROVIDER_OWNER_ID, active_machines=2, min_machines=1
+    )
+    drain.reconcile(now=NOW + timedelta(seconds=2))
+    if busy:
+        assert compute.released == []
+        compute.instances = [("i-new", "")]
+    else:
+        assert compute.released == [(PROVIDER_OWNER_ID, "machine-i-old")]
+    _seed_pool_state(
+        compute_states, capacity_owner_id=PROVIDER_OWNER_ID, active_machines=1, min_machines=1
+    )
+    drain.reconcile(now=NOW + timedelta(seconds=3))
+    drain.reconcile(now=NOW + timedelta(seconds=4))
+    assert compute.replacement_machine_id == ""
+    assert compute.desired_machines == 1
+    assert compute.replacement_started == [("machine-i-old", "")]
 
 
 def test_replacement_drains_after_its_surge_registers_even_if_template_advances(

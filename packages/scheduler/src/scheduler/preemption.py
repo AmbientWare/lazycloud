@@ -20,6 +20,8 @@ from shared.scheduling import (
 )
 from shared.timestamps import utc_now
 
+from scheduler.worker_rollout import WorkerWorkloadDrainService
+
 
 class WorkerPreemptionOperation(ContractModel):
     operation_id: str = Field(min_length=1, max_length=160)
@@ -57,6 +59,7 @@ class CapacityInterruption(ContractModel):
     state: AgentCapacityState
     reason: str
     observed_at: datetime
+    notice_at: datetime | None = None
 
 
 class CapacityInterruptionSource(Protocol):
@@ -277,6 +280,7 @@ class SchedulerCapacityInterruptionService:
     workers: WorkerPreemptionRepository
     source: CapacityInterruptionSource | None = None
     maintenance: SchedulerWorkerMaintenance | None = None
+    workload_drains: WorkerWorkloadDrainService | None = None
 
     def reconcile(self, *, now: datetime | None = None) -> list[WorkerPreemptionResult]:
         if self.source is None:
@@ -300,6 +304,9 @@ class SchedulerCapacityInterruptionService:
         }:
             return []
         current_time = now or utc_now()
+        draining = interruption.state is AgentCapacityState.Draining and (
+            interruption.notice_at is None or current_time < interruption.notice_at
+        )
         results: list[WorkerPreemptionResult] = []
         for worker in self.workers.list_workers_on_machine(interruption.machine_id):
             if worker.pool != interruption.pool:
@@ -308,7 +315,8 @@ class SchedulerCapacityInterruptionService:
                 operation_id=(
                     f"{interruption.enrollment_id}:"
                     f"{interruption.credential_generation}:"
-                    f"{interruption.observed_at.isoformat()}"
+                    f"{interruption.observed_at.isoformat()}:"
+                    f"{'drain' if draining else 'preempt'}"
                 ),
                 worker_id=worker.worker_id,
                 capacity_owner_id=worker.capacity_owner_id,
@@ -317,7 +325,7 @@ class SchedulerCapacityInterruptionService:
                 reason=interruption.reason,
                 observed_at=interruption.observed_at,
             )
-            if interruption.state is AgentCapacityState.Draining:
+            if draining:
                 if self.maintenance is None:
                     raise RuntimeError("planned worker maintenance service is not configured")
                 results.append(
@@ -326,6 +334,12 @@ class SchedulerCapacityInterruptionService:
                         now=current_time,
                     )
                 )
+                if interruption.notice_at is not None:
+                    if self.workload_drains is None:
+                        raise RuntimeError("capacity interruption workload drain is not configured")
+                    self.workload_drains.prepare(
+                        worker.worker_id, now=current_time, close_admission=True
+                    )
             else:
                 results.append(self.preemption.preempt_worker(operation, now=current_time))
         return results

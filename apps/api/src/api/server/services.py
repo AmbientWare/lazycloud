@@ -177,6 +177,7 @@ from scheduler.state import (
     RedisWorkerNetworkIpRepository,
     RedisWorkerPoolStateRepository,
 )
+from scheduler.worker_rollout import WorkerWorkloadDrainService
 from scheduler.workers import SchedulerWorkerAdminService
 from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.container_requests import StopContainerReason
@@ -290,6 +291,7 @@ class SchedulerAgentCapacityInterruptionSink:
                 state=state.capacity_state,
                 reason=state.capacity_reason,
                 observed_at=observed_at,
+                notice_at=state.capacity_notice_at,
             )
         )
 
@@ -1523,6 +1525,9 @@ def _gateway_control_service(
                 ),
                 scheduler_workers,
                 maintenance=SchedulerWorkerMaintenanceService(scheduler_workers),
+                workload_drains=WorkerWorkloadDrainService(
+                    core.context.database, scheduler_containers
+                ),
             )
         ),
         scheduler_maintenance=SchedulerWorkerMaintenanceService(scheduler_workers),

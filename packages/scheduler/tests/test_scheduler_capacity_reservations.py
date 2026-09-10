@@ -8,6 +8,10 @@ from threading import Barrier
 from time import sleep
 
 import pytest
+from compute.capacity_errors import (
+    CapacityReservationConflictError,
+    CapacityReservationLockContendedError,
+)
 from compute.request_placement import ComputeCapacityPurchase
 from coordination.redis_client import AsyncRedisClient, RedisSettings
 from scheduler.capacity_reservations import (
@@ -15,9 +19,7 @@ from scheduler.capacity_reservations import (
     CapacityAcquisitionStatus,
     CapacityProvisioningReservation,
     CapacityRequestShape,
-    CapacityReservationConflictError,
     CapacityReservationDecision,
-    CapacityReservationLockContendedError,
     CapacityReservationService,
     CapacityReservationStateTransitionError,
     CapacityReservationStatus,
@@ -699,6 +701,22 @@ def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() ->
     assert not compute.accepts(
         _request("other-pool").model_copy(update={"pool_selector": "another-pool"})
     )
+
+
+def test_platform_capacity_accepts_customer_cold_requests_in_the_requested_market() -> None:
+    unit = _managed_pool().model_copy(update={"platform_fleet": True})
+    controller = ComputeUnitCapacityController(
+        unit.workspace_id, unit, _UnusedComputeCapacity(unit), _WorkerRepository()
+    )
+    request = _request("customer-cold-capacity").model_copy(update={"preemptible": False})
+
+    assert request.workspace_id != unit.workspace_id
+    assert controller.accepts(request)
+    assert not controller.accepts(request.model_copy(update={"pool_selector": "other-fleet"}))
+
+    controller.unit = unit.model_copy(update={"worker_preemptible": True})
+    assert not controller.accepts(request)
+    assert controller.accepts(request.model_copy(update={"preemptible": True}))
 
 
 def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
