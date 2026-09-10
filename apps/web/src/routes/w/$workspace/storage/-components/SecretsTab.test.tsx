@@ -1,6 +1,6 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { SecretsTab } from "./SecretsTab";
@@ -14,13 +14,6 @@ const secret = {
 };
 
 beforeEach(() => vi.useFakeTimers());
-
-afterEach(() => {
-  cleanup();
-  vi.clearAllTimers();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
 
 it("keeps a pending reveal masked during deletion and allows a fresh reveal after keeping it", async () => {
   let resolveReveal: ((response: Response) => void) | undefined;

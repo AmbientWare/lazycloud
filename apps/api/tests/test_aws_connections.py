@@ -37,8 +37,7 @@ from shared.http.aws_connections import (
     AwsConnectionResponse,
     AwsFleetEnsureRequest,
 )
-from tests.domain_fixtures import workspace_owner_user_id
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential, workspace_owner_user_id
 
 ACCOUNT_ID = "123456789012"
 VALIDATED_AT = datetime(2026, 7, 15, 12, tzinfo=UTC)
@@ -540,7 +539,7 @@ def test_only_administrators_can_ensure_shared_fleet(
     ).model_dump(mode="json")
     refused = client.put("/api/v1/aws-connection/fleet", json=payload)
     assert refused.status_code == 403
-    administrator, _record = administrator_credential(isolated_services, "fleet-ensure")
+    administrator, _record = administrator_credential(isolated_services.context, "fleet-ensure")
     headers = {"Authorization": f"Bearer {administrator}"}
     created = client.put("/api/v1/aws-connection/fleet", json=payload, headers=headers)
     assert created.status_code == 200, created.text

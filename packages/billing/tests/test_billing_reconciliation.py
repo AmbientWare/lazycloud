@@ -6,17 +6,18 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from api.server.services import ApiServices
 from billing.reconciliation import (
     RECONCILIATION_DIVERGENCE_ACTION,
     BillingDivergence,
     BillingReconciliationService,
 )
+from database.context import ServiceContext
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.observability import UsageRecordTable
+from observability.events import EventService
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_quotes import BilledDimension, LedgerBasis, LedgerComponent
@@ -30,7 +31,7 @@ from shared.payments import (
     ProviderSubscription,
     SubscriptionChangeTiming,
 )
-from tests.domain_fixtures import unbilled_account, workspace_owner_user_id
+from tests.workspaces import unbilled_account, workspace_owner_user_id
 
 CYCLE_STARTED_AT = datetime(2026, 8, 13, 9, 30, tzinfo=UTC)
 CYCLE_ENDED_AT = datetime(2026, 9, 13, 9, 30, tzinfo=UTC)
@@ -155,7 +156,7 @@ class _Provider:
 
 
 def test_a_plan_changed_at_the_provider_is_reported_and_never_corrected(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """A disagreement about money is reported once and acted on by nobody.
 
@@ -171,29 +172,29 @@ def test_a_plan_changed_at_the_provider_is_reported_and_never_corrected(
     same unchanged disagreement would bury the report it exists to make.
     """
 
-    user_id, _ = unbilled_account(isolated_services.context)
-    _account_row(isolated_services, user_id, BillingPlanId.Free)
+    user_id, _ = unbilled_account(service_context)
+    _account_row(service_context, user_id, BillingPlanId.Free)
     # The other account this installation holds agrees with the provider, and is
     # here so that "one of them was reported" is a claim about the divergent one
     # rather than about everything the pass walked.
-    with isolated_services.context.database.session() as session:
-        default_workspace_id = isolated_services.context.default_workspace_id(session)
-    agreeing_user_id = workspace_owner_user_id(isolated_services.context, default_workspace_id)
-    _account_row(isolated_services, agreeing_user_id, BillingPlanId.Team)
+    with service_context.database.session() as session:
+        default_workspace_id = service_context.default_workspace_id(session)
+    agreeing_user_id = workspace_owner_user_id(service_context, default_workspace_id)
+    _account_row(service_context, agreeing_user_id, BillingPlanId.Team)
     provider = _Provider()
     service = BillingReconciliationService(
-        database=isolated_services.context.database,
+        database=service_context.database,
         payments=lambda: provider,
-        events=isolated_services.events,
+        events=EventService(service_context),
     )
 
-    before = _account_state(isolated_services, user_id)
+    before = _account_state(service_context, user_id)
     first = service.reconcile(now=CYCLE_STARTED_AT + timedelta(days=1))
-    after = _account_state(isolated_services, user_id)
+    after = _account_state(service_context, user_id)
 
     assert (first.accounts_checked, first.divergent_count, first.unreachable_count) == (2, 1, 0)
     assert after == before
-    reported = isolated_services.events.list(
+    reported = EventService(service_context).list(
         workspace_id=None,
         actions=[RECONCILIATION_DIVERGENCE_ACTION],
     )
@@ -203,10 +204,10 @@ def test_a_plan_changed_at_the_provider_is_reported_and_never_corrected(
     second = service.reconcile(now=CYCLE_STARTED_AT + timedelta(days=1))
 
     assert second.divergent_count == 1
-    assert _account_state(isolated_services, user_id) == before
+    assert _account_state(service_context, user_id) == before
     assert (
         len(
-            isolated_services.events.list(
+            EventService(service_context).list(
                 workspace_id=None,
                 actions=[RECONCILIATION_DIVERGENCE_ACTION],
             )
@@ -216,7 +217,7 @@ def test_a_plan_changed_at_the_provider_is_reported_and_never_corrected(
 
 
 def test_usage_nobody_will_ever_be_charged_for_is_reported_rather_than_balanced(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """A charge the outbox gave up on is named, and a proration is not compared.
 
@@ -236,10 +237,10 @@ def test_usage_nobody_will_ever_be_charged_for_is_reported_rather_than_balanced(
     upgrade onwards.
     """
 
-    user_id, workspace_id = unbilled_account(isolated_services.context)
-    _account_row(isolated_services, user_id, BillingPlanId.Free)
-    _priced_usage(isolated_services, workspace_id, user_id, costs=(10_000, 4_000))
-    _abandoned_delivery(isolated_services, workspace_id, user_id, value_nanos=4_000)
+    user_id, workspace_id = unbilled_account(service_context)
+    _account_row(service_context, user_id, BillingPlanId.Free)
+    _priced_usage(service_context, workspace_id, user_id, costs=(10_000, 4_000))
+    _abandoned_delivery(service_context, workspace_id, user_id, value_nanos=4_000)
     provider = _Provider(
         plan=BillingPlanId.Free,
         billed_customer_id=f"cus_{user_id}",
@@ -262,16 +263,16 @@ def test_usage_nobody_will_ever_be_charged_for_is_reported_rather_than_balanced(
     )
 
     BillingReconciliationService(
-        database=isolated_services.context.database,
+        database=service_context.database,
         payments=lambda: provider,
-        events=isolated_services.events,
+        events=EventService(service_context),
     ).reconcile(now=CYCLE_STARTED_AT + timedelta(days=1))
 
     # The proration invoice is the newest of the two and was never compared.
     assert provider.invoice_reads == ["in_closed"]
     reported = [
         event
-        for event in isolated_services.events.list(
+        for event in EventService(service_context).list(
             workspace_id=None,
             actions=[RECONCILIATION_DIVERGENCE_ACTION],
         )
@@ -286,11 +287,11 @@ def test_usage_nobody_will_ever_be_charged_for_is_reported_rather_than_balanced(
 
 
 def _priced_usage(
-    services: ApiServices, workspace_id: str, user_id: str, *, costs: tuple[int, ...]
+    services: ServiceContext, workspace_id: str, user_id: str, *, costs: tuple[int, ...]
 ) -> None:
     """Ledger segments this payer's last closed cycle was billed for."""
 
-    with services.context.database.session() as session:
+    with services.database.session() as session:
         for index, cost_nanos in enumerate(costs):
             usage_record_id = str(uuid4())
             session.add(
@@ -332,11 +333,11 @@ def _priced_usage(
 
 
 def _abandoned_delivery(
-    services: ApiServices, workspace_id: str, user_id: str, *, value_nanos: int
+    services: ServiceContext, workspace_id: str, user_id: str, *, value_nanos: int
 ) -> None:
     """A meter event inside that cycle the provider will never be offered again."""
 
-    with services.context.database.session() as session:
+    with services.database.session() as session:
         session.add(
             BillingMeterOutboxTable(
                 id=str(uuid4()),
@@ -356,10 +357,10 @@ def _abandoned_delivery(
         )
 
 
-def _account_row(services: ApiServices, user_id: str, plan: BillingPlanId) -> None:
+def _account_row(services: ServiceContext, user_id: str, plan: BillingPlanId) -> None:
     """A subscribed account on a plan, in the cycle the provider is also in."""
 
-    with services.context.database.session() as session:
+    with services.database.session() as session:
         BillingAccountRepository(session).upsert(
             user_id=user_id,
             status=BillingAccountStatus.Active,
@@ -378,10 +379,10 @@ def _account_row(services: ApiServices, user_id: str, plan: BillingPlanId) -> No
         )
 
 
-def _account_state(services: ApiServices, user_id: str) -> tuple[object, ...]:
+def _account_state(services: ServiceContext, user_id: str) -> tuple[object, ...]:
     """Everything a correction would have moved, read as one comparable value."""
 
-    with services.context.database.session() as session:
+    with services.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
         period = BillingAllowanceRepository(session).current_period(
             user_id=user_id, at=CYCLE_STARTED_AT

@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from api.server.services import ApiServices
+from database.context import ServiceContext
 from identity.auth import AuthService
 from identity.workspaces import WorkspaceSettingsService
 
 
 def test_workspace_audit_cursor_round_trips_through_validated_contract(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _raw_token, actor = AuthService(isolated_services.context).create_token("audit-actor")
-    service = WorkspaceSettingsService(isolated_services.context)
+    _raw_token, actor = AuthService(service_context).create_token("audit-actor")
+    service = WorkspaceSettingsService(service_context)
     service.rename("default", name="workspace-alpha", actor=actor)
     service.rename("workspace-alpha", name="workspace-beta", actor=actor)
 

@@ -44,8 +44,8 @@ from shared.workload_keys import (
     pod_keep_warm_lock_key,
     pod_total_connections_key,
 )
-from tests.domain_fixtures import workspace_owner_user_id
 from tests.real_redis import RealRedisActors
+from tests.workspaces import workspace_owner_user_id
 
 
 class _Scheduler:

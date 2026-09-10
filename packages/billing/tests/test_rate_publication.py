@@ -2,17 +2,19 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from api.server.services import ApiServices
 from billing.rate_publication import publish_metered_rate_history
+from database.context import ServiceContext
 from database.repositories.billing_rates import (
     ComputeRateRepository,
     PlatformRateRepository,
     RatePublication,
 )
 from database.tables.billing_ledger import BillingLedgerSegmentTable
+from observability.usage import UsageService
 from shared.billing_quotes import ContainerShape, LedgerComponent
 from shared.billing_rate_card import (
     PUBLISHED_METERED_RATE_HISTORY,
@@ -30,11 +32,14 @@ from shared.usage import (
 )
 from sqlalchemy import select
 
+from database import DatabaseClient
+
 
 @pytest.mark.parametrize("existing_installation", [False, True])
 def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
-    isolated_services: ApiServices, existing_installation: bool
+    workspace_database: DatabaseClient, tmp_path: Path, existing_installation: bool
 ) -> None:
+    service_context = ServiceContext.create(workspace_database, root=tmp_path, create_schema=False)
     old = PUBLISHED_METERED_RATE_HISTORY[0]
     assert old.platform_rate is not None
     transfer_boundary = next(
@@ -42,8 +47,8 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
         for card in PUBLISHED_METERED_RATE_HISTORY
         if card.platform_rate is not None and card.platform_rate.nanos_per_egress_gib > 0
     )
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         if existing_installation:
             PlatformRateRepository(session).publish(
                 pricing_version=old.pricing_version,
@@ -71,8 +76,8 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
             ).isoformat(),
         },
     )
-    isolated_services.usage.append(before)
-    with isolated_services.context.database.session() as session:
+    UsageService(service_context).append(before)
+    with service_context.database.session() as session:
         publish_metered_rate_history(session)
 
     after = before.model_copy(
@@ -86,8 +91,8 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
             },
         }
     )
-    isolated_services.usage.append(after)
-    with isolated_services.context.database.session() as session:
+    UsageService(service_context).append(after)
+    with service_context.database.session() as session:
         old_segment = session.scalar(
             select(BillingLedgerSegmentTable).where(
                 BillingLedgerSegmentTable.usage_record_id == before.id
@@ -124,15 +129,14 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
     ],
 )
 def test_published_execution_choices_price_each_resource_and_preserve_customer_cloud_fees(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     pinned: bool,
     preemptible: bool,
     cpu_memory_multiplier: str,
     gpu_multiplier: str,
 ) -> None:
     started_at = datetime(2026, 9, 9, 1, tzinfo=UTC)
-    with isolated_services.context.database.session() as session:
-        publish_metered_rate_history(session)
+    with service_context.database.session() as session:
         rates = ComputeRateRepository(session)
         for owner in (UsageBillingOwner.PlatformFleet, UsageBillingOwner.ConnectedCloud):
             for component, multiplier in (
@@ -170,11 +174,10 @@ def test_published_execution_choices_price_each_resource_and_preserve_customer_c
 
 
 def test_price_cutover_matches_quotes_and_preserves_customer_gpu_prices(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    boundary = datetime(2026, 9, 12, tzinfo=UTC)
-    with isolated_services.context.database.session() as session:
-        publish_metered_rate_history(session)
+    boundary = PUBLISHED_METERED_RATE_HISTORY[-1].effective_at
+    with service_context.database.session() as session:
         rates = ComputeRateRepository(session)
         for at, expected_cpu in (
             (boundary - timedelta(seconds=1), 55_126_800),

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import pytest
-from api.server.services import ApiServices
+from database.context import ServiceContext
 from identity.users import UserService
 from shared.errors import ConflictError
 from shared.identity import PlatformRole, UserStatus
 
 
 def test_the_last_active_administrator_cannot_be_demoted_or_disabled(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Nothing an administrator does from the dashboard may lock everyone out.
 
@@ -18,7 +18,7 @@ def test_the_last_active_administrator_cannot_be_demoted_or_disabled(
     the second can then be removed the same way only while the first remains.
     """
 
-    users = UserService(isolated_services.context)
+    users = UserService(service_context)
     first = users.create(display_name="first", role=PlatformRole.Administrator)
 
     with pytest.raises(ConflictError, match="last active administrator"):

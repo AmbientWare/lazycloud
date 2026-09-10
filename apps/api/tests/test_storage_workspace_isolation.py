@@ -13,8 +13,8 @@ from shared.deployments import DeploymentKind
 from shared.identity import TokenKind
 from shared.mounts import MountAuthMode
 from storage.service import ObjectStorage
-from tests.domain_fixtures import owned_workspace
 from tests.fakes import FakeObjectClient
+from tests.workspaces import owned_workspace
 
 
 def test_workspace_object_cleanup_preserves_external_bucket_data(

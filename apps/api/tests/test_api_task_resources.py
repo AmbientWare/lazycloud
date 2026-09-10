@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
 from uuid import uuid4
 
-from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from database.repositories.orchestration import ContainerRepository
@@ -15,33 +13,37 @@ from shared.deployments import StubKind
 from shared.function_payloads import FunctionCloudpickleResult
 from shared.http.errors import ErrorResponse
 from shared.http.tasks import TaskDetailResponse, TaskPageResponse
-from shared.identity import TokenKind
+from shared.identity import TokenKind, WorkspaceRecord
 from shared.tasks import Task, TaskStatus
 
 
-def _headers(isolated_services: ApiServices, name: str, *, scopes: list[str]) -> dict[str, str]:
-    token, _ = AuthService(isolated_services.context).create_token(
+def _headers(
+    services: ApiServices, workspace_id: str, name: str, *, scopes: list[str]
+) -> dict[str, str]:
+    token, _ = AuthService(services.context).create_token(
         name,
         scopes=scopes,
         kind=TokenKind.Workspace,
+        workspace_id=workspace_id,
     )
     return {"Authorization": f"Bearer {token}"}
 
 
 def test_raw_task_creation_is_unsupported_and_historic_commands_cannot_rerun(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
+    api_workspace: WorkspaceRecord,
 ) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    historic = isolated_services.tasks.create(
+    services, client = api_runtime
+    workspace_id = api_workspace.id
+    historic = services.tasks.create(
         "historic-command",
         workspace_id=workspace_id,
         command=["python", "-c", "print('unsafe')"],
     )
-    historic = isolated_services.tasks.transition(historic, TaskStatus.Complete, exit_code=0)
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    headers = _headers(isolated_services, "historic-command-write", scopes=["read", "write"])
+    historic = services.tasks.transition(historic, TaskStatus.Complete, exit_code=0)
+    headers = _headers(
+        services, api_workspace.id, "historic-command-write", scopes=["read", "write"]
+    )
 
     unsupported = client.post(
         "/api/v1/tasks",
@@ -55,25 +57,27 @@ def test_raw_task_creation_is_unsupported_and_historic_commands_cannot_rerun(
     assert ErrorResponse.model_validate_json(rerun.content).detail == (
         "historic command tasks cannot be re-run"
     )
-    assert [task.id for task in isolated_services.tasks.list() if task.name == historic.name] == [
-        historic.id
-    ]
+    assert [
+        task.id
+        for task in services.tasks.list(workspace_id=api_workspace.id)
+        if task.name == historic.name
+    ] == [historic.id]
 
 
 def test_task_detail_projects_durable_function_result_to_public_result(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
+    api_workspace: WorkspaceRecord,
 ) -> None:
-    task = isolated_services.tasks.create("function-result")
+    services, client = api_runtime
+    task = services.tasks.create("function-result", workspace_id=api_workspace.id)
     function_result = FunctionCloudpickleResult.from_bytes(b"opaque-python-result")
-    isolated_services.tasks.transition(
+    services.tasks.transition(
         task,
         TaskStatus.Complete,
         function_result=function_result,
         exit_code=0,
     )
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    headers = _headers(isolated_services, "function-result-reader", scopes=["read"])
+    headers = _headers(services, api_workspace.id, "function-result-reader", scopes=["read"])
 
     response = client.get(f"/api/v1/tasks/{task.id}", headers=headers)
 
@@ -82,15 +86,15 @@ def test_task_detail_projects_durable_function_result_to_public_result(
     assert payload.result == function_result.model_dump(mode="json")
 
 
-def _deployed_task(services: ApiServices) -> Task:
+def _deployed_task(services: ApiServices, workspace_id: str) -> Task:
     """A task bound to a real app, workload, deployment, and container."""
 
     deployment = services.deployments.deploy(
-        DeploymentSpec(name="reindex", handler="jobs.search:reindex")
+        DeploymentSpec(name="reindex", handler="jobs.search:reindex"), workspace=workspace_id
     )
     stub = next(
         item
-        for item in ControlPlaneService(services.context).list_stubs()
+        for item in ControlPlaneService(services.context).list_stubs(workspace=workspace_id)
         if item.deployment_id == deployment.id
     )
     container = ContainerRecord(
@@ -116,12 +120,12 @@ def _deployed_task(services: ApiServices) -> Task:
 
 
 def test_task_rows_name_their_resources_and_only_the_detail_read_carries_the_container(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
+    api_workspace: WorkspaceRecord,
 ) -> None:
-    task = _deployed_task(isolated_services)
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    headers = _headers(isolated_services, "task-row-reader", scopes=["read"])
+    services, client = api_runtime
+    task = _deployed_task(services, api_workspace.id)
+    headers = _headers(services, api_workspace.id, "task-row-reader", scopes=["read"])
 
     page = client.get("/api/v1/tasks", headers=headers, params={"limit": 100})
     detail = client.get(f"/api/v1/tasks/{task.id}", headers=headers)

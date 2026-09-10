@@ -20,8 +20,8 @@ from shared.http.operations import ImageBuildListResponse
 from shared.http.operations import ImageBuildResponse as ImageBuildRecordResponse
 from shared.identity import TokenKind
 from storage.service import ObjectStorage
-from tests.domain_fixtures import owned_workspace
 from tests.fakes import FakeObjectClient
+from tests.workspaces import owned_workspace
 
 
 def test_image_build_http_records_events_and_context_are_workspace_owned(

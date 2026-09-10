@@ -14,7 +14,7 @@ from shared.errors import PaymentRequiredError
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody
 from sqlalchemy import func, select
-from tests.domain_fixtures import workspace_owner_user_id
+from tests.workspaces import workspace_owner_user_id
 
 
 def test_invoking_a_function_past_due_refuses_and_queues_nothing(

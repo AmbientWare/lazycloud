@@ -21,7 +21,7 @@ from coordination.token_lock import (
     try_acquire_token_lock_async,
 )
 from pydantic import Field, field_validator
-from shared.container_requests import StopContainerReason
+from shared.container_requests import StopContainerReason, capacity_memory_mib
 from shared.contracts import ContractModel
 from shared.gpu import gpu_preference_accepts
 from shared.placement import ProductRegion
@@ -3452,12 +3452,6 @@ class RedisWorkerPoolStateRepository:
                 self.keys.worker_pool_replicas(capacity_owner_id),
             )
         )
-
-
-def capacity_memory_mib(memory_mib: int) -> int:
-    if memory_mib <= 0:
-        return memory_mib
-    return (memory_mib * 125 + 99) // 100
 
 
 def plan_worker_capacity_change(

@@ -8,6 +8,7 @@ import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.identity import DeviceAuthorizationRepository, WorkspaceMemberRepository
 from database.tables.identity import DeviceAuthorizationTable
 from database.types import DatabaseSession
@@ -25,7 +26,7 @@ from shared.identity import (
 )
 from shared.timestamps import utc_now
 from sqlalchemy import update
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 
 
 def _signed_in_user(
@@ -162,12 +163,12 @@ def test_device_codes_expire_and_are_pruned(
 
 
 def test_expired_device_code_claim_reports_expired_before_prune(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    service = DeviceAuthorizationService(isolated_services.context)
+    service = DeviceAuthorizationService(service_context)
     started = service.start(client_name="cli")
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = DeviceAuthorizationRepository(session)
         record = repository.by_user_code(started.record.user_code)
         assert record is not None

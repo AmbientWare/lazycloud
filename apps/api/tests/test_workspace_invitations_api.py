@@ -13,7 +13,7 @@ from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.identity import WorkspaceRole
 from shared.timestamps import utc_now
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 
 from billing import DatabaseBillingAdmission
 

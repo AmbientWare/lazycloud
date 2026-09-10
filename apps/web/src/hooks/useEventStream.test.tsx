@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { useEventStream } from "@/hooks/useEventStream";
 import type { ServerSentEvent } from "@/lib/api/sse";
@@ -17,11 +17,6 @@ function streamResponse(chunks: string[]): Response {
     headers: { "Content-Type": "text/event-stream" },
   });
 }
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-});
 
 describe("useEventStream", () => {
   it("delivers parsed frames and closes when reconnect is disabled", async () => {

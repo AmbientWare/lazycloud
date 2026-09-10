@@ -7,9 +7,9 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from api.server.services import ApiServices
 from billing.credits import fund_subscription_credits, recover_subscription_credits
 from billing.rate_publication import publish_metered_rate_history
+from database.context import ServiceContext
 from database.repositories import billing_credits
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
@@ -26,6 +26,7 @@ from database.tables.billing_credits import (
 )
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_outbox import BillingMeterOutboxTable
+from observability.usage import UsageService
 from provider_stripe.billing import StripeBilling
 from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
@@ -40,11 +41,11 @@ from shared.usage import (
     UsageUnit,
 )
 from sqlalchemy import func, select
-from tests.domain_fixtures import unfunded_billing_account
+from tests.workspaces import unfunded_billing_account
 
 
 def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     end = datetime(2027, 1, 1, tzinfo=UTC)
@@ -52,9 +53,9 @@ def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
     monkeypatch.setattr(billing_credits, "utc_now", lambda: now)
     start = end - timedelta(seconds=10)
     user_id, workspace_id = unfunded_billing_account(
-        isolated_services.context, period_started_at=start, period_ended_at=end
+        service_context, period_started_at=start, period_ended_at=end
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         credits = BillingCreditRepository(session)
         PlatformRateRepository(session).publish(
             pricing_version="late-credit",
@@ -89,7 +90,7 @@ def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
 
 
 def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_proration_terms(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     start = datetime(2027, 1, 1, tzinfo=UTC)
@@ -97,11 +98,11 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
     now = end + timedelta(days=1)
     monkeypatch.setattr(billing_credits, "utc_now", lambda: now)
     user_id, workspace_id = unfunded_billing_account(
-        isolated_services.context,
+        service_context,
         period_started_at=start - timedelta(days=30),
         period_ended_at=start,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
         assert account is not None
         credits = BillingCreditRepository(session)
@@ -163,7 +164,7 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
     monkeypatch.setattr(StripeBilling, "paid_subscription_periods", receipts)
     with httpx.Client() as client:
         payments = StripeBilling(client)
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             recover_subscription_credits(
                 session, payments, account=account, subscription=subscription
             )
@@ -173,12 +174,12 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
             )
         line = line.model_copy(update={"prorated": False})
         for _ in range(2):
-            with isolated_services.context.database.session() as session:
+            with service_context.database.session() as session:
                 recover_subscription_credits(
                     session, payments, account=account, subscription=subscription
                 )
                 assert BillingCreditRepository(session).balance(user_id=user_id, at=now) == -10
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             lot = session.scalars(
                 select(BillingCreditLotTable).where(BillingCreditLotTable.user_id == user_id)
             ).one()
@@ -192,12 +193,12 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
 
 
 def test_storage_grace_waives_only_retained_time_and_top_up_resumes_charges(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     start = datetime(2027, 1, 1, tzinfo=UTC)
     end = start + timedelta(seconds=10)
     user_id, workspace_id = unfunded_billing_account(
-        isolated_services.context,
+        service_context,
         period_started_at=start,
         period_ended_at=start + timedelta(days=30),
     )
@@ -215,7 +216,7 @@ def test_storage_grace_waives_only_retained_time_and_top_up_resumes_charges(
         },
         created_at=end,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         credits = BillingCreditRepository(session)
         BillingAllowanceRepository(session).confirm_credit(
             user_id=user_id, period_started_at=start, at=start
@@ -262,14 +263,14 @@ def test_storage_grace_waives_only_retained_time_and_top_up_resumes_charges(
 
 
 def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
-    isolated_services: ApiServices, monkeypatch: pytest.MonkeyPatch
+    committed_service_context: ServiceContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     start = datetime(2027, 1, 1, tzinfo=UTC)
     end = start + timedelta(days=30)
     user_id, _ = unfunded_billing_account(
-        isolated_services.context, period_started_at=start, period_ended_at=end
+        committed_service_context, period_started_at=start, period_ended_at=end
     )
-    with isolated_services.context.database.session() as session:
+    with committed_service_context.database.session() as session:
         BillingAllowanceRepository(session).set_subscription_period(
             user_id=user_id,
             period_started_at=start,
@@ -316,7 +317,7 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
         payments = StripeBilling(client)
 
         def fund() -> None:
-            with isolated_services.context.database.session() as session:
+            with committed_service_context.database.session() as session:
                 assert fund_subscription_credits(
                     session,
                     payments,
@@ -329,7 +330,7 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
             futures = [executor.submit(fund) for _ in range(4)]
             for future in futures:
                 future.result()
-        with isolated_services.context.database.session() as session:
+        with committed_service_context.database.session() as session:
             lots = session.scalars(
                 select(BillingCreditLotTable).where(
                     BillingCreditLotTable.user_id == user_id,
@@ -362,7 +363,7 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
                 }
             ),
         )
-        with isolated_services.context.database.session() as session:
+        with committed_service_context.database.session() as session:
             BillingAllowanceRepository(session).set_subscription_period(
                 user_id=user_id,
                 period_started_at=start,
@@ -371,7 +372,7 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
             )
         fund()
         fund()
-        with isolated_services.context.database.session() as session:
+        with committed_service_context.database.session() as session:
             assert (
                 BillingCreditRepository(session).subscription_issued(
                     user_id=user_id,
@@ -429,7 +430,7 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
                 }
             ),
         )
-        with isolated_services.context.database.session() as session:
+        with committed_service_context.database.session() as session:
             BillingAllowanceRepository(session).set_subscription_period(
                 user_id=user_id,
                 period_started_at=start,
@@ -448,7 +449,7 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
             )
         fund()
         fund()
-        with isolated_services.context.database.session() as session:
+        with committed_service_context.database.session() as session:
             lots = session.execute(
                 select(BillingCreditLotTable.amount_nanos).where(
                     BillingCreditLotTable.user_id == user_id,
@@ -459,13 +460,13 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
 
 
 def test_credit_expiry_and_start_split_a_frozen_charge_and_preserve_purchased_funds(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     at = datetime(2026, 9, 12, tzinfo=UTC)
     user_id, workspace_id = unfunded_billing_account(
-        isolated_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
+        service_context, period_started_at=at, period_ended_at=at + timedelta(days=30)
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         publish_metered_rate_history(session)
         credits = BillingCreditRepository(session)
         allowance = BillingAllowanceRepository(session)
@@ -505,9 +506,9 @@ def test_credit_expiry_and_start_split_a_frozen_charge_and_preserve_purchased_fu
             METERING_WINDOW_ENDED_AT_METADATA_KEY: (at + timedelta(seconds=10)).isoformat(),
         },
     )
-    isolated_services.usage.append(record)
-    isolated_services.usage.append(record)
-    with isolated_services.context.database.session() as session:
+    UsageService(service_context).append(record)
+    UsageService(service_context).append(record)
+    with service_context.database.session() as session:
         allocations = session.execute(
             select(
                 BillingCreditLotTable.source_id, func.sum(BillingCreditAllocationTable.amount_nanos)
@@ -531,13 +532,13 @@ def test_credit_expiry_and_start_split_a_frozen_charge_and_preserve_purchased_fu
 
 
 def test_waived_usage_preserves_purchased_credit_and_records_the_gross_waiver(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     at = datetime(2026, 9, 12, tzinfo=UTC)
     user_id, workspace_id = unfunded_billing_account(
-        isolated_services.context, period_started_at=at, period_ended_at=at + timedelta(days=30)
+        service_context, period_started_at=at, period_ended_at=at + timedelta(days=30)
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         publish_metered_rate_history(session)
         account = session.scalar(
             select(BillingAccountTable).where(BillingAccountTable.user_id == user_id)
@@ -567,8 +568,8 @@ def test_waived_usage_preserves_purchased_credit_and_records_the_gross_waiver(
             METERING_WINDOW_ENDED_AT_METADATA_KEY: (at + timedelta(seconds=10)).isoformat(),
         },
     )
-    isolated_services.usage.append(record)
-    with isolated_services.context.database.session() as session:
+    UsageService(service_context).append(record)
+    with service_context.database.session() as session:
         settlement = session.get(BillingCreditSettlementTable, record.id)
         assert settlement is not None
         assert (settlement.gross_nanos, settlement.credited_nanos, settlement.payable_nanos) == (

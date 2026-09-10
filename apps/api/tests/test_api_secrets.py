@@ -1,30 +1,20 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
-
-from api.fastapi_app import create_app
-from api.server.services import ApiServices
 from fastapi.testclient import TestClient
 from shared.http.secrets import GetSecretResponse, SecretMaskedListResponse
-from tests.service_fixtures import administrator_credential
 
 
 def test_secret_routes_mask_lists_and_reveal_only_explicit_detail(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_client: TestClient,
 ) -> None:
-    raw_token, _ = administrator_credential(isolated_services, "secret-admin")
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    headers = {"Authorization": f"Bearer {raw_token}"}
 
-    created = client.post(
+    created = api_client.post(
         "/api/v1/secrets",
-        headers=headers,
         json={"name": "API_KEY", "value": "secret-value"},
     )
     assert created.status_code == 201
 
-    listed = client.get("/api/v1/secrets", headers=headers)
+    listed = api_client.get("/api/v1/secrets")
     assert listed.status_code == 200
     [masked_secret] = SecretMaskedListResponse.model_validate_json(listed.content).secrets
     assert masked_secret.name == "API_KEY"
@@ -32,7 +22,7 @@ def test_secret_routes_mask_lists_and_reveal_only_explicit_detail(
     assert masked_secret.created_at is not None
     assert masked_secret.updated_at is not None
 
-    revealed = client.get("/api/v1/secrets/API_KEY", headers=headers)
+    revealed = api_client.get("/api/v1/secrets/API_KEY")
     assert revealed.status_code == 200
     revealed_secret = GetSecretResponse.model_validate_json(revealed.content).secret
     assert revealed_secret is not None
@@ -44,35 +34,27 @@ def test_secret_routes_mask_lists_and_reveal_only_explicit_detail(
 
 
 def test_secret_mutations_return_exact_conflict_and_not_found_outcomes(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_client: TestClient,
 ) -> None:
-    raw_token, _ = administrator_credential(isolated_services, "secret-mutation-admin")
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    headers = {"Authorization": f"Bearer {raw_token}"}
 
-    created = client.post(
+    created = api_client.post(
         "/api/v1/secrets",
-        headers=headers,
         json={"name": "ATOMIC_SECRET", "value": "first"},
     )
-    conflict = client.post(
+    conflict = api_client.post(
         "/api/v1/secrets",
-        headers=headers,
         json={"name": "ATOMIC_SECRET", "value": "collision"},
     )
-    missing_update = client.patch(
+    missing_update = api_client.patch(
         "/api/v1/secrets/MISSING_SECRET",
-        headers=headers,
         json={"value": "missing"},
     )
-    missing_delete = client.delete("/api/v1/secrets/MISSING_SECRET", headers=headers)
-    updated = client.patch(
+    missing_delete = api_client.delete("/api/v1/secrets/MISSING_SECRET")
+    updated = api_client.patch(
         "/api/v1/secrets/ATOMIC_SECRET",
-        headers=headers,
         json={"value": "second"},
     )
-    deleted = client.delete("/api/v1/secrets/ATOMIC_SECRET", headers=headers)
+    deleted = api_client.delete("/api/v1/secrets/ATOMIC_SECRET")
 
     assert created.status_code == 201
     assert conflict.status_code == 409

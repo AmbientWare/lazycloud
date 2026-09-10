@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
 from datetime import timedelta
 
-from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from fastapi.testclient import TestClient
 from shared.http.tasks import (
@@ -11,15 +9,16 @@ from shared.http.tasks import (
     TaskPageResponse,
     TaskTimeWindowBucketListResponse,
 )
+from shared.identity import WorkspaceRecord
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
-from tests.service_fixtures import administrator_credential
 
 
 def _seed_task(
     services: ApiServices,
     name: str,
     *,
+    workspace_id: str,
     status: TaskStatus,
     app_id: str | None = None,
     runtime_ms: float | None = None,
@@ -29,7 +28,7 @@ def _seed_task(
     # the payload are written together and every aggregate reads the column, so a
     # task seeded with only the payload moved is a row production cannot produce
     # and makes startup measure the gap between the two rather than the task's.
-    task = services.tasks.create(name, workspace_id=None, app_id=app_id, command=[])
+    task = services.tasks.create(name, workspace_id=workspace_id, app_id=app_id, command=[])
     task.status = status
     if runtime_ms is not None:
         task.started_at = task.created_at + timedelta(milliseconds=startup_ms)
@@ -38,28 +37,28 @@ def _seed_task(
 
 
 def test_task_metrics_api_exposes_percentiles_and_app_filter(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
+    api_workspace: WorkspaceRecord,
+    api_client: TestClient,
 ) -> None:
-    app_id = isolated_services.apps.create("metrics_api_app").id
+    services, _ = api_runtime
+    app_id = services.apps.create("metrics_api_app", workspace=api_workspace.id).id
     _seed_task(
-        isolated_services,
+        services,
         "run",
         status=TaskStatus.Complete,
+        workspace_id=api_workspace.id,
         app_id=app_id,
         runtime_ms=500,
     )
-    _seed_task(isolated_services, "unscoped", status=TaskStatus.Failed)
+    _seed_task(services, "unscoped", status=TaskStatus.Failed, workspace_id=api_workspace.id)
 
-    raw_token, _ = administrator_credential(isolated_services, "metrics-reader")
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    headers = {"Authorization": f"Bearer {raw_token}"}
     window = {
         "started_at": int((utc_now() - timedelta(hours=1)).timestamp()),
         "ended_at": int((utc_now() + timedelta(minutes=1)).timestamp()),
     }
 
-    response = client.get("/api/v1/tasks/metrics", headers=headers, params=window)
+    response = api_client.get("/api/v1/tasks/metrics", params=window)
     assert response.status_code == 200
     body = TaskMetricsSummaryResponse.model_validate_json(response.content)
     assert body.total == 2
@@ -68,9 +67,8 @@ def test_task_metrics_api_exposes_percentiles_and_app_filter(
     assert body.runtime_ms_p95 == 500
     assert body.startup_ms_p50 == 1_000
 
-    scoped = client.get(
+    scoped = api_client.get(
         "/api/v1/tasks/metrics",
-        headers=headers,
         params={**window, "app_id": app_id},
     )
     assert scoped.status_code == 200
@@ -78,18 +76,16 @@ def test_task_metrics_api_exposes_percentiles_and_app_filter(
     assert scoped_body.total == 1
     assert scoped_body.failure_rate == 0.0
 
-    buckets = client.get(
+    buckets = api_client.get(
         "/api/v1/tasks/aggregate-by-time-window",
-        headers=headers,
         params={"window_seconds": 3600, "app_id": app_id},
     )
     assert buckets.status_code == 200
     bucket_page = TaskTimeWindowBucketListResponse.model_validate_json(buckets.content)
     assert sum(item.count for item in bucket_page.items) == 1
 
-    tasks = client.get(
+    tasks = api_client.get(
         "/api/v1/tasks",
-        headers=headers,
         params={"app_id": app_id},
     )
     assert tasks.status_code == 200

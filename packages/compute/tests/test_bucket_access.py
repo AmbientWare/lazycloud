@@ -21,7 +21,7 @@ from shared.aws_connections import (
 from shared.capacity import MachinePool
 from shared.deployment_records import DeploymentSpec, VolumeMount
 from shared.mounts import MountAuthMode
-from tests.domain_fixtures import workspace_owner_user_id
+from tests.workspaces import workspace_owner_user_id
 
 
 @dataclass(slots=True)

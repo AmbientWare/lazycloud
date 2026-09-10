@@ -17,7 +17,7 @@ from shared.errors import NotFoundError
 from shared.identity import TokenKind
 from shared.image_building.records import ImageRecord
 from shared.timestamps import utc_now
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 
 
 def test_cross_workspace_reads_and_deletes_are_denied_by_construction(
