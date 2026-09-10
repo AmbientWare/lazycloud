@@ -45,6 +45,11 @@ spec:
       containers:
         - name: cache-server
           image: {{ include "lazycloud.image" (list . "cache-server") }}
+          readinessProbe:
+            tcpSocket:
+              port: 8100
+            periodSeconds: 5
+            timeoutSeconds: 2
           env:
             {{- include "lazycloud.env" (list . "cacheServer") | nindent 12 }}
           volumeMounts:

@@ -1,10 +1,9 @@
 # Platform Spot plan
 
-Status: proposed; no infrastructure changes applied. Keep EKS Auto Mode.
-Recommend qualifying all Kubernetes worker nodes on Spot for the owner's cost
-priority, retaining application replication and the existing managed data
-services. On-Demand is additional protection against a broad Spot shortage,
-not a technical requirement for running this application.
+Status: implementation and migration in progress. Keep EKS Auto Mode and move
+Kubernetes worker capacity to Spot, retaining application replication and the
+existing managed data services. Qualify recovery and actual savings before
+calling the migration accepted.
 
 This proposal accepts recovery periods after correlated Spot interruptions or
 loss of singleton services. It does not promise uninterrupted service. Prove
@@ -120,13 +119,12 @@ the 80 GiB data disks intact: one current node already uses about 32 GiB.
    though the Metrics API is absent. Attribute costs to exact platform
    resources; account-wide billing also includes customer and other compute.
 
-2. Add the Spot NodePool and its canonical NodeClass through one cluster-owned
-   Argo Application under deploy/argocd/apps/. Reuse existing network and
-   identities. Resolve NodeClass ownership and bootstrap ordering before
-   disabling the built-in On-Demand pool; do not rely on an implicitly
-   retained default NodeClass. Preserve the EKS cluster, access entries and
-   data. Update deploy/platform-core/AGENTS.md and its runbook, keeping the
-   CLAUDE.md symlink intact.
+2. Bootstrap the Spot NodePool and its canonical NodeClass from
+   `deploy/platform-core/node_capacity.tf`, carried by the Terraform-owned
+   Argo Helm release. These infrastructure resources must exist before Argo
+   can start on a fresh cluster. Argo continues to own workloads. Reuse the
+   existing network, identities and node access entry. Disable the built-in
+   On-Demand pool only after migration; do not rely on its default NodeClass.
    [AWS NodePools](https://docs.aws.amazon.com/eks/latest/userguide/create-node-pool.html)
 
 3. Update Helm values, schema, placement helpers and workload templates

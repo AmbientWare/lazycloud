@@ -138,10 +138,10 @@ limit is throttling, and throttling a connector or an API turns contention into
 the latency the request was meant to prevent.
 
 `control-plane`, `scheduler`, `cloudflared`, and `tunnel-gateway` spread
-replicas across nodes. That is what turns their second replicas into redundancy, and it obliges
-the cluster to hold more than one node. `DoNotSchedule` leaves the second replica
-Pending, and Pending is the state Karpenter provisions for. A
-`PodDisruptionBudget` on each prevents one drain from removing both replicas.
+replicas across nodes and availability zones. Both constraints require two
+domains and count old and new revisions together. A missing domain leaves a
+replica Pending so Auto Mode provisions capacity. Disruption budgets permit one
+replica to drain at a time; they cannot prevent a Spot interruption.
 
 ## Replica counts
 
@@ -149,13 +149,19 @@ Pending, and Pending is the state Karpenter provisions for. A
 Redis token locks and tolerates overlapping ticks, so the second replica adds
 nothing to throughput and keeps placement running while a node is replaced.
 
-`cache-server` at one is a correctness decision: it serves a local directory, so
-a second replica is a second cache rather than a larger one.
+`cache-server` has one replica and one ReadWriteOnce EBS volume. A replacement
+must run in the volume's zone and attach the same disk. Cache service is
+unavailable during that recovery. Do not increase replicas against this claim.
+Its readiness probe checks the listener; acceptance must also read stored data.
 
 `tunnel-gateway` runs two replicas against one gateway key. Redis grants the
 active lease to one replica and the other remains ready to take over. This is
 availability, not packet-capacity scaling; both replicas do not forward traffic
 at the same time.
+
+Cloudflare readiness requires a connection to its edge before a replacement
+counts as available. Gateway readiness remains governed by the existing active
+lease and NLB health checks, not a Kubernetes probe that excludes the standby.
 
 `cloudflared` runs several deliberately. Cloudflare balances a tunnel across its
 connectors, and one was a single point of failure that also collided with any
