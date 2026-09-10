@@ -497,8 +497,8 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             max_concurrent_gpus=TEAM_PLAN_MAX_GPUS,
             gpu_types="all",
             max_workspaces="unlimited",
-            max_members="unlimited",
-            connected_cloud=True,
+            max_members=3,
+            connected_cloud=False,
             region_selection=True,
             custom_domains=True,
             self_hosted=True,
@@ -506,14 +506,15 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
         ),
         terms=(
             "The same workloads at the same metered rates, with higher account limits.",
-            "Every GPU model the platform rents, and as many workspaces and members as you need.",
+            "Every GPU model the platform rents, with unlimited workspaces.",
+            "The member limit includes you and is shared across your workspaces.",
             "One account and invoice for every workspace it owns.",
         ),
     ),
     PublishedPlan(
         id=BillingPlanId.Business,
         name="Business",
-        summary="Higher concurrency and longer log retention.",
+        summary="BYO cloud, unlimited members, and higher concurrency.",
         terms_version=SubscriptionTermsVersion.Business,
         entitlements=PlanEntitlements(
             max_concurrent_cpu_containers=2_000,
@@ -527,7 +528,10 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             self_hosted=True,
             retention_days=90,
         ),
-        terms=("The same metered rates and capabilities as Team, with higher account limits.",),
+        terms=(
+            "Connect your own AWS account, with unlimited members.",
+            "Higher concurrency and longer log and artifact retention.",
+        ),
     ),
 )
 """Every plan an account can be on, cheapest first."""

@@ -133,7 +133,7 @@ function ConnectedCloudsPanel({
               ? billingError.message
               : connectedCloudEnabled
                 ? "Connect AWS. Capacity is created only when a workload uses AWS."
-                : "Connected cloud accounts are available on the Team plan."
+                : "Connected cloud accounts are available on the Business plan."
           }
           className="min-h-64 px-6"
         />
