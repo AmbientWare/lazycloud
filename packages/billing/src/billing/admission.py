@@ -190,7 +190,7 @@ class DatabaseBillingAdmission:
     def assert_may_use_connected_cloud(self, session: Session, *, user_id: str) -> None:
         terms = self._account_terms_for_user(session, user_id=user_id)
         if not terms.entitlements.connected_cloud:
-            raise PaymentRequiredError("connected cloud accounts require the Team plan")
+            raise PaymentRequiredError("connected cloud accounts require the Business plan")
 
     def assert_may_use_custom_domains(self, session: Session, *, user_id: str) -> None:
         terms = self._account_terms_for_user(session, user_id=user_id)

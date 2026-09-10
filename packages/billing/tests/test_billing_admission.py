@@ -8,11 +8,13 @@ from api.server.services import ApiServices
 from database.context import ServiceContext
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_credits import BillingCreditRepository
+from database.repositories.compute import AwsAccountConnectionRepository
 from database.repositories.custom_domains import CustomDomainRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository
 from database.tables.orchestration import ContainerTable
 from database.tables.storage import VolumeTable
+from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
@@ -83,6 +85,100 @@ def test_the_free_plan_counts_the_owner_as_its_one_member(
             user_id=colleague.id,
             admission=DatabaseBillingAdmission(),
         )
+
+
+def test_team_counts_three_people_once_across_owned_workspaces(
+    isolated_services: ApiServices,
+) -> None:
+    context = isolated_services.context
+    with context.database.session() as session:
+        workspace_id = context.default_workspace_id(session)
+    owner_id = workspace_owner_user_id(context, workspace_id)
+    with context.database.session() as session:
+        BillingAccountRepository(session).upsert(
+            user_id=owner_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id=f"cus_{owner_id}",
+            provider_subscription_id=f"sub_{owner_id}",
+            plan=BillingPlanId.Team,
+            subscription_terms_version=SubscriptionTermsVersion.Team,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
+        )
+    other_workspace = isolated_services.control_plane_service.set_workspace(
+        "second-team-workspace", owner_user_id=owner_id
+    )
+    first = isolated_services.users.create(display_name="first")
+    second = isolated_services.users.create(display_name="second")
+    fourth = isolated_services.users.create(display_name="fourth")
+    admission = DatabaseBillingAdmission()
+    for target_workspace, user_id in (
+        (workspace_id, first.id),
+        (other_workspace.id, second.id),
+        (other_workspace.id, first.id),
+    ):
+        isolated_services.users.add_member(
+            workspace_id=target_workspace, user_id=user_id, admission=admission
+        )
+
+    with pytest.raises(CapacityLimitReachedError, match="3 members"):
+        isolated_services.users.add_member(
+            workspace_id=workspace_id, user_id=fourth.id, admission=admission
+        )
+    assert isolated_services.users.membership(workspace_id=workspace_id, user_id=fourth.id) is None
+    assert {member.user_id for member in isolated_services.users.members(other_workspace.id)} == {
+        owner_id,
+        first.id,
+        second.id,
+    }
+
+
+def test_connected_cloud_requires_business_and_prevents_a_team_downgrade(
+    service_context: ServiceContext,
+) -> None:
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(service_context, workspace_id)
+    admission = DatabaseBillingAdmission()
+    with service_context.database.session() as session:
+        accounts = BillingAccountRepository(session)
+        accounts.upsert(
+            user_id=user_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id=f"cus_{user_id}",
+            provider_subscription_id=f"sub_{user_id}",
+            plan=BillingPlanId.Team,
+            subscription_terms_version=SubscriptionTermsVersion.Team,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
+        )
+        with pytest.raises(PaymentRequiredError, match="Business plan"):
+            admission.assert_may_use_connected_cloud(session, user_id=user_id)
+        accounts.upsert(
+            user_id=user_id,
+            status=BillingAccountStatus.Active,
+            provider_customer_id=f"cus_{user_id}",
+            provider_subscription_id=f"sub_{user_id}",
+            plan=BillingPlanId.Business,
+            subscription_terms_version=SubscriptionTermsVersion.Business,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
+        )
+        admission.assert_may_use_connected_cloud(session, user_id=user_id)
+        connection = AwsAccountConnection(
+            id=str(uuid4()),
+            user_id=user_id,
+            account_id="123456789012",
+            external_id=uuid4().hex,
+            phase=AwsAccountConnectionPhase.AwaitingAuthorization,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        AwsAccountConnectionRepository(session).create(connection)
+    with service_context.database.session() as session:
+        with pytest.raises(ConflictError, match="a connected cloud account"):
+            admission.assert_plan_change_fits(session, user_id=user_id, target=BillingPlanId.Team)
+        assert AwsAccountConnectionRepository(session).get_for_user(user_id) == connection
 
 
 def test_an_open_invitation_holds_the_seat_it_would_fill(
@@ -443,16 +539,7 @@ def _hold_gpu_cards(
 def test_a_complimentary_account_is_admitted_on_team_terms_without_a_subscription(
     service_context: ServiceContext,
 ) -> None:
-    """A waived account runs on the Team plan's terms, and returns to its own when unwaived.
-
-    The account here has never signed in, so it holds no subscription and would
-    be refused every start. The waiver is what admits it, and what it is admitted
-    to is the proof the terms are Team's rather than the free plan's: a card the
-    free plan does not sell, and the two capabilities it does not include.
-    Withdrawing the waiver has to refuse it again, since the alternative is an
-    account that stays free for good the first time somebody grants and then
-    reconsiders.
-    """
+    """A waiver grants Team access, and withdrawing it restores billing checks."""
 
     user_id, workspace_id = unbilled_account(service_context)
     admission = DatabaseBillingAdmission()
@@ -476,8 +563,9 @@ def test_a_complimentary_account_is_admitted_on_team_terms_without_a_subscriptio
             session, workspace_id=workspace_id, gpu=["H100"], gpu_count=1
         ) == ["H100"]
         admission.assert_may_take_on_billed_work(session, workspace_id=workspace_id)
-        admission.assert_may_use_connected_cloud(session, user_id=user_id)
         admission.assert_may_use_custom_domains(session, user_id=user_id)
+        with pytest.raises(PaymentRequiredError, match="Business plan"):
+            admission.assert_may_use_connected_cloud(session, user_id=user_id)
     with (
         service_context.database.session() as session,
         pytest.raises(ConflictError, match="complimentary"),
