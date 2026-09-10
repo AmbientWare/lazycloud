@@ -73,7 +73,7 @@ spec:
             - name: LAZYCLOUD_WIREGUARD_PLATFORM_KEY_DIRECTORY
               value: /var/lib/lazycloud/wireguard
             - name: LAZYCLOUD_WIREGUARD_PLATFORM_PEER_COUNT
-              value: {{ .Values.wireguard.platformPeers | quote }}
+              value: {{ .Values.controlPlane.replicas | quote }}
           volumeMounts:
             - name: tun
               mountPath: /dev/net/tun
@@ -81,7 +81,7 @@ spec:
               mountPath: /var/lib/lazycloud/wireguard/server/private-key
               subPath: server-private-key
               readOnly: true
-            {{- range $index := until (int .Values.wireguard.platformPeers) }}
+            {{- range $index := until (int .Values.controlPlane.replicas) }}
             - name: wireguard-keys
               mountPath: /var/lib/lazycloud/wireguard/platform-{{ $index }}/public-key
               subPath: platform-{{ $index }}-public-key

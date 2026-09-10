@@ -189,13 +189,14 @@ function PreferencesForm({ preferences }: { preferences: Preferences }) {
             </p>
             {terms ? (
               <p className="mt-1">
-                Each reload adds ${terms.minimum_cents / 100} to ${terms.maximum_cents / 100}.
+                Each reload adds {formatCostNanos(terms.minimum_cents * 10_000_000)} to{" "}
+                {formatCostNanos(terms.maximum_cents * 10_000_000)}.
               </p>
             ) : null}
             {status.data ? (
               <p className="mt-1">
-                ${(status.data.monthly_payment_committed_cents / 100).toFixed(2)} charged or pending
-                this UTC calendar month.
+                {formatCostNanos(status.data.monthly_payment_committed_cents * 10_000_000)} charged
+                or pending this UTC calendar month.
               </p>
             ) : null}
           </details>

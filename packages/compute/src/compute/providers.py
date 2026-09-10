@@ -8,7 +8,7 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitProviderState,
@@ -82,6 +82,7 @@ class ProviderUnitRequest(ContractModel):
     offer: ComputeOffer
     desired_machines: int
     max_machines: int
+    purchases_enabled: bool = True
     root_volume_gib: int = 200
     bootstrap: ProviderUnitBootstrap
     provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)
@@ -122,6 +123,9 @@ class ProviderOfferEligibility(ContractModel):
 
 
 class ProviderCapacityPolicy(ContractModel):
+    model_config = ConfigDict(frozen=True)
+
+    purchases_enabled: bool = True
     default_region: str
     allowed_regions: tuple[str, ...]
     root_volume_gib: int = Field(default=200, ge=50, le=2048)
@@ -154,6 +158,19 @@ class ResolvedProviderPolicy(ProviderCapacityPolicy):
     workspace_id: str = Field(min_length=1)
     pool: MachinePool = Field(min_length=1)
     platform_fleet: bool
+
+    @property
+    def can_purchase(self) -> bool:
+        return not self.platform_fleet or self.purchases_enabled
+
+
+class ProviderDefinition(ContractModel):
+    model_config = ConfigDict(frozen=True)
+
+    kind: str
+    policy: ProviderCapacityPolicy
+    platform_ref: str = ""
+    workspace: str = "default"
 
 
 class ProviderUnitSnapshot(ContractModel):

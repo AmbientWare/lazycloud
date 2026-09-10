@@ -196,6 +196,8 @@ def connection_role_statements(
                     "autoscaling:DeleteAutoScalingGroup",
                     "autoscaling:SetDesiredCapacity",
                     "autoscaling:SetInstanceProtection",
+                    "autoscaling:SuspendProcesses",
+                    "autoscaling:ResumeProcesses",
                     "autoscaling:TerminateInstanceInAutoScalingGroup",
                     "autoscaling:UpdateAutoScalingGroup",
                 ],

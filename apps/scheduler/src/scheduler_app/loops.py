@@ -31,6 +31,8 @@ from scheduler.service import (
     SchedulerRunResult,
 )
 
+from scheduler_app.health import SchedulerLoopName
+
 LOGGER = logging.getLogger(__name__)
 
 PLACEMENT_SWEEP_INTERVAL_SECONDS = 1.0
@@ -66,7 +68,7 @@ LOOP_FAILURE_RETRY_MAX_SECONDS = 30.0
 class SchedulerLoop:
     """One running loop and the switch that stops it."""
 
-    name: str
+    name: SchedulerLoopName
     thread: threading.Thread
     beat: Callable[[], None] | None = None
 
@@ -158,7 +160,7 @@ def start_scheduler_loops(
     loops: list[SchedulerLoop] = []
 
     def spawn(
-        name: str,
+        name: SchedulerLoopName,
         interval_seconds: float,
         pass_once: Callable[[], SchedulerRunResult],
         wait: Callable[[float], None] | None = None,
@@ -181,7 +183,7 @@ def start_scheduler_loops(
         loops.append(SchedulerLoop(name=name, thread=thread, beat=beat))
 
     spawn(
-        "placement",
+        SchedulerLoopName.Placement,
         PLACEMENT_SWEEP_INTERVAL_SECONDS,
         lambda: scheduler.run_placement_pass(
             include_containers=include_containers,
@@ -190,7 +192,7 @@ def start_scheduler_loops(
         ),
     )
     spawn(
-        "capacity",
+        SchedulerLoopName.Capacity,
         capacity_interval_seconds,
         lambda: scheduler.run_capacity_pass(
             include_cron_jobs=include_cron_jobs,
@@ -199,7 +201,7 @@ def start_scheduler_loops(
         ),
     )
     spawn(
-        "housekeeping",
+        SchedulerLoopName.Housekeeping,
         housekeeping_interval_seconds,
         lambda: scheduler.run_housekeeping_pass(
             include_containers=include_containers,
@@ -212,7 +214,7 @@ def start_scheduler_loops(
             kwargs={
                 "stop": resolved_stop,
                 "container_limit": container_limit,
-                "beat": resolved_beats.get("dispatch"),
+                "beat": resolved_beats.get(SchedulerLoopName.Dispatch),
             },
             name="scheduler-container-dispatch",
             daemon=True,
@@ -220,9 +222,9 @@ def start_scheduler_loops(
         dispatch.start()
         loops.append(
             SchedulerLoop(
-                name="dispatch",
+                name=SchedulerLoopName.Dispatch,
                 thread=dispatch,
-                beat=resolved_beats.get("dispatch"),
+                beat=resolved_beats.get(SchedulerLoopName.Dispatch),
             )
         )
     return SchedulerLoopSupervisor(stop=resolved_stop, loops=loops)
@@ -269,9 +271,6 @@ __all__ = [
     "start_scheduler_loops",
 ]
 
-
-SCHEDULER_LOOP_NAMES: tuple[str, ...] = ("placement", "capacity", "housekeeping", "dispatch")
-"""Every loop that stamps a heartbeat, in the order an operator reads them."""
 
 LOOP_SUPERVISOR_POLL_SECONDS = 1.0
 """How often the main thread checks whether a signal asked it to stop."""

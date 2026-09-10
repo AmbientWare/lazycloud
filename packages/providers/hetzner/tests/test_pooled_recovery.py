@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -6,7 +7,7 @@ import httpx
 import pytest
 from api.server.services import ApiServices
 from compute.offers import ComputeOffer
-from compute.providers import ProviderUnitBootstrap, ProviderUnitRequest
+from compute.providers import ProviderCapacityPhase, ProviderUnitBootstrap, ProviderUnitRequest
 from coordination.request_cooldown import RedisRequestCooldown
 from database.repositories.compute import ComputeUnitRepository
 from database.repositories.provider_launches import ProviderNodeLaunchRepository
@@ -137,6 +138,12 @@ def test_observation_does_not_mutate_and_ensure_recovers_unbound_nodes(
                     "meta": {"pagination": {"next_page": None}},
                 },
             )
+        if path.startswith("/v1/servers/") and incoming.method == "DELETE":
+            server_id = int(path.rsplit("/", 1)[1])
+            nodes[:] = [node for node in nodes if node.id != server_id]
+            assert addresses[server_id].auto_delete
+            del addresses[server_id]
+            return httpx.Response(200, json={})
         if path == "/v1/primary_ips" and incoming.method == "GET":
             tagged = [
                 address.model_dump(mode="json")
@@ -185,6 +192,27 @@ def test_observation_does_not_mutate_and_ensure_recovers_unbound_nodes(
             assert recorded.provider_instance_id is None
     assert all(not address.auto_delete for address in addresses.values())
 
+    disabled = request.model_copy(update={"purchases_enabled": False})
+    disabled_adapter = replace(adapter, images_by_location={})
+    disabled_snapshot = disabled_adapter.ensure_unit(disabled)
+    assert disabled_snapshot.observed_machines == 2
+    assert disabled_snapshot.current_template_version == ""
+    assert disabled_snapshot.instances == observed.instances
+    assert (
+        disabled_adapter.set_unit_capacity(
+            disabled, desired_machines=1, max_machines=2
+        ).observed_machines
+        == 2
+    )
+    with pytest.raises(ValueError, match="purchases are disabled"):
+        disabled_adapter.set_unit_capacity(disabled, desired_machines=3, max_machines=3)
+    with services.context.database.session() as session:
+        for launch in launches:
+            recorded = ProviderNodeLaunchRepository(session).get(launch.launch_id)
+            assert recorded is not None
+            assert recorded.provider_instance_id is None
+    assert all(not address.auto_delete for address in addresses.values())
+
     assert adapter.ensure_unit(request).observed_machines == 2
     with services.context.database.session() as session:
         for index, launch in enumerate(launches, start=1):
@@ -194,3 +222,7 @@ def test_observation_does_not_mutate_and_ensure_recovers_unbound_nodes(
     assert all(address.auto_delete for address in addresses.values())
     assert all(address.labels["lazycloud-unit"] == pool.id for address in addresses.values())
     assert all(address.labels["owner-note"] == "preserve" for address in addresses.values())
+
+    assert disabled_adapter.delete_unit(disabled).phase is ProviderCapacityPhase.Deleted
+    assert not nodes
+    assert not addresses

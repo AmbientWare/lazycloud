@@ -98,7 +98,7 @@ class ComputeCapacityPlacementService:
         failures: list[str] = []
         for provider in providers:
             policy = provider.policy
-            if provider.pooled is None or policy is None:
+            if provider.pooled is None or policy is None or not policy.can_purchase:
                 continue
             try:
                 candidates = filter_offers(

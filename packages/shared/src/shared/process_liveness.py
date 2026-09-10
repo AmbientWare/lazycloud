@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,12 +66,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv, namespace=ProcessLivenessArguments())
-    max_age_seconds = args.max_age_seconds
+    return check_heartbeats(args.path, max_age_seconds=args.max_age_seconds)
+
+
+def check_heartbeats(paths: Iterable[Path], *, max_age_seconds: float) -> int:
     if max_age_seconds <= 0:
         print("--max-age-seconds must be positive", file=sys.stderr)
         return 2
     failed = False
-    for path in args.path:
+    for path in paths:
         age = HeartbeatFile(path).age_seconds()
         if age is None:
             print(f"heartbeat missing: {path}", file=sys.stderr)

@@ -1,22 +1,3 @@
-{{/*
-Two replicas, and the second is for the drain rather than for capacity.
-
-The scheduler serialises its work on Redis token locks and tolerates overlapping
-ticks by design. `packages/scheduler/AGENTS.md`: "where two overlap anyway the
-second finds the row already terminal and settles nothing twice". What made more
-than one impossible before was a Redis per host, which is why that moved out of
-the cluster.
-
-With one replica a node replacement stops placement until the pod is rescheduled
-and its first housekeeping pass, the one that talks to every external service,
-has finished. Spread across nodes with a disruption budget, one replica keeps
-deciding while the other moves.
-
-It fetches the agent artifact it never serves. Resolving the release is what
-gives it the worker image and the AMI catalogue, and that resolution validates
-the artifact directory as one fact. A path here that named an empty directory
-would satisfy the check and describe something untrue.
-*/}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -51,6 +32,7 @@ spec:
           configMap:
             name: aws-chain
       initContainers:
+        # Release validation requires the agent artifact alongside the worker image and AMIs.
         - name: agent-artifact
           image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
           command:
@@ -87,22 +69,14 @@ spec:
               mountPath: /var/lib/lazycloud/agent-binarys
             - name: aws-chain
               mountPath: /run/lazycloud/aws
-          # Every loop's heartbeat, not the process's. The process stays up
-          # while one of its loops is wedged, which is the failure this exists to
-          # catch, so the oldest file decides and a missing one fails outright.
-          # The threshold is sized against the slowest loop: housekeeping waits
-          # on Stripe and object storage, so it beats far less often than placement does.
           readinessProbe:
             exec:
               command:
                 - python
                 - -m
-                - shared.process_liveness
+                - scheduler_app.health
                 - --max-age-seconds
                 - {{ .Values.scheduler.livenessMaxAgeSeconds | quote }}
-                {{- range .Values.scheduler.loopNames }}
-                - /tmp/lazycloud-scheduler.heartbeat.{{ . }}
-                {{- end }}
             periodSeconds: 5
             timeoutSeconds: 5
           livenessProbe:
@@ -110,12 +84,9 @@ spec:
               command:
                 - python
                 - -m
-                - shared.process_liveness
+                - scheduler_app.health
                 - --max-age-seconds
                 - {{ .Values.scheduler.livenessMaxAgeSeconds | quote }}
-                {{- range .Values.scheduler.loopNames }}
-                - /tmp/lazycloud-scheduler.heartbeat.{{ . }}
-                {{- end }}
             initialDelaySeconds: {{ .Values.scheduler.livenessInitialDelaySeconds }}
             periodSeconds: 30
             timeoutSeconds: 10

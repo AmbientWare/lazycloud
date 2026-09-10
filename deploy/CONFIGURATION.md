@@ -6,10 +6,17 @@ The operator publishes that output to the private S3 deployment bucket with
 `python -m deploy.object_storage publish`. Deploy downloads its exact descriptor
 with its OIDC role, which has no Terraform-state access.
 
-Helm owns application defaults, environment policy, fleet ceilings and secret
-property bindings. Edit `chart/values.yaml` or `chart/environments/prod.yaml` and
-deploy. No infrastructure apply is needed for those changes. Runtime processes
+Python provider definitions own purchase enablement, approved locations,
+instance catalogs and supplier price assumptions. `compute.fleet_policy` owns
+fleet limits and warm targets. Helm owns Kubernetes resources, process settings
+and secret property bindings. Edit their owner and deploy. Runtime processes
 receive environment variables and mounted files, never Terraform output files.
+
+The values renderer supplies provider image identities from the infrastructure
+descriptor and binds the credentials needed to manage them. Disable new
+purchases through the provider definition's `policy.purchases_enabled` field.
+Retain existing infrastructure identities and credentials until node cleanup
+finishes.
 
 The chart supplies one S3-compatible endpoint, signing configuration,
 application bucket, workspace bucket prefix and workspace grant role.
@@ -28,8 +35,8 @@ three explicit URLs alongside configuration and control-plane images:
 Routine Ship advances control and worker pins, retaining the recorded host pin.
 Pass `host_manifest_url` only for an intentional host upgrade. The first deployment
 must supply it. The CLI and application do not pick a newer release
-from an unpinned release. Customer-connected accounts remain database-owned; Helm governs only
-the platform fleet. Fleet ensure refuses a changed account, role, external ID or
+from an unpinned release. Customer-connected accounts remain database-owned.
+Fleet ensure refuses a changed account, role, external ID or
 network instead of replacing or adopting the existing connection.
 
 ## Deploy sequence

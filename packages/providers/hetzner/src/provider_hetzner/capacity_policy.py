@@ -1,6 +1,7 @@
-from compute.providers import ProviderCapacityPolicy, ProviderOfferEligibility
+from compute.providers import ProviderCapacityPolicy, ProviderDefinition, ProviderOfferEligibility
 
 HETZNER_CAPACITY_POLICY = ProviderCapacityPolicy(
+    purchases_enabled=True,
     default_region="ash",
     allowed_regions=("ash",),
     allowed_offers=tuple(
@@ -8,4 +9,10 @@ HETZNER_CAPACITY_POLICY = ProviderCapacityPolicy(
         for instance_type in ("ccx13", "ccx23", "ccx33", "ccx43", "ccx53", "ccx63")
     ),
     root_volume_gib=80,
+)
+
+HETZNER_PROVIDER = ProviderDefinition(
+    kind="hetzner",
+    platform_ref="hetzner:platform",
+    policy=HETZNER_CAPACITY_POLICY,
 )

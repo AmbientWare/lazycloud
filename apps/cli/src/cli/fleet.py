@@ -77,10 +77,11 @@ def fleet_ensure(
         ),
     ],
 ) -> None:
-    """Ensure the fleet uses the registered AWS infrastructure."""
+    """Register and validate the fleet's AWS infrastructure."""
     if len(subnet_id) < 2:
         raise typer.BadParameter("at least two --subnet-id are required")
-    connection = compute_client().ensure_fleet_account(
+    client = compute_client()
+    client.ensure_fleet_account(
         AwsFleetEnsureRequest(
             account_id=account_id,
             role_arn=role_arn,
@@ -92,17 +93,21 @@ def fleet_ensure(
             ),
         )
     )
+    connection = client.validate_connection()
+    ready = connection.phase is AwsAccountConnectionPhase.Ready
     emit_result(
         ctx,
         payload=connection.model_dump(mode="json"),
-        title="Fleet account configured",
+        title="Fleet account ready" if ready else "Fleet validation failed",
         fields={
             "account": connection.account_id,
             "phase": connection.phase.value,
             "detail": connection.detail,
         },
-        tone="success" if connection.phase is AwsAccountConnectionPhase.Ready else "info",
+        tone="success" if ready else "warning",
     )
+    if not ready:
+        raise typer.Exit(code=1)
 
 
 __all__ = ["fleet_app"]

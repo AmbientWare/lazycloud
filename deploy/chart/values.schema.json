@@ -12,16 +12,6 @@
     "secrets"
   ],
   "properties": {
-    "capacityProviders": {
-      "type": "object",
-      "propertyNames": {
-        "pattern": "^LAZYCLOUD_PLATFORM_CAPACITY_[A-Z]+$"
-      },
-      "additionalProperties": {
-        "type": "string",
-        "pattern": "^LAZYCLOUD_PLATFORM_CAPACITY_[A-Z_]+$"
-      }
-    },
     "aws": {
       "type": "object",
       "additionalProperties": false,
@@ -35,7 +25,8 @@
       "properties": {
         "replicas": {
           "type": "integer",
-          "minimum": 2
+          "minimum": 2,
+          "maximum": 32
         },
         "database": {
           "type": "object",
@@ -95,10 +86,6 @@
     "bootstrap": {
       "type": "object",
       "properties": {
-        "replicas": {
-          "type": "integer",
-          "minimum": 2
-        },
         "database": {
           "type": "object",
           "additionalProperties": false,
@@ -152,24 +139,6 @@
         "replicas": {
           "type": "integer",
           "minimum": 2
-        },
-        "database": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "poolSize",
-            "maxOverflow"
-          ],
-          "properties": {
-            "poolSize": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "maxOverflow": {
-              "type": "integer",
-              "minimum": 0
-            }
-          }
         }
       }
     },
@@ -180,24 +149,6 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 1
-        },
-        "database": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "poolSize",
-            "maxOverflow"
-          ],
-          "properties": {
-            "poolSize": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "maxOverflow": {
-              "type": "integer",
-              "minimum": 0
-            }
-          }
         }
       }
     },
@@ -240,8 +191,7 @@
         "LAZYCLOUD_RELEASE_HOST_MANIFEST_URL",
         "LAZYCLOUD_STRIPE_ACCOUNT_ID",
         "LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT",
-        "LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS",
-        "LAZYCLOUD_AWS_CAPACITY_REGIONAL_PRICES"
+        "LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES"
       ],
       "properties": {
         "LAZYCLOUD_RELEASE_MANIFEST_URL": {

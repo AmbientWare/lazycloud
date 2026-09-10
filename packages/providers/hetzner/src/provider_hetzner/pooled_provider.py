@@ -126,7 +126,7 @@ class HetznerPooledProvider:
                     memory_mb=int(shape.memory * 1024),
                     storage_mb=shape.disk * 1024,
                     cost_terms=SupplierCostTerms(
-                        source="api:hetzner.server_types;deployment:primary_ipv4_hourly_micros",
+                        source="api:hetzner.server_types;code:provider_hetzner.supplier_prices",
                         observed_at=utc_now(),
                         compute_hourly_micros=compute_micros,
                         root_disk_hourly_micros=0,
@@ -146,6 +146,8 @@ class HetznerPooledProvider:
                 )
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        if not request.purchases_enabled:
+            return self.describe_unit(request)
         return self.set_unit_capacity(
             request,
             desired_machines=request.desired_machines,
@@ -171,6 +173,10 @@ class HetznerPooledProvider:
             }
         )
         servers = self._servers(request)
+        if not request.purchases_enabled:
+            if desired_machines > len(servers):
+                raise ValueError("purchases are disabled for this provider")
+            return self._snapshot(request, servers)
         self._reconcile_servers(request, servers)
         if len(servers) > desired_machines:
             # Only release_machine can identify the worker the drain owner fenced.
@@ -400,7 +406,11 @@ class HetznerPooledProvider:
             observed_machines=len(servers),
             instances=instances,
             provider_state=ComputeUnitProviderState(resource_id=request.unit_id),
-            current_template_version=self._template_version(request),
+            current_template_version=(
+                self._template_version(request)
+                if request.offer.region in self.images_by_location
+                else ""
+            ),
         )
 
 

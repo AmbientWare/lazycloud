@@ -1,39 +1,11 @@
 {{/*
-Bootstrap: the catalog and the schema, then the administrator and the rate card
-written into it.
+Negative sync waves finish schema, identity and billing bootstrap before the
+control plane starts. Database consumers run in separate waves, so the database
+budget includes one bootstrap Job at a time.
 
-Argo sync waves rather than `depends_on`: the schema must exist before an
-administrator can be created against it. Running them together produces a
-bootstrap that fails on a table it cannot see, which reads as a database problem.
-
-Three of them open a database, and each is alone in its wave. That is not only
-ordering: `lazycloud.databaseBudget` refuses to render a chart whose pools can
-exceed the server's connection ceiling, and the figure it checks counts one
-Job's pool because no two of them are ever open at once.
-
-All four run in negative waves, ahead of every workload. That is the order the
-control plane needs, and it is also what keeps the release able to recover.
-Argo holds a wave until it is healthy, so a Job behind the Deployments would
-wait on a control plane that is itself waiting on the schema that Job creates.
-Nothing waits on a Deployment now, and a workload that cannot start fails alone
-instead of freezing the sync that would fix it.
-
-Each names its command. The images they run default to `--help` and to
-`database status`, either of which exits 0 without doing the work, so a Job that
-inherited its image's default would report success and leave the deployment
-empty.
-
-Waves rather than Helm hooks, because this chart is synced rather than installed.
-Argo does honour hooks, but a hook is deleted and recreated on every sync while a
-waved Job is a resource the sync ordering already understands.
-
-The administrator credential is the one with a trap in it. `auth bootstrap`
-adopts a configured credential when it finds one and mints its own when it does
-not, recording a different request id for each. A first run without the value in
-Secrets Manager leaves the credential inside this Job's own pod, no later step
-can authenticate, and supplying it afterwards is refused as an already completed
-bootstrap. Supply the credential before first installation. Recover a persistent
-installation through offline administrator recovery, never by resetting its schema.
+The administrator Job requires LAZYCLOUD_TOKEN from the projected secret. Token
+generation requires an explicit output path and is reserved for offline use.
+Recover an existing installation through offline administrator recovery.
 */}}
 apiVersion: batch/v1
 kind: Job
@@ -114,20 +86,7 @@ spec:
       containers:
         - name: administrator-bootstrap
           image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
-          command: ["/bin/sh", "-ec"]
-          args:
-            - |
-              # The credential is read from the environment rather than a file:
-              # the operator wrote it to Secrets Manager and External Secrets put
-              # it here, so there is no staged file to publish to and no volume
-              # that has to outlive the pod.
-              printf '%s' "$LAZYCLOUD_TOKEN" > /tmp/administrator-token
-              chmod 600 /tmp/administrator-token
-              github_id="${LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID:-}"
-              lazycloud-admin --json auth bootstrap \
-                --token-file /tmp/administrator-token \
-                ${github_id:+--github-user-id "$github_id"}
-              rm -f /tmp/administrator-token
+          command: ["lazycloud-admin", "--json", "auth", "bootstrap"]
           env:
             {{- include "lazycloud.env" (list . "administratorBootstrap") | nindent 12 }}
             {{- include "lazycloud.databaseEnv" .Values.bootstrap.database | nindent 12 }}

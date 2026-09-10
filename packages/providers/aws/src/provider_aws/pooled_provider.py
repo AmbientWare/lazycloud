@@ -25,7 +25,6 @@ from shared.compute_policy import (
 )
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
-from shared.timestamps import utc_now
 
 from .account_connection import AwsAccountConnectionTarget
 from .instance_catalog import (
@@ -62,7 +61,6 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     provider_ref: str
     connection: AwsAccountConnectionTarget
     binaries_by_region: Mapping[str, AwsManagedPoolBinaries]
-    instance_hourly_micros: Mapping[str, int]
     client_provider: AwsManagedPoolClientProvider
     regional_prices: Mapping[str, AwsRegionalPrices] = field(
         default_factory=lambda: dict[str, AwsRegionalPrices]()
@@ -118,7 +116,11 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
                 if ami_id is None:
                     continue
                 instances.append(instance)
-                compute_price = self.instance_hourly_micros.get(instance.instance_type)
+                compute_price = (
+                    regional_prices.instance_hourly_micros.get(instance.instance_type)
+                    if regional_prices is not None
+                    else None
+                )
                 if compute_price is not None and False in instance.purchase_markets:
                     on_demand.append(
                         self._offer(
@@ -126,8 +128,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
                             region=region,
                             root_volume_gib=root_volume_gib,
                             cost_terms=SupplierCostTerms(
-                                source="deployment:aws.instance_hourly_micros,aws.regional_prices;gp3:30-day-month",
-                                observed_at=utc_now(),
+                                source="code:provider_aws.supplier_prices;reviewed:2026-09-10;gp3:30-day-month",
                                 compute_hourly_micros=compute_price,
                             ),
                             regional_prices=regional_prices,
@@ -170,7 +171,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
                         preemptible=True,
                         availability_zone=quote.availability_zone,
                         cost_terms=SupplierCostTerms(
-                            source="aws:DescribeSpotPriceHistory;deployment:aws.regional_prices;gp3:30-day-month",
+                            source="aws:DescribeSpotPriceHistory;code:provider_aws.supplier_prices;gp3:30-day-month",
                             observed_at=quote.observed_at,
                             effective_at=quote.effective_at,
                             compute_hourly_micros=quote.compute_hourly_micros,
@@ -232,7 +233,8 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         )
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
-        aws_instance_catalog_entry(request.offer.instance_type)
+        if request.purchases_enabled:
+            aws_instance_catalog_entry(request.offer.instance_type)
         provisioner = self._provisioner(request.offer.region)
         snapshot = provisioner.ensure(
             self._spec(request),
@@ -264,15 +266,17 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         )
         spec = self._spec(capacity_request)
         resource_ids = self._resource_ids(request)
-        if resource_ids.autoscaling_group_name is None:
-            snapshot = provisioner.ensure(spec, resource_ids)
-        else:
-            provisioner.scale(
-                spec,
-                desired_nodes=desired_machines,
-                max_nodes=max_machines,
-            )
-            snapshot = provisioner.describe(spec, resource_ids)
+        snapshot = provisioner.ensure(spec, resource_ids)
+        if not request.purchases_enabled:
+            if desired_machines > snapshot.desired_nodes:
+                raise ValueError("purchases are disabled for this provider")
+            if snapshot.resource_ids.autoscaling_group_name is not None:
+                provisioner.scale(
+                    spec,
+                    desired_nodes=desired_machines,
+                    max_nodes=max_machines,
+                )
+                snapshot = provisioner.describe(spec, snapshot.resource_ids)
         return self._snapshot(provisioner, snapshot)
 
     def release_machine(
@@ -282,7 +286,11 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     ) -> ProviderUnitSnapshot:
         provisioner = self._provisioner(request.offer.region)
         spec = self._spec(request)
-        provisioner.scale(spec, desired_nodes=spec.desired_nodes, max_nodes=spec.max_nodes)
+        desired_nodes = spec.desired_nodes
+        if not request.purchases_enabled:
+            observed = provisioner.ensure(spec, self._resource_ids(request))
+            desired_nodes = min(desired_nodes, observed.desired_nodes)
+        provisioner.scale(spec, desired_nodes=desired_nodes, max_nodes=spec.max_nodes)
         provisioner.release_instance(spec, provider_instance_id)
         return self._snapshot(provisioner, provisioner.describe(spec, self._resource_ids(request)))
 
@@ -340,6 +348,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
             region=request.offer.region,
             instance_type=request.offer.instance_type,
             preemptible=request.offer.preemptible,
+            purchases_enabled=request.purchases_enabled,
             availability_zone=request.offer.availability_zone,
             ami_id=ami_id,
             desired_nodes=request.desired_machines,

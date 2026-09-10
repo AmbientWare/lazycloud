@@ -79,6 +79,8 @@
         "autoscaling:DeleteAutoScalingGroup",
         "autoscaling:SetDesiredCapacity",
         "autoscaling:SetInstanceProtection",
+        "autoscaling:SuspendProcesses",
+        "autoscaling:ResumeProcesses",
         "autoscaling:TerminateInstanceInAutoScalingGroup",
         "autoscaling:UpdateAutoScalingGroup"
       ],

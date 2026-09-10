@@ -15,6 +15,7 @@ from gateway.settings import GatewaySettings
 from identity.auth import AuthService, BootstrapAdminToken, IdentityDatabaseContext
 from identity.credential_files import CredentialFileError, CredentialFilePublication
 from lazycloud.cli.components.results import emit_result
+from lazycloud.config import ClientSettings
 from lazycloud.json_contracts import validate_json_object
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStorageConfig
@@ -48,6 +49,7 @@ def bootstrap_admin(
         int | None,
         typer.Option(
             "--github-user-id",
+            envvar="LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID",
             help=(
                 "Numeric GitHub user id allowed to sign in as the first administrator. "
                 "Resolve it with curl -s https://api.github.com/users/<login>. Without "
@@ -73,9 +75,20 @@ def bootstrap_admin(
     additive and says who may also reach the account through the dashboard, so a
     rebuilt stack lands its operator straight back in without a second account.
     """
-    configured_token = _read_configured_token(token_file) if token_file is not None else None
+    environment_token = _validate_configured_token(
+        ClientSettings().token.strip(), source="LAZYCLOUD_TOKEN"
+    )
+    file_token = _read_configured_token(token_file) if token_file is not None else None
+    if environment_token is not None and file_token is not None and environment_token != file_token:
+        raise CredentialFileError("LAZYCLOUD_TOKEN and --token-file contain different credentials")
+    configured_token = environment_token or file_token
+    credential_source = (
+        ("environment" if environment_token is not None else "configured_file")
+        if configured_token is not None
+        else "generated"
+    )
     if output is None and configured_token is None:
-        raise CredentialFileError("--output is required without a configured credential file")
+        raise CredentialFileError("--output is required without LAZYCLOUD_TOKEN or --token-file")
     request_id = (
         _bootstrap_request_id(output)
         if output is not None
@@ -100,7 +113,7 @@ def bootstrap_admin(
         else:
             if output is None:
                 raise CredentialFileError(
-                    "--output is required without a configured credential file"
+                    "--output is required without LAZYCLOUD_TOKEN or --token-file"
                 )
             publication = CredentialFilePublication(output, request_id)
             current_request = service.bootstrap_request_id()
@@ -132,9 +145,7 @@ def bootstrap_admin(
             "workspace": workspace,
             "user_id": result.user_id,
             "token_id": result.record.id,
-            "credential_source": (
-                "configured_file" if configured_token is not None else "generated"
-            ),
+            "credential_source": credential_source,
             "output": str(publication.resolved_output) if publication is not None else None,
             "mode": "0600" if publication is not None else None,
             "workspace_storage_bucket": storage.bucket,
@@ -149,7 +160,7 @@ def bootstrap_admin(
             "status": payload["status"],
             "workspace": workspace,
             "credential": (
-                str(publication.resolved_output) if publication is not None else "configured file"
+                str(publication.resolved_output) if publication is not None else credential_source
             ),
         },
         tone="success",
@@ -331,10 +342,14 @@ def read_private_file(path: Path, *, description: str) -> str:
 
 def _read_configured_token(path: Path) -> str | None:
     value = read_private_file(path, description="configured credential file")
+    return _validate_configured_token(value, source="configured credential file")
+
+
+def _validate_configured_token(value: str, *, source: str) -> str | None:
     if not value:
         return None
     if re.fullmatch(r"rt_[A-Za-z0-9_-]{43}", value) is None:
-        raise CredentialFileError("configured credential file does not contain one valid token")
+        raise CredentialFileError(f"{source} does not contain one valid token")
     return value
 
 

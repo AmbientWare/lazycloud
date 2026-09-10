@@ -9,9 +9,6 @@ image:
 # Non-secret application settings. Resource facts are added by chart_values.py.
 runtime: {}
 
-capacityProviders:
-  LAZYCLOUD_PLATFORM_CAPACITY_HETZNER: LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS
-
 aws:
   region: ""
 
@@ -63,8 +60,7 @@ environment:
       - LAZYCLOUD_RELEASE_MANIFEST_URL
       - LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL
       - LAZYCLOUD_RELEASE_HOST_MANIFEST_URL
-      - LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS
-      - LAZYCLOUD_AWS_CAPACITY_REGIONAL_PRICES
+      - LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES
   scheduler:
     secretKeys: [LAZYCLOUD_DATABASE_URL, LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY, LAZYCLOUD_CACHE_SERVICE_TOKEN, LAZYCLOUD_CLOUDFLARE_API_TOKEN, LAZYCLOUD_STRIPE_API_KEY, LAZYCLOUD_RESEND_API_KEY]
     runtimeKeys: *applicationRuntime
@@ -106,7 +102,6 @@ wireguard:
   database:
     poolSize: 1
     maxOverflow: 0
-  platformPeers: 2
   secretName: lazycloud-wireguard
   secretId: ""
   resources:
@@ -120,42 +115,19 @@ database:
   # Kept back for an operator's psql and the database's own sessions.
   reserved: 3
 
-# Every workload below states a CPU and a memory request, and the reason is that
-# Karpenter sizes the cluster from exactly this. A pod that requests nothing is
-# not a pod that uses nothing: it is a pod the node's arithmetic cannot see, so
-# the node is provisioned as though it were not there and then runs it anyway.
-# Requests are measured from `/api/v1/nodes/<node>/proxy/metrics/resource`
-# rather than estimated, because the estimate is what produced a node whose
-# requests read 75% while its CPU sat at 85%.
-#
-# Memory carries a limit and CPU does not. A memory limit is a ceiling on a
-# process that would otherwise take the node down with it; a CPU limit is
-# throttling, which turns contention into latency in exactly the processes least
-# able to absorb it. The request is what apportions CPU under contention, and it
-# is the lever used here.
+# Karpenter sizes nodes from requests. Memory limits bound process growth;
+# CPU stays uncapped to allow bursts during contention.
 
 controlPlane:
   replicas: 2
-  # 126m sustained on the replica taking traffic, 143m at its peak. The request
-  # is several times that because the spike this has to absorb is not a request
-  # rate: it is the fleet reconnecting at once, which arrives as a step rather
-  # than a ramp.
+  # Reserve headroom for simultaneous fleet reconnects.
   resources:
     requests: { cpu: 400m, memory: 1Gi }
     limits: { memory: 2Gi }
-  # The artifact fetch, which runs before the container above and is sized on
-  # its own. A pod's request is the larger of its init containers and the sum of
-  # its containers, so this adds nothing to what the node reserves; what it buys
-  # is an init container that is not the first thing descheduled while it pulls
-  # 48MB over the network.
   initResources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 256Mi }
-  # Each replica owns one synchronous and one asynchronous engine. Both read
-  # these settings, so 2 + 1 means six possible connections per replica and 12
-  # across the two replicas. The recovery fence holds one asynchronous
-  # connection per process; request and stream operations use that engine's
-  # remaining capacity without holding a connection for an SSE lifetime.
+  # Each replica has synchronous and asynchronous pools; SSE does not hold a session.
   database:
     poolSize: 2
     maxOverflow: 1
@@ -164,39 +136,18 @@ scheduler:
   replicas: 2
   minReadySeconds: 35
   terminationGracePeriodSeconds: 30
-  # The largest consumer in the deployment by a wide margin: 678m sustained,
-  # 899m at its peak, 497Mi resident. Whatever this process does not request it
-  # takes anyway, out of whatever on the node has no request of its own, so an
-  # understated figure here is charged to the ingress and to Argo rather than
-  # reported against the scheduler.
-  #
-  # This is what the process uses, not what it ought to. A tick loop that
-  # serialises on Redis leases has no obvious reason to hold two thirds of a
-  # core at rest, and that question belongs to `packages/scheduler`. Until it is
-  # answered the number has to be the true one.
   resources:
     requests: { cpu: 750m, memory: 640Mi }
     limits: { memory: 1Gi }
   initResources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 256Mi }
-  # Each loop stamps its own heartbeat and the probe reads all of them, so a
-  # wedged loop is visible while the process it lives in is still up.
-  loopNames: [placement, capacity, housekeeping, dispatch]
-  # Comfortably above the slowest loop's cadence plus the longest external call
-  # it waits on. Housekeeping is the one that sets this: it drains to Stripe and
-  # meters against object storage, and a threshold near its interval would restart a
-  # scheduler for being slow rather than for being stuck.
+  # The health command checks every loop. Allow for housekeeping's external calls.
   livenessMaxAgeSeconds: 300
-  # The first housekeeping pass has to finish before any heartbeat exists, and
-  # it is the pass that talks to every external service.
+  # Every loop must finish its first pass before the process is healthy.
   livenessInitialDelaySeconds: 120
   database:
-    # One per loop with headroom, not one per loop times what a loop might nest.
-    # Sessions are opened around an operation rather than held for a pass, so
-    # four loops draw four at their peak; the rest is for a pass that opens a
-    # second inside the first. These are PgBouncer client connections; Terraform
-    # bounds the shared pool of PostgreSQL backends separately.
+    # Client pools use PgBouncer; Terraform bounds its PostgreSQL backend pool.
     poolSize: 5
     maxOverflow: 2
 
@@ -205,9 +156,7 @@ bootstrap:
   database:
     poolSize: 1
     maxOverflow: 1
-  # Shared by every Job in the chart. They are brief, but they are not free and
-  # they run while the previous release's pods are still serving, which is the
-  # moment the node has least to spare.
+  # Jobs share nodes with the previous release during rollout.
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 512Mi }
@@ -219,34 +168,16 @@ storage:
 cacheServer:
   replicas: 1
   storage: 20Gi
-  # It serves a local directory, so its cost is disk rather than either of
-  # these: 28Mi resident and no measurable CPU while nothing pulls from it. The
-  # CPU request covers the moment a build does. The memory limit is close enough
-  # to the request to mean something, since a ceiling far above anything the
-  # process can reach reserves nothing and only inflates what the node appears
-  # to have promised.
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 512Mi }
 
 cloudflared:
-  # More than one connector, which is how a tunnel is meant to be run and what a
-  # single host could not offer.
   replicas: 2
   image: cloudflare/cloudflared:2026.7.3
   tunnelId: ""
-  # The zone this deployment answers for, which the ingress rules are written
-  # against and the public origin is built from.
   apex: ""
-  # Deliberately far above what it measures at rest, which is 7m and 26Mi.
-  #
-  # This process is the whole product's ingress and its failure mode is
-  # scheduling latency rather than throughput. A QUIC connection is declared
-  # dead when its keepalive stops arriving, so a connector that cannot run for a
-  # few seconds does not serve slowly. It drops every connection it holds and
-  # every stream on them, and Cloudflare answers 502 while the origin behind it
-  # is idle and healthy. A request is what apportions a contended CPU, so this
-  # one is sized for the contention rather than for the average.
+  # Keepalive latency under CPU contention can drop every tunnel connection.
   resources:
     requests: { cpu: 150m, memory: 96Mi }
     limits: { memory: 256Mi }

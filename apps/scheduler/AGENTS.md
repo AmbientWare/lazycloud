@@ -51,8 +51,9 @@ attempted, and stays fresh while the work under it is wedged.
 The threshold is set by the slowest loop. Housekeeping waits on Stripe and S3,
 so a threshold near its cadence restarts a scheduler for being slow rather than
 for being stuck. Changing a cadence means revisiting `livenessMaxAgeSeconds` in
-the chart, the Compose healthcheck, and the image's `HEALTHCHECK`, which all
-name the same files.
+the chart, the Compose healthcheck, and the scheduler image healthcheck. All
+invoke `scheduler_app.health`, which owns loop names and heartbeat paths shared
+with the running process.
 
 ## Stopping
 

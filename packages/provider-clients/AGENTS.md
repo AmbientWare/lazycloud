@@ -7,10 +7,12 @@ This package owns construction and nothing else: not provider workflows, billing
 capacity reconciliation, API or CLI behavior, persistence tables, or process
 entrypoints.
 
-Managed capacity policy and supported types are defined in code. Deployment
-settings carry image catalogs, supplier prices, and provider bindings; separate
-secret settings carry credentials. Resolve bootstrap-created workspace identities
-when capacity is used, not while constructing the services bootstrap itself needs.
+Provider definitions, purchase permission and supported types are defined in code.
+Provider packages own reviewed supplier prices and live quote retrieval.
+Deployment settings carry image catalogs and infrastructure identities; separate
+secret settings carry credentials. The registry constructs disabled providers
+when their resources still require management. Resolve bootstrap-created workspace
+identities when capacity is used, not while composing bootstrap services.
 
 Where that configuration comes from is part of the mapping, so this package also
 owns the published release manifest contract and the resolution of a deployment's
@@ -20,7 +22,7 @@ worker manifest supplies the container-worker image. The host manifest supplies
 the agent executable and exact CPU and GPU AMIs. Routine Ship advances control
 and worker pins while retaining the host pin; host upgrades are explicit.
 Values a release cannot know, such as the
-local artifact mount, instance prices, and control principal, stay
+local artifact mount and control principal, stay
 environment-owned, and a rule that spans both halves says which half is missing.
 A deployment with no manifests has no managed capacity. Partial pin sets are
 invalid. Terraform owns infrastructure identities, Helm owns these runtime

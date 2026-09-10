@@ -27,6 +27,10 @@ gets its `CLAUDE.md` symlink in the same change.
   what a design costs, what it missed. Match the capability, security,
   durability, operability, cost, performance, and public contracts production
   requires rather than another project's internals.
+- Describe LazyCloud directly in documentation, UI copy and code comments. Never
+  name or link other platforms, apps or repositories as comparisons, inspiration
+  or explanations of our behavior. External names belong only where needed to
+  document an actual dependency, supported integration or operational step.
 
 ## Reporting and responding to the user
 

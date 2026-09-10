@@ -1,7 +1,4 @@
 {{- include "lazycloud.databaseBudget" . -}}
-{{- if ne (int .Values.controlPlane.replicas) (int .Values.wireguard.platformPeers) -}}
-{{- fail "controlPlane.replicas and wireguard.platformPeers must match" -}}
-{{- end -}}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
