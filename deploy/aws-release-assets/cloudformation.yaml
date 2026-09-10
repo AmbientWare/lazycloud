@@ -123,11 +123,7 @@ Resources:
                 Effect: Allow
                 Action:
                   - ec2:DescribeImages
-                  - ec2:DescribeSnapshots
                   - ec2:DescribeInstances
-                  - ec2:DescribeSubnets
-                  - ec2:DescribeRouteTables
-                  - ec2:DescribeSecurityGroups
                 Resource: "*"
               # How the bake reports. The instance carries no key pair and no
               # instance profile, so its console is the only channel it has, and
@@ -186,6 +182,23 @@ Resources:
                 Condition:
                   StringEquals:
                     ec2:ResourceTag/cloud-pool:managed-by: control-plane
+
+  RegionalBakeInventoryPolicy:
+    Type: AWS::IAM::Policy
+    Condition: GitHubPublisherConfigured
+    Properties:
+      PolicyName: inspect-regional-image-bakes
+      Roles: [!Ref GitHubReleaseRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - ec2:DescribeSubnets
+              - ec2:DescribeRouteTables
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeSnapshots
+            Resource: "*"
 
 Outputs:
   ContainerWorkerRepositoryName:
