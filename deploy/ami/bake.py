@@ -524,6 +524,7 @@ def _read_console(request: _BakeRequest, *, region: str, instance_id: str) -> st
         [
             "ec2",
             "get-console-output",
+            "--latest",
             "--instance-id",
             instance_id,
             "--region",
@@ -610,7 +611,7 @@ def _wait_for_instance_stopped(request: _BakeRequest, *, region: str, instance_i
         state = states[0]
         _log(f"{region}: bake instance {instance_id}: {state}")
         _log("\n".join(console.strip().splitlines()[-8:]) or "No bake console output yet")
-        if state == "stopped" and _BAKE_OK_SENTINEL in console:
+        if state == "stopped" and announced_ok:
             return
         if state in {"shutting-down", "terminated"}:
             raise SystemExit(f"{region}: bake instance {instance_id} terminated before imaging")
