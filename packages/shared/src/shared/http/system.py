@@ -30,6 +30,7 @@ class AuthTokenResponse(HttpModel):
     name: str
     prefix: str
     kind: TokenKind = TokenKind.Workspace
+    device_login: bool = False
     # Exactly one is set: a credential names the person who holds it or the single
     # workspace it was minted for.
     user_id: str = ""

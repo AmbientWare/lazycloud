@@ -1379,6 +1379,7 @@ class TokenRepository:
         prefix: str,
         kind: TokenKind,
         user_id: str = "",
+        device_login: bool = False,
         workspace_id: str = "",
         worker_id: str = "",
         scopes: list[str] | None = None,
@@ -1393,6 +1394,7 @@ class TokenRepository:
             token_hash=token_hash,
             prefix=prefix,
             kind=kind.value,
+            device_login=device_login,
             user_id=user_id or None,
             workspace_id=workspace_id or None,
             worker_id=worker_id,
@@ -1421,8 +1423,9 @@ class TokenRepository:
         *,
         limit: int,
         cursor: AccountTokenCursor | None = None,
+        include_device: bool = True,
     ) -> AccountTokenPage:
-        """The credentials a person deliberately created, which are theirs to manage.
+        """Account credentials, including those issued through device login.
 
         Their sessions are not among them: a session is what being signed in *is*, it
         is ended by signing out, and listing one beside a credential invites revoking
@@ -1438,6 +1441,8 @@ class TokenRepository:
             TokenTable.kind == TokenKind.User.value,
             TokenTable.status == TokenStatus.Active.value,
         )
+        if not include_device:
+            statement = statement.where(TokenTable.device_login.is_(False))
         if cursor is not None:
             statement = statement.where(
                 or_(

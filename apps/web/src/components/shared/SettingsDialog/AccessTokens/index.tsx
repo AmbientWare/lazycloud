@@ -32,10 +32,10 @@ type Expiry = "86400" | "604800" | "2592000" | "7776000" | "never";
 const EXPIRY_VALUES: readonly Expiry[] = ["86400", "604800", "2592000", "7776000", "never"];
 
 export function AccessTokens() {
-  const controller = useAccessTokensController();
   const [showDeviceTokens, setShowDeviceTokens] = useState(false);
+  const controller = useAccessTokensController(showDeviceTokens);
   const toggleId = useId();
-  const tokens = controller.tokens.filter((token) => showDeviceTokens || token.kind !== "session");
+  const tokens = controller.tokens;
 
   return (
     <Panel

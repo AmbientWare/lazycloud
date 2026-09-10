@@ -5,7 +5,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AuthToken, TokenListResponse } from "@/lib/api/schemas";
-import { accountQueryKeys } from "@/lib/queries/workspace-keys";
+import { tokensQueryOptions } from "@/lib/queries/tokens";
 
 import { useAccessTokensController } from "./controller";
 
@@ -23,7 +23,7 @@ describe("access tokens controller", () => {
       return jsonResponse({ data: [existing], next: "" });
     });
     const queryClient = testQueryClient();
-    const { result } = renderHook(() => useAccessTokensController(), {
+    const { result } = renderHook(() => useAccessTokensController(false), {
       wrapper: wrapper(queryClient),
     });
     await waitFor(() => expect(result.current.tokens).toEqual([existing]));
@@ -67,7 +67,7 @@ describe("access tokens controller", () => {
       return jsonResponse({ data: [target, sibling], next: "" });
     });
     const queryClient = testQueryClient();
-    const { result } = renderHook(() => useAccessTokensController(), {
+    const { result } = renderHook(() => useAccessTokensController(false), {
       wrapper: wrapper(queryClient),
     });
     await waitFor(() => expect(result.current.tokens).toHaveLength(2));
@@ -96,7 +96,7 @@ function wrapper(queryClient: QueryClient) {
 
 function cachedTokens(queryClient: QueryClient): AuthToken[] {
   const cache = queryClient.getQueryData<InfiniteData<TokenListResponse, string>>(
-    accountQueryKeys.tokens(),
+    tokensQueryOptions(false).queryKey,
   );
   return (cache?.pages ?? []).flatMap((page) => page.data);
 }
@@ -116,6 +116,7 @@ function token(overrides: Partial<AuthToken> = {}): AuthToken {
     name: "dashboard",
     prefix: "lc_1234",
     kind: "user",
+    device_login: false,
     user_id: "user-1",
     workspace_id: "",
     status: "active",
