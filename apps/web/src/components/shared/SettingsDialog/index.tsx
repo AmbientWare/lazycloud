@@ -78,11 +78,17 @@ export function SettingsDialog({
             <AccessTokens />
           </TabsContent>
 
-          <TabsContent value="compute" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <TabsContent
+            value="compute"
+            className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-4 sm:overflow-hidden"
+          >
             <ComputeSettings onUpgrade={openUpgrade} />
           </TabsContent>
 
-          <TabsContent value="domains" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <TabsContent
+            value="domains"
+            className="flex min-h-0 flex-1 flex-col overflow-hidden px-5 py-4"
+          >
             <DomainSettings onUpgrade={openUpgrade} />
           </TabsContent>
 

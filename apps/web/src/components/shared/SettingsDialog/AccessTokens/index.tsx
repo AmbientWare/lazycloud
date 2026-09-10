@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import type { AuthToken } from "@/lib/api/schemas";
 
 import {
@@ -30,28 +31,45 @@ type Expiry = "86400" | "604800" | "2592000" | "7776000" | "never";
 
 const EXPIRY_VALUES: readonly Expiry[] = ["86400", "604800", "2592000", "7776000", "never"];
 
-/** Every credential the account holds, in one list, because that is how they work. */
 export function AccessTokens() {
   const controller = useAccessTokensController();
+  const [showDeviceTokens, setShowDeviceTokens] = useState(false);
+  const toggleId = useId();
+  const tokens = controller.tokens.filter((token) => showDeviceTokens || token.kind !== "session");
 
   return (
     <Panel
       title="Access tokens"
       action={
-        <Button
-          size="sm"
-          onClick={controller.beginCreate}
-          disabled={
-            controller.createMode !== "closed" ||
-            controller.actionMode !== "idle" ||
-            controller.isCommandPending
-          }
-        >
-          <Plus />
-          Create token
-        </Button>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <label
+            htmlFor={toggleId}
+            className="flex items-center gap-2 text-xs text-muted-foreground"
+          >
+            <Switch
+              id={toggleId}
+              checked={showDeviceTokens}
+              onCheckedChange={setShowDeviceTokens}
+              disabled={controller.actionMode !== "idle"}
+            />
+            Show device tokens
+          </label>
+          <Button
+            size="sm"
+            onClick={controller.beginCreate}
+            disabled={
+              controller.createMode !== "closed" ||
+              controller.actionMode !== "idle" ||
+              controller.isCommandPending
+            }
+          >
+            <Plus />
+            Create token
+          </Button>
+        </div>
       }
       className="min-h-0 flex-1"
+      headerClassName="flex-wrap"
       contentClassName="flex flex-col overflow-hidden"
     >
       {controller.issued ? (
@@ -65,15 +83,24 @@ export function AccessTokens() {
           <TokenTableSkeleton />
         ) : controller.loadError ? (
           <PanelError message="Couldn't load access tokens. Try again." />
-        ) : controller.tokens.length === 0 ? (
+        ) : tokens.length === 0 && !controller.nextCursor ? (
           <PanelEmpty
-            message="No tokens yet"
+            message={showDeviceTokens ? "No tokens yet" : "No access tokens yet"}
             detail="Create a token for CLI, CI, or API access."
-            className="min-h-32 p-8"
+            className="min-h-full p-8"
           />
         ) : (
-          <TokenTable controller={controller} tokens={controller.tokens} />
+          <TokenTable controller={controller} tokens={tokens} />
         )}
+        {!controller.isLoading && !controller.loadError ? (
+          <InfiniteScrollBoundary
+            nextCursor={controller.nextCursor}
+            loading={controller.loadingMore}
+            error={controller.loadMoreError}
+            onLoadMore={controller.loadMore}
+            resourceLabel="access tokens"
+          />
+        ) : null}
       </div>
     </Panel>
   );
@@ -103,13 +130,6 @@ function TokenTable({
           <TokenRow key={token.id} token={token} controller={controller} />
         ))}
       </ul>
-      <InfiniteScrollBoundary
-        nextCursor={controller.nextCursor}
-        loading={controller.loadingMore}
-        error={controller.loadMoreError}
-        onLoadMore={controller.loadMore}
-        resourceLabel="access tokens"
-      />
     </div>
   );
 }

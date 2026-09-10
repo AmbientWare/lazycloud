@@ -49,7 +49,7 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
 
   if (loadError) {
     return (
-      <Panel title="Compute">
+      <Panel title="Compute" className="min-h-0 flex-1">
         <PanelError message={loadError.message} />
       </Panel>
     );
@@ -61,7 +61,7 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const selfHostedMachines = machines.data?.data ?? [];
 
   return (
-    <div className="flex min-h-full flex-col gap-5 pb-1">
+    <div className="flex min-h-full flex-col gap-4 sm:min-h-0 sm:flex-1 sm:overflow-hidden">
       <ConnectedCloudsPanel
         connection={connection.data ?? null}
         instances={awsInstances}
@@ -121,7 +121,7 @@ function ConnectedCloudsPanel({
           onUpgrade={onUpgrade}
         />
       }
-      className="min-h-[18rem]"
+      className="min-h-56 shrink-0 sm:min-h-0 sm:flex-1"
       contentClassName="overflow-y-auto"
     >
       {!connection ? (
@@ -135,7 +135,7 @@ function ConnectedCloudsPanel({
                 ? "Connect AWS. Capacity is created only when a workload uses AWS."
                 : "Connected cloud accounts are available on the Business plan."
           }
-          className="min-h-64 px-6"
+          className="min-h-full px-6 py-6"
         />
       ) : (
         <div>
@@ -178,7 +178,7 @@ function AddCloudMenu({
   if (!connection && !connectedCloudEnabled) {
     return (
       <Button size="sm" onClick={onUpgrade}>
-        Upgrade to Team
+        Upgrade to Business
       </Button>
     );
   }
@@ -378,7 +378,7 @@ function SelfHostedPanel({
           Join machine
         </Button>
       }
-      className="shrink-0 lg:max-h-[15rem]"
+      className="min-h-56 shrink-0 sm:min-h-0 sm:flex-1"
       contentClassName="overflow-y-auto"
     >
       {loading ? (
@@ -386,7 +386,7 @@ function SelfHostedPanel({
       ) : error ? (
         <PanelError message={error.message} />
       ) : machines.length === 0 ? (
-        <PanelEmpty message="No self-hosted machines connected" className="px-4 py-6" />
+        <PanelEmpty message="No self-hosted machines connected" className="min-h-full px-4 py-6" />
       ) : (
         <ul aria-label="Self-hosted machines" className="divide-y divide-border">
           {machines.map((machine) => (
@@ -417,9 +417,9 @@ function SelfHostedPanel({
 
 function SettingsSkeleton() {
   return (
-    <div className="flex min-h-full flex-col gap-3 lg:h-full">
-      <Skeleton className="min-h-80 flex-1" />
-      <Skeleton className="h-36 shrink-0" />
+    <div className="flex min-h-full flex-col gap-4 sm:min-h-0 sm:flex-1 sm:overflow-hidden">
+      <Skeleton className="min-h-56 shrink-0 sm:min-h-0 sm:flex-1" />
+      <Skeleton className="min-h-56 shrink-0 sm:min-h-0 sm:flex-1" />
     </div>
   );
 }
