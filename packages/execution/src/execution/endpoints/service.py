@@ -844,6 +844,7 @@ class EndpointControlService:
         *,
         max_inflight_per_container: int,
     ) -> tuple[EndpointDispatchTarget, EndpointDispatchRecord]:
+        outdated_containers: set[str] = set()
         while True:
             await self._raise_if_cancelled(task.id)
             if wait.warmup_attempted:
@@ -858,7 +859,8 @@ class EndpointControlService:
                 stub.id,
                 container_loads=loads,
                 max_inflight_per_container=max_inflight_per_container,
-                excluded_container_ids=await repository.closed_containers(stub.id),
+                excluded_container_ids=(await repository.closed_containers(stub.id))
+                | outdated_containers,
             )
             if target is None:
                 if not wait.warmup_attempted:
@@ -867,6 +869,11 @@ class EndpointControlService:
                 await asyncio.sleep(wait.poll_delay())
                 continue
 
+            if not await asyncio.to_thread(
+                self.services.containers.accepting_work, target.container_id
+            ):
+                outdated_containers.add(target.container_id)
+                continue
             record = await repository.claim(task, container_id=target.container_id)
             if record is None:
                 await asyncio.sleep(wait.poll_delay())

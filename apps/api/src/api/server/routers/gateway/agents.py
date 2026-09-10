@@ -29,11 +29,22 @@ from shared.http.provider_nodes import (
     ProviderNodeBootstrapPhaseRequest,
     ProviderNodeEnrollmentRequest,
 )
+from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
 
 from api.server.client_address import client_address
 from api.server.service_dependencies import gateway_service, provider_node_enrollment_service
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
+
+
+@router.post(
+    "/agents/release", response_model=AgentReleaseResponse, operation_id="reconcile_agent_release"
+)
+def reconcile_agent_release(
+    request: AgentReleaseRequest,
+    service: GatewayControlService = Depends(gateway_service),
+) -> AgentReleaseResponse:
+    return service.agent_release(request)
 
 
 @router.post(

@@ -4,6 +4,7 @@
 .env.*
 !.env.example
 .lazycloud
+.lazycloud-release/
 __pycache__/
 *.py[cod]
 .pytest_cache/

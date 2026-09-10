@@ -103,6 +103,7 @@ from shared.tasks import RetryPolicy, Task, TaskStatus, is_terminal_task_status
 from shared.usage import UsageBillingOwner
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
+from tests.releases import assign_runtime
 
 _EVENT_DATA_ADAPTER = TypeAdapter(dict[str, JsonValue | datetime])
 
@@ -413,6 +414,11 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
     functions = FunctionControlService(isolated_services)
 
     initial = isolated_services.tasks.get(task_id)
+    assign_runtime(
+        isolated_services.containers,
+        isolated_services.scheduler_workers,
+        container_scheduler.requests[0].container_id,
+    )
     # A cron container is started for the stub like any other, so it takes its
     # run by claiming it rather than being addressed by it.
     assert initial.stub_id is not None
@@ -482,6 +488,11 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
 
     retry_task = isolated_services.tasks.get(task_id)
     assert retry_task.stub_id is not None
+    assign_runtime(
+        isolated_services.containers,
+        isolated_services.scheduler_workers,
+        container_scheduler.requests[1].container_id,
+    )
     assert (
         functions.function_claim(
             FunctionClaimRequest(
@@ -554,6 +565,11 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
     task_id = runs[0].task_id
     functions = FunctionControlService(isolated_services)
     initial = isolated_services.tasks.get(task_id)
+    assign_runtime(
+        isolated_services.containers,
+        isolated_services.scheduler_workers,
+        container_scheduler.requests[0].container_id,
+    )
     # A cron container is started for the stub like any other, so it takes its
     # run by claiming it rather than being addressed by it.
     assert initial.stub_id is not None
@@ -705,6 +721,7 @@ def test_scheduler_worker_repository_requeues_removed_worker_requests(
 
     worker = repo.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -786,6 +803,7 @@ async def test_scheduler_worker_repository_requeues_expired_worker_requests(
     now = datetime(2026, 1, 1, tzinfo=UTC)
     repo.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -851,6 +869,7 @@ async def test_expired_worker_requeues_delivered_requests_but_not_ones_it_acted_
     now = datetime(2026, 1, 1, tzinfo=UTC)
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -975,6 +994,7 @@ async def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pu
 
     repo.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -1130,6 +1150,7 @@ async def test_claim_dispatch_commit_survives_scheduler_crash_without_duplicate_
     now = datetime(2026, 1, 1, tzinfo=UTC)
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -1231,6 +1252,7 @@ def test_scheduler_worker_admin_service_lists_cordons_drains_and_removes_workers
 
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -1474,6 +1496,7 @@ async def test_scheduler_container_request_service_queues_selects_and_dispatches
 
     worker_repo.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="machine-1",
@@ -1495,6 +1518,7 @@ async def test_scheduler_container_request_service_queues_selects_and_dispatches
     )
     worker_repo.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-2",
             pool=MachinePool("default"),
@@ -1600,6 +1624,7 @@ def test_scheduler_dispatch_clears_runtime_assignment_when_queueing_fails(
     now = datetime(2026, 1, 1, tzinfo=UTC)
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="machine-1",
@@ -1659,6 +1684,7 @@ async def test_scheduler_claim_dispatch_honors_cancellation_before_atomic_commit
     now = datetime(2026, 1, 1, tzinfo=UTC)
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="machine-1",
@@ -1830,6 +1856,7 @@ async def test_scheduler_dispatch_records_the_placement_an_image_build_is_priced
     now = datetime(2026, 1, 1, tzinfo=UTC)
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="machine-1",
@@ -1897,6 +1924,7 @@ async def test_scheduler_container_cancellation_cannot_be_dispatched_or_requeued
     now = datetime(2026, 1, 1, tzinfo=UTC)
     worker_repo.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -2092,6 +2120,7 @@ async def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
     now = datetime(2026, 1, 1, tzinfo=UTC)
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -2216,6 +2245,7 @@ async def test_scheduler_run_once_dispatches_when_pool_state_refresh_fails(
     now = datetime(2026, 1, 1, tzinfo=UTC)
     worker_repo.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -2280,6 +2310,7 @@ async def test_scheduler_dispatch_resumes_an_expired_claim_after_restart(
     now = datetime(2026, 1, 1, tzinfo=UTC)
     worker_repo.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -2500,6 +2531,7 @@ def test_scheduler_ready_pop_and_worker_dispatch_are_atomic_under_parallel_sched
     now = datetime(2026, 1, 1, tzinfo=UTC)
     worker_repo.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -2550,6 +2582,7 @@ def test_worker_capacity_reservation_and_enqueue_are_worker_lock_guarded(
     now = datetime(2026, 1, 1, tzinfo=UTC)
     repo.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -2718,6 +2751,7 @@ def test_scheduler_container_request_service_waits_for_pending_worker_without_re
     now = datetime(2026, 1, 1, tzinfo=UTC)
     worker_repo.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("default"),
@@ -3028,6 +3062,7 @@ def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snaps
     )
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             worker_id=worker_id,
             pool=MachinePool("gpu"),
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
@@ -3108,6 +3143,7 @@ def test_scheduler_pool_state_service_isolates_same_display_name_by_capacity_own
 
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             worker_id="worker-one",
             pool=MachinePool("shared-name"),
             capacity_owner_id=owner_one,
@@ -3121,6 +3157,7 @@ def test_scheduler_pool_state_service_isolates_same_display_name_by_capacity_own
     )
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             worker_id="worker-two",
             pool=MachinePool("shared-name"),
             capacity_owner_id=owner_two,

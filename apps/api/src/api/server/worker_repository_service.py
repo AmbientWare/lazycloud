@@ -14,6 +14,7 @@ from uuid import uuid4
 from compute.service import ComputeService
 from compute.state import AsyncRedisComputeStateRepository, RedisComputeStateRepository
 from control.deployment_resources import DeploymentResourceService
+from control.releases import DeploymentReleaseService
 from coordination.event_bus import (
     EventBusEvent,
     EventBusEventType,
@@ -630,6 +631,8 @@ class WorkerRepositoryService:
                 request.worker_id,
                 principal=principal,
             )
+            if not self._worker_release_admitted(worker):
+                return
             try:
                 await self._require_source_cache_available_async(
                     io,
@@ -652,6 +655,11 @@ class WorkerRepositoryService:
             if container_request is None:
                 yield GetNextContainerRequestResponse()
                 continue
+            if not self._worker_release_admitted(worker):
+                await self.workers.return_worker_request(
+                    io.redis, request.worker_id, container_request, ready_at=utc_now()
+                )
+                return
             try:
                 await self._require_source_cache_available_async(
                     io,
@@ -1114,6 +1122,9 @@ class WorkerRepositoryService:
             )
         except SchedulerRepositoryError as exc:
             raise _scheduler_domain_error(exc) from exc
+
+    def _worker_release_admitted(self, worker: SchedulerWorkerRecord) -> bool:
+        return bool(DeploymentReleaseService().admitted_workers([worker]))
 
     def disable_worker(self, request: DisableWorkerRequest) -> WorkerRecordResponse:
         try:

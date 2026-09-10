@@ -31,7 +31,7 @@ reads it inside the container. The mount is
 the deployment's; which version it holds and what that version must hash to are
 facts of the release that filled it, so neither is set by hand. The control
 plane resolves both from the release manifest at
-`LAZYCLOUD_RELEASE_HOST_MANIFEST_URL` (see `deploy/aws-release-assets/README.md`)
+`LAZYCLOUD_RELEASE_MANIFEST_URL` (see `deploy/aws-release-assets/README.md`)
 and serves that version out of this directory — a mount holding a different
 version than the release published serves nothing. Attached hosts select and
 verify the digest for their architecture; a connected-AWS release publishes

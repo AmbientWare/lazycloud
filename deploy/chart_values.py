@@ -11,6 +11,7 @@ from typing import Annotated, Literal
 
 import yaml
 from provider_clients.provider_definitions import PROVIDER_DEFINITIONS
+from provider_clients.release_manifest import AwsReleaseManifest
 from provider_hetzner import HetznerNodeImage
 from pydantic import (
     BaseModel,
@@ -114,7 +115,6 @@ class Infrastructure(Contract):
 _VALUES = TypeAdapter(dict[str, JsonValue])
 _STRINGS = TypeAdapter(dict[str, str])
 _TAG = TypeAdapter[str](Annotated[str, Field(pattern=r"^[a-f0-9]{40}$")])
-_DIGEST = TypeAdapter[str](Annotated[str, Field(pattern=r"^sha256:[a-f0-9]{64}$")])
 _RELEASE = TypeAdapter[str](
     Annotated[str, Field(pattern=r"^https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+/manifest\.json$")]
 )
@@ -200,17 +200,21 @@ def render(
     deployment: str,
     tag: str,
     release_manifest_url: str,
-    worker_manifest_url: str,
-    host_manifest_url: str,
+    manifest: AwsReleaseManifest,
+    generation: int,
 ) -> dict[str, JsonValue]:
     if infrastructure.deployment != deployment:
         raise ValueError("Infrastructure descriptor belongs to a different deployment")
     _TAG.validate_python(tag)
-    for url in (release_manifest_url, worker_manifest_url, host_manifest_url):
-        _RELEASE.validate_python(url)
+    _RELEASE.validate_python(release_manifest_url)
+    if manifest.source_revision != tag or manifest.manifest_public_url != release_manifest_url:
+        raise ValueError("deployment source must match the selected complete release")
+    if generation < 1:
+        raise ValueError("deployment generation must be positive")
     # Environment overlays cannot replace resource identities.
     owned: dict[str, set[str] | None] = {
         "image": None,
+        "release": None,
         "serviceAccounts": None,
         "aws": {"region"},
         "storage": {"className"},
@@ -244,8 +248,6 @@ def render(
         "LAZYCLOUD_GITHUB_REDIRECT_URI": f"{infrastructure.public_origin}/auth/github/callback",
         "LAZYCLOUD_REDIS_URL": f"rediss://{infrastructure.redis_host}:6379/0",
         "LAZYCLOUD_RELEASE_MANIFEST_URL": release_manifest_url,
-        "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL": worker_manifest_url,
-        "LAZYCLOUD_RELEASE_HOST_MANIFEST_URL": host_manifest_url,
         "LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES": TypeAdapter(dict[str, HetznerNodeImage])
         .dump_json(infrastructure.hetzner_node_images)
         .decode(),
@@ -288,6 +290,15 @@ def render(
             "registry": infrastructure.registry,
             "repositoryPrefix": infrastructure.repository_prefix,
             "tag": tag,
+            "artifacts": dict(manifest.platform_images),
+        },
+        "release": {
+            "generation": generation,
+            "active": {
+                "generation": generation,
+                "manifest_url": release_manifest_url,
+                "target": manifest.target.model_dump(mode="json"),
+            },
         },
         "serviceAccounts": infrastructure.service_accounts.model_dump(mode="json"),
         "aws": {"region": infrastructure.region},
@@ -325,13 +336,7 @@ def main() -> None:
     parser.add_argument("--infrastructure", type=Path, required=True)
     parser.add_argument("--environment", type=Path, required=True)
     parser.add_argument("--deployment", required=True)
-    parser.add_argument("--tag", required=True)
-    artifact = parser.add_mutually_exclusive_group(required=True)
-    artifact.add_argument("--preflight", action="store_true")
-    artifact.add_argument("--network-digest")
-    parser.add_argument("--release-manifest-url", default="")
-    parser.add_argument("--worker-manifest-url", default="")
-    parser.add_argument("--host-manifest-url", default="")
+    parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--previous-values", type=Path)
     parser.add_argument("--previous-chart-values", type=Path)
     parser.add_argument("--output", type=Path, required=True)
@@ -339,26 +344,26 @@ def main() -> None:
     try:
         infrastructure = Infrastructure.model_validate_json(args.infrastructure.read_bytes())
         environment = _VALUES.validate_python(yaml.safe_load(args.environment.read_text()))
-        release_url = args.release_manifest_url
-        worker_url = args.worker_manifest_url or release_url
-        host_url = args.host_manifest_url
+        manifest = AwsReleaseManifest.model_validate_json(args.manifest.read_bytes())
+        release_url = manifest.manifest_public_url
+        generation = 1
         previous: dict[str, JsonValue] | None = None
         if args.previous_values is not None:
             previous = _VALUES.validate_python(yaml.safe_load(args.previous_values.read_text()))
-            previous_runtime = _STRINGS.validate_python(previous.get("runtime", {}), strict=True)
-            release_url = release_url or previous_runtime.get("LAZYCLOUD_RELEASE_MANIFEST_URL", "")
-            worker_url = worker_url or previous_runtime.get(
-                "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL", ""
+            generation = (
+                TypeAdapter(int).validate_python(
+                    _mapping(previous, "release").get("generation", 0), strict=True
+                )
+                + 1
             )
-            host_url = host_url or previous_runtime.get("LAZYCLOUD_RELEASE_HOST_MANIFEST_URL", "")
         values = render(
             infrastructure,
             environment,
             deployment=args.deployment,
-            tag=args.tag,
+            tag=manifest.source_revision,
             release_manifest_url=release_url,
-            worker_manifest_url=worker_url,
-            host_manifest_url=host_url,
+            manifest=manifest,
+            generation=generation,
         )
         if previous is not None:
             if args.previous_chart_values is None:
@@ -374,10 +379,6 @@ def main() -> None:
                 values,
                 ceiling=infrastructure.database_max_connections,
             )
-        if not args.preflight:
-            image = _mapping(values, "image")
-            image["networkDigest"] = _DIGEST.validate_python(args.network_digest)
-            values["image"] = image
         args.output.write_text(yaml.safe_dump(values, sort_keys=True))
     except ValidationError as error:
         locations = [".".join(map(str, item["loc"])) for item in error.errors(include_input=False)]
@@ -389,7 +390,7 @@ def main() -> None:
     except (ValueError, OSError) as error:
         print(f"Invalid deployment configuration: {error}", file=sys.stderr)
         raise SystemExit(1) from None
-    print(json.dumps({"output": str(args.output), "tag": args.tag}))
+    print(json.dumps({"output": str(args.output), "tag": manifest.source_revision}))
 
 
 if __name__ == "__main__":

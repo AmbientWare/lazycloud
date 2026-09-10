@@ -115,13 +115,10 @@ manifest path.
 
 ## What a deployment configures
 
-The deployment records three immutable manifest URLs. `LAZYCLOUD_RELEASE_MANIFEST_URL`
-names the control-plane release and authorization template;
-`LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL` names the worker image;
-`LAZYCLOUD_RELEASE_HOST_MANIFEST_URL` names the host agent executable and AMIs.
-Processes must agree on all three. Routine Ship updates control and worker pins
-without changing the host pin. `deploy/release.py` writes all three into `.env`
-and requires an explicit `--host-manifest-url`; see `deploy/RUNBOOK.md`.
+The deployment records one immutable `LAZYCLOUD_RELEASE_MANIFEST_URL`. It names
+platform image digests, the worker image, agent executable, authorization template,
+and host AMIs. Ship selects the complete release automatically. Argo activates it
+after the platform is healthy; see `deploy/RUNBOOK.md`.
 
 The manifest's `deployment_environment` object is a self-check the release
 carries, not settings to transcribe: the schema validates it against the
@@ -130,12 +127,11 @@ manifests are immutable, so it stays in the document.
 
 The local agent-binary mount (`LAZYCLOUD_COMPOSE_AGENT_BINARY_DIR`) and connected-AWS
 control principal (`LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN`) stay in deployment
-configuration. Managed capacity requires all three release pins. Supplier prices
+configuration. Managed capacity requires a complete release manifest. Supplier prices
 are defined by region in `provider_aws.supplier_prices`.
 
 `capacity_cpu_ami_ids` and `capacity_gpu_ami_ids` come from the current host-image
-catalog in Actions. Local publication may still supply them through `--cpu-ami`
-and `--gpu-ami`. See `deploy/ami/README.md` for the catalog workflow.
+catalog in Actions. See `deploy/ami/README.md` for the catalog workflow.
 
 ## Focused acceptance
 

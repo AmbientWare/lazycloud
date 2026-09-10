@@ -1,4 +1,4 @@
-"""Resolve independently pinned control-plane, worker, and host release artifacts."""
+"""Resolve the artifacts selected by one deployment release."""
 
 from __future__ import annotations
 
@@ -9,13 +9,11 @@ import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlparse
 
 from agent.binary import AgentBinaryEnvironmentSettings, AgentBinarySettings
+from control.release_settings import ReleaseSettings
 from provider_aws import aws_account_connection_template_identity
-from pydantic import Field, ValidationError, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from shared.app_identity import ENV_PREFIX
+from pydantic import ValidationError
 from shared.transport_retry import TransientRetryPolicy, call_with_transient_retry
 
 from provider_clients.release_manifest import AwsReleaseManifest
@@ -31,44 +29,6 @@ _TRANSFER_CHUNK_BYTES = 1024 * 1024
 
 class ReleaseManifestError(RuntimeError):
     """A configured release manifest could not be read or does not fit this build."""
-
-
-class ReleaseManifestSettings(BaseSettings):
-    manifest_url: str = ""
-    worker_manifest_url: str = ""
-    host_manifest_url: str = ""
-    fetch_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
-
-    model_config = SettingsConfigDict(
-        env_prefix=f"{ENV_PREFIX}_RELEASE_",
-        extra="ignore",
-    )
-
-    @field_validator("manifest_url", "worker_manifest_url", "host_manifest_url")
-    @classmethod
-    def validate_manifest_url(cls, value: str) -> str:
-        url = value.strip()
-        if not url:
-            return url
-        parsed = urlparse(url)
-        if (
-            parsed.scheme != "https"
-            or not parsed.netloc
-            or parsed.username
-            or parsed.password
-            or parsed.fragment
-        ):
-            raise ValueError("release manifest URL must be an HTTPS URL without credentials")
-        return url
-
-    @model_validator(mode="after")
-    def validate_release_pins(self) -> ReleaseManifestSettings:
-        pins = (self.manifest_url, self.worker_manifest_url, self.host_manifest_url)
-        if any(pins) and not all(pins):
-            raise ValueError(
-                "managed capacity requires control-plane, worker, and host release pins"
-            )
-        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,24 +48,19 @@ class DeploymentRelease:
 
 
 def resolve_deployment_release(
-    settings: ReleaseManifestSettings | None = None,
+    settings: ReleaseSettings | None = None,
 ) -> DeploymentRelease:
-    manifest_settings = settings or ReleaseManifestSettings()
-    manifests = {
-        url: fetch_release_manifest(url, timeout_seconds=manifest_settings.fetch_timeout_seconds)
-        for url in dict.fromkeys(
-            (
-                manifest_settings.manifest_url,
-                manifest_settings.worker_manifest_url,
-                manifest_settings.host_manifest_url,
-            )
+    manifest_settings = settings or ReleaseSettings()
+    manifest = (
+        fetch_release_manifest(
+            manifest_settings.manifest_url,
+            timeout_seconds=manifest_settings.fetch_timeout_seconds,
         )
-        if url
-    }
+        if manifest_settings.manifest_url
+        else None
+    )
     return deployment_release(
-        manifests.get(manifest_settings.manifest_url),
-        worker_manifest=manifests.get(manifest_settings.worker_manifest_url),
-        host_manifest=manifests.get(manifest_settings.host_manifest_url),
+        manifest,
         agent_binaries=AgentBinaryEnvironmentSettings(),
         aws_connections=AwsAccountConnectionEnvironmentSettings(),
     )
@@ -114,34 +69,26 @@ def resolve_deployment_release(
 def deployment_release(
     manifest: AwsReleaseManifest | None,
     *,
-    worker_manifest: AwsReleaseManifest | None,
-    host_manifest: AwsReleaseManifest | None,
     agent_binaries: AgentBinaryEnvironmentSettings,
     aws_connections: AwsAccountConnectionEnvironmentSettings,
 ) -> DeploymentRelease:
-    if any(item is not None for item in (manifest, worker_manifest, host_manifest)):
-        if manifest is None or worker_manifest is None or host_manifest is None:
-            raise ReleaseManifestError("managed capacity requires all three release pins")
+    if manifest is not None:
         validate_connection_template(manifest)
     return DeploymentRelease(
         version="" if manifest is None else manifest.release_version,
         agent_binaries=AgentBinarySettings(
             binary_dir=agent_binaries.binary_dir,
             binary_name=agent_binaries.binary_name,
-            binary_version="" if host_manifest is None else host_manifest.agent_artifact_version,
+            binary_version="" if manifest is None else manifest.agent_artifact_version,
             binary_sha256_by_arch=(
-                {} if host_manifest is None else host_manifest.agent_artifact_sha256_by_arch
+                {} if manifest is None else manifest.agent_artifact_sha256_by_arch
             ),
         ),
         aws_capacity=AwsCapacitySettings(
-            worker_image_digest=""
-            if worker_manifest is None
-            else worker_manifest.container_worker_image,
-            agent_binary_url=""
-            if host_manifest is None
-            else host_manifest.agent_artifact_object.public_url,
-            cpu_ami_ids={} if host_manifest is None else host_manifest.capacity_cpu_ami_ids,
-            gpu_ami_ids={} if host_manifest is None else host_manifest.capacity_gpu_ami_ids,
+            worker_image_digest="" if manifest is None else manifest.container_worker_image,
+            agent_binary_url="" if manifest is None else manifest.agent_artifact_object.public_url,
+            cpu_ami_ids={} if manifest is None else manifest.capacity_cpu_ami_ids,
+            gpu_ami_ids={} if manifest is None else manifest.capacity_gpu_ami_ids,
         ),
         aws_connections=AwsAccountConnectionSettings(
             template_url=(
@@ -336,7 +283,6 @@ def _download_manifest(url: str, *, timeout_seconds: float) -> bytes:
 __all__ = [
     "DeploymentRelease",
     "ReleaseManifestError",
-    "ReleaseManifestSettings",
     "deployment_release",
     "fetch_release_manifest",
     "materialize_agent_artifact",

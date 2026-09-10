@@ -74,6 +74,8 @@ class WorkerSettings(BaseSettings):
         default="",
         validation_alias="WORKER_ID",
     )
+    runtime_image: str = Field(default="", validation_alias="WORKER_RUNTIME_IMAGE")
+    agent_binary_sha256: str = Field(default="", validation_alias="WORKER_AGENT_BINARY_SHA256")
     worker_token: str = Field(
         default="",
         validation_alias="WORKER_TOKEN",

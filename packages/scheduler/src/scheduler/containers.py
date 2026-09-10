@@ -11,6 +11,7 @@ from typing import Protocol
 
 from compute.capacity_errors import CapacityReservationConflictError
 from compute.request_placement import ComputeCapacityPurchase
+from control.releases import DeploymentReleaseService
 from coordination.wake_signal import WakeSignalPublisher
 from pydantic import JsonValue
 from shared.billing_quotes import ContainerShape
@@ -537,7 +538,9 @@ class SchedulerContainerRequestService:
             return results
         requests = [claim.request for claim in claims]
         claims_by_request_id = {claim.request.container_id: claim for claim in claims}
-        schedulable_workers = _schedulable_workers(self.workers)
+        schedulable_workers = DeploymentReleaseService().admitted_workers(
+            _schedulable_workers(self.workers)
+        )
         workers_by_id = {worker.worker_id: worker for worker in schedulable_workers}
         reserved_by_worker = (
             self.capacity_reservations.reserved_worker_capacity()
@@ -985,6 +988,13 @@ class SchedulerContainerRequestService:
         *,
         now: datetime,
     ) -> SchedulerContainerDispatchResult:
+        if not DeploymentReleaseService().admitted_workers([worker]):
+            return self._requeue_capacity_owner_dispatch(
+                claim,
+                worker_id=worker.worker_id,
+                now=now,
+                reason="worker is waiting for the selected deployment release",
+            )
         request = claim.request
         worker_id = worker.worker_id
         reserved_capacity = self._reserved_capacity_for_request(request)

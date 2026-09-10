@@ -1,374 +1,107 @@
 name: Deploy
 
-# Builds the control-plane images once and records them for one deployment.
-#
-# Nothing here installs anything. Argo CD watches the deployment's branch and
-# reconciles its namespace to it, so a deploy is a commit rather than a command,
-# and what the cluster runs is a fact recorded in git rather than the outcome of
-# whichever workflow ran last.
-#
-# One bake, pushing every control-plane image to ECR in a single invocation. A
-# subset rebuild produces a package-digest mismatch the managed runtime rejects
-# at container start, naming a digest rather than the stale artifact behind it,
-# which is why `deploy/release.py` refuses one and why this does not build images
-# job by job.
-#
-# Images belong to a commit, not to a deployment. They go to one set of
-# repositories shared by every deployment and are tagged by the commit that
-# built them, so recording the same commit for a second deployment is a values
-# file and no build. That is what promotion is: `promote.yml` calls this with
-# the commit staging runs and the images are already there.
-#
-# Nothing here holds a long-lived AWS key or a GitHub one. The job assumes a role
-# through OIDC and pushes with the token GitHub gives it for this repository.
-# Which role is decided by the GitHub environment the job runs under, which is
-# named for the deployment: the role's trust admits that environment and no
-# other, so a staging deploy cannot write prod's bundle.
-
 on:
   workflow_dispatch:
     inputs:
       deployment:
-        description: Which deployment records this commit
         type: choice
-        required: true
         default: prod
-        options:
-          - prod
-          - staging
-      commit:
-        description: |
-          Commit to record. Empty records the commit this workflow runs from.
-          Naming one is how a deployment moves onto a commit that is already
-          built, which is a values commit and no build.
-        type: string
-        default: ""
-      worker_manifest_url:
-        description: Worker release to run. Empty follows a named release, otherwise retains the recorded worker.
-        type: string
-        default: ""
-      host_manifest_url:
-        description: Host agent and AMI release. Empty retains the recorded host pin; required for the first deployment.
-        type: string
-        default: ""
+        options: [prod, staging]
+        required: true
       release_manifest_url:
-        description: |
-          Release this deployment should run. Empty keeps whichever release it
-          already runs. Naming one by hand is how a deployment reaches a release
-          that published successfully and then lost its workflow, which the
-          anonymous registry read at the end of a release does often enough to
-          matter.
+        description: Complete published release to select, including for rollback.
         type: string
-        default: ""
+        required: true
   workflow_call:
     inputs:
       deployment:
-        description: Which deployment records this commit, prod or staging
         type: string
         required: true
-      commit:
-        description: Commit to record. Empty records the caller's commit.
-        type: string
-        default: ""
-      worker_manifest_url:
-        description: Worker release to run. Empty follows a named release, otherwise retains the recorded worker.
-        type: string
-        default: ""
-      host_manifest_url:
-        description: Host agent and AMI release. Empty retains the recorded host pin; required for the first deployment.
-        type: string
-        default: ""
       release_manifest_url:
-        description: |
-          Release this deployment should run. Empty keeps whichever release it
-          already runs, so a code-only deploy does not silently take the fleet's
-          managed capacity away.
         type: string
-        default: ""
+        required: true
 
 permissions:
-  # Write, because recording a build is a commit on the deployment branch. The
-  # branch is in this repository, so the workflow's own token reaches it and no
-  # other credential is involved -- Argo's App credential exists to read the
-  # repository from inside the cluster, which is a different direction.
   contents: write
   id-token: write
 
 concurrency:
-  # A second deploy overtaking the first would leave the deployment on whichever
-  # commit landed last rather than on whichever is newer. Per deployment, so a
-  # staging deploy and a prod one do not queue on each other.
   group: deploy-${{ inputs.deployment }}
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Build images and record them
+  select:
+    name: Record the selected release
     runs-on: ubuntu-latest
-    # The environment is the deployment. It holds AWS_DEPLOY_ROLE_ARN for that
-    # deployment's role, and the role's trust names this environment.
     environment: ${{ inputs.deployment }}
     env:
       DEPLOYMENT: lazycloud-${{ inputs.deployment }}
       BRANCH: ${{ inputs.deployment }}
-      # The path every image repository shares. The cluster's, not the
-      # deployment's: `deploy/platform-core` creates them once under its name.
-      COMMIT: ${{ inputs.commit || github.sha }}
-      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       RELEASE_MANIFEST_URL: ${{ inputs.release_manifest_url }}
-      WORKER_MANIFEST_URL: ${{ inputs.worker_manifest_url }}
-      HOST_MANIFEST_URL: ${{ inputs.host_manifest_url }}
     steps:
-      # A `workflow_call` input is a string, so the choice above does not
-      # constrain a caller. The two names are the two GitHub environments and
-      # the two Terraform states; anything else has nothing behind it.
-      - name: Refuse an unknown deployment
-        if: inputs.deployment != 'prod' && inputs.deployment != 'staging'
+      - name: Validate deployment
         run: |
-          echo "::error::deployment must be prod or staging; received $BRANCH"
-          exit 1
-
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.commit || github.sha }}
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+          case "$BRANCH" in prod|staging) ;; *) exit 1 ;; esac
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v5
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to ECR
-        id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - uses: azure/setup-helm@v4
         with:
           version: v3.16.3
-
-      - name: Snapshot and validate the target configuration
+      - name: Resolve the published source
+        run: |
+          set -euo pipefail
+          uv run --frozen --group workspace python - <<'PY'
+          import os
+          from pathlib import Path
+          from provider_clients.release import fetch_release_manifest
+          manifest = fetch_release_manifest(os.environ["RELEASE_MANIFEST_URL"])
+          Path(os.environ["RUNNER_TEMP"], "release-manifest.json").write_text(manifest.model_dump_json())
+          with open(os.environ["GITHUB_ENV"], "a") as out:
+              out.write(f"COMMIT={manifest.source_revision}\n")
+          PY
+      - name: Render the deployment from the published source
         env:
           INFRASTRUCTURE_CONFIG_URI: ${{ vars.INFRASTRUCTURE_CONFIG_URI }}
           LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: ${{ vars.LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL }}
           LAZYCLOUD_OBJECT_STORE_REGION_NAME: ${{ vars.LAZYCLOUD_OBJECT_STORE_REGION_NAME }}
           LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: ${{ vars.LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE }}
-          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
           set -euo pipefail
-          test -n "$INFRASTRUCTURE_CONFIG_URI"
-          COMMIT="$(git rev-parse HEAD)"
-          echo "COMMIT=$COMMIT" >>"$GITHUB_ENV"
-          uv run --frozen --python 3.12 --group workspace python -m deploy.object_storage download \
+          git fetch --depth=1 origin "$COMMIT"
+          git checkout --detach "$COMMIT"
+          uv run --frozen --group workspace python -m deploy.object_storage download \
             --uri "$INFRASTRUCTURE_CONFIG_URI" --file "$RUNNER_TEMP/infrastructure.json"
-          # Capture the compare-and-swap target before validation or builds.
-          git ls-remote --heads origin "refs/heads/$BRANCH" >"$RUNNER_TEMP/deployment-ref"
+          git ls-remote --heads origin "refs/heads/$BRANCH" > "$RUNNER_TEMP/deployment-ref"
           previous="$(cut -f1 "$RUNNER_TEMP/deployment-ref")"
-          echo "PREVIOUS_DEPLOYMENT=$previous" >>"$GITHUB_ENV"
+          echo "PREVIOUS_DEPLOYMENT=$previous" >> "$GITHUB_ENV"
           previous_args=()
           if [ -n "$previous" ]; then
             git fetch --depth=1 origin "$previous"
-            git show "$previous:deploy/chart/values-deployment.yaml" >"$RUNNER_TEMP/previous-values.yaml"
-            git show "$previous:deploy/chart/values.yaml" >"$RUNNER_TEMP/previous-chart-values.yaml"
+            git show "$previous:deploy/chart/values-deployment.yaml" > "$RUNNER_TEMP/previous-values.yaml"
+            git show "$previous:deploy/chart/values.yaml" > "$RUNNER_TEMP/previous-chart-values.yaml"
             previous_args=(--previous-values "$RUNNER_TEMP/previous-values.yaml" --previous-chart-values "$RUNNER_TEMP/previous-chart-values.yaml")
           fi
-          uv run --frozen --python 3.12 --group workspace python deploy/chart_values.py \
+          uv run --frozen --group workspace python -m deploy.chart_values \
             --infrastructure "$RUNNER_TEMP/infrastructure.json" \
             --environment "deploy/chart/environments/$BRANCH.yaml" \
-            --deployment "$DEPLOYMENT" --tag "$COMMIT" \
-            --release-manifest-url "$RELEASE_MANIFEST_URL" \
-            --worker-manifest-url "$WORKER_MANIFEST_URL" \
-            --host-manifest-url "$HOST_MANIFEST_URL" \
-            "${previous_args[@]}" --preflight --output "$RUNNER_TEMP/deployment-preflight.yaml"
-          uv run --frozen --python 3.12 --group workspace python - <<'PY'
-          import os
-          from pathlib import Path
-          import yaml
-          values = yaml.safe_load((Path(os.environ["RUNNER_TEMP"]) / "deployment-preflight.yaml").read_text())
-          if values["image"]["registry"] != os.environ["ECR_REGISTRY"]:
-              raise SystemExit("Infrastructure registry does not match the deployment AWS account")
-          with open(os.environ["GITHUB_ENV"], "a") as out:
-              out.write(f"IMAGE_PREFIX={values['image']['repositoryPrefix']}\n")
-              out.write(f"RELEASE_MANIFEST_URL={values['runtime']['LAZYCLOUD_RELEASE_MANIFEST_URL']}\n")
-              out.write(f"WORKER_MANIFEST_URL={values['runtime']['LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL']}\n")
-              out.write(f"HOST_MANIFEST_URL={values['runtime']['LAZYCLOUD_RELEASE_HOST_MANIFEST_URL']}\n")
-          PY
-
-      - name: Authenticate to the public release registry
-        uses: aws-actions/amazon-ecr-login@v2
-        env:
-          AWS_REGION: us-east-1
-          AWS_DEFAULT_REGION: us-east-1
-        with:
-          registry-type: public
-
-      - name: Verify the selected release artifacts
-        run: |
-          set -euo pipefail
-          uv run --frozen --python 3.12 --group workspace python - <<'PY'
-          import os
-          import re
-          import subprocess
-          from pathlib import Path
-          from provider_clients.release import fetch_release_manifest, materialize_agent_artifact, validate_connection_template
-          from shared.managed_runtime_integrity import MANAGED_PACKAGE_NAMES
-          manifest = fetch_release_manifest(os.environ["RELEASE_MANIFEST_URL"])
-          validate_connection_template(manifest)
-          worker = fetch_release_manifest(os.environ["WORKER_MANIFEST_URL"])
-          host = fetch_release_manifest(os.environ["HOST_MANIFEST_URL"])
-          if not re.fullmatch(r"[0-9a-f]{40}", manifest.source_revision):
-              raise SystemExit("Selected release does not identify its source commit")
-          subprocess.run(["git", "fetch", "--depth=1", "origin", manifest.source_revision], check=True)
-          packages = [f"packages/{name}" for name in MANAGED_PACKAGE_NAMES]
-          comparison = subprocess.run([
-              "git", "diff", "--exit-code", "--name-only", manifest.source_revision, "HEAD", "--", *packages,
-          ])
-          if comparison.returncode:
-              raise SystemExit("Selected control-plane release has different managed packages; run Ship to publish matching artifacts")
-          materialize_agent_artifact(host, into=Path(os.environ["RUNNER_TEMP"]) / "agent-artifact")
-          subprocess.run(["docker", "buildx", "imagetools", "inspect", worker.container_worker_image], check=True)
-          print(f"Verified release {manifest.release_version}")
-          PY
-
-      # An ECR tag is immutable, so a deploy re-run for a commit whose images
-      # are already published cannot push them again. Recording the values is
-      # still the point of the run: a deployment moves onto a new release or
-      # onto a commit another deployment already built, and that deploy has
-      # nothing to build.
-      #
-      # All or nothing. A tag present in some repositories and absent in others
-      # is a half-published build, and completing it would put images from two
-      # trees behind one tag -- the package-digest mismatch the managed runtime
-      # rejects at container start, which names a digest rather than the deploy
-      # that produced it.
-      - name: Check whether this commit is already published
-        id: published
-        run: |
-          set -euo pipefail
-          present=0
-          missing=0
-          for repository in api scheduler tunnel-gateway cache-server worker-bootstrap cli database-bootstrap; do
-            if aws ecr describe-images \
-              --repository-name "$IMAGE_PREFIX/$repository" \
-              --image-ids "imageTag=$COMMIT" >"$RUNNER_TEMP/image.json" 2>"$RUNNER_TEMP/ecr-error"; then
-              present=$((present + 1))
-            elif grep -q 'ImageNotFoundException' "$RUNNER_TEMP/ecr-error"; then
-              missing=$((missing + 1))
-              echo "not published: $IMAGE_PREFIX/$repository:$COMMIT"
-            else
-              cat "$RUNNER_TEMP/ecr-error" >&2
-              exit 1
-            fi
-          done
-          if [ "$present" -gt 0 ] && [ "$missing" -gt 0 ]; then
-            echo "::error::$present image(s) already published at $COMMIT and $missing missing; an immutable tag cannot be completed. Deploy a new commit."
-            exit 1
-          fi
-          if [ "$missing" -gt 0 ]; then
-            echo "build=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "build=false" >>"$GITHUB_OUTPUT"
-            echo "every image is already published at $COMMIT; recording values only"
-          fi
-
-      - name: Build and push every control-plane image
-        if: steps.published.outputs.build == 'true'
-        uses: docker/bake-action@v7
-        with:
-          source: .
-          files: docker/bake.hcl
-          targets: control-plane
-          push: true
-          set: |
-            api.cache-from=type=gha,scope=deploy-control-plane
-            api.cache-to=type=gha,mode=max,scope=deploy-control-plane
-            scheduler.cache-from=type=gha,scope=deploy-control-plane
-            scheduler.cache-to=type=gha,mode=max,scope=deploy-control-plane
-            cache-server.cache-from=type=gha,scope=deploy-control-plane
-            cache-server.cache-to=type=gha,mode=max,scope=deploy-control-plane
-            worker-bootstrap.cache-from=type=gha,scope=deploy-control-plane
-            worker-bootstrap.cache-to=type=gha,mode=max,scope=deploy-control-plane
-            cli.cache-from=type=gha,scope=deploy-control-plane
-            cli.cache-to=type=gha,mode=max,scope=deploy-control-plane
-            database-bootstrap.cache-from=type=gha,scope=deploy-control-plane
-            database-bootstrap.cache-to=type=gha,mode=max,scope=deploy-control-plane
-            tunnel-gateway.cache-from=type=gha,scope=deploy-network
-            tunnel-gateway.cache-to=type=gha,mode=max,scope=deploy-network
-            api.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/api:${{ env.COMMIT }}
-            scheduler.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/scheduler:${{ env.COMMIT }}
-            tunnel-gateway.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/tunnel-gateway:${{ env.COMMIT }}
-            cache-server.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/cache-server:${{ env.COMMIT }}
-            worker-bootstrap.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/worker-bootstrap:${{ env.COMMIT }}
-            cli.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/cli:${{ env.COMMIT }}
-            database-bootstrap.tags=${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_PREFIX }}/database-bootstrap:${{ env.COMMIT }}
-
-      - name: Verify all control-plane images before publication
-        run: |
-          set -euo pipefail
-          for repository in api scheduler tunnel-gateway cache-server worker-bootstrap cli database-bootstrap; do
-            aws ecr describe-images --repository-name "$IMAGE_PREFIX/$repository" \
-              --image-ids "imageTag=$COMMIT" --query 'imageDetails[0].imageDigest' --output text
-          done
-
-      - name: Resolve the network artifact and validate the deployment
-        env:
-          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
-        run: |
-          set -euo pipefail
-          network_image="$ECR_REGISTRY/$IMAGE_PREFIX/tunnel-gateway"
-          docker buildx imagetools inspect --raw "$network_image:$COMMIT" >"$RUNNER_TEMP/network-index.json"
-          network_digest="$(jq -er '
-            [.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")]
-            | if length == 1 then .[0].digest else error("Expected one executable linux/amd64 network manifest") end
-          ' "$RUNNER_TEMP/network-index.json")"
-          docker buildx imagetools inspect "$network_image@$network_digest" >/dev/null
-          previous_args=()
-          if [ -n "$PREVIOUS_DEPLOYMENT" ]; then
-            previous_args=(--previous-values "$RUNNER_TEMP/previous-values.yaml" --previous-chart-values "$RUNNER_TEMP/previous-chart-values.yaml")
-          fi
-          uv run --frozen --python 3.12 --group workspace python deploy/chart_values.py \
-            --infrastructure "$RUNNER_TEMP/infrastructure.json" \
-            --environment "deploy/chart/environments/$BRANCH.yaml" \
-            --deployment "$DEPLOYMENT" --tag "$COMMIT" --network-digest "$network_digest" \
-            --release-manifest-url "$RELEASE_MANIFEST_URL" \
-            --worker-manifest-url "$WORKER_MANIFEST_URL" \
-            --host-manifest-url "$HOST_MANIFEST_URL" \
+            --deployment "$DEPLOYMENT" --manifest "$RUNNER_TEMP/release-manifest.json" \
             "${previous_args[@]}" --output "$RUNNER_TEMP/values-deployment.yaml"
           helm lint deploy/chart --strict -f "$RUNNER_TEMP/values-deployment.yaml"
           helm template "$DEPLOYMENT" deploy/chart --namespace "$DEPLOYMENT" \
-            -f "$RUNNER_TEMP/values-deployment.yaml" >"$RUNNER_TEMP/rendered.yaml"
-
-      - name: Record it on the deployment branch
+            -f "$RUNNER_TEMP/values-deployment.yaml" > "$RUNNER_TEMP/rendered.yaml"
+      - name: Record the release for Argo CD
         run: |
           set -euo pipefail
           git config user.name "lazycloud-deploy"
           git config user.email "deploy@lazycloud.dev"
-
-          # Branched from this commit rather than merged into: the deployment
-          # branch is the source that produced the images plus the file naming
-          # them, so it can never describe a tree the tag was not built from.
-          git checkout -B "${BRANCH}" "${COMMIT}"
-          # Argo reads `deploy/chart` from this branch and nothing else, so the
-          # workflows are carried here for no reader. They are not free to
-          # carry: a deploy of any commit that touched one makes this push a
-          # workflow rewrite, which the workflow token is refused — at the push,
-          # after every image is built, and with no way to grant it, because
-          # `workflows` is not a permission a job can ask for.
+          git checkout -B "$BRANCH" "$COMMIT"
           git rm -r --quiet --cached .github
           cp "$RUNNER_TEMP/values-deployment.yaml" deploy/chart/values-deployment.yaml
           git add deploy/chart/values-deployment.yaml
-          git commit -m "Run ${COMMIT}"
+          git commit -m "Select release from $COMMIT"
           git push --force-with-lease="refs/heads/$BRANCH:$PREVIOUS_DEPLOYMENT" origin "HEAD:refs/heads/$BRANCH"
-          echo "${DEPLOYMENT} now records ${COMMIT}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "$DEPLOYMENT selected $RELEASE_MANIFEST_URL. Argo CD owns rollout; release status reports runtime completion." >> "$GITHUB_STEP_SUMMARY"

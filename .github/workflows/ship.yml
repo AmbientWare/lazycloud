@@ -27,14 +27,6 @@ on:
         description: Source commit already merged into main. Empty uses this workflow's commit.
         type: string
         default: ""
-      worker_manifest_url:
-        description: Worker release to retain during an ordered control-plane upgrade. Empty uses the new release.
-        type: string
-        default: ""
-      host_manifest_url:
-        description: Host agent and AMI release. Empty preserves the deployed host pin.
-        type: string
-        default: ""
       bump:
         description: Which part of the version this release changes
         type: choice
@@ -212,15 +204,23 @@ jobs:
           # deploy that follows.
           skip-existing: true
 
+  platform:
+    needs: version
+    uses: ./.github/workflows/build-platform.yml
+    secrets: inherit
+    with:
+      commit: ${{ needs.version.outputs.commit }}
+
   release:
     name: Publish the release
     # Host images are published separately. This job only builds release assets.
-    needs: [version, python-package]
+    needs: [version, python-package, platform]
     uses: ./.github/workflows/release.yml
     secrets: inherit
     with:
       version: ${{ needs.version.outputs.version }}
       commit: ${{ needs.version.outputs.commit }}
+      platform_images: ${{ needs.platform.outputs.images }}
 
   # Straight to prod, until staging runs. Then a release lands on staging here
   # and `promote.yml` carries it to prod once it has been looked at.
@@ -231,7 +231,4 @@ jobs:
     secrets: inherit
     with:
       deployment: prod
-      commit: ${{ needs.version.outputs.commit }}
       release_manifest_url: ${{ needs.release.outputs.manifest_url }}
-      worker_manifest_url: ${{ inputs.worker_manifest_url }}
-      host_manifest_url: ${{ inputs.host_manifest_url }}

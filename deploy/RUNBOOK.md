@@ -1,21 +1,16 @@
 # Operator Runbook
 
-What you cannot derive from the code. Every command here was run against a live
-stack on 2026-07-31; where a section covers work that has not landed, it says so
-rather than guessing.
+Commands for starting, inspecting, and recovering a deployment.
 
 ## Bring-up
 
 ```bash
 cd /path/to/lazycloud
-COMPOSE_PROFILES='*' docker compose build      # all source-bearing images together
-docker compose up -d
-until [ "$(docker compose ps --format '{{.Health}}' control-plane | head -1)" = healthy ]; do sleep 5; done
+uv run --frozen --group workspace python -m deploy.release
 ```
 
-Build **every** source-bearing image in one command. Building a subset produces
-a package-digest mismatch that the managed runtime rejects at container start,
-and the error names the digest rather than the stale image.
+The command builds the Compose images, reports service health, and activates the
+release after the platform is healthy.
 
 ### Billing, before the first sign-in
 
@@ -66,42 +61,17 @@ command refuses beyond that rather than freezing a cost no invoice can carry.
 
 ## Publishing a release
 
-For a local connected-AWS stack, explicitly retain its host release:
+Build and activate local Compose images:
 
 ```bash
-uv run python deploy/release.py \
-  --bucket "$OBJECT_STORE_RELEASE_BUCKET" \
-  --public-base-url https://releases.lazycloud.dev \
-  --worker-repository <registry>/lazycloud-container-worker \
-  --host-manifest-url "$LAZYCLOUD_RELEASE_HOST_MANIFEST_URL" \
-  --cpu-ami us-east-1=ami-<id> \
-  --gpu-ami us-east-1=ami-<id>
+uv run --group workspace python -m deploy.release
 ```
 
-It refuses a dirty tree, because a version label that names a revision the
-artifacts do not contain is worse than no label. It builds every image and the
-agent executable from that one revision, publishes the worker image and the
-release, and updates the stack's release pins in `.env`.
-
-`LAZYCLOUD_RELEASE_MANIFEST_URL` and `LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL`
-select the new release. `LAZYCLOUD_RELEASE_HOST_MANIFEST_URL` retains the supplied
-host release, which owns the agent executable and AMIs. All three URLs are
-required for managed capacity. Publishing an agent artifact does not select it
-for an existing host.
-
-`--cpu-ami` names the base image managed nodes boot. It is not optional for a
-deployment that runs managed capacity: a release naming no AMI produces a control
-plane that refuses to start rather than a pool that launches nothing.
-
-`--gpu-ami` names the GPU node image from the same host recipe. It is optional. A
-release without one simply offers no GPU instance types, and CPU capacity is
-unaffected. Supply it and every GPU type in the catalog becomes launchable in that
-region, because one image serves every card: the driver branch is unified across
-Turing through Blackwell.
-
-Neither flag is verified against AWS during a release. `verify` can check that the
-AMIs exist, but only when run with `--aws-cli-verify`, which neither this command
-nor the workflow passes; the recorded ids are validated by pattern alone.
+It derives services from Compose, builds their images, restarts the stack, and
+polls container state, health and image identity. Once the platform is healthy it
+writes `.lazycloud-release/active.json`, mounted by API and scheduler. Worker
+registration uses the built image ID from `.env.release`. Both files are local
+state. The same release admission code runs in Compose and Kubernetes.
 
 ### Shipping from Actions
 
@@ -119,9 +89,20 @@ A release rebuilds only the application artifact whose inputs changed.
 and decides whether to rebuild the worker image and agent binary. Host images
 come from the separately dispatched Node Images workflow. Release resolves its
 current catalog and refuses to continue if the catalog's recipe does not match
-the checked-out revision. Worker changes never start an AMI bake. Routine Ship
-retains the deployed host manifest. Supply `host_manifest_url` only for an
-intentional host upgrade or the first deployment.
+the checked-out revision. Worker changes never start an AMI bake. The complete
+manifest includes that catalog and retains unchanged worker and agent artifact
+identities. Ship builds platform targets from Docker Bake, resumes existing
+commit images after a partial push, then publishes the complete manifest.
+
+Argo applies the chart and activates the release after its health checks pass.
+Agents receive the selected worker and agent artifacts through the gateway.
+Managed hosts replace through their existing controller. Joined agents need the
+supervised `install-service` installation once to support automatic binary updates.
+An older agent without the update protocol also needs that initial upgrade.
+Existing work drains; long-running pods remain and can delay replacement.
+
+To roll back, dispatch Deploy with the earlier complete manifest URL. Deployment
+generations increase even when the selected version decreases.
 Both PyPI projects accept the workflow through trusted publishing, configured on
 each project as repository `AmbientWare/lazycloud`, workflow `ship.yml`,
 environment `release`. No token is stored anywhere. The projects themselves were
@@ -287,8 +268,8 @@ commit and a rollback is a revert.
 # a build against it. Prod directly, until staging runs.
 gh workflow run ship.yml -f bump=patch
 
-# Code only, onto the release the deployment already runs.
-gh workflow run deploy.yml -f deployment=prod
+# Select an already published complete release, including for rollback.
+gh workflow run deploy.yml -f deployment=prod -f release_manifest_url=<manifest-url>
 
 # Prod onto the commit and release staging runs. No build.
 gh workflow run promote.yml
@@ -298,13 +279,12 @@ kubectl -n argocd patch application lazycloud-prod --type merge \
   -p '{"operation":{"sync":{"revision":"prod"}}}'
 ```
 
-Deploy reads the selected release from the deployment branch and carries it
-forward when no new release is requested. A missing release is an error before
-builds start. Release manifests are immutable.
+Deploy selects the supplied complete release. Ship supplies the URL automatically.
+Release manifests are immutable; incomplete publication cannot advance the deployment.
 
 Images are built once per commit into repositories every deployment shares,
 so `Promote` finds every image already published and writes prod's values
-file. What crosses from staging is the image tag and the release URL; prod's
+file. What crosses from staging is one release URL; prod's
 tunnel, secrets and database are rendered from prod's own infrastructure descriptor.
 
 CI runs Helm validation and rendering, but only Argo installs workloads.

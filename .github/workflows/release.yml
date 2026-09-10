@@ -23,6 +23,10 @@ on:
         description: The version this release is published under, as cut by ship.yml.
         type: string
         required: true
+      platform_images:
+        description: Verified platform image references from this source commit.
+        type: string
+        required: true
     outputs:
       manifest_url:
         description: Public URL of the published manifest, for a deployment to name.
@@ -175,7 +179,7 @@ jobs:
           path = os.path.join(directory, "lazycloud-agent-linux-amd64")
           manifest = {
               "schema_version": 1,
-              "version": version,
+              "version": "${{ steps.plan.outputs.previous_agent_version }}",
               "artifacts": [{
                   "os": "linux",
                   "arch": "amd64",
@@ -217,12 +221,15 @@ jobs:
           echo "worker image: ${image}"
 
       - name: Stage immutable connected AWS release bundle
+        env:
+          PLATFORM_IMAGES: ${{ inputs.platform_images }}
         run: >-
           uv run --group workspace python -m deploy.aws-release-assets.release stage
           --version "${{ inputs.version }}"
           --agent-version-dir
           "dist/agent-binarys/${{ inputs.version }}"
           --worker-image "${{ steps.worker.outputs.image }}"
+          --platform-images "$PLATFORM_IMAGES"
           --bucket "${{ vars.OBJECT_STORE_RELEASE_BUCKET }}"
           --public-base-url "${{ vars.RELEASE_PUBLIC_BASE_URL }}"
           --cpu-ami-ids '${{ steps.images.outputs.cpu_ami_ids }}'

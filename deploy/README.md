@@ -1,16 +1,16 @@
 # Deployment
 
-Deploy builds all control-plane images for the selected commit. Helm records the
-network image's executable manifest digest in `image.networkDigest`; the other
-images use immutable commit tags. An unchanged network image keeps the WireGuard
+Ship publishes the platform images from Docker Bake and records their executable
+digests in one complete release manifest. An unchanged network image keeps the WireGuard
 Deployment unchanged during an API release. Changes to its source, dependencies,
 or system packages select a new digest automatically. Ship and Promote use the
 same selection, with no separate network release input or Terraform apply.
 
-CI validates infrastructure, release pins, and database pool budgets before the
-build. After the image exists, it resolves the single linux/amd64 runtime manifest
-and validates the completed Helm values before recording the deployment. Missing
-or ambiguous artifacts fail the deployment rather than retaining stale code.
+Deploy renders Helm from that manifest and the environment's infrastructure descriptor.
+Argo rolls out the chart, then publishes the active-release ConfigMap after its
+health checks pass. API and scheduler use its mounted file to gate worker admission.
+Use `uv run --group workspace python -m deploy.release` to build and activate local
+Compose images through the same runtime admission contract.
 
 Root `compose.yaml` is the canonical local stack. This file is the operator
 runbook for it; the subdirectory READMEs cover individual services and assets.
@@ -31,7 +31,7 @@ Stripe fields with development credentials.
 Start the local platform with:
 
 ```sh
-docker compose up -d --build control-plane scheduler container-worker wireguard-platform otel-collector
+uv run --frozen --group workspace python -m deploy.release
 ```
 
 Inspect `docker compose ps`
@@ -147,7 +147,7 @@ same SDK transport for discovery and stack creation.
 
 ### Activation
 
-`docker compose up` is the only activation path. The control plane and scheduler
+`python -m deploy.release` builds and activates a local source release. The control plane and scheduler
 mount `LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR` (default `~/.lazycloud/compose-aws`) at
 `/run/lazycloud/aws` and read the role chain from it, so a connected stack
 differs from a local one by that variable alone.
@@ -161,7 +161,7 @@ connection later.
 ### Recreating the control plane
 
 ```sh
-docker compose up -d --build control-plane wireguard-platform
+uv run --frozen --group workspace python -m deploy.release
 docker compose ps control-plane wireguard-platform tunnel-gateway
 ```
 

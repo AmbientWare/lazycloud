@@ -63,6 +63,7 @@ from shared.identity import TokenKind, WorkspaceStatus
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
+from tests.releases import select_worker_release
 from tests.workspaces import administrator_credential, owned_workspace, workspace_owner_user_id
 from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
@@ -274,10 +275,8 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
     workspace_id = _workspace_id(services)
     pool = MachinePool("worker-image-update")
     unit = services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
-    gateway = replace(
-        _gateway(services),
-        agent_worker_image="registry.test/worker@sha256:old",
-    )
+    gateway = _gateway(services)
+    select_worker_release("registry.test/worker@sha256:old")
     assert isinstance(gateway.scheduler_workers, RedisSchedulerWorkerRepository)
     assert isinstance(gateway.scheduler_containers, RedisSchedulerContainerRepository)
     scheduler_workers = gateway.scheduler_workers
@@ -320,14 +319,11 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
         gateway.scheduler_pool_state_repository,
     )
     pool_states.refresh()
-    gateway = replace(
-        gateway,
-        agent_worker_image="registry.test/worker@sha256:new",
-    )
+    select_worker_release("registry.test/worker@sha256:new")
     held = gateway.stream_agent(
         StreamAgentRequest(agent_token=joined.agent_token, active_worker_images=current_image)
     )
-    assert held.slots[0].status is AgentWorkerSlotStatus.Active
+    assert held.slots[0].status is AgentWorkerSlotStatus.Draining
 
     scheduler_workers.add_worker(
         SchedulerWorkerRecord(

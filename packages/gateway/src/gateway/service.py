@@ -25,7 +25,6 @@ from compute.agent_control import (
     WorkerTokenRecord,
     agent_install_command,
     agent_machine_worker_id,
-    agent_worker_image,
     build_agent_bootstrap_config,
     hash_compute_token,
     hash_machine_fingerprint,
@@ -68,6 +67,7 @@ from compute.telemetry import (
 from control.apps import AppService
 from control.deployment_resources import DeploymentResourceService, client_manifest_resource
 from control.deployments import DeploymentService
+from control.releases import DeploymentReleaseService
 from control.service import ControlPlaneService, StubKind
 from coordination.redis_client import AsyncRedisClient
 from database.context import ServiceContext
@@ -92,7 +92,7 @@ from database.types import DatabaseSession
 from execution.containers.service import ContainerService
 from execution.functions.service import FunctionControlService
 from execution.tasks import TaskService
-from identity.auth import AuthService
+from identity.auth import AuthorizationDeniedError, AuthService
 from identity.authz import AuthzRequirement
 from identity.signatures import sign_payload
 from networking.async_http import AsyncBackendHttpClient, AsyncBackendHttpError
@@ -128,7 +128,7 @@ from scheduler.workers import (
     SchedulerWorkerAdminService,
     SchedulerWorkerContainerRepository,
 )
-from shared.app_identity import AGENT_NAME, CONTAINER_WORKER_IMAGE
+from shared.app_identity import AGENT_NAME
 from shared.app_slug import app_slug_or_default, validate_app_slug
 from shared.compute_enrollment import (
     AgentCapacityState,
@@ -205,6 +205,7 @@ from shared.http.objects import (
     PutObjectRequest,
     PutObjectResponse,
 )
+from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
 from shared.identity import AuthScope, TokenKind, TokenStatus
 from shared.logs import LogEntry
 from shared.objects import ObjectRecord
@@ -413,10 +414,6 @@ class GatewayControlService:
     scheduler_maintenance: SchedulerWorkerMaintenance | None = None
     route_authenticator: BackendRouteAuthenticator | None = None
     agent_cluster_name: str = AGENT_NAME
-    agent_worker_image_registry: str = ""
-    agent_worker_image_name: str = CONTAINER_WORKER_IMAGE
-    agent_worker_image_tag: str = "local"
-    agent_worker_image: str = ""
     agent_artifact_version: str = ""
     agent_sha256_by_arch: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
     async_http_client: AsyncBackendHttpClient | None = None
@@ -2296,6 +2293,30 @@ class GatewayControlService:
     ) -> None:
         self.route_prewarmer.prewarm_route(route, agent_state)
 
+    def agent_release(self, request: AgentReleaseRequest) -> AgentReleaseResponse:
+        state = self._agent_state_for_token(request.agent_token)
+        if state is None:
+            raise AuthorizationDeniedError("agent credential is no longer current")
+        release = DeploymentReleaseService().active()
+        if release is None:
+            return AgentReleaseResponse(generation=request.generation)
+        if request.generation > release.generation:
+            raise ConflictError("agent has observed a newer deployment generation")
+        unit = self.unit_state_coordinator.unit_by_capacity_owner(
+            state.capacity_owner_id, workspace_id=state.workspace_id
+        )
+        worker_id = agent_machine_worker_id(state.machine_id)
+        return AgentReleaseResponse(
+            generation=release.generation,
+            agent=release.target.agent,
+            update_agent=(
+                unit.provider == "agent"
+                and release.target.agent is not None
+                and request.binary_sha256 != release.target.agent.sha256
+                and not self._worker_has_started_containers(worker_id)
+            ),
+        )
+
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse:
         try:
             provided = self._agent_state_for_token(request.agent_token)
@@ -2345,6 +2366,7 @@ class GatewayControlService:
                 response_state,
                 billing_owner=billing_owner_for_unit(bootstrap_unit),
                 active_worker_images=request.active_worker_images,
+                agent_binary_sha256=request.binary_sha256,
                 rollout_fleet_size=max(
                     bootstrap_unit.desired_machines,
                     bootstrap_unit.observed_machines,
@@ -2461,6 +2483,7 @@ class GatewayControlService:
         billing_owner: UsageBillingOwner,
         active_worker_images: Mapping[str, str],
         rollout_fleet_size: int,
+        agent_binary_sha256: str,
     ) -> list[ComputeAgentWorkerSlotState]:
         slots = self.compute_states.list_agent_worker_slot_states(
             agent_state.workspace_id,
@@ -2469,15 +2492,25 @@ class GatewayControlService:
         )
         worker = self._agent_machine_worker(agent_state)
         worker_id = agent_machine_worker_id(agent_state.machine_id)
+        existing = next((slot for slot in slots if slot.worker_id == worker_id), None)
 
-        target_image = self.agent_worker_image or agent_worker_image(
-            self.agent_worker_image_registry,
-            self.agent_worker_image_name,
-            self.agent_worker_image_tag,
+        release = DeploymentReleaseService().active()
+        if release is None:
+            return slots
+        target_image = release.target.worker_image
+        agent_current = (
+            release.target.agent is None or agent_binary_sha256 == release.target.agent.sha256
         )
         slot_status = AgentWorkerSlotStatus.Active
         active_image = active_worker_images.get(worker_id, "")
-        image_revision = hashlib.sha256(target_image.encode("utf-8")).hexdigest()[:24]
+        image_revision = str(release.generation)
+        claimed = False
+        continuing_rollout = (
+            existing is not None
+            and bool(existing.metadata.get("release_rollout_generation"))
+            and worker is not None
+            and worker.status is SchedulerWorkerStatus.Draining
+        )
         if (
             worker is not None
             and active_image == target_image
@@ -2488,10 +2521,13 @@ class GatewayControlService:
                 worker.worker_id,
                 image_revision,
             )
-        if worker is not None and active_image and active_image != target_image:
+        if (
+            worker is not None
+            and active_image
+            and (active_image != target_image or not agent_current or continuing_rollout)
+        ):
             if worker.status is SchedulerWorkerStatus.Draining:
                 slot_status = AgentWorkerSlotStatus.Draining
-            claimed = False
             if self._ensure_worker_rollout_capacity(worker, fleet_size=rollout_fleet_size):
                 worker, claimed = self._claim_worker_image_rollout(
                     worker,
@@ -2511,7 +2547,9 @@ class GatewayControlService:
                     else AgentWorkerSlotStatus.Pending
                 )
 
-        existing = next((slot for slot in slots if slot.worker_id == worker_id), None)
+        if not agent_current:
+            slot_status = AgentWorkerSlotStatus.Draining
+
         token_plan = self._agent_worker_token(
             agent_state,
             worker_id=worker_id,
@@ -2546,6 +2584,9 @@ class GatewayControlService:
                     **slot_plan.slot.metadata,
                     "worker_token": slot_plan.worker_token,
                     "observed_worker_image": active_image,
+                    "release_rollout_generation": (
+                        release.generation if claimed or continuing_rollout else 0
+                    ),
                 }
             }
         )
@@ -2689,7 +2730,7 @@ class GatewayControlService:
                     except SchedulerRepositoryError:
                         return current, False
                     else:
-                        minimum_available = max(fleet_size - max_unavailable, 1)
+                        minimum_available = max(fleet_size - max_unavailable, 0)
                         if pool_state.available_workers - 1 < minimum_available:
                             return current, False
                 elif current.status is not SchedulerWorkerStatus.Draining:

@@ -10,6 +10,7 @@ dependencies = [
     "foundation",
     "identity",
     "pydantic>=2,<3",
+    "pydantic-settings>=2.4,<3",
 ]
 
 [build-system]

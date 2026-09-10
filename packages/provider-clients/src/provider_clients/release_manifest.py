@@ -16,8 +16,9 @@ from urllib.parse import urlparse
 
 from provider_aws import AwsAccountConnectionTemplatePublication
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from shared.releases import AgentArtifact, ReleaseTarget
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 AMI_PATTERN = re.compile(r"^ami-[0-9a-f]{8,17}$")
 VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 BUCKET_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
@@ -53,6 +54,7 @@ class AwsReleaseManifest(ReleaseModel):
     agent_artifact_version: str
     agent_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     container_worker_image: str = Field(pattern=WORKER_IMAGE_PATTERN.pattern)
+    platform_images: dict[str, str] = Field(min_length=1)
     capacity_cpu_ami_ids: dict[str, str] = Field(default_factory=dict)
     capacity_gpu_ami_ids: dict[str, str] = Field(default_factory=dict)
     objects: list[ReleaseObject]
@@ -74,6 +76,19 @@ class AwsReleaseManifest(ReleaseModel):
     @property
     def agent_artifact_sha256_by_arch(self) -> dict[str, str]:
         return {"amd64": self.agent_artifact_sha256}
+
+    @property
+    def target(self) -> ReleaseTarget:
+        return ReleaseTarget(
+            version=self.release_version,
+            source_revision=self.source_revision,
+            worker_image=self.container_worker_image,
+            agent=AgentArtifact(
+                url=self.agent_artifact_object.public_url,
+                sha256=self.agent_artifact_sha256,
+                size_bytes=self.agent_artifact_object.size_bytes,
+            ),
+        )
 
     def _connection_template_objects(self) -> list[ReleaseObject]:
         suffix = f"/connection-templates/{self.connection_template_sha256}/template.json"
@@ -117,8 +132,12 @@ class AwsReleaseManifest(ReleaseModel):
                 if not AMI_PATTERN.fullmatch(ami_id):
                     msg = f"AWS release {catalog_name} AMI catalog has an invalid AMI ID"
                     raise ValueError(msg)
-        if self.agent_artifact_version != self.release_version:
-            raise ValueError("agent artifact version must equal the AWS release version")
+        if any(
+            not WORKER_IMAGE_PATTERN.fullmatch(image) for image in self.platform_images.values()
+        ):
+            raise ValueError("platform images must use immutable digests")
+        if not re.fullmatch(r"[0-9a-f]{40}", self.source_revision):
+            raise ValueError("release must identify its source commit")
         if not BUCKET_NAME_PATTERN.fullmatch(self.bucket):
             raise ValueError("invalid AWS release bucket name")
         object_keys = [release_object.object_key for release_object in self.objects]

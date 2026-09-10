@@ -1519,6 +1519,7 @@ def _enters_lease(repository: RedisCapacityReservationRepository) -> bool:
 
 def _worker(capacity_owner_id: str, *, created_at: datetime) -> SchedulerWorkerRecord:
     return SchedulerWorkerRecord(
+        runtime_image="container-worker:local",
         worker_id=f"worker-{capacity_owner_id[:4]}",
         pool=MachinePool("default"),
         capacity_owner_id=capacity_owner_id,
