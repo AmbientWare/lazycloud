@@ -178,7 +178,7 @@ function AddCloudMenu({
   if (!connection && !connectedCloudEnabled) {
     return (
       <Button size="sm" onClick={onUpgrade}>
-        Upgrade to Team
+        Upgrade to Business
       </Button>
     );
   }
