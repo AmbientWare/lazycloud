@@ -1,5 +1,9 @@
 # LazyCloud
 
+Proprietary software. All rights reserved. Use, modification, redistribution,
+and hosting require written permission. See [LICENSE](LICENSE) for the terms
+and third-party exceptions.
+
 LazyCloud is a Python-first toolkit for defining, registering, and running
 workloads with local development semantics that mirror remote execution
 workflows.
