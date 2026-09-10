@@ -501,6 +501,7 @@ def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
         )
     resolver = WorkspaceComputeProviderResolver(
         connections=lambda _workspace: (),
+        platform_connections=tuple,
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
         instance_hourly_micros={},
@@ -568,6 +569,7 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
     )
     resolver = WorkspaceComputeProviderResolver(
         connections=lambda _workspace: (),
+        platform_connections=tuple,
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
         instance_hourly_micros={},
