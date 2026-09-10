@@ -2,13 +2,14 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { creditBalanceQueryOptions, purchaseCredit } from "@/lib/queries/billing";
 import { formatCostNanos } from "@/lib/money";
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 
-export function PrepaidCredit() {
+import { AmountSelect } from "./AmountSelect";
+
+export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: boolean }) {
   const pricing = useQuery(pricingCatalogQueryOptions());
   const balance = useQuery(creditBalanceQueryOptions());
   const [amount, setAmount] = useState<string | null>(null);
@@ -19,6 +20,7 @@ export function PrepaidCredit() {
   const dollars = amount ?? (terms ? String(terms.minimum_cents / 100) : "");
   const cents = Math.round(Number(dollars) * 100);
   const valid =
+    paymentMethodOnFile &&
     terms &&
     /^\d+(\.\d{1,2})?$/.test(dollars) &&
     cents >= terms.minimum_cents &&
@@ -60,15 +62,17 @@ export function PrepaidCredit() {
         <label htmlFor={inputId} className="text-sm">
           Amount in USD
         </label>
-        <div className="flex gap-2">
-          <Input
+        <div className="flex items-start gap-2">
+          <AmountSelect
             id={inputId}
-            className="min-w-0"
-            inputMode="decimal"
+            label="Amount in USD"
             value={dollars}
-            disabled={!terms || purchase.isPending}
-            onChange={(event) => {
-              setAmount(event.target.value);
+            presets={[5, 10, 20, 50, 100, 250, 500, 1000]}
+            minimum={terms ? terms.minimum_cents / 100 : undefined}
+            maximum={terms ? terms.maximum_cents / 100 : undefined}
+            disabled={!paymentMethodOnFile || !terms || purchase.isPending}
+            onChange={(value) => {
+              setAmount(value);
               setRequestKey(crypto.randomUUID());
               purchase.reset();
             }}

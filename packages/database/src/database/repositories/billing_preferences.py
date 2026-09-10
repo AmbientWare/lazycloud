@@ -93,7 +93,6 @@ class BillingPreferencesRepository:
         row.reload_enabled = preferences.reload_enabled
         row.reload_threshold_cents = preferences.reload_threshold_cents
         row.reload_amount_cents = preferences.reload_amount_cents
-        row.reload_monthly_payment_limit_cents = preferences.reload_monthly_payment_limit_cents
         self.session.flush()
         return BillingPreferences.model_validate(row)
 

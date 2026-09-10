@@ -25,16 +25,16 @@ export function SettingsDialog({
   const { user } = useSession();
   const admin = user.role === "administrator";
   // A member can arrive at `?settings=admin` by typing it. The tab is not
-  // rendered for them, so the view is shown as general and the address is
+  // rendered for them, so the view is shown as billing and the address is
   // corrected to say so.
-  const shownView = view === "admin" && !admin ? "general" : view;
+  const shownView = view === "admin" && !admin ? "billing" : view;
   useEffect(() => {
     if (shownView !== view) onViewChange(shownView);
   }, [shownView, view, onViewChange]);
   const [planOpen, setPlanOpen] = useState(false);
   const openUpgrade = () => {
     setPlanOpen(true);
-    onViewChange("general");
+    onViewChange("billing");
   };
 
   return (
@@ -49,12 +49,12 @@ export function SettingsDialog({
 
         <Tabs
           value={shownView}
-          onValueChange={(next) => onViewChange(settingsView(next) ?? "general")}
+          onValueChange={(next) => onViewChange(settingsView(next) ?? "billing")}
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
           <div className="shrink-0 px-5 pt-3">
             <LinearTabsList ariaLabel="Settings sections">
-              <LinearTab value="general">General</LinearTab>
+              <LinearTab value="billing">Billing</LinearTab>
               <LinearTab value="tokens">Tokens</LinearTab>
               <LinearTab value="compute">Compute</LinearTab>
               <LinearTab value="domains">Domains</LinearTab>
@@ -62,7 +62,7 @@ export function SettingsDialog({
             </LinearTabsList>
           </div>
 
-          <TabsContent value="general" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <TabsContent value="billing" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
             <div className="mx-auto max-w-4xl space-y-4">
               <AccountSettings />
               <BillingSettings planOpen={planOpen} onPlanOpenChange={setPlanOpen} />
