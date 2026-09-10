@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from provider_aws import AwsRegionalPrices
 from provider_clients.provider_definitions import PROVIDER_DEFINITIONS
 from provider_hetzner import HetznerNodeImage
 from pydantic import (
@@ -257,18 +256,6 @@ def render(
     authored_runtime = _STRINGS.validate_python(environment.get("runtime", {}), strict=True)
     if runtime.keys() & authored_runtime.keys():
         raise ValueError("Environment runtime overrides an infrastructure or release value")
-    rates = TypeAdapter(dict[str, Annotated[int, Field(gt=0)]]).validate_json(
-        authored_runtime.get("LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS", "")
-    )
-    if not rates:
-        raise ValueError("Managed fleet requires nonempty instance prices")
-    regional_prices = TypeAdapter(dict[str, AwsRegionalPrices]).validate_json(
-        authored_runtime.get("LAZYCLOUD_AWS_CAPACITY_REGIONAL_PRICES", "{}")
-    )
-    if infrastructure.region not in regional_prices:
-        raise ValueError(
-            f"Managed fleet requires AWS gp3 and public IPv4 prices for {infrastructure.region}"
-        )
     hetzner_policy = PROVIDER_DEFINITIONS["hetzner"].policy
     if hetzner_policy.purchases_enabled:
         missing_locations = (

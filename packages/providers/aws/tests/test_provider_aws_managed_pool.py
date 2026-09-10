@@ -587,10 +587,11 @@ def test_real_aws_offers_include_storage_and_ipv4_before_purchase() -> None:
                 cpu_ami_id="ami-0123456789abcdef0",
             )
         },
-        instance_hourly_micros={"m7i.2xlarge": 340_000},
         regional_prices={
             "us-east-1": AwsRegionalPrices(
-                gp3_gib_monthly_micros=80_000, public_ipv4_hourly_micros=5_000
+                gp3_gib_monthly_micros=80_000,
+                public_ipv4_hourly_micros=5_000,
+                instance_hourly_micros={"m7i.2xlarge": 340_000},
             )
         },
         client_provider=_ClientProvider(
@@ -620,7 +621,6 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
                 cpu_ami_id="ami-0123456789abcdef0",
             )
         },
-        instance_hourly_micros={"m7i.2xlarge": 340_000},
         client_provider=_ClientProvider(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling)),
     )
     request = _pool_request(provider.provider_ref)
@@ -735,7 +735,6 @@ def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
                 cpu_ami_id="ami-0123456789abcdef0",
             )
         },
-        instance_hourly_micros={"m7i.2xlarge": 340_000},
         client_provider=_ClientProvider(
             AwsManagedPoolClients(ec2=_Ec2(), autoscaling=_AutoScaling())
         ),

@@ -521,7 +521,6 @@ def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
         platform_connections=tuple,
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
-        instance_hourly_micros={},
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
         platform_providers=lambda: tuple(providers),
     )
@@ -588,7 +587,6 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
         platform_connections=tuple,
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
-        instance_hourly_micros={},
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
         platform_providers=lambda: (resolved,),
     )
@@ -722,7 +720,6 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
         platform_connections=tuple,
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
-        instance_hourly_micros={},
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
         platform_providers=lambda: tuple(providers),
     )
@@ -847,7 +844,6 @@ def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
         platform_connections=tuple,
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
-        instance_hourly_micros={},
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
         platform_providers=lambda: tuple(providers),
     )
@@ -1914,7 +1910,6 @@ def test_disconnecting_connection_rejects_a_previously_selected_purchase(
                 cpu_ami_id="ami-0123456789abcdef0",
             )
         },
-        instance_hourly_micros={},
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
     )
     provider = resolver.resolve(workspace_id, f"aws:{_CONNECTION_ID}")

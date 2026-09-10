@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from decimal import Decimal
 
 from agent.binary import AgentBinarySettings
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
@@ -28,8 +27,10 @@ from provider_aws import (
     AwsRegionalPrices,
     Boto3AwsManagedPoolClientProvider,
 )
+from provider_aws.supplier_prices import AWS_REGIONAL_PRICES
 from provider_hetzner.client import HetznerClient
 from provider_hetzner.pooled_provider import HetznerPooledProvider
+from provider_hetzner.supplier_prices import PRIMARY_IPV4_HOURLY_MICROS, USD_PER_CURRENCY_UNIT
 from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationPhase,
@@ -67,8 +68,8 @@ def configured_platform_compute_providers(
         provider_ref=definition.platform_ref,
         client=HetznerClient(token, cooldown=RedisRequestCooldown(redis, definition.platform_ref)),
         images_by_location=settings.hetzner_images,
-        usd_per_currency_unit=Decimal("1"),
-        primary_ipv4_hourly_micros=1000,
+        usd_per_currency_unit=USD_PER_CURRENCY_UNIT,
+        primary_ipv4_hourly_micros=PRIMARY_IPV4_HOURLY_MICROS,
         launch_credentials=launch_credentials,
     )
 
@@ -103,10 +104,11 @@ def configured_aws_compute_catalog(
         return ()
     capacity_settings.binaries_by_region(agent_binary_settings)
 
-    priced_instance_types = capacity_settings.instance_hourly_micros.keys()
     regions = sorted(capacity_settings.cpu_ami_ids.keys() | capacity_settings.gpu_ami_ids.keys())
     catalog: list[ComputeCatalogRegion] = []
     for region in regions:
+        prices = AWS_REGIONAL_PRICES.get(region)
+        priced_instance_types = prices.instance_hourly_micros if prices is not None else {}
         if region not in AWS_COMPUTE_CONFIGURATION.allowed_regions:
             continue
         cpu_available = region in capacity_settings.cpu_ami_ids
@@ -143,12 +145,11 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
     connections: AwsConnectionLoader
     platform_connections: PlatformAwsConnectionLoader
     binaries_by_region: Mapping[str, AwsManagedPoolBinaries]
-    instance_hourly_micros: Mapping[str, int]
     client_provider: Boto3AwsManagedPoolClientProvider
     capacity_workspace: Callable[[AwsAccountConnection], str]
     platform_providers: PlatformProviderLoader = tuple
     regional_prices: Mapping[str, AwsRegionalPrices] = field(
-        default_factory=lambda: dict[str, AwsRegionalPrices]()
+        default_factory=lambda: AWS_REGIONAL_PRICES
     )
 
     def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
@@ -232,7 +233,6 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
                 provider_ref=provider_ref,
                 connection=target,
                 binaries_by_region=self.binaries_by_region,
-                instance_hourly_micros=self.instance_hourly_micros,
                 regional_prices=self.regional_prices,
                 client_provider=self.client_provider,
             ),
@@ -267,8 +267,6 @@ def workspace_compute_provider_resolver(
         capacity_workspace=capacity_workspace,
         platform_providers=platform_providers,
         binaries_by_region=artifacts,
-        instance_hourly_micros=capacity_settings.instance_hourly_micros,
-        regional_prices=capacity_settings.regional_prices,
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
     )
 

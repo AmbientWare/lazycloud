@@ -126,7 +126,7 @@ class HetznerPooledProvider:
                     memory_mb=int(shape.memory * 1024),
                     storage_mb=shape.disk * 1024,
                     cost_terms=SupplierCostTerms(
-                        source="api:hetzner.server_types;deployment:primary_ipv4_hourly_micros",
+                        source="api:hetzner.server_types;code:provider_hetzner.supplier_prices",
                         observed_at=utc_now(),
                         compute_hourly_micros=compute_micros,
                         root_disk_hourly_micros=0,

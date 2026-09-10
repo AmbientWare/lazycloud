@@ -23,7 +23,6 @@ from provider_aws import (
     AwsManagedNodeIdentity,
     AwsManagedPoolBinaries,
     AwsPendingAccountAuthorization,
-    AwsRegionalPrices,
     Boto3AwsManagedPoolClientProvider,
     aws_account_connection_template_identity,
 )
@@ -83,12 +82,6 @@ def _enabled_settings() -> _AwsOwnerSettings:
             agent_binary_url=(
                 f"https://releases.example.com/agents/0.1.0/{'b' * 64}/lazycloud-agent-linux-amd64"
             ),
-            instance_hourly_micros={"m7i.xlarge": 340_000},
-            regional_prices={
-                "us-east-1": AwsRegionalPrices(
-                    gp3_gib_monthly_micros=80_000, public_ipv4_hourly_micros=5_000
-                )
-            },
             cpu_ami_ids={"us-east-1": "ami-0123456789abcdef0"},
             gpu_ami_ids={"us-east-1": "ami-0fedcba9876543210"},
         ),
@@ -269,7 +262,6 @@ def test_draining_connection_keeps_cleanup_access_but_cannot_purchase() -> None:
                 cpu_ami_id="ami-0123456789abcdef0",
             )
         },
-        instance_hourly_micros={},
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
     )
     provider_ref = f"aws:{connection.id}"
