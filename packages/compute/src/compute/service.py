@@ -214,6 +214,8 @@ class ComputeService:
         policy = provider.policy
         if policy is None or offer.provider != provider.ref or not policy.accepts(offer):
             return "provider offer is outside its approved catalog"
+        if not policy.can_purchase:
+            return "provider purchases are disabled"
         if not policy.platform_fleet:
             return None
         assessment = assess_fleet_purchase(
@@ -1635,7 +1637,7 @@ class ComputeService:
         offers: list[ComputeOffer] = []
         for provider in providers:
             pooled = provider.pooled
-            if pooled is None or provider.policy is None:
+            if pooled is None or provider.policy is None or not provider.policy.can_purchase:
                 continue
             offers.extend(
                 offer
@@ -2636,7 +2638,7 @@ class ComputeService:
         offers: list[tuple[ResolvedComputeProvider, ComputeOffer]] = []
         for provider in self.provider_resolver.list_platform_providers():
             policy = provider.policy
-            if policy is None or provider.pooled is None:
+            if policy is None or provider.pooled is None or not policy.can_purchase:
                 continue
             try:
                 offers.extend(
@@ -2893,6 +2895,9 @@ class ComputeService:
                 raise UpstreamUnavailableError(
                     f"compute pool {current.name!r} provider is not pooled"
                 )
+            if provider.policy is not None and not provider.policy.can_purchase:
+                with dispatch_fence.dispatch_lock(current.capacity_owner_id):
+                    pooled.ensure_unit(self._provider_unit_request(current, offer))
             if current.phase is ComputeUnitPhase.Deleting:
                 with dispatch_fence.dispatch_lock(current.capacity_owner_id):
                     snapshot = pooled.delete_unit(self._provider_unit_request(current, offer))
@@ -3504,6 +3509,8 @@ class ComputeService:
         pooled = provider.pooled
         if pooled is None:
             raise InvalidInputError(f"compute pool {pool.name!r} provider is not pooled")
+        if provider.policy is not None and not provider.policy.can_purchase:
+            return pooled.unit_offer(pool)
         offer = next(
             (
                 item
@@ -3671,6 +3678,12 @@ class ComputeService:
         offer: ComputeOffer,
     ) -> ProviderUnitRequest:
         request = provider_unit_request(self.pool_bootstrap_factory, pool, offer)
+        if self.provider_resolver is None:
+            raise UpstreamUnavailableError("compute provider resolver is unavailable")
+        provider = self.provider_resolver.resolve(pool.workspace_id, pool.provider_ref)
+        if provider.policy is None:
+            raise UpstreamUnavailableError("compute provider policy is unavailable")
+        request = request.model_copy(update={"purchases_enabled": provider.policy.can_purchase})
         if pool.provider_state.degraded_reason is None:
             return request
         with self.context.database.session() as session:

@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from decimal import Decimal
 from urllib.parse import urlparse
 
 from agent.binary import AgentBinarySettings
 from provider_aws import AwsManagedPoolBinaries, AwsRegionalPrices
 from provider_hetzner import HetznerNodeImage
-from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 
+from .provider_definitions import PROVIDER_DEFINITIONS
 from .release_manifest import WORKER_IMAGE_PATTERN
 
 _AMI_PATTERN = re.compile(r"ami-[0-9a-f]{8,17}")
@@ -262,24 +261,8 @@ class AwsCapacityReconciliationSettings(BaseSettings):
     )
 
 
-class HetznerCapacityBinding(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
-
-    ref: str = Field(pattern=r"^hetzner:[a-z0-9][a-z0-9-]{0,119}$")
-    workspace: str = Field(default="default", min_length=1)
-    images_by_location: dict[str, HetznerNodeImage]
-    usd_per_currency_unit: Decimal = Field(gt=0)
-    primary_ipv4_hourly_micros: int = Field(ge=0)
-
-    @model_validator(mode="after")
-    def validate_binding(self) -> HetznerCapacityBinding:
-        if not set(HETZNER_CAPACITY_POLICY.allowed_regions) <= self.images_by_location.keys():
-            raise ValueError(f"{self.ref} requires a release image for every allowed location")
-        return self
-
-
 class PlatformCapacitySettings(BaseSettings):
-    hetzner: tuple[HetznerCapacityBinding, ...] = ()
+    hetzner_images: dict[str, HetznerNodeImage] = Field(default_factory=dict)
     hetzner_tokens: dict[str, SecretStr] = Field(default_factory=dict, repr=False)
 
     model_config = SettingsConfigDict(
@@ -290,19 +273,16 @@ class PlatformCapacitySettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_bindings(self) -> PlatformCapacitySettings:
-        if len({binding.ref for binding in self.hetzner}) != len(self.hetzner):
-            raise ValueError("platform provider refs must be unique")
-        if len({binding.workspace for binding in self.hetzner}) > 1:
-            raise ValueError("platform providers require one capacity workspace")
-        for binding in self.hetzner:
-            token = self.hetzner_tokens.get(binding.ref)
+        if self.hetzner_images:
+            ref = PROVIDER_DEFINITIONS["hetzner"].platform_ref
+            token = self.hetzner_tokens.get(ref)
             if token is None or not token.get_secret_value().strip():
-                raise ValueError(f"{binding.ref} requires a provider token")
+                raise ValueError(f"{ref} requires a provider token")
         return self
 
     @property
     def configured(self) -> bool:
-        return bool(self.hetzner)
+        return bool(self.hetzner_images or self.hetzner_tokens)
 
 
 __all__ = [
@@ -313,6 +293,5 @@ __all__ = [
     "AwsCapacityEnvironmentSettings",
     "AwsCapacityReconciliationSettings",
     "AwsCapacitySettings",
-    "HetznerCapacityBinding",
     "PlatformCapacitySettings",
 ]

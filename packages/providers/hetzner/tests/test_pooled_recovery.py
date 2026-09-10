@@ -185,6 +185,21 @@ def test_observation_does_not_mutate_and_ensure_recovers_unbound_nodes(
             assert recorded.provider_instance_id is None
     assert all(not address.auto_delete for address in addresses.values())
 
+    disabled = request.model_copy(update={"purchases_enabled": False})
+    assert adapter.ensure_unit(disabled).observed_machines == 2
+    assert (
+        adapter.set_unit_capacity(disabled, desired_machines=1, max_machines=2).observed_machines
+        == 2
+    )
+    with pytest.raises(ValueError, match="purchases are disabled"):
+        adapter.set_unit_capacity(disabled, desired_machines=3, max_machines=3)
+    with services.context.database.session() as session:
+        for launch in launches:
+            recorded = ProviderNodeLaunchRepository(session).get(launch.launch_id)
+            assert recorded is not None
+            assert recorded.provider_instance_id is None
+    assert all(not address.auto_delete for address in addresses.values())
+
     assert adapter.ensure_unit(request).observed_machines == 2
     with services.context.database.session() as session:
         for index, launch in enumerate(launches, start=1):

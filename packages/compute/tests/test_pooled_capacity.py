@@ -135,7 +135,8 @@ class _PooledProvider:
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
         self.ensure_calls.append(request)
-        self.desired = request.desired_machines
+        if request.purchases_enabled:
+            self.desired = request.desired_machines
         return self._snapshot(request)
 
     def describe_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
@@ -299,6 +300,7 @@ class _MutationLeases:
 class _Resolver(ComputeProviderResolver):
     provider: _PooledProvider
     services: ApiServices
+    purchases_enabled: bool = True
 
     def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
         return ()
@@ -324,6 +326,7 @@ class _Resolver(ComputeProviderResolver):
             connection_id=_CONNECTION_ID,
             pooled=self.provider,
             policy=ResolvedProviderPolicy(
+                purchases_enabled=self.purchases_enabled,
                 workspace_id=workspace_id,
                 pool=connection.pool,
                 platform_fleet=connection.platform_fleet,
@@ -475,6 +478,7 @@ def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
         ("cheap", 200_000),
         ("unknown", None),
         ("unprofitable", 10_000_000),
+        ("disabled", 1),
     ):
         offer = _offer().model_copy(
             update={
@@ -490,8 +494,14 @@ def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
             ResolvedComputeProvider(
                 ref=offer.provider,
                 capacity_mode=ComputeCapacityMode.Pooled,
-                pooled=_PooledProvider(offer=offer),
+                pooled=_PooledProvider(
+                    offer=offer,
+                    catalog_failure=RuntimeError("disabled catalog queried")
+                    if name == "disabled"
+                    else None,
+                ),
                 policy=ResolvedProviderPolicy(
+                    purchases_enabled=name != "disabled",
                     workspace_id=workspace_id,
                     pool=MachinePool("lazycloud"),
                     platform_fleet=True,
@@ -1546,6 +1556,46 @@ def test_pooled_capacity_does_not_import_provider_surplus_into_logical_intent(
     assert provider.desired == 3
     durable = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
     assert durable.desired_machines == 1
+
+
+@pytest.mark.parametrize("platform_fleet", [True, False])
+def test_provider_disable_preserves_cleanup_and_customer_cloud(
+    isolated_services: ApiServices, platform_fleet: bool
+) -> None:
+    _seed_connection(isolated_services, platform_fleet=platform_fleet)
+    supplier = _PooledProvider()
+    resolver = _Resolver(supplier, isolated_services)
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=resolver,
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=1,
+        root_volume_gib=200,
+    )
+    compute.reconcile_unit_capacity(pool.id)
+    resolver.purchases_enabled = False
+    if platform_fleet:
+        supplier.catalog_failure = RuntimeError("disabled provider catalog must not be queried")
+        with pytest.raises(ConflictError, match="purchases are disabled"):
+            compute.scale_internal_unit(pool.workspace_id, pool.id, 2, before_mutation=_allow_scale)
+        compute.reconcile_unit_capacity(pool.id)
+        assert supplier.desired == 1
+        assert not supplier.ensure_calls[-1].purchases_enabled
+    else:
+        compute.scale_internal_unit(pool.workspace_id, pool.id, 2, before_mutation=_allow_scale)
+        assert supplier.desired == 2
+    compute.scale_internal_unit(pool.workspace_id, pool.id, 0, before_mutation=_allow_scale)
+    assert supplier.desired == 0
+    resolver.purchases_enabled = True
+    supplier.catalog_failure = None
+    compute.scale_internal_unit(pool.workspace_id, pool.id, 1, before_mutation=_allow_scale)
+    assert supplier.desired == 1
 
 
 def test_platform_growth_checks_workload_rates_and_new_quotes_without_blocking_drain(

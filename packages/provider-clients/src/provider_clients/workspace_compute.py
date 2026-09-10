@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from agent.binary import AgentBinarySettings
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
@@ -27,8 +28,6 @@ from provider_aws import (
     AwsRegionalPrices,
     Boto3AwsManagedPoolClientProvider,
 )
-from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
-from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
 from provider_hetzner.client import HetznerClient
 from provider_hetzner.pooled_provider import HetznerPooledProvider
 from pydantic import SecretStr
@@ -38,6 +37,7 @@ from shared.aws_connections import (
 )
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, ComputeCapacityMode, MachinePool
 
+from provider_clients.provider_definitions import PROVIDER_DEFINITIONS
 from provider_clients.settings import AwsCapacitySettings, PlatformCapacitySettings
 
 AwsConnectionLoader = Callable[[str], Iterable[AwsAccountConnection]]
@@ -52,37 +52,41 @@ def configured_platform_compute_providers(
     capacity_workspace: Callable[[str], str],
     redis: RedisClient,
 ) -> PlatformProviderLoader:
-    adapters = {
-        binding.ref: HetznerPooledProvider(
-            provider_ref=binding.ref,
-            client=HetznerClient(
-                settings.hetzner_tokens[binding.ref],
-                cooldown=RedisRequestCooldown(redis, binding.ref),
-            ),
-            images_by_location=binding.images_by_location,
-            usd_per_currency_unit=binding.usd_per_currency_unit,
-            primary_ipv4_hourly_micros=binding.primary_ipv4_hourly_micros,
-            launch_credentials=launch_credentials,
-        )
-        for binding in settings.hetzner
-    }
+    definition = PROVIDER_DEFINITIONS["hetzner"]
+    if not settings.configured:
+        return tuple
+    token = settings.hetzner_tokens.get(definition.platform_ref)
+    if token is None or not token.get_secret_value().strip():
+        raise ValueError(f"{definition.platform_ref} requires a provider token")
+    if (
+        definition.policy.purchases_enabled
+        and not set(definition.policy.allowed_regions) <= settings.hetzner_images.keys()
+    ):
+        raise ValueError(f"{definition.platform_ref} requires images for its approved regions")
+    adapter = HetznerPooledProvider(
+        provider_ref=definition.platform_ref,
+        client=HetznerClient(token, cooldown=RedisRequestCooldown(redis, definition.platform_ref)),
+        images_by_location=settings.hetzner_images,
+        usd_per_currency_unit=Decimal("1"),
+        primary_ipv4_hourly_micros=1000,
+        launch_credentials=launch_credentials,
+    )
 
     def providers() -> tuple[ResolvedComputeProvider, ...]:
         # Administrator bootstrap creates the capacity workspace after composing
         # services. Resolve its identity when capacity is used, never at startup.
-        return tuple(
+        return (
             ResolvedComputeProvider(
-                ref=binding.ref,
+                ref=definition.platform_ref,
                 capacity_mode=ComputeCapacityMode.Pooled,
                 policy=ResolvedProviderPolicy(
-                    **HETZNER_CAPACITY_POLICY.model_dump(),
-                    workspace_id=capacity_workspace(binding.workspace),
+                    **definition.policy.model_dump(),
+                    workspace_id=capacity_workspace(definition.workspace),
                     pool=MachinePool(LAZYCLOUD_MACHINE_POOL),
                     platform_fleet=True,
                 ),
-                pooled=adapters[binding.ref],
-            )
-            for binding in settings.hetzner
+                pooled=adapter,
+            ),
         )
 
     return providers
@@ -211,14 +215,18 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
             capacity_mode=ComputeCapacityMode.Pooled,
             connection_id=connection.id,
             policy=ResolvedProviderPolicy(
+                **PROVIDER_DEFINITIONS["aws"]
+                .policy.model_copy(
+                    update={
+                        "allowed_offers": PROVIDER_DEFINITIONS["aws"].policy.allowed_offers
+                        if _connection_ready(connection)
+                        else ()
+                    }
+                )
+                .model_dump(),
                 workspace_id=self.capacity_workspace(connection),
                 pool=connection.pool,
                 platform_fleet=connection.platform_fleet,
-                default_region=AWS_COMPUTE_CONFIGURATION.default_region,
-                allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
-                root_volume_gib=AWS_COMPUTE_CONFIGURATION.root_volume_gib,
-                idle_timeout_seconds=AWS_COMPUTE_CONFIGURATION.idle_timeout_seconds,
-                allowed_offers=AWS_ALLOWED_OFFERS if _connection_ready(connection) else (),
             ),
             pooled=AwsConnectedAccountPooledProvider(
                 provider_ref=provider_ref,

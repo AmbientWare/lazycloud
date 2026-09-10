@@ -146,6 +146,8 @@ class HetznerPooledProvider:
                 )
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        if not request.purchases_enabled:
+            return self.describe_unit(request)
         return self.set_unit_capacity(
             request,
             desired_machines=request.desired_machines,
@@ -171,6 +173,10 @@ class HetznerPooledProvider:
             }
         )
         servers = self._servers(request)
+        if not request.purchases_enabled:
+            if desired_machines > len(servers):
+                raise ValueError("purchases are disabled for this provider")
+            return self._snapshot(request, servers)
         self._reconcile_servers(request, servers)
         if len(servers) > desired_machines:
             # Only release_machine can identify the worker the drain owner fenced.

@@ -40,6 +40,7 @@ from shared.provider_identity import (
 )
 from shared.timestamps import utc_now
 
+from provider_clients.provider_definitions import PROVIDER_DEFINITIONS
 from provider_clients.settings import PlatformCapacitySettings
 
 
@@ -331,12 +332,13 @@ def configured_provider_node_identity_registry(
     redis: RedisClient,
 ) -> ProviderNodeIdentityRegistry:
     bootstrap_nodes: dict[str, ProviderBootstrapNodeVerifier] = {}
-    for binding in platform_settings.hetzner:
-        bootstrap_nodes[binding.ref] = partial(
+    definition = PROVIDER_DEFINITIONS["hetzner"]
+    if token := platform_settings.hetzner_tokens.get(definition.platform_ref):
+        bootstrap_nodes[definition.platform_ref] = partial(
             verify_hetzner_node,
             HetznerClient(
-                platform_settings.hetzner_tokens[binding.ref],
-                cooldown=RedisRequestCooldown(redis, binding.ref),
+                token,
+                cooldown=RedisRequestCooldown(redis, definition.platform_ref),
             ),
         )
     return ProviderNodeIdentityRegistry(aws=aws, bootstrap_nodes=bootstrap_nodes)

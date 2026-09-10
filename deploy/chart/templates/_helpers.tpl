@@ -1,13 +1,3 @@
-{{- define "lazycloud.capacitySecrets" -}}
-{{- $secrets := dict -}}
-{{- range $configuration, $credential := .Values.capacityProviders -}}
-{{- if (index $.Values.runtime $configuration | default "[]" | mustFromJson) -}}
-{{- $_ := set $secrets $credential "operator" -}}
-{{- end -}}
-{{- end -}}
-{{- $secrets | toJson -}}
-{{- end -}}
-
 {{- define "lazycloud.env" -}}
 {{- $root := index . 0 -}}
 {{- $consumer := index . 1 -}}
@@ -31,22 +21,6 @@
 {{- end }}
 - name: {{ $variable }}
   value: {{ index $root.Values.runtime $variable | quote }}
-{{- end }}
-{{- if or (eq $consumer "controlPlane") (eq $consumer "scheduler") }}
-{{- range $configuration, $credential := $root.Values.capacityProviders }}
-{{- if (index $root.Values.runtime $configuration | default "[]" | mustFromJson) }}
-{{- if hasKey $root.Values.runtime $credential -}}
-{{- fail (printf "%s must not appear in plaintext runtime values" $credential) -}}
-{{- end }}
-- name: {{ $configuration }}
-  value: {{ index $root.Values.runtime $configuration | quote }}
-- name: {{ $credential }}
-  valueFrom:
-    secretKeyRef:
-      name: {{ $root.Values.secrets.name }}
-      key: {{ $credential }}
-{{- end }}
-{{- end }}
 {{- end }}
 {{- end -}}
 

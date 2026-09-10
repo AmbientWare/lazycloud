@@ -108,6 +108,7 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
     region: str = Field(pattern=_REGION_PATTERN.pattern)
     instance_type: str = Field(pattern=r"^[a-z0-9-]+\.[a-z0-9]+$")
     preemptible: bool = False
+    purchases_enabled: bool = True
     availability_zone: str = ""
     ami_id: str = Field(pattern=_AMI_PATTERN.pattern)
     desired_nodes: int = Field(ge=0)
@@ -309,6 +310,12 @@ class AwsManagedPoolEc2Client(AwsSpotPriceClient, AwsNetworkEvidenceClient, Prot
 
 
 class AwsManagedPoolAutoScalingClient(Protocol):
+    def suspend_processes(
+        self, *, AutoScalingGroupName: str, ScalingProcesses: list[str]
+    ) -> Mapping[str, object]: ...
+    def resume_processes(
+        self, *, AutoScalingGroupName: str, ScalingProcesses: list[str]
+    ) -> Mapping[str, object]: ...
     def describe_scaling_activities(
         self, *, AutoScalingGroupName: str, MaxRecords: int
     ) -> Mapping[str, object]: ...
@@ -457,6 +464,8 @@ def _is_autoscaling_client(value: object) -> TypeGuard[AwsManagedPoolAutoScaling
             "delete_auto_scaling_group",
             "describe_auto_scaling_groups",
             "describe_scaling_activities",
+            "suspend_processes",
+            "resume_processes",
             "terminate_instance_in_auto_scaling_group",
             "update_auto_scaling_group",
         ),
@@ -602,6 +611,10 @@ class _GroupInstance(_Response):
     launch_template: _GroupLaunchTemplate | None = Field(default=None, alias="LaunchTemplate")
 
 
+class _SuspendedProcess(_Response):
+    name: str = Field(alias="ProcessName")
+
+
 class _Group(_Response):
     name: str = Field(alias="AutoScalingGroupName")
     desired: int = Field(alias="DesiredCapacity")
@@ -612,6 +625,9 @@ class _Group(_Response):
     launch_template: _GroupLaunchTemplate | None = Field(default=None, alias="LaunchTemplate")
     instances: tuple[_GroupInstance, ...] = Field(default=(), alias="Instances")
     tags: tuple[Mapping[str, object], ...] = Field(default=(), alias="Tags")
+    suspended_processes: tuple[_SuspendedProcess, ...] = Field(
+        default=(), alias="SuspendedProcesses"
+    )
 
 
 class _Groups(_Response):
@@ -647,6 +663,12 @@ class AwsManagedPoolProvisioner:
         *,
         progress: AwsManagedPoolProgressSink | None = None,
     ) -> AwsManagedPoolSnapshot:
+        if not spec.purchases_enabled:
+            group = self._describe_group(spec.autoscaling_group_name)
+            if group is not None:
+                _validate_group_tags(group, spec)
+                self._suspend_launches(group)
+            return self.describe(spec, prior)
         state = prior or AwsManagedPoolResourceIds()
 
         def checkpoint(updated: AwsManagedPoolResourceIds) -> AwsManagedPoolResourceIds:
@@ -674,6 +696,13 @@ class AwsManagedPoolProvisioner:
                 launch_template_version=launch_template_version,
             )
             state = checkpoint(state.model_copy(update={"autoscaling_group_name": group.name}))
+            if any(process.name == "Launch" for process in group.suspended_processes):
+                self._asg(
+                    "resume managed pool launches",
+                    self._clients.autoscaling.resume_processes,
+                    AutoScalingGroupName=group.name,
+                    ScalingProcesses=["Launch"],
+                )
         except AwsProviderControlError as exc:
             raise AwsManagedPoolProvisioningError(exc, resource_ids=state) from exc
         return self._snapshot(group, state)
@@ -749,21 +778,37 @@ class AwsManagedPoolProvisioner:
         ):
             raise ValueError("invalid managed pool capacity")
         group = self._require_group(spec)
-        subnets = self._resolve_subnets(spec)
+        if not spec.purchases_enabled:
+            self._suspend_launches(group)
+            if desired_nodes > group.desired:
+                raise ValueError("purchases are disabled for this provider")
+            if group.launch_template is None:
+                raise invalid_response_error(
+                    "scale managed pool", "managed pool has no launch template"
+                )
+            vpc_zone_identifier = group.vpc_zone_identifier
+            launch_template_id = group.launch_template.id
+            launch_template_version = group.launch_template.version
+        else:
+            vpc_zone_identifier = ",".join(self._resolve_subnets(spec))
+            resources = self.discover(spec)
+            if (
+                resources.launch_template_id is None
+                or resources.launch_template_latest_version is None
+            ):
+                raise AwsProviderControlError(
+                    AwsProviderControlErrorCode.ResourceNotFound,
+                    operation="scale managed pool",
+                    detail="managed pool launch template is incomplete",
+                )
+            launch_template_id = resources.launch_template_id
+            launch_template_version = str(resources.launch_template_latest_version)
+            if desired_nodes > group.desired:
+                launch_template_id, version = self._ensure_launch_template(
+                    spec, spec.security_group_id
+                )
+                launch_template_version = str(version)
         self._protect_instances(group, desired_nodes=desired_nodes)
-        resources = self.discover(spec)
-        if resources.launch_template_id is None or resources.launch_template_latest_version is None:
-            raise AwsProviderControlError(
-                AwsProviderControlErrorCode.ResourceNotFound,
-                operation="scale managed pool",
-                detail="managed pool launch template is incomplete",
-            )
-        launch_template_id = resources.launch_template_id
-        launch_template_version = resources.launch_template_latest_version
-        if desired_nodes > group.desired:
-            launch_template_id, launch_template_version = self._ensure_launch_template(
-                spec, spec.security_group_id
-            )
         self._asg(
             "scale Auto Scaling Group",
             self._clients.autoscaling.update_auto_scaling_group,
@@ -772,10 +817,10 @@ class AwsManagedPoolProvisioner:
             MaxSize=max_nodes,
             DesiredCapacity=desired_nodes,
             NewInstancesProtectedFromScaleIn=True,
-            VPCZoneIdentifier=",".join(subnets),
+            VPCZoneIdentifier=vpc_zone_identifier,
             LaunchTemplate={
                 "LaunchTemplateId": launch_template_id,
-                "Version": str(launch_template_version),
+                "Version": launch_template_version,
             },
         )
 
@@ -784,6 +829,8 @@ class AwsManagedPoolProvisioner:
         if not _INSTANCE_ID_PATTERN.fullmatch(normalized):
             raise ValueError("invalid EC2 instance ID")
         group = self._require_group(spec)
+        if not spec.purchases_enabled:
+            self._suspend_launches(group)
         instance = next((item for item in group.instances if item.instance_id == normalized), None)
         if instance is None or instance.lifecycle_state.startswith("Terminating"):
             return False
@@ -794,6 +841,16 @@ class AwsManagedPoolProvisioner:
             ShouldDecrementDesiredCapacity=False,
         )
         return True
+
+    def _suspend_launches(self, group: _Group) -> None:
+        if any(process.name == "Launch" for process in group.suspended_processes):
+            return
+        self._asg(
+            "suspend managed pool launches",
+            self._clients.autoscaling.suspend_processes,
+            AutoScalingGroupName=group.name,
+            ScalingProcesses=["Launch"],
+        )
 
     def delete(
         self,

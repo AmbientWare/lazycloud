@@ -232,7 +232,8 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         )
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
-        aws_instance_catalog_entry(request.offer.instance_type)
+        if request.purchases_enabled:
+            aws_instance_catalog_entry(request.offer.instance_type)
         provisioner = self._provisioner(request.offer.region)
         snapshot = provisioner.ensure(
             self._spec(request),
@@ -264,15 +265,17 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         )
         spec = self._spec(capacity_request)
         resource_ids = self._resource_ids(request)
-        if resource_ids.autoscaling_group_name is None:
-            snapshot = provisioner.ensure(spec, resource_ids)
-        else:
-            provisioner.scale(
-                spec,
-                desired_nodes=desired_machines,
-                max_nodes=max_machines,
-            )
-            snapshot = provisioner.describe(spec, resource_ids)
+        snapshot = provisioner.ensure(spec, resource_ids)
+        if not request.purchases_enabled:
+            if desired_machines > snapshot.desired_nodes:
+                raise ValueError("purchases are disabled for this provider")
+            if snapshot.resource_ids.autoscaling_group_name is not None:
+                provisioner.scale(
+                    spec,
+                    desired_nodes=desired_machines,
+                    max_nodes=max_machines,
+                )
+                snapshot = provisioner.describe(spec, snapshot.resource_ids)
         return self._snapshot(provisioner, snapshot)
 
     def release_machine(
@@ -282,7 +285,11 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     ) -> ProviderUnitSnapshot:
         provisioner = self._provisioner(request.offer.region)
         spec = self._spec(request)
-        provisioner.scale(spec, desired_nodes=spec.desired_nodes, max_nodes=spec.max_nodes)
+        desired_nodes = spec.desired_nodes
+        if not request.purchases_enabled:
+            observed = provisioner.ensure(spec, self._resource_ids(request))
+            desired_nodes = min(desired_nodes, observed.desired_nodes)
+        provisioner.scale(spec, desired_nodes=desired_nodes, max_nodes=spec.max_nodes)
         provisioner.release_instance(spec, provider_instance_id)
         return self._snapshot(provisioner, provisioner.describe(spec, self._resource_ids(request)))
 
@@ -340,6 +347,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
             region=request.offer.region,
             instance_type=request.offer.instance_type,
             preemptible=request.offer.preemptible,
+            purchases_enabled=request.purchases_enabled,
             availability_zone=request.offer.availability_zone,
             ami_id=ami_id,
             desired_nodes=request.desired_machines,

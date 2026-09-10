@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 
 import yaml
 from provider_aws import AwsRegionalPrices
-from provider_clients.settings import HetznerCapacityBinding
+from provider_clients.provider_definitions import PROVIDER_DEFINITIONS
 from provider_hetzner import HetznerNodeImage
 from pydantic import (
     BaseModel,
@@ -92,7 +92,7 @@ class Infrastructure(Contract):
     control_principal_arn: Name
     public_origin: Annotated[str, Field(pattern=r"^https://[a-zA-Z0-9.-]+$")]
     redis_host: Name
-    hetzner_node_images: Annotated[dict[Name, HetznerNodeImage], Field(min_length=1)]
+    hetzner_node_images: dict[Name, HetznerNodeImage] = Field(default_factory=dict)
     fleet: FleetInfrastructure
     secret_documents: SecretDocuments
     secrets_reader_role_arn: Name
@@ -250,6 +250,9 @@ def render(
         "LAZYCLOUD_RELEASE_MANIFEST_URL": release_manifest_url,
         "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL": worker_manifest_url,
         "LAZYCLOUD_RELEASE_HOST_MANIFEST_URL": host_manifest_url,
+        "LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES": TypeAdapter(dict[str, HetznerNodeImage])
+        .dump_json(infrastructure.hetzner_node_images)
+        .decode(),
     }
     authored_runtime = _STRINGS.validate_python(environment.get("runtime", {}), strict=True)
     if runtime.keys() & authored_runtime.keys():
@@ -266,25 +269,36 @@ def render(
         raise ValueError(
             f"Managed fleet requires AWS gp3 and public IPv4 prices for {infrastructure.region}"
         )
-    bindings = TypeAdapter(list[dict[str, JsonValue]]).validate_json(
-        authored_runtime.get("LAZYCLOUD_PLATFORM_CAPACITY_HETZNER", "")
-    )
-    if not bindings:
-        raise ValueError("Platform capacity requires a configured Hetzner binding")
-    resolved_bindings: list[HetznerCapacityBinding] = []
-    for binding in bindings:
-        if "images_by_location" in binding:
-            raise ValueError("Environment capacity overrides infrastructure-owned images")
-        resolved_bindings.append(
-            HetznerCapacityBinding.model_validate(
-                {**binding, "images_by_location": infrastructure.hetzner_node_images}
-            )
+    hetzner_policy = PROVIDER_DEFINITIONS["hetzner"].policy
+    if hetzner_policy.purchases_enabled:
+        missing_locations = (
+            set(hetzner_policy.allowed_regions) - infrastructure.hetzner_node_images.keys()
         )
-    authored_runtime["LAZYCLOUD_PLATFORM_CAPACITY_HETZNER"] = (
-        TypeAdapter(list[HetznerCapacityBinding]).dump_json(resolved_bindings).decode()
-    )
+        if missing_locations:
+            raise ValueError(
+                "Enabled Hetzner purchases require node images for "
+                + ", ".join(sorted(missing_locations))
+            )
     values = dict(environment)
     values["runtime"] = {**runtime, **authored_runtime}
+    if infrastructure.hetzner_node_images:
+        token_key = "LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS"
+        defaults = _VALUES.validate_python(
+            yaml.safe_load((Path(__file__).parent / "chart/values.yaml").read_text())
+        )
+        bindings = _mapping(values, "environment")
+        for consumer in ("controlPlane", "scheduler"):
+            binding = {
+                **_mapping(_mapping(defaults, "environment"), consumer),
+                **_mapping(bindings, consumer),
+            }
+            secret_keys = TypeAdapter(list[str]).validate_python(binding["secretKeys"])
+            binding["secretKeys"] = list(dict.fromkeys([*secret_keys, token_key]))
+            bindings[consumer] = binding
+        values["environment"] = bindings
+        secrets = _mapping(values, "secrets")
+        secrets["map"] = {**_mapping(secrets, "map"), token_key: "operator"}
+        values["secrets"] = secrets
     generated: dict[str, dict[str, JsonValue]] = {
         "image": {
             "registry": infrastructure.registry,
