@@ -27,16 +27,7 @@
 {{- define "lazycloud.image" -}}
 {{- $root := index . 0 -}}
 {{- $name := index . 1 -}}
-{{- if eq $name "tunnel-gateway" -}}
-{{- $digest := required "image.networkDigest must name the executable network image manifest" $root.Values.image.networkDigest -}}
-{{- printf "%s/%s/%s@%s" $root.Values.image.registry $root.Values.image.repositoryPrefix $name $digest -}}
-{{- else -}}
-{{- $tag := $root.Values.image.tag -}}
-{{- if not $tag -}}
-{{- fail "image.tag was not supplied; CI writes it to the deployment branch after it builds" -}}
-{{- end -}}
-{{- printf "%s/%s/%s:%s" $root.Values.image.registry $root.Values.image.repositoryPrefix $name $tag -}}
-{{- end -}}
+{{- required (printf "release must name the %s image" $name) (index $root.Values.image.artifacts $name) -}}
 {{- end -}}
 
 {{/* The chart writes this profile and names it for every consumer. */}}

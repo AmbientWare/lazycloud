@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "agent",
     "compute",
+    "control",
     "coordination",
     "networking",
     "lazycloud-shared==0.1.0",

@@ -26,16 +26,10 @@ storage uses customer credentials through the same storage contracts.
 
 Postgres owns customer configuration and workload state. Redis owns coordination.
 Immutable manifests describe release artifacts. The deployment branch records
-three explicit URLs alongside configuration and control-plane images:
-
-- `LAZYCLOUD_RELEASE_MANIFEST_URL` supplies the control-plane release and customer authorization template.
-- `LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL` selects the worker image.
-- `LAZYCLOUD_RELEASE_HOST_MANIFEST_URL` selects the host agent executable and AMIs.
-
-Routine Ship advances control and worker pins, retaining the recorded host pin.
-Pass `host_manifest_url` only for an intentional host upgrade. The first deployment
-must supply it. The CLI and application do not pick a newer release
-from an unpinned release. Customer-connected accounts remain database-owned.
+one `LAZYCLOUD_RELEASE_MANIFEST_URL` alongside configuration and image digests.
+The manifest selects platform images, the worker image, agent executable,
+authorization template, and host AMIs together. Ship supplies that URL automatically.
+Customer-connected accounts remain database-owned.
 Fleet ensure refuses a changed account, role, external ID or
 network instead of replacing or adopting the existing connection.
 
@@ -43,22 +37,21 @@ network instead of replacing or adopting the existing connection.
 
 Deploy captures the current branch revision and the infrastructure descriptor,
 validates the descriptor and environment values, and renders the exact Helm
-chart. It verifies the separately selected host artifact and worker image before
-building control-plane images. Only after all images exist does it publish the
-configuration and all three pins together, using a compare-and-swap branch push.
-The control-plane release must contain the same managed-package sources as the
-control plane. Changes to those packages require Ship to publish matching worker
-artifacts; a code-only deploy may retain the release when those sources match.
-Preflight also checks database backend capacity during rollout, including direct
-connections from a deployment that predates PgBouncer. Failure before the push
-leaves the selected deployment unchanged. A partially
-published image set fails explicitly because commit tags are immutable.
+chart from the complete manifest Ship already published. Deploy builds nothing.
+It checks database connection budgets and commits the configuration with a
+compare-and-swap branch push. A failed build or partial publication cannot select
+a deployment because the complete manifest has not been published.
 
-CI authenticates to ECR Public before inspecting the worker image. Its deploy
-role receives token-issuance permissions, not public-registry publishing rights.
-AWS documents the required permissions in
-[ECR Public authentication](https://docs.aws.amazon.com/AmazonECR/latest/public/public-registry-auth.html).
-Authentication failures stop preflight; they do not mean an image is missing.
+Argo rolls out all chart resources and applies the active-release ConfigMap in
+PostSync after health checks pass. API and scheduler read its mounted file on work
+admission. A replica whose configured manifest differs refuses new work; maintenance,
+drain, logs and completion traffic continue. Workers must report the selected worker
+image and agent binary before accepting new work. Existing registration and drain
+state provide rollout status. No release tables or service observer are required.
+
+Rollback selects an earlier complete manifest with a newer activation generation.
+Managed hosts follow the launch-template replacement controller. Supervised joined
+agents update after their workloads drain. Long-running pods can hold that drain.
 
 Cloudflared configuration and the AWS role-chain ConfigMaps have pod-template
 checksums. A change to a mounted configuration therefore rolls its consumers.

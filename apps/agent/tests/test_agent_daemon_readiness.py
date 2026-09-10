@@ -55,10 +55,14 @@ from shared.http.provider_nodes import (
     ProviderNodeBootstrapPhaseRequest,
     ProviderNodeEnrollmentRequest,
 )
+from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
 from shared.provider_config import ProviderKind
 
 
 class _Gateway:
+    def agent_release(self, request: AgentReleaseRequest) -> AgentReleaseResponse:
+        return AgentReleaseResponse(generation=request.generation)
+
     def __init__(self, *, stream_error: Exception | None = None) -> None:
         self.stream_error = stream_error
 

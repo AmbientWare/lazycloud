@@ -13,5 +13,5 @@ def create_report() -> dict[str, str]:
     path.write_text(
         "This report was written through a workspace volume and saved as an artifact.\n"
     )
-    saved = Artifact(path=path, retention_seconds=7 * 24 * 60 * 60).save()
+    saved = Artifact(path=path).save()
     return {"artifact_id": saved.artifact_id, "filename": saved.filename}

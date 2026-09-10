@@ -42,14 +42,14 @@ substitutes, and gives every service an explicit owner and health check.
   tagged deploy raced the release it was meant to run. Ship is dispatched with
   a bump choice, pushes the tag itself, and passes the version to both as an
   input; a tag pushed with the workflow token starts no other workflow.
-- Control-plane, worker-image and host releases have independent manifest pins.
-  Routine Ship advances the first two and retains the host pin. Updating the host
-  agent executable or AMIs requires an explicit host manifest selection.
-  Managed pools replace hosts on the resulting launch template through the
-  existing surge, drain, and retirement controller. Manual binary upgrades belong
-  to self-hosted machines, not hosts that controller is replacing.
+- One complete manifest selects platform images, the worker image, agent binary,
+  and host catalog. Ship publishes it and records it for Argo. Argo health checks
+  precede the PostSync active-release ConfigMap. API and scheduler read its mounted
+  file and admit workers only when the selected artifacts match registration.
+  Managed hosts use the existing replacement controller; supervised joined agents
+  update after their workloads drain. Release observation needs no database tables.
 - The network image records its executable linux/amd64 manifest digest, not its
-  commit tag or attestation index. Deploy selects it from the same published
+  commit tag or attestation index. Ship selects it from the same published
   commit automatically. Its Docker build copies only the installed network
   workspace dependencies, so an unrelated API edit does not restart WireGuard.
   Network source or dependency changes publish and select a new image without an
@@ -57,17 +57,16 @@ substitutes, and gives every service an explicit owner and health check.
 - Helm owns application settings and secret property bindings. Terraform publishes
   non-secret resource identities in a versioned infrastructure descriptor; app CI
   reads that document, never Terraform state. Git records the descriptor snapshot,
-  environment settings, image commit and all three release URLs together on the
-  deployment branch. A code-only deploy retains the recorded pins.
-- CI builds and records; Argo installs. The deploy workflow pushes images and
+  environment settings, image digests and one release URL on the deployment branch.
+- CI builds and records; Argo installs. Ship publishes images and Deploy
   commits the values naming them to the deployment's branch, and stops. Nothing in
   CI runs `helm install`, because a workflow that installs and a controller that
   reconciles are two opinions about what should be running, and they disagree
   where nobody is looking.
-- An image belongs to a commit, not to a deployment. Deploy builds a commit
+- An image belongs to a commit, not to a deployment. Ship builds a commit
   once into repositories every deployment shares, tagged by the commit, and a
-  deployment names the tag it runs. Promotion records the commit staging runs
-  for prod and builds nothing; what crosses is the tag and all three release URLs,
+  deployment names its executable digests. Promotion selects staging's complete
+  release for prod and builds nothing; what crosses is one manifest URL,
   and prod's values are rendered from prod's own infrastructure descriptor.
 - The list of deployments lives on `main`; what each runs lives on its branch.
   Argo's root Application reads `deploy/argocd/apps` on `main`, one file per

@@ -4,6 +4,7 @@
   "additionalProperties": false,
   "required": [
     "image",
+    "release",
     "aws",
     "runtime",
     "fleet",
@@ -12,6 +13,23 @@
     "secrets"
   ],
   "properties": {
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["active"],
+      "properties": {
+        "active": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["generation", "manifest_url", "target"],
+          "properties": {
+            "generation": {"type": "integer", "minimum": 1},
+            "manifest_url": {"type": "string", "pattern": "^https://[^\\s]+/manifest\\.json$"},
+            "target": {"type": "object", "required": ["version", "source_revision", "worker_image", "agent"]}
+          }
+        }
+      }
+    },
     "aws": {
       "type": "object",
       "additionalProperties": false,
@@ -164,7 +182,7 @@
         "registry",
         "repositoryPrefix",
         "tag",
-        "networkDigest"
+        "artifacts"
       ],
       "properties": {
         "registry": {
@@ -179,9 +197,10 @@
           "type": "string",
           "pattern": "^[a-f0-9]{40}$"
         },
-        "networkDigest": {
-          "type": "string",
-          "pattern": "^sha256:[a-f0-9]{64}$"
+        "artifacts": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "string", "pattern": "@sha256:[a-f0-9]{64}$"}
         }
       }
     },
@@ -192,22 +211,12 @@
       },
       "required": [
         "LAZYCLOUD_RELEASE_MANIFEST_URL",
-        "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL",
-        "LAZYCLOUD_RELEASE_HOST_MANIFEST_URL",
         "LAZYCLOUD_STRIPE_ACCOUNT_ID",
         "LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT",
         "LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES"
       ],
       "properties": {
         "LAZYCLOUD_RELEASE_MANIFEST_URL": {
-          "type": "string",
-          "pattern": "^https://[^\\s]+/manifest\\.json$"
-        },
-        "LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL": {
-          "type": "string",
-          "pattern": "^https://[^\\s]+/manifest\\.json$"
-        },
-        "LAZYCLOUD_RELEASE_HOST_MANIFEST_URL": {
           "type": "string",
           "pattern": "^https://[^\\s]+/manifest\\.json$"
         },

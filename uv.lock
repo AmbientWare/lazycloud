@@ -546,6 +546,7 @@ dependencies = [
     { name = "provider-stripe" },
     { name = "pydantic" },
     { name = "rich" },
+    { name = "scheduler" },
     { name = "storage-client" },
     { name = "typer" },
 ]
@@ -570,6 +571,7 @@ requires-dist = [
     { name = "provider-stripe", editable = "packages/providers/stripe" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "rich", specifier = ">=15,<16" },
+    { name = "scheduler", editable = "packages/scheduler" },
     { name = "storage-client", editable = "packages/storage-client" },
     { name = "typer", specifier = ">=0.26.7" },
 ]
@@ -671,6 +673,7 @@ dependencies = [
     { name = "identity" },
     { name = "lazycloud-shared" },
     { name = "pydantic" },
+    { name = "pydantic-settings" },
 ]
 
 [package.metadata]
@@ -681,6 +684,7 @@ requires-dist = [
     { name = "identity", editable = "packages/identity" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "pydantic", specifier = ">=2,<3" },
+    { name = "pydantic-settings", specifier = ">=2.4,<3" },
 ]
 
 [[package]]
@@ -1639,6 +1643,7 @@ source = { editable = "packages/provider-clients" }
 dependencies = [
     { name = "agent" },
     { name = "compute" },
+    { name = "control" },
     { name = "coordination" },
     { name = "images" },
     { name = "lazycloud-shared" },
@@ -1653,6 +1658,7 @@ dependencies = [
 requires-dist = [
     { name = "agent", editable = "packages/agent" },
     { name = "compute", editable = "packages/compute" },
+    { name = "control", editable = "packages/control" },
     { name = "coordination", editable = "packages/coordination" },
     { name = "images", editable = "packages/images" },
     { name = "lazycloud-shared", editable = "packages/shared" },
@@ -2137,6 +2143,7 @@ version = "0.1.0"
 source = { editable = "packages/scheduler" }
 dependencies = [
     { name = "compute" },
+    { name = "control" },
     { name = "coordination" },
     { name = "database" },
     { name = "foundation" },
@@ -2149,6 +2156,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "compute", editable = "packages/compute" },
+    { name = "control", editable = "packages/control" },
     { name = "coordination", editable = "packages/coordination" },
     { name = "database", editable = "packages/database" },
     { name = "foundation", editable = "packages/foundation" },

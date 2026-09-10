@@ -88,9 +88,9 @@ concurrent operator changes before publication. Ship reads the non-secret
 infrastructure descriptor published by Terraform;
 it does not apply infrastructure changes for you.
 
-Hetzner requires a host manifest whose agent supports `provider-bootstrap`
-enrollment. Routine Ship retains the existing host pin. When changing the host
-agent protocol, explicitly select a compatible host manifest during deployment.
+Hetzner uses the selected release's agent for `provider-bootstrap` enrollment.
+Ship selects that agent along with the worker and platform images. Host replacement
+uses the existing surge and drain controller.
 
 ## Scheduler and adapter boundary
 

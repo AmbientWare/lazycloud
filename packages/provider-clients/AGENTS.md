@@ -16,17 +16,12 @@ identities when capacity is used, not while composing bootstrap services.
 
 Where that configuration comes from is part of the mapping, so this package also
 owns the published release manifest contract and the resolution of a deployment's
-settings from it. A deployment explicitly pins three manifests. The control-plane
-manifest supplies its release identity and customer authorization template. The
-worker manifest supplies the container-worker image. The host manifest supplies
-the agent executable and exact CPU and GPU AMIs. Routine Ship advances control
-and worker pins while retaining the host pin; host upgrades are explicit.
-Values a release cannot know, such as the
-local artifact mount and control principal, stay
-environment-owned, and a rule that spans both halves says which half is missing.
-A deployment with no manifests has no managed capacity. Partial pin sets are
-invalid. Terraform owns infrastructure identities, Helm owns these runtime
-settings, and processes read environment variables rather than Terraform files.
+settings from it. One complete manifest names the platform images, worker image,
+agent executable, authorization template, and CPU and GPU AMIs. Unchanged artifacts
+retain their original identity. Docker Bake owns the platform build inventory.
+The local artifact mount and control principal belong to deployment configuration.
+A deployment with no manifest has no managed capacity. Terraform owns infrastructure
+identities, Helm owns runtime settings, and processes read environment variables.
 
 The production registry admits only providers with live evidence behind them. A
 persisted kind that is not supported fails explicitly and by name; it never

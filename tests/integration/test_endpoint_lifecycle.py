@@ -64,6 +64,7 @@ from starlette.websockets import WebSocketDisconnect
 from tests.http_server import running_http_server
 from tests.metric_helpers import metric_value
 from tests.real_redis import RealRedisActors
+from tests.releases import assign_runtime
 from tests.scheduler_composition import services_with_redis_container_control
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
@@ -666,7 +667,7 @@ def _record_dispatch_container(
     container_id: str,
 ) -> ContainerRecord:
     with services.context.database.session() as session:
-        return ContainerRepository(session).upsert(
+        record = ContainerRepository(session).upsert(
             ContainerRecord(
                 id=container_id,
                 name=f"endpoint-{container_id}",
@@ -678,6 +679,8 @@ def _record_dispatch_container(
                 status=ContainerStatus.Running,
             )
         )
+    assign_runtime(services.containers, services.scheduler_workers, container_id)
+    return record
 
 
 def _set_endpoint_dispatch_limits(

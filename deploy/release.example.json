@@ -1,0 +1,48 @@
+{
+  "schema_version": 3,
+  "release_version": "0.0.1",
+  "bucket": "lazycloud-releases",
+  "public_base_url": "https://releases.example.com",
+  "manifest_object_key": "connected-aws/releases/0.0.1/manifest.json",
+  "manifest_public_url": "https://releases.example.com/connected-aws/releases/0.0.1/manifest.json",
+  "connection_template_version": "2026-09-09.v14",
+  "connection_template_sha256": "6c1905eaea6728df7f49f6a62d9a5d6c79df696ff9ec93c7fc7e9c0ad572756e",
+  "agent_artifact_version": "0.0.1",
+  "agent_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "container_worker_image": "registry.example.com/container-worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "platform_images": {
+    "api": "registry.example.com/api@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "scheduler": "registry.example.com/scheduler@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "tunnel-gateway": "registry.example.com/tunnel-gateway@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "cache-server": "registry.example.com/cache-server@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "worker-bootstrap": "registry.example.com/worker-bootstrap@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "cli": "registry.example.com/cli@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "database-bootstrap": "registry.example.com/database-bootstrap@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "source_revision": "0000000000000000000000000000000000000000",
+  "objects": [
+    {
+      "local_path": "objects/connection-template.json",
+      "object_key": "connected-aws/connection-templates/6c1905eaea6728df7f49f6a62d9a5d6c79df696ff9ec93c7fc7e9c0ad572756e/template.json",
+      "public_url": "https://releases.example.com/connected-aws/connection-templates/6c1905eaea6728df7f49f6a62d9a5d6c79df696ff9ec93c7fc7e9c0ad572756e/template.json",
+      "sha256": "6c1905eaea6728df7f49f6a62d9a5d6c79df696ff9ec93c7fc7e9c0ad572756e",
+      "size_bytes": 1024,
+      "content_type": "application/json"
+    },
+    {
+      "local_path": "agent-binarys/0.0.1/lazycloud-agent-linux-amd64",
+      "object_key": "connected-aws/agents/0.0.1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/lazycloud-agent-linux-amd64",
+      "public_url": "https://releases.example.com/connected-aws/agents/0.0.1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/lazycloud-agent-linux-amd64",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 1024,
+      "content_type": "application/octet-stream"
+    }
+  ],
+  "deployment_environment": {
+    "LAZYCLOUD_AGENT_BINARY_SHA256_BY_ARCH": "{\"amd64\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+    "LAZYCLOUD_AGENT_BINARY_VERSION": "0.0.1",
+    "LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL": "https://releases.example.com/connected-aws/agents/0.0.1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/lazycloud-agent-linux-amd64",
+    "LAZYCLOUD_AWS_CAPACITY_WORKER_IMAGE_DIGEST": "registry.example.com/container-worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "LAZYCLOUD_AWS_CONNECTION_TEMPLATE_URL": "https://releases.example.com/connected-aws/connection-templates/6c1905eaea6728df7f49f6a62d9a5d6c79df696ff9ec93c7fc7e9c0ad572756e/template.json"
+  }
+}
