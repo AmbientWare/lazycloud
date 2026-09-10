@@ -44,7 +44,11 @@ it("saves reload and usage limits together and preserves untouched settings", as
     connected_cloud_management_fee_percent: 8,
     credit_purchase: { minimum_cents: 500, maximum_cents: 100000 },
     trial: { amount_nanos: 5_000_000_000, duration_days: 30, one_time: true },
-    no_payment_method: { max_concurrent_cpu_containers: 10, max_concurrent_gpus: 1 },
+    no_payment_method: {
+      max_concurrent_cpu_containers: 10,
+      max_concurrent_gpus: 1,
+      gpu_types: ["T4", "L4", "A10G"],
+    },
     plans: [],
     shape_rates: [],
     gpu_rates: [],

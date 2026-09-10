@@ -183,10 +183,12 @@ const sections = [
           Services. Your cloud provider separately bills resources in a connected cloud account.
         </p>
         <p>
-          Paid plan fees are billed in advance on a recurring basis. Metered usage beyond an
-          included amount is invoiced after use and charged to the payment method on file. When you
-          add a payment method, you authorize LazyCloud and its payment provider to charge fees,
-          usage, taxes, and other amounts you approve under these Terms.
+          Paid plan fees are billed in advance on a recurring basis. Metered usage draws from trial,
+          included subscription, and purchased credit. Included subscription credit expires at the
+          end of its billing period; purchased credit does not expire. Credit purchases and enabled
+          automatic reloads are charged to your payment method. When you add a payment method, you
+          authorize LazyCloud and its payment provider to charge fees, purchases, taxes, and other
+          amounts you approve under these Terms.
         </p>
         <p>
           An upgrade may take effect immediately and include a prorated charge. A move to a lower

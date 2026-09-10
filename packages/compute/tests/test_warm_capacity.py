@@ -25,7 +25,7 @@ def test_provider_paid_hour_advances_only_after_its_boundary() -> None:
 
 def test_warm_capacity_absorbs_launch_window_demand_and_shrinks_gradually() -> None:
     now = datetime(2026, 9, 1, 1, tzinfo=UTC)
-    policy = FleetCapacityPolicy()
+    policy = FleetCapacityPolicy(warm_cpu_preemptible_min=1)
     offer = ComputeOffer(
         id="ccx23",
         provider="hetzner:platform",
@@ -75,7 +75,7 @@ def test_warm_capacity_absorbs_launch_window_demand_and_shrinks_gradually() -> N
 def test_warm_capacity_counts_only_fitting_requests_using_reserved_memory() -> None:
     now = datetime(2026, 9, 1, 1, tzinfo=UTC)
     target = warm_capacity_target(
-        FleetCapacityPolicy(),
+        FleetCapacityPolicy(warm_cpu_preemptible_min=1),
         ComputeOffer(
             id="memory-bound-node",
             provider="hetzner:platform",

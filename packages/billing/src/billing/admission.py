@@ -20,7 +20,6 @@ from shared.billing_rate_card import (
     PlanEntitlements,
     account_terms,
     complimentary_terms,
-    published_plan,
 )
 from shared.errors import (
     CapacityLimitReachedError,
@@ -221,7 +220,9 @@ class DatabaseBillingAdmission:
             workspace_count > entitlements.max_workspaces
         ):
             violations.append(f"{workspace_count} workspaces (limit {entitlements.max_workspaces})")
-        violations.extend(_unofferable_gpu_violations(session, user_id=user_id, target=target))
+        violations.extend(
+            _unofferable_gpu_violations(session, user_id=user_id, entitlements=entitlements)
+        )
         member_count = members.distinct_member_count_for_owner(user_id)
         if entitlements.max_members != "unlimited" and member_count > entitlements.max_members:
             violations.append(f"{member_count} members (limit {entitlements.max_members})")
@@ -305,8 +306,8 @@ def _admitted_gpu_models(gpu: Sequence[str], entitlements: PlanEntitlements) -> 
             return list(offered)
         if normalized not in offered:
             raise PaymentRequiredError(
-                f"this account's plan does not offer {normalized}; it runs "
-                f"{', '.join(offered)}. The Team plan runs every model the platform rents."
+                f"add a payment method to use {normalized}; without a saved card, "
+                f"this account can use {', '.join(offered)}"
             )
         named.append(normalized)
     # A GPU count without a model requests any allowed model.
@@ -314,11 +315,11 @@ def _admitted_gpu_models(gpu: Sequence[str], entitlements: PlanEntitlements) -> 
 
 
 def _unofferable_gpu_violations(
-    session: Session, *, user_id: str, target: BillingPlanId
+    session: Session, *, user_id: str, entitlements: PlanEntitlements
 ) -> list[str]:
     """Group incompatible running containers by GPU model for the refusal message."""
 
-    offered = tuple(model.value for model in published_plan(target).entitlements.allowed_gpu_types)
+    offered = tuple(model.value for model in entitlements.allowed_gpu_types)
     running: dict[str, int] = {}
     for record in ContainerRepository(session).live_gpu_containers_for_owner(owner_user_id=user_id):
         for entry in record.gpu:
@@ -327,9 +328,8 @@ def _unofferable_gpu_violations(
                 continue
             running[normalized] = running.get(normalized, 0) + 1
             break
-    plan_name = published_plan(target).name
     return [
-        f"{count} running containers on {model}, which the {plan_name} plan does not offer"
+        f"{count} running containers on {model}, which requires a saved payment method"
         for model, count in sorted(running.items())
     ]
 

@@ -48,7 +48,7 @@ class BillingAllowancePeriodTable(TimestampMixin, DatabaseBase):
         ),
         CheckConstraint(
             "funded_terms_version IS NULL OR funded_terms_version IN "
-            "('free-v1', 'team-v1', 'free-v2', 'team-v2', 'business-v1')",
+            "('free-v1', 'team-v1', 'free-v2', 'team-v2', 'business-v1', 'team-v3', 'business-v2')",
             name="ck_billing_allowance_periods_funded_terms",
         ),
         Index(

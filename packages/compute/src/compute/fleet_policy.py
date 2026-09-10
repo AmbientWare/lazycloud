@@ -8,7 +8,7 @@ class FleetCapacityPolicy(ContractModel):
     minimum_purchase_margin_percent: int = Field(default=30, ge=0, lt=100)
     max_cpu_instances: int = Field(default=500, ge=0)
     max_gpu_instances: int = Field(default=100, ge=0)
-    warm_cpu_preemptible_min: int = Field(default=1, ge=0)
+    warm_cpu_preemptible_min: int = Field(default=2, ge=0)
     warm_cpu_non_preemptible_min: int = Field(default=0, ge=0)
     warm_decrease_after_seconds: int = Field(default=600, ge=60)
 

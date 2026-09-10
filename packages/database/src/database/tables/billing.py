@@ -46,15 +46,16 @@ class BillingAccountTable(IdTable, DatabaseBase):
         CheckConstraint(
             "subscription_terms_version IS NULL OR "
             "(plan = 'free' AND subscription_terms_version IN ('free-v1', 'free-v2')) OR "
-            "(plan = 'team' AND subscription_terms_version IN ('team-v1', 'team-v2')) OR "
-            "(plan = 'business' AND subscription_terms_version = 'business-v1')",
+            "(plan = 'team' AND subscription_terms_version "
+            "IN ('team-v1', 'team-v2', 'team-v3')) OR "
+            "(plan = 'business' AND subscription_terms_version IN ('business-v1', 'business-v2'))",
             name="ck_billing_accounts_subscription_terms",
         ),
         CheckConstraint(
             "(scheduled_terms_version IS NULL AND scheduled_change_at IS NULL) OR "
             "(scheduled_terms_version IS NOT NULL AND "
             "scheduled_terms_version IN "
-            "('free-v1', 'team-v1', 'free-v2', 'team-v2', 'business-v1') "
+            "('free-v1', 'team-v1', 'free-v2', 'team-v2', 'business-v1', 'team-v3', 'business-v2') "
             "AND scheduled_change_at IS NOT NULL)",
             name="ck_billing_accounts_scheduled_terms",
         ),

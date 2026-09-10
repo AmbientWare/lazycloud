@@ -24,8 +24,10 @@ class SubscriptionTermsVersion(StringEnum):
     FreeLegacy = "free-v1"
     TeamLegacy = "team-v1"
     Free = "free-v2"
-    Team = "team-v2"
-    Business = "business-v1"
+    TeamV2 = "team-v2"
+    BusinessV1 = "business-v1"
+    Team = "team-v3"
+    Business = "business-v2"
 
 
 __all__ = ["BillingPlanId", "SubscriptionTermsVersion"]

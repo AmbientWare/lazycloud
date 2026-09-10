@@ -8,6 +8,8 @@ export const billingTermsVersionSchema = z.enum([
   "free-v2",
   "team-v2",
   "business-v1",
+  "team-v3",
+  "business-v2",
 ]);
 export type BillingTermsVersion = z.infer<typeof billingTermsVersionSchema>;
 
@@ -144,6 +146,7 @@ export const pricingCatalogSchema = z
       .object({
         max_concurrent_cpu_containers: z.number().int().positive(),
         max_concurrent_gpus: z.number().int().positive(),
+        gpu_types: z.array(z.string()).min(1),
       })
       .strict(),
     plans: z.array(publishedPlanSchema),

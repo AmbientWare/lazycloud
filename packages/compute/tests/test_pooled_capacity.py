@@ -731,7 +731,9 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
         capacity_owner_mutations=_MutationLeases(),
         pool_bootstrap_factory=_bootstrap,
         scheduler_hooks=hooks,
-        fleet_policy=FleetCapacityPolicy(warm_cpu_non_preemptible_min=1),
+        fleet_policy=FleetCapacityPolicy(
+            warm_cpu_preemptible_min=1, warm_cpu_non_preemptible_min=1
+        ),
     )
     now = datetime.now(UTC)
     compute.reconcile_platform_warm_capacity(now=now)
@@ -743,7 +745,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
     }
     assert {unit.worker_preemptible for unit in units} == {False, True}
 
-    compute.fleet_policy = FleetCapacityPolicy()
+    compute.fleet_policy = FleetCapacityPolicy(warm_cpu_preemptible_min=1)
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=1))
     with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
@@ -879,7 +881,7 @@ def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
         capacity_owner_mutations=_MutationLeases(),
         pool_bootstrap_factory=_bootstrap,
         scheduler_hooks=_SchedulerHooks(),
-        fleet_policy=FleetCapacityPolicy(max_cpu_instances=1),
+        fleet_policy=FleetCapacityPolicy(max_cpu_instances=1, warm_cpu_preemptible_min=1),
     )
     now = datetime.now(UTC)
     compute.reconcile_platform_warm_capacity(now=now)
