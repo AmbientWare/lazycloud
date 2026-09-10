@@ -27,11 +27,11 @@ resource "aws_eks_cluster" "control_plane" {
     public_access_cidrs     = length(var.cluster_api_cidrs) > 0 ? var.cluster_api_cidrs : null
   }
 
-  # Auto Mode. Without both blocks the cluster comes up with no compute at all
-  # and every pod stays Pending with no node to place it on.
+  # The node role also retains EKS-managed node access. Custom capacity is
+  # bootstrapped by the Helm release; no built-in On-Demand pool is enabled.
   compute_config {
     enabled       = true
-    node_pools    = ["general-purpose"]
+    node_pools    = []
     node_role_arn = aws_iam_role.node.arn
   }
 
