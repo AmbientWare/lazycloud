@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "certifi>=2025.1.31",
     "croniter>=6.2.4",
+    "httpx>=0.28,<1",
     "packaging>=24,<27",
     "pydantic>=2.12,<3",
 ]

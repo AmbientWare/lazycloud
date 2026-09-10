@@ -9,7 +9,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 
-import yaml
 from pydantic import JsonValue
 from shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
 from shared.deployment_records import (
@@ -1029,6 +1028,8 @@ class SandboxDockerManager:
         output_file: str = SANDBOX_COMPOSE_OVERRIDE_PATH,
         cwd: str = "/workspace",
     ) -> str:
+        import yaml
+
         if self.filesystem is None:
             msg = "compose override generation requires sandbox filesystem access"
             raise SandboxProcessError(msg)
@@ -1207,6 +1208,8 @@ class SandboxDockerManager:
         return args, selected_override or ""
 
     def _compose_service_names(self, *, file: str, cwd: str) -> list[str]:
+        import yaml
+
         if self.filesystem is None:
             return []
         try:

@@ -25,7 +25,6 @@ def test_api_log_history_and_stream_support_filters_wait_and_resume(
         with isolated_services.context.database.session() as session:
             workspace_id = isolated_services.context.default_workspace_id(session)
         task = isolated_services.tasks.create("durable-log", workspace_id=workspace_id)
-        isolated_services.tasks.append_log(task.id, "stdout", "needle durable")
         redis = real_redis_actors.client()
         repo = RedisEventStreamRepository(redis)
         _append_container_log(repo, message="needle first", workspace_id=workspace_id)
@@ -34,6 +33,14 @@ def test_api_log_history_and_stream_support_filters_wait_and_resume(
         second_cursor = repo.read_logs(LogStreamQuery(workspace_id=workspace_id))[-1].entry_id
         client = client_stack.enter_context(TestClient(create_app(isolated_services)))
         admin_token, _record = administrator_credential(isolated_services.context, "root")
+        for message in ("needle durable", ["needle durable second\n", "needle durable third\n"]):
+            appended = client.post(
+                "/gateway/tasks/log",
+                params={"workspace": workspace_id},
+                json={"task_id": task.id, "stream": "stdout", "message": message},
+                headers=_auth(admin_token),
+            )
+            assert appended.status_code == 200, appended.text
 
         history = client.get(
             f"/api/v1/logs?workspace={workspace_id}&task_id={task.id}&query=durable",
@@ -48,7 +55,11 @@ def test_api_log_history_and_stream_support_filters_wait_and_resume(
 
         assert history.status_code == 200
         payload = history.json()
-        assert [item["message"] for item in payload["data"]] == ["needle durable"]
+        assert [item["message"] for item in payload["data"]] == [
+            "needle durable",
+            "needle durable second",
+            "needle durable third",
+        ]
         assert payload["data"][0]["task_id"] == task.id
         assert stream.status_code == 200
         assert f"id: {second_cursor}" in stream.text
@@ -82,7 +93,7 @@ def test_api_deployment_logs_resolve_deployment_to_owned_stream(
             stub_id=deployment.stub_id,
             deployment_id=deployment.id,
         )
-        isolated_services.tasks.append_log(task.id, "stdout", "deployment line")
+        isolated_services.tasks.append_logs(task.id, "stdout", ["deployment line"])
         client = client_stack.enter_context(TestClient(create_app(isolated_services)))
         admin_token, _record = administrator_credential(isolated_services.context, "root")
 

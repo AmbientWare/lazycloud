@@ -82,7 +82,6 @@ from lazycloud.clients.gateway.control import GatewayControlClient
 from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
 from lazycloud.env import is_local
-from lazycloud.http_transport import request_raw
 from lazycloud.json_contracts import parse_json_value
 from lazycloud.references import dotted_reference
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
@@ -1110,6 +1109,8 @@ def _request_http_endpoint(
     params: Mapping[str, object] | Iterable[tuple[str, object]] | None,
     options: InvocationOptions,
 ) -> EndpointResponse:
+    from lazycloud.http_transport import request_raw
+
     config = owner._config()
     spec = owner.spec()
     resolved = _resolve_endpoint_invocation_target(
