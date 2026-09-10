@@ -75,6 +75,7 @@ from shared.usage import UsageBillingOwner
 
 from compute.aws_connections import AwsAccountPoolDrain
 from compute.context import ComputeContext
+from compute.fleet_policy import FleetCapacityPolicy
 from compute.offers import (
     ComputeOffer,
     OfferRequest,
@@ -188,10 +189,25 @@ class ComputeService:
     workspace_changes: WorkspaceChangePublisher | None = None
     capacity_owner_mutations: CapacityOwnerMutationLease | None = None
     reclaim: ComputeReclaimPolicy = field(default_factory=ComputeReclaimPolicy)
+    fleet_policy: FleetCapacityPolicy = field(default_factory=FleetCapacityPolicy)
     source_cache_lifecycle: SourceCacheStorageLifecycleService = field(init=False)
 
     def __post_init__(self) -> None:
         self.source_cache_lifecycle = SourceCacheStorageLifecycleService(self.context)
+
+    def _available_fleet_machines(
+        self,
+        repository: ComputeUnitRepository,
+        *,
+        platform_fleet: bool,
+        gpu: bool,
+        current: ComputeUnitRecord | None,
+    ) -> int | None:
+        if not platform_fleet:
+            return None
+        usage = repository.platform_capacity_usage(gpu=gpu)
+        headroom = max(self.fleet_policy.machine_limit(gpu=gpu) - usage, 0)
+        return (current.desired_machines if current is not None else 0) + headroom
 
     @property
     def provider_machines(self) -> ProviderMachineReconciler:
@@ -536,7 +552,10 @@ class ComputeService:
         with self.context.database.session() as session:
             pools = ComputeUnitRepository(session)
             assert provider.policy is not None
-            pools.lock_capacity_workspace(provider.policy.workspace_id)
+            if provider.policy.platform_fleet:
+                pools.lock_platform_capacity()
+            else:
+                pools.lock_capacity_workspace(provider.policy.workspace_id)
             locked_pool = pools.get(current_pool.id, for_update=True)
             if locked_pool is None:
                 return _capacity_result(
@@ -603,16 +622,17 @@ class ComputeService:
                     )
             else:
                 current_units = locked_pool.desired_machines
-                machine_limit = provider.policy.machine_limit(
+                available = self._available_fleet_machines(
+                    pools,
+                    platform_fleet=locked_pool.platform_fleet,
                     gpu=_pool_gpu_capacity(locked_pool),
+                    current=locked_pool,
                 )
-                other_desired = pools.desired_capacity_for_provider(
-                    provider.ref,
-                    gpu=_pool_gpu_capacity(locked_pool),
-                    excluding_unit_id=locked_pool.id,
-                )
-                available = None if machine_limit is None else max(machine_limit - other_desired, 0)
-                if available is not None and desired_unit > available:
+                if (
+                    available is not None
+                    and desired_unit > available
+                    and desired_unit > current_units
+                ):
                     operation = operations.upsert(
                         _new_capacity_operation(
                             locked_pool,
@@ -1400,9 +1420,7 @@ class ComputeService:
         if policy is None or provider.pooled is None or offer.provider != provider.ref:
             raise InvalidInputError("offer does not belong to a pooled provider")
         if not policy.accepts(offer):
-            raise InvalidInputError(
-                "offer is outside the approved provider catalog"
-            )
+            raise InvalidInputError("offer is outside the approved provider catalog")
         return self._prepare_pooled_offer(
             provider=provider,
             offer=offer,
@@ -1646,7 +1664,10 @@ class ComputeService:
             unit_pool = provider.policy.pool
             unit_platform_fleet = provider.policy.platform_fleet
             repository = ComputeUnitRepository(session)
-            repository.lock_capacity_workspace(provider.policy.workspace_id)
+            if unit_platform_fleet:
+                repository.lock_platform_capacity()
+            else:
+                repository.lock_capacity_workspace(provider.policy.workspace_id)
             current = repository.get_by_identity(
                 workspace_id=workspace_id,
                 provider_ref=provider.ref,
@@ -1655,15 +1676,12 @@ class ComputeService:
                 root_volume_gib=root_volume_gib,
                 for_update=True,
             )
-            machine_limit = provider.policy.machine_limit(
+            remaining = self._available_fleet_machines(
+                repository,
+                platform_fleet=unit_platform_fleet,
                 gpu=requirements.gpu_count > 0,
+                current=current,
             )
-            other_desired = repository.desired_capacity_for_provider(
-                provider.ref,
-                gpu=requirements.gpu_count > 0,
-                excluding_unit_id=current.id if current is not None else None,
-            )
-            remaining = None if machine_limit is None else max(machine_limit - other_desired, 0)
             requested_machines = max(
                 desired_machines,
                 baseline.initial_machines if baseline is not None else 0,
@@ -1707,11 +1725,9 @@ class ComputeService:
                     if provider.policy.platform_fleet:
                         desired = current.desired_machines
             if requested_machines > 0 and desired < requested_machines:
-                assert machine_limit is not None
                 raise CapacityLimitReachedError(
-                    f"provider compute limit reached: {requested_machines} machines "
-                    f"requested, {desired} available within the provider limit of "
-                    f"{machine_limit}"
+                    f"fleet capacity limit reached: {requested_machines} machines "
+                    f"requested, {desired} available"
                 )
             maximum = (
                 max(current.max_machines if current is not None else 0, desired, 1)
@@ -1758,9 +1774,6 @@ class ComputeService:
                     == recorded_terms
                 ):
                     cost_terms = recorded_terms
-            # One construction for both create and update: everything the unit
-            # derives from the offer and the baseline is stated here, and only
-            # the facts the provider owns are carried over from the stored row.
             unit = ComputeUnitRecord(
                 id=current.id if current is not None else unit_id,
                 capacity_owner_id=current.capacity_owner_id if current is not None else unit_id,
@@ -1790,6 +1803,11 @@ class ComputeService:
                 initial_machines=min(max(initial, minimum), maximum),
                 min_machines=minimum,
                 max_machines=maximum,
+                replacement_machine_id=(current.replacement_machine_id if current else ""),
+                replacement_template_version=(
+                    current.replacement_template_version if current else ""
+                ),
+                worker_rollout_surge=current.worker_rollout_surge if current else False,
                 scaling_enabled=True,
                 # True by construction rather than by preference: this unit is
                 # built from workspace policy because the workspace needed general
@@ -1966,7 +1984,10 @@ class ComputeService:
             provider = self.provider_resolver.resolve(workspace_id, initial.provider_ref)
             if provider.policy is None:
                 raise UpstreamUnavailableError("compute provider policy is unavailable")
-            units.lock_capacity_workspace(provider.policy.workspace_id)
+            if provider.policy.platform_fleet:
+                units.lock_platform_capacity()
+            else:
+                units.lock_capacity_workspace(provider.policy.workspace_id)
             unit = _require_workspace_internal_pooled_unit(
                 units.get_by_capacity_owner_id(capacity_owner_id, for_update=True),
                 workspace_id=workspace_id,
@@ -1980,9 +2001,7 @@ class ComputeService:
             if desired_machines > 0 and desired_machines >= unit.desired_machines:
                 purchase_offer = self._available_unit_offer(provider, unit)
                 if not provider.policy.accepts(purchase_offer):
-                    raise ConflictError(
-                        "provider offer is outside its approved catalog"
-                    )
+                    raise ConflictError("provider offer is outside its approved catalog")
             if unit.provider_state.degraded_reason is not None:
                 # An explicit capacity mutation supersedes the durable degraded
                 # reason and re-enables capacity restoration.
@@ -1993,23 +2012,22 @@ class ComputeService:
                         )
                     }
                 )
-            machine_limit = provider.policy.machine_limit(
+            available = self._available_fleet_machines(
+                units,
+                platform_fleet=unit.platform_fleet,
                 gpu=_pool_gpu_capacity(unit),
+                current=unit,
             )
-            other_desired = units.desired_capacity_for_provider(
-                provider.ref,
-                gpu=_pool_gpu_capacity(unit),
-                excluding_unit_id=unit.id,
-            )
-            available = None if machine_limit is None else max(machine_limit - other_desired, 0)
             if desired_machines < unit.min_machines:
                 raise InvalidInputError(
                     f"compute pool {unit!r} requires at least {unit.min_machines} machines"
                 )
-            if available is not None and desired_machines > available:
-                raise ConflictError(
-                    f"provider pooled compute capacity limit leaves {available} machines available"
-                )
+            if (
+                available is not None
+                and desired_machines > available
+                and desired_machines > unit.desired_machines
+            ):
+                raise ConflictError(f"fleet capacity limit leaves {available} machines available")
             maximum = (
                 max(unit.max_machines, desired_machines, 1)
                 if available is None
@@ -2208,6 +2226,11 @@ class ComputeService:
             raise InvalidInputError("replacement machine and template version are required")
         with self.context.database.session() as session:
             units = ComputeUnitRepository(session)
+            initial = _require_internal_pooled_unit(
+                units.get_by_capacity_owner_id(capacity_owner_id), unit_ref=capacity_owner_id
+            )
+            if initial.platform_fleet:
+                units.lock_platform_capacity()
             unit = _require_internal_pooled_unit(
                 units.get_by_capacity_owner_id(capacity_owner_id, for_update=True),
                 unit_ref=capacity_owner_id,
@@ -2226,6 +2249,18 @@ class ComputeService:
             provider_machine = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
             if provider_machine is None or provider_machine.pool_id != unit.id:
                 raise NotFoundError(f"provider machine not found in compute unit: {machine_id}")
+            available = self._available_fleet_machines(
+                units,
+                platform_fleet=unit.platform_fleet,
+                gpu=_pool_gpu_capacity(unit),
+                current=unit,
+            )
+            if (
+                not unit.worker_rollout_surge
+                and available is not None
+                and unit.desired_machines + 1 > available
+            ):
+                raise CapacityLimitReachedError("fleet capacity limit prevents a replacement node")
             return units.upsert(
                 unit.model_copy(
                     update={
@@ -2237,6 +2272,34 @@ class ComputeService:
                     }
                 )
             )
+
+    def begin_worker_rollout_capacity(self, capacity_owner_id: str) -> ComputeUnitRecord | None:
+        with self.context.database.session() as session:
+            units = ComputeUnitRepository(session)
+            initial = units.get_by_capacity_owner_id(capacity_owner_id)
+            if initial is None or initial.visibility is not ComputeUnitVisibility.Internal:
+                return initial
+            if initial.platform_fleet:
+                units.lock_platform_capacity()
+            unit = units.get_by_capacity_owner_id(capacity_owner_id, for_update=True)
+            if unit is None or unit.provider == "agent" or unit.worker_rollout_surge:
+                return unit
+            available = self._available_fleet_machines(
+                units,
+                platform_fleet=unit.platform_fleet,
+                gpu=_pool_gpu_capacity(unit),
+                current=unit,
+            )
+            if (
+                not unit.replacement_machine_id
+                and available is not None
+                and unit.desired_machines + 1 > available
+            ):
+                return None
+            updated = units.set_worker_rollout_surge(
+                unit.id, expected_generation=unit.generation, enabled=True
+            )
+        return updated
 
     def clear_internal_unit_replacement(
         self,

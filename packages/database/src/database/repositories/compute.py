@@ -57,9 +57,10 @@ from shared.compute_policy import (
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
+from shared.placement import placement_rate_class
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 from shared.timestamps import to_utc, utc_now
-from sqlalchemy import Select, and_, delete, func, or_, select
+from sqlalchemy import Select, String, and_, case, cast, delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
@@ -616,6 +617,28 @@ class ComputeUnitRepository:
         """System listing over every workspace's internal placement pools."""
         return self._list_internal(workspace_id=None)
 
+    def list_platform_internal(
+        self, *, preemptible: bool | None = None, gpu: bool | None = None
+    ) -> list[ComputeUnitRecord]:
+        statement = select(ComputeUnitTable).where(
+            ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
+            ComputeUnitTable.payload["platform_fleet"].as_boolean().is_(True),
+        )
+        if preemptible is not None:
+            statement = statement.where(ComputeUnitTable.worker_preemptible.is_(preemptible))
+        if gpu is not None:
+            statement = statement.where(
+                ComputeUnitTable.worker_gpu_count > 0
+                if gpu
+                else ComputeUnitTable.worker_gpu_count == 0
+            )
+        statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id).options(
+            load_only(
+                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
+            )
+        )
+        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
+
     def _list_internal(self, *, workspace_id: str | None) -> list[ComputeUnitRecord]:
         statement = select(ComputeUnitTable).where(
             ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value
@@ -650,12 +673,89 @@ class ComputeUnitRepository:
         if workspace is None:
             raise LookupError("provider capacity workspace no longer exists")
 
-    def recent_platform_cpu_arrivals(self, since: datetime) -> list[PlatformCpuArrival]:
+    def lock_platform_capacity(self) -> None:
+        self.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": "compute:platform-capacity"},
+        )
+
+    def platform_capacity_usage(self, *, gpu: bool, excluding_unit_id: str | None = None) -> int:
+        # Retiring nodes still bill after desired capacity is reduced or replaced.
+        # An explicitly paired replacement already occupies the unit's surge slot.
+        live_instances = (
+            select(
+                ComputeProviderInstanceTable.pool_id,
+                func.count().label("count"),
+                func.count()
+                .filter(
+                    ComputeProviderInstanceTable.status == "terminating",
+                    or_(
+                        ComputeProviderInstanceTable.machine_id.is_(None),
+                        cast(ComputeProviderInstanceTable.machine_id, String)
+                        != func.coalesce(
+                            ComputeUnitTable.payload["replacement_machine_id"].as_string(), ""
+                        ),
+                    ),
+                )
+                .label("retiring_count"),
+            )
+            .join(ComputeUnitTable, ComputeUnitTable.id == ComputeProviderInstanceTable.pool_id)
+            .where(ComputeProviderInstanceTable.status.not_in(("deleted", "failed")))
+            .group_by(ComputeProviderInstanceTable.pool_id)
+            .subquery()
+        )
+        surge = case(
+            (
+                or_(
+                    ComputeUnitTable.worker_rollout_surge.is_(True),
+                    func.coalesce(
+                        ComputeUnitTable.payload["replacement_machine_id"].as_string(), ""
+                    )
+                    != "",
+                ),
+                1,
+            ),
+            else_=0,
+        )
+        statement = (
+            select(
+                func.coalesce(
+                    func.sum(
+                        func.greatest(
+                            ComputeUnitTable.desired_machines
+                            + surge
+                            + func.coalesce(live_instances.c.retiring_count, 0),
+                            ComputeUnitTable.observed_machines,
+                            func.coalesce(live_instances.c.count, 0),
+                        )
+                    ),
+                    0,
+                )
+            )
+            .outerjoin(live_instances, live_instances.c.pool_id == ComputeUnitTable.id)
+            .where(
+                ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
+                ComputeUnitTable.payload["platform_fleet"].as_boolean().is_(True),
+                (
+                    ComputeUnitTable.worker_gpu_count > 0
+                    if gpu
+                    else ComputeUnitTable.worker_gpu_count == 0
+                ),
+            )
+        )
+        if excluding_unit_id is not None:
+            statement = statement.where(ComputeUnitTable.id != excluding_unit_id)
+        return int(self.session.scalar(statement) or 0)
+
+    def recent_platform_cpu_arrivals(
+        self, since: datetime, *, preemptible: bool
+    ) -> list[PlatformCpuArrival]:
         statement = (
             select(ContainerBillingShapeTable)
             .where(
                 ContainerBillingShapeTable.billing_owner == "platform_fleet",
-                ContainerBillingShapeTable.rate_class == "auto",
+                ContainerBillingShapeTable.rate_class
+                == placement_rate_class(pinned=False, preemptible=preemptible),
                 ContainerBillingShapeTable.gpu_count == 0,
                 ContainerBillingShapeTable.created_at >= since,
             )
@@ -669,26 +769,6 @@ class ComputeUnitRepository:
             )
             for row in self.session.scalars(statement)
         ]
-
-    def desired_capacity_for_provider(
-        self,
-        provider_ref: str,
-        *,
-        gpu: bool,
-        excluding_unit_id: str | None = None,
-    ) -> int:
-        statement = select(func.coalesce(func.sum(ComputeUnitTable.desired_machines), 0)).where(
-            ComputeUnitTable.provider_ref == provider_ref,
-            ComputeUnitTable.desired_machines > 0,
-            (
-                ComputeUnitTable.worker_gpu_count > 0
-                if gpu
-                else ComputeUnitTable.worker_gpu_count == 0
-            ),
-        )
-        if excluding_unit_id is not None:
-            statement = statement.where(ComputeUnitTable.id != excluding_unit_id)
-        return int(self.session.scalar(statement) or 0)
 
     def update_capacity(
         self,

@@ -2601,18 +2601,17 @@ class GatewayControlService:
                     return True
                 with self.services.context.database.session() as session:
                     repository = ComputeUnitRepository(session)
-                    unit = repository.get_by_capacity_owner_id(
-                        worker.capacity_owner_id, for_update=True
-                    )
+                    unit = repository.get_by_capacity_owner_id(worker.capacity_owner_id)
                     if unit is None or unit.provider == "agent" or unit.worker_rollout_surge:
                         return True
                     if unit.visibility is not ComputeUnitVisibility.Internal:
                         return True
-                    updated = repository.set_worker_rollout_surge(
-                        unit.id, expected_generation=unit.generation, enabled=True
-                    )
-                    if updated is not None:
-                        provision_unit_id = updated.id
+                updated = self.services.compute.begin_worker_rollout_capacity(
+                    worker.capacity_owner_id
+                )
+                if updated is None:
+                    return False
+                provision_unit_id = updated.id
             if provision_unit_id is not None:
                 self.services.compute.reconcile_unit_capacity(provision_unit_id)
         except (CapacityReservationLockContendedError, CapacityReservationLeaseLostError):
