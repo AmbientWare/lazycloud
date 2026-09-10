@@ -290,6 +290,7 @@ class ComputeMachineCapacityInterruptionRecord:
     state: AgentCapacityState
     reason: str
     observed_at: datetime
+    notice_at: datetime | None
 
 
 class ComputeMachineEnrollmentCreate(ContractModel):
@@ -1629,6 +1630,7 @@ class ComputeMachineEnrollmentRepository:
                     "",
                 ),
                 ComputeMachineEnrollmentTable.capacity_observed_at,
+                ComputeMachineEnrollmentTable.payload["capacity_notice_at"].as_string(),
             )
             .where(
                 ComputeMachineEnrollmentTable.status == ComputeMachineEnrollmentStatus.Active.value,
@@ -1656,6 +1658,7 @@ class ComputeMachineEnrollmentRepository:
                 state=AgentCapacityState(state),
                 reason=reason,
                 observed_at=to_utc(observed_at),
+                notice_at=_DATETIME_ADAPTER.validate_python(notice_at) if notice_at else None,
             )
             for (
                 enrollment_id,
@@ -1666,6 +1669,7 @@ class ComputeMachineEnrollmentRepository:
                 state,
                 reason,
                 observed_at,
+                notice_at,
             ) in rows
             if observed_at is not None
         ]

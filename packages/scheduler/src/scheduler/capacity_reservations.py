@@ -11,6 +11,11 @@ from threading import Event, Thread, local
 from typing import Protocol
 from uuid import uuid4
 
+from compute.capacity_errors import (
+    CapacityReservationConflictError,
+    CapacityReservationLeaseLostError,
+    CapacityReservationLockContendedError,
+)
 from compute.request_placement import ComputeCapacityPurchase
 from coordination.redis_client import RedisClient, redis_text
 from coordination.token_lock import (
@@ -28,7 +33,6 @@ from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequ
 from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
-from shared.errors import ConflictError
 from shared.gpu import GPU_ANY, gpu_preference_accepts
 from shared.placement import ProductRegion, product_region
 from shared.scheduling import (
@@ -261,18 +265,6 @@ class CapacityReservationDecision(ContractModel):
     created: bool = False
 
 
-class CapacityReservationConflictError(ConflictError):
-    """Capacity owner state changed while one scheduler operation was in flight."""
-
-
-class CapacityReservationLockContendedError(CapacityReservationConflictError):
-    """Another reconciler currently owns the capacity-owner mutation lease."""
-
-
-class CapacityReservationLeaseLostError(CapacityReservationConflictError):
-    """The capacity-owner mutation lease could not be renewed or was replaced."""
-
-
 class CapacityReservationVersionConflictError(CapacityReservationConflictError):
     """A reservation resource version or state transition was superseded."""
 
@@ -427,7 +419,7 @@ class ComputeUnitCapacityController:
             return False
         if self.owner_kind is not CapacityOwnerKind.PooledProvider:
             return False
-        if request.workspace_id != self.workspace_id:
+        if not self.unit.platform_fleet and request.workspace_id != self.workspace_id:
             return False
         if request.pool_selector:
             if request.pool_selector != self.unit.pool:
@@ -2055,10 +2047,7 @@ __all__ = [
     "CapacityProvisioningReservation",
     "CapacityRequestShape",
     "CapacityReservationAllocation",
-    "CapacityReservationConflictError",
     "CapacityReservationDecision",
-    "CapacityReservationLeaseLostError",
-    "CapacityReservationLockContendedError",
     "CapacityReservationService",
     "CapacityReservationStateTransitionError",
     "CapacityReservationStatus",

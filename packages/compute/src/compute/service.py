@@ -75,6 +75,10 @@ from shared.usage import UsageBillingOwner
 
 from compute.agent_control import machine_serves_workloads
 from compute.aws_connections import AwsAccountPoolDrain
+from compute.capacity_errors import (
+    CapacityReservationLeaseLostError,
+    CapacityReservationLockContendedError,
+)
 from compute.context import ComputeContext
 from compute.fleet_policy import FleetCapacityPolicy
 from compute.offers import (
@@ -2221,10 +2225,10 @@ class ComputeService:
         *,
         template_version: str,
     ) -> ComputeUnitRecord:
-        """Durably pair one superseded machine with one operational surge."""
+        """Durably pair one retiring machine with one operational surge."""
 
-        if not machine_id or not template_version:
-            raise InvalidInputError("replacement machine and template version are required")
+        if not machine_id:
+            raise InvalidInputError("replacement machine is required")
         with self.context.database.session() as session:
             units = ComputeUnitRepository(session)
             initial = _require_internal_pooled_unit(
@@ -2250,6 +2254,24 @@ class ComputeService:
             provider_machine = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
             if provider_machine is None or provider_machine.pool_id != unit.id:
                 raise NotFoundError(f"provider machine not found in compute unit: {machine_id}")
+            if not template_version:
+                enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+                    workspace_id, machine_id
+                )
+                if (
+                    enrollment is None
+                    or enrollment.status is not ComputeMachineEnrollmentStatus.Active
+                    or enrollment.capacity_state
+                    not in {
+                        AgentCapacityState.Draining,
+                        AgentCapacityState.Preempting,
+                        AgentCapacityState.Cordoned,
+                    }
+                    or enrollment.capacity_notice_at is None
+                ):
+                    raise InvalidInputError(
+                        "replacement requires a template or interruption notice"
+                    )
             available = self._available_fleet_machines(
                 units,
                 platform_fleet=unit.platform_fleet,
@@ -2354,6 +2376,29 @@ class ComputeService:
             if enrollment.machine_id
             and enrollment.capacity_state is AgentCapacityState.Draining
             and enrollment.capacity_observed_at is not None
+        }
+
+    def internal_unit_interrupted_machines(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+    ) -> dict[str, datetime]:
+        with self.context.database.session() as session:
+            enrollments = ComputeMachineEnrollmentRepository(session).list_for_unit(
+                workspace_id, capacity_owner_id
+            )
+        return {
+            enrollment.machine_id: enrollment.capacity_notice_at
+            for enrollment in enrollments
+            if enrollment.machine_id
+            and enrollment.status is ComputeMachineEnrollmentStatus.Active
+            and enrollment.capacity_state
+            in {
+                AgentCapacityState.Draining,
+                AgentCapacityState.Preempting,
+                AgentCapacityState.Cordoned,
+            }
+            and enrollment.capacity_notice_at is not None
         }
 
     def drain_internal_unit_machine(
@@ -2532,33 +2577,45 @@ class ComputeService:
         if self.provider_resolver is None:
             return
         warm_owner = str(uuid5(NAMESPACE_URL, "lazycloud:platform-warm-capacity"))
-        with self._required_capacity_owner_mutations().mutation_lock(warm_owner):
-            offers: list[tuple[ResolvedComputeProvider, ComputeOffer]] = []
-            for provider in self.provider_resolver.list_platform_providers():
-                policy = provider.policy
-                if policy is None or provider.pooled is None:
-                    continue
-                try:
-                    offers.extend(
-                        (provider, offer)
-                        for offer in provider.pooled.list_offers(
-                            root_volume_gib=policy.root_volume_gib
-                        )
-                        if offer.provider == provider.ref
-                        and policy.accepts(offer)
-                        and offer.storage_mb >= policy.root_volume_gib * 1024
-                        and offer.cost_terms.complete_hourly_cost_micros is not None
-                        and offer.gpu_count == 0
-                    )
-                except Exception:
-                    LOGGER.exception("platform offer discovery failed for %s", provider.ref)
-            for preemptible in (True, False):
-                try:
-                    self._reconcile_warm_market(offers, preemptible=preemptible, now=now)
-                except Exception:
-                    LOGGER.exception(
-                        "platform warm reconciliation failed for preemptible=%s", preemptible
-                    )
+        try:
+            with self._required_capacity_owner_mutations().mutation_lock(warm_owner):
+                self._reconcile_platform_warm_markets(now=now)
+        except CapacityReservationLockContendedError:
+            LOGGER.debug("platform warm reconciliation deferred: capacity lease is held")
+
+    def _reconcile_platform_warm_markets(self, *, now: datetime) -> None:
+        assert self.provider_resolver is not None
+        offers: list[tuple[ResolvedComputeProvider, ComputeOffer]] = []
+        for provider in self.provider_resolver.list_platform_providers():
+            policy = provider.policy
+            if policy is None or provider.pooled is None:
+                continue
+            try:
+                offers.extend(
+                    (provider, offer)
+                    for offer in provider.pooled.list_offers(root_volume_gib=policy.root_volume_gib)
+                    if offer.provider == provider.ref
+                    and policy.accepts(offer)
+                    and offer.storage_mb >= policy.root_volume_gib * 1024
+                    and offer.cost_terms.complete_hourly_cost_micros is not None
+                    and offer.gpu_count == 0
+                )
+            except Exception:
+                LOGGER.exception("platform offer discovery failed for %s", provider.ref)
+        for preemptible in (True, False):
+            try:
+                self._reconcile_warm_market(offers, preemptible=preemptible, now=now)
+            except CapacityReservationLockContendedError:
+                LOGGER.debug(
+                    "platform warm reconciliation deferred: preemptible=%s capacity lease is held",
+                    preemptible,
+                )
+            except CapacityReservationLeaseLostError:
+                raise
+            except Exception:
+                LOGGER.exception(
+                    "platform warm reconciliation failed for preemptible=%s", preemptible
+                )
 
     def _reconcile_warm_market(
         self,
@@ -2665,6 +2722,8 @@ class ComputeService:
                 if not handing_over or self._warm_unit_ready(unit):
                     self._clear_platform_warm_floors(preemptible=preemptible, keep_unit_id=unit.id)
                 return
+            except (CapacityReservationLockContendedError, CapacityReservationLeaseLostError):
+                raise
             except Exception:
                 with self.context.database.session() as session:
                     prepared = ComputeUnitRepository(session).get(unit_id)

@@ -23,6 +23,7 @@ from types import TracebackType
 from typing import Protocol
 from urllib.parse import urlparse
 
+from agent.capacity_shutdown import DEFAULT_INTERRUPTION_GRACE_SECONDS, CapacityShutdown
 from agent.operations import (
     AGENT_AUTHORITY_REVOKED_FILE,
     AGENT_MANAGED_LABEL,
@@ -131,7 +132,6 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_AGENT_STREAM_INTERVAL_SECONDS = 5.0
 DEFAULT_AGENT_HTTP_TIMEOUT_SECONDS = 30.0
-DEFAULT_AGENT_INTERRUPTION_GRACE_SECONDS = 90.0
 NVIDIA_SMI_TIMEOUT_SECONDS = 5.0
 JOIN_MAX_ATTEMPTS = 6
 JOIN_RETRY_BASE_SECONDS = 2.0
@@ -211,7 +211,7 @@ class AgentDaemonOptions(ContractModel):
     docker_binary: str = "docker"
     stream_interval_seconds: float = DEFAULT_AGENT_STREAM_INTERVAL_SECONDS
     http_timeout_seconds: float = DEFAULT_AGENT_HTTP_TIMEOUT_SECONDS
-    interruption_grace_seconds: float = DEFAULT_AGENT_INTERRUPTION_GRACE_SECONDS
+    interruption_grace_seconds: float = DEFAULT_INTERRUPTION_GRACE_SECONDS
     once: bool = False
     capacity: AgentCapacityOptions = Field(default_factory=AgentCapacityOptions)
     route_proxy: AgentRouteProxyConfig = Field(default_factory=AgentRouteProxyConfig)
@@ -607,13 +607,15 @@ class DockerAgentWorkerController:
         return self.state_dir / AGENT_ACTIVE_SLOTS_FILE
 
     def active_slots(self) -> list[AgentWorkerSlot]:
+        return [slot for slot in self._recorded_slots() if self._slot_container_running(slot)]
+
+    def _recorded_slots(self) -> list[AgentWorkerSlot]:
         if not self.active_slots_path.exists():
             return []
         raw = _JSON_VALUE_ADAPTER.validate_json(self.active_slots_path.read_text(encoding="utf-8"))
         if not isinstance(raw, list):
             return []
-        slots = [AgentWorkerSlot.model_validate(item) for item in raw]
-        return [slot for slot in slots if self._slot_container_running(slot)]
+        return [AgentWorkerSlot.model_validate(item) for item in raw]
 
     def apply(
         self,
@@ -655,14 +657,14 @@ class DockerAgentWorkerController:
         return applied
 
     def stop_all(self) -> None:
-        for slot in self.active_slots():
+        for slot in self._recorded_slots():
             self._stop(slot)
         self._save_active_slots([])
 
     def gracefully_stop_all(self, *, grace_seconds: float) -> None:
         if grace_seconds <= 0:
             raise ValueError("worker shutdown grace must be positive")
-        slots = self.active_slots()
+        slots = self._recorded_slots()
         if not slots:
             self._save_active_slots([])
             return
@@ -677,12 +679,12 @@ class DockerAgentWorkerController:
             ]
         )
         remove_result = self.runner.run([self.docker_binary, "rm", "-f", *names])
+        if remove_result.returncode != 0:
+            msg = f"remove stopped workers failed: {remove_result.stderr or remove_result.stdout}"
+            raise RuntimeError(msg)
         self._save_active_slots([])
         if stop_result.returncode != 0:
             msg = f"graceful worker shutdown failed: {stop_result.stderr or stop_result.stdout}"
-            raise RuntimeError(msg)
-        if remove_result.returncode != 0:
-            msg = f"remove stopped workers failed: {remove_result.stderr or remove_result.stdout}"
             raise RuntimeError(msg)
 
     def _start(self, slot: AgentWorkerSlot, bootstrap: AgentBootstrap) -> None:
@@ -834,6 +836,13 @@ class AgentDaemonService:
     private_network_runtime: AgentPrivateNetworkRuntime | None = None
     provider_identity: ProviderNodeIdentityEvidenceProvider | None = None
     _bootstrap_failure_reported: bool = False
+    _capacity_shutdown: CapacityShutdown = field(init=False)
+    _interruption_reported: bool = False
+
+    def __post_init__(self) -> None:
+        self._capacity_shutdown = CapacityShutdown(
+            self.worker_controller, grace_seconds=self.options.interruption_grace_seconds
+        )
 
     def _provider_evidence_provider(self) -> ProviderNodeIdentityEvidenceProvider:
         if self.options.provider is None:
@@ -893,12 +902,22 @@ class AgentDaemonService:
 
     def run(self) -> AgentDaemonRunResult:
         self.state_store.begin_run()
-        self._report_bootstrap_phase(MachineBootstrapPhase.Booting)
+        saved_state = self.state_store.load(self.options.gateway_url)
+        if saved_state is not None and saved_state.capacity_notice_at is not None:
+            self._capacity_shutdown.arm(saved_state.capacity_notice_at)
         try:
+            self._report_bootstrap_phase(MachineBootstrapPhase.Booting)
             state = self._join_step("identity.resolve", self.resolve_identity)
         except Exception:
-            self._report_bootstrap_failure(MachineBootstrapFailureReason.ProviderIdentityFailed)
+            try:
+                if self._capacity_shutdown.deadline is not None:
+                    self._capacity_shutdown.stop()
+            finally:
+                self._capacity_shutdown.close()
+                self._report_bootstrap_failure(MachineBootstrapFailureReason.ProviderIdentityFailed)
             raise
+        if state.capacity_notice_at is not None:
+            self._capacity_shutdown.arm(state.capacity_notice_at)
         self._report_bootstrap_phase(MachineBootstrapPhase.Joining)
         private_network_runtime: AgentPrivateNetworkRuntime | None = None
         private_network_address = ""
@@ -943,6 +962,7 @@ class AgentDaemonService:
             while True:
                 next_iteration = iterations + 1
                 try:
+                    state = self.state_store.load(state.gateway_url) or state
                     if (
                         private_network_runtime is not None
                         and private_network_configuration is not None
@@ -950,24 +970,17 @@ class AgentDaemonService:
                         private_network_runtime.reconcile_connection(private_network_configuration)
                     notice = self._poll_capacity_interruption()
                     if notice is not None:
-                        last_result = self._begin_capacity_interruption(
-                            state,
-                            notice,
-                            current_iterations=next_iteration,
-                            private_network_started=private_network_runtime is not None,
-                            private_network_address=private_network_address,
-                        )
-                    else:
-                        last_result = self.run_stream_iteration(
-                            state,
-                            current_iterations=next_iteration,
-                            route_proxy=route_proxy,
-                            private_network_started=private_network_runtime is not None,
-                            private_network_address=private_network_address,
-                        )
+                        state = self._begin_capacity_interruption(state, notice)
+                    last_result = self.run_stream_iteration(
+                        state,
+                        current_iterations=next_iteration,
+                        route_proxy=route_proxy,
+                        private_network_started=private_network_runtime is not None,
+                        private_network_address=private_network_address,
+                    )
                 except Exception as exc:
                     if agent_authority_was_revoked(exc):
-                        self.worker_controller.stop_all()
+                        self._capacity_shutdown.stop(force=True)
                         self.state_store.mark_authority_revoked(state)
                         return last_result.model_copy(
                             update={
@@ -1004,14 +1017,19 @@ class AgentDaemonService:
         except Exception as exc:
             if not agent_authority_was_revoked(exc):
                 raise
-            self.worker_controller.stop_all()
+            self._capacity_shutdown.stop(force=True)
             self.state_store.mark_authority_revoked(state)
             return last_result.model_copy(update={"authority_revoked": True})
         finally:
-            if route_proxy is not None:
-                route_proxy.close()
-            if private_network_runtime is not None:
-                private_network_runtime.close()
+            self._capacity_shutdown.close()
+            try:
+                if self._capacity_shutdown.deadline is not None:
+                    self._capacity_shutdown.stop()
+            finally:
+                if route_proxy is not None:
+                    route_proxy.close()
+                if private_network_runtime is not None:
+                    private_network_runtime.close()
 
     def resolve_identity(self) -> AgentState:
         revoked = self.state_store.authority_revoked()
@@ -1027,6 +1045,11 @@ class AgentDaemonService:
             raise AgentAuthorityRevokedError(msg)
         gateway_url = normalize_gateway_url(self.options.gateway_url)
         saved_state = self.state_store.load(gateway_url)
+        if (
+            saved_state is not None
+            and saved_state.capacity_state is not AgentCapacityState.Available
+        ):
+            return saved_state
         if saved_state is not None and self.options.provider_enrollment_request:
             return saved_state
         if self.options.provider_enrollment_request:
@@ -1058,6 +1081,17 @@ class AgentDaemonService:
         private_network_started: bool = False,
         private_network_address: str = "",
     ) -> AgentDaemonRunResult:
+        if state.capacity_notice_at is not None:
+            self._capacity_shutdown.arm(state.capacity_notice_at)
+        if state.capacity_state is not AgentCapacityState.Available:
+            result = self._resume_capacity_interruption(
+                state,
+                current_iterations=current_iterations,
+                private_network_started=private_network_started,
+                private_network_address=private_network_address,
+            )
+            if result.capacity_interrupted:
+                return result
         active_slots = self.worker_controller.active_slots()
         stream = self.client.stream_agent(
             StreamAgentRequest(
@@ -1129,26 +1163,34 @@ class AgentDaemonService:
         self,
         state: AgentState,
         notice: AgentCapacityInterruptionNotice,
-        *,
-        current_iterations: int,
-        private_network_started: bool,
-        private_network_address: str,
-    ) -> AgentDaemonRunResult:
-        preempting = self._record_capacity_interruption(
-            state,
-            capacity_state=AgentCapacityState.Preempting,
-            reason=notice.reason,
-            observed_at=notice.observed_at,
-            notice_at=notice.notice_at,
+    ) -> AgentState:
+        if notice.notice_at is not None:
+            self._capacity_shutdown.arm(notice.notice_at)
+        if state.capacity_state in {AgentCapacityState.Preempting, AgentCapacityState.Cordoned}:
+            return state
+        if (
+            state.capacity_state is AgentCapacityState.Draining
+            and state.capacity_notice_at is not None
+            and notice.notice_at is not None
+            and state.capacity_notice_at <= notice.notice_at
+        ):
+            return state
+        self._interruption_reported = False
+        updated = state.model_copy(
+            update={
+                "capacity_state": (
+                    AgentCapacityState.Draining
+                    if notice.notice_at is not None
+                    else AgentCapacityState.Preempting
+                ),
+                "capacity_reason": notice.reason,
+                "capacity_observed_at": _next_capacity_observation(state.capacity_observed_at),
+                "capacity_notice_at": notice.notice_at,
+                "updated_at": utc_now(),
+            }
         )
-        return self._cordon_and_stop_capacity(
-            preempting,
-            reason=notice.reason,
-            notice_at=notice.notice_at,
-            current_iterations=current_iterations,
-            private_network_started=private_network_started,
-            private_network_address=private_network_address,
-        )
+        self.state_store.save(updated)
+        return updated
 
     def _resume_capacity_interruption(
         self,
@@ -1158,7 +1200,19 @@ class AgentDaemonService:
         private_network_started: bool,
         private_network_address: str,
     ) -> AgentDaemonRunResult:
-        if state.capacity_state is AgentCapacityState.Draining:
+        if (
+            state.capacity_state is AgentCapacityState.Draining
+            and not self._capacity_shutdown.due()
+        ):
+            if state.capacity_notice_at is not None and not self._interruption_reported:
+                self._record_capacity_interruption(
+                    state,
+                    capacity_state=AgentCapacityState.Draining,
+                    reason=state.capacity_reason,
+                    observed_at=state.capacity_observed_at or utc_now(),
+                    notice_at=state.capacity_notice_at,
+                )
+                self._interruption_reported = True
             return _capacity_interruption_result(
                 state,
                 current_iterations=current_iterations,
@@ -1166,9 +1220,7 @@ class AgentDaemonService:
                 private_network_address=private_network_address,
             )
         if state.capacity_state is AgentCapacityState.Cordoned:
-            self.worker_controller.gracefully_stop_all(
-                grace_seconds=self.options.interruption_grace_seconds
-            )
+            self._capacity_shutdown.stop()
             return _capacity_interruption_result(
                 state,
                 current_iterations=current_iterations,
@@ -1195,7 +1247,7 @@ class AgentDaemonService:
         private_network_started: bool,
         private_network_address: str,
     ) -> AgentDaemonRunResult:
-        cordoned = state
+        cordoned = state.model_copy(update={"capacity_state": AgentCapacityState.Cordoned})
         try:
             cordoned = self._record_capacity_interruption(
                 state,
@@ -1212,9 +1264,7 @@ class AgentDaemonService:
                 message="agent capacity cordon confirmation failed",
                 attrs={"error_type": type(exc).__name__},
             )
-        self.worker_controller.gracefully_stop_all(
-            grace_seconds=self.options.interruption_grace_seconds
-        )
+        self._capacity_shutdown.stop()
         return _capacity_interruption_result(
             cordoned,
             current_iterations=current_iterations,
@@ -1231,6 +1281,16 @@ class AgentDaemonService:
         observed_at: datetime,
         notice_at: datetime | None,
     ) -> AgentState:
+        updated = state.model_copy(
+            update={
+                "capacity_state": capacity_state,
+                "capacity_reason": reason,
+                "capacity_observed_at": observed_at,
+                "capacity_notice_at": notice_at,
+                "updated_at": utc_now(),
+            }
+        )
+        self.state_store.save(updated)
         response = self.client.record_agent_capacity_interruption(
             AgentCapacityInterruptionRequest(
                 agent_token=state.agent_token,
@@ -1812,7 +1872,12 @@ def _agent_state_from_stream_response(
         raise RuntimeError("gateway returned the wrong agent stream session")
     return state.model_copy(
         update={
-            "capacity_state": response.capacity_state,
+            "capacity_state": (
+                state.capacity_state
+                if state.capacity_notice_at is not None
+                and response.capacity_state is AgentCapacityState.Available
+                else response.capacity_state
+            ),
             "bootstrap": (
                 state.bootstrap
                 if response.bootstrap is None
@@ -1848,7 +1913,7 @@ def _capacity_interruption_result(
         private_network_started=private_network_started,
         private_network_address=private_network_address,
         capacity_state=state.capacity_state,
-        capacity_interrupted=True,
+        capacity_interrupted=state.capacity_state is not AgentCapacityState.Draining,
     )
 
 

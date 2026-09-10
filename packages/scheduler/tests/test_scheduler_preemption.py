@@ -2,13 +2,21 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from coordination.redis_client import AsyncRedisClient, RedisSettings
+from database.records.apps import StubRecord
+from database.repositories.apps import StubRepository
+from database.repositories.container_rollouts import ContainerRolloutRepository
+from database.repositories.execution import TaskRepository
+from database.repositories.identity import WorkspaceRepository
+from database.repositories.orchestration import ContainerRepository
 from scheduler.preemption import (
     CapacityInterruption,
     SchedulerCapacityInterruptionService,
+    SchedulerWorkerMaintenanceService,
     SchedulerWorkerPreemptionService,
     WorkerPreemptionOperation,
 )
@@ -16,9 +24,12 @@ from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
 )
+from scheduler.worker_rollout import WorkerWorkloadDrainService
 from shared.compute_enrollment import AgentCapacityState
 from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
+from shared.containers import ContainerRecord, ContainerStatus
+from shared.deployments import StubKind
 from shared.scheduling import (
     SchedulerContainerState,
     SchedulerContainerStatus,
@@ -26,7 +37,11 @@ from shared.scheduling import (
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
 )
+from shared.tasks import Task
+from sqlalchemy.engine import URL
 from tests.real_redis import RealRedisActors
+
+from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -192,3 +207,122 @@ def test_preemption_rejects_stale_worker_session_fence(
     persisted = workers.get_worker("worker-1")
     assert persisted is not None
     assert persisted.status is SchedulerWorkerStatus.Pending
+
+
+def test_interruption_drains_workload_admission_until_provider_deadline(
+    real_redis_actors: RealRedisActors,
+    migrated_database_url: URL,
+) -> None:
+    database = DatabaseClient.from_settings(
+        DatabaseSettings(
+            url=migrated_database_url.render_as_string(hide_password=False),
+            application_name=DatabaseApplicationName.Test,
+        )
+    )
+    workers = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    containers = RedisSchedulerContainerRepository(real_redis_actors.client())
+    stopper = _Stopper()
+    workers.add_worker(
+        SchedulerWorkerRecord(
+            worker_id="worker-1",
+            pool=MachinePool("cpu"),
+            capacity_owner_id=OWNER_ID,
+            machine_id="machine-1",
+            status=SchedulerWorkerStatus.Available,
+        ),
+        now=NOW,
+    )
+    try:
+        workloads: list[ContainerRecord] = []
+        with database.session() as session:
+            workspace = WorkspaceRepository(session).create(name="interruption-drain")
+            for kind in (StubKind.Function, StubKind.Endpoint):
+                stub = StubRepository(session).upsert(
+                    StubRecord(
+                        id=str(uuid4()), workspace_id=workspace.id, name=kind.value, kind=kind
+                    )
+                )
+                container = ContainerRecord(
+                    id=str(uuid4()),
+                    name=kind.value,
+                    image="image",
+                    command=[],
+                    workspace_id=workspace.id,
+                    stub_id=stub.id,
+                    worker_id="worker-1",
+                    status=ContainerStatus.Running,
+                )
+                ContainerRepository(session).records.upsert(
+                    container,
+                    workspace_id=workspace.id,
+                    name=container.name,
+                    status=container.status.value,
+                )
+                workloads.append(container)
+                containers.set_container_state(
+                    _container(container.id, SchedulerContainerStatus.Running).model_copy(
+                        update={"workspace_id": workspace.id, "stub_id": stub.id}
+                    )
+                )
+            function = workloads[0]
+            assert function.stub_id is not None
+            task = TaskRepository(session).upsert(
+                Task(
+                    id=str(uuid4()),
+                    name="inflight",
+                    workspace_id=workspace.id,
+                    stub_id=function.stub_id,
+                    claimable_at=NOW,
+                )
+            )
+            [claimed] = TaskRepository(session).claim_for_stub(
+                function.stub_id, container_id=function.id, limit=1
+            )
+            assert claimed.id == task.id
+
+        deadline = NOW + timedelta(minutes=2)
+        interruption = CapacityInterruption(
+            enrollment_id="provider-notice",
+            credential_generation=1,
+            workspace_id=workspace.id,
+            pool=MachinePool("cpu"),
+            machine_id="machine-1",
+            state=AgentCapacityState.Draining,
+            reason="provider interruption",
+            observed_at=NOW,
+            notice_at=deadline,
+        )
+        service = SchedulerCapacityInterruptionService(
+            SchedulerWorkerPreemptionService(workers, containers, stopper),
+            workers,
+            source=_InterruptionSource([interruption]),
+            maintenance=SchedulerWorkerMaintenanceService(workers),
+            workload_drains=WorkerWorkloadDrainService(database, containers),
+        )
+        [drained] = service.reconcile(now=NOW)
+        assert drained.worker.status is SchedulerWorkerStatus.Draining
+        assert stopper.calls == []
+        with database.session() as session:
+            rollouts = ContainerRolloutRepository(session)
+            for container in workloads:
+                assert container.stub_id is not None
+                assert not rollouts.accepting_work(container.id, stub_id=container.stub_id)
+                assert rollouts.draining_ids([container.id]) == {container.id}
+                assert rollouts.serving_floor(container.stub_id) == 1
+                assert ContainerRepository(session).count_live_for_stub(container.stub_id) == 0
+            assert TaskRepository(session).containers_with_inflight_work([function.id]) == {
+                function.id
+            }
+
+        [before_deadline] = service.reconcile(now=deadline - timedelta(seconds=1))
+        assert not before_deadline.changed
+        assert stopper.calls == []
+
+        [preempted] = service.reconcile(now=deadline)
+        assert preempted.changed
+        assert preempted.worker.status is SchedulerWorkerStatus.Unavailable
+        assert set(stopper.calls) == {
+            (container.id, StopContainerReason.Preempted) for container in workloads
+        }
+    finally:
+        database.dispose()

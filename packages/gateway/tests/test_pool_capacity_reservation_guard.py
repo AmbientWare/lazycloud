@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from compute.agent_control import agent_machine_worker_id
+from compute.capacity_errors import CapacityReservationLockContendedError
 from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
 from coordination.redis_client import RedisClient
@@ -17,7 +18,6 @@ from database.repositories.orchestration import ContainerRepository, WorkerRepos
 from gateway.http import JoinAgentRequest
 from gateway.service import GatewayControlService
 from gateway.unit_state import billing_owner_for_unit
-from scheduler.capacity_reservations import CapacityReservationLockContendedError
 from scheduler.fleet import WorkerPoolStateSnapshot
 from scheduler.state import (
     RedisSchedulerContainerRepository,

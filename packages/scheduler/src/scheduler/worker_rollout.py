@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 
 from database.repositories.apps import StubRepository
@@ -27,21 +28,14 @@ class WorkerRolloutStopper(Protocol):
 
 
 @dataclass(slots=True)
-class WorkerWorkloadRolloutService:
+class WorkerWorkloadDrainService:
     database: DatabaseClient
     containers: WorkerRolloutContainers
-    stopper: WorkerRolloutStopper
-    endpoint_readiness: Callable[[str, list[str]], set[str]]
 
-    def reconcile(self, worker_id: str, *, workers: list[SchedulerWorkerRecord]) -> None:
-        now = utc_now()
-        available = {
-            worker.worker_id
-            for worker in workers
-            if worker.status is SchedulerWorkerStatus.Available
-        }
-        candidates: list[ContainerRecord] = []
-        kinds: dict[str, StubKind] = {}
+    def prepare(
+        self, worker_id: str, *, now: datetime, close_admission: bool = False
+    ) -> list[tuple[ContainerRecord, StubKind]]:
+        candidates: list[tuple[ContainerRecord, StubKind]] = []
         with self.database.session() as session:
             containers = ContainerRepository(session)
             rollouts = ContainerRolloutRepository(session)
@@ -61,15 +55,37 @@ class WorkerWorkloadRolloutService:
                     StubKind.Asgi,
                 }:
                     continue
-                kinds[stub.id] = stub.kind
                 if stub.id not in floors:
                     floors[stub.id] = max(
                         containers.count_live_for_stub(stub.id),
                         rollouts.serving_floor(stub.id),
                         1,
                     )
-                candidates.append(container)
+                candidates.append((container, stub.kind))
                 rollouts.prepare(container, serving_floor=floors[stub.id], now=now)
+                if close_admission:
+                    rollouts.close_admission(container.id, now=now)
+        return candidates
+
+
+@dataclass(slots=True)
+class WorkerWorkloadRolloutService:
+    database: DatabaseClient
+    containers: WorkerRolloutContainers
+    stopper: WorkerRolloutStopper
+    endpoint_readiness: Callable[[str, list[str]], set[str]]
+
+    def reconcile(self, worker_id: str, *, workers: list[SchedulerWorkerRecord]) -> None:
+        now = utc_now()
+        available = {
+            worker.worker_id
+            for worker in workers
+            if worker.status is SchedulerWorkerStatus.Available
+        }
+        candidates = WorkerWorkloadDrainService(self.database, self.containers).prepare(
+            worker_id, now=now
+        )
+        kinds = {container.stub_id: kind for container, kind in candidates if container.stub_id}
 
         ready: dict[str, set[str]] = {}
         endpoint_candidates: dict[str, list[str]] = {}
@@ -91,7 +107,7 @@ class WorkerWorkloadRolloutService:
         stop: list[str] = []
         with self.database.session() as session:
             rollouts = ContainerRolloutRepository(session)
-            for container in candidates:
+            for container, _kind in candidates:
                 if not container.stub_id:
                     continue
                 if len(ready[container.stub_id]) < rollouts.serving_floor(container.stub_id):

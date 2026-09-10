@@ -36,6 +36,10 @@ from compute.agent_control import (
     plan_agent_worker_token,
     plan_route_status_update,
 )
+from compute.capacity_errors import (
+    CapacityReservationLeaseLostError,
+    CapacityReservationLockContendedError,
+)
 from compute.projection import PoolConfig
 from compute.providers import joined_unit_identity
 from compute.service import ComputeService
@@ -110,10 +114,6 @@ from observability.stream_state import AsyncRedisEventStreamRepository, RedisEve
 from observability.usage import UsageService
 from operations.management import ManagementService
 from pydantic import JsonValue, SecretStr
-from scheduler.capacity_reservations import (
-    CapacityReservationLeaseLostError,
-    CapacityReservationLockContendedError,
-)
 from scheduler.preemption import (
     SchedulerWorkerMaintenance,
     WorkerPlannedDrainOperation,

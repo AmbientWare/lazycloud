@@ -7,12 +7,13 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
 from api.server.services import ApiServices
 from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
+from compute.capacity_errors import CapacityReservationLeaseLostError
 from compute.fleet_policy import FleetCapacityPolicy
 from compute.offers import ComputeOffer
 from compute.policy import WorkspaceComputePolicyService
@@ -56,6 +57,7 @@ from database.repositories.source_cache import SourceCacheCleanupRepository
 from provider_aws import AwsManagedPoolBinaries, Boto3AwsManagedPoolClientProvider
 from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
 from provider_clients.workspace_compute import WorkspaceComputeProviderResolver
+from scheduler.capacity_reservations import RedisCapacityReservationRepository
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -95,6 +97,7 @@ from shared.network_egress import NetworkEgressRouteEvidence
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.supplier_costs import SupplierCostTerms
 from tests.domain_fixtures import workspace_owner_user_id
+from tests.real_redis import RealRedisActors
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 
@@ -603,6 +606,59 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
     assert restarted.reconcile_pooled_capacity()[0].id == unit.id
     scaled = restarted.scale_internal_unit(workspace_id, unit.id, 3, before_mutation=_allow_scale)
     assert scaled.desired_machines == 3
+
+
+def test_warm_lock_contention_does_not_skip_provider_reconciliation(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    _seed_connection(isolated_services)
+    leases = RedisCapacityReservationRepository(real_redis_actors.client())
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(_PooledProvider(), isolated_services),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=leases,
+    )
+    unit = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=1,
+        root_volume_gib=200,
+    )
+    warm_owner = str(uuid5(NAMESPACE_URL, "lazycloud:platform-warm-capacity"))
+    with leases.mutation_lock(warm_owner), ThreadPoolExecutor(max_workers=1) as executor:
+        reconciled = executor.submit(compute.reconcile_pooled_capacity).result(timeout=10)
+    assert [(item.id, item.observed_machines) for item in reconciled] == [(unit.id, 1)]
+
+
+def test_warm_reconciliation_propagates_lost_capacity_lease(
+    isolated_services: ApiServices,
+) -> None:
+    _seed_connection(isolated_services, platform_fleet=True)
+
+    class PlatformResolver(_Resolver):
+        def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
+            return (self._resolved(),)
+
+    resolver = PlatformResolver(_PooledProvider(), isolated_services)
+
+    def lose_unit_lease(capacity_owner_id: str) -> None:
+        if capacity_owner_id == owner_id:
+            raise CapacityReservationLeaseLostError("capacity lease was replaced")
+
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=resolver,
+        capacity_owner_mutations=_MutationLeases(on_acquire=lose_unit_lease),
+        fleet_policy=FleetCapacityPolicy(
+            warm_cpu_preemptible_min=0, warm_cpu_non_preemptible_min=1
+        ),
+    )
+    owner_id = compute.pooled_offer_owner_id(resolver._resolved(), resolver.provider.offer)
+    with pytest.raises(CapacityReservationLeaseLostError, match="lease was replaced"):
+        compute.reconcile_platform_warm_capacity(now=datetime.now(UTC))
 
 
 def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(

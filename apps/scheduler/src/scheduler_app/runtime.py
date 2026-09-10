@@ -65,6 +65,7 @@ from scheduler.state import (
     RedisWorkerNetworkIpRepository,
     RedisWorkerPoolStateRepository,
 )
+from scheduler.worker_rollout import WorkerWorkloadDrainService
 from storage.retention_settings import RetentionSettings
 from worker_repository.image_build_dispatch import DurableImageBuildDispatch
 
@@ -306,6 +307,9 @@ class SchedulerRuntime:
                         scheduler_services.context.database,
                     ),
                     SchedulerWorkerMaintenanceService(worker_states),
+                    workload_drains=WorkerWorkloadDrainService(
+                        scheduler_services.context.database, container_states
+                    ),
                 ),
             ),
             maintenance=SchedulerMaintenanceControls(

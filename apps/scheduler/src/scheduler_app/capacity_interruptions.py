@@ -27,6 +27,7 @@ class DatabaseCapacityInterruptionSource:
                 state=record.state,
                 reason=record.reason,
                 observed_at=record.observed_at,
+                notice_at=record.notice_at,
             )
             for record in records
         ]
