@@ -119,7 +119,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
                     continue
                 instances.append(instance)
                 compute_price = self.instance_hourly_micros.get(instance.instance_type)
-                if compute_price is not None:
+                if compute_price is not None and False in instance.purchase_markets:
                     on_demand.append(
                         self._offer(
                             instance,
@@ -142,7 +142,11 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
             market = load_aws_spot_quotes(
                 clients.ec2,
                 network=network,
-                instance_types=tuple(instance.instance_type for instance in instances),
+                instance_types=tuple(
+                    instance.instance_type
+                    for instance in instances
+                    if True in instance.purchase_markets
+                ),
             )
             offers.extend(on_demand)
             for offer in on_demand:
@@ -200,11 +204,6 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
             region=region,
             availability_zone=availability_zone,
             preemptible=preemptible,
-            max_hourly_cost_micros=(
-                instance.max_spot_hourly_cost_micros
-                if preemptible
-                else instance.max_hourly_cost_micros
-            ),
             cpu_millicores=instance.cpu_millicores,
             memory_mb=instance.memory_mb,
             storage_mb=root_volume_gib * 1024,
@@ -335,14 +334,6 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         network = self.connection.network
         if network is None:
             raise ValueError("AWS account connection has no network for managed pools")
-        compute_ceiling = None
-        if request.offer.preemptible:
-            ceiling = request.offer.max_hourly_cost_micros
-            disk = request.offer.cost_terms.root_disk_hourly_micros
-            ipv4 = request.offer.cost_terms.public_ipv4_hourly_micros
-            if ceiling is None or disk is None or ipv4 is None:
-                raise ValueError("AWS Spot capacity requires complete costs and a purchase ceiling")
-            compute_ceiling = ceiling - disk - ipv4
         return AwsManagedPoolSpec(
             workspace_id=request.workspace_id,
             unit_name=request.unit_name,
@@ -350,7 +341,6 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
             instance_type=request.offer.instance_type,
             preemptible=request.offer.preemptible,
             availability_zone=request.offer.availability_zone,
-            max_compute_hourly_micros=compute_ceiling,
             ami_id=ami_id,
             desired_nodes=request.desired_machines,
             max_nodes=request.max_machines,

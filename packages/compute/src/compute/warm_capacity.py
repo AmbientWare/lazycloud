@@ -9,8 +9,8 @@ from database.repositories.compute import ComputeProviderInstanceRecord, Platfor
 from shared.container_requests import schedulable_capacity
 from shared.timestamps import to_utc
 
+from compute.fleet_policy import FleetCapacityPolicy
 from compute.offers import ComputeOffer
-from compute.providers import ResolvedProviderPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,11 +20,12 @@ class WarmCapacityTarget:
 
 
 def warm_capacity_target(
-    policy: ResolvedProviderPolicy,
+    policy: FleetCapacityPolicy,
     offer: ComputeOffer,
     arrivals: Sequence[PlatformCpuArrival],
     machines: Sequence[ComputeProviderInstanceRecord],
     *,
+    preemptible: bool,
     current: int,
     lower_since: datetime | None,
     now: datetime,
@@ -60,7 +61,8 @@ def warm_capacity_target(
         )
         for cpu_value, memory_value in zip(cpu, memory, strict=True)
     )
-    target = max(policy.warm_cpu_min, loads[ceil(buckets * 0.95) - 1])
+    minimum = policy.warm_cpu_min(preemptible=preemptible)
+    target = min(max(minimum, loads[ceil(buckets * 0.95) - 1]), policy.max_cpu_instances)
     if target >= current:
         return WarmCapacityTarget(target, None)
     if lower_since is None:

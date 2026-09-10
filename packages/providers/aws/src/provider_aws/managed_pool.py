@@ -7,7 +7,6 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
 from enum import StrEnum
 from typing import Literal, NotRequired, Protocol, Self, TypedDict, TypeGuard, overload
 
@@ -109,7 +108,6 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
     region: str = Field(pattern=_REGION_PATTERN.pattern)
     instance_type: str = Field(pattern=r"^[a-z0-9-]+\.[a-z0-9]+$")
     preemptible: bool = False
-    max_compute_hourly_micros: int | None = Field(default=None, gt=1_000)
     availability_zone: str = ""
     ami_id: str = Field(pattern=_AMI_PATTERN.pattern)
     desired_nodes: int = Field(ge=0)
@@ -127,8 +125,6 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
             raise ValueError("desired_nodes cannot exceed max_nodes")
         if ":instance-profile/" not in self.node_instance_profile_arn:
             raise ValueError("node instance profile ARN is invalid")
-        if self.preemptible and self.max_compute_hourly_micros is None:
-            raise ValueError("preemptible capacity requires a maximum compute hourly price")
         return self
 
     @property
@@ -254,7 +250,6 @@ class _TagSpecification(TypedDict):
 
 
 class _SpotOptions(TypedDict):
-    MaxPrice: str
     SpotInstanceType: Literal["one-time"]
     InstanceInterruptionBehavior: Literal["terminate"]
 
@@ -1277,12 +1272,9 @@ def _launch_template_data(
         "UserData": base64.b64encode(aws_managed_pool_bootstrap_script(spec).encode()).decode(),
     }
     if spec.preemptible:
-        if spec.max_compute_hourly_micros is None:
-            raise ValueError("preemptible capacity requires a maximum compute hourly price")
         data["InstanceMarketOptions"] = {
             "MarketType": "spot",
             "SpotOptions": {
-                "MaxPrice": str(Decimal(spec.max_compute_hourly_micros) / Decimal(1_000_000)),
                 "SpotInstanceType": "one-time",
                 "InstanceInterruptionBehavior": "terminate",
             },

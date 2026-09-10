@@ -1566,19 +1566,20 @@ class AwsAccountConnectionDirectory:
             return AwsAccountConnectionRepository(session).get_for_user(user_id)
 
     def list_for_workspace(self, workspace_id: str) -> tuple[AwsAccountConnection, ...]:
-        """Connections a workspace may place work on, reached through its owner.
-
-        Placement asks per workspace and always did; what changed is that the answer
-        now comes from the account behind it rather than the workspace itself.
-        """
+        """The workspace owner's connection, including capacity being drained."""
         with self.context.database.session() as session:
-            repository = AwsAccountConnectionRepository(session)
-            connection = repository.get_for_workspace_owner(workspace_id)
-            fleet = [item for item in repository.list_all() if item.platform_fleet]
-        by_id = {item.id: item for item in fleet}
-        if connection is not None:
-            by_id[connection.id] = connection
-        return tuple(by_id[key] for key in sorted(by_id))
+            connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
+                workspace_id
+            )
+        return (connection,) if connection is not None else ()
+
+    def list_platform(self) -> tuple[AwsAccountConnection, ...]:
+        with self.context.database.session() as session:
+            return tuple(
+                connection
+                for connection in AwsAccountConnectionRepository(session).list_all()
+                if connection.platform_fleet
+            )
 
     def capacity_workspace(self, connection: AwsAccountConnection) -> str:
         with self.context.database.session() as session:

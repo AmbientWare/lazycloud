@@ -547,20 +547,35 @@ class ProviderMachineReconciler:
             # again, and the pool holds a floor it can never fill. A wrong
             # `Provisioning` costs one pass.
             phase = ComputeUnitPhase.Provisioning
-        # Providers never own the relaunch bookkeeping: carry it from the durable
-        # intent so snapshot application cannot silently restore a pool that
-        # exhausted its launch attempts, nor discard the baseline that recovery
-        # set. Explicit capacity mutations clear the reason on the intent before
-        # the provider is consulted. A provider describes machines it holds; it
-        # has never heard of either field, so its snapshot leaves both at their
-        # defaults and overwriting from it loses them.
+        # Provider snapshots cannot reset the control plane's retry state or
+        # make a previously handled failure look new after recovery.
         provider_state = snapshot.provider_state.model_copy(
             update={
                 "degraded_reason": pool.provider_state.degraded_reason,
                 "degraded_at": pool.provider_state.degraded_at,
+                "last_capacity_failure_at": pool.provider_state.last_capacity_failure_at,
                 "launch_attempt_baseline": pool.provider_state.launch_attempt_baseline,
             }
         )
+        failure_at = snapshot.last_capacity_failure_at
+        recorded_failure_at = provider_state.last_capacity_failure_at
+        if failure_at is not None and (
+            recorded_failure_at is None or to_utc(failure_at) > to_utc(recorded_failure_at)
+        ):
+            provider_state = provider_state.model_copy(
+                update={"last_capacity_failure_at": to_utc(failure_at)}
+            )
+            if (
+                snapshot.observed_machines < snapshot.desired_machines
+                and pool.phase not in ENDED_UNIT_PHASES
+                and provider_state.degraded_reason is None
+            ):
+                provider_state = provider_state.model_copy(
+                    update={
+                        "degraded_reason": "provider_acquisition_rejected",
+                        "degraded_at": current_time,
+                    }
+                )
         provider_request = provider_unit_request(self.pool_bootstrap_factory, pool, offer)
         observed_instance_ids = {item.provider_instance_id for item in snapshot.instances}
         authoritative_zero = _provider_zero_capacity_converged(snapshot)

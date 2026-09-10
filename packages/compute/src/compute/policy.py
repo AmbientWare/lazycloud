@@ -105,7 +105,7 @@ class ComputeSummary:
 
 
 class AwsDefaultCapacityOwner(Protocol):
-    def workspace_has_ready_connection(self, workspace: str) -> bool: ...
+    def workspace_has_ready_customer_connection(self, workspace: str) -> bool: ...
 
     def reconcile_aws_default_capacity(
         self,
@@ -126,11 +126,7 @@ class AwsDefaultCapacityOwner(Protocol):
 
 def _aws_capacity_is_zero(configuration: AwsComputeConfiguration) -> bool:
     """Whether managed policy disables AWS CPU capacity."""
-    return (
-        configuration.min_cpu_workers == 0
-        and configuration.initial_cpu_workers == 0
-        and configuration.max_cpu_instances == 0
-    )
+    return configuration.min_cpu_workers == 0 and configuration.initial_cpu_workers == 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,7 +140,7 @@ class AwsDefaultCapacityBaseline:
         configuration: AwsComputeConfiguration,
     ) -> ComputeUnitRecord | None:
         """Apply the managed AWS warm baseline to a connected workspace."""
-        if not self.capacity.workspace_has_ready_connection(workspace_id):
+        if not self.capacity.workspace_has_ready_customer_connection(workspace_id):
             LOGGER.info(
                 "warm baseline for workspace %s declined: no connection hosting workloads",
                 workspace_id,

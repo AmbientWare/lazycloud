@@ -27,7 +27,7 @@ from provider_aws import (
     AwsRegionalPrices,
     Boto3AwsManagedPoolClientProvider,
 )
-from provider_aws.instance_catalog import AWS_PURCHASE_LIMITS
+from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
 from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
 from provider_hetzner.client import HetznerClient
 from provider_hetzner.pooled_provider import HetznerPooledProvider
@@ -41,6 +41,7 @@ from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, ComputeCapacityMode, M
 from provider_clients.settings import AwsCapacitySettings, PlatformCapacitySettings
 
 AwsConnectionLoader = Callable[[str], Iterable[AwsAccountConnection]]
+PlatformAwsConnectionLoader = Callable[[], Iterable[AwsAccountConnection]]
 PlatformProviderLoader = Callable[[], tuple[ResolvedComputeProvider, ...]]
 
 
@@ -113,7 +114,7 @@ def configured_aws_compute_catalog(
             )
             if not launchable or (
                 instance.instance_type not in priced_instance_types
-                and instance.max_spot_hourly_cost_micros is None
+                and True not in instance.purchase_markets
             ):
                 continue
             instances_by_type.setdefault(
@@ -136,6 +137,7 @@ def configured_aws_compute_catalog(
 @dataclass(frozen=True, slots=True)
 class WorkspaceComputeProviderResolver(ComputeProviderResolver):
     connections: AwsConnectionLoader
+    platform_connections: PlatformAwsConnectionLoader
     binaries_by_region: Mapping[str, AwsManagedPoolBinaries]
     instance_hourly_micros: Mapping[str, int]
     client_provider: Boto3AwsManagedPoolClientProvider
@@ -146,7 +148,14 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
     )
 
     def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
-        providers = self.platform_providers()
+        providers = (
+            *self.platform_providers(),
+            *(
+                self._resolved(connection)
+                for connection in self.platform_connections()
+                if self.binaries_by_region and _connection_ready(connection)
+            ),
+        )
         refs = [provider.ref for provider in providers]
         if len(refs) != len(set(refs)):
             raise ValueError("platform compute provider refs must be unique")
@@ -157,20 +166,22 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
         return providers
 
     def list_providers(self, workspace_id: str) -> Iterable[ResolvedComputeProvider]:
-        return [
-            *self.list_platform_providers(),
-            *[
-                self._resolved(connection)
-                for connection in self.connections(workspace_id)
-                if self.binaries_by_region and _connection_ready(connection)
-            ],
-        ]
+        providers = {provider.ref: provider for provider in self.list_platform_providers()}
+        for connection in self.connections(workspace_id):
+            if (
+                self.binaries_by_region
+                and _connection_ready(connection)
+                and _provider_ref(connection.id) not in providers
+            ):
+                provider = self._resolved(connection)
+                providers[provider.ref] = provider
+        return tuple(providers.values())
 
     def resolve(self, workspace_id: str, provider_ref: str) -> ResolvedComputeProvider:
-        for provider in self.list_platform_providers():
+        for provider in self.platform_providers():
             if provider.ref == provider_ref:
                 return provider
-        for connection in self.connections(workspace_id):
+        for connection in (*self.platform_connections(), *self.connections(workspace_id)):
             if _provider_ref(connection.id) != provider_ref:
                 continue
             if not _connection_resolvable(connection):
@@ -205,11 +216,9 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
                 platform_fleet=connection.platform_fleet,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
-                max_cpu_instances=AWS_COMPUTE_CONFIGURATION.max_cpu_instances,
-                max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
                 root_volume_gib=AWS_COMPUTE_CONFIGURATION.root_volume_gib,
                 idle_timeout_seconds=AWS_COMPUTE_CONFIGURATION.idle_timeout_seconds,
-                purchase_limits=AWS_PURCHASE_LIMITS,
+                allowed_offers=AWS_ALLOWED_OFFERS,
             ),
             pooled=AwsConnectedAccountPooledProvider(
                 provider_ref=provider_ref,
@@ -227,6 +236,7 @@ def workspace_compute_provider_resolver(
     agent_binary_settings: AgentBinarySettings,
     *,
     connections: AwsConnectionLoader,
+    platform_connections: PlatformAwsConnectionLoader,
     capacity_workspace: Callable[[AwsAccountConnection], str],
     gateway_origin: str,
     presigned_origin: str = "",
@@ -245,6 +255,7 @@ def workspace_compute_provider_resolver(
     )
     return WorkspaceComputeProviderResolver(
         connections=connections,
+        platform_connections=platform_connections,
         capacity_workspace=capacity_workspace,
         platform_providers=platform_providers,
         binaries_by_region=artifacts,

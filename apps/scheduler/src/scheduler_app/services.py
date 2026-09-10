@@ -284,6 +284,7 @@ class SchedulerAppServices:
                 capacity.aws_capacity,
                 capacity.agent_binaries,
                 connections=connection_directory.list_for_workspace,
+                platform_connections=connection_directory.list_platform,
                 capacity_workspace=connection_directory.capacity_workspace,
                 platform_providers=configured_platform_compute_providers(
                     platform_capacity,

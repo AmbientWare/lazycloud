@@ -29,13 +29,23 @@ coordination package.
   actually protects against before relying on it, and say so where it is used.
 
 Platform capacity spans providers behind the pooled-capacity protocol. A stable
-`provider_ref` resolves ownership, pool, limits, allowed offers, and lifecycle
+`provider_ref` resolves ownership, pool, allowed offers, and lifecycle
 policy. The AWS connection pointer belongs only to capacity backed by an actual
-AWS connection. Platform bindings need no customer connection row or separate
-purchase ceiling. Existing AWS connection limits sum across that connection's
-units; account admission owns plan concurrency and billing limits.
-Desired-capacity changes lock the
-binding's capacity workspace before reading the sum or updating a unit.
+AWS connection. Platform bindings need no customer connection row. Account
+admission owns plan concurrency and billing limits.
+
+`FleetCapacityPolicy` owns platform CPU/GPU node limits and CPU warm minimums by
+purchase market. Platform growth and planned replacement share a PostgreSQL
+transaction lock before reading commitments or changing a unit. Terminating
+nodes consume headroom until their absence is observed. Providers can replace
+failed machines autonomously, so observed physical counts may briefly exceed
+the platform's admitted commitments. Customer-owned capacity stays outside these
+totals and serializes changes through its capacity workspace.
+
+Warm reconciliation chooses approved offers across platform providers, separately
+for preemptible and non-preemptible capacity. A zero minimum disables that
+market's spare-capacity floor. Changing a floor leaves active work to normal
+draining. A customer's AWS baseline cannot own a platform warm floor.
 
 Supplier quotes are immutable component estimates recorded when a node is first
 observed. A unit records its prepared offer; reconciling its existing nodes must
@@ -58,16 +68,12 @@ choose workload resources, not node types, warm floors, or acquisition limits.
 Provider catalogs define the supported machine types. Removing a type must stop
 new purchases while preserving observation, draining, and deletion of owned nodes.
 
-Catalog review owns profitability assumptions. Provider code defines the region,
-instance type and maximum complete hourly node price; acquisition compares the
-supplier quote with that ceiling through `ProviderCapacityPolicy.accepts`.
-Unknown component prices and absent limits refuse acquisition. The check covers
-compute, root disk and public IPv4, not network traffic or realized profit.
-Do not add per-workload revenue forecasts or a runtime margin engine. Pricing,
-occupancy and operating-cost changes are reasons to review the catalog limits.
-Owned nodes remain observable and removable when their offers fail admission.
-Supplier-managed replacement needs a supplier-enforced price cap where supported;
-an application admission check alone does not constrain an autonomous ASG.
+Catalog review owns profitability assumptions. Provider catalogs approve regions,
+instance types and purchase markets. Acquisition ranks suitable approved offers
+by quoted compute, root disk and public IPv4 cost. Unknown component costs cannot
+rank as free capacity. Do not add purchase ceilings, per-workload revenue
+forecasts or a runtime margin engine. Owned nodes remain observable and removable
+after their types leave the catalog.
 
 A connected cloud account belongs to a user, not a workspace, and backs every
 workspace that user owns. Runtime lookups therefore resolve
