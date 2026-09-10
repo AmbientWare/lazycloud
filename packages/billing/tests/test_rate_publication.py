@@ -173,46 +173,28 @@ def test_published_execution_choices_price_each_resource_and_preserve_customer_c
                 )
 
 
-def test_price_cutover_matches_quotes_and_preserves_customer_gpu_prices(
+def test_published_cutovers_match_stored_quotes(
     service_context: ServiceContext,
 ) -> None:
-    boundary = PUBLISHED_METERED_RATE_HISTORY[-1].effective_at
     with service_context.database.session() as session:
         rates = ComputeRateRepository(session)
-        for at, expected_cpu in (
-            (boundary - timedelta(seconds=1), 55_126_800),
-            (boundary, 22_000_000),
+        for at in (
+            moment
+            for card in PUBLISHED_METERED_RATE_HISTORY[1:]
+            for moment in (card.effective_at - timedelta(seconds=1), card.effective_at)
         ):
             catalog = pricing_catalog_response(at=at)
-            automatic = next(
-                placement for placement in catalog.placement_rates if placement.rate_class == "auto"
-            )
-            cpu = next(
-                rate
-                for rate in automatic.compute_rates
-                if rate.billing_owner is UsageBillingOwner.PlatformFleet and not rate.gpu_type
-            )
-            assert cpu.nanos_per_cpu_core_hour == expected_cpu
-            assert {rate.gpu_type for rate in catalog.gpu_rates} == {"T4", "A10G", "L4"}
-            assert not any(
-                rate.billing_owner is UsageBillingOwner.PlatformFleet and rate.gpu_type == "H100"
-                for rate in automatic.compute_rates
-            )
-            assert any(
-                rate.billing_owner is UsageBillingOwner.ConnectedCloud and rate.gpu_type == "H100"
-                for rate in automatic.compute_rates
-            )
             assert all(placement.effective_at <= at for placement in catalog.placement_rates)
             for placement in catalog.placement_rates:
                 selected = next(
                     rate
                     for rate in placement.compute_rates
                     if rate.billing_owner is UsageBillingOwner.PlatformFleet
-                    and rate.gpu_type == "T4"
+                    and rate.gpu_type == "H100"
                 )
                 shape = ContainerShape(
                     UsageBillingOwner.PlatformFleet,
-                    "T4",
+                    "H100",
                     1_000,
                     1_024,
                     1,

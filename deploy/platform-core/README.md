@@ -68,6 +68,12 @@ selected old nodes one at a time. Disable the built-in pool only after custom
 capacity is serving and replacement provisioning is proven. Preserve node
 access, the cluster and all data. [Migration acceptance](../SPOT_PLAN.md)
 
+When adopting an existing built-in node role, import its access entry and
+`AmazonEKSAutoNodePolicy` association into `aws_eks_access_entry.node` and
+`aws_eks_access_policy_association.node` before applying. EKS requires
+`compute_config.node_role_arn` to be absent when built-in pools are disabled.
+The NodeClass still uses the same role; Terraform owns its explicit node access.
+
 ## Images
 
 One repository per control-plane image, `lazycloud/<name>`, tagged by the

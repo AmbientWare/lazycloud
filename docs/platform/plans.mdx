@@ -11,7 +11,7 @@ prices and per-plan limits are on the
 ## What you pay for
 
 Compute is metered per second for each running container: a base rate per
-container, plus rates per CPU core, per GiB of memory, and per GPU. Volumes
+container, plus rates per CPU, per GiB of memory, and per GPU. Volumes
 are billed by the GiB-month stored. Compute, storage, and transfer charges all
 deduct from one prepaid credit balance. Trial credit, subscription credit, and
 purchased credit fund that same balance. Subscription fees are separate.
@@ -28,6 +28,16 @@ dates.
 
 The pricing page lists base rates for automatic placement. LazyCloud chooses
 where the workload runs. These rates have no regional surcharge.
+
+One CPU is one vCPU and matches `cpu=1` in a workload definition. For comparisons
+with [Modal](https://modal.com/pricing) and [Beam](https://www.beam.cloud/pricing),
+their published physical core represents two vCPUs. Compare one of their cores
+with two LazyCloud CPUs. This normalizes billing units; processor performance
+depends on the hardware.
+
+GPU rates are per card. Add the CPU and memory charges for the same workload
+size when comparing total compute costs. GPU availability depends on the model
+and whether the workload allows interruptions.
 
 Pinning a region or availability zone requires a plan that allows it and adds
 the published location premium to CPU, memory and GPU rates. Choosing

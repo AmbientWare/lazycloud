@@ -29,19 +29,14 @@ const SECONDS_PER_HOUR = 3600;
 /** Which unit every figure on the page is currently read in. */
 type Meter = "hour" | "second";
 
-/* Every figure the card publishes divides into a whole nanodollar a second, and
-   that divisibility is a term of the card rather than a coincidence of these
-   numbers. A figure that broke it has no exact per-second price to publish, so
-   the page stops instead of quoting a rounded one. */
-function perSecond(nanosPerHour: number): number {
-  if (nanosPerHour % SECONDS_PER_HOUR !== 0) {
-    throw new Error(`${nanosPerHour} nanodollars an hour has no exact per-second price`);
-  }
-  return nanosPerHour / SECONDS_PER_HOUR;
-}
-
-function metered(nanosPerHour: number, meter: Meter): number {
-  return meter === "second" ? perSecond(nanosPerHour) : nanosPerHour;
+function metered(nanosPerHour: number, meter: Meter): number | string {
+  if (meter === "hour") return nanosPerHour;
+  if (nanosPerHour % SECONDS_PER_HOUR === 0) return nanosPerHour / SECONDS_PER_HOUR;
+  return `≈ ${new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 12,
+  }).format(nanosPerHour / SECONDS_PER_HOUR / 1_000_000_000)}`;
 }
 
 const meters = [
@@ -95,7 +90,12 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
         {
           label: "Reserved or used CPU, whichever is greater",
           figure: metered(shape.nanos_per_cpu_core_hour, meter),
-          unit: `/ vCPU / ${per}`,
+          unit: `/ CPU / ${per}`,
+        },
+        {
+          label: "2 CPUs, for physical-core price comparisons",
+          figure: metered(shape.nanos_per_cpu_core_hour * 2, meter),
+          unit: `/ ${per}`,
         },
       ],
     },
@@ -112,10 +112,6 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
   ];
 }
 
-/* What a container moves and keeps, which the card prices once for the platform
-   rather than per capacity. Egress is published at a stated zero rather than
-   left off, so a reader can tell the traffic is measured and free rather than
-   unmeasured. */
 function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
   return [
     {
@@ -237,6 +233,16 @@ function MarketingPricing() {
                 groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
                 id={fleetRatesId}
               />
+              <p className="mb-3 text-[12.5px] leading-relaxed text-muted-foreground">
+                One CPU matches <code>cpu=1</code> and represents one vCPU. Modal and Beam quote
+                physical cores as two vCPUs, so compare their one-core price with our two-CPU price.
+                This compares billing units, not processor performance.
+              </p>
+              <p className="mb-3 text-[12.5px] leading-relaxed text-muted-foreground">
+                GPU prices are per card and exclude CPU and memory. Add all three for your workload
+                cost. GPU availability depends on the model and interruption setting.
+                {meter === "second" ? " Figures marked ≈ are rounded for display." : ""}
+              </p>
               <p className="mb-3 text-[12.5px] leading-relaxed text-muted-foreground">
                 Compute rates shown allow interruptions and use automatic location selection.
                 {nonPreemptible
