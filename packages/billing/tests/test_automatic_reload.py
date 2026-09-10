@@ -10,21 +10,24 @@ from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_preferences import BillingPreferencesRepository
 from database.repositories.credit_purchases import CreditPurchaseRepository
 from shared.billing_credits import CreditGrant, CreditKind
-from shared.billing_preferences import AutomaticReloadPauseReason, usage_budget_month
+from shared.billing_preferences import AutomaticReloadPauseReason
 from shared.credit_payments import CreditPaymentStatus
 from shared.http.billing_preferences import BillingPreferences
 from shared.timestamps import utc_now
 from tests.workspaces import workspace_owner_user_id
 
 
-def test_reload_serializes_payments_preserves_pause_and_counts_refunds_and_old_pending(
+def test_reload_serializes_payments_preserves_pause_and_continues_after_refunds(
     isolated_services: ApiServices,
 ) -> None:
     now = utc_now()
-    preferences = BillingPreferences(reload_enabled=True, reload_monthly_payment_limit_cents=2000)
+    preferences = BillingPreferences(reload_enabled=True)
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
         user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+        BillingAccountRepository(session).set_payment_method_present(
+            user_id=user_id, present=True, at=now
+        )
         credits = BillingCreditRepository(session)
         BillingPreferencesService(session).set(user_id=user_id, preferences=preferences)
     service = AutomaticReloadService(
@@ -55,7 +58,6 @@ def test_reload_serializes_payments_preserves_pause_and_counts_refunds_and_old_p
             authorize_automatic_purchase(
                 session,
                 purchase=purchase,
-                now=now,
             )
             is AutomaticPurchaseDecision.Disabled
         )
@@ -106,28 +108,24 @@ def test_reload_serializes_payments_preserves_pause_and_counts_refunds_and_old_p
             effective_at=now,
         )
     assert service.status(user_id=user_id, now=now).monthly_payment_committed_cents == 2000
-    assert service.prepare_due_reload(user_id=user_id, now=utc_now()) is None
-
-    with isolated_services.context.database.session() as session:
-        BillingPreferencesService(session).set(
-            user_id=user_id,
-            preferences=preferences.model_copy(update={"reload_monthly_payment_limit_cents": 4000}),
-        )
     pending_id = service.prepare_due_reload(user_id=user_id, now=utc_now())
     assert pending_id is not None
-    _, following_month = usage_budget_month(now)
     with isolated_services.context.database.session() as session:
-        BillingPreferencesService(session).set(
-            user_id=user_id,
-            preferences=preferences.model_copy(update={"reload_monthly_payment_limit_cents": 1999}),
-        )
         purchase = CreditPurchaseRepository(session).get(purchase_id=pending_id, user_id=user_id)
         assert purchase is not None
         assert (
             authorize_automatic_purchase(
                 session,
                 purchase=purchase,
-                now=following_month,
             )
-            is AutomaticPurchaseDecision.PaymentLimit
+            is AutomaticPurchaseDecision.Allowed
         )
+        BillingAccountRepository(session).set_payment_method_present(
+            user_id=user_id, present=False, at=now
+        )
+        assert (
+            authorize_automatic_purchase(session, purchase=purchase)
+            is AutomaticPurchaseDecision.IneligibleAccount
+        )
+        purchase.status = CreditPaymentStatus.Cancelled.value
+    assert service.prepare_due_reload(user_id=user_id, now=utc_now()) is None

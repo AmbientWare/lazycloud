@@ -139,15 +139,6 @@ class AutomaticReloadService:
             )
             if balance > preferences.reload_threshold_cents * (NANOS_PER_USD // 100):
                 return None
-            start, end = usage_budget_month(now)
-            committed = purchases.automatic_payment_commitment(
-                user_id=user_id, start=start, end=end
-            )
-            payment_limit = preferences.reload_monthly_payment_limit_cents
-            if payment_limit is not None and committed + preferences.reload_amount_cents * (
-                NANOS_PER_USD // 100
-            ) > payment_limit * (NANOS_PER_USD // 100):
-                return None
             prepared = CreditPurchaseService(self.database, self.payments).prepare_in_session(
                 session,
                 user_id=user_id,

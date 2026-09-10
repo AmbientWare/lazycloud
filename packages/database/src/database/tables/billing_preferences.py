@@ -25,9 +25,7 @@ class BillingPreferencesTable(TimestampMixin, DatabaseBase):
             name="ck_billing_preferences_usage_limit",
         ),
         CheckConstraint(
-            "reload_threshold_cents >= 0 AND reload_amount_cents > 0 AND "
-            "(reload_monthly_payment_limit_cents IS NULL OR "
-            "reload_monthly_payment_limit_cents >= 0)",
+            "reload_threshold_cents >= 0 AND reload_amount_cents > 0",
             name="ck_billing_preferences_reload_amounts",
         ),
         CheckConstraint(
@@ -56,7 +54,6 @@ class BillingPreferencesTable(TimestampMixin, DatabaseBase):
         Integer, nullable=False, server_default=text("1000")
     )
     reload_amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
-    reload_monthly_payment_limit_cents: Mapped[int | None] = mapped_column(BigInteger)
     reload_paused_purchase_id: Mapped[str | None] = mapped_column(
         uuid_type,
         ForeignKey("credit_purchases.id", ondelete="RESTRICT"),

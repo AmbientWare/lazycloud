@@ -4,9 +4,7 @@ import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { BillingSummary } from "@/lib/api/schemas";
-import { usagePhrase } from "@/lib/entitlements";
 import { formatCostNanos } from "@/lib/money";
-import { cn } from "@/lib/utils";
 
 import { useBillingSettingsController } from "./controller";
 import { PlanDialog } from "./PlanDialog";
@@ -27,7 +25,6 @@ export function BillingSettings({
   return (
     <>
       <div className="space-y-4">
-        {summary && !complimentary ? <PrepaidCredit /> : null}
         <div className="flex flex-col gap-2">
           {controller.isLoading ? (
             <div className="space-y-2" aria-hidden="true">
@@ -53,34 +50,33 @@ export function BillingSettings({
                 {summary.status === "past_due" ? (
                   <p className="text-sm text-warning">Payment past due</p>
                 ) : null}
-                <div className="flex flex-wrap gap-1">
+                <div className="flex flex-wrap gap-2">
                   {complimentary ? null : (
                     <>
                       <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={controller.busy}
+                        variant="outline"
+                        disabled={controller.busy || !summary.payment_method_on_file}
                         onClick={controller.openPlan}
                       >
                         Change plan
                       </Button>
                       <Button
-                        variant="ghost"
-                        size="sm"
+                        variant={summary.payment_method_on_file ? "outline" : "default"}
                         disabled={controller.busy}
                         onClick={controller.startCard}
                       >
                         {controller.leaving === "card" ? (
                           <LoaderCircle className="size-4 animate-spin" />
                         ) : null}
-                        {summary.payment_method_on_file ? "Payment method" : "Add payment method"}
+                        {summary.payment_method_on_file
+                          ? "Update payment method"
+                          : "Add payment method"}
                       </Button>
                     </>
                   )}
                   {summary.portal_available ? (
                     <Button
-                      variant="ghost"
-                      size="sm"
+                      variant="outline"
                       disabled={controller.busy}
                       onClick={controller.openPortal}
                     >
@@ -92,27 +88,10 @@ export function BillingSettings({
                   ) : null}
                 </div>
               </div>
-              {summary.plan || complimentary ? (
-                <details className="text-xs text-muted-foreground">
-                  <summary className="cursor-pointer">Plan limits</summary>
-                  <div className="mt-2 space-y-1">
-                    <ConcurrencyLine
-                      running={summary.usage.concurrent_cpu_containers}
-                      limit={summary.entitlements?.max_concurrent_cpu_containers ?? 0}
-                      noun="CPU container"
-                      state="running or queued"
-                      atLimitNote="Stop a container or raise your plan limit before starting another."
-                    />
-                    <ConcurrencyLine
-                      running={summary.usage.concurrent_gpus}
-                      limit={summary.entitlements?.max_concurrent_gpus ?? 0}
-                      noun="GPU card"
-                      state="in use"
-                      atLimitNote="Release GPU capacity or raise your plan limit before starting more."
-                    />
-                    <EntitlementUsage summary={summary} />
-                  </div>
-                </details>
+              {!complimentary && !summary.payment_method_on_file ? (
+                <p className="text-xs text-muted-foreground">
+                  Add a payment method to buy credit, enable automatic reload, or change plans.
+                </p>
               ) : null}
               {controller.settling ? (
                 <p className="text-sm text-warning">
@@ -122,43 +101,15 @@ export function BillingSettings({
             </>
           )}
         </div>
-        {summary && !complimentary ? <BillingPreferences /> : null}
+        {summary && !complimentary ? (
+          <>
+            <PrepaidCredit paymentMethodOnFile={summary.payment_method_on_file} />
+            <BillingPreferences paymentMethodOnFile={summary.payment_method_on_file} />
+          </>
+        ) : null}
       </div>
       <PlanDialog controller={controller} />
     </>
-  );
-}
-
-function ConcurrencyLine({
-  running,
-  limit,
-  noun,
-  state,
-  atLimitNote,
-}: {
-  running: number;
-  limit: number;
-  noun: string;
-  state: string;
-  atLimitNote: string;
-}) {
-  const atLimit = running >= limit;
-  return (
-    <p className={cn("text-sm", atLimit ? "text-warning" : "text-muted-foreground")}>
-      {usagePhrase(running, limit, noun)} {state}
-      {atLimit ? `. ${atLimitNote}` : null}
-    </p>
-  );
-}
-
-function EntitlementUsage({ summary }: { summary: BillingSummary }) {
-  const entitlements = summary.entitlements;
-  if (!entitlements) return null;
-  return (
-    <p className="text-sm text-muted-foreground">
-      {usagePhrase(summary.usage.workspaces, entitlements.max_workspaces, "workspace")} ·{" "}
-      {usagePhrase(summary.usage.members, entitlements.max_members, "member")}
-    </p>
   );
 }
 

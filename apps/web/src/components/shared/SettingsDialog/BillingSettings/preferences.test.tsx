@@ -1,7 +1,7 @@
 import { testQueryClient } from "@/test/query-client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 
 import {
   billingPreferencesSchema,
@@ -11,13 +11,22 @@ import {
 import {
   automaticReloadStatusQueryOptions,
   billingPreferencesQueryOptions,
+  creditBalanceQueryOptions,
   usageBudgetQueryOptions,
 } from "@/lib/queries/billing";
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 
 import { BillingPreferences as BillingPreferencesForm } from "./BillingPreferences";
+import { PrepaidCredit } from "./PrepaidCredit";
 
-it("saves reload and usage limits together and preserves untouched settings", async () => {
+it("saves preset and custom amounts without changing untouched settings or confusing zero with no limit", async () => {
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
+  onTestFinished(() => {
+    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+  });
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -34,9 +43,12 @@ it("saves reload and usage limits together and preserves untouched settings", as
     reload_enabled: false,
     reload_threshold_cents: 500,
     reload_amount_cents: 500,
-    reload_monthly_payment_limit_cents: null,
   };
   client.setQueryData(billingPreferencesQueryOptions().queryKey, stored);
+  client.setQueryData(creditBalanceQueryOptions().queryKey, {
+    ready: true,
+    balance_nanos: 5_000_000_000,
+  });
   client.setQueryData<PricingCatalog>(pricingCatalogQueryOptions().queryKey, {
     pricing_version: "test",
     metered_rates_effective_at: "2026-09-01T00:00:00Z",
@@ -87,12 +99,15 @@ it("saves reload and usage limits together and preserves untouched settings", as
     if (path.endsWith("/automatic-reload")) return Response.json(status);
     throw new Error(`Unexpected request: ${path}`);
   });
-  render(
+  const { rerender } = render(
     <QueryClientProvider client={client}>
-      <BillingPreferencesForm />
+      <PrepaidCredit paymentMethodOnFile />
+      <BillingPreferencesForm paymentMethodOnFile />
     </QueryClientProvider>,
   );
-  fireEvent.change(screen.getByLabelText("Monthly usage limit, USD"), { target: { value: "50" } });
+  expect(screen.getByRole("button", { name: "Add credit" })).toBeEnabled();
+  fireEvent.keyDown(screen.getByLabelText("Monthly usage limit, USD"), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("option", { name: "$50.00" }));
   fireEvent.click(screen.getByLabelText("Automatic reload"));
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(screen.getByLabelText("Monthly usage limit, USD")).toBeDisabled());
@@ -102,10 +117,39 @@ it("saves reload and usage limits together and preserves untouched settings", as
   await screen.findByText("Changes saved.");
   expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
   expect(stored.reload_amount_cents).toBe(500);
-  fireEvent.change(screen.getByLabelText("Monthly reload limit, USD"), { target: { value: "25" } });
+  fireEvent.keyDown(screen.getByLabelText("Add, USD"), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("option", { name: "Custom amount" }));
+  fireEvent.change(screen.getByLabelText("Add, USD, custom amount"), {
+    target: { value: "32.75" },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await screen.findByText("Changes saved.");
   expect(stored.reload_enabled).toBe(true);
   expect(stored.monthly_usage_limit_nanos).toBe(50_000_000_000);
-  expect(stored.reload_monthly_payment_limit_cents).toBe(2500);
+  expect(stored.reload_amount_cents).toBe(3275);
+
+  rerender(
+    <QueryClientProvider client={client}>
+      <PrepaidCredit paymentMethodOnFile={false} />
+      <BillingPreferencesForm paymentMethodOnFile={false} />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByRole("button", { name: "Add credit" })).toBeDisabled();
+  expect(screen.getByLabelText("Amount in USD")).toBeDisabled();
+  expect(screen.getByLabelText("Add, USD")).toBeDisabled();
+  expect(screen.getByLabelText("Add, USD, custom amount")).toBeDisabled();
+  fireEvent.click(screen.getByLabelText("Automatic reload"));
+  expect(screen.getByLabelText("Automatic reload")).toBeDisabled();
+  fireEvent.keyDown(screen.getByLabelText("Monthly usage limit, USD"), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("option", { name: "$0.00" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await screen.findByText("Changes saved.");
+  expect(stored.monthly_usage_limit_nanos).toBe(0);
+  expect(stored.reload_enabled).toBe(false);
+
+  fireEvent.keyDown(screen.getByLabelText("Monthly usage limit, USD"), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("option", { name: "No limit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await screen.findByText("Changes saved.");
+  expect(stored.monthly_usage_limit_nanos).toBeNull();
 });

@@ -188,7 +188,7 @@ function stubNavigation() {
   const assign = vi.fn();
   vi.spyOn(window, "location", "get").mockReturnValue({
     ...window.location,
-    href: "http://dashboard.example/w/main/apps?settings=general",
+    href: "http://dashboard.example/w/main/apps?settings=billing",
     assign,
   } as unknown as Location);
   return assign;

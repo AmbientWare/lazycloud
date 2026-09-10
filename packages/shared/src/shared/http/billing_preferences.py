@@ -20,12 +20,6 @@ class BillingPreferences(HttpModel):
         le=MAX_CREDIT_PURCHASE_CENTS,
         strict=True,
     )
-    reload_monthly_payment_limit_cents: int | None = Field(
-        default=None,
-        ge=0,
-        le=2**53 - 1,
-        strict=True,
-    )
 
 
 class AutomaticReloadStatus(HttpModel):

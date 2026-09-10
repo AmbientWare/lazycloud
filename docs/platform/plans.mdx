@@ -4,7 +4,7 @@ description: "What your plan includes, what usage costs, and what happens when y
 ---
 
 Your plan belongs to your account and covers every workspace you own. See it,
-change it, and add a payment method in the dashboard under Settings. Current
+change it, and add a payment method in the dashboard under Settings > Billing. Current
 prices and per-plan limits are on the
 [pricing page](https://lazycloud.dev/pricing).
 
@@ -20,9 +20,28 @@ Direct downloads through signed object-storage URLs are not charged. Responses
 served through the API and workload internet egress are metered.
 
 The Usage page shows spend over time, broken down by app and workload. Add
-credit in Settings, or save an automatic reload threshold and amount. Purchased
+credit in Settings > Billing, or save an automatic reload threshold and amount. Purchased
 credit does not expire. Trial and subscription credit expire on their stated
 dates.
+
+## Automatic reload
+
+Automatic reload charges your saved card when your balance reaches the threshold
+you choose. Trial, subscription, and purchased credit all count toward that
+balance. Select a suggested amount or choose Custom amount to enter your own.
+The billing form shows the permitted credit purchase range.
+
+Add a payment method in Billing before buying credit, enabling automatic reload,
+or changing plans. When a card is saved, use Update payment method to replace it.
+Invoices and the monthly usage limit remain available without a saved card.
+
+A declined payment or one that needs bank authentication pauses automatic
+reload. Update your payment method, then resume reload in Billing. You can also
+add credit through checkout. Payments already processing may finish after you
+disable reload.
+
+The monthly usage limit applies to metered usage, not card payments. A reload
+can add credit beyond that limit; unused purchased credit stays in your balance.
 
 ## Compute pricing
 
@@ -77,7 +96,7 @@ Business adds unlimited members, the ability to connect your own AWS account,
 more usage credit, higher concurrency, and longer log and artifact retention.
 Joining your own machines is available on every plan.
 
-Change plans from Settings, then Manage subscription. You cannot move to a
+Change plans from Settings > Billing, then Change plan. You cannot move to a
 plan whose limits your account already exceeds; the dashboard names what has
 to go first. While a plan change is processing, you cannot add plan-limited
 resources.
@@ -103,7 +122,9 @@ stops. Added credit covers that negative balance first.
 You can also save a monthly usage limit across your workspaces. It counts usage
 paid with any credit and resets on the first of each month at midnight UTC.
 Reaching it stops compute and blocks new work and transfers in the same way.
-Subscription fees do not count toward this limit.
+Subscription fees do not count toward this limit. Choose No limit to remove it,
+or set $0 to stop new work and transfers. Running compute can exceed the limit
+between usage records and shutdown.
 
 If funds run out, existing stored data is retained for 30 days before deletion.
 Add enough credit to restore a positive balance during that period to retain
