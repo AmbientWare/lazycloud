@@ -11,7 +11,7 @@ runtime:
   LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: wg.lazycloud.dev:51820
   LAZYCLOUD_AWS_CAPACITY_REGIONAL_PRICES: |-
     {"us-east-1":{"gp3_gib_monthly_micros":80000,"public_ipv4_hourly_micros":5000}}
-  # Existing us-east-1 on-demand rates. Update deliberately because these rank offers.
+  # Linux shared-tenancy On-Demand compute prices in us-east-1, reviewed 2026-09-10.
   LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS: |-
     {
       "c6a.2xlarge": 306000,
@@ -19,8 +19,10 @@ runtime:
       "c6a.8xlarge": 1224000,
       "c6i.8xlarge": 1360000,
       "g4dn.12xlarge": 3912000,
+      "g4dn.16xlarge": 4352000,
       "g4dn.2xlarge": 752000,
       "g4dn.4xlarge": 1204000,
+      "g4dn.8xlarge": 2176000,
       "g4dn.metal": 7824000,
       "g4dn.xlarge": 526000,
       "g5.12xlarge": 5672000,
@@ -39,6 +41,14 @@ runtime:
       "g6.4xlarge": 1323200,
       "g6.8xlarge": 2014400,
       "g6.xlarge": 804800,
+      "g6e.12xlarge": 10492640,
+      "g6e.16xlarge": 7577190,
+      "g6e.24xlarge": 15065590,
+      "g6e.2xlarge": 2242080,
+      "g6e.48xlarge": 30131180,
+      "g6e.4xlarge": 3004240,
+      "g6e.8xlarge": 4528560,
+      "g6e.xlarge": 1861000,
       "m6a.2xlarge": 345600,
       "m6a.4xlarge": 691200,
       "m6a.8xlarge": 1382400,
@@ -47,6 +57,11 @@ runtime:
       "m7i.2xlarge": 403200,
       "m7i.4xlarge": 806400,
       "m7i.8xlarge": 1612800,
+      "p4d.24xlarge": 21957642,
+      "p4de.24xlarge": 27447050,
+      "p5.48xlarge": 55040000,
+      "p5.4xlarge": 6880000,
+      "p5en.48xlarge": 63296000,
       "r6a.2xlarge": 453600,
       "r6a.4xlarge": 907200,
       "r6a.8xlarge": 1814400
