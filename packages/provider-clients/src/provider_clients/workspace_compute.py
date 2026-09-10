@@ -218,7 +218,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
                 root_volume_gib=AWS_COMPUTE_CONFIGURATION.root_volume_gib,
                 idle_timeout_seconds=AWS_COMPUTE_CONFIGURATION.idle_timeout_seconds,
-                allowed_offers=AWS_ALLOWED_OFFERS,
+                allowed_offers=AWS_ALLOWED_OFFERS if _connection_ready(connection) else (),
             ),
             pooled=AwsConnectedAccountPooledProvider(
                 provider_ref=provider_ref,
