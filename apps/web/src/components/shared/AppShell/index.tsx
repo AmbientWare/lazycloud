@@ -133,7 +133,7 @@ export function AppShell() {
         path={path}
         basePath={basePath}
         onOpenSearch={openSearch}
-        onOpenSettings={() => setSettings("general")}
+        onOpenSettings={() => setSettings("billing")}
         settingsOpen={openSettingsView !== undefined}
         onLogout={logout}
       />
@@ -141,7 +141,7 @@ export function AppShell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <MobileHeader
           onOpenSearch={openSearch}
-          onOpenSettings={() => setSettings("general")}
+          onOpenSettings={() => setSettings("billing")}
           onLogout={logout}
         />
         <main

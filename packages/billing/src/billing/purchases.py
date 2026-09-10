@@ -152,9 +152,7 @@ class CreditPurchaseService:
                             "payment creation needs reconciliation before it can be retried"
                         )
                     if row.kind == CreditPurchaseKind.Automatic.value:
-                        decision = authorize_automatic_purchase(
-                            session, purchase=row, now=utc_now()
-                        )
+                        decision = authorize_automatic_purchase(session, purchase=row)
                         if decision is not AutomaticPurchaseDecision.Allowed:
                             row.status = CreditPaymentStatus.Cancelled.value
                             row.updated_at = utc_now()
@@ -207,7 +205,7 @@ class CreditPurchaseService:
                 and payment.status is CreditPaymentStatus.Pending
                 and payment.confirmation_required
             ):
-                decision = authorize_automatic_purchase(session, purchase=row, now=utc_now())
+                decision = authorize_automatic_purchase(session, purchase=row)
                 if decision is AutomaticPurchaseDecision.Allowed:
                     payment = payments.confirm_credit_purchase_payment(
                         provider_payment_id=row.provider_payment_id

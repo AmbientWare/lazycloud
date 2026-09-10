@@ -50,7 +50,6 @@ export const billingPreferencesSchema = z
     reload_enabled: z.boolean(),
     reload_threshold_cents: z.number().int().nonnegative(),
     reload_amount_cents: z.number().int().positive(),
-    reload_monthly_payment_limit_cents: z.number().int().nonnegative().nullable(),
   })
   .strict();
 export type BillingPreferences = z.infer<typeof billingPreferencesSchema>;
