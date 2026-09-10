@@ -5,21 +5,18 @@ from datetime import datetime, timedelta
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
+from billing.retention import workspace_retention_days
 from database.repositories.apps import AppRepository
 from database.repositories.artifacts import ArtifactRepository
 from database.repositories.billing_rates import PlatformRateRepository
 from database.repositories.execution import TaskRepository
-from database.repositories.identity import WorkspaceRepository
 from pydantic import ValidationError
-from shared.artifacts import ArtifactObjectFields, ArtifactRetentionSource, InheritRetention
+from shared.artifacts import ArtifactObjectFields
 from shared.billing_quotes import LedgerComponent
 from shared.billing_rate_card import SECONDS_PER_30_DAY_MONTH
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.artifacts import (
     ArtifactListResponse,
-    ArtifactRetentionPolicy,
-    ArtifactRetentionPreview,
-    ArtifactRetentionSelection,
     ArtifactSaveResponse,
     ArtifactStorageSummary,
     ArtifactSummary,
@@ -45,6 +42,8 @@ class ArtifactCursor(HttpModel):
 
 
 def artifact_summary(record: ObjectRecord) -> ArtifactSummary:
+    if record.artifact_expires_at is None:
+        raise RuntimeError("stored task artifact has no expiration")
     return ArtifactSummary(
         id=record.id,
         task_id=record.artifact_task_id or "",
@@ -55,8 +54,6 @@ def artifact_summary(record: ObjectRecord) -> ArtifactSummary:
         app_id=record.artifact_app_id,
         app_name=record.artifact_app_name,
         expires_at=record.artifact_expires_at,
-        retention_source=record.artifact_retention_source,
-        retention_seconds=record.artifact_retention_seconds,
         deleting=record.cleanup_claimed_at is not None,
         deletion_failed=record.artifact_deletion_failed,
     )
@@ -81,7 +78,6 @@ class ArtifactStorageService:
         filename: str,
         content: bytes,
         content_type: str = "application/octet-stream",
-        retention_seconds: int | InheritRetention | None = InheritRetention.Workspace,
     ) -> ArtifactSaveResponse:
         with self.context.database.session() as session:
             task = TaskRepository(session).get(task_id, workspace_id=workspace_id)
@@ -94,11 +90,7 @@ class ArtifactStorageService:
                 if task.app_id
                 else None
             )
-            seconds = (
-                ArtifactRepository(session).retention(workspace_id)
-                if isinstance(retention_seconds, InheritRetention)
-                else retention_seconds
-            )
+            seconds = workspace_retention_days(session, workspace_id) * 24 * 60 * 60
         identifier = str(uuid4())
         stub_id = task.deployment_id or "standalone"
         path = plan_artifact_path(workspace_id, stub_id, task.id, identifier, filename)
@@ -122,16 +114,13 @@ class ArtifactStorageService:
                 artifact_app_name=app.name if app else "",
                 artifact_filename=path.filename,
                 artifact_retention_seconds=seconds,
-                artifact_retention_source=ArtifactRetentionSource.Workspace
-                if isinstance(retention_seconds, InheritRetention)
-                else ArtifactRetentionSource.Explicit,
             ),
         )
+        if record.artifact_expires_at is None:
+            raise RuntimeError("stored task artifact has no expiration")
         return ArtifactSaveResponse(
             id=record.id,
             expires_at=record.artifact_expires_at,
-            retention_source=record.artifact_retention_source,
-            retention_seconds=record.artifact_retention_seconds,
         )
 
     def list(
@@ -206,65 +195,8 @@ class ArtifactStorageService:
                 else None,
                 accrued_nanos=repository.accrued_cost(workspace_id, since=since),
                 accrued_since=since,
-                retention_seconds=repository.retention(workspace_id),
+                retention_seconds=workspace_retention_days(session, workspace_id) * 24 * 60 * 60,
             )
-
-    def set_workspace_retention(
-        self, *, workspace_id: str, retention_seconds: int | None
-    ) -> ArtifactRetentionPolicy:
-        with self.context.database.session() as session:
-            ArtifactRepository(session).set_retention(workspace_id, retention_seconds)
-        return ArtifactRetentionPolicy(retention_seconds=retention_seconds)
-
-    def retention_selection(
-        self, *, workspace_id: str, request: ArtifactRetentionSelection, apply: bool = False
-    ) -> ArtifactRetentionPreview:
-        with self.context.database.session() as session:
-            WorkspaceRepository(session).lock_active_owner(workspace_id)
-            repository = ArtifactRepository(session)
-            records: list[ObjectRecord] = []
-            for identifier in sorted(set(request.ids)):
-                record = repository.get(identifier, workspace_id=workspace_id, lock=True)
-                if record is None:
-                    raise NotFoundError(f"artifact not found: {identifier}")
-                self._assert_available(record)
-                if record.artifact_retention_source is ArtifactRetentionSource.Explicit:
-                    continue
-                record.artifact_retention_seconds = request.retention_seconds
-                record.artifact_expires_at = (
-                    to_utc(record.artifact_stored_at or record.created_at)
-                    + timedelta(seconds=request.retention_seconds)
-                    if request.retention_seconds is not None
-                    else None
-                )
-                if apply:
-                    repository.update(record)
-                records.append(record)
-            return ArtifactRetentionPreview(
-                data=[artifact_summary(record) for record in records],
-                total_bytes=sum(record.size for record in records),
-            )
-
-    def update_retention(
-        self, *, workspace_id: str, artifact_id: str, retention_seconds: int | None
-    ) -> ArtifactSummary:
-        with self.context.database.session() as session:
-            WorkspaceRepository(session).lock_active_owner(workspace_id)
-            repository = ArtifactRepository(session)
-            record = repository.get(artifact_id, workspace_id=workspace_id, lock=True)
-            if record is None:
-                raise NotFoundError(f"artifact not found: {artifact_id}")
-            self._assert_available(record)
-            record.artifact_retention_source = ArtifactRetentionSource.Explicit
-            record.artifact_retention_seconds = retention_seconds
-            record.artifact_expires_at = (
-                to_utc(record.artifact_stored_at or record.created_at)
-                + timedelta(seconds=retention_seconds)
-                if retention_seconds is not None
-                else None
-            )
-            repository.update(record)
-            return artifact_summary(record)
 
     def delete(self, *, workspace_id: str, artifact_id: str) -> None:
         with self.context.database.session() as session:

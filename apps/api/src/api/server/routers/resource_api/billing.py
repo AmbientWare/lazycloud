@@ -477,7 +477,7 @@ def _summary(standing: BillingStanding) -> BillingSummaryResponse:
                 connected_cloud=standing.entitlements.connected_cloud,
                 custom_domains=standing.entitlements.custom_domains,
                 self_hosted=standing.entitlements.self_hosted,
-                log_retention_days=standing.entitlements.log_retention_days,
+                retention_days=standing.entitlements.retention_days,
                 region_selection=standing.entitlements.region_selection,
             )
             if standing.entitlements is not None

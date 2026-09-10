@@ -344,6 +344,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
                   ? "Storage rate unavailable"
                   : `Volume storage: ${formatCostNanos(summary.data.estimated_monthly_nanos)} / month`}
               </span>
+              <span>New uploads expire after {countLabel(summary.data.retention_seconds / 86400, "day")}</span>
             </>
           ) : (
             <span>{summary.error ? "Storage totals unavailable" : "Loading storage totals…"}</span>

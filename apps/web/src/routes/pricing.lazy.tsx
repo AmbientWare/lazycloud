@@ -269,8 +269,8 @@ function MarketingPricing() {
                       />
                       <PlanFeature label="Self-hosted" included={plan.entitlements.self_hosted} />
                       <PlanLimit
-                        label="Log retention"
-                        value={`${plan.entitlements.log_retention_days} days`}
+                        label="Log and artifact retention"
+                        value={`${plan.entitlements.retention_days} days`}
                       />
                     </dl>
                     <ul className="mt-4 mb-6 grid list-none gap-2 p-0">

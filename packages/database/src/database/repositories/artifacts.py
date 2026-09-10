@@ -6,7 +6,7 @@ from datetime import datetime
 from database.repositories.cleanup import OBJECT_CLEANUP_DELETE, CleanupRepository
 from database.repositories.identity import WorkspaceRepository
 from database.tables.billing_ledger import BillingLedgerSegmentTable
-from database.tables.storage import ArtifactRetentionTable, ObjectTable
+from database.tables.storage import ObjectTable
 from shared.artifacts import ARTIFACT_STORAGE_SUBJECT
 from shared.errors import ConflictError
 from shared.objects import ObjectRecord
@@ -154,19 +154,3 @@ class ArtifactRepository:
                 .limit(limit)
             )
         ]
-
-    def retention(self, workspace_id: str) -> int | None:
-        row = self.session.get(ArtifactRetentionTable, workspace_id)
-        return row.retention_seconds if row else None
-
-    def set_retention(self, workspace_id: str, seconds: int | None) -> None:
-        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
-        CleanupRepository(self.session).lock_keys({f"artifact-retention:{workspace_id}"})
-        row = self.session.get(ArtifactRetentionTable, workspace_id)
-        if row is None:
-            self.session.add(
-                ArtifactRetentionTable(workspace_id=workspace_id, retention_seconds=seconds)
-            )
-        else:
-            row.retention_seconds = seconds
-        self.session.flush()
