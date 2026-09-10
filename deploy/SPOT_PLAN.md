@@ -1,9 +1,49 @@
 # Platform Spot plan
 
-Status: implementation and migration in progress. Keep EKS Auto Mode and move
-Kubernetes worker capacity to Spot, retaining application replication and the
-existing managed data services. Qualify recovery and actual savings before
-calling the migration accepted.
+Status: deployed on September 10, 2026 UTC. EKS Auto Mode is enabled, built-in
+NodePools are disabled, and all worker nodes use the custom Spot pool. Task
+recovery under interruption and seven days of measured savings remain
+unverified.
+
+## Deployment evidence
+
+Implementation merged in PRs #205, #207 and #210. Argo deployed the chart with
+the existing application image, worker, host and network release pins intact.
+Terraform's final plan reports no changes. The custom NodeClass, NodePool,
+Argo applications and External Secrets are healthy. The node role and its
+existing EC2 access entry were retained, with explicit Terraform ownership.
+
+Both replicas of the API, scheduler, Cloudflare connector and WireGuard
+gateway were observed ready on different hosts and zones. Gateway handovers
+recovered but caused API readiness interruptions. This is not evidence of
+uninterrupted availability or a validated failover SLO.
+
+The cache retained its original 20 GiB EBS volume. An authenticated HTTP write
+and range read succeeded through its Service. The same bytes survived pod
+replacement and volume attachment to another Spot node. The acceptance object
+was then removed and its absence verified. Readiness exposed an existing port
+mismatch: the image listens on 7900, while the Service had targeted 8100. The
+Service retains port 8100 and forwards to the named container port on 7900.
+
+A uniquely named public Function deployment was attempted in the operator's
+default workspace. Billing rejected the build because that account has no
+subscription. Its temporary app was deleted and cleanup verified. No task ran,
+so durable task outcomes during interruption remain an acceptance gap.
+
+Auto Mode settled on two c7i-flex.large nodes in us-east-1b and one
+c8i-flex.large in us-east-1c before the cache recovery exercise. That layout
+projects to $119.43/month using seven-day Spot averages, compared with $218.75
+for the original three On-Demand c6a.large nodes. Both figures include Auto Mode,
+84 GiB node disks and public IPv4, using 730 hours. Current Spot quotes put that
+layout at $117.92/month. Node selection remains automatic; a recovery exercise
+can temporarily add capacity.
+
+The seven-day hourly Spot averages were $0.02892209 for c7i-flex.large in 1b
+and $0.03212149 for c8i-flex.large in 1c. Auto Mode adds $0.01017 and $0.01068
+per node-hour respectively. The modeled saving is about $99/month before
+incremental traffic and replacement overlap, or $89 with the proposal's
+$10 allowance. These are projections from observed rates, not a measured
+monthly bill. Retain the seven-day qualification below.
 
 This proposal accepts recovery periods after correlated Spot interruptions or
 loss of singleton services. It does not promise uninterrupted service. Prove
