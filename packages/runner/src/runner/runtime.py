@@ -3,9 +3,11 @@ from __future__ import annotations
 import io
 import sys
 import threading
-from collections.abc import Iterator, Mapping
+import time
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from queue import Empty, Queue
 from typing import Protocol, TextIO
 
 from pydantic import JsonValue
@@ -19,18 +21,18 @@ class TaskLogControlChannel(Protocol):
     def post(self, path: str, payload: dict[str, JsonValue] | None = None) -> JsonValue: ...
 
 
-def post_task_log(
+def post_task_logs(
     control: TaskLogControlChannel,
     task_id: str,
     stream: str,
-    message: str,
+    messages: str | list[str],
 ) -> None:
-    if not message:
+    if not messages:
         return
     AppendTaskLogResponse.model_validate(
         control.post(
             "/gateway/tasks/log",
-            AppendTaskLogRequest(task_id=task_id, stream=stream, message=message).model_dump(
+            AppendTaskLogRequest(task_id=task_id, stream=stream, message=messages).model_dump(
                 mode="json"
             ),
         )
@@ -38,59 +40,115 @@ def post_task_log(
 
 
 class RunnerTaskLogStream(io.TextIOBase):
-    def __init__(self, stream: str, wrapped: TextIO) -> None:
+    def __init__(self, stream: str, wrapped: TextIO, logs: TaskLogBuffer) -> None:
         self.stream = stream
         self.wrapped = wrapped
+        self.logs = logs
         self._pending = ""
-        # A handler is free to hand this stream to threads of its own, and two
-        # of them appending to one buffer interleave into a line that belongs to
-        # neither. The lock is over the buffer, not over the write to the real
-        # stream, which is already serialized by the file object.
         self._lock = threading.Lock()
-        self.dropped_appends = 0
-        self.last_append_error = ""
+        self._closing = False
 
     def writable(self) -> bool:
         return True
 
     def write(self, value: str) -> int:
-        self.wrapped.write(value)
-        self.wrapped.flush()
         with self._lock:
+            if self._closing:
+                raise ValueError("I/O operation on closed task log stream")
+            self.wrapped.write(value)
+            self.wrapped.flush()
             self._pending += value
-            complete = self._take_complete_lines()
-        for line in complete:
-            self._append(line)
+            lines = self._pending.split("\n")
+            self._pending = lines.pop()
+            for line in lines:
+                self.logs.append(self.stream, line + "\n")
         return len(value)
 
     def flush(self) -> None:
         self.wrapped.flush()
-        self.flush_log()
-
-    def flush_log(self) -> None:
         with self._lock:
             pending, self._pending = self._pending, ""
-        if pending:
-            self._append(pending)
+            if pending and not self._closing:
+                self.logs.append(self.stream, pending)
 
-    def append_log(self, value: str) -> None:
-        raise NotImplementedError
+    def close(self) -> None:
+        with self._lock:
+            if not self._closing:
+                if self._pending:
+                    self.logs.append(self.stream, self._pending)
+                    self._pending = ""
+                self._closing = True
+        super().close()
 
-    def _take_complete_lines(self) -> list[str]:
-        lines: list[str] = []
-        while "\n" in self._pending:
-            line, self._pending = self._pending.split("\n", maxsplit=1)
-            lines.append(f"{line}\n")
-        return lines
 
-    def _append(self, value: str) -> None:
+class TaskLogBuffer:
+    def __init__(self, append_logs: Callable[[str, list[str]], None]) -> None:
+        self._append_logs = append_logs
+        self._queue: Queue[tuple[str, str] | None] = Queue(maxsize=128)
+        self._lock = threading.Lock()
+        self._sender: threading.Thread | None = None
+        self._closing = False
+        self.dropped_appends = 0
+        self.last_append_error = ""
+
+    def append(self, stream: str, value: str) -> None:
+        with self._lock:
+            if self._closing:
+                raise ValueError("Task log buffer is closed")
+            if self._sender is None:
+                self._sender = threading.Thread(target=self._send, daemon=True)
+                self._sender.start()
+            self._queue.put((stream, value))
+
+    def close(self) -> None:
+        with self._lock:
+            if not self._closing:
+                self._closing = True
+                if self._sender is not None:
+                    self._queue.put(None)
+        if self._sender is not None:
+            self._sender.join()
+
+    def _send(self) -> None:
+        pending: tuple[str, str] | None = None
+        while True:
+            first = pending if pending is not None else self._queue.get()
+            pending = None
+            if first is None:
+                return
+            stream, message = first
+            batch = [message]
+            size = len(message)
+            deadline = time.monotonic() + 0.05
+            closing = False
+            while len(batch) < 64 and size < 16_384:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    value = self._queue.get(timeout=remaining)
+                except Empty:
+                    break
+                if value is None:
+                    closing = True
+                    break
+                if value[0] != stream:
+                    pending = value
+                    break
+                batch.append(value[1])
+                size += len(value[1])
+            self._append(stream, batch)
+            if closing:
+                return
+
+    def _append(self, stream: str, values: list[str]) -> None:
         try:
-            self.append_log(value)
+            self._append_logs(stream, values)
         except Exception as exc:
             # `write` already put this line on the real stream, so only the
             # platform's copy is lost. Reporting through a logger would write
             # back into this same stream.
-            self.dropped_appends += 1
+            self.dropped_appends += len(values)
             self.last_append_error = f"{type(exc).__name__}: {exc}"
 
 
@@ -202,6 +260,7 @@ __all__ = [
     "DEFAULT_RUNNER_TIMEOUT_SECONDS",
     "RoutedSink",
     "RunnerTaskLogStream",
+    "TaskLogBuffer",
     "install_context_routed_output",
     "required_env",
     "routed_output",

@@ -53,7 +53,6 @@ from lazycloud.control_clients import (
 from lazycloud.function_results import FunctionResultDecodeError, decode_function_result
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.references import HandlerReferenceError, source_root_handler_reference
-from lazycloud.session.source_sync import SourcePackageSyncer
 from lazycloud.session.task import Task, TaskClient, TaskSubscription
 from lazycloud.session.uploads import (
     object_upload_timeout_seconds,
@@ -607,6 +606,8 @@ class DeploymentClient(ControlClientConfigMixin):
         selected_root = source_root or self.source_root
         if self.client is not None and self.object_client is None and selected_root is None:
             return metadata_object_id
+
+        from lazycloud.session.source_sync import SourcePackageSyncer
 
         result = SourcePackageSyncer(
             self._object_client(),

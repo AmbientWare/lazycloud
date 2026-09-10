@@ -32,6 +32,9 @@ class ProcessManager:
     def ready(self) -> bool:
         return True
 
+    def start_workload(self) -> None:
+        raise AssertionError("sandbox does not have a workload command")
+
     def stream_exec(
         self,
         argv: list[str],

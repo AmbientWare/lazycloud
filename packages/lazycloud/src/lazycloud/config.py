@@ -9,7 +9,6 @@ from functools import lru_cache
 from pathlib import Path
 from secrets import token_hex
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
@@ -271,6 +270,8 @@ def _read_config_document(
     process has already proved it owns a regular file, so the repair cannot be
     aimed at anything else.
     """
+    import yaml
+
     descriptor = _open_config_for_read(path)
     if descriptor is None:
         return {}, None
@@ -348,6 +349,8 @@ def _write_config_document(
     was already readable by other users is repaired by this replacement rather
     than by chmod-ing a path that could have been swapped underneath it.
     """
+    import yaml
+
     path = settings().config_path
     directory = _prepared_config_directory(path.parent)
     if _config_identity(path) != expected:

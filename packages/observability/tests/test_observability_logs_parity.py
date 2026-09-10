@@ -122,13 +122,16 @@ async def test_task_log_write_reaches_live_stream_with_durable_identity(
     followed = await AsyncRedisEventStreamRepository(async_redis).follow_logs(
         stream_broker,
         LogStreamQuery(workspace_id=workspace_id, task_id=task.id),
-        max_events=1,
+        max_events=2,
         heartbeat_seconds=0.1,
     )
-    isolated_services.tasks.append_log(task.id, "stdout", "new output\n")
+    isolated_services.tasks.append_logs(task.id, "stdout", ["first output\n", "second output\n"])
     query = LogStreamQuery(workspace_id=workspace_id, task_id=task.id)
     captured = isolated_services.tasks.log_streams.read_logs(query)
-    assert len(captured) == 1
+    assert [log_record_from_redis(record).message for record in captured] == [
+        "first output",
+        "second output",
+    ]
     live: list[LogRecord] = []
     try:
         for _ in range(10):
@@ -136,13 +139,16 @@ async def test_task_log_write_reaches_live_stream_with_durable_identity(
             print("task log stream", stream_broker.status(), "record", record is not None)
             if record is not None:
                 live.append(log_record_from_redis(record))
-                break
+                if len(live) == 2:
+                    break
     finally:
         await followed.aclose()
     stored = isolated_services.tasks.logs(task.id)
     assert [(record.id, record.message, record.task_id) for record in live] == [
-        (stored[0].id, "new output", task.id)
+        (stored[0].id, "first output", task.id),
+        (stored[1].id, "second output", task.id),
     ]
+    assert [record.message for record in stored] == ["first output", "second output"]
 
 
 def test_redis_log_read_honors_clamp(real_redis_actors: RealRedisActors) -> None:
