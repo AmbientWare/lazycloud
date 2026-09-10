@@ -98,6 +98,9 @@ type supervisor struct {
 	directChildren map[int]struct{}
 	connections    map[net.Conn]struct{}
 	tokenPath      string
+	workload       *exec.Cmd
+	workloadExit   chan int
+	stopping       bool
 }
 
 func main() {
@@ -113,6 +116,17 @@ func main() {
 		connections:    make(map[net.Conn]struct{}),
 		tokenPath:      defaultTokenPath,
 	}
+	if len(os.Args) > 1 {
+		if os.Args[1] != "--" || len(os.Args) < 3 {
+			fatal(errors.New("expected -- followed by a workload command"))
+		}
+		s.workload = exec.Command(os.Args[2], os.Args[3:]...)
+		s.workload.Stdin = os.Stdin
+		s.workload.Stdout = os.Stdout
+		s.workload.Stderr = os.Stderr
+		s.workload.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		s.workloadExit = make(chan int, 1)
+	}
 	if _, err := s.controlToken(); err != nil {
 		fatal(err)
 	}
@@ -122,7 +136,12 @@ func main() {
 		fatal(err)
 	}
 	defer listener.Close()
-	go s.handleSignals(listener)
+	go s.handleSignals()
+	if s.workload != nil {
+		go func() {
+			os.Exit(<-s.workloadExit)
+		}()
+	}
 	for {
 		connection, acceptErr := listener.Accept()
 		if acceptErr != nil {
@@ -136,24 +155,31 @@ func main() {
 	}
 }
 
-func (s *supervisor) handleSignals(listener net.Listener) {
+func (s *supervisor) handleSignals() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	received := <-signals
-	_ = listener.Close()
 	signalNumber := received.(syscall.Signal)
-	s.mu.RLock()
+	s.mu.Lock()
+	s.stopping = true
+	hasWorkload := s.workload != nil && s.workload.Process != nil
+	if hasWorkload {
+		_ = syscall.Kill(-s.workload.Process.Pid, signalNumber)
+	}
 	processes := make([]*processState, 0, len(s.processes))
 	for _, process := range s.processes {
 		processes = append(processes, process)
 	}
-	s.mu.RUnlock()
+	s.mu.Unlock()
 	for _, process := range processes {
 		process.mu.Lock()
 		if process.running && process.process != nil {
 			_ = syscall.Kill(-process.pid, signalNumber)
 		}
 		process.mu.Unlock()
+	}
+	if hasWorkload {
+		return
 	}
 	time.Sleep(250 * time.Millisecond)
 	os.Exit(128 + int(signalNumber))
@@ -181,6 +207,8 @@ func (s *supervisor) handleConnection(connection net.Conn) {
 	switch command.Op {
 	case "ready":
 		_ = encoder.Encode(response{Version: protocolVersion, Type: "ready"})
+	case "start-workload":
+		s.handleStartWorkload(encoder)
 	case "drain":
 		s.handleDrain(encoder, connection)
 	case "exec":
@@ -198,6 +226,49 @@ func (s *supervisor) handleConnection(connection net.Conn) {
 	default:
 		_ = encoder.Encode(response{Version: protocolVersion, Type: "error", Error: "unknown operation"})
 	}
+}
+
+func (s *supervisor) handleStartWorkload(encoder *json.Encoder) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopping {
+		writeError(encoder, errors.New("supervisor is stopping"))
+		return
+	}
+	if s.workload == nil {
+		writeError(encoder, errors.New("supervisor has no workload command"))
+		return
+	}
+	if s.workload.Process != nil {
+		_ = encoder.Encode(response{Version: protocolVersion, Type: "started", PID: s.workload.Process.Pid})
+		return
+	}
+	if err := s.workload.Start(); err != nil {
+		writeError(encoder, err)
+		s.workloadExit <- 1
+		return
+	}
+	pid := s.workload.Process.Pid
+	s.directChildren[pid] = struct{}{}
+	_ = encoder.Encode(response{Version: protocolVersion, Type: "started", PID: pid})
+	go func() {
+		err := s.workload.Wait()
+		s.mu.Lock()
+		delete(s.directChildren, pid)
+		s.mu.Unlock()
+		exitCode := 0
+		if err != nil {
+			exitCode = 1
+			var exitError *exec.ExitError
+			if errors.As(err, &exitError) {
+				exitCode = exitError.ExitCode()
+				if status, ok := exitError.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+					exitCode = 128 + int(status.Signal())
+				}
+			}
+		}
+		s.workloadExit <- exitCode
+	}()
 }
 
 func (s *supervisor) trackConnection(connection net.Conn) {

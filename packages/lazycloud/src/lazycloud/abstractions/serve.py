@@ -31,7 +31,6 @@ from shared.transport_retry import (
 )
 
 from lazycloud.json_contracts import parse_json_object
-from lazycloud.session.source_sync import collect_source_files
 from lazycloud.terminal import Terminal
 
 LOGGER = logging.getLogger(__name__)
@@ -526,6 +525,8 @@ def sync_local_workspace(
 
 
 def _snapshot(local_dir: str) -> dict[str, FileState]:
+    from lazycloud.session.source_sync import collect_source_files
+
     root = Path(local_dir).expanduser().resolve()
     files: dict[str, FileState] = {}
     for path in collect_source_files(root):

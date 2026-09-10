@@ -6,7 +6,6 @@ from typing import BinaryIO, TypeAlias
 from shared.http.errors import HttpResponseDecodeError, http_api_error_from_body
 from shared.http.objects import ObjectMetadata, PutObjectRequest, PutObjectResponse
 
-from lazycloud.http_transport import request_raw
 from lazycloud.terminal import ProgressCallback
 
 DEFAULT_OBJECT_UPLOAD_TIMEOUT_SECONDS = 300.0
@@ -102,6 +101,8 @@ def _stream_object(
     metadata: dict[str, str] | None,
     timeout_seconds: float,
 ) -> PutObjectResponse:
+    from lazycloud.http_transport import request_raw
+
     upload = PutObjectRequest(
         object_metadata=ObjectMetadata(name=name, size=size),
         hash=object_hash,

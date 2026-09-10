@@ -99,7 +99,7 @@ func TestShellProtocolSupportsAuthDataResizeAndExit(t *testing.T) {
 	if err := writeShellFrame(connection, shellFrameResize, resizePayload); err != nil {
 		t.Fatalf("write resize: %v", err)
 	}
-	command := "if env | grep -Eq '^(USERNAME|PASSWORD)='; then printf 'credential-leak\\n'; else printf 'credentials-scrubbed\\n'; fi; printf 'shell-ok\\n'; exit 7\n"
+	command := "if env | grep -Eq '^(USERNAME|PASSWORD)='; then printf '\\ncredential-leak\\n'; else printf '\\ncredentials-scrubbed\\n'; fi; printf 'shell-ok\\n'; exit 7\n"
 	if err := writeShellFrame(connection, shellFrameData, []byte(command)); err != nil {
 		t.Fatalf("write data: %v", err)
 	}

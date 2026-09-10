@@ -755,7 +755,8 @@ class GatewayControlService:
     ) -> AppendTaskLogResponse:
         try:
             self._task_for_workspace(request.task_id, workspace_id)
-            self.services.tasks.append_log(request.task_id, request.stream, request.message)
+            messages = [request.message] if isinstance(request.message, str) else request.message
+            self.services.tasks.append_logs(request.task_id, request.stream, messages)
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
         return AppendTaskLogResponse(task_id=request.task_id)

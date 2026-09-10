@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from typing import Annotated
+
+from pydantic import Field
+
 from shared.bytes_transport import decode_bytes
 from shared.http.base import HttpModel
 from shared.tasks import TaskStatus
@@ -17,7 +21,7 @@ class StartTaskResponse(HttpModel):
 class AppendTaskLogRequest(HttpModel):
     task_id: str
     stream: str = "stdout"
-    message: str = ""
+    message: str | Annotated[list[str], Field(min_length=1, max_length=1024)] = ""
 
 
 class AppendTaskLogResponse(HttpModel):

@@ -193,33 +193,37 @@ class TaskService:
                 status=task.status.value,
             )
 
-    def append_log(self, task_id: str, stream: str, message: str) -> None:
+    def append_logs(self, task_id: str, stream: str, messages: list[str]) -> None:
         task = self.get(task_id)
-        line = message.rstrip("\n")
         with self.context.database.session() as session:
-            entry = LogRepository(session).records.create_across_workspaces(
+            records = LogRepository(session).records
+            entries = [
+                records.create_across_workspaces(
+                    {
+                        "task_id": required_uuid(task_id, field="task_id"),
+                        "stream": stream,
+                        "message": message.rstrip("\n"),
+                    },
+                    workspace_id=task.workspace_id,
+                )
+                for message in messages
+            ]
+        for entry in entries:
+            self.log_streams.append_event(
+                EventRecordType.ContainerLog,
                 {
-                    "task_id": required_uuid(task_id, field="task_id"),
-                    "stream": stream,
-                    "message": line,
+                    "workspace_id": task.workspace_id or "",
+                    "task_id": task.id,
+                    "stub_id": task.stub_id or "",
+                    "app_id": task.app_id or "",
+                    "deployment_id": task.deployment_id or "",
+                    "container_id": task.container_id or "",
+                    "stream": entry.stream,
+                    "message": entry.message,
+                    "timestamp": entry.created_at.isoformat(),
                 },
-                workspace_id=task.workspace_id,
+                event_id=entry.id,
             )
-        self.log_streams.append_event(
-            EventRecordType.ContainerLog,
-            {
-                "workspace_id": task.workspace_id or "",
-                "task_id": task.id,
-                "stub_id": task.stub_id or "",
-                "app_id": task.app_id or "",
-                "deployment_id": task.deployment_id or "",
-                "container_id": task.container_id or "",
-                "stream": entry.stream,
-                "message": entry.message,
-                "timestamp": entry.created_at.isoformat(),
-            },
-            event_id=entry.id,
-        )
 
     def transition(
         self,

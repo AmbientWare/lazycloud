@@ -831,6 +831,7 @@ services:
           # never delivers, which is metered usage nobody is charged for.
           *stripe-env,
           *object-store-env,
+          *workspace-storage-issuer-env,
           *release-env,
           *agent-binary-env,
           *aws-compute-env,
@@ -1074,7 +1075,6 @@ configs:
           source_cache_root: /var/lib/lazycloud/source-cache
           checkpoint_root: /var/lib/lazycloud/checkpoints
         monitoring:
-          metrics_enabled: true
           metrics_interval_seconds: 5
 
 volumes:

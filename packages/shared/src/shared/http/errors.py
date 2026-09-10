@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import urllib.error
 import urllib.parse
 
 from shared.http.base import HttpModel
@@ -53,11 +52,6 @@ class HttpResponseDecodeError(RuntimeError):
     """An HTTP response body does not match the channel's JSON protocol."""
 
 
-def http_api_error_from_http_error(exc: urllib.error.HTTPError) -> HttpApiError:
-    raw = exc.read().decode("utf-8", errors="replace")
-    return http_api_error_from_body(exc.code, raw, fallback=str(exc))
-
-
 def http_api_error_from_body(
     status_code: int,
     raw: str,
@@ -80,5 +74,4 @@ __all__ = [
     "HttpResponseDecodeError",
     "HttpTransportError",
     "http_api_error_from_body",
-    "http_api_error_from_http_error",
 ]

@@ -74,8 +74,9 @@ from runner.runtime import (
     DEFAULT_GATEWAY_ENDPOINT,
     DEFAULT_RUNNER_TIMEOUT_SECONDS,
     RunnerTaskLogStream,
+    TaskLogBuffer,
     install_context_routed_output,
-    post_task_log,
+    post_task_logs,
     required_env,
     routed_output,
 )
@@ -141,10 +142,6 @@ class FunctionControlChannel(Protocol):
     ) -> JsonValue: ...
 
 
-class FunctionTaskLogSink(Protocol):
-    def append_task_log(self, task_id: str, stream: str, message: str) -> None: ...
-
-
 @dataclass(slots=True)
 class FunctionRunner:
     config: FunctionRunnerConfig
@@ -186,8 +183,16 @@ class FunctionRunner:
             self.run_startup_hooks_once()
         except BaseException:
             print(traceback.format_exc(), file=sys.stderr)
+            self.close()
             return 1
-        return self.serve()
+        try:
+            return self.serve()
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        if isinstance(self.channel, HttpChannel):
+            self.channel.close()
 
     def install_output_routing(self) -> None:
         """Take over this process's streams once, before anything writes.
@@ -293,7 +298,7 @@ class FunctionRunner:
             duration = time.perf_counter() - started
             formatted = traceback.format_exc()
             with contextlib.suppress(Exception):
-                self.append_task_log(task.task_id, "stderr", formatted)
+                self.append_task_logs(task.task_id, "stderr", formatted)
             print(formatted, file=sys.stderr)
             self.run_error_hooks(task, exc, duration_seconds=duration)
             response = self.end_failed_task(task, exc, duration_seconds=duration)
@@ -306,8 +311,11 @@ class FunctionRunner:
 
     def execute_with_log_capture(self, task: ClaimedTask) -> Any:
         container_stdout, container_stderr = self.container_streams
-        stdout = TaskLogStream(self, task.task_id, "stdout", container_stdout)
-        stderr = TaskLogStream(self, task.task_id, "stderr", container_stderr)
+        logs = TaskLogBuffer(
+            lambda stream, messages: self.append_task_logs(task.task_id, stream, messages)
+        )
+        stdout = RunnerTaskLogStream("stdout", container_stdout, logs)
+        stderr = RunnerTaskLogStream("stderr", container_stderr, logs)
         with routed_output(stdout, stderr):
             try:
                 return invoke_handler(
@@ -316,8 +324,9 @@ class FunctionRunner:
                     **task.invocation.kwargs,
                 )
             finally:
-                stdout.flush_log()
-                stderr.flush_log()
+                stdout.close()
+                stderr.close()
+                logs.close()
 
     def start_task(self, task: ClaimedTask) -> None:
         StartTaskResponse.model_validate(
@@ -342,8 +351,8 @@ class FunctionRunner:
             )
         )
 
-    def append_task_log(self, task_id: str, stream: str, message: str) -> None:
-        post_task_log(self.control, task_id, stream, message)
+    def append_task_logs(self, task_id: str, stream: str, messages: str | list[str]) -> None:
+        post_task_logs(self.control, task_id, stream, messages)
 
     def append_container_log(self, stream: str, message: str) -> None:
         """Write to the container's own stream, for output no task owns."""
@@ -520,24 +529,8 @@ class FunctionRunner:
             self.config.lifecycle_hooks,
             hook,
             context,
-            log=lambda stream, message: self.append_task_log(task.task_id, stream, message),
+            log=lambda stream, message: self.append_task_logs(task.task_id, stream, message),
         )
-
-
-class TaskLogStream(RunnerTaskLogStream):
-    def __init__(
-        self,
-        runner: FunctionTaskLogSink,
-        task_id: str,
-        stream: str,
-        wrapped: TextIO,
-    ) -> None:
-        super().__init__(stream, wrapped)
-        self.runner = runner
-        self.task_id = task_id
-
-    def append_log(self, value: str) -> None:
-        self.runner.append_task_log(self.task_id, self.stream, value)
 
 
 def decode_function_invocation(response: FunctionClaimedTask) -> FunctionInvocation:
@@ -816,7 +809,9 @@ class FunctionThreadManager:
             self.runner.run_startup_hooks_once()
         except BaseException:
             print(traceback.format_exc(), file=sys.stderr)
+            self.runner.close()
             return 1
+        _ = self.runner.control
         previous_handlers = {
             handled_signal: signal.signal(handled_signal, self._request_shutdown)
             for handled_signal in (signal.SIGINT, signal.SIGTERM)
@@ -834,6 +829,9 @@ class FunctionThreadManager:
                 thread.join()
         finally:
             self.shutdown.set()
+            for thread in self.threads:
+                thread.join()
+            self.runner.close()
             for handled_signal, previous_handler in previous_handlers.items():
                 signal.signal(handled_signal, previous_handler)
         return 0

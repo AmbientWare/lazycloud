@@ -376,9 +376,10 @@ class OciRuntimeSpecBuilder:
         spec: dict[str, JsonValue],
         bundle_path: Path,
     ) -> str:
+        supervised = context.request.stub_type == "sandbox" or context.docker_enabled
         source = self.sandbox_supervisor_source
         if source is None or not source.is_file():
-            if context.request.stub_type != "sandbox":
+            if not supervised:
                 return ""
             raise RuntimeError("sandbox supervisor binary is unavailable on this worker")
         self._extend_mounts(
@@ -392,12 +393,18 @@ class OciRuntimeSpecBuilder:
                 )
             ],
         )
-        if context.request.stub_type != "sandbox":
+        if not supervised:
             return ""
         process = spec.get("process")
         if not isinstance(process, dict):
             raise RuntimeError("sandbox OCI process configuration is missing")
-        process["args"] = [self.sandbox_supervisor_path]
+        if context.request.stub_type == "sandbox":
+            process["args"] = [self.sandbox_supervisor_path]
+        else:
+            command = process.get("args")
+            if not isinstance(command, list) or not command:
+                raise RuntimeError("Docker-enabled workload command is missing")
+            process["args"] = [self.sandbox_supervisor_path, "--", *command]
         token_path = (
             bundle_path / SANDBOX_SUPERVISOR_CONTROL_DIR_NAME / SANDBOX_SUPERVISOR_TOKEN_FILE_NAME
         )

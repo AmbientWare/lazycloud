@@ -55,7 +55,7 @@ from runner.endpoint_forwarding import (
 from runner.hooks import lifecycle_hooks_from_env, run_lifecycle_hooks
 from runner.invocation import invoke_handler
 from runner.reload import SourceChangeWatcher, hot_reload_enabled, hot_reload_root
-from runner.runtime import DEFAULT_GATEWAY_ENDPOINT, DEFAULT_RUNNER_TIMEOUT_SECONDS, post_task_log
+from runner.runtime import DEFAULT_GATEWAY_ENDPOINT, DEFAULT_RUNNER_TIMEOUT_SECONDS, post_task_logs
 from runner.worker_processes import stop_worker_processes
 
 ENDPOINT_SERVE_PORT_ENV = "BIND_PORT"
@@ -131,14 +131,16 @@ class EndpointServeRunner:
 
     def serve_forever(self) -> None:
         if self.is_asgi:
-            self.run_startup_hooks()
-            uvicorn.run(
-                RunnerASGIApplication(self),
-                host=self.host,
-                port=self.port,
-                log_level="info",
-            )
+            with self.control:
+                self.run_startup_hooks()
+                uvicorn.run(
+                    RunnerASGIApplication(self),
+                    host=self.host,
+                    port=self.port,
+                    log_level="info",
+                )
             return
+        _ = self.control
         server = self.create_server()
         watcher = (
             SourceChangeWatcher(hot_reload_root(), self.reload_handler)
@@ -154,6 +156,7 @@ class EndpointServeRunner:
             if watcher is not None:
                 watcher.stop()
             server.server_close()
+            self.control.close()
 
     def handle(self, request: EndpointForwardRequest) -> EndpointForwardResponse:
         try:
@@ -184,7 +187,7 @@ class EndpointServeRunner:
         return response_from_endpoint_result(resolve_endpoint_result(result))
 
     def append_task_log(self, task_id: str, stream: str, message: str) -> None:
-        post_task_log(self.control, task_id, stream, message)
+        post_task_logs(self.control, task_id, stream, message)
 
     def run_startup_hooks(self) -> None:
         self.handler()

@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import http.client
 import json
+import os
 import ssl
-import urllib.error
-import urllib.request
+import weakref
 from collections.abc import Generator, Iterator, Mapping
 from dataclasses import dataclass, field
-from email.message import Message
 from types import TracebackType
-from typing import Protocol
 
 import certifi
+import httpx
 from pydantic import JsonValue, TypeAdapter
 
 from shared.client_version import (
@@ -22,27 +20,8 @@ from shared.client_version import (
 from shared.http.errors import (
     HttpResponseDecodeError,
     HttpTransportError,
-    http_api_error_from_http_error,
+    http_api_error_from_body,
 )
-
-
-class _HttpResponse(Protocol):
-    status: int
-    headers: Message
-
-    def read(self) -> bytes: ...
-
-    def __iter__(self) -> Iterator[bytes]: ...
-
-    def __enter__(self) -> _HttpResponse: ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool | None: ...
-
 
 _JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
@@ -59,6 +38,35 @@ class HttpChannel:
     token: str | None = None
     timeout_seconds: float = 10.0
     ssl_context: ssl.SSLContext = field(default_factory=build_http_ssl_context, repr=False)
+    _client: httpx.Client = field(init=False, repr=False)
+    _owner_pid: int = field(default_factory=os.getpid, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._client = httpx.Client(
+            verify=self.ssl_context,
+            follow_redirects=True,
+            limits=httpx.Limits(max_connections=None),
+        )
+        weakref.finalize(self, self._client.close)
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> HttpChannel:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def _request_url(self, path: str) -> str:
+        if os.getpid() != self._owner_pid:
+            raise RuntimeError("HTTP channels must be created in the process that uses them")
+        return f"{self.endpoint.rstrip('/')}/{path.lstrip('/')}"
 
     def request(
         self,
@@ -73,52 +81,38 @@ class HttpChannel:
             self.token,
             {"Content-Type": "application/json"},
         )
-        request = urllib.request.Request(
-            f"{self.endpoint.rstrip('/')}/{path.lstrip('/')}",
-            data=data,
-            headers=headers,
-            method=method.upper(),
-        )
+        url = self._request_url(path)
         try:
-            opened: _HttpResponse = urllib.request.urlopen(
-                request,
+            with self._client.stream(
+                method.upper(),
+                url,
+                content=data,
+                headers=headers,
                 timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
-                context=self.ssl_context,
-            )
-            with opened as response:
-                report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
+            ) as response:
+                _check_response(response)
                 return _decode_response(response)
-        except urllib.error.HTTPError as exc:
-            report_client_version(exc.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
-            raise http_api_error_from_http_error(exc) from exc
-        except (OSError, http.client.HTTPException) as exc:
-            raise _transport_error(method, request.full_url, exc) from exc
+        except httpx.RequestError as exc:
+            raise HttpTransportError(method, url, str(exc)) from exc
 
     def get(self, path: str) -> JsonValue:
         return self.request("GET", path)
 
     def stream_get(self, path: str) -> Generator[str]:
         headers = _request_headers(self.token)
-        request = urllib.request.Request(
-            f"{self.endpoint.rstrip('/')}/{path.lstrip('/')}",
-            headers=headers,
-            method="GET",
-        )
+        url = self._request_url(path)
         try:
-            opened: _HttpResponse = urllib.request.urlopen(
-                request,
+            with self._client.stream(
+                "GET",
+                url,
+                headers=headers,
                 timeout=self.timeout_seconds,
-                context=self.ssl_context,
-            )
-            with opened as response:
-                report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
-                for raw_line in response:
+            ) as response:
+                _check_response(response)
+                for raw_line in _response_lines(response):
                     yield raw_line.decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            report_client_version(exc.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
-            raise http_api_error_from_http_error(exc) from exc
-        except (OSError, http.client.HTTPException) as exc:
-            raise _transport_error("GET", request.full_url, exc) from exc
+        except httpx.RequestError as exc:
+            raise HttpTransportError("GET", url, str(exc)) from exc
 
     def post(
         self,
@@ -142,29 +136,22 @@ class HttpChannel:
                 "Content-Type": "application/json",
             },
         )
-        request = urllib.request.Request(
-            f"{self.endpoint.rstrip('/')}/{path.lstrip('/')}",
-            data=data,
-            headers=headers,
-            method="POST",
-        )
+        url = self._request_url(path)
         try:
-            opened: _HttpResponse = urllib.request.urlopen(
-                request,
+            with self._client.stream(
+                "POST",
+                url,
+                content=data,
+                headers=headers,
                 timeout=self.timeout_seconds,
-                context=self.ssl_context,
-            )
-            with opened as response:
-                report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
-                for raw_line in response:
+            ) as response:
+                _check_response(response)
+                for raw_line in _response_lines(response):
                     line = raw_line.strip()
                     if line:
                         yield _decode_json(line)
-        except urllib.error.HTTPError as exc:
-            report_client_version(exc.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
-            raise http_api_error_from_http_error(exc) from exc
-        except (OSError, http.client.HTTPException) as exc:
-            raise _transport_error("POST", request.full_url, exc) from exc
+        except httpx.RequestError as exc:
+            raise HttpTransportError("POST", url, str(exc)) from exc
 
     def patch(self, path: str, payload: Mapping[str, JsonValue] | None = None) -> JsonValue:
         return self.request("PATCH", path, payload=payload)
@@ -176,8 +163,29 @@ class HttpChannel:
         return self.request("DELETE", path)
 
 
-def _decode_response(response: _HttpResponse) -> JsonValue:
-    if response.status == 204:
+def _check_response(response: httpx.Response) -> None:
+    report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
+    if not response.is_success:
+        raise http_api_error_from_body(
+            response.status_code,
+            response.read().decode("utf-8", errors="replace"),
+            fallback=f"HTTP {response.status_code}: {response.reason_phrase}",
+        )
+
+
+def _response_lines(response: httpx.Response) -> Iterator[bytes]:
+    pending = b""
+    for chunk in response.iter_bytes():
+        pending += chunk
+        while b"\n" in pending:
+            line, pending = pending.split(b"\n", maxsplit=1)
+            yield line + b"\n"
+    if pending:
+        yield pending
+
+
+def _decode_response(response: httpx.Response) -> JsonValue:
+    if response.status_code == 204:
         return None
     raw = response.read().decode("utf-8")
     if not raw:
@@ -213,12 +221,3 @@ def _decode_json(raw: str | bytes) -> JsonValue:
         return _JSON_VALUE_ADAPTER.validate_json(raw)
     except ValueError as exc:
         raise HttpResponseDecodeError("HTTP response contained invalid JSON") from exc
-
-
-def _transport_error(
-    method: str,
-    url: str,
-    exc: OSError | http.client.HTTPException,
-) -> HttpTransportError:
-    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
-    return HttpTransportError(method, url, str(reason))

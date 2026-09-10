@@ -131,6 +131,11 @@ class SupervisorSandboxProcessManager:
         response = self._request(SupervisorRequest(op="ready"))
         return response.type == "ready"
 
+    def start_workload(self) -> None:
+        response = self._request(SupervisorRequest(op="start-workload"))
+        if response.type != "started":
+            raise SandboxSupervisorError("supervisor did not start the workload")
+
     def stream_exec(
         self,
         argv: list[str],
