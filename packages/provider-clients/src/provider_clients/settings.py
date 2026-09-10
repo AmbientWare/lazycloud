@@ -298,8 +298,6 @@ class PlatformCapacitySettings(BaseSettings):
             token = self.hetzner_tokens.get(binding.ref)
             if token is None or not token.get_secret_value().strip():
                 raise ValueError(f"{binding.ref} requires a provider token")
-        if HETZNER_CAPACITY_POLICY.warm_cpu_min > 0 and len(self.hetzner) > 1:
-            raise ValueError("only one platform provider may own the automatic warm floor")
         return self
 
     @property

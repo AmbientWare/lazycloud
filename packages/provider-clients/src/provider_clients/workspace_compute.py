@@ -216,8 +216,6 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
                 platform_fleet=connection.platform_fleet,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
-                max_cpu_instances=AWS_COMPUTE_CONFIGURATION.max_cpu_instances,
-                max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
                 root_volume_gib=AWS_COMPUTE_CONFIGURATION.root_volume_gib,
                 idle_timeout_seconds=AWS_COMPUTE_CONFIGURATION.idle_timeout_seconds,
                 allowed_offers=AWS_ALLOWED_OFFERS,

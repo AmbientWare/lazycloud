@@ -124,20 +124,14 @@ class ProviderOfferEligibility(ContractModel):
 class ProviderCapacityPolicy(ContractModel):
     default_region: str
     allowed_regions: tuple[str, ...]
-    max_cpu_instances: int | None = Field(default=None, ge=0)
-    max_gpu_instances: int | None = Field(default=None, ge=0)
     root_volume_gib: int = Field(default=200, ge=50, le=2048)
     idle_timeout_seconds: int = Field(default=300, ge=60, le=86_400)
     allowed_offers: tuple[ProviderOfferEligibility, ...] = ()
-    warm_cpu_min: int = Field(default=0, ge=0)
-    warm_decrease_after_seconds: int = Field(default=600, ge=60, le=86_400)
 
     @model_validator(mode="after")
     def validate_policy(self) -> ProviderCapacityPolicy:
         if self.default_region not in self.allowed_regions:
             raise ValueError("provider default region must be allowed")
-        if self.max_cpu_instances is not None and self.warm_cpu_min > self.max_cpu_instances:
-            raise ValueError("provider warm CPU minimum cannot exceed provider capacity limit")
         identities = {
             (offer.region, offer.instance_type, offer.preemptible) for offer in self.allowed_offers
         }
@@ -147,18 +141,12 @@ class ProviderCapacityPolicy(ContractModel):
             raise ValueError("approved offers must belong to allowed regions")
         return self
 
-    def machine_limit(self, *, gpu: bool) -> int | None:
-        return self.max_gpu_instances if gpu else self.max_cpu_instances
-
     def accepts(self, offer: ComputeOffer) -> bool:
-        return (
-            offer.region in self.allowed_regions
-            and any(
-                limit.region == offer.region
-                and limit.instance_type == offer.instance_type
-                and limit.preemptible is offer.preemptible
-                for limit in self.allowed_offers
-            )
+        return offer.region in self.allowed_regions and any(
+            limit.region == offer.region
+            and limit.instance_type == offer.instance_type
+            and limit.preemptible is offer.preemptible
+            for limit in self.allowed_offers
         )
 
 
