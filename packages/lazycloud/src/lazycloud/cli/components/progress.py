@@ -134,14 +134,14 @@ class LiveStep(TerminalStep):
             return
         if _interactive():
             self._live = Live(
-                self._render_live(),
+                get_renderable=self._render_live,
                 console=output.error_console,
                 refresh_per_second=12,
                 transient=True,
                 redirect_stdout=False,
                 redirect_stderr=False,
             )
-            self._live.start()
+            self._live.start(refresh=True)
 
     def update(self, summary: str) -> None:
         self.summary = summary
@@ -181,7 +181,7 @@ class LiveStep(TerminalStep):
 
     def _refresh(self) -> None:
         if self._live is not None:
-            self._live.update(self._render_live())
+            self._live.refresh()
 
     def _stop(self) -> None:
         if self._live is not None:
