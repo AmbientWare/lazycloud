@@ -523,7 +523,7 @@ class ComputeService:
                 return _capacity_result(
                     request,
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
-                    reason="provider offer is outside its approved catalog or purchase ceiling",
+                    reason="provider offer is outside its approved catalog",
                     desired_unit=desired_unit,
                 )
         if not _offer_matches_capacity_shape(offer, request.shape):
@@ -1401,7 +1401,7 @@ class ComputeService:
             raise InvalidInputError("offer does not belong to a pooled provider")
         if not policy.accepts(offer):
             raise InvalidInputError(
-                "offer is outside the approved provider catalog or purchase ceiling"
+                "offer is outside the approved provider catalog"
             )
         return self._prepare_pooled_offer(
             provider=provider,
@@ -1785,7 +1785,6 @@ class ComputeService:
                 offer_cost_terms=cost_terms,
                 offer_storage_mib=offer.storage_mb,
                 offer_availability_zone=offer.availability_zone,
-                offer_max_hourly_cost_micros=offer.max_hourly_cost_micros,
                 supplier_cpu_unit=offer.supplier_cpu_unit,
                 supplier_cpu_count=offer.supplier_cpu_count,
                 initial_machines=min(max(initial, minimum), maximum),
@@ -1982,7 +1981,7 @@ class ComputeService:
                 purchase_offer = self._available_unit_offer(provider, unit)
                 if not provider.policy.accepts(purchase_offer):
                     raise ConflictError(
-                        "provider offer is outside its approved catalog or purchase ceiling"
+                        "provider offer is outside its approved catalog"
                     )
             if unit.provider_state.degraded_reason is not None:
                 # An explicit capacity mutation supersedes the durable degraded

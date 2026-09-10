@@ -150,7 +150,6 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     offer_cost_terms: SupplierCostTerms | None = None
     offer_storage_mib: int | None = Field(default=None, ge=0)
     offer_availability_zone: str = Field(default="", max_length=64)
-    offer_max_hourly_cost_micros: int | None = Field(default=None, gt=0)
     supplier_cpu_unit: SupplierCpuUnit = SupplierCpuUnit.Unknown
     supplier_cpu_count: int | None = Field(default=None, ge=0)
     desired_machines: int = Field(default=0, ge=0)

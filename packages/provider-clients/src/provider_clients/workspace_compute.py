@@ -27,7 +27,7 @@ from provider_aws import (
     AwsRegionalPrices,
     Boto3AwsManagedPoolClientProvider,
 )
-from provider_aws.instance_catalog import AWS_PURCHASE_LIMITS
+from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
 from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
 from provider_hetzner.client import HetznerClient
 from provider_hetzner.pooled_provider import HetznerPooledProvider
@@ -114,7 +114,7 @@ def configured_aws_compute_catalog(
             )
             if not launchable or (
                 instance.instance_type not in priced_instance_types
-                and instance.max_spot_hourly_cost_micros is None
+                and True not in instance.purchase_markets
             ):
                 continue
             instances_by_type.setdefault(
@@ -220,7 +220,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
                 max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
                 root_volume_gib=AWS_COMPUTE_CONFIGURATION.root_volume_gib,
                 idle_timeout_seconds=AWS_COMPUTE_CONFIGURATION.idle_timeout_seconds,
-                purchase_limits=AWS_PURCHASE_LIMITS,
+                allowed_offers=AWS_ALLOWED_OFFERS,
             ),
             pooled=AwsConnectedAccountPooledProvider(
                 provider_ref=provider_ref,

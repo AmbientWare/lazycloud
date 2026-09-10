@@ -17,7 +17,7 @@ from compute.policy import WorkspaceComputePolicyService
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
-    ProviderPurchaseLimit,
+    ProviderOfferEligibility,
     ProviderUnitBootstrap,
     ProviderUnitInstance,
     ProviderUnitRequest,
@@ -324,11 +324,10 @@ class _Resolver(ComputeProviderResolver):
                 platform_fleet=connection.platform_fleet,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
-                purchase_limits=(
-                    ProviderPurchaseLimit(
+                allowed_offers=(
+                    ProviderOfferEligibility(
                         region=self.provider.offer.region,
                         instance_type=self.provider.offer.instance_type,
-                        max_hourly_cost_micros=1_000_000,
                     ),
                 ),
                 max_cpu_instances=self.max_cpu_instances,
@@ -489,11 +488,10 @@ def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
                     platform_fleet=True,
                     default_region=offer.region,
                     allowed_regions=(offer.region,),
-                    purchase_limits=(
-                        ProviderPurchaseLimit(
+                    allowed_offers=(
+                        ProviderOfferEligibility(
                             region=offer.region,
                             instance_type=offer.instance_type,
-                            max_hourly_cost_micros=1_000_000,
                         ),
                     ),
                 ),
@@ -558,11 +556,10 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
             platform_fleet=True,
             default_region=offer.region,
             allowed_regions=(offer.region,),
-            purchase_limits=(
-                ProviderPurchaseLimit(
+            allowed_offers=(
+                ProviderOfferEligibility(
                     region=offer.region,
                     instance_type=offer.instance_type,
-                    max_hourly_cost_micros=1_000_000,
                 ),
             ),
         ),

@@ -58,16 +58,12 @@ choose workload resources, not node types, warm floors, or acquisition limits.
 Provider catalogs define the supported machine types. Removing a type must stop
 new purchases while preserving observation, draining, and deletion of owned nodes.
 
-Catalog review owns profitability assumptions. Provider code defines the region,
-instance type and maximum complete hourly node price; acquisition compares the
-supplier quote with that ceiling through `ProviderCapacityPolicy.accepts`.
-Unknown component prices and absent limits refuse acquisition. The check covers
-compute, root disk and public IPv4, not network traffic or realized profit.
-Do not add per-workload revenue forecasts or a runtime margin engine. Pricing,
-occupancy and operating-cost changes are reasons to review the catalog limits.
-Owned nodes remain observable and removable when their offers fail admission.
-Supplier-managed replacement needs a supplier-enforced price cap where supported;
-an application admission check alone does not constrain an autonomous ASG.
+Catalog review owns profitability assumptions. Provider catalogs approve regions,
+instance types and purchase markets. Acquisition ranks suitable approved offers
+by quoted compute, root disk and public IPv4 cost. Unknown component costs cannot
+rank as free capacity. Do not add purchase ceilings, per-workload revenue
+forecasts or a runtime margin engine. Owned nodes remain observable and removable
+after their types leave the catalog.
 
 A connected cloud account belongs to a user, not a workspace, and backs every
 workspace that user owns. Runtime lookups therefore resolve
