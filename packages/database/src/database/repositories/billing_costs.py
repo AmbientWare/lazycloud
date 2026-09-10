@@ -565,7 +565,12 @@ class BillingLedgerCostRepository:
         workload_ids = (
             set[str]()
             if group_by is UsageCostGroupKey.App
-            else {key[2] for key in keys if len(key) > 2 and key[2]}
+            else {
+                key[2]
+                for key in keys
+                if len(key) > 2
+                and key[2] not in ("", IMAGE_BUILD_WORKLOAD_ID, ARTIFACT_STORAGE_SUBJECT)
+            }
         )
         workspaces = names_by_id(
             self.session,

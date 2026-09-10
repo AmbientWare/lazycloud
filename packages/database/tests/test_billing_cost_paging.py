@@ -5,6 +5,8 @@ from decimal import Decimal
 from uuid import uuid4
 
 from database.context import ServiceContext
+from database.records.apps import StubRecord
+from database.repositories.apps import StubRepository
 from database.repositories.billing_costs import (
     BillingLedgerCostRepository,
     LedgerCostCursor,
@@ -12,6 +14,7 @@ from database.repositories.billing_costs import (
 )
 from database.repositories.billing_rates import PlatformRateRepository
 from observability.usage import UsageService
+from shared.artifacts import ARTIFACT_STORAGE_SUBJECT
 from shared.billing_rate_card import PUBLISHED_METERED_RATE_HISTORY
 from shared.http.usage import UsageCostGroupKey
 from shared.timestamps import utc_now
@@ -27,6 +30,66 @@ from shared.usage import (
 _RATE_AT = timedelta(minutes=1)
 _WINDOW_AT = timedelta(minutes=2)
 _WINDOW = timedelta(seconds=60)
+
+
+def test_cost_breakdown_resolves_workloads_without_looking_up_billing_categories(
+    service_context: ServiceContext,
+) -> None:
+    now = max(utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY))
+    started_at = now + _WINDOW_AT
+    ended_at = started_at + _WINDOW
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+        workload = StubRepository(session).upsert(
+            StubRecord(id=str(uuid4()), workspace_id=workspace_id, name="training")
+        )
+        PlatformRateRepository(session).publish(
+            pricing_version="test.cost-categories",
+            effective_at=now + _RATE_AT,
+            nanos_per_egress_byte=Decimal(1),
+            nanos_per_volume_byte_second=Decimal(1),
+        )
+    for workload_id, metric, unit, quantity in (
+        (
+            ARTIFACT_STORAGE_SUBJECT,
+            UsageMetric.ArtifactStorageByteSeconds,
+            UsageUnit.ByteSeconds,
+            300,
+        ),
+        (IMAGE_BUILD_WORKLOAD_ID, UsageMetric.NetworkEgressBytes, UsageUnit.Bytes, 200),
+        (workload.id, UsageMetric.NetworkEgressBytes, UsageUnit.Bytes, 100),
+    ):
+        UsageService(service_context).append(
+            UsageRecord(
+                id=str(uuid4()),
+                workspace_id=workspace_id,
+                resource_type="workspace",
+                resource_id=workspace_id,
+                metric=metric,
+                quantity=quantity,
+                unit=unit,
+                labels={"stub_id": workload_id},
+                metadata={
+                    METERING_WINDOW_STARTED_AT_METADATA_KEY: started_at.isoformat(),
+                    METERING_WINDOW_ENDED_AT_METADATA_KEY: ended_at.isoformat(),
+                },
+            )
+        )
+    with service_context.database.session() as session:
+        page = BillingLedgerCostRepository(session).page(
+            scope=WorkspaceCostScope((workspace_id,)),
+            start=started_at,
+            end=ended_at + _WINDOW,
+            group_by=UsageCostGroupKey.Workload,
+            limit=10,
+        )
+    assert [
+        (row.workload_id, row.workload_name, row.category, row.cost_nanos) for row in page.rows
+    ] == [
+        (ARTIFACT_STORAGE_SUBJECT, "Artifacts", "", 300),
+        (IMAGE_BUILD_WORKLOAD_ID, "", IMAGE_BUILD_WORKLOAD_ID, 200),
+        (workload.id, "training", "", 100),
+    ]
 
 
 def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
