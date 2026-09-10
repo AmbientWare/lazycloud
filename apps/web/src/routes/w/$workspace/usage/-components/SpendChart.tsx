@@ -100,7 +100,7 @@ export function SpendChart({
             return (
               <div className="grid min-w-48 gap-2 rounded-lg border border-border/50 bg-background px-2.5 py-2 text-xs shadow-xl">
                 <p className="text-muted-foreground">
-                  {intervalLabel(interval.started_at, bucket)}
+                  {intervalLabel(interval.started_at, bucket)} UTC
                 </p>
                 <IntervalBreakdown
                   cost={interval.cost}
