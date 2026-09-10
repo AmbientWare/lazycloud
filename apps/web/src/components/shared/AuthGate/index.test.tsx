@@ -8,7 +8,7 @@ import {
   Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { getStoredAuthToken, setStoredAuthToken, clearStoredAuthToken } from "@/lib/auth";
@@ -47,11 +47,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  cleanup();
   queryClient.clear();
   clearStoredAuthToken();
   window.history.replaceState(null, "", "/");
-  vi.unstubAllGlobals();
 });
 
 it("retries a session outage in place without requiring another sign-in", async () => {

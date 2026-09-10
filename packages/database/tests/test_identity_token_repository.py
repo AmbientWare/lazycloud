@@ -10,7 +10,7 @@ from database.tables.identity import TokenTable
 from shared.identity import TokenKind, TokenStatus
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 
 
 @pytest.mark.parametrize(

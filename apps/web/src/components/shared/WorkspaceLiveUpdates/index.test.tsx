@@ -83,9 +83,6 @@ async function mountProvider(fetchMock: ReturnType<typeof vi.fn>) {
 
 afterEach(() => {
   focusManager.setFocused(undefined);
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 describe("workspace live updates", () => {

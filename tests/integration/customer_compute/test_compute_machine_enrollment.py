@@ -70,10 +70,9 @@ from shared.http.gateway import AgentCapacityInterruptionRequest
 from shared.identity import TokenKind, WorkspaceStatus
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
-from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential, owned_workspace, workspace_owner_user_id
 from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
 
@@ -764,7 +763,9 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
     services = _services_with_redis(isolated_services, redis, request)
     control = ControlPlaneService(services.context)
     owned_workspace(control, "default")
-    _raw_token, audit_actor = administrator_credential(isolated_services, "workspace-delete-admin")
+    _raw_token, audit_actor = administrator_credential(
+        isolated_services.context, "workspace-delete-admin"
+    )
     workspace = owned_workspace(control, "enrolled-customer")
     unit = services.compute.create_unit(
         UnitName("workspace-machine-pool"),

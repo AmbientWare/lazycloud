@@ -11,7 +11,7 @@ from shared.checkpoints import (
     CheckpointStatus,
     checkpoint_recent_stub_key,
 )
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 
 
 def test_checkpoint_repository_lifecycle_uses_database(service_context: ServiceContext) -> None:

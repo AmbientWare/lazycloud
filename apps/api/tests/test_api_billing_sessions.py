@@ -9,8 +9,7 @@ from fastapi.testclient import TestClient
 from identity.auth import TokenIssuer
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.identity import TokenKind
-from tests.domain_fixtures import workspace_owner_user_id
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential, workspace_owner_user_id
 
 
 @pytest.fixture
@@ -44,7 +43,7 @@ def test_a_billing_return_address_must_be_on_this_platform(
     never going to be served.
     """
 
-    raw_token, _ = administrator_credential(isolated_services, "billing-redirect")
+    raw_token, _ = administrator_credential(isolated_services.context, "billing-redirect")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
     own_origin = isolated_services.gateway_settings.public_http_url

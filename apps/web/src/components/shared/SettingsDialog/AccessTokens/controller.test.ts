@@ -1,14 +1,12 @@
 import { createElement, type PropsWithChildren } from "react";
 import { QueryClient, QueryClientProvider, type InfiniteData } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AuthToken, TokenListResponse } from "@/lib/api/schemas";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { useAccessTokensController } from "./controller";
-
-afterEach(() => vi.restoreAllMocks());
 
 describe("access tokens controller", () => {
   it("mints once and keeps the issued secret out of the query cache", async () => {

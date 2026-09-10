@@ -20,7 +20,7 @@ from shared.http.compute import ContainerWithAppPageResponse
 from shared.http.errors import HttpResponseDecodeError
 from shared.identity import TokenKind
 from sqlalchemy import update
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 
 
 @pytest.fixture

@@ -156,23 +156,11 @@ jobs:
               -- lazycloud --help >/dev/null
           done
 
-  test-shards:
-    name: Changed Python owners ${{ matrix.shard }}/4
+  validate:
+    name: Changed Python owners
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        shard: [1, 2, 3, 4]
-    # Real Redis and real PostgreSQL, because the properties that most need
-    # proving cannot be proven without them: single-winner races, expired-lease
-    # recovery, exactly-once delivery, prefix sweeps matched against the real key
-    # layout, and on the database side `FOR UPDATE SKIP LOCKED`, unique
-    # constraints and advisory locks that SQLite has no equivalent for. A fake
-    # passes all of them while production loses the race.
-    #
-    # The PostgreSQL fixtures create a throwaway database per test off this URL
-    # and drop it after, so `postgres` here is only ever connected to in order to
-    # issue `CREATE DATABASE`.
+    # The postgres database is only the administrative connection for creating
+    # and removing fixture-owned databases. Test writes never reach it.
     services:
       redis:
         image: redis:8-alpine
@@ -225,25 +213,13 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: >-
           uv run --group dev python .github/scripts/validate_changed_scope.py
-          --base "${BASE_SHA}" --check tests --workers 2
-          --splits 4 --group ${{ matrix.shard }}
+          --base "${BASE_SHA}" --check tests
           --junitxml test-results/python.xml
 
       - name: Upload test timings
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: python-test-results-${{ matrix.shard }}
+          name: python-test-results
           path: test-results/python.xml
           retention-days: 14
-
-  validate:
-    name: Changed Python owners
-    needs: test-shards
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require every test shard to pass
-        env:
-          TEST_RESULT: ${{ needs.test-shards.result }}
-        run: test "${TEST_RESULT}" = success

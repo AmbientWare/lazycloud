@@ -6,7 +6,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.billing_rates import (
     ComputeRateRepository,
     PlatformRateRepository,
@@ -14,6 +14,7 @@ from database.repositories.billing_rates import (
 )
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_rates import PlatformRateTable
+from observability.usage import UsageService
 from shared.billing_quotes import (
     ContainerShape,
     LedgerBasis,
@@ -44,7 +45,7 @@ _WINDOW = timedelta(seconds=60)
 
 
 def test_a_boundary_republished_unchanged_writes_nothing_and_one_republished_otherwise_is_refused(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """The deployment publishes its rate card on every sync, and every sync after
     the first finds its own boundary already there.
@@ -60,8 +61,8 @@ def test_a_boundary_republished_unchanged_writes_nothing_and_one_republished_oth
     effective_at = now + _RATE_AT
     started_at = now + _WINDOW_AT
     ended_at = started_at + _WINDOW
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         opened = PlatformRateRepository(session).publish(
             pricing_version=_PRICING_VERSION,
             effective_at=effective_at,
@@ -70,7 +71,7 @@ def test_a_boundary_republished_unchanged_writes_nothing_and_one_republished_oth
         )
     assert opened is RatePublication.Published
 
-    isolated_services.usage.append(
+    UsageService(service_context).append(
         UsageRecord(
             id=str(uuid4()),
             workspace_id=workspace_id,
@@ -86,7 +87,7 @@ def test_a_boundary_republished_unchanged_writes_nothing_and_one_republished_oth
         )
     )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         frozen = session.scalar(select(func.max(BillingLedgerSegmentTable.segment_ended_at)))
         assert frozen is not None
         assert to_utc(frozen) > effective_at
@@ -106,7 +107,7 @@ def test_a_boundary_republished_unchanged_writes_nothing_and_one_republished_oth
                 nanos_per_volume_byte_second=Decimal(0),
             )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         rows = session.scalars(
             select(PlatformRateTable).where(PlatformRateTable.effective_at == effective_at)
         ).all()

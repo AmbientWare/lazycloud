@@ -33,8 +33,8 @@ from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind
 from shared.routing import AgentBackendRoute, BackendRouteState
 from starlette.websockets import WebSocketDisconnect
-from tests.domain_fixtures import owned_workspace
 from tests.url_constants import TEST_DOMAIN, TEST_URL
+from tests.workspaces import owned_workspace
 from websockets.sync.server import ServerConnection, serve
 from websockets.typing import Subprotocol
 
