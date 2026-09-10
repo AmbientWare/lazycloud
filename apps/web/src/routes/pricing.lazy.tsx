@@ -92,11 +92,6 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
           figure: metered(shape.nanos_per_cpu_core_hour, meter),
           unit: `/ CPU / ${per}`,
         },
-        {
-          label: "2 CPUs, for physical-core price comparisons",
-          figure: metered(shape.nanos_per_cpu_core_hour * 2, meter),
-          unit: `/ ${per}`,
-        },
       ],
     },
     {
@@ -234,9 +229,7 @@ function MarketingPricing() {
                 id={fleetRatesId}
               />
               <p className="mb-3 text-[12.5px] leading-relaxed text-muted-foreground">
-                One CPU matches <code>cpu=1</code> and represents one vCPU. Modal and Beam quote
-                physical cores as two vCPUs, so compare their one-core price with our two-CPU price.
-                This compares billing units, not processor performance.
+                One CPU matches <code>cpu=1</code> and represents one vCPU.
               </p>
               <p className="mb-3 text-[12.5px] leading-relaxed text-muted-foreground">
                 GPU prices are per card and exclude CPU and memory. Add all three for your workload
