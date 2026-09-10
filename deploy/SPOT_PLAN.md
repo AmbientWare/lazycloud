@@ -3,15 +3,22 @@
 Status: proposed; no infrastructure changes applied. The owner selected keeping
 EKS Auto Mode and wants production quality at minimum practical cost.
 
-Use one four-vCPU On-Demand node and one two-vCPU Spot node. Keep two replicas
-of the API, scheduler, Cloudflare connector and WireGuard gateway, with one
-of each on each capacity type. Put Argo, External Secrets and the existing
-cache on On-Demand. This keeps a complete serving and scheduling path running
-when Spot capacity disappears.
+Let Auto Mode select node sizes and counts from accurate pod resource requests.
+Keep two replicas of the API, scheduler, Cloudflare connector and WireGuard
+gateway, with one of each on each capacity type. Put Argo, External Secrets and
+the existing cache on On-Demand. This preserves a complete serving and scheduling
+path during a Spot shortage without prescribing how many nodes host it.
 
-The quoted target is **$172.23/month for nodes**, down from $218.75. Including
-the unchanged EKS cluster fee, that is $245.23 versus $291.75. Database, Redis,
-load balancing, the cache volume and traffic are additional in both cases.
+The **$172.23/month node estimate is one feasible sizing scenario**, compared
+with $218.75 today. It is not a required topology or a promised bill. Including
+the unchanged EKS cluster fee, that scenario costs $245.23 versus $291.75.
+Database, Redis, load balancing, the cache volume and traffic are additional.
+
+Auto Mode packs and consolidates nodes using the pods' declared requests. It
+does not establish those requests from the app's actual CPU and memory usage
+for us. Measure normal load, reconnect bursts and rollouts to keep requests
+accurate; let Auto Mode optimize capacity within the availability rules.
+[AWS Auto Mode cost optimization](https://docs.aws.amazon.com/eks/latest/userguide/auto-cost-control.html)
 
 ## Cost evidence
 
@@ -34,7 +41,7 @@ prices or available capacity.
 | Layout, all retaining Auto Mode | Nodes/month | Saving/month | Availability tradeoff |
 | --- | ---: | ---: | --- |
 | Current: three On-Demand c6a.large | $218.75 | $0 | Existing baseline |
-| Proposed: On-Demand c6a.xlarge in 1c, Spot c6a.large in 1a | $172.23 | $46.52 | Complete application replica on each capacity type |
+| Illustrative protected layout: On-Demand c6a.xlarge in 1c, Spot c6a.large in 1a | $172.23 | $46.52 | Complete application replica on each capacity type |
 | On-Demand large in 1c, Spot large in 1a and 1b | $150.26 | $68.49 | Both schedulers depend on Spot |
 | Three Spot large, one in each zone | $116.11 | $102.64 | Whole platform depends on Spot |
 | Spot xlarge in 1c, Spot large in 1a | $109.04 | $109.71 | Whole platform depends on Spot |
@@ -44,38 +51,55 @@ IPv4 and Auto Mode. Totals use unrounded inputs. Cost Explorer corroborated
 the current instance and management rates. Account-wide charges include other
 compute and must not be substituted for the platform baseline.
 
-The proposed node bill is $111.69 On-Demand EC2, $19.70 Spot EC2, $20.10 Auto
-Mode, $7.30 IPv4, and $13.44 disks. Its management fee still covers six raw
-vCPUs. The EKS cluster fee is separately $73/month.
+The illustrative protected layout costs $111.69 On-Demand EC2, $19.70 Spot EC2,
+$20.10 Auto Mode, $7.30 IPv4, and $13.44 disks. Its management fee covers six raw
+vCPUs. Recalculate for the types and counts Auto Mode actually selects. The EKS
+cluster fee is separately $73/month.
 [AWS EKS pricing](https://aws.amazon.com/eks/pricing/)
 
 Allow $10/month provisionally for changed traffic and replacement overlap.
-That leaves approximately **$36.52/month net savings**, or $438/year. Verify
-the allowance with actual usage. The earlier $50/month minimum was an
-assistant-selected target, not an owner requirement. Replace it with a
+For the illustrative layout, that leaves approximately **$36.52/month net
+savings**, or $438/year. Verify the allowance with actual usage. The earlier
+$50/month minimum was an assistant-selected target, not an owner requirement. Replace it with a
 $30/month net savings floor while preserving the complete On-Demand path.
 
-The extra $21.97/month over the three-node mixed option keeps a scheduler
-running during a complete Spot shortage. All-Spot saves more but is not the
-recommendation for the owner's quality requirement.
+The illustrative protected layout costs $21.97/month more than the three-node
+mixed example and keeps a scheduler running during a complete Spot shortage.
+All-Spot saves more but is not the recommendation for the owner's quality
+requirement.
 
 ## Placement
 
-| Node | Workloads | Effective CPU requests | Effective memory requests |
+| Capacity type | Workloads | Aggregate effective CPU requests | Aggregate effective memory requests |
 | --- | --- | ---: | ---: |
-| On-Demand, four vCPUs | Argo, External Secrets, cache, one API, scheduler, connector and gateway | 2,200m | 3,520 MiB |
-| Spot, two vCPUs | One API, scheduler, connector and gateway | 1,500m | 2,144 MiB |
+| On-Demand | Argo, External Secrets, cache, one API, scheduler, connector and gateway | 2,200m | 3,520 MiB |
+| Spot | One API, scheduler, connector and gateway | 1,500m | 2,144 MiB |
 
-Requests include the API sidecar and the gateway's larger init-container
-memory request. Current small nodes expose 1,780m CPU and approximately
-3,065 MiB allocatable, so the Spot packing fits. Verify the larger node's
-actual allocatable capacity, system overhead, and burst behavior. Its nominal
-four vCPUs and 8 GiB are not a substitute for that check.
+These are requests by capacity type, not a requirement to pack each group on
+one node. They include the API sidecar and the gateway's larger init-container
+memory request. Verify actual allocatable capacity, system overhead, and burst
+behavior for the selected nodes. Nominal instance capacity is not a substitute
+for that check.
+
+The live add-on inventory is seven Argo pods requesting 500m CPU and 1,024 MiB,
+plus three External Secrets pods requesting 100m CPU and 224 MiB. These are
+already included above. The platform's nine pods request 3,100m CPU and
+4,416 MiB, giving 3,700m CPU and 5,664 MiB cluster-wide. No pending pods or
+separately installed EKS add-ons were observed. Auto Mode supplies its node
+services; current two-vCPU nodes expose only 1,780m CPU and approximately
+3,065 MiB memory as allocatable to pods. Account for that overhead rather than
+treating raw instance capacity as available to applications.
+
+Argo and External Secrets have no current dedicated-node requirement. Their
+requests can still make Auto Mode choose larger or additional nodes. Recent
+consolidation events reported no cheaper replacement under current rules;
+earlier rollout events recorded temporary disruption-budget blocks. Inspect
+these signals after the placement change rather than promising a fixed count.
 
 Keep two platform WireGuard peers, current database budgets and replica counts.
 Do not reduce requests to force placement. Two current-size nodes cannot hold
-the existing 3,700m CPU request. The proposed differently sized pair retains
-six raw vCPUs.
+the existing 3,700m CPU request. Auto Mode may select a differently sized pair
+or more nodes. Availability and measured cost decide acceptance, not a count.
 
 For every replicated service, enforce different hosts, different zones, and one
 replica per capacity type. Use workload-wide selectors across rollout revisions
@@ -89,12 +113,12 @@ must be eligible there. Offer Spot across existing subnets and several
 compatible families. The quoted 1a placement is a cost example, not a
 permanent pin to one Spot market.
 
-Losing either node leaves an API, scheduler, connector and gateway. Losing
-the On-Demand node also stops the cache and deployment/secret controllers
-until replacement. Those services already lack independent replicas. Preserve
-their data and prove recovery. WireGuard remains active/standby; failover can
-interrupt connections. Existing streams are not guaranteed to survive node
-loss. Simultaneous loss of both nodes can still stop service.
+The placement rules leave an API, scheduler, connector and gateway after one
+node is lost. Loss of a node hosting the cache or deployment/secret controllers
+can stop those services until replacement; they already lack independent
+replicas. Preserve their data and prove recovery. WireGuard remains
+active/standby; failover can interrupt connections. Existing streams are not
+guaranteed to survive node loss. Simultaneous failures can still stop service.
 
 ## Implementation sequence
 
@@ -104,20 +128,19 @@ loss. Simultaneous loss of both nodes can still stop service.
    kubelet resource metrics are available. Attribute costs to exact platform
    resources and exclude customer fleet usage.
 
-2. Define two capacity policies at the cluster owner. The On-Demand policy
-   needs enough allocatable capacity for 2,200m CPU and 3,520 MiB of protected
-   requests, justifying a four-vCPU minimum. Spot must fit the other complete
-   application replica. Keep amd64 and compatible C/M families; let Auto Mode
-   choose within the cost envelope. Resource limits do not guarantee the node
-   count or dollar bill.
+2. Retain the built-in general-purpose On-Demand pool and add a custom
+   Spot-only NodePool. Keep amd64 and a broad selection of compatible C/M/R
+   families, excluding accelerators and exotic hardware. Do not impose a
+   four-vCPU minimum, fixed instance types, or a fixed node count. Use accurate
+   pod requests and only the placement restrictions needed for availability.
 
-3. Reconcile custom NodePools through one cluster-owned Argo Application under
-   deploy/argocd/apps/. Reuse network and node identities. Resolve NodeClass
-   ownership and bootstrap ordering before retiring any unused built-in pool;
-   do not assume its default NodeClass will remain. Preserve cluster access
-   and existing identities; never replace the cluster. Update
-   deploy/platform-core/AGENTS.md and its runbook for the measured capacity
-   policy, preserving the CLAUDE.md symlink.
+3. Reconcile the Spot NodePool through one cluster-owned Argo Application under
+   deploy/argocd/apps/. Reuse the existing default NodeClass, network and node
+   identities. Preserve cluster access and the built-in pool; never replace
+   the cluster. Keep consolidation enabled and disruption budgets that permit
+   safe node replacement. Resource limits must allow rollout/replacement
+   headroom and are not a dollar cap. Update deploy/platform-core/AGENTS.md
+   and its runbook for the capacity policy, preserving the CLAUDE.md symlink.
    [AWS NodePools](https://docs.aws.amazon.com/eks/latest/userguide/create-node-pool.html)
 
 4. Update Helm values, schema, placement helpers and workload templates
@@ -137,7 +160,7 @@ loss. Simultaneous loss of both nodes can still stop service.
    Provision and qualify replacements before draining selected old nodes.
    Preserve serving replicas, cache PVC, secrets, deployment pins, identities
    and customer resources. Permit temporary rollout/replacement surge; do not
-   impose a hard two-node ceiling. Record created resources and their cost.
+   impose a fixed node-count ceiling. Record created resources and their cost.
    Budget $5 for migration and acceptance overlap, then reassess if exceeded.
 
 Auto Mode keeps ownership of node replacement, interruption handling,
@@ -150,8 +173,8 @@ Spot-selected replicas.
 
 Keep the change only after the production implementation proves:
 
-- One complete application replica on each capacity type, two steady nodes
-  at the measured workload, and no persistent Pending pods, OOMs or CPU
+- One complete application replica on each capacity type, with Auto Mode
+  choosing capacity, and no persistent Pending pods, OOMs or CPU
   starvation. Bootstrap jobs and ordinary rollouts succeed.
 - Controlled node drain and pod/process loss preserve correct task outcomes,
   scheduler lease recovery, worker reconnection and gateway failover. Poll
