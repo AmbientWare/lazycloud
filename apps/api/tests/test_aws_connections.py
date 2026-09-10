@@ -61,7 +61,7 @@ class _AuthorizationPlanner:
         active_authorization: AwsAccountAuthorizationGeneration | None,
         node_role_arn: str | None,
         node_instance_profile_arn: str | None,
-        network: AwsAccountNetwork | None = None,
+        networks: dict[str, AwsAccountNetwork],
     ) -> AwsAccountAuthorizationPlan:
         del user_id, connection_id, external_id, active_authorization
         managed = role_arn is None
@@ -115,7 +115,7 @@ class _AuthorizationPlanner:
                 if managed
                 else None
             ),
-            network=network,
+            networks=networks,
             node_role_arn=node_role,
             node_instance_profile_arn=node_profile,
         )
@@ -525,11 +525,13 @@ def test_only_administrators_can_ensure_shared_fleet(
             account_id=ACCOUNT_ID,
             role_arn=f"arn:aws:iam::{ACCOUNT_ID}:role/fleet",
             external_id="fleet-api-test-external-identifier",
-            network=AwsAccountNetwork(
-                vpc_id="vpc-01234567",
-                subnet_ids=("subnet-01234567", "subnet-89abcdef"),
-                security_group_id="sg-01234567",
-            ),
+            networks={
+                "us-east-1": AwsAccountNetwork(
+                    vpc_id="vpc-01234567",
+                    subnet_ids=("subnet-01234567", "subnet-89abcdef"),
+                    security_group_id="sg-01234567",
+                )
+            },
         ).model_dump(mode="json")
         refused = client.put("/api/v1/aws-connection/fleet", json=payload)
         assert refused.status_code == 403

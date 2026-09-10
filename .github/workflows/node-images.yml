@@ -49,7 +49,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ami_ids="$(uv run --group workspace python -m deploy.ami.bake --regions us-east-1)"
+          ami_ids="$(uv run --group workspace python -m deploy.ami.bake --regions us-east-1 us-west-2)"
           test -n "${ami_ids}"
           echo "ami_ids=${ami_ids}" >> "${GITHUB_OUTPUT}"
 
@@ -89,7 +89,7 @@ jobs:
           set -euo pipefail
           ami_ids="$(uv run --group workspace python -m deploy.ami.bake \
             --variant gpu \
-            --regions us-east-1)"
+            --regions us-east-1 us-west-2)"
           test -n "${ami_ids}"
           echo "ami_ids=${ami_ids}" >> "${GITHUB_OUTPUT}"
 

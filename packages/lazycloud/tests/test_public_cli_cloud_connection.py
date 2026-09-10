@@ -190,7 +190,7 @@ def test_cloud_disconnect_opens_only_terminal_recovery_action(
 @dataclass(slots=True)
 class _ConnectClient:
     requests: list[tuple[str, str | None]] = field(default_factory=list)
-    networks: list[AwsAccountNetwork | None] = field(default_factory=list)
+    networks: list[dict[str, AwsAccountNetwork] | None] = field(default_factory=list)
 
     def connect_account(
         self,
@@ -198,11 +198,11 @@ class _ConnectClient:
         account_id: str,
         pool: str = "aws",
         role_arn: str | None = None,
-        network: AwsAccountNetwork | None = None,
+        networks: dict[str, AwsAccountNetwork] | None = None,
     ) -> AwsConnectionAuthorizationResponse:
         del pool
         self.requests.append((account_id, role_arn))
-        self.networks.append(network)
+        self.networks.append(networks)
         return AwsConnectionAuthorizationResponse(
             connection=_connection(phase="awaiting_authorization"),
             authorization=AwsConnectionAuthorization(

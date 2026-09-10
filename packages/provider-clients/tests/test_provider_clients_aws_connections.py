@@ -235,6 +235,13 @@ def _validating_connection(
         pending_authorization=generation,
         node_role_arn=_NODE_ROLE_ARN,
         node_instance_profile_arn=_NODE_PROFILE_ARN,
+        networks={
+            "us-east-1": AwsAccountNetwork(
+                vpc_id="vpc-01234567",
+                subnet_ids=("subnet-01234567", "subnet-89abcdef"),
+                security_group_id="sg-01234567",
+            )
+        },
         created_at=now,
         updated_at=now,
     )
@@ -275,6 +282,7 @@ def test_draining_connection_keeps_cleanup_access_but_cannot_purchase() -> None:
     )
     ready = resolver.resolve(workspace_id, provider_ref)
     assert ready.policy is not None and ready.policy.accepts(offer)
+    assert not ready.policy.accepts(offer.model_copy(update={"region": "us-west-2"}))
 
     connection = connection.model_copy(
         update={"phase": AwsAccountConnectionPhase.DisconnectDraining}

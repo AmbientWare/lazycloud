@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "deployment": "lazycloud-prod",
   "region": "us-east-1",
   "registry": "000000000000.dkr.ecr.us-east-1.amazonaws.com",
@@ -34,12 +34,24 @@
   "fleet": {
     "account_id": "000000000000",
     "role_arn": "arn:aws:iam::000000000000:role/fleet",
-    "vpc_id": "vpc-00000000000000000",
-    "subnet_ids": [
-      "subnet-00000000000000001",
-      "subnet-00000000000000002"
-    ],
-    "security_group_id": "sg-00000000000000000"
+    "networks": {
+      "us-east-1": {
+        "vpc_id": "vpc-00000000000000000",
+        "subnet_ids": [
+          "subnet-00000000000000001",
+          "subnet-00000000000000002"
+        ],
+        "security_group_id": "sg-00000000000000000"
+      },
+      "us-west-2": {
+        "vpc_id": "vpc-22222222",
+        "subnet_ids": [
+          "subnet-22222221",
+          "subnet-22222222"
+        ],
+        "security_group_id": "sg-22222222"
+      }
+    }
   },
   "secret_documents": {
     "platform": "lazycloud-prod/platform",

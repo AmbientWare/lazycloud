@@ -14,6 +14,7 @@ from shared.aws_connections import (
     AwsAccountConnectionPhase,
     AwsAccountNetwork,
     AwsConnectionStackAction,
+    AwsRegion,
 )
 from shared.capacity import MachinePool
 from shared.http.base import HttpModel
@@ -29,7 +30,7 @@ class AwsConnectionCreateRequest(HttpModel):
         default=MachinePool(AWS_CONNECTED_MACHINE_POOL), min_length=1, max_length=240
     )
     role_arn: str | None = Field(default=None, pattern=_AWS_ROLE_ARN_PATTERN)
-    network: AwsAccountNetwork | None = None
+    networks: dict[AwsRegion, AwsAccountNetwork] = Field(default_factory=dict)
     # The external ID a role that already exists enforces.
     #
     # Only with a role, because the two modes differ in who the value belongs
@@ -48,7 +49,7 @@ class AwsConnectionCreateRequest(HttpModel):
     def validate_role_account(self) -> AwsConnectionCreateRequest:
         if self.role_arn is not None and self.role_arn.split(":", maxsplit=5)[4] != self.account_id:
             raise ValueError("AWS role ARN must belong to account_id")
-        if self.network is not None and self.role_arn is None:
+        if self.networks and self.role_arn is None:
             raise ValueError("AWS network may only be supplied with an existing role")
         if self.external_id is not None and self.role_arn is None:
             raise ValueError("AWS external ID may only be supplied with an existing role")
@@ -58,7 +59,7 @@ class AwsConnectionCreateRequest(HttpModel):
 class AwsFleetEnsureRequest(HttpModel):
     account_id: str = Field(pattern=r"^[0-9]{12}$")
     role_arn: str = Field(pattern=_AWS_ROLE_ARN_PATTERN)
-    network: AwsAccountNetwork
+    networks: dict[AwsRegion, AwsAccountNetwork] = Field(min_length=1)
     external_id: str = Field(
         min_length=32, max_length=256, pattern=r"^[A-Za-z0-9+=,.@:_/-]+$", repr=False
     )

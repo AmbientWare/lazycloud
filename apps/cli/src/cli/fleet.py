@@ -12,7 +12,8 @@ from lazycloud.cli.components.output import console, emit
 from lazycloud.cli.components.results import emit_result
 from lazycloud.cli.control import compute_client, workspace_client
 from lazycloud.json_contracts import validate_json_object
-from shared.aws_connections import AwsAccountConnectionPhase, AwsAccountNetwork
+from pydantic import TypeAdapter
+from shared.aws_connections import AwsAccountConnectionPhase, AwsAccountNetwork, AwsRegion
 from shared.contracts import ContractModel
 from shared.http.aws_connections import AwsFleetEnsureRequest
 from shared.http.compute import UnitResponse
@@ -60,13 +61,12 @@ def fleet_ensure(
     ctx: typer.Context,
     account_id: Annotated[str, typer.Option("--account-id", help="AWS account ID.")],
     role_arn: Annotated[str, typer.Option("--role-arn", help="Connection role to assume.")],
-    vpc_id: Annotated[str, typer.Option("--vpc-id", help="VPC pools launch into.")],
-    subnet_id: Annotated[
-        list[str],
-        typer.Option("--subnet-id", help="Subnet to launch into. At least two, across zones."),
-    ],
-    security_group_id: Annotated[
-        str, typer.Option("--security-group-id", help="Security group nodes join.")
+    networks_json: Annotated[
+        str,
+        typer.Option(
+            "--networks-json",
+            help="JSON mapping AWS regions to VPC, subnet and security group IDs.",
+        ),
     ],
     external_id: Annotated[
         str,
@@ -78,19 +78,14 @@ def fleet_ensure(
     ],
 ) -> None:
     """Register and validate the fleet's AWS infrastructure."""
-    if len(subnet_id) < 2:
-        raise typer.BadParameter("at least two --subnet-id are required")
+    networks = TypeAdapter(dict[AwsRegion, AwsAccountNetwork]).validate_json(networks_json)
     client = compute_client()
     client.ensure_fleet_account(
         AwsFleetEnsureRequest(
             account_id=account_id,
             role_arn=role_arn,
             external_id=external_id,
-            network=AwsAccountNetwork(
-                vpc_id=vpc_id,
-                subnet_ids=tuple(subnet_id),
-                security_group_id=security_group_id,
-            ),
+            networks=networks,
         )
     )
     connection = client.validate_connection()

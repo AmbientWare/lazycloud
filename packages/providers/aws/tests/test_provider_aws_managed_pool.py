@@ -580,6 +580,7 @@ def test_real_aws_offers_include_storage_and_ipv4_before_purchase() -> None:
     provider = AwsConnectedAccountPooledProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         connection=_connection_target(),
+        networks={"us-east-1": _NETWORK},
         binaries_by_region={
             "us-east-1": AwsManagedPoolBinaries(
                 agent_version="0.1.0",
@@ -616,6 +617,7 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
     provider = AwsConnectedAccountPooledProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         connection=_connection_target(),
+        networks={"us-east-1": _NETWORK},
         binaries_by_region={
             "us-east-1": AwsManagedPoolBinaries(
                 agent_version="0.1.0",
@@ -722,6 +724,7 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
 def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
     provider = AwsConnectedAccountPooledProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
+        networks={},
         connection=AwsAccountConnectionTarget(
             account_id="123456789012",
             region="us-east-1",
@@ -742,7 +745,7 @@ def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
         ),
     )
 
-    with pytest.raises(ValueError, match="no network for managed pools"):
+    with pytest.raises(ValueError, match="network is not configured for 'us-east-1'"):
         provider.set_unit_capacity(
             _pool_request(provider.provider_ref),
             desired_machines=1,

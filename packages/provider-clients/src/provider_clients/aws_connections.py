@@ -122,7 +122,7 @@ class _AwsAccountAuthorizationPlanner:
         active_authorization: AwsAccountAuthorizationGeneration | None,
         node_role_arn: str | None,
         node_instance_profile_arn: str | None,
-        network: AwsAccountNetwork | None = None,
+        networks: dict[str, AwsAccountNetwork],
     ) -> AwsAccountAuthorizationPlan:
         secret_external_id = SecretStr(external_id)
         if role_arn is not None:
@@ -132,7 +132,6 @@ class _AwsAccountAuthorizationPlanner:
                 account_id=account_id,
                 role_arn=role_arn,
                 external_id=secret_external_id,
-                network=network,
             )
             if generation != (active_authorization.generation + 1 if active_authorization else 1):
                 raise ValueError("existing-role authorization generation is not sequential")
@@ -141,7 +140,7 @@ class _AwsAccountAuthorizationPlanner:
                 authorization_mode=AwsAccountAuthorizationMode.ExistingRole,
                 node_role_arn=existing.node_identity.role_arn,
                 node_instance_profile_arn=existing.node_identity.instance_profile_arn,
-                network=existing.network,
+                networks=networks,
             )
         plan = (
             self.planner.plan_initial(
@@ -210,7 +209,6 @@ class _AwsAccountConnectionValidator:
     validator: _AwsAccountAuthorizationValidator
     image_sharing: _AwsCapacityImageSharing
     capacity_ami_ids: Mapping[str, tuple[str, ...]]
-    region: str = "us-east-1"
 
     def validate(
         self,
@@ -254,23 +252,40 @@ class _AwsAccountConnectionValidator:
                     ),
                     node_role_arn=managed.node_identity.role_arn,
                     node_instance_profile_arn=managed.node_identity.instance_profile_arn,
-                    network=managed.network,
+                    networks={managed.authorization.region: managed.network},
                     validated_at=managed.authorization.validated_at,
                 )
-            existing = self.validator.validate_existing_authorization(
-                AwsExistingAccountAuthorizationValidationInput(
-                    authorization=_existing_authorization(
-                        account_id=connection.account_id,
-                        external_id=connection.external_id,
-                        authorization=authorization,
-                        node_role_arn=connection.node_role_arn,
-                        node_instance_profile_arn=connection.node_instance_profile_arn,
-                        region=self.region,
-                        network=connection.network,
-                    ),
-                    external_id=SecretStr(connection.external_id),
+            if not connection.networks:
+                raise AwsAccountConnectionValidationError("AWS connection has no regional networks")
+            networks: dict[str, AwsAccountNetwork] = {}
+            for region, network in sorted(connection.networks.items()):
+                existing = self.validator.validate_existing_authorization(
+                    AwsExistingAccountAuthorizationValidationInput(
+                        authorization=_existing_authorization(
+                            account_id=connection.account_id,
+                            external_id=connection.external_id,
+                            authorization=authorization,
+                            node_role_arn=connection.node_role_arn,
+                            node_instance_profile_arn=connection.node_instance_profile_arn,
+                            region=region,
+                            network=network,
+                        ),
+                        external_id=SecretStr(connection.external_id),
+                    )
                 )
-            )
+                if (
+                    existing.network != network
+                    or existing.authorization.account_id != connection.account_id
+                    or existing.authorization.role_arn != authorization.role_arn
+                    or existing.authorization.region != region
+                    or existing.node_identity.role_arn != connection.node_role_arn
+                    or existing.node_identity.instance_profile_arn
+                    != connection.node_instance_profile_arn
+                ):
+                    raise AwsAccountConnectionValidationError(
+                        "AWS regional network or identity changed"
+                    )
+                networks[region] = network
         except AwsAccountAuthorizationValidationError as exc:
             raise AwsAccountConnectionValidationError(
                 exc.message,
@@ -286,11 +301,11 @@ class _AwsAccountConnectionValidator:
                 code=_connection_error_code(exc),
             ) from exc
         return AwsAccountValidationResult(
-            account_id=existing.authorization.account_id,
-            role_arn=existing.authorization.role_arn,
-            node_role_arn=existing.node_identity.role_arn,
-            node_instance_profile_arn=existing.node_identity.instance_profile_arn,
-            network=existing.network,
+            account_id=connection.account_id,
+            role_arn=authorization.role_arn,
+            node_role_arn=connection.node_role_arn,
+            node_instance_profile_arn=connection.node_instance_profile_arn,
+            networks=networks,
             validated_at=utc_now(),
         )
 

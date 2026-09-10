@@ -94,12 +94,6 @@ _AMI_PATTERN = re.compile(r"^ami-[0-9a-f]{8,17}$")
 _BAKE_FAILED_SENTINEL = "LAZYCLOUD_BAKE_FAILED"
 _BAKE_OK_SENTINEL = "LAZYCLOUD_BAKE_OK"
 _CLI_TIMEOUT_SECONDS = 300
-# Console output trails the instance badly: a bake that stopped at 20:12 first
-# published at 20:17. These attempts are only spent once an instance has stopped
-# without its success line having appeared, so a generous window costs time on a
-# path that is usually about to succeed, while a short one throws away a finished
-# bake for being slow to say so. Twelve minutes against a measured five.
-_CONSOLE_SETTLE_ATTEMPTS = 48
 # A denied read is a deployment fault and will not fix itself; everything else
 # this call can return is transient and the next cycle answers it.
 _CONSOLE_REFUSAL_CODES = ("AccessDenied", "UnauthorizedOperation", "AuthFailure")
@@ -123,9 +117,28 @@ class _GetParameterResponse(_BakeModel):
     parameter: _SsmParameter = Field(alias="Parameter")
 
 
+class _ImageDisk(_BakeModel):
+    snapshot_id: str = Field(alias="SnapshotId")
+
+
+class _ImageDevice(_BakeModel):
+    disk: _ImageDisk | None = Field(default=None, alias="Ebs")
+
+
 class _DescribedImage(_BakeModel):
     image_id: str = Field(alias="ImageId")
     state: str = Field(alias="State")
+    devices: list[_ImageDevice] = Field(default_factory=list, alias="BlockDeviceMappings")
+
+
+class _Snapshot(_BakeModel):
+    id: str = Field(alias="SnapshotId")
+    state: str = Field(alias="State")
+    progress: str = Field(alias="Progress")
+
+
+class _Snapshots(_BakeModel):
+    values: list[_Snapshot] = Field(alias="Snapshots")
 
 
 class _DescribeImagesResponse(_BakeModel):
@@ -155,6 +168,44 @@ class _RunInstancesResponse(_BakeModel):
 
 class _CreateImageResponse(_BakeModel):
     image_id: str = Field(alias="ImageId")
+
+
+class _Subnet(_BakeModel):
+    id: str = Field(alias="SubnetId")
+    vpc_id: str = Field(alias="VpcId")
+    public: bool = Field(alias="MapPublicIpOnLaunch")
+
+
+class _Subnets(_BakeModel):
+    values: list[_Subnet] = Field(alias="Subnets")
+
+
+class _Route(_BakeModel):
+    destination: str = Field(default="", alias="DestinationCidrBlock")
+    gateway: str = Field(default="", alias="GatewayId")
+    state: str = Field(alias="State")
+
+
+class _Association(_BakeModel):
+    subnet_id: str = Field(default="", alias="SubnetId")
+    main: bool = Field(default=False, alias="Main")
+
+
+class _RouteTable(_BakeModel):
+    routes: list[_Route] = Field(alias="Routes")
+    associations: list[_Association] = Field(alias="Associations")
+
+
+class _RouteTables(_BakeModel):
+    values: list[_RouteTable] = Field(alias="RouteTables")
+
+
+class _SecurityGroup(_BakeModel):
+    id: str = Field(alias="GroupId")
+
+
+class _SecurityGroups(_BakeModel):
+    values: list[_SecurityGroup] = Field(alias="SecurityGroups")
 
 
 class _BakeVariant(StrEnum):
@@ -312,6 +363,7 @@ def _latest_al2023_ami(request: _BakeRequest, *, region: str) -> str:
 
 
 def _launch_bake_instance(request: _BakeRequest, *, region: str, base_ami: str) -> str:
+    subnet_id, security_group_id = _bake_network(request, region=region)
     tags = [
         {"Key": "Name", "Value": f"lazycloud-ami-bake-{request.recipe_sha256[:16]}"},
         {"Key": _MANAGED_TAG_KEY, "Value": _MANAGED_TAG_VALUE},
@@ -362,13 +414,15 @@ def _launch_bake_instance(request: _BakeRequest, *, region: str, base_ami: str) 
             f"fileb://{user_data.name}",
             "--region",
             region,
+            "--subnet-id",
+            subnet_id,
+            "--security-group-ids",
+            security_group_id,
             "--output",
             "json",
         ]
         if request.instance_profile is not None:
             command.extend(["--iam-instance-profile", f"Name={request.instance_profile}"])
-        if request.subnet_id is not None:
-            command.extend(["--subnet-id", request.subnet_id])
         result = _run_aws(request.aws_cli, command)
     instances = _parse(_RunInstancesResponse, result.stdout, operation="launch bake instance")
     if len(instances.instances) != 1:
@@ -376,6 +430,81 @@ def _launch_bake_instance(request: _BakeRequest, *, region: str, base_ami: str) 
     instance_id = instances.instances[0].instance_id
     _log(f"{region}: launched bake instance {instance_id}")
     return instance_id
+
+
+def _bake_network(request: _BakeRequest, *, region: str) -> tuple[str, str]:
+    filters = [
+        f"Name=tag:{_MANAGED_TAG_KEY},Values={_MANAGED_TAG_VALUE}",
+        "Name=state,Values=available",
+    ]
+    if request.subnet_id is not None:
+        filters.append(f"Name=subnet-id,Values={request.subnet_id}")
+    result = _run_aws(
+        request.aws_cli,
+        [
+            "ec2",
+            "describe-subnets",
+            "--region",
+            region,
+            "--filters",
+            *filters,
+            "--output",
+            "json",
+        ],
+    )
+    subnets = _parse(_Subnets, result.stdout, operation="find regional bake subnet")
+    for subnet in sorted(subnets.values, key=lambda item: item.id):
+        if not subnet.public:
+            continue
+        result = _run_aws(
+            request.aws_cli,
+            [
+                "ec2",
+                "describe-route-tables",
+                "--region",
+                region,
+                "--filters",
+                f"Name=vpc-id,Values={subnet.vpc_id}",
+                "--output",
+                "json",
+            ],
+        )
+        tables = _parse(_RouteTables, result.stdout, operation="inspect bake subnet routes").values
+        explicit = [
+            table for table in tables if any(a.subnet_id == subnet.id for a in table.associations)
+        ]
+        effective = explicit or [
+            table for table in tables if any(a.main for a in table.associations)
+        ]
+        if len(effective) != 1 or not any(
+            route.destination == "0.0.0.0/0"
+            and route.gateway.startswith("igw-")
+            and route.state == "active"
+            for route in effective[0].routes
+        ):
+            continue
+        result = _run_aws(
+            request.aws_cli,
+            [
+                "ec2",
+                "describe-security-groups",
+                "--region",
+                region,
+                "--filters",
+                f"Name=vpc-id,Values={subnet.vpc_id}",
+                f"Name=tag:{_MANAGED_TAG_KEY},Values={_MANAGED_TAG_VALUE}",
+                "--output",
+                "json",
+            ],
+        )
+        groups = _parse(_SecurityGroups, result.stdout, operation="find bake security group").values
+        if len(groups) == 1:
+            _log(f"{region}: baking in fleet subnet {subnet.id}")
+            return subnet.id, groups[0].id
+    raise SystemExit(
+        f"{region}: no configured public fleet subnet with an active internet route "
+        "and one fleet security group; apply regional fleet networking before baking"
+    )
 
 
 def _read_console(request: _BakeRequest, *, region: str, instance_id: str) -> str:
@@ -479,24 +608,10 @@ def _wait_for_instance_stopped(request: _BakeRequest, *, region: str, instance_i
         if len(states) != 1:
             raise SystemExit(f"{region}: bake instance {instance_id} was not observable")
         state = states[0]
-        if state == "stopped":
-            if announced_ok:
-                return
-            # The console trails the instance, so a stop seen before the success
-            # line is usually only that lag. Give it a bounded chance to arrive
-            # rather than imaging on the strength of the state alone.
-            for _ in range(_CONSOLE_SETTLE_ATTEMPTS):
-                time.sleep(_POLL_INTERVAL_SECONDS)
-                console = _read_console(request, region=region, instance_id=instance_id)
-                if _BAKE_OK_SENTINEL in console:
-                    return
-                if _BAKE_FAILED_SENTINEL in console:
-                    break
-            tail = "\n".join(console.strip().splitlines()[-_CONSOLE_TAIL_LINES:])
-            raise SystemExit(
-                f"{region}: bake instance {instance_id} stopped without finishing its "
-                f"script. Its last {_CONSOLE_TAIL_LINES} console lines:\n{tail}"
-            )
+        _log(f"{region}: bake instance {instance_id}: {state}")
+        _log("\n".join(console.strip().splitlines()[-8:]) or "No bake console output yet")
+        if state == "stopped" and _BAKE_OK_SENTINEL in console:
+            return
         if state in {"shutting-down", "terminated"}:
             raise SystemExit(f"{region}: bake instance {instance_id} terminated before imaging")
         if time.monotonic() >= deadline:
@@ -560,6 +675,31 @@ def _wait_for_image(request: _BakeRequest, *, region: str, image_id: str) -> Non
         if len(images.images) != 1 or images.images[0].image_id != image_id:
             raise SystemExit(f"{region}: node image {image_id} was not observable")
         state = images.images[0].state
+        snapshot_ids = [
+            device.disk.snapshot_id
+            for device in images.images[0].devices
+            if device.disk is not None
+        ]
+        _log(f"{region}: image {image_id}: {state}")
+        if snapshot_ids:
+            result = _run_aws(
+                request.aws_cli,
+                [
+                    "ec2",
+                    "describe-snapshots",
+                    "--region",
+                    region,
+                    "--snapshot-ids",
+                    *snapshot_ids,
+                    "--output",
+                    "json",
+                ],
+            )
+            snapshots = _parse(_Snapshots, result.stdout, operation="inspect image snapshots")
+            for snapshot in snapshots.values:
+                _log(f"{region}: snapshot {snapshot.id}: {snapshot.state}, {snapshot.progress}")
+                if snapshot.state == "error":
+                    raise SystemExit(f"{region}: image snapshot {snapshot.id} failed")
         if state == "available":
             return
         if state not in {"pending"}:

@@ -4,8 +4,10 @@ The control plane, the scheduler, the cache, the tunnel, and the bootstrap that
 has to run before any of them.
 
 Image archives share the application S3 bucket and workload identity.
-Infrastructure descriptor version 5 supplies its endpoint and bucket identities,
-plus the role that issues temporary workspace credentials. Follow the
+Infrastructure descriptor version 6 supplies its endpoint and bucket identities,
+the role that issues temporary workspace credentials, and `fleet.networks` keyed
+by AWS region. Fleet registration passes that map to `fleet ensure --networks-json`.
+Follow the
 [S3 cutover steps](../platform-deployment/OBJECT_STORAGE.md) before deploying
 these settings to an existing installation.
 

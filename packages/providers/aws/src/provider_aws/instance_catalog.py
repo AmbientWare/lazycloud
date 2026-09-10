@@ -5,6 +5,7 @@ import re
 from enum import StrEnum
 from types import MappingProxyType
 
+from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.providers import ProviderOfferEligibility
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shared.compute_policy import UnitName
@@ -427,10 +428,11 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
 
 AWS_ALLOWED_OFFERS = tuple(
     ProviderOfferEligibility(
-        region="us-east-1",
+        region=region,
         instance_type=instance.instance_type,
         preemptible=preemptible,
     )
+    for region in AWS_COMPUTE_CONFIGURATION.allowed_regions
     for instance in AWS_INSTANCE_CATALOG
     for preemptible in instance.purchase_markets
 )
