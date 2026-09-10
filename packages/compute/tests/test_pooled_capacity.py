@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -52,7 +53,8 @@ from database.repositories.orchestration import (
     WorkerRepository,
 )
 from database.repositories.source_cache import SourceCacheCleanupRepository
-from provider_aws import Boto3AwsManagedPoolClientProvider
+from provider_aws import AwsManagedPoolBinaries, Boto3AwsManagedPoolClientProvider
+from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
 from provider_clients.workspace_compute import WorkspaceComputeProviderResolver
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
@@ -88,7 +90,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
+from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.supplier_costs import SupplierCostTerms
@@ -1730,16 +1732,67 @@ def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
     assert [operation.owns_capacity for operation in operations] == [True, False]
 
 
-def test_connection_drain_deletes_hidden_capacity_idempotently(
+def test_disconnecting_connection_rejects_a_previously_selected_purchase(
     isolated_services: ApiServices,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(isolated_services, platform_fleet=True)
+    with isolated_services.context.database.session() as session:
+        stored_connection = AwsAccountConnectionRepository(session).get(_CONNECTION_ID)
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    assert stored_connection is not None
+    connection = stored_connection
+    resolver = WorkspaceComputeProviderResolver(
+        connections=lambda _: (),
+        platform_connections=lambda: (connection,),
+        capacity_workspace=lambda _: workspace_id,
+        binaries_by_region={
+            "us-east-1": AwsManagedPoolBinaries(
+                agent_version="0.1.0",
+                agent_sha256="a" * 64,
+                cpu_ami_id="ami-0123456789abcdef0",
+            )
+        },
+        instance_hourly_micros={},
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+    )
+    provider = resolver.resolve(workspace_id, f"aws:{_CONNECTION_ID}")
+    approved = AWS_ALLOWED_OFFERS[0]
+    offer = _offer().model_copy(
+        update={
+            "region": approved.region,
+            "instance_type": approved.instance_type,
+            "preemptible": approved.preemptible,
+        }
+    )
+    connection = connection.model_copy(
+        update={"phase": AwsAccountConnectionPhase.DisconnectDraining}
+    )
+    compute = ComputeService(isolated_services.context, provider_resolver=resolver)
+
+    with pytest.raises(ConflictError, match="no longer accepts"):
+        compute.prepare_pooled_offer(
+            provider=provider,
+            offer=offer,
+            requirements=ComputeResourceRequirements(cpu_millicores=1000, memory_mb=1024),
+        )
+
+    with isolated_services.context.database.session() as session:
+        assert ComputeUnitRepository(session).list_for_provider_connection(_CONNECTION_ID) == []
+
+
+@pytest.mark.parametrize("platform_fleet", [False, True])
+def test_connection_drain_deletes_hidden_capacity_idempotently(
+    isolated_services: ApiServices,
+    platform_fleet: bool,
+) -> None:
+    _seed_connection(isolated_services, platform_fleet=platform_fleet)
     provider = _PooledProvider()
+    mutations = isolated_services.capacity_reservation_repository
     compute = ComputeService(
         isolated_services.context,
         provider_resolver=_Resolver(provider, isolated_services),
         pool_bootstrap_factory=_bootstrap,
-        capacity_owner_mutations=_MutationLeases(),
+        capacity_owner_mutations=mutations,
     )
     pool = compute.prepare_pooled_capacity(
         workspace="default",
@@ -1752,6 +1805,32 @@ def test_connection_drain_deletes_hidden_capacity_idempotently(
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
+
+    with isolated_services.context.database.session() as session:
+        units = ComputeUnitRepository(session)
+        stored = units.get(pool.id)
+        assert stored is not None
+        units.upsert(stored.model_copy(update={"initial_machines": 1, "min_machines": 1}))
+    if platform_fleet:
+        with pytest.raises(InvalidInputError, match="fleet policy"):
+            compute.clear_aws_default_capacity(workspace="default", release_capacity=True)
+        with isolated_services.context.database.session() as session:
+            stored = ComputeUnitRepository(session).get(pool.id)
+            assert stored is not None
+            assert stored.min_machines == 1
+        with (
+            mutations.mutation_lock(pool.capacity_owner_id),
+            ThreadPoolExecutor(max_workers=1) as executor,
+        ):
+            attempt = executor.submit(
+                compute.request_connection_drain,
+                pool.provider_connection_id or "",
+                workspace_ids=[pool.workspace_id],
+            )
+            with pytest.raises(ConflictError):
+                attempt.result(timeout=5)
+        assert provider.desired == 1
+        assert provider.delete_calls == []
 
     drained = compute.request_connection_drain(
         pool.provider_connection_id or "",

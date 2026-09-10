@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionValidationError
+from compute.offers import ComputeOffer
 from networking.settings import BackendRouteSettings
 from provider_aws import (
     AwsAccountAuthorizationCleanupResult,
@@ -20,10 +21,13 @@ from provider_aws import (
     AwsExistingAccountAuthorizationValidation,
     AwsExistingAccountAuthorizationValidationInput,
     AwsManagedNodeIdentity,
+    AwsManagedPoolBinaries,
     AwsPendingAccountAuthorization,
     AwsRegionalPrices,
+    Boto3AwsManagedPoolClientProvider,
     aws_account_connection_template_identity,
 )
+from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
 from provider_clients import (
     AwsAccountConnectionComponents,
     configured_aws_account_connection_components,
@@ -34,6 +38,7 @@ from provider_clients.aws_connections import (
     _require_current_managed_template,
 )
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
+from provider_clients.workspace_compute import WorkspaceComputeProviderResolver
 from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
@@ -240,6 +245,52 @@ def _validating_connection(
         created_at=now,
         updated_at=now,
     )
+
+
+def test_draining_connection_keeps_cleanup_access_but_cannot_purchase() -> None:
+    generation = _managed_generation()
+    connection = _validating_connection(generation).model_copy(
+        update={
+            "phase": AwsAccountConnectionPhase.Ready,
+            "active_authorization": generation,
+            "pending_authorization": None,
+            "platform_fleet": True,
+        }
+    )
+    workspace_id = "12345678-1234-4123-8123-123456789abf"
+    resolver = WorkspaceComputeProviderResolver(
+        connections=lambda _: (),
+        platform_connections=lambda: (connection,),
+        capacity_workspace=lambda _: workspace_id,
+        binaries_by_region={
+            "us-east-1": AwsManagedPoolBinaries(
+                agent_version="0.1.0",
+                agent_sha256="a" * 64,
+                cpu_ami_id="ami-0123456789abcdef0",
+            )
+        },
+        instance_hourly_micros={},
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+    )
+    provider_ref = f"aws:{connection.id}"
+    approved = AWS_ALLOWED_OFFERS[0]
+    offer = ComputeOffer(
+        id="approved-node",
+        provider=provider_ref,
+        region=approved.region,
+        instance_type=approved.instance_type,
+        preemptible=approved.preemptible,
+    )
+    ready = resolver.resolve(workspace_id, provider_ref)
+    assert ready.policy is not None and ready.policy.accepts(offer)
+
+    connection = connection.model_copy(
+        update={"phase": AwsAccountConnectionPhase.DisconnectDraining}
+    )
+    assert not tuple(resolver.list_platform_providers())
+    draining = resolver.resolve(workspace_id, provider_ref)
+    assert draining.pooled is not None
+    assert draining.policy is not None and not draining.policy.accepts(offer)
 
 
 def _managed_validation() -> AwsAccountAuthorizationValidation:
