@@ -130,7 +130,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
    before they have paid for anything. The rest is disclosure, not pricing. */
 function accountTerm(catalog: PricingCatalog): string {
   const terms = catalog.no_payment_method;
-  return `New accounts receive a one-time ${formatCostNanos(catalog.trial.amount_nanos)} usage credit, valid for ${catalog.trial.duration_days} days. Without a saved card, you can run ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once and ${countLabel(terms.max_concurrent_gpus, "GPU card")}. Further usage needs prepaid credit.`;
+  return `New accounts receive a one-time ${formatCostNanos(catalog.trial.amount_nanos)} usage credit, valid for ${catalog.trial.duration_days} days. Without a saved card, you can run ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once and ${countLabel(terms.max_concurrent_gpus, "GPU card")} using ${gpuModelsLabel(terms.gpu_types)}. Every plan includes access to all offered GPU models with a saved card and sufficient credit, subject to capacity. Monthly included credit expires at the end of the billing period. Purchased credit never expires.`;
 }
 
 const sectionTitle =

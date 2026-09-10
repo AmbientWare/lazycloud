@@ -40,8 +40,9 @@ class BillingPlanChangeIntentTable(TimestampMixin, DatabaseBase):
         CheckConstraint("attempts >= 0", name="ck_billing_plan_change_intents_attempts"),
         CheckConstraint(
             "(target_plan = 'free' AND target_terms_version IN ('free-v1', 'free-v2')) OR "
-            "(target_plan = 'team' AND target_terms_version IN ('team-v1', 'team-v2')) OR "
-            "(target_plan = 'business' AND target_terms_version = 'business-v1')",
+            "(target_plan = 'team' AND target_terms_version "
+            "IN ('team-v1', 'team-v2', 'team-v3')) OR "
+            "(target_plan = 'business' AND target_terms_version IN ('business-v1', 'business-v2'))",
             name="ck_billing_plan_change_intents_terms",
         ),
         # A claimed row cannot exist without its claim, and a claim cannot leak
