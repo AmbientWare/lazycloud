@@ -67,14 +67,8 @@ spec:
             - {{ required "fleet.account_id is required" .Values.fleet.account_id | quote }}
             - --role-arn
             - {{ required "fleet.role_arn is required" .Values.fleet.role_arn | quote }}
-            - --vpc-id
-            - {{ required "fleet.vpc_id is required" .Values.fleet.vpc_id | quote }}
-            {{- range .Values.fleet.subnet_ids }}
-            - --subnet-id
-            - {{ . | quote }}
-            {{- end }}
-            - --security-group-id
-            - {{ required "fleet.security_group_id is required" .Values.fleet.security_group_id | quote }}
+            - --networks-json
+            - {{ required "fleet.networks is required" .Values.fleet.networks | toJson | quote }}
           env:
             {{- include "lazycloud.env" (list . "fleetEnsure") | nindent 12 }}
             # The cluster-local Service rather than the public origin. This call

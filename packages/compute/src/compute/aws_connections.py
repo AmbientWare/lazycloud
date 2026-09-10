@@ -57,7 +57,7 @@ class AwsAccountAuthorizationPlanner(Protocol):
         active_authorization: AwsAccountAuthorizationGeneration | None,
         node_role_arn: str | None,
         node_instance_profile_arn: str | None,
-        network: AwsAccountNetwork | None,
+        networks: dict[str, AwsAccountNetwork],
     ) -> AwsAccountAuthorizationPlan: ...
 
 
@@ -222,7 +222,7 @@ class AwsAccountConnectionService:
             active_authorization=None,
             node_role_arn=None,
             node_instance_profile_arn=None,
-            network=request.network,
+            networks=request.networks,
         )
         self._validate_plan_account(plan, request.account_id)
         now = utc_now()
@@ -243,7 +243,7 @@ class AwsAccountConnectionService:
             pending_authorization=pending,
             node_role_arn=plan.node_role_arn,
             node_instance_profile_arn=plan.node_instance_profile_arn,
-            network=plan.network,
+            networks=plan.networks,
             customer_action_url=None,
             customer_action_label=(
                 "Create the connection stack" if plan.authorization_stack else ""
@@ -273,7 +273,7 @@ class AwsAccountConnectionService:
         return connection
 
     def ensure_fleet(self, request: AwsFleetEnsureRequest, *, user_id: str) -> AwsAccountConnection:
-        """Register platform infrastructure and validate additive subnet changes."""
+        """Register platform infrastructure and validate additive regional networks."""
         if self.current(user_id=user_id) is None:
             try:
                 self.connect(request, user_id=user_id, platform_fleet=True)
@@ -291,7 +291,6 @@ class AwsAccountConnectionService:
                 for authorization in (current.active_authorization, current.pending_authorization)
                 if authorization is not None
             ]
-            network = current.network
             if (
                 not current.platform_fleet
                 or current.account_id != request.account_id
@@ -301,10 +300,13 @@ class AwsAccountConnectionService:
                 or any(
                     authorization.role_arn != request.role_arn for authorization in authorizations
                 )
-                or network is None
-                or network.vpc_id != request.network.vpc_id
-                or not set(network.subnet_ids).issubset(request.network.subnet_ids)
-                or network.security_group_id != request.network.security_group_id
+                or any(
+                    region not in request.networks
+                    or network.vpc_id != request.networks[region].vpc_id
+                    or not set(network.subnet_ids).issubset(request.networks[region].subnet_ids)
+                    or network.security_group_id != request.networks[region].security_group_id
+                    for region, network in current.networks.items()
+                )
             ):
                 raise ConflictError(
                     "Fleet infrastructure does not match the existing connection. "
@@ -317,7 +319,7 @@ class AwsAccountConnectionService:
                 AwsAccountConnectionPhase.Degraded,
             }:
                 raise ConflictError("Fleet authorization transition must finish before deploying")
-            if set(network.subnet_ids) == set(request.network.subnet_ids):
+            if current.networks == request.networks:
                 return current
             active = current.active_authorization
             if (
@@ -327,16 +329,16 @@ class AwsAccountConnectionService:
                 or current.pending_authorization is not None
                 or current.retiring_authorization is not None
             ):
-                raise ConflictError("Fleet authorization must be ready before adding subnets")
+                raise ConflictError("Fleet authorization must be ready before adding networks")
 
-        candidate = current.model_copy(update={"network": request.network})
+        candidate = current.model_copy(update={"networks": request.networks})
         try:
             result = self.validator.validate(candidate, active)
             self._validate_result(candidate, active, result)
         except AwsAccountConnectionValidationError as exc:
             raise UpstreamUnavailableError(exc.message) from exc
         if (
-            result.network != request.network
+            result.networks != request.networks
             or result.node_role_arn != current.node_role_arn
             or result.node_instance_profile_arn != current.node_instance_profile_arn
         ):
@@ -351,7 +353,7 @@ class AwsAccountConnectionService:
                 raise ConflictError("Fleet connection changed while validating additional subnets")
             updated = durable.model_copy(
                 update={
-                    "network": result.network,
+                    "networks": result.networks,
                     "revision": durable.revision + 1,
                     "updated_at": utc_now(),
                 }
@@ -1193,7 +1195,7 @@ class AwsAccountConnectionService:
                         "pending_authorization": None,
                         "node_role_arn": result.node_role_arn,
                         "node_instance_profile_arn": result.node_instance_profile_arn,
-                        "network": result.network or connection.network,
+                        "networks": result.networks,
                         "next_reconcile_at": None,
                         "reconcile_attempt_count": 0,
                         "customer_action_url": None,
@@ -1215,7 +1217,7 @@ class AwsAccountConnectionService:
                     ),
                     "node_role_arn": result.node_role_arn,
                     "node_instance_profile_arn": result.node_instance_profile_arn,
-                    "network": result.network or connection.network,
+                    "networks": result.networks,
                     "provider_operation_id": self._operation_id(),
                     "provider_operation_started_at": result.validated_at,
                     "next_reconcile_at": result.validated_at,
@@ -1232,7 +1234,7 @@ class AwsAccountConnectionService:
                 "active_authorization": ready_target,
                 "node_role_arn": result.node_role_arn,
                 "node_instance_profile_arn": result.node_instance_profile_arn,
-                "network": result.network or connection.network,
+                "networks": result.networks,
                 "next_reconcile_at": None,
                 "reconcile_attempt_count": 0,
                 "customer_action_url": None,
@@ -1327,7 +1329,7 @@ class AwsAccountConnectionService:
         active_authorization: AwsAccountAuthorizationGeneration | None,
         node_role_arn: str | None,
         node_instance_profile_arn: str | None,
-        network: AwsAccountNetwork | None = None,
+        networks: dict[str, AwsAccountNetwork] | None = None,
     ) -> AwsAccountAuthorizationPlan:
         try:
             return self.authorization_planner.plan(
@@ -1340,7 +1342,7 @@ class AwsAccountConnectionService:
                 active_authorization=active_authorization,
                 node_role_arn=node_role_arn,
                 node_instance_profile_arn=node_instance_profile_arn,
-                network=network,
+                networks=networks if networks is not None else {},
             )
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc

@@ -21,6 +21,7 @@ from pydantic import (
     ValidationError,
     model_validator,
 )
+from shared.aws_connections import AwsAccountNetwork, AwsRegion
 
 Name = Annotated[str, Field(min_length=1, pattern=r"^\S+$")]
 
@@ -34,16 +35,12 @@ class FleetInfrastructure(Contract):
     role_arn: Annotated[
         str, Field(pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::\d{12}:role/[A-Za-z0-9+=,.@_/-]+$")
     ]
-    vpc_id: Annotated[str, Field(pattern=r"^vpc-[a-f0-9]+$")]
-    subnet_ids: Annotated[list[Name], Field(min_length=2)]
-    security_group_id: Annotated[str, Field(pattern=r"^sg-[a-f0-9]+$")]
+    networks: dict[AwsRegion, AwsAccountNetwork] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_identity(self) -> FleetInfrastructure:
         if self.role_arn.split(":", maxsplit=5)[4] != self.account_id:
             raise ValueError("Fleet role must belong to its account")
-        if len(set(self.subnet_ids)) != len(self.subnet_ids):
-            raise ValueError("Fleet subnets must be distinct")
         return self
 
 
@@ -69,7 +66,7 @@ class ObjectStoreInfrastructure(Contract):
 
 
 class Infrastructure(Contract):
-    schema_version: Literal[5]
+    schema_version: Literal[6]
     deployment: Name
     region: Name
     registry: Name

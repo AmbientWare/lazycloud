@@ -64,6 +64,7 @@ from shared.aws_connections import (
     AwsAccountAuthorizationPhase,
     AwsAccountConnection,
     AwsAccountConnectionPhase,
+    AwsAccountNetwork,
 )
 from shared.capacity import (
     CapacityAcquisitionRequest,
@@ -2800,6 +2801,13 @@ def _seed_connection(service_context: ServiceContext, *, platform_fleet: bool = 
                 node_instance_profile_arn=(
                     f"arn:aws:iam::{account_id}:instance-profile/compute-node"
                 ),
+                networks={
+                    "us-east-1": AwsAccountNetwork(
+                        vpc_id="vpc-01234567",
+                        subnet_ids=("subnet-01234567", "subnet-89abcdef"),
+                        security_group_id="sg-01234567",
+                    )
+                },
                 created_at=now,
                 updated_at=now,
             )

@@ -27,6 +27,18 @@ terraform {
 provider "cloudflare" {}
 
 provider "aws" {
+  alias  = "west"
+  region = "us-west-2"
+
+  default_tags {
+    tags = {
+      "lazycloud:deployment" = var.deployment
+      "lazycloud:managed-by" = "terraform"
+    }
+  }
+}
+
+provider "aws" {
   alias  = "certificate"
   region = "us-east-1"
 }

@@ -14,8 +14,8 @@ deployment, from the branch named for it, and the values file Deploy writes
 there.
 
 [Object storage](OBJECT_STORAGE.md) describes workload identity, scoped workspace
-access and the application data cutover. Infrastructure descriptor version 5 names
-the S3 endpoint, bucket identities and workspace grant role.
+access and the application data cutover. Infrastructure descriptor version 6 names
+the S3 endpoint, bucket identities, workspace grant role and regional fleet networks.
 
 Use the shared [S3 Terraform backend](../terraform-state/README.md):
 
@@ -31,6 +31,25 @@ sizes. Supply the
 `hetzner-images.tfvars.json` image-workflow artifact to Terraform and add
 `LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS` to the existing operator secret.
 Only credentials are operator-owned; capacity policy is deployment-owned.
+
+AWS fleet workers can launch in `us-east-1` and `us-west-2`. The deployment
+owns a VPC in each region and registers both through `fleet.networks`. The
+connection role and node identity are shared across regions. Adding a region
+or subnets preserves every existing network; removing or replacing one is
+rejected while registering the fleet.
+
+For this rollout, apply and publish the version-6 infrastructure descriptor,
+publish CPU and GPU images through Connected AWS Node Images, then publish a
+host release containing both regional image catalogs. Deploy the application
+with that host release pinned. Migration `0032_aws_regional_networks` preserves
+existing connection networks before fleet registration adds West. Existing
+customer-managed authorization stacks retain their own region.
+
+Set `region="us-west"` in SDK workload configuration to require Oregon.
+Automatic placement may choose either approved region. A region needs its
+network, image, eligible offer and supplier quote before it can supply capacity.
+Customer rates and the selected-location multiplier remain unchanged. Storage
+stays in its existing region; cross-region transfer remains a supplier expense.
 
 PostgreSQL application traffic uses the branch's built-in PgBouncer on port 6432.
 Terraform also publishes an explicit port-5432 URL for migrations, administration

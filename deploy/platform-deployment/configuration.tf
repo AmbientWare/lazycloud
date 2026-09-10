@@ -1,7 +1,7 @@
 output "infrastructure_configuration" {
   description = "Publish this non-secret descriptor with deploy/object_storage.py."
   value = {
-    schema_version    = 5
+    schema_version    = 6
     deployment        = var.deployment
     region            = var.region
     registry          = local.ecr_registry
@@ -29,11 +29,20 @@ output "infrastructure_configuration" {
     redis_host                 = aws_elasticache_replication_group.redis.primary_endpoint_address
     hetzner_node_images        = var.hetzner_node_images
     fleet = {
-      account_id        = data.aws_caller_identity.current.account_id
-      role_arn          = aws_iam_role.fleet_connection.arn
-      vpc_id            = aws_vpc.fleet.id
-      subnet_ids        = aws_subnet.fleet[*].id
-      security_group_id = aws_security_group.fleet_node.id
+      account_id = data.aws_caller_identity.current.account_id
+      role_arn   = aws_iam_role.fleet_connection.arn
+      networks = {
+        (var.region) = {
+          vpc_id            = aws_vpc.fleet.id
+          subnet_ids        = aws_subnet.fleet[*].id
+          security_group_id = aws_security_group.fleet_node.id
+        }
+        "us-west-2" = {
+          vpc_id            = aws_vpc.fleet_west.id
+          subnet_ids        = aws_subnet.fleet_west[*].id
+          security_group_id = aws_security_group.fleet_west_node.id
+        }
+      }
     }
     secret_documents = {
       platform  = aws_secretsmanager_secret.platform.name

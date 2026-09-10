@@ -6,10 +6,12 @@ import webbrowser
 from typing import Annotated, Any
 
 import typer
+from pydantic import TypeAdapter
 from shared.aws_connections import (
     AWS_CONNECTED_MACHINE_POOL,
     AwsAccountConnectionPhase,
     AwsAccountNetwork,
+    AwsRegion,
 )
 from shared.compute_policy import MachinePool
 from shared.http.aws_connections import (
@@ -200,38 +202,6 @@ def compute_policy_update(
     )
 
 
-def _account_network(
-    *,
-    vpc_id: str | None,
-    subnet_ids: tuple[str, ...],
-    security_group_id: str | None,
-) -> AwsAccountNetwork | None:
-    """Build the network from options, or refuse a half-supplied one.
-
-    All three or none: a connection carrying part of a network fails later, when
-    a pool is requested, with an error about the pool rather than about the
-    option that was left out.
-    """
-    supplied = [bool(vpc_id), bool(subnet_ids), bool(security_group_id)]
-    if not any(supplied):
-        return None
-    if not all(supplied):
-        raise typer.BadParameter(
-            "give --network-vpc-id, at least two --network-subnet-id and "
-            "--network-security-group-id together, or none of them"
-        )
-    if len(subnet_ids) < 2:
-        raise typer.BadParameter(
-            f"at least two --network-subnet-id are required, in different "
-            f"availability zones; got {len(subnet_ids)}"
-        )
-    return AwsAccountNetwork(
-        vpc_id=vpc_id or "",
-        subnet_ids=subnet_ids,
-        security_group_id=security_group_id or "",
-    )
-
-
 @cloud_connect_app.command("aws")
 def cloud_connect_aws(
     ctx: typer.Context,
@@ -244,38 +214,21 @@ def cloud_connect_aws(
         str | None,
         typer.Option("--role-arn", help="Existing cross-account management role."),
     ] = None,
-    network_vpc_id: Annotated[
-        str | None,
-        typer.Option("--network-vpc-id", help="VPC managed pools launch into."),
-    ] = None,
-    network_subnet_id: Annotated[
-        list[str] | None,
+    networks_json: Annotated[
+        str,
         typer.Option(
-            "--network-subnet-id",
-            help="Subnet to launch into. Give at least two spanning different zones.",
+            "--networks-json",
+            help="Regional VPC, subnet and security group IDs as JSON; requires an existing role.",
         ),
-    ] = None,
-    network_security_group_id: Annotated[
-        str | None,
-        typer.Option("--network-security-group-id", help="Security group nodes join."),
-    ] = None,
+    ] = "{}",
 ) -> None:
-    """Connect an AWS account, which backs every workspace you own.
-
-    The network options apply only with `--role-arn`. A managed-stack connection
-    is given its network by the stack it deploys; an existing role is given one
-    here, because nothing in that mode creates it.
-    """
-    network = _account_network(
-        vpc_id=network_vpc_id,
-        subnet_ids=tuple(network_subnet_id or ()),
-        security_group_id=network_security_group_id,
-    )
+    """Connect an AWS account, which backs every workspace you own."""
+    networks = TypeAdapter(dict[AwsRegion, AwsAccountNetwork]).validate_json(networks_json)
     response = compute_client().connect_account(
         account_id=account_id,
         pool=pool,
         role_arn=role_arn,
-        network=network,
+        networks=networks,
     )
     if response.authorization.stack is None and response.authorization.external_id is None:
         raise RuntimeError("existing-role authorization did not return its external ID")
