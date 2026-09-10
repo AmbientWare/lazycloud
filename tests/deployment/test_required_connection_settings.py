@@ -13,7 +13,9 @@ from database import DatabaseApplicationName, DatabaseSettings
 # here is silent by construction: the process connects, the writes land
 # somewhere, and nothing reports a problem until the data is read back from a
 # store nobody meant to use.
-_CONNECTION_SETTINGS: tuple[tuple[str, str, Callable[[], object]], ...] = (
+type ConnectionSettings = DatabaseSettings | RedisSettings | S3ObjectStoreSettings
+
+_CONNECTION_SETTINGS: tuple[tuple[str, str, Callable[[], ConnectionSettings]], ...] = (
     (
         "database",
         "LAZYCLOUD_DATABASE_URL",
@@ -30,7 +32,7 @@ _CONNECTION_SETTINGS: tuple[tuple[str, str, Callable[[], object]], ...] = (
 )
 def test_unset_connection_setting_fails_by_name(
     variable: str,
-    build: Callable[[], object],
+    build: Callable[[], ConnectionSettings],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv(variable, raising=False)

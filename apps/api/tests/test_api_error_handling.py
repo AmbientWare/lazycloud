@@ -79,104 +79,104 @@ def test_invalid_stub_type_returns_typed_invalid_input(
 
 def test_provider_validation_does_not_echo_identity_credentials(
     isolated_services: ApiServices,
-    client_stack: ExitStack,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    enrollment = ProviderNodeEnrollmentService(
-        gateway=isolated_services.gateway_service,
-        compute=isolated_services.compute,
-        identity_verifier=AwsProviderNodeIdentityAdapter(
-            http_client=BoundedProviderNodeIdentityHttpClient(),
-            replay_guard=RedisProviderNodeIdentityReplayGuard(isolated_services.redis()),
-        ),
-    )
-    _, client, _ = _client(
-        replace(isolated_services, provider_node_enrollment_service=enrollment), client_stack
-    )
-    proof = "https://identity.invalid/?credential=validation-proof-sentinel"
-    response = client.post(
-        "/gateway/provider-nodes/bootstrap-phase",
-        json={
-            "enrollment_request_id": "11111111-1111-4111-8111-111111111111",
-            "provider": "aws",
-            "region": "invalid-region",
-            "provider_instance_id": "i-0123456789abcdef0",
-            "identity_proof_url": proof,
-            "phase": "booting",
-        },
-    )
-    assert response.status_code == 422
-    assert ErrorResponse.model_validate_json(response.content).code == "invalid_input"
-    assert "validation-proof-sentinel" not in response.text
-    assert "validation-proof-sentinel" not in caplog.text
+    with ExitStack() as client_stack:
+        enrollment = ProviderNodeEnrollmentService(
+            gateway=isolated_services.gateway_service,
+            compute=isolated_services.compute,
+            identity_verifier=AwsProviderNodeIdentityAdapter(
+                http_client=BoundedProviderNodeIdentityHttpClient(),
+                replay_guard=RedisProviderNodeIdentityReplayGuard(isolated_services.redis()),
+            ),
+        )
+        _, client, _ = _client(
+            replace(isolated_services, provider_node_enrollment_service=enrollment), client_stack
+        )
+        proof = "https://identity.invalid/?credential=validation-proof-sentinel"
+        response = client.post(
+            "/gateway/provider-nodes/bootstrap-phase",
+            json={
+                "enrollment_request_id": "11111111-1111-4111-8111-111111111111",
+                "provider": "aws",
+                "region": "invalid-region",
+                "provider_instance_id": "i-0123456789abcdef0",
+                "identity_proof_url": proof,
+                "phase": "booting",
+            },
+        )
+        assert response.status_code == 422
+        assert ErrorResponse.model_validate_json(response.content).code == "invalid_input"
+        assert "validation-proof-sentinel" not in response.text
+        assert "validation-proof-sentinel" not in caplog.text
 
 
 def test_unexpected_exception_returns_opaque_500(
     isolated_services: ApiServices,
-    client_stack: ExitStack,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    app, client, headers = _client(
-        isolated_services,
-        client_stack,
-        raise_server_exceptions=False,
-    )
-    router = APIRouter()
-
-    @router.get("/api/v1/error-handling-probe")
-    def _explode() -> None:
-        msg = "sensitive internal detail"
-        raise RuntimeError(msg)
-
-    app.include_router(router)
-
-    with caplog.at_level(logging.ERROR, logger="api.fastapi_app"):
-        response = client.get(
-            "/api/v1/error-handling-probe",
-            headers={**headers, "x-request-id": "probe-request-id"},
+    with ExitStack() as client_stack:
+        app, client, headers = _client(
+            isolated_services,
+            client_stack,
+            raise_server_exceptions=False,
         )
+        router = APIRouter()
 
-    assert response.status_code == 500
-    body = ErrorResponse.model_validate_json(response.content)
-    assert "sensitive internal detail" not in body.detail
-    assert "RuntimeError" not in body.detail
-    assert "probe-request-id" in body.detail
-    assert response.headers["x-request-id"] == "probe-request-id"
+        @router.get("/api/v1/error-handling-probe")
+        def _explode() -> None:
+            msg = "sensitive internal detail"
+            raise RuntimeError(msg)
 
-    matching = [
-        record
-        for record in caplog.records
-        if record.name == "api.fastapi_app" and "probe-request-id" in record.getMessage()
-    ]
-    assert matching, "unexpected error must be logged server-side with the request id"
-    assert any(
-        record.exc_info is not None and "sensitive internal detail" in str(record.exc_info[1])
-        for record in matching
-    )
+        app.include_router(router)
+
+        with caplog.at_level(logging.ERROR, logger="api.fastapi_app"):
+            response = client.get(
+                "/api/v1/error-handling-probe",
+                headers={**headers, "x-request-id": "probe-request-id"},
+            )
+
+        assert response.status_code == 500
+        body = ErrorResponse.model_validate_json(response.content)
+        assert "sensitive internal detail" not in body.detail
+        assert "RuntimeError" not in body.detail
+        assert "probe-request-id" in body.detail
+        assert response.headers["x-request-id"] == "probe-request-id"
+
+        matching = [
+            record
+            for record in caplog.records
+            if record.name == "api.fastapi_app" and "probe-request-id" in record.getMessage()
+        ]
+        assert matching, "unexpected error must be logged server-side with the request id"
+        assert any(
+            record.exc_info is not None and "sensitive internal detail" in str(record.exc_info[1])
+            for record in matching
+        )
 
 
 def test_unexpected_exception_mints_request_id_when_absent(
     isolated_services: ApiServices,
-    client_stack: ExitStack,
 ) -> None:
-    app, client, headers = _client(
-        isolated_services,
-        client_stack,
-        raise_server_exceptions=False,
-    )
-    router = APIRouter()
+    with ExitStack() as client_stack:
+        app, client, headers = _client(
+            isolated_services,
+            client_stack,
+            raise_server_exceptions=False,
+        )
+        router = APIRouter()
 
-    @router.get("/api/v1/error-handling-probe-no-id")
-    def _explode() -> None:
-        raise RuntimeError("boom")
+        @router.get("/api/v1/error-handling-probe-no-id")
+        def _explode() -> None:
+            raise RuntimeError("boom")
 
-    app.include_router(router)
+        app.include_router(router)
 
-    response = client.get("/api/v1/error-handling-probe-no-id", headers=headers)
-    assert response.status_code == 500
-    minted = response.headers["x-request-id"]
-    assert minted
-    assert minted in ErrorResponse.model_validate_json(response.content).detail
+        response = client.get("/api/v1/error-handling-probe-no-id", headers=headers)
+        assert response.status_code == 500
+        minted = response.headers["x-request-id"]
+        assert minted
+        assert minted in ErrorResponse.model_validate_json(response.content).detail
 
 
 @dataclass(slots=True)
@@ -203,7 +203,6 @@ class _StubIdentityProvider:
 
 def test_a_sign_in_that_cannot_be_provisioned_lands_the_browser_on_the_sign_in_page(
     isolated_services: ApiServices,
-    client_stack: ExitStack,
 ) -> None:
     """The one route whose caller is a browser mid-navigation, not a client.
 
@@ -214,22 +213,23 @@ def test_a_sign_in_that_cannot_be_provisioned_lands_the_browser_on_the_sign_in_p
     with no way forward, which is the whole reason this route redirects.
     """
 
-    identity = _StubIdentityProvider()
-    isolated_services.sign_in.provider_factory = lambda: identity
+    with ExitStack() as client_stack:
+        identity = _StubIdentityProvider()
+        isolated_services.sign_in.provider_factory = lambda: identity
 
-    def storage_unavailable(user_id: str, login: str) -> WorkspaceRecord:
-        del user_id, login
-        raise WorkspaceStorageError("unable to create workspace storage bucket 'workspace-1'")
+        def storage_unavailable(user_id: str, login: str) -> WorkspaceRecord:
+            del user_id, login
+            raise WorkspaceStorageError("unable to create workspace storage bucket 'workspace-1'")
 
-    isolated_services.sign_in.provision_default_workspace = storage_unavailable
-    _, client, _ = _client(isolated_services, client_stack, raise_server_exceptions=False)
+        isolated_services.sign_in.provision_default_workspace = storage_unavailable
+        _, client, _ = _client(isolated_services, client_stack, raise_server_exceptions=False)
 
-    isolated_services.sign_in.start()
-    response = client.get(
-        "/auth/github/callback",
-        params={"code": "auth-code", "state": identity.states[-1]},
-        follow_redirects=False,
-    )
+        isolated_services.sign_in.start()
+        response = client.get(
+            "/auth/github/callback",
+            params={"code": "auth-code", "state": identity.states[-1]},
+            follow_redirects=False,
+        )
 
-    assert response.status_code == 303
-    assert response.headers["location"] == "/signin?error=provider_unavailable"
+        assert response.status_code == 303
+        assert response.headers["location"] == "/signin?error=provider_unavailable"

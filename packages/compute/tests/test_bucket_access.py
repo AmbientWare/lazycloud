@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -26,7 +26,7 @@ from tests.workspaces import workspace_owner_user_id
 
 @dataclass(slots=True)
 class _BucketAccessController:
-    calls: list[tuple[ConnectedBucketAccessGrant, ...]] = field(default_factory=list)
+    grants: tuple[ConnectedBucketAccessGrant, ...] = ()
 
     def reconcile(
         self,
@@ -34,7 +34,7 @@ class _BucketAccessController:
         grants: tuple[ConnectedBucketAccessGrant, ...],
     ) -> None:
         assert connection.phase is AwsAccountConnectionPhase.Ready
-        self.calls.append(grants)
+        self.grants = grants
 
 
 def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
@@ -89,26 +89,15 @@ def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
         )
     )
 
-    assert controller.calls == [
-        (
-            ConnectedBucketAccessGrant(
-                bucket="customer-data",
-                prefix="workspace/input",
-                read_only=True,
-            ),
+    assert controller.grants == (
+        ConnectedBucketAccessGrant(
+            bucket="customer-data", prefix="workspace/input", read_only=True
         ),
-        (
-            ConnectedBucketAccessGrant(
-                bucket="customer-data",
-                prefix="workspace/input",
-                read_only=True,
-            ),
-        ),
-    ]
+    )
 
     deployments.delete(first.id)
 
-    assert controller.calls[-1] == ()
+    assert controller.grants == ()
 
 
 def _seed_ready_connection(isolated_services: ApiServices) -> None:

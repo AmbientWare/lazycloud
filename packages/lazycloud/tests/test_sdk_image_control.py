@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Mapping
+from functools import partial
 
+import pytest
 from lazycloud.clients.image.control import ImageControlClient
 from pydantic import JsonValue
 from shared.http.errors import HttpTransportError
 from shared.http.images import BuildImageEvent, BuildImageRequest, BuildImageResponse
 from shared.image_building.records import BuildStatus, ImageBuildPhase
+from shared.transport_retry import TransientRetry
 
 
 class _ReconnectingImageChannel:
@@ -54,7 +57,13 @@ class _ReconnectingImageChannel:
         ).model_dump_json()
 
 
-def test_image_build_reconnect_preserves_distinct_identical_log_lines() -> None:
+def test_image_build_reconnect_preserves_distinct_identical_log_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "lazycloud.clients.image.control.TransientRetry",
+        partial(TransientRetry, sleep=lambda _: None),
+    )
     client = ImageControlClient(_ReconnectingImageChannel(), workspace="workspace-1")
     responses = list(client.build_image(BuildImageRequest(python_packages=["httpx"])))
 

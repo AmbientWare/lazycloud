@@ -21,7 +21,6 @@ from observability.container_logs import (
     ContainerLogWorkerAssignmentError,
 )
 from observability.stream_state import (
-    RedisContainerLogBatchAppendResult,
     RedisEventStreamRepository,
 )
 from pydantic import JsonValue, TypeAdapter
@@ -29,7 +28,7 @@ from shared.compute_fleet import Machine, Worker
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.errors import ConflictError
-from shared.realtime.contracts import CloudEventRecord
+from shared.realtime.streams import LogStreamQuery
 from shared.tasks import Task
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
@@ -37,7 +36,6 @@ _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 def test_container_log_ingestion_service_supports_direct_durable_attribution(
     isolated_services: ApiServices,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
@@ -61,30 +59,8 @@ def test_container_log_ingestion_service_supports_direct_durable_attribution(
                 status=ContainerStatus.Running,
             )
         )
-    captured: list[CloudEventRecord] = []
-
-    def append_batch(
-        _repository: RedisEventStreamRepository,
-        *,
-        container_id: str,
-        capture_id: str,
-        first_sequence: int,
-        events: tuple[CloudEventRecord, ...],
-    ) -> RedisContainerLogBatchAppendResult:
-        assert container_id == container.id
-        assert capture_id == "direct-capture"
-        assert first_sequence == 0
-        captured.extend(events)
-        return RedisContainerLogBatchAppendResult(
-            accepted_through=1,
-            appended_count=2,
-        )
-
-    monkeypatch.setattr(RedisEventStreamRepository, "append_container_log_batch", append_batch)
-    service = ContainerLogIngestionService(
-        isolated_services.context,
-        RedisEventStreamRepository(isolated_services.redis()),
-    )
+    repository = RedisEventStreamRepository(isolated_services.redis())
+    service = ContainerLogIngestionService(isolated_services.context, repository)
     entries = [
         _Entry(sequence=0, message="root stdout"),
         _Entry(sequence=1, message="root stderr", stream="stderr"),
@@ -96,16 +72,20 @@ def test_container_log_ingestion_service_supports_direct_durable_attribution(
         entries=entries,
     )
 
+    captured = repository.read_logs(
+        LogStreamQuery(workspace_id=workspace_id, object_type="container", object_id=container.id)
+    )
+    assert len(captured) == 2
     assert result.accepted_through == 1
     assert result.appended_count == 2
-    assert [event.extensions["workspaceid"] for event in captured] == [
+    assert [event.body["workspaceid"] for event in captured] == [
         workspace_id,
         workspace_id,
     ]
-    assert [event.extensions["workerid"] for event in captured] == [worker.id, worker.id]
-    assert [event.extensions["machineid"] for event in captured] == [machine.id, machine.id]
-    first_data = _JSON_OBJECT_ADAPTER.validate_python(captured[0].data)
-    second_data = _JSON_OBJECT_ADAPTER.validate_python(captured[1].data)
+    assert [event.body["workerid"] for event in captured] == [worker.id, worker.id]
+    assert [event.body["machineid"] for event in captured] == [machine.id, machine.id]
+    first_data = _JSON_OBJECT_ADAPTER.validate_python(captured[0].body["data"])
+    second_data = _JSON_OBJECT_ADAPTER.validate_python(captured[1].body["data"])
     assert first_data["source_sequence"] == 0
     assert second_data["stream"] == "stderr"
 
@@ -142,7 +122,6 @@ def test_container_log_ingestion_service_supports_direct_durable_attribution(
 
 def test_container_log_runtime_attribution_uses_durable_ownership(
     isolated_services: ApiServices,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     deployment = isolated_services.deployments.deploy(
         DeploymentSpec(name="runtime-container-log", handler="pkg.module:handler")
@@ -181,30 +160,8 @@ def test_container_log_runtime_attribution_uses_durable_ownership(
             container.model_copy(update={"task_id": task.id})
         )
 
-    captured: list[CloudEventRecord] = []
-
-    def append_batch(
-        _repository: RedisEventStreamRepository,
-        *,
-        container_id: str,
-        capture_id: str,
-        first_sequence: int,
-        events: tuple[CloudEventRecord, ...],
-    ) -> RedisContainerLogBatchAppendResult:
-        assert container_id == container.id
-        assert capture_id == "runtime-capture"
-        assert first_sequence == 0
-        captured.extend(events)
-        return RedisContainerLogBatchAppendResult(
-            accepted_through=0,
-            appended_count=1,
-        )
-
-    monkeypatch.setattr(RedisEventStreamRepository, "append_container_log_batch", append_batch)
-    service = ContainerLogIngestionService(
-        isolated_services.context,
-        RedisEventStreamRepository(isolated_services.redis()),
-    )
+    repository = RedisEventStreamRepository(isolated_services.redis())
+    service = ContainerLogIngestionService(isolated_services.context, repository)
     with pytest.raises(ConflictError, match="durable worker assignment"):
         service.append_batch(
             container_id=container.id,
@@ -222,14 +179,20 @@ def test_container_log_runtime_attribution_uses_durable_ownership(
         ),
     )
 
+    captured = repository.read_logs(
+        LogStreamQuery(
+            workspace_id=stub.workspace_id, object_type="container", object_id=container.id
+        )
+    )
+    assert len(captured) == 1
     assert result.accepted_through == 0
     assert result.appended_count == 1
-    assert captured[0].extensions["workspaceid"] == stub.workspace_id
-    assert captured[0].extensions["stubid"] == stub.id
-    assert captured[0].extensions["appid"] == stub.app_id
-    assert captured[0].extensions["taskid"] == task.id
-    assert captured[0].extensions["workerid"] == runtime_worker_id
-    assert captured[0].extensions["machineid"] == runtime_machine_id
+    assert captured[0].body["workspaceid"] == stub.workspace_id
+    assert captured[0].body["stubid"] == stub.id
+    assert captured[0].body["appid"] == stub.app_id
+    assert captured[0].body["taskid"] == task.id
+    assert captured[0].body["workerid"] == runtime_worker_id
+    assert captured[0].body["machineid"] == runtime_machine_id
 
     with pytest.raises(ContainerLogWorkerAssignmentError, match="execution assignment"):
         service.append_runtime_batch(

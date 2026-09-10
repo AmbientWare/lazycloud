@@ -3,8 +3,9 @@ from __future__ import annotations
 import io
 import os
 import zipfile
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import cast
+from typing import IO, Never
 
 import pytest
 from networking.internal_http import InternalHttpClient
@@ -132,17 +133,21 @@ def test_source_download_error_never_discloses_capability_query(
 ) -> None:
     sentinel = "never-log-this-source-signature"
 
-    class _FailingHttp:
-        """An internal client whose failure carries the signed URL."""
+    def fail_request(
+        self: InternalHttpClient,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        content: bytes | Iterable[bytes] | IO[bytes] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> Never:
+        raise RuntimeError(f"failed request with {sentinel}")
 
-        def request(self, *args: object, **kwargs: object) -> object:
-            _ = args, kwargs
-            raise RuntimeError(f"failed request with {sentinel}")
-
+    monkeypatch.setattr(InternalHttpClient, "request", fail_request)
     materializer = SourceCodePackageMaterializer(
         cache_root=tmp_path / "cache",
         workspace_root=tmp_path / "workspaces",
-        http=cast(InternalHttpClient, _FailingHttp()),
     )
     mount = RequestMount(
         mount_path=WORKER_USER_CODE_VOLUME,

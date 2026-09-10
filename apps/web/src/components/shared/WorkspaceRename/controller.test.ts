@@ -1,3 +1,4 @@
+import { testQueryClient } from "@/test/query-client";
 import { createElement, useState, type PropsWithChildren } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -87,7 +88,6 @@ describe("workspace identity controller", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(updateWorkspaceMock).toHaveBeenCalledWith(target.id, "renamed");
       router.history.destroy();
-      queryClient.clear();
     },
   );
 
@@ -227,15 +227,6 @@ function renderController({
 function controllerWrapper(queryClient: QueryClient) {
   return ({ children }: PropsWithChildren) =>
     createElement(QueryClientProvider, { client: queryClient }, children);
-}
-
-function testQueryClient() {
-  return new QueryClient({
-    defaultOptions: {
-      mutations: { retry: false },
-      queries: { retry: false },
-    },
-  });
 }
 
 function sessionUser(): CurrentSession["user"] {

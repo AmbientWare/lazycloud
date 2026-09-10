@@ -1,5 +1,6 @@
+import { testQueryClient } from "@/test/query-client";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
 
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
@@ -21,7 +22,7 @@ it("keeps a pending reveal masked during deletion and allows a fresh reveal afte
     resolveReveal = resolve;
   });
   vi.stubGlobal("fetch", () => response);
-  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  const client = testQueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(workspaceQueryKeys.storage.secrets("workspace-1"), { secrets: [secret] });
   render(
     <QueryClientProvider client={client}>
@@ -70,7 +71,6 @@ it("keeps a pending reveal masked during deletion and allows a fresh reveal afte
   expect(screen.getByText("test-only-current-value")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Hide secret API_KEY" }));
   expect(screen.queryByText("test-only-current-value")).not.toBeInTheDocument();
-  client.clear();
 });
 
 it("clears revealed values on rotation and ignores responses for the previous version", async () => {
@@ -78,7 +78,7 @@ it("clears revealed values on rotation and ignores responses for the previous ve
     Response.json({ secret: { name: secret.name, value: "test-only-old-value" } }),
   );
   vi.stubGlobal("fetch", () => response);
-  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  const client = testQueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   const queryKey = workspaceQueryKeys.storage.secrets("workspace-1");
   client.setQueryData(queryKey, { secrets: [secret] });
   render(
@@ -122,5 +122,4 @@ it("clears revealed values on rotation and ignores responses for the previous ve
   });
   expect(screen.queryByText("test-only-stale-value")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Reveal secret API_KEY" })).toBeEnabled();
-  client.clear();
 });

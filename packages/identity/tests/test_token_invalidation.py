@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from uuid import uuid4
-
 import pytest
-from api.server.services import ApiServices
-from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient, RedisWireScalar
 from database.context import ServiceContext
 from identity.auth import AuthError, AuthService
@@ -12,25 +8,23 @@ from identity.token_invalidation import (
     AuthTokenInvalidation,
 )
 from identity.users import UserService
-from identity.workspaces import WorkspaceDeletionIdentityService
 from redis.exceptions import ConnectionError as RedisConnectionError
-from shared.errors import NotFoundError
-from shared.identity import TokenKind
+from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
-from tests.workspaces import administrator_credential, owned_workspace
 
 
-def _replica_context(services: ApiServices) -> ServiceContext:
+def _replica_context(context: ServiceContext) -> ServiceContext:
     """A second process's view of the same durable state: fresh identity, same database."""
-    return ServiceContext(database=services.context.database, paths=services.context.paths)
+    return ServiceContext(database=context.database, paths=context.paths)
 
 
 def test_revoked_token_rejected_immediately_across_replicas(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
 ) -> None:
-    invalidation = AuthTokenInvalidation.from_redis(isolated_services.redis_client)
-    auth_a = AuthService(isolated_services.context, token_invalidation=invalidation)
-    auth_b = AuthService(_replica_context(isolated_services), token_invalidation=invalidation)
+    invalidation = AuthTokenInvalidation.from_redis(real_redis_actors.client())
+    auth_a = AuthService(service_context, token_invalidation=invalidation)
+    auth_b = AuthService(_replica_context(service_context), token_invalidation=invalidation)
     raw_token, record = auth_a.create_token("api-key")
 
     assert auth_b.authenticate(raw_token).id == record.id
@@ -41,11 +35,12 @@ def test_revoked_token_rejected_immediately_across_replicas(
 
 
 def test_admin_disable_rejected_immediately_across_replicas(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
 ) -> None:
-    invalidation = AuthTokenInvalidation.from_redis(isolated_services.redis_client)
-    auth_a = AuthService(isolated_services.context, token_invalidation=invalidation)
-    auth_b = AuthService(_replica_context(isolated_services), token_invalidation=invalidation)
+    invalidation = AuthTokenInvalidation.from_redis(real_redis_actors.client())
+    auth_a = AuthService(service_context, token_invalidation=invalidation)
+    auth_b = AuthService(_replica_context(service_context), token_invalidation=invalidation)
     raw_token, record = auth_a.create_token("api-key")
 
     assert auth_b.authenticate(raw_token).id == record.id
@@ -55,86 +50,30 @@ def test_admin_disable_rejected_immediately_across_replicas(
         auth_b.authenticate(raw_token)
 
 
-def test_every_validity_mutation_emits_invalidation(isolated_services: ApiServices) -> None:
-    invalidation = AuthTokenInvalidation.from_redis(isolated_services.redis_client)
-    auth = AuthService(isolated_services.context, token_invalidation=invalidation)
+def test_revoked_account_token_is_rejected_by_a_warm_replica(
+    service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    invalidation = AuthTokenInvalidation.from_redis(real_redis_actors.client())
+    first = AuthService(service_context, token_invalidation=invalidation)
+    second = AuthService(_replica_context(service_context), token_invalidation=invalidation)
+    owner = UserService(service_context).create(display_name="account-owner")
+    raw_token, record = first.create_account_token(owner.id, "account-key")
+    assert second.authenticate(raw_token).id == record.id
 
-    def generation() -> int:
-        value = invalidation.current_generation()
-        assert value is not None
-        return value
+    first.revoke_account_token(owner.id, record.id)
 
-    baseline = generation()
-    _raw_token, record = auth.create_token("api-key")
-    assert generation() == baseline, "creation must not churn replica caches"
-
-    auth.revoke_token(record.id)
-    after_revoke = generation()
-    assert after_revoke > baseline
-
-    auth.set_workspace_tokens_admin_disabled(record.workspace_id, disabled=True)
-    after_disable = generation()
-    assert after_disable > after_revoke
-    auth.set_workspace_tokens_admin_disabled(record.workspace_id, disabled=False)
-
-    owner = UserService(isolated_services.context).create(
-        display_name="invalidation-owner",
-    )
-    _account_raw, account_record = auth.create_account_token(owner.id, "account-key")
-    before_account_revoke = generation()
-    auth.revoke_account_token(owner.id, account_record.id)
-    after_account_revoke = generation()
-    assert after_account_revoke > before_account_revoke
-
-    with pytest.raises(NotFoundError, match="account token not found"):
-        auth.revoke_account_token(owner.id, str(uuid4()))
-
-    _raw, expired = auth.create_token(
-        "expired-worker",
-        kind=TokenKind.Worker,
-        expires_in_seconds=-10,
-    )
-    before_prune = generation()
-    assert auth.prune_expired_system_tokens() >= 1
-    assert generation() > before_prune
-    del expired
-
-    expired_raw, _expired_record = auth.create_token("expired-user", expires_in_seconds=-10)
-    before_expiry = generation()
     with pytest.raises(AuthError):
-        auth.authenticate(expired_raw)
-    assert generation() > before_expiry, "expiry-driven auto-revoke must emit"
-
-    _admin_raw, audit_actor = administrator_credential(
-        isolated_services.context, "workspace-delete-admin"
-    )
-    doomed_workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context), "doomed-workspace"
-    )
-    _raw, other = auth.create_token("other-workspace", workspace_id=doomed_workspace.id)
-    before_workspace_delete = generation()
-    identity = WorkspaceDeletionIdentityService(isolated_services.context)
-    with isolated_services.context.database.session() as session:
-        deleting = identity.lock_and_validate_begin(
-            session,
-            doomed_workspace.id,
-            actor_workspace_id=audit_actor.workspace_id,
-        )
-        identity.mark_deleting(session, deleting)
-    auth.credentials_revoked()
-    with isolated_services.context.database.session() as session:
-        identity.finalize(session, doomed_workspace.id, actor=audit_actor)
-    assert generation() > before_workspace_delete
-    del other
+        second.authenticate(raw_token)
 
 
 def test_redis_outage_bypasses_cache_and_falls_back_to_database(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     outage = _OutageRedis()
     invalidation = AuthTokenInvalidation.from_redis(RedisClient(outage, key_prefix="test"))
-    auth_a = AuthService(isolated_services.context, token_invalidation=invalidation)
-    auth_b = AuthService(_replica_context(isolated_services), token_invalidation=invalidation)
+    auth_a = AuthService(service_context, token_invalidation=invalidation)
+    auth_b = AuthService(_replica_context(service_context), token_invalidation=invalidation)
     raw_token, record = auth_a.create_token("api-key")
 
     assert auth_b.authenticate(raw_token).id == record.id

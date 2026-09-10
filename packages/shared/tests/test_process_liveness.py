@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
 
 from shared.process_liveness import HeartbeatFile, main
@@ -12,10 +11,10 @@ def test_beat_creates_parent_and_refreshes_mtime(tmp_path: Path) -> None:
     assert heartbeat.age_seconds() is None
     heartbeat.beat()
     assert heartbeat.path.exists()
-    first = heartbeat.path.stat().st_mtime
-    time.sleep(0.02)
+    stale = heartbeat.path.stat().st_mtime - 120
+    os.utime(heartbeat.path, (stale, stale))
     heartbeat.beat()
-    assert heartbeat.path.stat().st_mtime >= first
+    assert heartbeat.path.stat().st_mtime > stale
 
 
 def test_freshness_against_reference_clock(tmp_path: Path) -> None:

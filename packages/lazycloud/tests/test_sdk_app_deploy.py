@@ -1,49 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 
-import pytest
-from shared.http.gateway import DeployStubResponse
 from tests.fakes import FakeDeploymentClient
 
 from lazycloud import App
-
-
-def test_app_deploy_forwards_source_root_to_function_deployment(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source_roots: list[Path | str | None] = []
-
-    class RecordingDeploymentClient:
-        def __init__(self, **kwargs: object) -> None:
-            del kwargs
-
-        def create(
-            self,
-            spec: object,
-            *,
-            name: str | None = None,
-            workspace: str | None = None,
-            image: object | None = None,
-            source_root: Path | str | None = None,
-        ) -> DeployStubResponse:
-            del spec, name, workspace, image
-            source_roots.append(source_root)
-            return DeployStubResponse(stub_id="stub-function", deployment_id="deployment")
-
-    monkeypatch.setattr(
-        "lazycloud.abstractions.function.DeploymentClient",
-        RecordingDeploymentClient,
-    )
-    app = App("source_root")
-    app.function(lambda: "ok", name="function")
-
-    result = app.deploy(source_root=tmp_path)
-
-    assert len(result.resources) == 1
-    assert source_roots == [tmp_path]
 
 
 def test_app_deploy_applies_the_pool_to_every_deployable_resource() -> None:

@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind, StubRecord
-from coordination.redis_client import RedisClient
 from database.repositories.orchestration import ContainerRepository
 from execution.pods.service import PodControlService
 from fastapi.testclient import TestClient
@@ -25,7 +24,6 @@ from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 from shared.timestamps import utc_now
 from shared.workload_keys import pod_keep_warm_lock_key
 from tests.real_redis import RealRedisActors
-from tests.redis_fakes import FakeRedis
 from tests.scheduler_composition import services_with_redis_container_control
 from worker.checkpoints import (
     WorkerCheckpointStatus,
@@ -159,7 +157,7 @@ def test_sandbox_restore_resolves_source_stub_and_schedules_typed_checkpoint(
     )
     service = PodControlService(
         services,
-        redis=RedisClient(FakeRedis(), key_prefix="test"),
+        redis=isolated_services.redis_client,
     )
     stub = _sandbox_stub(services, keep_warm_seconds=60)
     workspace = ControlPlaneService(services.context).get_workspace(stub.workspace_id)

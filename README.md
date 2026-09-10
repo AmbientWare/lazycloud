@@ -40,7 +40,7 @@ Local working files are stored under `~/.lazycloud` by default. Durable applicat
 state is stored in PostgreSQL and hot coordination state is stored in Redis.
 Set `LAZYCLOUD_HOME=/path/to/state` to isolate local filesystem resources.
 
-## Development Validation
+## Development validation
 
 Use Python 3.12, selected by `.python-version`. Start the test services once:
 
@@ -86,14 +86,18 @@ Use the fixture contracts in [tests/AGENTS.md](tests/AGENTS.md) when adding or
 changing tests. Owner tests use `service_context` for rollback isolation or
 `committed_service_context` for independent connections. API request tests can
 share `api_runtime` with a separate `api_workspace` per case. Configuration,
-global-state, and lifespan tests use `isolated_services`.
+global-state, and lifespan tests use `isolated_services`. Async owner scenarios
+use `async_services` so clients close in the event loop that used them. Redis
+and import cleanup also have shared fixtures; avoid local setup copies.
+
 Both local runs and CI print total setup, call, and teardown times, fixture
 creation counts, and the slowest individual phases. App startup inside a test
 is included in its call time. Add `--junitxml=test-results/python.xml` to retain
 a local report. For detailed profiling, run
 `uv run --group dev python -m cProfile -o /tmp/tests.prof -m pytest -x -q <owner>`;
 profiling adds overhead, so use ordinary runs for wall-clock comparisons.
-Web tests use Vitest with shared mock, timer, and DOM cleanup under
+
+Web tests use Vitest with shared mock, timer, DOM, and query-client cleanup under
 `apps/web/src/test/`. Keep browser-only checks in the named Playwright scenarios.
 Stop the test-only stack with `docker compose -f compose.test.yaml down -v`.
 

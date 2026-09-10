@@ -92,7 +92,7 @@ class _OnlyOneIsServing:
 
 @pytest.mark.anyio
 async def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
-    isolated_services: ApiServices,
+    async_services: ApiServices,
 ) -> None:
     """A started container is not a serving one, and only the probe knows which.
 
@@ -101,10 +101,10 @@ async def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
     selection is decided by tie-break among backends that are not equivalent.
     """
 
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(async_services.context)
     stub = control.create_stub(f"pod-readiness-{uuid4().hex[:8]}", kind=StubKind.Pod)
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with async_services.context.database.session() as session:
+        workspace_id = async_services.context.default_workspace_id(session)
         repository = ContainerRepository(session)
         for container_id in (SERVING_CONTAINER, STARTED_CONTAINER):
             repository.upsert(
@@ -120,7 +120,7 @@ async def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
             )
 
     service = replace(
-        isolated_services.pod_service,
+        async_services.pod_service,
         async_scheduler_containers=_RunningContainers(
             workspace_id=workspace_id,
             stub_id=stub.id,
@@ -128,15 +128,12 @@ async def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
         container_readiness_probe=_OnlyOneIsServing(serving_container_id=SERVING_CONTAINER),
     )
 
-    try:
-        session = await service.prepare_pod_proxy(
-            stub_id=stub.id,
-            port=PORT,
-            path="/",
-            query_params={},
-            protocol=PodProxyProtocol.Http,
-        )
-        assert session.target.container_id == SERVING_CONTAINER
-        await service.finish_pod_proxy(session)
-    finally:
-        await isolated_services.require_async_io().close()
+    session = await service.prepare_pod_proxy(
+        stub_id=stub.id,
+        port=PORT,
+        path="/",
+        query_params={},
+        protocol=PodProxyProtocol.Http,
+    )
+    assert session.target.container_id == SERVING_CONTAINER
+    await service.finish_pod_proxy(session)

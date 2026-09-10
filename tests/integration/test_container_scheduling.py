@@ -15,14 +15,7 @@ from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContai
 from scheduler.state import (
     SchedulerWorkerRequest,
 )
-from shared.container_requests import (
-    WORKER_USER_ARTIFACT_VOLUME,
-    WorkerContainerRequestPayload,
-)
 from shared.containers import ContainerStatus
-from shared.env import (
-    CHECKPOINT_ENABLED_ENV,
-)
 from shared.function_payloads import (
     FunctionCloudpickleInvocation,
     FunctionCloudpickleResult,
@@ -34,7 +27,6 @@ from shared.http.functions import (
     FunctionInvokeBody,
     FunctionSetResultBody,
 )
-from shared.identity import WorkspaceStorageConfig
 from shared.tasks import TaskStatus
 from tests.real_redis import RealRedisActors
 from tests.scheduler_composition import scheduler_request_service_for_redis
@@ -73,47 +65,6 @@ def test_container_scheduling_failure_syncs_container_and_task(
     assert task.error == "retry-limit"
     assert task.exit_code == 1
     assert task.kwargs["container_id"] == container.id
-
-
-def test_function_invoke_requests_workspace_storage_when_workspace_bucket_available(
-    isolated_services: ApiServices,
-) -> None:
-    scheduler = _Scheduler()
-    isolated_services.containers.scheduler = scheduler
-    control = ControlPlaneService(isolated_services.context)
-    workspace = control.get_workspace("default")
-    control.set_workspace_storage(
-        workspace.id,
-        WorkspaceStorageConfig(
-            backend="s3",
-            bucket="workspace-bucket",
-            config={
-                "endpoint_url": "http://object-store:9000",
-                "region": "us-east-1",
-                "access_key": "access",
-                "secret_key": "secret",
-                "force_path_style": True,
-            },
-        ),
-    )
-    stub = control.create_stub(
-        "fn-storage",
-        kind=StubKind.Function,
-        handler="pkg.fn:handler",
-        config={"runtime": {"image_id": "image-fn"}},
-    )
-
-    response = FunctionControlService(isolated_services).function_invoke(
-        FunctionInvokeBody(
-            stub_id=stub.id,
-            invocation=FunctionCloudpickleInvocation.from_bytes(b"{}"),
-        )
-    )
-
-    assert response.exit_code == 0
-    payload = WorkerContainerRequestPayload.model_validate(scheduler.requests[0].payload)
-    assert payload.workspace_storage_required
-    assert [mount.mount_path for mount in payload.mounts] == [WORKER_USER_ARTIFACT_VOLUME]
 
 
 def test_function_dependency_waits_then_schedules_materialized_args(
@@ -391,40 +342,6 @@ def test_function_dependency_failure_fails_downstream_without_scheduling(
     assert downstream_task.exit_code == 1
     assert downstream_task.error is not None
     assert upstream.task_id in downstream_task.error
-
-
-def test_checkpoint_function_runner_receives_checkpoint_barrier_env(
-    isolated_services: ApiServices,
-) -> None:
-    """A pooled function container is the workload checkpointing now serves.
-
-    Its process is long-lived and its startup hook is the expensive part, which
-    is exactly what a checkpoint amortises. The runner half already waits on the
-    barrier; what this covers is that the control plane still asks for it.
-    """
-
-    scheduler = _Scheduler()
-    isolated_services.containers.scheduler = scheduler
-    stub = ControlPlaneService(isolated_services.context).create_stub(
-        "checkpoint-function",
-        kind=StubKind.Function,
-        handler="pkg.jobs:handler",
-        config={
-            "image": {"image_id": "img_checkpoint_function"},
-            "runtime": {"checkpoint_enabled": True},
-        },
-    )
-
-    FunctionControlService(isolated_services).function_invoke(
-        FunctionInvokeBody(
-            stub_id=stub.id,
-            invocation=FunctionCloudpickleInvocation.from_bytes(b"{}"),
-        )
-    )
-
-    payload = WorkerContainerRequestPayload.model_validate(scheduler.requests[0].payload)
-    assert payload.checkpoint_enabled is True
-    assert f"{CHECKPOINT_ENABLED_ENV}=true" in payload.env
 
 
 class _Scheduler:

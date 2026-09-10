@@ -373,7 +373,13 @@ def test_sandbox_memory_restore_does_not_prepare_a_new_stub() -> None:
     assert pod.connect_requests == ["ctr-checkpoint-stub"]
 
 
-def test_sandbox_create_retries_only_typed_pending_readiness() -> None:
+def test_sandbox_create_retries_only_typed_pending_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def skip_delay(seconds: float) -> None:
+        del seconds
+
+    monkeypatch.setattr("lazycloud.abstractions.sandbox.time.sleep", skip_delay)
     pod = FakeSandboxPodClient(
         connect_outcomes=[
             http_api_error("container ctr-stub-1 is pending", status_code=503),

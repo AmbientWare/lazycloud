@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -14,7 +13,7 @@ from api.server.services import ApiServices
 from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from control.service import ControlPlaneService
-from coordination.redis_client import AsyncRedisClient, RedisClient, RedisSettings, redis_text
+from coordination.redis_client import AsyncRedisClient, RedisClient, redis_text
 from database.records.apps import StubRecord
 from database.repositories.apps import DeploymentRepository
 from database.repositories.orchestration import ContainerRepository
@@ -292,19 +291,6 @@ def _capacity_reservations(redis: RedisClient) -> CapacityReservationService:
     dispatch at all.
     """
     return CapacityReservationService(RedisCapacityReservationRepository(redis), tuple)
-
-
-@pytest.fixture
-async def async_redis(
-    real_redis_actors: RealRedisActors,
-) -> AsyncIterator[AsyncRedisClient]:
-    client = AsyncRedisClient.from_settings(
-        RedisSettings(url=real_redis_actors.url, key_prefix=real_redis_actors.prefix)
-    )
-    try:
-        yield client
-    finally:
-        await client.close()
 
 
 async def _worker_delivery_empty(
