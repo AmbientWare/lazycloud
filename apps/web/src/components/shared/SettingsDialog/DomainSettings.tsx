@@ -4,6 +4,7 @@ import { Check, Copy, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { useCopyToClipboard } from "@/components/shared/CopyButton/useCopyToClipboard";
 import { Panel } from "@/components/shared/Panel";
+import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,10 +54,13 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
     <Panel
       title="Domains"
       description="Available to every workspace in this account"
+      className="min-h-0 flex-1"
+      headerClassName="flex-wrap"
+      contentClassName="flex flex-col overflow-y-auto"
       action={
         billing.isPending || billing.error ? null : customDomainsEnabled ? (
           <form
-            className="flex items-center gap-2"
+            className="flex w-full min-w-0 items-center gap-2 sm:w-auto"
             onSubmit={(event) => {
               event.preventDefault();
               if (hostname.trim()) register.mutate(hostname);
@@ -67,7 +71,7 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
               onChange={(event) => setHostname(event.target.value)}
               placeholder="app.acme.com"
               aria-label="Domain to register"
-              className="h-8 w-56"
+              className="h-8 min-w-0 flex-1 sm:w-56"
               disabled={pending}
             />
             <Button size="sm" type="submit" disabled={pending || !hostname.trim()}>
@@ -97,11 +101,15 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
           <Skeleton className="h-8 w-full" />
         </div>
       ) : rows.length === 0 ? (
-        <p className="p-4 text-[11px] text-muted-foreground">
-          {customDomainsEnabled
-            ? "No domains yet. Add one to use it for deployments."
-            : "Custom domains require the Team plan. Deployments still have platform hostnames."}
-        </p>
+        <PanelEmpty
+          message="No domains yet"
+          detail={
+            customDomainsEnabled
+              ? "Add one to use it for deployments."
+              : "Custom domains require the Team plan. Deployments still have platform hostnames."
+          }
+          className="flex-1 p-4"
+        />
       ) : (
         <ul className="divide-y divide-border/80">
           {rows.map((domain) => (

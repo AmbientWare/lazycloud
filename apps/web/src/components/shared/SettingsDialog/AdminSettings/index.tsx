@@ -134,7 +134,7 @@ export function AdminSettings() {
           ) : controller.accounts.length === 0 ? (
             <PanelEmpty
               message={controller.narrowed ? "No accounts match this search" : "No accounts yet"}
-              className="min-h-32 p-8"
+              className="min-h-full p-8"
             />
           ) : (
             <AccountTable controller={controller} />
