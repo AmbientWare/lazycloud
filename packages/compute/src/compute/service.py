@@ -81,6 +81,8 @@ from compute.offers import (
     OfferRequest,
     ReservationStatus,
     choose_offer,
+    filter_offers,
+    offer_selection_key,
     record_purchase_terms,
 )
 from compute.provider_machines import (
@@ -1377,14 +1379,15 @@ class ComputeService:
             provider_ref=provider_ref,
         )
 
-    def workspace_has_ready_connection(self, workspace: str) -> bool:
-        """Whether this workspace has an account capacity can be built in."""
+    def workspace_has_ready_customer_connection(self, workspace: str) -> bool:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
             connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
                 workspace_id
             )
-        return connection is not None and connection.hosts_workloads
+        return (
+            connection is not None and not connection.platform_fleet and connection.hosts_workloads
+        )
 
     def pooled_offer_owner_id(self, provider: ResolvedComputeProvider, offer: ComputeOffer) -> str:
         policy = provider.policy
@@ -1453,10 +1456,7 @@ class ComputeService:
         if connection is None:
             raise UpstreamUnavailableError("AWS baseline connection is unavailable")
         if connection.platform_fleet:
-            initial_machines = 0
-            min_machines = 0
-            min_free_cpu_millicores = 0
-            min_free_memory_mib = 0
+            raise InvalidInputError("platform warm capacity belongs to the fleet policy")
         pool = self._prepare_pooled_capacity(
             workspace=workspace,
             requirements=ComputeResourceRequirements(),
@@ -1852,7 +1852,7 @@ class ComputeService:
             created = current is None
             if current is None or unit != current:
                 current = repository.upsert(unit)
-            if baseline is not None:
+            if baseline is not None and not unit_platform_fleet:
                 self._clear_other_internal_pool_floors(
                     session,
                     workspace_id=workspace_id,
@@ -1891,7 +1891,7 @@ class ComputeService:
             "min_free_gpu_count": 0,
         }
         for unit in units.list_internal(workspace_id=workspace_id):
-            if unit.id == keep_pool_id or unit.provider_ref != provider_ref:
+            if unit.id == keep_pool_id or unit.provider_ref != provider_ref or unit.platform_fleet:
                 continue
             if all(getattr(unit, field) == value for field, value in cleared.items()):
                 continue
@@ -2530,70 +2530,102 @@ class ComputeService:
     def reconcile_platform_warm_capacity(self, *, now: datetime) -> None:
         if self.provider_resolver is None:
             return
-        for provider in self.provider_resolver.list_platform_providers():
+        warm_owner = str(uuid5(NAMESPACE_URL, "lazycloud:platform-warm-capacity"))
+        with self._required_capacity_owner_mutations().mutation_lock(warm_owner):
+            offers: list[tuple[ResolvedComputeProvider, ComputeOffer]] = []
+            for provider in self.provider_resolver.list_platform_providers():
+                policy = provider.policy
+                if policy is None or provider.pooled is None:
+                    continue
+                try:
+                    offers.extend(
+                        (provider, offer)
+                        for offer in provider.pooled.list_offers(
+                            root_volume_gib=policy.root_volume_gib
+                        )
+                        if offer.provider == provider.ref
+                        and policy.accepts(offer)
+                        and offer.storage_mb >= policy.root_volume_gib * 1024
+                        and offer.cost_terms.complete_hourly_cost_micros is not None
+                        and offer.gpu_count == 0
+                    )
+                except Exception:
+                    LOGGER.exception("platform offer discovery failed for %s", provider.ref)
+            for preemptible in (True, False):
+                try:
+                    self._reconcile_warm_market(offers, preemptible=preemptible, now=now)
+                except Exception:
+                    LOGGER.exception(
+                        "platform warm reconciliation failed for preemptible=%s", preemptible
+                    )
+
+    def _reconcile_warm_market(
+        self,
+        offers: Sequence[tuple[ResolvedComputeProvider, ComputeOffer]],
+        *,
+        preemptible: bool,
+        now: datetime,
+    ) -> None:
+        minimum = self.fleet_policy.warm_cpu_min(preemptible=preemptible)
+        if minimum == 0:
+            self._clear_platform_warm_floors(preemptible=preemptible, keep_unit_id=None)
+            return
+        with self.context.database.session() as session:
+            repository = ComputeUnitRepository(session)
+            units = repository.list_platform_internal(preemptible=preemptible, gpu=False)
+            arrivals = repository.recent_platform_cpu_arrivals(
+                now - timedelta(hours=1), preemptible=preemptible
+            )
+            machines = [
+                machine
+                for unit in units
+                for machine in ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
+            ]
+        lower_times = [
+            to_utc(datetime.fromisoformat(value))
+            for unit in units
+            if isinstance(value := unit.config.get("warm_lower_since"), str)
+        ]
+        unavailable_owners = {
+            unit.capacity_owner_id
+            for unit in units
+            if unit.phase is ComputeUnitPhase.Degraded
+            or unit.provider_state.degraded_reason is not None
+        }
+        request = OfferRequest(nodes=1, preemptible=preemptible)
+        candidates = sorted(
+            (
+                (provider, offer)
+                for provider, offer in offers
+                if offer.preemptible is preemptible and filter_offers([offer], request)
+            ),
+            key=lambda item: offer_selection_key(item[1], request),
+        )
+        for provider, offer in candidates:
             policy = provider.policy
-            if policy is None or provider.pooled is None:
+            assert policy is not None
+            target = warm_capacity_target(
+                self.fleet_policy,
+                offer,
+                arrivals,
+                machines,
+                preemptible=preemptible,
+                current=sum(unit.min_machines for unit in units),
+                lower_since=max(lower_times) if lower_times else None,
+                now=now,
+            )
+            unit_id = self.pooled_offer_owner_id(provider, offer)
+            if unit_id in unavailable_owners:
                 continue
             try:
-                if policy.warm_cpu_min == 0:
-                    with self.context.database.session() as session:
-                        self._clear_other_internal_pool_floors(
-                            session,
-                            workspace_id=policy.workspace_id,
-                            keep_pool_id=None,
-                            provider_ref=provider.ref,
-                        )
-                    continue
-                offers = [
-                    offer
-                    for offer in provider.pooled.list_offers(root_volume_gib=policy.root_volume_gib)
-                    if policy.accepts(offer)
-                ]
-                offer = choose_offer(
-                    offers,
-                    OfferRequest(
-                        regions=[policy.default_region],
-                        min_storage_mb=policy.root_volume_gib * 1024,
-                        nodes=1,
-                    ),
-                )
-                unit_id, _ = internal_unit_identity(
-                    workspace_id=policy.workspace_id,
-                    provider_ref=provider.ref,
-                    region=offer.region,
-                    capability_key=offer.capability_key,
-                    root_volume_gib=policy.root_volume_gib,
-                )
                 with self._required_capacity_owner_mutations().mutation_lock(unit_id):
-                    with self.context.database.session() as session:
-                        repository = ComputeUnitRepository(session)
-                        current = repository.get(unit_id)
-                        arrivals = repository.recent_platform_cpu_arrivals(now - timedelta(hours=1))
-                        machines = ComputeProviderInstanceRepository(session).list_for_pool(unit_id)
-                    lower_since_raw = current.config.get("warm_lower_since") if current else None
-                    lower_since = (
-                        to_utc(datetime.fromisoformat(lower_since_raw))
-                        if isinstance(lower_since_raw, str)
-                        else None
-                    )
-                    target = warm_capacity_target(
-                        policy,
-                        offer,
-                        arrivals,
-                        machines,
-                        current=current.min_machines if current else policy.warm_cpu_min,
-                        lower_since=lower_since,
-                        now=now,
-                    )
-                    unit = self._prepare_pooled_capacity(
-                        workspace=policy.workspace_id,
-                        provider_ref=provider.ref,
-                        requirements=ComputeResourceRequirements(),
-                        region=offer.region,
+                    unit = self._prepare_pooled_offer(
+                        provider=provider,
+                        offer=offer,
+                        requirements=ComputeResourceRequirements(preemptible=preemptible),
                         desired_machines=target.machines,
                         root_volume_gib=policy.root_volume_gib,
                         idle_timeout_seconds=policy.idle_timeout_seconds,
-                        allowed_instance_types=(offer.instance_type,),
                         baseline=_PooledCapacityBaseline(
                             initial_machines=target.machines,
                             min_machines=target.machines,
@@ -2609,9 +2641,7 @@ class ComputeService:
                         repository = ComputeUnitRepository(session)
                         latest = repository.get(unit.id, for_update=True)
                         if latest is None:
-                            raise LookupError(
-                                "platform warm unit disappeared during reconciliation"
-                            )
+                            raise LookupError("platform warm unit disappeared")
                         repository.upsert(
                             latest.model_copy(
                                 update={
@@ -2626,9 +2656,47 @@ class ComputeService:
                                 }
                             )
                         )
+                self._clear_platform_warm_floors(preemptible=preemptible, keep_unit_id=unit.id)
+                return
             except Exception:
-                LOGGER.exception(
-                    "platform warm capacity reconciliation failed for %s", provider.ref
+                LOGGER.exception("platform warm capacity preparation failed for %s", offer.id)
+        raise UpstreamUnavailableError(
+            f"no approved capacity can supply the warm target for preemptible={preemptible}"
+        )
+
+    def _clear_platform_warm_floors(self, *, preemptible: bool, keep_unit_id: str | None) -> None:
+        with self.context.database.session() as session:
+            repository = ComputeUnitRepository(session)
+            repository.lock_platform_capacity()
+            for candidate in repository.list_platform_internal(preemptible=preemptible, gpu=False):
+                if candidate.id == keep_unit_id:
+                    continue
+                unit = repository.get(candidate.id, for_update=True)
+                if unit is None:
+                    continue
+                cleared = {
+                    "initial_machines": 0,
+                    "min_machines": 0,
+                    "min_free_cpu_millicores": 0,
+                    "min_free_memory_mib": 0,
+                    "min_free_gpu_count": 0,
+                }
+                if (
+                    all(getattr(unit, key) == value for key, value in cleared.items())
+                    and "warm_lower_since" not in unit.config
+                ):
+                    continue
+                repository.upsert(
+                    unit.model_copy(
+                        update={
+                            **cleared,
+                            "config": {
+                                key: value
+                                for key, value in unit.config.items()
+                                if key != "warm_lower_since"
+                            },
+                        }
+                    )
                 )
 
     def reconcile_unit_capacity(

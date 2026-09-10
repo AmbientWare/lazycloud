@@ -764,8 +764,6 @@ def _compute(isolated_services: ApiServices, provider: _PooledProvider) -> Compu
                         instance_type="m7i.xlarge",
                     ),
                 ),
-                max_cpu_instances=AWS_COMPUTE_CONFIGURATION.max_cpu_instances,
-                max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
             ),
         ),
         pool_bootstrap_factory=_bootstrap,

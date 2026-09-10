@@ -29,13 +29,23 @@ coordination package.
   actually protects against before relying on it, and say so where it is used.
 
 Platform capacity spans providers behind the pooled-capacity protocol. A stable
-`provider_ref` resolves ownership, pool, limits, allowed offers, and lifecycle
+`provider_ref` resolves ownership, pool, allowed offers, and lifecycle
 policy. The AWS connection pointer belongs only to capacity backed by an actual
-AWS connection. Platform bindings need no customer connection row or separate
-purchase ceiling. Existing AWS connection limits sum across that connection's
-units; account admission owns plan concurrency and billing limits.
-Desired-capacity changes lock the
-binding's capacity workspace before reading the sum or updating a unit.
+AWS connection. Platform bindings need no customer connection row. Account
+admission owns plan concurrency and billing limits.
+
+`FleetCapacityPolicy` owns platform CPU/GPU node limits and CPU warm minimums by
+purchase market. Platform growth and planned replacement share a PostgreSQL
+transaction lock before reading commitments or changing a unit. Terminating
+nodes consume headroom until their absence is observed. Providers can replace
+failed machines autonomously, so observed physical counts may briefly exceed
+the platform's admitted commitments. Customer-owned capacity stays outside these
+totals and serializes changes through its capacity workspace.
+
+Warm reconciliation chooses approved offers across platform providers, separately
+for preemptible and non-preemptible capacity. A zero minimum disables that
+market's spare-capacity floor. Changing a floor leaves active work to normal
+draining. A customer's AWS baseline cannot own a platform warm floor.
 
 Supplier quotes are immutable component estimates recorded when a node is first
 observed. A unit records its prepared offer; reconciling its existing nodes must
