@@ -147,10 +147,11 @@ same SDK transport for discovery and stack creation.
 
 ### Activation
 
-`python -m deploy.release` builds and activates a local source release. The control plane and scheduler
+The control plane and scheduler
 mount `LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR` (default `~/.lazycloud/compose-aws`) at
-`/run/lazycloud/aws` and read the role chain from it, so a connected stack
-differs from a local one by that variable alone.
+`/run/lazycloud/aws` and read the role chain from it. Managed capacity also needs a
+complete published release. The local source release command requires an unpinned
+Compose environment.
 
 That directory holds only the test source credentials and the role-chain profiles
 ending in the control principal, never the root `default` keys. The SDK refreshes the

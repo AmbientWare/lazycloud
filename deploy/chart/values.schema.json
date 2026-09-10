@@ -16,9 +16,8 @@
     "release": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["generation", "active"],
+      "required": ["active"],
       "properties": {
-        "generation": {"type": "integer", "minimum": 1},
         "active": {
           "type": "object",
           "additionalProperties": false,

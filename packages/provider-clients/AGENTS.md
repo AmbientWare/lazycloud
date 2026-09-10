@@ -19,12 +19,9 @@ owns the published release manifest contract and the resolution of a deployment'
 settings from it. One complete manifest names the platform images, worker image,
 agent executable, authorization template, and CPU and GPU AMIs. Unchanged artifacts
 retain their original identity. Docker Bake owns the platform build inventory.
-Values a release cannot know, such as the
-local artifact mount and control principal, stay
-environment-owned, and a rule that spans both halves says which half is missing.
+The local artifact mount and control principal belong to deployment configuration.
 A deployment with no manifest has no managed capacity. Terraform owns infrastructure
-identities, Helm owns these runtime
-settings, and processes read environment variables rather than Terraform files.
+identities, Helm owns runtime settings, and processes read environment variables.
 
 The production registry admits only providers with live evidence behind them. A
 persisted kind that is not supported fails explicitly and by name; it never

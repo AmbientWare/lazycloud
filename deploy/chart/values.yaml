@@ -6,7 +6,6 @@ image:
   artifacts: {}
 
 release:
-  generation: 0
   active: {}
 
 # Non-secret application settings. Resource facts are added by chart_values.py.

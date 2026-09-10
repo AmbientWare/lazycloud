@@ -293,7 +293,6 @@ def render(
             "artifacts": dict(manifest.platform_images),
         },
         "release": {
-            "generation": generation,
             "active": {
                 "generation": generation,
                 "manifest_url": release_manifest_url,
@@ -352,7 +351,8 @@ def main() -> None:
             previous = _VALUES.validate_python(yaml.safe_load(args.previous_values.read_text()))
             generation = (
                 TypeAdapter(int).validate_python(
-                    _mapping(previous, "release").get("generation", 0), strict=True
+                    _mapping(_mapping(previous, "release"), "active").get("generation", 0),
+                    strict=True,
                 )
                 + 1
             )

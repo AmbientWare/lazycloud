@@ -26,7 +26,6 @@ jobs:
     name: Read what staging runs
     runs-on: ubuntu-latest
     outputs:
-      commit: ${{ steps.read.outputs.commit }}
       release_manifest_url: ${{ steps.read.outputs.release_manifest_url }}
     steps:
       - name: Checkout the staging branch
@@ -51,15 +50,15 @@ jobs:
 
           values = yaml.safe_load(open("deploy/chart/values-deployment.yaml"))
           commit = values["image"]["tag"]
-          manifest = values.get("runtime", {}).get("LAZYCLOUD_RELEASE_MANIFEST_URL", "")
+          manifest = values["runtime"]["LAZYCLOUD_RELEASE_MANIFEST_URL"]
+          if not manifest:
+              raise SystemExit("staging has no complete release to promote")
           parent = subprocess.check_output(["git", "rev-parse", "HEAD^"], text=True).strip()
           if parent != commit:
               raise SystemExit(f"staging records {commit} but its branch was built from {parent}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              out.write(f"commit={commit}\n")
               out.write(f"release_manifest_url={manifest}\n")
-          summary = f"Promoting {commit}"
-          summary += f" on release {manifest}" if manifest else " with prod's recorded release unchanged"
+          summary = f"Promoting {commit} on release {manifest}"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
               out.write(summary + "\n")
           print(summary)
