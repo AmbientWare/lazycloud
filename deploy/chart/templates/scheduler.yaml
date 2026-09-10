@@ -43,13 +43,7 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.scheduler.terminationGracePeriodSeconds }}
       serviceAccountName: {{ .Values.serviceAccounts.scheduler }}
       topologySpreadConstraints:
-        - maxSkew: 1
-          topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: DoNotSchedule
-          matchLabelKeys: [pod-template-hash]
-          labelSelector:
-            matchLabels:
-              app: scheduler
+        {{- include "lazycloud.spreadAcrossNodes" "scheduler" | nindent 8 }}
       volumes:
         - name: agent-binarys
           emptyDir: {}

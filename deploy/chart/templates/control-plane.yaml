@@ -23,13 +23,7 @@ spec:
     spec:
       serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
       topologySpreadConstraints:
-        - maxSkew: 1
-          topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: DoNotSchedule
-          matchLabelKeys: [controller-revision-hash]
-          labelSelector:
-            matchLabels:
-              app: control-plane
+        {{- include "lazycloud.spreadAcrossNodes" "control-plane" | nindent 8 }}
       volumes:
         - name: tun
           hostPath:

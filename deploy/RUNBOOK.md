@@ -359,12 +359,12 @@ placement ran behind a synchronous Stripe drain in the same tick. A warm
 container answers in about 0.1s; anything in seconds is a cold start, and
 anything in tens of seconds is a loop that is not running.
 
-### Capacity, and why the cluster holds two nodes
+### Spot capacity and replica placement
 
-Auto Mode sizes the cluster from what the pods request, and from nothing else.
-There is no node group to grow and no instance type to pick. The way to give
-this deployment more machine is to request accurately; the way to give it less
-is the same.
+Auto Mode sizes capacity from pod requests and placement constraints. The
+cluster-owned `platform-spot` NodePool admits compatible amd64 C/M/R Spot
+instances across the existing subnets. It has no fixed size or node count.
+Keep requests accurate; Auto Mode does not measure and rewrite them for us.
 
 Requests are declared in three files, and they have to be read together because
 they land on the same nodes:
@@ -375,14 +375,16 @@ they land on the same nodes:
 | External Secrets (3 pods) | `deploy/argocd/apps/external-secrets.yaml` |
 | Argo CD (7 pods) | `deploy/platform-core/argocd.tf` |
 
-Two nodes is the floor and it is deliberate. `control-plane`, `cloudflared`, and
-`tunnel-gateway` each spread replicas across nodes. During bring-up, a rollout,
-or a node replacement a replica may sit `Pending` while Karpenter provisions.
-`Pending` is the signal Karpenter acts on, so allowing all replicas to pack onto
-one node would hide the need for the second node.
+The API, scheduler, Cloudflare connectors and gateway each require two nodes
+and two zones, including across revisions during a rollout. A replica may be
+Pending while Auto Mode provisions. Inspect its scheduling events, NodeClaims,
+NodeClass conditions and node availability together. A Spot shortage can affect
+both replicas; disruption budgets cannot prevent provider reclamation.
 
-A node vanishing from `kubectl get nodes` until only one remains is not
-consolidation working. It means something started requesting less than it uses.
+Argo and External Secrets share Spot capacity. Auto Mode provisioning runs
+outside these nodes, so their outage does not stop replacement provisioning.
+The cache retains its single EBS claim and recovers in the disk's zone. See
+[the migration and recovery checks](SPOT_PLAN.md) before draining a node.
 
 There is no metrics-server in this cluster, so `kubectl top` returns
 `Metrics API not available`. Read usage from the kubelet through the API server

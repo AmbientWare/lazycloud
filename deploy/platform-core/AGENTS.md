@@ -31,12 +31,13 @@ owns is in `deploy/platform-deployment`, applied once per deployment.
 - The storage class is here because it is cluster-scoped. Two deployments
   syncing a chart that declared it would each claim it, and Argo would prune
   it from under the other.
-- Auto Mode provisions everything, including the control plane. No node group
-  is declared here and no workload names a node: Karpenter sizes from what the
-  pods request, so a hand-declared pool would be choosing hardware on its
-  behalf and paying for it whether or not anything lands there. Every
-  deployment's pods land on the same nodes, so a request understated in one
-  chart is charged to the other deployment's pods.
+- Auto Mode provisions Spot workers from the cluster-owned NodeClass and
+  NodePool in `node_capacity.tf`. The bootstrap Helm release carries these
+  infrastructure resources before Argo starts, avoiding a dependency on a
+  running GitOps controller to create its own first node. Argo owns workloads.
+  Keep the existing node identity and network. Auto Mode chooses instance sizes
+  and counts from pod requests; do not pin hardware or reduce requests to force
+  a node count. Every deployment shares this capacity.
 - `cluster_api_cidrs` is this module's alone. The Kubernetes and Helm providers
   reach the API from wherever the apply runs, so that address is listed here. A
   deployment apply never reaches the API and needs no listing.

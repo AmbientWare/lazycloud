@@ -48,6 +48,22 @@ reading the `prod` branch into namespace `lazycloud-prod`. A change to a file
 there takes effect on the next sync with no deploy in between. Adding a
 deployment is adding its file, once its first deploy has created its branch.
 
+## Node capacity
+
+`node_capacity.tf` owns the `platform` NodeClass and `platform-spot` NodePool.
+The Argo bootstrap release installs them as infrastructure before it waits for
+Argo pods, so initial node provisioning does not depend on Argo reconciliation.
+They reuse the cluster's node role, access entry, security group and subnets.
+Auto Mode chooses instance sizes and counts from pod requests. The pool permits
+amd64 C/M/R Spot instances and serial voluntary disruption, with five minutes
+before consolidation to avoid churn during short deployment bursts.
+
+Migrate an existing built-in pool in stages. Install and validate custom
+capacity first, deploy the replica placement rules through Argo, then drain
+selected old nodes one at a time. Disable the built-in pool only after custom
+capacity is serving and replacement provisioning is proven. Preserve node
+access, the cluster and all data. [Migration acceptance](../SPOT_PLAN.md)
+
 ## Images
 
 One repository per control-plane image, `lazycloud/<name>`, tagged by the

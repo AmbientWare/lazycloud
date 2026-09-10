@@ -1,10 +1,4 @@
-# The one controller Terraform installs, and the last thing it installs.
-#
-# Everything else that runs in this cluster is an Argo Application, declared in
-# the repository and reconciled from it. Terraform's job ends at infrastructure
-# plus the thing that reads git: a second system installing workloads is a second
-# opinion about what should be running, and the disagreement surfaces as drift
-# nobody owns.
+# Terraform bootstraps node capacity and Argo. Argo installs the workloads.
 
 resource "kubernetes_namespace" "argocd" {
   metadata {
@@ -108,7 +102,7 @@ resource "helm_release" "argocd" {
     # does not exist when a fresh deployment is planned. Planning would fail on
     # the resource whose whole purpose is to run after the cluster exists, and
     # "one apply" would quietly become two.
-    extraObjects = [{
+    extraObjects = concat(local.node_capacity, [{
       apiVersion = "argoproj.io/v1alpha1"
       kind       = "Application"
       metadata = {
@@ -155,7 +149,7 @@ resource "helm_release" "argocd" {
           syncOptions = ["CreateNamespace=true", "RespectIgnoreDifferences=true"]
         }
       }
-    }]
+    }])
   })]
 
   # The credential has to exist before the root Application is reconciled, or the
