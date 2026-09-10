@@ -346,6 +346,9 @@ class TokenTable(IdTable, DatabaseBase):
     token_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     prefix: Mapped[str] = mapped_column(String(64), nullable=False)
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    device_login: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     user_id: Mapped[str | None] = mapped_column(
         uuid_type,
         ForeignKey("users.id", ondelete="CASCADE"),

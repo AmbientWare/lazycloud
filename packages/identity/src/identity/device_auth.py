@@ -148,6 +148,7 @@ class DeviceAuthorizationService:
                 session,
                 consumed.client_name,
                 kind=TokenKind.User,
+                device_login=True,
                 user_id=user.id,
                 reusable=True,
             )

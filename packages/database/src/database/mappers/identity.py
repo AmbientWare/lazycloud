@@ -42,6 +42,7 @@ def auth_token_record_from_table(row: TokenTable) -> AuthTokenRecord:
         token_hash=row.token_hash,
         prefix=row.prefix,
         kind=TokenKind(row.kind),
+        device_login=row.device_login,
         user_id=_optional_id(row.user_id),
         workspace_id=_optional_id(row.workspace_id),
         worker_id=row.worker_id,

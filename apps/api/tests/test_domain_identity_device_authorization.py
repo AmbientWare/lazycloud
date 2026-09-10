@@ -15,6 +15,7 @@ from identity.device_auth import (
     DeviceAuthorizationService,
 )
 from identity.users import UserService
+from shared.http.system import TokenListResponse
 from shared.identity import (
     DeviceAuthorizationStatus,
     TokenKind,
@@ -57,9 +58,16 @@ def test_device_login_flow_approves_and_mints_account_token(
             "https://control.example.com",
         )
         client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-        _user, headers = _signed_in_user(isolated_services)
+        user, headers = _signed_in_user(isolated_services)
+        manual = client.post("/api/v1/tokens", headers=headers, json={"name": "cli@laptop"})
+        assert manual.status_code == 201
+        manual_id = manual.json()["record"]["id"]
+        with isolated_services.context.database.session() as session:
+            TokenIssuer(isolated_services.context).issue_for_user(
+                session, "session", user_id=user.id, kind=TokenKind.Session
+            )
 
-        started = client.post("/auth/device", json={"client_name": "cli@laptop"})
+        started = client.post("/auth/device", json={"client_name": "work-laptop"})
         assert started.status_code == 201
         start = started.json()
         assert start["verification_uri"] == "https://control.example.com/activate"
@@ -75,7 +83,7 @@ def test_device_login_flow_approves_and_mints_account_token(
 
         shown = client.get(f"/api/v1/device-codes/{start['user_code']}", headers=headers)
         assert shown.status_code == 200
-        assert shown.json()["client_name"] == "cli@laptop"
+        assert shown.json()["client_name"] == "work-laptop"
         assert shown.json()["status"] == "pending"
 
         approved = client.post(
@@ -97,6 +105,37 @@ def test_device_login_flow_approves_and_mints_account_token(
             headers={"Authorization": f"Bearer {claim['token']}"},
         )
         assert workspaces.status_code == 200
+
+        listed = client.get("/api/v1/tokens", headers=headers)
+        assert listed.status_code == 200
+        tokens = TokenListResponse.model_validate_json(listed.content).data
+        device = next(item for item in tokens if item.name == "work-laptop")
+        assert device.device_login
+        assert not next(item for item in tokens if item.id == manual_id).device_login
+        assert all(item.kind is TokenKind.User for item in tokens)
+
+        filtered = client.get("/api/v1/tokens?include_device=false&limit=1", headers=headers)
+        assert filtered.status_code == 200
+        page = TokenListResponse.model_validate_json(filtered.content)
+        assert [item.id for item in page.data] == [manual_id]
+        assert page.next
+        following = client.get(
+            "/api/v1/tokens",
+            params={"include_device": "false", "limit": 1, "cursor": page.next},
+            headers=headers,
+        )
+        next_page = TokenListResponse.model_validate_json(following.content)
+        assert [item.name for item in next_page.data] == ["operator"]
+        assert not next_page.next
+
+        revoked = client.post(f"/api/v1/tokens/{device.id}/revoke", headers=headers)
+        assert revoked.status_code == 200
+        assert (
+            client.get(
+                "/api/v1/workspaces", headers={"Authorization": f"Bearer {claim['token']}"}
+            ).status_code
+            == 401
+        )
 
         # The durable consumption marker rejects replay without losing audit state.
         replay = client.post("/auth/device/token", json={"device_code": start["device_code"]})

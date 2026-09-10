@@ -32,12 +32,15 @@ function tokenPath(tokenId: string): string {
  * A token reaches every workspace its account belongs to, so the list is the same
  * answer everywhere and stays out of the workspace keys that a switch invalidates.
  */
-export function tokensQueryOptions() {
+export function tokensQueryOptions(includeDevice: boolean) {
   return infiniteQueryOptions({
-    queryKey: accountQueryKeys.tokens(),
+    queryKey: [...accountQueryKeys.tokens(), { includeDevice }],
     initialPageParam: "",
     queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+      const params = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        include_device: String(includeDevice),
+      });
       if (pageParam) params.set("cursor", pageParam);
       return apiRequest(`${COLLECTION}?${params.toString()}`, tokenListSchema);
     },

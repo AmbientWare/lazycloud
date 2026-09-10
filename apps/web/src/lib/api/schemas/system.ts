@@ -22,6 +22,7 @@ export const authTokenSchema = z
     name: z.string(),
     prefix: z.string(),
     kind: tokenKindSchema,
+    device_login: z.boolean().default(false),
     // Exactly one is set: a credential names the person holding it or the single
     // workspace it was minted for.
     user_id: z.string(),
