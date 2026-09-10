@@ -461,18 +461,8 @@ class ManagedComputeWorkerPoolDrainController:
         snapshot: ProviderUnitSnapshot,
         now: datetime,
     ) -> WorkerPoolDrainResult | None:
-        """Move the pool onto the version it would launch today, one machine at a time.
-
-        Idle retirement runs first and preserves the minimum capacity. Surging
-        adds a ready replacement before draining a machine the floor still needs.
-        """
+        """Replace retiring machines one at a time while preserving the warm floor."""
         current_version = snapshot.current_template_version
-        if not current_version:
-            # The provider cannot say what it would launch. Nothing is provably
-            # stale, and treating that as "everything" would replace a whole pool
-            # on a provider that simply does not report versions.
-            return None
-
         machines_by_instance = self.compute.internal_unit_machine_by_instance(
             self.state.workspace_id,
             self.capacity_owner_id,
@@ -482,12 +472,21 @@ class ManagedComputeWorkerPoolDrainController:
             for instance in snapshot.instances
             if (machine_id := machines_by_instance.get(instance.provider_instance_id))
         }
-        superseded = [
+        interrupted = {
+            machine_id: deadline
+            for machine_id, deadline in self.compute.internal_unit_interrupted_machines(
+                self.state.workspace_id, self.capacity_owner_id
+            ).items()
+            if machine_id in snapshot_machine_ids
+        }
+        superseded = sorted(interrupted, key=interrupted.__getitem__) + [
             machine_id
             for instance in snapshot.instances
-            if instance.booted_template_version
+            if current_version
+            and instance.booted_template_version
             and instance.booted_template_version != current_version
             and (machine_id := machines_by_instance.get(instance.provider_instance_id))
+            and machine_id not in interrupted
         ]
         replacement_machine_id = unit.replacement_machine_id
         if replacement_machine_id and replacement_machine_id not in snapshot_machine_ids:
@@ -514,7 +513,11 @@ class ManagedComputeWorkerPoolDrainController:
             self.state.workspace_id,
             self.capacity_owner_id,
         )
-        draining = [machine_id for machine_id in superseded if machine_id in draining_since]
+        draining = [
+            machine_id
+            for machine_id in superseded
+            if machine_id in draining_since and machine_id not in interrupted
+        ]
         if draining:
             return self._release_draining(
                 draining[0],
@@ -562,7 +565,7 @@ class ManagedComputeWorkerPoolDrainController:
                 machine_id=replacement_machine_id,
                 desired_replicas=operational_desired,
                 observed_replicas=self.state.active_machines,
-                reason=f"restored the replacement surge for template {current_version}",
+                reason="restored replacement capacity",
             )
         if (
             snapshot.desired_machines != operational_desired
@@ -583,10 +586,21 @@ class ManagedComputeWorkerPoolDrainController:
             unit.replacement_template_version,
         }
         registered_replacement = any(
-            instance.booted_template_version in accepted_replacement_versions
+            (
+                replacement_machine_id in interrupted
+                or instance.booted_template_version in accepted_replacement_versions
+            )
             and bool(
                 (machine_id := machines_by_instance.get(instance.provider_instance_id))
                 and machine_id != replacement_machine_id
+                and machine_id not in interrupted
+                and (
+                    replacement_machine_id not in interrupted
+                    or any(
+                        worker.status is SchedulerWorkerStatus.Available
+                        for worker in workers_by_machine.get(machine_id, [])
+                    )
+                )
             )
             for instance in snapshot.instances
         )
@@ -597,6 +611,8 @@ class ManagedComputeWorkerPoolDrainController:
                 machine_id=replacement_machine_id,
                 reason="replacement provider machine has not enrolled",
             )
+        if replacement_machine_id in interrupted:
+            return self._release_draining(replacement_machine_id, workers_by_machine)
         return self._drain_superseded(
             replacement_machine_id,
             snapshot,
@@ -663,7 +679,7 @@ class ManagedComputeWorkerPoolDrainController:
             machine_id=machine_id,
             desired_replicas=target,
             observed_replicas=self.state.active_machines,
-            reason=f"surged a replacement for template {current_version}",
+            reason="surged replacement capacity",
         )
 
     def _drain_superseded(

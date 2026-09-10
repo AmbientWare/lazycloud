@@ -16,6 +16,17 @@ Every workload decorator on `App` accepts these options:
 | `task_policy` | `TaskPolicy` | Scheduling policy for invocations. |
 | `inputs` / `outputs` | schema | Optional schema metadata for clients and validation. |
 | `docker_enabled` | `bool` | Give the container its own Docker daemon. |
-| `preemptible` | `bool` | Allow the container on capacity that can be reclaimed. |
+| `preemptible` | `bool` | Defaults to `True`, allowing capacity that can be reclaimed. Set `False` to require non-preemptible capacity, including for GPU workloads. |
 | `pool` | `str` | Compute pool to run in. See [Compute](/platform/compute). |
 | `metadata` | `dict` | Custom metadata stored with the deployment. |
+
+When a provider gives an interruption deadline, LazyCloud stops admitting new
+calls to affected function and endpoint containers and starts replacements.
+Calls already running can finish during the notice window. Remaining work is
+stopped before the provider's deadline; interrupted function invocations follow
+their retry policy. Save checkpoints for long-running work and make retries safe.
+Providers can interrupt capacity without advance notice.
+
+Use `@app.function(preemptible=False)` to opt out. This adds the CPU and memory
+premium shown on the [pricing page](https://lazycloud.dev/pricing). It does not
+add a GPU premium.

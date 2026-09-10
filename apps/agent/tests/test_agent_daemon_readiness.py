@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -127,19 +127,29 @@ class _Gateway:
 
 
 class _InterruptionGateway(_Gateway):
-    def __init__(self, events: list[str]) -> None:
+    def __init__(self, events: list[str], *, unavailable: bool = False) -> None:
         super().__init__()
         self.events = events
+        self.unavailable = unavailable
+        self.streams = 0
 
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse:
         del request
-        raise AssertionError("capacity must be cordoned before the next agent stream")
+        self.streams += 1
+        return StreamAgentResponse(
+            ok=True,
+            credential_id="credential-one",
+            credential_generation=3,
+            capacity_state=AgentCapacityState.Draining,
+        )
 
     def record_agent_capacity_interruption(
         self,
         request: AgentCapacityInterruptionRequest,
     ) -> AgentCapacityInterruptionResponse:
         self.events.append(request.state.value)
+        if self.unavailable:
+            raise HttpApiError("gateway unavailable", status_code=503)
         return AgentCapacityInterruptionResponse(
             machine_id=request.machine_id,
             credential_id=request.credential_id,
@@ -207,8 +217,16 @@ class _InterruptionWorkerController(DockerAgentWorkerController):
     def gracefully_stop_all(self, *, grace_seconds: float) -> None:
         self.events.append(f"workers:{grace_seconds:g}")
 
+    def stop_all(self) -> None:
+        self.events.append("workers:forced")
 
-def _service(state_dir: Path, gateway: _Gateway) -> AgentDaemonService:
+
+def _service(
+    state_dir: Path,
+    gateway: _Gateway,
+    *,
+    worker_controller: DockerAgentWorkerController | None = None,
+) -> AgentDaemonService:
     state_store = AgentStateStore(state_dir)
     state_store.save(
         AgentState(
@@ -230,7 +248,7 @@ def _service(state_dir: Path, gateway: _Gateway) -> AgentDaemonService:
             once=True,
         ),
         client=gateway,
-        worker_controller=DockerAgentWorkerController(state_dir),
+        worker_controller=worker_controller or DockerAgentWorkerController(state_dir),
     )
 
 
@@ -296,9 +314,21 @@ def test_worker_image_pull_failure_is_reported_before_runtime_ready(tmp_path: Pa
     ]
 
 
-def test_daemon_cordons_current_session_before_bounded_worker_shutdown(
+@pytest.mark.parametrize("resume", [False, True])
+def test_daemon_keeps_draining_workers_alive_until_shutdown_window(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resume: bool,
 ) -> None:
+    current = [datetime(2026, 7, 21, 15, 28, tzinfo=UTC)]
+    deadline = current[0] + timedelta(seconds=120)
+
+    def advance(seconds: float) -> None:
+        current[0] += timedelta(seconds=seconds)
+
+    monkeypatch.setattr("agent_app.daemon.utc_now", lambda: current[0])
+    monkeypatch.setattr("agent.capacity_shutdown.utc_now", lambda: current[0])
+    monkeypatch.setattr("agent_app.daemon.time.sleep", advance)
     events: list[str] = []
     gateway = _InterruptionGateway(events)
     state_store = AgentStateStore(tmp_path)
@@ -311,6 +341,10 @@ def test_daemon_cordons_current_session_before_bounded_worker_shutdown(
             agent_token="agent-secret",
             credential_id="credential-one",
             credential_generation=3,
+            capacity_state=AgentCapacityState.Draining if resume else AgentCapacityState.Available,
+            capacity_notice_at=deadline if resume else None,
+            capacity_reason="provider-capacity-reclaimed" if resume else "",
+            capacity_observed_at=current[0] if resume else None,
             bootstrap=AgentBootstrap(gateway_public_http_url="https://control.example.com"),
         )
     )
@@ -318,28 +352,55 @@ def test_daemon_cordons_current_session_before_bounded_worker_shutdown(
         AgentDaemonOptions(
             gateway_url="https://control.example.com",
             state_dir=str(tmp_path),
+            join_token="consumed-join-token" if resume else "",
             executor=WorkerExecutor.External,
-            interruption_grace_seconds=90,
+            stream_interval_seconds=50,
             route_proxy=AgentRouteProxyConfig(bind_port=0),
         ),
         client=gateway,
         worker_controller=_InterruptionWorkerController(tmp_path, events),
-        interruption_detector=lambda: AgentCapacityInterruptionNotice(
-            reason="aws-ec2-spot-terminate",
-            observed_at=datetime(2026, 7, 21, 15, 28, tzinfo=UTC),
-            notice_at=datetime(2026, 7, 21, 15, 30, tzinfo=UTC),
+        interruption_detector=lambda: (
+            None
+            if resume
+            else AgentCapacityInterruptionNotice(
+                reason="provider-capacity-reclaimed", observed_at=current[0], notice_at=deadline
+            )
         ),
     )
 
     result = service.run()
 
-    assert events == ["preempting", "cordoned", "workers:90"]
+    assert gateway.streams == 2
+    assert events.count("draining") == 1
+    assert [event for event in events if event.startswith("workers:")] == ["workers:15"]
+    assert current[0] == deadline - timedelta(seconds=20)
     assert result.capacity_interrupted
     assert result.capacity_state is AgentCapacityState.Cordoned
     saved = state_store.load("https://control.example.com")
     assert saved is not None
     assert saved.capacity_state is AgentCapacityState.Cordoned
-    assert saved.capacity_reason == "aws-ec2-spot-terminate"
+    assert saved.capacity_reason == "provider-capacity-reclaimed"
+
+
+def test_expired_interruption_stops_workers_when_gateway_is_unavailable(tmp_path: Path) -> None:
+    events: list[str] = []
+    gateway = _InterruptionGateway(events, unavailable=True)
+    service = _service(
+        tmp_path, gateway, worker_controller=_InterruptionWorkerController(tmp_path, events)
+    )
+    service.interruption_detector = lambda: AgentCapacityInterruptionNotice(
+        reason="provider-capacity-reclaimed", notice_at=datetime.now(UTC) - timedelta(seconds=1)
+    )
+
+    result = service.run()
+
+    assert result.capacity_interrupted
+    assert result.capacity_state is AgentCapacityState.Cordoned
+    assert gateway.streams == 0
+    assert events.count("workers:forced") == 1
+    saved = service.state_store.load(service.options.gateway_url)
+    assert saved is not None
+    assert saved.capacity_state is AgentCapacityState.Cordoned
 
 
 def test_transport_failures_are_recoverable_so_a_machine_keeps_rejoining() -> None:

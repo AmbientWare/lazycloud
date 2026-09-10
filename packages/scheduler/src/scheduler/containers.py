@@ -9,6 +9,7 @@ from enum import StrEnum
 from functools import partial
 from typing import Protocol
 
+from compute.capacity_errors import CapacityReservationConflictError
 from compute.request_placement import ComputeCapacityPurchase
 from coordination.wake_signal import WakeSignalPublisher
 from pydantic import JsonValue
@@ -33,7 +34,6 @@ from shared.usage import UsageMetric, UsageRecord, UsageUnit, usage_record_id
 from scheduler.capacity_reservations import (
     CapacityAcquisitionResult,
     CapacityAcquisitionStatus,
-    CapacityReservationConflictError,
 )
 from scheduler.fleet import (
     DEFAULT_MAX_SCHEDULE_RETRY_COUNT,
