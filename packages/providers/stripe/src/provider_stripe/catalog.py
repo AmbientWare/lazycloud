@@ -74,18 +74,32 @@ PLAN_LINES: tuple[PlanLine, ...] = (
         terms_version=SubscriptionTermsVersion.Team,
         product_id="lazycloud_plan_team",
         product_name="LazyCloud Team",
-        price_lookup_key="lazycloud_plan_team_v2_monthly_usd",
+        price_lookup_key="lazycloud_plan_team_v3_monthly_usd",
     ),
     PlanLine(
         plan=BillingPlanId.Business,
         terms_version=SubscriptionTermsVersion.Business,
         product_id="lazycloud_plan_business",
         product_name="LazyCloud Business",
-        price_lookup_key="lazycloud_plan_business_v1_monthly_usd",
+        price_lookup_key="lazycloud_plan_business_v2_monthly_usd",
     ),
 )
 
 _LEGACY_PLAN_LINES = (
+    PlanLine(
+        BillingPlanId.Team,
+        SubscriptionTermsVersion.TeamV2,
+        "lazycloud_plan_team",
+        "LazyCloud Team",
+        "lazycloud_plan_team_v2_monthly_usd",
+    ),
+    PlanLine(
+        BillingPlanId.Business,
+        SubscriptionTermsVersion.BusinessV1,
+        "lazycloud_plan_business",
+        "LazyCloud Business",
+        "lazycloud_plan_business_v1_monthly_usd",
+    ),
     PlanLine(
         BillingPlanId.Free,
         SubscriptionTermsVersion.FreeLegacy,

@@ -9,6 +9,7 @@ from pydantic import Field
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import (
     CONNECTED_CLOUD_MANAGEMENT_FEE,
+    NO_CARD_GPU_TYPES,
     NO_CARD_MAX_CPU_CONTAINERS,
     NO_CARD_MAX_GPUS,
     ONE_TIME_TRIAL_NANOS,
@@ -60,6 +61,7 @@ class PublishedPlanResponse(HttpModel):
 class NoPaymentMethodTermsResponse(HttpModel):
     max_concurrent_cpu_containers: int = Field(gt=0)
     max_concurrent_gpus: int = Field(gt=0)
+    gpu_types: list[GpuType] = Field(min_length=1)
 
 
 class PublishedShapeRateResponse(HttpModel):
@@ -197,6 +199,7 @@ def pricing_catalog_response(*, at: datetime | None = None) -> PricingCatalogRes
         ],
         connected_cloud_management_fee_percent=int(fee_percent),
         no_payment_method=NoPaymentMethodTermsResponse(
+            gpu_types=sorted(NO_CARD_GPU_TYPES),
             max_concurrent_cpu_containers=NO_CARD_MAX_CPU_CONTAINERS,
             max_concurrent_gpus=NO_CARD_MAX_GPUS,
         ),
