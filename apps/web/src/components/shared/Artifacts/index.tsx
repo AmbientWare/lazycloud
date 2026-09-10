@@ -22,6 +22,7 @@ import {
 import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { formatCostNanos } from "@/lib/money";
 import { countLabel, formatBytes } from "@/lib/format";
 import { useWorkspace } from "@/lib/workspace-context";
 import type { ArtifactSummary } from "@/lib/api/schemas/artifacts";
@@ -34,11 +35,6 @@ import {
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import { workspaceQueryKeys, accountQueryKeys } from "@/lib/queries/workspace-keys";
 import { ArtifactRow } from "./ArtifactRow";
-
-const money = (nanos: number) =>
-  nanos > 0 && nanos < 1e7
-    ? "<$0.01"
-    : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(nanos / 1e9);
 
 export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId?: string }) {
   const { workspace } = useWorkspace();
@@ -342,11 +338,11 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
                 <span className="ml-3 tabular-nums">{formatBytes(summary.data.size_bytes)}</span>
               </span>
               <span
-                title={`Billed as volume storage. ${money(summary.data.accrued_nanos)} accrued since ${new Date(summary.data.accrued_since).toLocaleDateString()}.`}
+                title={`Billed as volume storage. ${formatCostNanos(summary.data.accrued_nanos)} accrued since ${new Date(summary.data.accrued_since).toLocaleDateString()}.`}
               >
                 {summary.data.estimated_monthly_nanos === null
                   ? "Storage rate unavailable"
-                  : `Volume storage: ${money(summary.data.estimated_monthly_nanos)} / month`}
+                  : `Volume storage: ${formatCostNanos(summary.data.estimated_monthly_nanos)} / month`}
               </span>
             </>
           ) : (

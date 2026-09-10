@@ -6,7 +6,7 @@ import { PanelError } from "@/components/shared/PanelError";
 import { ChartContainer, ChartTooltip, type ChartConfig } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
 import { billedDimensions, type BilledDimension, type UsageCostBucket } from "@/lib/api/schemas";
-import { exactDollars, formatCostNanos } from "@/lib/money";
+import { formatCostNanos } from "@/lib/money";
 import { accountCostSeriesQueryOptions, type UsageCostWindow } from "@/lib/queries/usage";
 
 import { intervalLabel } from "./ranges";
@@ -90,7 +90,7 @@ export function SpendChart({
           axisLine={false}
           width={62}
           tick={{ fontSize: 10 }}
-          tickFormatter={(value: number | string) => exactDollars(Number(value) || 0)}
+          tickFormatter={(value: number | string) => formatCostNanos(Number(value) || 0)}
         />
         <ChartTooltip
           cursor={{ fill: "var(--accent)", opacity: 0.5 }}

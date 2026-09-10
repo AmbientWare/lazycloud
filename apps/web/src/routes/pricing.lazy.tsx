@@ -6,7 +6,7 @@ import type { PricingCatalog, PublishedPlacementRate } from "@/lib/api/schemas";
 import { gpuModelsLabel, limitFigure, memberLimitFigure } from "@/lib/entitlements";
 import { DOCS_URL } from "@/lib/env";
 import { countLabel } from "@/lib/format";
-import { exactDollars } from "@/lib/money";
+import { formatCostNanos } from "@/lib/money";
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 import { cn } from "@/lib/utils";
 
@@ -29,14 +29,8 @@ const SECONDS_PER_HOUR = 3600;
 /** Which unit every figure on the page is currently read in. */
 type Meter = "hour" | "second";
 
-function metered(nanosPerHour: number, meter: Meter): number | string {
-  if (meter === "hour") return nanosPerHour;
-  if (nanosPerHour % SECONDS_PER_HOUR === 0) return nanosPerHour / SECONDS_PER_HOUR;
-  return `≈ ${new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 12,
-  }).format(nanosPerHour / SECONDS_PER_HOUR / 1_000_000_000)}`;
+function metered(nanosPerHour: number, meter: Meter): number {
+  return meter === "hour" ? nanosPerHour : nanosPerHour / SECONDS_PER_HOUR;
 }
 
 const meters = [
@@ -135,7 +129,7 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
    before they have paid for anything. The rest is disclosure, not pricing. */
 function accountTerm(catalog: PricingCatalog): string {
   const terms = catalog.no_payment_method;
-  return `New accounts receive a one-time ${exactDollars(catalog.trial.amount_nanos)} usage credit, valid for ${catalog.trial.duration_days} days. Without a saved card, you can run ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once and ${countLabel(terms.max_concurrent_gpus, "GPU card")}. Further usage needs prepaid credit.`;
+  return `New accounts receive a one-time ${formatCostNanos(catalog.trial.amount_nanos)} usage credit, valid for ${catalog.trial.duration_days} days. Without a saved card, you can run ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once and ${countLabel(terms.max_concurrent_gpus, "GPU card")}. Further usage needs prepaid credit.`;
 }
 
 const sectionTitle =
@@ -228,7 +222,7 @@ function MarketingPricing() {
                       </h3>
                       <p className="flex items-baseline gap-2">
                         <span className="font-mono text-[22px] leading-none tracking-[-0.02em]">
-                          {exactDollars(plan.monthly_nanos)}
+                          {formatCostNanos(plan.monthly_nanos)}
                         </span>
                         <span className="text-[12px] text-muted-foreground">per month</span>
                       </p>
@@ -240,7 +234,7 @@ function MarketingPricing() {
                       <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
                         <dt className="text-muted-foreground">Monthly usage credit</dt>
                         <dd className="font-mono font-medium text-brand">
-                          {exactDollars(plan.included_nanos)}{" "}
+                          {formatCostNanos(plan.included_nanos)}{" "}
                           <span className="text-muted-foreground">/ month</span>
                         </dd>
                       </div>
@@ -359,7 +353,7 @@ function RateList({ groups, id }: { groups: readonly RateGroup[]; id: string }) 
                   {line.label}
                 </dt>
                 <dd className="shrink-0 font-mono text-[13px] whitespace-nowrap">
-                  {typeof line.figure === "number" ? <Rate nanos={line.figure} /> : line.figure}{" "}
+                  {typeof line.figure === "number" ? formatCostNanos(line.figure) : line.figure}{" "}
                   <span className="text-muted-foreground">{line.unit}</span>
                 </dd>
               </div>
@@ -405,22 +399,5 @@ function MeterToggle({
         ))}
       </div>
     </fieldset>
-  );
-}
-
-/* A per-second rate is mostly leading zeros, and the length of that run is the
-   part of it the eye compares two rows by. Dimming the run leaves the exact
-   published figure on the page while the significant digits carry the scan. */
-function Rate({ nanos }: { nanos: number }) {
-  const figure = exactDollars(nanos);
-  const significant = figure.search(/[1-9]/);
-  if (significant <= 0) {
-    return figure;
-  }
-  return (
-    <>
-      <span className="text-muted-foreground">{figure.slice(0, significant)}</span>
-      {figure.slice(significant)}
-    </>
   );
 }

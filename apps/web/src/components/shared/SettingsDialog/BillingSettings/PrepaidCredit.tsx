@@ -83,8 +83,8 @@ export function PrepaidCredit() {
         </div>
         {terms && (
           <p className="text-xs text-muted-foreground">
-            ${terms.minimum_cents / 100} to ${terms.maximum_cents / 100}. Purchased credit never
-            expires.
+            {formatCostNanos(terms.minimum_cents * 10_000_000)} to{" "}
+            {formatCostNanos(terms.maximum_cents * 10_000_000)}. Purchased credit never expires.
           </p>
         )}
         {purchase.error || pricing.error || balance.error ? (
