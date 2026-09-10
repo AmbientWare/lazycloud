@@ -45,9 +45,12 @@ spec:
       containers:
         - name: cache-server
           image: {{ include "lazycloud.image" (list . "cache-server") }}
+          ports:
+            - name: cache
+              containerPort: 7900
           readinessProbe:
             tcpSocket:
-              port: 8100
+              port: cache
             periodSeconds: 5
             timeoutSeconds: 2
           env:
@@ -67,4 +70,4 @@ spec:
     app: cache-server
   ports:
     - port: 8100
-      targetPort: 8100
+      targetPort: cache

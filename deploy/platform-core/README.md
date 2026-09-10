@@ -34,6 +34,10 @@ repository with the organisation's GitHub App, and Terraform writes that key
 into Argo's repository-credentials Secret directly, because External Secrets is
 one of the things Argo installs and cannot also be what Argo needs to start.
 
+The Kubernetes and Helm providers run `aws eks get-token` with the ambient
+operator identity. Install the AWS CLI before applying. Generating tokens when
+needed keeps authentication valid during a cluster update or a long apply.
+
 **A failed apply is not proof that nothing was created.** EKS has returned a
 400 on `CreateCluster` and created the cluster anyway, leaving it ACTIVE and
 absent from state, where `terraform destroy` will never find it. After any

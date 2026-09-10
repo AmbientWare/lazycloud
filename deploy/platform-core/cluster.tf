@@ -62,7 +62,3 @@ resource "aws_eks_cluster" "control_plane" {
 
   tags = { Name = var.name }
 }
-
-data "aws_eks_cluster_auth" "control_plane" {
-  name = aws_eks_cluster.control_plane.name
-}
