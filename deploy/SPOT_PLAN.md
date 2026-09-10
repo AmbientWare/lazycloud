@@ -1,267 +1,192 @@
-# Platform Spot plan
+# Platform cost and availability plan
 
-Status: proposed, no infrastructure changes applied. Evidence collected on
-2026-09-10 UTC with AWS profile `default` against the `lazycloud` cluster.
+Status: proposed; no infrastructure changes applied. The owner selected keeping
+EKS Auto Mode and wants production quality at minimum practical cost.
 
-Keep EKS Auto Mode, as selected by the owner. The protected serving-path option
-uses one On-Demand node and two Spot nodes, retaining the existing application
-replica counts. It is not the cheapest possible layout. Qualify it only if
-measured net savings are at least $50 per 730-hour month and single-node
-recovery passes. This $50 floor
-is the proposed threshold for making the operational work worthwhile.
+Use one four-vCPU On-Demand node and one two-vCPU Spot node. Keep two replicas
+of the API, scheduler, Cloudflare connector and WireGuard gateway, with one
+of each on each capacity type. Put Argo, External Secrets and the existing
+cache on On-Demand. This keeps a complete serving and scheduling path running
+when Spot capacity disappears.
 
-## Refined estimates
+The quoted target is **$172.23/month for nodes**, down from $218.75. Including
+the unchanged EKS cluster fee, that is $245.23 versus $291.75. Database, Redis,
+load balancing, the cache volume and traffic are additional in both cases.
 
-Use time-weighted EC2 Spot prices for the seven days ending September 10 at
-04:07 UTC, rather than a generic Spot discount. All observations cover the
-full seven days. These are monthly projections at 730 hours, not future price
-guarantees. The cache disk, database, Redis, load balancer and variable traffic
-are excluded from every row, consistently.
+## Cost evidence
 
-| Layout with Auto Mode | EC2 | Auto Mode | Node IPv4 | Node disks | Node total | Including EKS cluster fee |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Current, three On-Demand `c6a.large` | $167.54 | $20.10 | $10.95 | $20.16 | $218.75 | $291.75 |
-| One On-Demand plus two Spot `c6a.large` | $99.05 | $20.10 | $10.95 | $20.16 | $150.26 | $223.26 |
-| Three Spot `c6a.large` | $64.89 | $20.10 | $10.95 | $20.16 | $116.11 | $189.11 |
-| Spot `c6a.large` plus Spot `c6a.xlarge` | $68.19 | $20.10 | $7.30 | $13.44 | $109.04 | $182.04 |
+Read-only evidence was collected on September 10, 2026 UTC using AWS profile
+default. The live cluster has three c6a.large On-Demand nodes. AWS Pricing API
+rates in us-east-1 are $0.0765/hour for c6a.large and $0.153/hour for c6a.xlarge.
+Their Auto Mode fees are $0.00918 and $0.01836/hour respectively.
 
-Totals use unrounded inputs. The mixed case puts On-Demand in `us-east-1c`
-and Spot in `1a` and `1b`. The three-Spot case uses all three zones. The
-two-Spot case puts the large instance in `1a` and xlarge in `1c`, where the
-cache volume is bound. Time-weighted prices were $0.02698121/hour for
-`c6a.large` in `1a`, $0.03220031 in `1b`, $0.02971000 in `1c`, and
-$0.06643164/hour for `c6a.xlarge` in `1c`. Auto Mode costs $0.00918/hour for
-large and $0.01836/hour for xlarge. The two-node case retains six raw vCPUs,
-so its management fee stays the same. Every node retains 84 GiB of gp3 storage.
+Every existing node has one public IPv4 address, a 4 GiB root disk and an 80 GiB
+data disk. IPv4 costs $0.005/hour; gp3 costs $0.08/GiB-month at the existing
+baseline IOPS and throughput. Keep these disk sizes: one current node uses
+approximately 32 GiB, so shrinking them has not been qualified.
 
-The mixed layout saves $68.49/month before changed traffic and replacement
-costs. Three Spot nodes save $102.64; two differently sized Spot nodes save
-$109.71. Subtract the provisional $10/month overhead allowance from each
-saving. Actual selected types, prices and node-hours decide acceptance.
+Spot estimates use time-weighted price history over seven full days ending
+September 10 at 04:07 UTC. The hourly averages for c6a.large were $0.02698121
+in us-east-1a, $0.03220031 in 1b, and $0.02971000 in 1c. For c6a.xlarge in 1c,
+the average was $0.06643164. These are observations, not guarantees of future
+prices or available capacity.
 
-### Cheaper all-Spot candidate
+| Layout, all retaining Auto Mode | Nodes/month | Saving/month | Availability tradeoff |
+| --- | ---: | ---: | --- |
+| Current: three On-Demand c6a.large | $218.75 | $0 | Existing baseline |
+| Proposed: On-Demand c6a.xlarge in 1c, Spot c6a.large in 1a | $172.23 | $46.52 | Complete application replica on each capacity type |
+| On-Demand large in 1c, Spot large in 1a and 1b | $150.26 | $68.49 | Both schedulers depend on Spot |
+| Three Spot large, one in each zone | $116.11 | $102.64 | Whole platform depends on Spot |
+| Spot xlarge in 1c, Spot large in 1a | $109.04 | $109.71 | Whole platform depends on Spot |
 
-Two differently sized Spot nodes are the cheapest quoted candidate here.
-Retain all replica counts and place one API, scheduler, connector and gateway
-on each node. Put Argo, External Secrets and the cache on the larger node.
-Effective requests would be 1,500m CPU and 2,144 MiB on the small node, and
-2,200m CPU and 3,520 MiB on the larger one. This fits the current small node's
-allocatable resources and the larger instance's raw capacity; confirm actual
-xlarge allocatable resources, overhead and burst behavior before acceptance.
+Every row includes 730 hours, observed prices, unchanged 84 GiB node disks,
+IPv4 and Auto Mode. Totals use unrounded inputs. Cost Explorer corroborated
+the current instance and management rates. Account-wide charges include other
+compute and must not be substituted for the platform baseline.
 
-This differs from trying to fit everything on two current-size nodes, which
-cannot hold the current CPU requests. It requires no speculative request cuts.
-It is a packing candidate, not a guarantee Auto Mode will choose exactly that
-pair. Let it choose among viable families, and measure whether the selected
-layout preserves the saving. Keep host and zone separation across rollouts;
-remove the mixed option's capacity-type split if this candidate is selected.
-
-Choosing two Spot nodes saves another $41.22/month over the mixed layout at
-these observed prices. A Spot shortage can then take down the whole
-platform. Loss of the larger node also stops the cache and deployment/secret
-controllers until replacement; the surviving small node cannot host every
-replica and controller. Its cache volume still requires replacement capacity
-in `1c`. Preserve the PVC and allow temporary replacement/rollout surge rather
-than imposing a hard two-node ceiling. Test the same application outcomes and
-cost gates below. Selecting this availability tradeoff remains separate from
-the owner's decision to retain Auto Mode.
-
-Auto Mode is retained because its approximately $20.10/month fee covers
-services this deployment uses: node provisioning/replacement, pod networking
-and DNS, the WireGuard NLB, EBS storage, and Pod Identity integration.
-Disabling it would require replacing those services, while the separate
-$73/month EKS cluster charge would remain.
+The proposed node bill is $111.69 On-Demand EC2, $19.70 Spot EC2, $20.10 Auto
+Mode, $7.30 IPv4, and $13.44 disks. Its management fee still covers six raw
+vCPUs. The EKS cluster fee is separately $73/month.
 [AWS EKS pricing](https://aws.amazon.com/eks/pricing/)
 
-## Cost inputs and sensitivity
+Allow $10/month provisionally for changed traffic and replacement overlap.
+That leaves approximately **$36.52/month net savings**, or $438/year. Verify
+the allowance with actual usage. The earlier $50/month minimum was an
+assistant-selected target, not an owner requirement. Replace it with a
+$30/month net savings floor while preserving the complete On-Demand path.
 
-The live cluster has three `c6a.large` On-Demand nodes. Each has a public IPv4
-address, a 4 GiB root disk and an 80 GiB data disk. The separate 20 GiB cache
-volume is unchanged by this proposal. AWS Pricing API rates in `us-east-1` are
-$0.0765/hour for the instance, $0.00918/hour for its EKS Auto Mode management,
-$0.005/hour for IPv4, and $0.08/GiB-month for gp3 storage.
+The extra $21.97/month over the three-node mixed option keeps a scheduler
+running during a complete Spot shortage. All-Spot saves more but is not the
+recommendation for the owner's quality requirement.
 
-At 730 hours, the current node fleet costs approximately **$218.75/month**:
-`3 × [730 × (0.0765 + 0.00918 + 0.005) + 84 × 0.08]`.
-The estimate excludes unchanged services and variable traffic and replacement
-costs. Auto Mode management charges do not receive the Spot discount.
-[AWS EKS pricing](https://aws.amazon.com/eks/pricing/)
+## Placement
 
-| Steady fleet | Node cost/month | Savings/month |
-| --- | ---: | ---: |
-| Three On-Demand, current | $218.75 | $0 |
-| Two On-Demand, one Spot | $184.80 to $192.10 | $26.64 to $33.94 |
-| One On-Demand, two Spot, proposed | $150.86 to $165.46 | $53.29 to $67.89 |
-| Two On-Demand, two Spot | $223.78 to $238.38 | Costs $5.03 to $19.63 more |
-| Three Spot | $116.91 to $138.81 | $79.94 to $101.84 |
-
-These scenarios use `c6a.large` equivalents, unchanged disks, and Spot rates
-of $0.03 to $0.04/hour. They are sensitivity calculations, not guaranteed quotes
-for every eligible instance family. Actual Auto Mode fees must follow the
-instance type selected.
-
-EC2's seven-day Spot history for `c6a.large` showed $0.0265 to $0.0336/hour across
-zones `us-east-1a`, `1b`, and `1c`. Latest prices were $0.0279, $0.0336, and
-$0.0307 respectively. The latest `1a` plus `1c` pair gives a $149.84/month mixed
-fleet, saving $68.91 before other cost changes. Price history proves price,
-not available capacity. Also sampled `c6i`, `c7a`, `c7i`, `m6a`, `m6i`, `m7a`,
-and `m7i` large instances to establish alternatives.
-
-Cost Explorer's September 3 through 8 usage corroborated the instance and
-management rates. Account-wide costs include other compute and services and
-must not be used as a platform-only baseline. September data remains estimated,
-and September 9 was incomplete when queried. Check active commitments before
-rollout so moving instances cannot strand prepaid On-Demand spend.
-
-Spot leaves the $73/month EKS cluster fee, approximately $23.36/month Redis pair,
-load balancer, cache volume, database, and other services in place. Do not
-advertise the node percentage saving as a percentage of the whole bill.
-
-Allow $10/month provisionally for additional cross-zone traffic and replacement
-overlap. The latest-price case still saves about $59/month; the $0.04 Spot case
-would miss the $50 net target. Recalculate using actual selected instances and
-usage before accepting the migration. Spot cannot guarantee a permanent saving.
-
-## Placement for the protected serving-path option
-
-Keep two API replicas, two schedulers, two Cloudflare connectors, two WireGuard
-gateways, and one cache server. Retain `wireguard.platformPeers: 2` and existing
-database budgets. Adding replicas is not part of the saving.
-
-Keep Argo, External Secrets and the cache on On-Demand. Distribute the API,
-Cloudflare and WireGuard pairs with one replica on each capacity type. Place
-the two schedulers on distinct Spot nodes in distinct zones. Both schedulers
-already coordinate through shared Redis locks; their production implementation
-does not change.
-
-The following packing fits current effective pod requests, including API
-sidecars and the gateway's larger init-container memory request:
-
-| Node | Workloads | CPU request | Memory request |
+| Node | Workloads | Effective CPU requests | Effective memory requests |
 | --- | --- | ---: | ---: |
-| On-Demand | Argo, External Secrets, cache, one API, connector and gateway | 1,450m | 2,880 MiB |
-| Spot A | One API, scheduler, connector and gateway | 1,500m | 2,144 MiB |
-| Spot B | One scheduler | 750m | 640 MiB |
+| On-Demand, four vCPUs | Argo, External Secrets, cache, one API, scheduler, connector and gateway | 2,200m | 3,520 MiB |
+| Spot, two vCPUs | One API, scheduler, connector and gateway | 1,500m | 2,144 MiB |
 
-Each current node advertises 1,780m CPU and about 3,065 MiB memory allocatable.
-This is a feasibility calculation, not an observed placement after migration.
-The On-Demand node has only about 185 MiB of request headroom. Keep bootstrap
-jobs on eligible Spot capacity and verify deployments, reconnect bursts, pod
-limits and system overhead before accepting this packing. Do not reduce
-resource requests to force the arithmetic to fit. Two current-size nodes
-cannot hold the existing total 3,700m request against 3,560m allocatable.
+Requests include the API sidecar and the gateway's larger init-container
+memory request. Current small nodes expose 1,780m CPU and approximately
+3,065 MiB allocatable, so the Spot packing fits. Verify the larger node's
+actual allocatable capacity, system overhead, and burst behavior. Its nominal
+four vCPUs and 8 GiB are not a substitute for that check.
 
-Enforce separation across hosts, zones, and capacity types where specified.
-Use workload-wide selectors across rollout revisions, rather than treating
-each revision as a separate group. Use `minDomains: 2` with hard spread where
-two independent domains are required. Check the combined constraints during
-startup, rollout and replacement; server-side validation alone cannot prove
-that pods will schedule.
+Keep two platform WireGuard peers, current database budgets and replica counts.
+Do not reduce requests to force placement. Two current-size nodes cannot hold
+the existing 3,700m CPU request. The proposed differently sized pair retains
+six raw vCPUs.
+
+For every replicated service, enforce different hosts, different zones, and one
+replica per capacity type. Use workload-wide selectors across rollout revisions
+and minDomains of two where two independent domains are required. Verify
+combined constraints during startup, rollout and replacement; valid YAML does
+not prove schedulability.
 [Kubernetes topology spread](https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/)
 
-The cache volume is bound to `us-east-1c`; preserve it and schedule its
-On-Demand replacement there. Offer Spot capacity across all three existing
-subnets, preferring three-zone node placement without requiring an extra node.
-Require at least two zones for each replicated service. Leave the 80 GiB data
-disks intact: one current node uses about 32 GiB already, so a speculative disk
-reduction is not included in the saving.
+Preserve the cache PVC, bound to us-east-1c. Its replacement On-Demand node
+must be eligible there. Offer Spot across existing subnets and several
+compatible families. The quoted 1a placement is a cost example, not a
+permanent pin to one Spot market.
 
-A single node loss leaves an API, connector, gateway and scheduler running.
-WireGuard still has one active lease holder, so a gateway loss can interrupt
-connections while the standby takes over. Losing both Spot nodes leaves the
-On-Demand API/ingress path but pauses scheduling until Spot capacity returns.
-This is an explicit limit of the proposal. Three Spot nodes save more but leave
-the entire platform exposed to a Spot capacity shortage. Disruption budgets
-limit voluntary disruption; they do not stop AWS reclaiming capacity.
-[Kubernetes disruptions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)
+Losing either node leaves an API, scheduler, connector and gateway. Losing
+the On-Demand node also stops the cache and deployment/secret controllers
+until replacement. Those services already lack independent replicas. Preserve
+their data and prove recovery. WireGuard remains active/standby; failover can
+interrupt connections. Existing streams are not guaranteed to survive node
+loss. Simultaneous loss of both nodes can still stop service.
 
-## Implementation of the protected serving-path option
+## Implementation sequence
 
-1. Capture a comparable baseline before changing placement. Reuse existing
-   history and collect only missing evidence. Record seven days
-   of node-hours by type, Auto Mode charges, node disks/IPs, regional traffic,
-   NLB usage, API errors/latency, reconnects, scheduler queue delay, memory and
-   CPU under normal load and a rollout. Use existing telemetry and kubelet
-   resource metrics; the cluster currently has no Metrics API. Attribute costs
-   to the exact cluster resources and exclude customer fleet and other account
-   usage. Keep secret values out of evidence.
+1. Reuse existing history for a comparable seven-day cost and service baseline.
+   Collect only missing evidence for API errors/latency, placement delay,
+   reconnects, CPU/memory, traffic and rollouts. The Metrics API is absent;
+   kubelet resource metrics are available. Attribute costs to exact platform
+   resources and exclude customer fleet usage.
 
-2. Add one cluster-owned Spot NodePool, reconciled by an Argo Application under
-   `deploy/argocd/apps/`, referencing a manifest under `deploy/platform-compute/`.
-   Reuse the existing Auto Mode `default` NodeClass, node identity and network.
-   Retain the built-in On-Demand `general-purpose` pool. This avoids creating
-   another network, node controller or storage configuration. Update
-   `deploy/platform-core/AGENTS.md` and its runbook to describe the explicit
-   Spot pool policy; preserve the `CLAUDE.md` symlink.
+2. Define two capacity policies at the cluster owner. The On-Demand policy
+   needs enough allocatable capacity for 2,200m CPU and 3,520 MiB of protected
+   requests, justifying a four-vCPU minimum. Spot must fit the other complete
+   application replica. Keep amd64 and compatible C/M families; let Auto Mode
+   choose within the cost envelope. Resource limits do not guarantee the node
+   count or dollar bill.
 
-3. Configure Spot-only capacity, `amd64`, and a diverse selection of supported
-   C/M instance families. Do not pin a single cheapest instance or add GPU,
-   ARM, burstable or exotic instances without a production need. Let Auto Mode
-   size nodes from requests. Set resource limits for bounded replacement
-   headroom and a one-node voluntary disruption budget. Resource limits are
-   not a dollar cap or a guarantee of exactly three nodes. EKS Auto Mode handles
-   interruption notices itself.
-   [AWS NodePools](https://docs.aws.amazon.com/eks/latest/userguide/create-node-pool.html),
-   [Auto Mode lifecycle](https://docs.aws.amazon.com/eks/latest/userguide/automode.html)
+3. Reconcile custom NodePools through one cluster-owned Argo Application under
+   deploy/argocd/apps/. Reuse network and node identities. Resolve NodeClass
+   ownership and bootstrap ordering before retiring any unused built-in pool;
+   do not assume its default NodeClass will remain. Preserve cluster access
+   and existing identities; never replace the cluster. Update
+   deploy/platform-core/AGENTS.md and its runbook for the measured capacity
+   policy, preserving the CLAUDE.md symlink.
+   [AWS NodePools](https://docs.aws.amazon.com/eks/latest/userguide/create-node-pool.html)
 
-4. Implement the placement policy in `deploy/chart/values.yaml`,
-   `values.schema.json`, the workload templates and `_helpers.tpl`. Place Argo
-   through `deploy/platform-core/argocd.tf` and External Secrets through its
-   existing Argo Application. Retain one workload controller per service.
-   Use capacity-type affinity and spread to place pairs, not duplicate service
-   deployments or a second runtime implementation. Specify bootstrap-job
-   placement so it cannot silently create a permanent On-Demand node floor.
-   Update `deploy/chart/README.md` and `deploy/RUNBOOK.md` together.
+4. Update Helm values, schema, placement helpers and workload templates
+   together. Retain one controller per service and the production
+   implementation. Place Argo through deploy/platform-core/argocd.tf and
+   External Secrets through its existing Argo Application. Give bootstrap jobs
+   explicit eligible placement. Update deploy/chart/README.md and
+   deploy/RUNBOOK.md in the same change.
 
-5. Run the existing deployment-definition validation for the changed owners:
-   Terraform validation, production values rendering, Helm lint/render, and
-   Kubernetes server-side dry runs for the proposed resources. Then exercise
-   real placement and a rollout. Do not add tests of generated manifest shape.
-   Use a feature branch and PR; merge only after applicable checks pass.
+5. Validate changed Terraform owners, render through the production values
+   boundary, run Helm lint, and perform Kubernetes server-side dry runs.
+   Exercise real scheduling and a normal rollout to prove packing. Do not add
+   tests of generated manifest shape. Work on a feature branch and merge its
+   PR only after applicable checks pass.
 
-6. Migrate serially after reviewing the exact live plan. Provision the Spot
-   pool first, retain healthy serving replicas, and drain one selected old node
-   at a time. Preserve the cache PVC and all existing secrets, identities and
-   deployment pins. Record each replacement's identity and incremental cost.
-   The steady fleet must settle at three nodes; brief rollout/replacement surge
-   is measured, not counted as permanent capacity. Budget at most $5 for the
-   migration and acceptance overlap, then stop and reassess if exceeded.
+6. Review the exact live migration plan, then replace nodes serially.
+   Provision and qualify replacements before draining selected old nodes.
+   Preserve serving replicas, cache PVC, secrets, deployment pins, identities
+   and customer resources. Permit temporary rollout/replacement surge; do not
+   impose a hard two-node ceiling. Record created resources and their cost.
+   Budget $5 for migration and acceptance overlap, then reassess if exceeded.
+
+Auto Mode keeps ownership of node replacement, interruption handling,
+networking/DNS, load balancing, storage and Pod Identity integration. Do not
+install duplicate controllers or an automatic On-Demand fallback for
+Spot-selected replicas.
+[Auto Mode lifecycle](https://docs.aws.amazon.com/eks/latest/userguide/automode.html)
 
 ## Acceptance and rollback
 
-Prove continued API service, correct durable task outcomes, scheduler lease
-recovery, worker reconnection and WireGuard failover during a controlled drain
-and process/pod loss. Poll records, both ends' logs, readiness, placement and
-provider state every cycle. Investigate a stalled cycle immediately. Do not
-claim that a voluntary drain proves abrupt EC2 loss or Spot replacement under
-capacity scarcity. EKS Auto Mode does not support FIS EC2 Spot-interruption or
-termination actions; use supported pod experiments and record the remaining
-host-interruption evidence gap explicitly.
-[Auto Mode experiment limitations](https://docs.aws.amazon.com/eks/latest/userguide/automode-learn-instances.html)
+Keep the change only after the production implementation proves:
 
-Keep the change only after a comparable seven-day observation passes all of:
-
-- Three steady nodes with the specified independent replicas, no persistent
-  Pending pods, OOMs or CPU starvation, and successful normal rollouts.
+- One complete application replica on each capacity type, two steady nodes
+  at the measured workload, and no persistent Pending pods, OOMs or CPU
+  starvation. Bootstrap jobs and ordinary rollouts succeed.
+- Controlled node drain and pod/process loss preserve correct task outcomes,
+  scheduler lease recovery, worker reconnection and gateway failover. Poll
+  durable records, logs at both ends, placement, readiness and provider state
+  every cycle. Investigate stalled progress immediately.
 - No durable task loss, duplicate terminal settlement or broken cleanup.
-  Meet existing production SLOs. In their absence, proposed qualification
+  Meet existing production SLOs. Where none exist, proposed qualification
   bounds are steady-load API p95 latency and placement delay within 10% of
-  baseline, error rate increasing by no more than 0.1 percentage points, and
-  gateway connectivity recovering within 60 seconds of losing the active pod.
-  Record equivalent request volume and task mix when comparing the windows.
-- At least $50/month net savings at equal workload, including actual instance
-  prices, management fees, disks, IPs, extra traffic, replacement overlap and
-  any commitment effects. With a $5 migration budget, payback is under four
-  days at that saving. Recheck billing completeness before making the decision;
-  do not treat a partial day's charges as savings.
-- A stressed price calculation still passes, using seven-day upper observed
-  prices for the selected families and zones. Otherwise keep observing or
-  reject the migration rather than assuming today's low prices persist.
+  baseline, error rate increasing by at most 0.1 percentage points, and gateway
+  connectivity recovering within 60 seconds of active-pod loss. Compare
+  equivalent traffic and task mixes.
+- At least $30/month net savings over a comparable seven-day observation,
+  including actual instance rates, management fees, disks, IPs, incremental
+  traffic, replacement overlap and commitment effects. Recheck incomplete
+  billing days. Repeat the calculation with seven-day upper observed prices
+  for selected types/zones. At the minimum saving, a $5 migration pays back
+  in about five days.
 
-Review cost and interruption rates weekly afterward. If the saving disappears
-or availability fails the agreed bounds, restore the previous Git placement
-policy, provision sufficient On-Demand capacity, then drain only the named
-Spot nodes. Keep the cache volume and shared resources. Remove the now-unused
-Spot pool through its owning Argo Application only after its workloads have
-moved. This is an operator rollback, not an automatic On-Demand fallback that
-can silently defeat the cost target.
+A voluntary drain does not prove abrupt EC2 loss or replacement during Spot
+scarcity. Auto Mode does not support FIS EC2 Spot-interruption or termination
+actions. Use supported pod experiments and record remaining host-loss evidence
+gaps. Do not claim uninterrupted streams or immunity to involuntary disruption.
+[Auto Mode experiment limitations](https://docs.aws.amazon.com/eks/latest/userguide/automode-learn-instances.html),
+[Kubernetes disruptions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)
+
+Review cost and interruption rates weekly. If savings disappear or availability
+fails its bounds, restore the previous Git placement policy, provision enough
+On-Demand capacity, then drain only the named replacement nodes. Preserve the
+cache volume and shared resources. Remove unused pools through their canonical
+owner after workloads have moved.
+
+## Further savings after acceptance
+
+Profile scheduler CPU under representative load and investigate demonstrated
+redundant work. Lower requests only after reducing actual resource needs and
+proving unchanged task behavior. Re-evaluate smaller nodes with those measured
+requests. No additional saving is booked for this work yet. Removing replicas,
+moving durable services onto Spot, and removing Auto Mode are outside this plan.
