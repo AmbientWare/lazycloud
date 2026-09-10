@@ -123,7 +123,11 @@ Resources:
                 Effect: Allow
                 Action:
                   - ec2:DescribeImages
+                  - ec2:DescribeSnapshots
                   - ec2:DescribeInstances
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeRouteTables
+                  - ec2:DescribeSecurityGroups
                 Resource: "*"
               # How the bake reports. The instance carries no key pair and no
               # instance profile, so its console is the only channel it has, and

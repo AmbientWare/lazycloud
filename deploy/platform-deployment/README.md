@@ -45,6 +45,10 @@ with that host release pinned. Migration `0033_aws_regional_networks` preserves
 existing connection networks before fleet registration adds West. Existing
 customer-managed authorization stacks retain their own region.
 
+Image baking selects tagged public fleet subnets with an active internet route
+and their fleet security group. Apply the release-assets stack's EC2 inventory
+permissions before running the image workflow. It does not rely on default VPCs.
+
 Set `region="us-west"` in SDK workload configuration to require Oregon.
 Automatic placement may choose either approved region. A region needs its
 network, image, eligible offer and supplier quote before it can supply capacity.
