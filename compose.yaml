@@ -90,12 +90,9 @@ x-image-build-env: &image-build-env
   # so a deployment whose capacity is a connected provider queues each build for
   # local capacity that does not exist until it hits the retry limit.
 
-# Both bootstrap composers need the same three pins. Worker image releases can
-# advance while the host agent and AMIs remain on their selected release.
+# Both bootstrap composers resolve the same complete release.
 x-release-env: &release-env
   LAZYCLOUD_RELEASE_MANIFEST_URL: "${LAZYCLOUD_RELEASE_MANIFEST_URL:-}"
-  LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL: "${LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL:-}"
-  LAZYCLOUD_RELEASE_HOST_MANIFEST_URL: "${LAZYCLOUD_RELEASE_HOST_MANIFEST_URL:-}"
 
 x-agent-binary-env: &agent-binary-env
   LAZYCLOUD_AGENT_BINARY_DIR: "${LAZYCLOUD_AGENT_BINARY_DIR:-/var/lib/lazycloud/agent-binarys}"
@@ -568,6 +565,7 @@ services:
     volumes:
       - lazycloud-files:/var/lib/lazycloud
       - "${LAZYCLOUD_COMPOSE_AGENT_BINARY_DIR:-./.lazycloud/agent-binarys}:/var/lib/lazycloud/agent-binarys:ro"
+      - "./.lazycloud-release:/run/lazycloud/release:ro"
       - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress:ro
       - *platform-aws-config
     healthcheck:
@@ -685,7 +683,7 @@ services:
         # the machine the platform's and prove nothing about tenancy.
         customer_name="${LAZYCLOUD_COMPOSE_CUSTOMER_NAME:-customer}"
         customer_id="$$(lazycloud-admin --json user list \
-          | python -c 'import json,sys; n=sys.argv[1]; print(next((u["id"] for u in json.load(sys.stdin) if u["display_name"]==n), ""))' \
+          | python -c 'import json,sys; n=sys.argv[1]; print(next((u["user"]["id"] for u in json.load(sys.stdin) if u["user"]["display_name"]==n), ""))' \
               "$$customer_name")"
         if [ -z "$$customer_id" ]; then
           customer_id="$$(lazycloud-admin --json user create --name "$$customer_name" --administrator \
@@ -858,6 +856,7 @@ services:
     volumes:
       - lazycloud-files:/var/lib/lazycloud
       - *platform-aws-config
+      - "./.lazycloud-release:/run/lazycloud/release:ro"
 
   platform-unit:
     # The capacity owner the shared fleet registers against. A worker is admitted
@@ -925,6 +924,9 @@ services:
     # and serve only the account that connected them.
     <<: *container-worker-settings
     image: container-worker:local
+    env_file:
+      - path: .env.release
+        required: false
     build:
       context: .
       dockerfile: docker/Dockerfile.worker

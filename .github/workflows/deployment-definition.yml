@@ -16,6 +16,7 @@ on:
       - "deploy/chart/**"
       - "deploy/chart_values.py"
       - "deploy/infrastructure.example.json"
+      - "deploy/release.example.json"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/promote.yml"
       - "deploy/argocd/**"
@@ -28,6 +29,7 @@ on:
       - "deploy/chart/**"
       - "deploy/chart_values.py"
       - "deploy/infrastructure.example.json"
+      - "deploy/release.example.json"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/promote.yml"
       - "deploy/argocd/**"
@@ -81,11 +83,7 @@ jobs:
             --infrastructure deploy/infrastructure.example.json \
             --environment deploy/chart/environments/prod.yaml \
             --deployment lazycloud-prod \
-            --tag 0000000000000000000000000000000000000000 \
-            --network-digest sha256:0000000000000000000000000000000000000000000000000000000000000000 \
-            --release-manifest-url https://example.invalid/releases/v1/manifest.json \
-            --worker-manifest-url https://example.invalid/releases/v1/manifest.json \
-            --host-manifest-url https://example.invalid/releases/host/manifest.json \
+            --manifest deploy/release.example.json \
             --output "$RUNNER_TEMP/values-deployment.yaml"
           helm lint deploy/chart --strict -f "$RUNNER_TEMP/values-deployment.yaml"
           helm template lazycloud deploy/chart --namespace lazycloud-prod \

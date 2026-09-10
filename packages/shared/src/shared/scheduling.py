@@ -165,6 +165,8 @@ def worker_serves_owner(
 
 class WorkerExecutionRecord(ContractModel):
     worker_id: str
+    runtime_image: str = ""
+    agent_binary_sha256: str = ""
     pool: MachinePool
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     workspace_id: str = ""

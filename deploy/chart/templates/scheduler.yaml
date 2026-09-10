@@ -26,6 +26,10 @@ spec:
       topologySpreadConstraints:
         {{- include "lazycloud.spreadAcrossNodes" "scheduler" | nindent 8 }}
       volumes:
+        - name: active-release
+          configMap:
+            name: active-release
+            optional: true
         - name: agent-binarys
           emptyDir: {}
         - name: aws-chain
@@ -69,6 +73,9 @@ spec:
               mountPath: /var/lib/lazycloud/agent-binarys
             - name: aws-chain
               mountPath: /run/lazycloud/aws
+            - name: active-release
+              mountPath: /run/lazycloud/release
+              readOnly: true
           readinessProbe:
             exec:
               command:

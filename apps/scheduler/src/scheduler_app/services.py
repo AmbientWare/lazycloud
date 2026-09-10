@@ -372,6 +372,7 @@ class SchedulerAppServices:
             workspace_changes=workspace_changes,
             runtime_state=container_runtime_state,
             container_shutdowns=container_shutdowns,
+            workers=worker_repository,
         )
         container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
             worker_repository, container_repository, containers

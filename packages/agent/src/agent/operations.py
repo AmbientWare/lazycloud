@@ -921,6 +921,7 @@ class AgentBootstrap(ContractModel):
 
 
 class AgentState(ContractModel):
+    release_generation: int = Field(default=0, ge=0)
     gateway_url: str
     workspace_id: str
     pool: MachinePool
@@ -1285,6 +1286,7 @@ def agent_state_payload(
     bootstrap = state.bootstrap
     return {
         "gateway_url": state.gateway_url,
+        "release_generation": state.release_generation,
         "workspace_id": state.workspace_id,
         "pool": state.pool,
         "machine_id": state.machine_id,
@@ -1419,6 +1421,7 @@ def plan_worker_container(
     state_dir: str,
     image: str,
     image_id: str = "",
+    agent_binary_sha256: str = "",
     target_host: str = "127.0.0.1",
     platform: str = "",
     host_aliases: list[str] | None = None,
@@ -1441,6 +1444,8 @@ def plan_worker_container(
     env = {
         WORKER_CONFIG_PATH_ENV: DEFAULT_WORKER_CONFIG_PATH,
         "WORKER_ID": slot.worker_id,
+        "WORKER_RUNTIME_IMAGE": image,
+        "WORKER_AGENT_BINARY_SHA256": agent_binary_sha256,
         "WORKER_TOKEN": slot.worker_token,
         "WORKER_POOL": str(slot.pool),
         "WORKER_CAPACITY_OWNER_ID": slot.capacity_owner_id,
@@ -1581,15 +1586,15 @@ def plan_worker_slot_reconciliation(
         return AgentWorkerReconcilePlan(executor=executor, actions=actions)
     for worker_id, desired in sorted(desired_by_id.items()):
         active = active_by_id.get(worker_id)
-        if active is None:
+        if desired.status is AgentWorkerSlotStatus.Draining:
+            action = WorkerSlotAction.Prepare
+            reason = "worker start is awaiting release authorization or drain completion"
+        elif active is None:
             action = WorkerSlotAction.Start
             reason = "worker slot is new"
         elif same_worker_slot(active, desired):
             action = WorkerSlotAction.Keep
             reason = "worker slot is unchanged"
-        elif desired.status is AgentWorkerSlotStatus.Draining:
-            action = WorkerSlotAction.Prepare
-            reason = "worker image is prepared while the current worker drains"
         elif desired.status is AgentWorkerSlotStatus.Pending:
             action = WorkerSlotAction.Restart
             reason = "worker slot is drained and ready to switch"

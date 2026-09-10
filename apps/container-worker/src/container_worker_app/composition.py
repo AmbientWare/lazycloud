@@ -614,6 +614,8 @@ def _scheduler_worker_record(
     capacity = execution.capacity
     return SchedulerWorkerRecord(
         worker_id=identity.worker_id,
+        runtime_image=config.runtime_image,
+        agent_binary_sha256=config.agent_binary_sha256,
         pool=identity.pool,
         capacity_owner_id=_required_capacity_owner_id(config),
         machine_id=identity.machine_id,

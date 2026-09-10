@@ -40,6 +40,7 @@ lazycloud_clients/
 .env.*
 !.env.example
 .lazycloud
+.lazycloud-release/
 .terraform/
 **/.terraform/
 *.tfstate

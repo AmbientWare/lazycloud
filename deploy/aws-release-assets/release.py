@@ -100,6 +100,7 @@ def main() -> None:
     stage.add_argument("--version", required=True)
     stage.add_argument("--agent-version-dir", type=Path, required=True)
     stage.add_argument("--worker-image", required=True)
+    stage.add_argument("--platform-images", required=True)
     stage.add_argument("--bucket", required=True)
     stage.add_argument("--public-base-url", required=True)
     stage.add_argument("--key-prefix", default="connected-aws")
@@ -145,6 +146,7 @@ def main() -> None:
             source_revision=args.source_revision,
             reused_from=json.loads(args.reused_from),
             worker_image=args.worker_image,
+            platform_images=json.loads(args.platform_images),
             bucket=args.bucket,
             public_base_url=args.public_base_url,
             key_prefix=args.key_prefix,
@@ -226,6 +228,7 @@ def stage_release(
     version: str,
     agent_version_dir: Path,
     worker_image: str,
+    platform_images: dict[str, str],
     bucket: str,
     public_base_url: str,
     key_prefix: str,
@@ -251,8 +254,8 @@ def stage_release(
     agent_manifest = AgentArtifactManifest.model_validate_json(
         agent_manifest_path.read_text(encoding="utf-8")
     )
-    if agent_manifest.schema_version != 1 or agent_manifest.version != version:
-        raise ValueError("agent artifact manifest does not match the release version")
+    if agent_manifest.schema_version != 1 or not VERSION_PATTERN.fullmatch(agent_manifest.version):
+        raise ValueError("agent artifact manifest has an invalid version")
     amd64_artifacts = [
         artifact
         for artifact in agent_manifest.artifacts
@@ -276,7 +279,7 @@ def stage_release(
 
     release_root = output.resolve() / version
     template_local = Path("objects") / "connection-template.json"
-    agent_local = Path(AGENT_BINARY_DIRECTORY) / version / agent.filename
+    agent_local = Path(AGENT_BINARY_DIRECTORY) / agent_manifest.version / agent.filename
     template_path = release_root / template_local
     agent_path = release_root / agent_local
     _write_immutable(template_path, template)
@@ -286,7 +289,9 @@ def stage_release(
     template_key = (
         f"{normalized_prefix}/connection-templates/{template_identity.sha256}/template.json"
     )
-    agent_key = f"{normalized_prefix}/agents/{version}/{agent.sha256}/{agent.filename}"
+    agent_key = (
+        f"{normalized_prefix}/agents/{agent_manifest.version}/{agent.sha256}/{agent.filename}"
+    )
     manifest_key = f"{normalized_prefix}/releases/{version}/manifest.json"
     template_url = release_public_url(public_base_url, template_key)
     agent_url = release_public_url(public_base_url, agent_key)
@@ -305,9 +310,10 @@ def stage_release(
         manifest_public_url=manifest_url,
         connection_template_version=template_identity.version,
         connection_template_sha256=template_identity.sha256,
-        agent_artifact_version=version,
+        agent_artifact_version=agent_manifest.version,
         agent_artifact_sha256=agent.sha256,
         container_worker_image=worker_image,
+        platform_images=platform_images,
         capacity_cpu_ami_ids=normalized_cpu_ami_ids,
         capacity_gpu_ami_ids=normalized_gpu_ami_ids,
         source_revision=source_revision,
@@ -334,7 +340,7 @@ def stage_release(
             "LAZYCLOUD_AGENT_BINARY_SHA256_BY_ARCH": json.dumps(
                 {"amd64": agent.sha256}, sort_keys=True, separators=(",", ":")
             ),
-            "LAZYCLOUD_AGENT_BINARY_VERSION": version,
+            "LAZYCLOUD_AGENT_BINARY_VERSION": agent_manifest.version,
             "LAZYCLOUD_AWS_CAPACITY_AGENT_BINARY_URL": agent_url,
             "LAZYCLOUD_AWS_CAPACITY_WORKER_IMAGE_DIGEST": worker_image,
             "LAZYCLOUD_AWS_CONNECTION_TEMPLATE_URL": template_url,

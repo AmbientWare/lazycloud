@@ -10,6 +10,7 @@ import random
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import traceback
 import urllib.error
@@ -63,6 +64,7 @@ from agent.service_manager import (
     machine_fingerprint,
     plan_agent_preflight,
 )
+from agent.updates import AgentUpdater
 from gateway.http import (
     AgentBootstrapConfig,
     AgentTelemetryRequest,
@@ -109,6 +111,7 @@ from shared.http.provider_nodes import (
     ProviderNodeCapacity,
     ProviderNodeEnrollmentRequest,
 )
+from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
 from shared.http_transport import HttpChannel
 from shared.provider_config import ProviderKind
 from shared.routing import BackendRouteTransport
@@ -304,6 +307,8 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
 
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse: ...
 
+    def agent_release(self, request: AgentReleaseRequest) -> AgentReleaseResponse: ...
+
     def record_agent_capacity_interruption(
         self,
         request: AgentCapacityInterruptionRequest,
@@ -387,6 +392,11 @@ class HttpAgentGatewayClient:
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse:
         return StreamAgentResponse.model_validate(
             self.channel.post("/gateway/agents/stream", _payload(request))
+        )
+
+    def agent_release(self, request: AgentReleaseRequest) -> AgentReleaseResponse:
+        return AgentReleaseResponse.model_validate(
+            self.channel.post("/gateway/agents/release", _payload(request))
         )
 
     def record_agent_capacity_interruption(
@@ -705,6 +715,9 @@ class DockerAgentWorkerController:
             slot,
             state_dir=str(self.state_dir),
             image=image,
+            agent_binary_sha256=AgentUpdater(
+                Path(sys.argv[0]).resolve(), self.state_dir
+            ).binary_sha256(),
             target_host=self.target_host,
             platform=self.platform,
             host_aliases=self.host_aliases,
@@ -1092,10 +1105,12 @@ class AgentDaemonService:
             )
             if result.capacity_interrupted:
                 return result
+        updater = AgentUpdater(Path(sys.argv[0]).resolve(), self.state_store.state_dir)
         active_slots = self.worker_controller.active_slots()
         stream = self.client.stream_agent(
             StreamAgentRequest(
                 agent_token=state.agent_token,
+                binary_sha256=updater.binary_sha256(),
                 active_worker_images={
                     slot.worker_id: slot.worker_image for slot in active_slots if slot.worker_image
                 },
@@ -1129,6 +1144,20 @@ class AgentDaemonService:
             desired_worker_count=len(desired_slots),
             applied=applied,
         )
+        updater.confirm()
+        release = self.client.agent_release(
+            AgentReleaseRequest(
+                agent_token=state.agent_token,
+                generation=state.release_generation,
+                binary_sha256=updater.binary_sha256(),
+            )
+        )
+        if release.generation < state.release_generation:
+            raise RuntimeError("agent release instruction is stale")
+        state = state.model_copy(update={"release_generation": release.generation})
+        self.state_store.save(state)
+        if release.update_agent and release.agent is not None:
+            updater.install(release.agent)
         return AgentDaemonRunResult(
             workspace_id=state.workspace_id,
             pool=state.pool,

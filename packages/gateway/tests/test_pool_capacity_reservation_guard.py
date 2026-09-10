@@ -50,6 +50,7 @@ from shared.scheduling import (
 )
 from shared.usage import UsageBillingOwner
 from tests.redis_fakes import FakeRedis
+from tests.releases import select_worker_release
 from tests.workspaces import workspace_owner_user_id
 
 
@@ -758,10 +759,8 @@ def test_rollout_contention_preserves_worker_without_restart_authorization(
         UnitName("rollout-contention"), workspace=workspace_id, provider="agent"
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
-    gateway = replace(
-        _gateway(isolated_services, guard, key_prefix="rollout-contention"),
-        agent_worker_image="worker:target",
-    )
+    gateway = _gateway(isolated_services, guard, key_prefix="rollout-contention")
+    select_worker_release("worker:target")
     join = gateway.unit_state_coordinator.create_unit_join_token(
         unit, workspace_id=workspace_id, owner_token_id="gateway-test-owner"
     )
@@ -792,6 +791,7 @@ def test_rollout_contention_preserves_worker_without_restart_authorization(
         billing_owner=billing_owner_for_unit(unit),
         active_worker_images={worker_id: "worker:current"},
         rollout_fleet_size=1,
+        agent_binary_sha256="",
     )
     assert len(slots) == 1 and slots[0].status is slot_status
     current = workers.get_worker(worker_id)

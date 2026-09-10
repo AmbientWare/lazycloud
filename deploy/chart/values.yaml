@@ -1,10 +1,12 @@
-# Commit tags are immutable. The network image uses its executable manifest
-# digest so unchanged network code does not restart the WireGuard gateway.
+# Every application image comes from the selected immutable release.
 image:
   registry: ""
   repositoryPrefix: ""
   tag: ""
-  networkDigest: ""
+  artifacts: {}
+
+release:
+  active: {}
 
 # Non-secret application settings. Resource facts are added by chart_values.py.
 runtime: {}
@@ -58,15 +60,13 @@ environment:
       - LAZYCLOUD_GITHUB_REDIRECT_URI
       - LAZYCLOUD_REDIS_URL
       - LAZYCLOUD_RELEASE_MANIFEST_URL
-      - LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL
-      - LAZYCLOUD_RELEASE_HOST_MANIFEST_URL
       - LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES
   scheduler:
     secretKeys: [LAZYCLOUD_DATABASE_URL, LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY, LAZYCLOUD_CACHE_SERVICE_TOKEN, LAZYCLOUD_CLOUDFLARE_API_TOKEN, LAZYCLOUD_STRIPE_API_KEY, LAZYCLOUD_RESEND_API_KEY]
     runtimeKeys: *applicationRuntime
   agentArtifact:
     secretKeys: []
-    runtimeKeys: [LAZYCLOUD_RELEASE_MANIFEST_URL, LAZYCLOUD_RELEASE_WORKER_MANIFEST_URL, LAZYCLOUD_RELEASE_HOST_MANIFEST_URL]
+    runtimeKeys: [LAZYCLOUD_RELEASE_MANIFEST_URL]
   cacheServer:
     secretKeys: [LAZYCLOUD_CACHE_SERVICE_TOKEN]
     runtimeKeys: []

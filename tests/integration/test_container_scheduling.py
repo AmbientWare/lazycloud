@@ -29,6 +29,7 @@ from shared.http.functions import (
 )
 from shared.tasks import TaskStatus
 from tests.real_redis import RealRedisActors
+from tests.releases import assign_runtime
 from tests.scheduler_composition import scheduler_request_service_for_redis
 
 
@@ -114,6 +115,11 @@ def test_function_dependency_waits_then_schedules_materialized_args(
 
     # The container takes the invocation before it can report on it. Ownership
     # is the claim now, not something scheduling handed out in advance.
+    assign_runtime(
+        isolated_services.containers,
+        isolated_services.scheduler_workers,
+        scheduler.requests[0].container_id,
+    )
     claimed = service.function_claim(
         FunctionClaimRequest(
             stub_id=stub.id,
@@ -251,6 +257,9 @@ def test_function_cancel_stops_container_and_rejects_terminal_writes(
                 cloudpickle_bytes({"args": (3,), "kwargs": {}})
             ),
         )
+    )
+    assign_runtime(
+        services.containers, services.scheduler_workers, scheduler.requests[0].container_id
     )
     claimed = service.function_claim(
         FunctionClaimRequest(

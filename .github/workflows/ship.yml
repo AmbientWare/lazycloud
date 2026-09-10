@@ -1,38 +1,13 @@
 name: Ship
 
-# One entry point for a full release: cut the version, publish the release, then
-# put the control plane on it.
-#
-# The version is chosen here and nowhere else. An operator picks which part of
-# the version this release changes, the first job reads the latest `v*` tag,
-# computes the next one, and pushes it; every later job carries that number as
-# an input. Nothing in the tree holds a version: the tag is the record, and the
-# workspace keeps a placeholder that the release stamps over at build time.
-#
-# The tag is pushed by this run rather than by hand, and it triggers nothing. A
-# tag pushed with the workflow token starts no other workflow. That is the
-# point: with release and deploy each listening for `v*`, the deploy raced the
-# release it was meant to run.
-#
-# The two halves stay separate workflows because they answer to different
-# audiences. A release is immutable and public: a customer's own AWS account
-# resolves the agent binary, the worker image and the node AMI out of its
-# manifest, and a customer's machine installs the Python package from PyPI. A
-# deploy is ours alone and runs many times against one release.
+# The tag defines the release version. Publishing must finish before Deploy
+# records the complete manifest for Argo; the workflow token starts no tag workflow.
 
 on:
   workflow_dispatch:
     inputs:
       commit:
         description: Source commit already merged into main. Empty uses this workflow's commit.
-        type: string
-        default: ""
-      worker_manifest_url:
-        description: Worker release to retain during an ordered control-plane upgrade. Empty uses the new release.
-        type: string
-        default: ""
-      host_manifest_url:
-        description: Host agent and AMI release. Empty preserves the deployed host pin.
         type: string
         default: ""
       bump:
@@ -44,10 +19,7 @@ on:
           - minor
           - major
 
-# What the called workflows need, because a caller cannot grant less than they
-# ask for: this run pushes the tag and the deploy records its build as a commit
-# on the deployment branch, and a caller offering only `contents: read` fails
-# the whole run before any job starts, with no logs to read.
+# Reusable workflows cannot request permissions their caller lacks.
 permissions:
   contents: write
   id-token: write
@@ -120,19 +92,8 @@ jobs:
           git tag -a "v${{ steps.next.outputs.version }}" -m "Release ${{ steps.next.outputs.version }}" "${{ steps.source.outputs.commit }}"
           git push origin "v${{ steps.next.outputs.version }}"
 
-  # The customer-facing Python package. `lazycloud-client` is the SDK and the
-  # `lazycloud` command; `lazycloud-shared` carries the contracts it speaks, and
-  # the client pins it exactly so an installed pair always agrees. Both are
-  # published at the release version, so the version a customer has installed
-  # names the release it was built from.
-  #
-  # The workspace keeps 0.1.0 as a placeholder. Stamping at build time rather
-  # than bumping in the tree is what keeps thirty exact workspace pins from
-  # changing on every release.
-  #
-  # The wheels are installed into an empty environment before anything is
-  # published: a wheel that resolves against the workspace and not against PyPI
-  # is the failure a customer would otherwise be the first to see.
+  # Stamp the SDK and its exact shared-package dependency with the same version.
+  # Wheel installation runs outside the workspace before publication.
   python-package:
     name: Publish the Python package
     needs: version
@@ -212,15 +173,23 @@ jobs:
           # deploy that follows.
           skip-existing: true
 
+  platform:
+    needs: version
+    uses: ./.github/workflows/build-platform.yml
+    secrets: inherit
+    with:
+      commit: ${{ needs.version.outputs.commit }}
+
   release:
     name: Publish the release
     # Host images are published separately. This job only builds release assets.
-    needs: [version, python-package]
+    needs: [version, python-package, platform]
     uses: ./.github/workflows/release.yml
     secrets: inherit
     with:
       version: ${{ needs.version.outputs.version }}
       commit: ${{ needs.version.outputs.commit }}
+      platform_images: ${{ needs.platform.outputs.images }}
 
   # Straight to prod, until staging runs. Then a release lands on staging here
   # and `promote.yml` carries it to prod once it has been looked at.
@@ -231,7 +200,4 @@ jobs:
     secrets: inherit
     with:
       deployment: prod
-      commit: ${{ needs.version.outputs.commit }}
       release_manifest_url: ${{ needs.release.outputs.manifest_url }}
-      worker_manifest_url: ${{ inputs.worker_manifest_url }}
-      host_manifest_url: ${{ inputs.host_manifest_url }}

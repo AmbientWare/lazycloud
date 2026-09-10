@@ -32,7 +32,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from provider_clients.release_manifest import AwsReleaseManifest
+from provider_clients.release_manifest import ReleaseObject
+from pydantic import BaseModel, Field
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKER_APP = "container-worker-app"
@@ -118,17 +119,34 @@ class PreviousRelease:
     agent_sha256: str
     agent_url: str
     agent_size_bytes: int
+    agent_version: str
 
     @classmethod
-    def from_manifest(cls, manifest: AwsReleaseManifest) -> PreviousRelease:
-        agent = manifest.agent_artifact_object
+    def from_manifest(cls, manifest: PublishedArtifacts) -> PreviousRelease:
+        agents = [
+            item for item in manifest.objects if item.sha256 == manifest.agent_artifact_sha256
+        ]
+        if len(agents) != 1:
+            raise ValueError("published artifacts must identify exactly one agent executable")
+        agent = agents[0]
         return cls(
             version=manifest.release_version,
             worker_image=manifest.container_worker_image,
             agent_sha256=manifest.agent_artifact_sha256,
             agent_url=agent.public_url,
             agent_size_bytes=agent.size_bytes,
+            agent_version=manifest.agent_artifact_version,
         )
+
+
+class PublishedArtifacts(BaseModel):
+    """Artifact identities used for reuse, independent of deployment manifest schema."""
+
+    release_version: str
+    container_worker_image: str
+    agent_artifact_version: str
+    agent_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    objects: list[ReleaseObject]
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +166,7 @@ class ReleasePlan:
             "previous_worker_image": previous.worker_image if previous else "",
             "previous_agent_sha256": previous.agent_sha256 if previous else "",
             "previous_agent_url": previous.agent_url if previous else "",
+            "previous_agent_version": previous.agent_version if previous else "",
             "previous_agent_size_bytes": str(previous.agent_size_bytes) if previous else "",
             "reused_from": json.dumps(
                 {
@@ -267,7 +286,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     previous: PreviousRelease | None = None
     if args.previous_manifest is not None and args.base:
         previous = PreviousRelease.from_manifest(
-            AwsReleaseManifest.model_validate_json(
+            PublishedArtifacts.model_validate_json(
                 args.previous_manifest.read_text(encoding="utf-8")
             )
         )

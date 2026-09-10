@@ -939,6 +939,7 @@ class ApiServices(ApiServiceCore):
             workspace_changes=workspace_changes,
             runtime_state=container_runtime_state,
             container_shutdowns=container_shutdowns,
+            workers=worker_repository,
         )
         container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
             worker_repository, container_repository, containers
@@ -1531,7 +1532,6 @@ def _gateway_control_service(
             )
         ),
         scheduler_maintenance=SchedulerWorkerMaintenanceService(scheduler_workers),
-        agent_worker_image=core.aws_capacity_settings.worker_image_digest,
         async_http_client=async_http,
     )
 

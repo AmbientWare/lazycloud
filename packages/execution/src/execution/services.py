@@ -62,6 +62,8 @@ class ExecutionContainerService(Protocol):
 
     def get(self, container_id: str) -> ContainerRecord: ...
 
+    def accepting_work(self, container_id: str) -> bool: ...
+
     def submit_scheduler_request(
         self,
         record: ContainerRecord,

@@ -8,6 +8,7 @@ from types import ModuleType
 
 import lazycloud.config
 import pytest
+from shared.releases import ActiveRelease, ReleaseTarget
 from tests.metric_helpers import install_metric_reader
 
 TEST_ENVIRONMENT_FILE = Path(__file__).parent / "tests" / "env.test"
@@ -46,7 +47,7 @@ def metric_reader() -> None:
 _TEST_ENVIRONMENT = _test_environment()
 
 
-def _configure_environment(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
+def _configure_environment(monkeypatch: pytest.MonkeyPatch, home: Path, release_dir: Path) -> None:
     # Clearing the prefixes also isolates settings absent from env.test.
     for name in tuple(os.environ):
         if name.startswith(_INHERITED_PREFIXES) and not name.startswith(_RETAINED_PREFIX):
@@ -57,20 +58,35 @@ def _configure_environment(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
     # Unconfigured external services must fail instead of reaching developer accounts.
     for name, value in _TEST_ENVIRONMENT.items():
         monkeypatch.setenv(name, value)
+    release_file = release_dir / "active-release.json"
+    release_file.write_text(
+        ActiveRelease(
+            generation=1,
+            manifest_url="",
+            target=ReleaseTarget(
+                version="local", source_revision="0" * 40, worker_image="container-worker:local"
+            ),
+        ).model_dump_json()
+    )
+    monkeypatch.setenv("LAZYCLOUD_RELEASE_ACTIVE_FILE", str(release_file))
     lazycloud.config.reset_settings_cache()
 
 
 @pytest.fixture(scope="session", autouse=True)
 def suite_environment(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
     with pytest.MonkeyPatch.context() as monkeypatch:
-        _configure_environment(monkeypatch, tmp_path_factory.mktemp("suite"))
+        _configure_environment(
+            monkeypatch, tmp_path_factory.mktemp("suite"), tmp_path_factory.mktemp("release")
+        )
         yield
     lazycloud.config.reset_settings_cache()
 
 
 @pytest.fixture(autouse=True)
-def isolated_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    _configure_environment(monkeypatch, tmp_path)
+def isolated_environment(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
+    _configure_environment(monkeypatch, tmp_path, tmp_path_factory.mktemp("release"))
     yield
     lazycloud.config.reset_settings_cache()
 

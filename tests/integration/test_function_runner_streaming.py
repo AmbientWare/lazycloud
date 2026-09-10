@@ -32,6 +32,7 @@ from shared.http.functions import (
 )
 from shared.http.gateway_tasks import AppendTaskLogRequest, EndTaskRequest, StartTaskRequest
 from shared.tasks import TaskStatus
+from tests.releases import assign_runtime
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
@@ -145,6 +146,9 @@ async def _invoke_and_run(
     responses = [initial]
     assert initial.task_id
     assert scheduler.requests
+    assign_runtime(
+        runtime.containers, runtime.scheduler_workers, scheduler.requests[0].container_id
+    )
     runner = FunctionRunner(
         config=FunctionRunnerConfig(
             stub_id=stub.id,

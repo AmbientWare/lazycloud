@@ -1062,6 +1062,8 @@ class FunctionControlService:
         finds nothing is the pooling working as intended.
         """
 
+        if not self.services.containers.accepting_work(request.container_id):
+            return FunctionClaimResponse()
         with self.services.context.database.session() as session:
             claimed = TaskRepository(session).claim_for_stub(
                 request.stub_id,

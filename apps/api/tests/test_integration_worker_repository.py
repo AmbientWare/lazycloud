@@ -332,6 +332,7 @@ def test_managed_image_build_credentials_use_assigned_workspace(
     # so the record has to exist for its owner to be read at all.
     RedisSchedulerWorkerRepository(redis).add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("pool"),
@@ -393,6 +394,7 @@ def test_managed_container_credentials_use_assigned_workspace(
     )
     RedisSchedulerWorkerRepository(redis).add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("pool"),
@@ -485,6 +487,7 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
     )
     RedisSchedulerWorkerRepository(redis).add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("pool"),
@@ -614,6 +617,7 @@ def test_image_build_context_download_is_bound_to_active_assignment_and_object(
     )
     RedisSchedulerWorkerRepository(redis).add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             pool=MachinePool("pool"),
@@ -815,6 +819,7 @@ def test_cache_origin_broker_denies_other_workers_container_and_image(
             client,
             bootstrap_token,
             SchedulerWorkerRecord(
+                runtime_image="container-worker:local",
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 worker_id="worker-attacker",
                 pool=MachinePool("managed"),
@@ -948,6 +953,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
         workers = RedisSchedulerWorkerRepository(redis)
         workers.add_worker(
             SchedulerWorkerRecord(
+                runtime_image="container-worker:local",
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 worker_id="worker-1",
                 pool=MachinePool("pool"),
@@ -966,6 +972,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
             client,
             token,
             SchedulerWorkerRecord(
+                runtime_image="container-worker:local",
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 worker_id="worker-1",
                 machine_id="compose-machine",
@@ -1040,6 +1047,7 @@ def test_worker_network_mutations_are_bound_to_authenticated_worker_assignment(
             client,
             bootstrap_token,
             SchedulerWorkerRecord(
+                runtime_image="container-worker:local",
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 worker_id="worker-network-owner",
                 machine_id="machine-network-owner",
@@ -1112,6 +1120,7 @@ async def test_worker_repository_stream_blocks_until_scheduler_assignment(
     capacity_owner_id = "11111111-1111-4111-8111-111111111111"
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id=capacity_owner_id,
             worker_id=worker_id,
             machine_id="compose-machine",
@@ -1205,6 +1214,7 @@ def test_stale_source_cache_session_cannot_change_current_worker_availability(
     worker_id = "worker-1"
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=worker_id,
             pool=MachinePool("default"),
@@ -1276,6 +1286,7 @@ async def test_worker_stream_rechecks_cache_after_dequeue_and_requeues_on_drain(
     worker_id = "worker-1"
     workers.add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=worker_id,
             pool=MachinePool("default"),
@@ -1355,6 +1366,7 @@ def test_worker_repository_api_vends_container_credentials_from_worker_token(
             client,
             token,
             SchedulerWorkerRecord(
+                runtime_image="container-worker:local",
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 worker_id="worker-1",
                 pool=MachinePool("pool"),
@@ -1367,6 +1379,7 @@ def test_worker_repository_api_vends_container_credentials_from_worker_token(
             client,
             token,
             SchedulerWorkerRecord(
+                runtime_image="container-worker:local",
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 worker_id="worker-2",
                 pool=MachinePool("pool"),
@@ -1424,6 +1437,7 @@ def test_worker_repository_rotates_worker_session_on_reregistration(
         )
         payload = AddWorkerRequest(
             worker=SchedulerWorkerRecord(
+                runtime_image="container-worker:local",
                 worker_id="worker-1",
                 pool=MachinePool("pool"),
                 capacity_owner_id=capacity_owner_id,
@@ -1503,6 +1517,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
             json={
                 **base_payload,
                 "worker": WorkerExecutionRecord(
+                    runtime_image="container-worker:local",
                     worker_id="capacity-worker",
                     pool=MachinePool("capacity-pool"),
                     capacity_owner_id=owner_id,
@@ -1521,6 +1536,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
             json={
                 **base_payload,
                 "worker": WorkerExecutionRecord(
+                    runtime_image="container-worker:local",
                     worker_id="capacity-worker",
                     pool=MachinePool("capacity-pool"),
                     capacity_owner_id=other_owner_id,
@@ -1533,6 +1549,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
             json={
                 **base_payload,
                 "worker": WorkerExecutionRecord(
+                    runtime_image="container-worker:local",
                     worker_id="capacity-worker",
                     pool=MachinePool("capacity-pool"),
                     capacity_owner_id=owner_id,
@@ -2089,6 +2106,7 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
         workspace_id = isolated_services.context.default_workspace_id(session)
     RedisSchedulerWorkerRepository(redis).add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id=_ROUTE_CAPACITY_OWNER,
             worker_id="compose-container-worker",
             workspace_id=workspace_id,
@@ -2190,6 +2208,7 @@ async def test_worker_repository_reconciles_orphan_routes_without_removing_activ
         workspace_id = async_services.context.default_workspace_id(session)
     RedisSchedulerWorkerRepository(redis).add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id=_ROUTE_CAPACITY_OWNER,
             worker_id="worker-1",
             workspace_id=workspace_id,
@@ -2298,6 +2317,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
     )
     RedisSchedulerWorkerRepository(redis).add_worker(
         SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
             capacity_owner_id=joined_unit.capacity_owner_id,
             worker_id=worker_id,
             workspace_id=workspace_id,
@@ -2388,6 +2408,7 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
     isolated_services.worker_repository_service.add_worker(
         AddWorkerRequest(
             worker=SchedulerWorkerRecord(
+                runtime_image="container-worker:local",
                 capacity_owner_id=joined_unit.capacity_owner_id,
                 worker_id=worker_id,
                 machine_id=machine_id,
@@ -2904,6 +2925,7 @@ def test_worker_container_routes_are_bound_to_the_container_the_worker_was_given
                 client,
                 _worker_token(isolated_services, "usage-owner"),
                 SchedulerWorkerRecord(
+                    runtime_image="container-worker:local",
                     capacity_owner_id="11111111-1111-4111-8111-111111111111",
                     worker_id=name,
                     machine_id=f"machine-{name}",
@@ -3017,6 +3039,7 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
             client,
             _worker_token(isolated_services, "window-owner"),
             SchedulerWorkerRecord(
+                runtime_image="container-worker:local",
                 capacity_owner_id="22222222-2222-4222-8222-222222222222",
                 worker_id="worker-window",
                 machine_id="machine-worker-window",

@@ -36,6 +36,7 @@ from agent.service_manager import (
     build_agent_service_lifecycle_plan,
     resolve_service_platform,
 )
+from agent.updates import SUPERVISOR, SUPERVISOR_SCRIPT
 from gateway.http import LeaveAgentRequest
 from provider_clients import ProviderNodeIdentityEvidenceProvider
 from pydantic import TypeAdapter, ValidationError
@@ -325,8 +326,8 @@ def _install_service(args: AgentCommandArgs) -> AgentServiceInstallResult:
     plan = build_agent_service_install_plan(
         AgentServiceSpec(
             name=args.service_name,
-            binary_path=command[0],
-            args=command[1:],
+            binary_path="/bin/sh",
+            args=[str(Path(args.state_dir) / SUPERVISOR), args.state_dir, *command],
             state_dir=args.state_dir,
         ),
         platform=selected_platform,
@@ -335,6 +336,7 @@ def _install_service(args: AgentCommandArgs) -> AgentServiceInstallResult:
     )
     results: list[ServiceCommandResult] = []
     if not args.dry_run:
+        _write_file_atomic(Path(args.state_dir) / SUPERVISOR, SUPERVISOR_SCRIPT, permissions=0o700)
         _write_service_plan(plan)
         results = _run_service_commands(
             [

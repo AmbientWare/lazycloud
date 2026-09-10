@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
+from control.releases import DeploymentReleaseService
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
 from database.repositories.apps import StubRepository
 from database.repositories.execution import TaskRepository
@@ -47,6 +48,7 @@ from shared.placement import ProductRegion
 from shared.scheduling import (
     SchedulerContainerCancellationResult,
     SchedulerContainerSubmitResult,
+    SchedulerWorkerRecord,
     SchedulerWorkerRequest,
     gpu_count_for_capacity,
 )
@@ -143,6 +145,10 @@ class PendingContainerReservation(ContractModel):
     created_at: datetime | None = None
 
 
+class RuntimeWorkerLookup(Protocol):
+    def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None: ...
+
+
 @dataclass(slots=True)
 class ContainerService:
     context: ExecutionContext
@@ -155,6 +161,7 @@ class ContainerService:
     event_bus: ContainerEventBus
     workspace_changes: WorkspaceChangePublisher
     container_shutdowns: ContainerStorageShutdown
+    workers: RuntimeWorkerLookup
     runtime_state: ContainerRuntimeStateRepository | None = None
 
     def admit_container_start(
@@ -565,6 +572,11 @@ class ContainerService:
         """System-authority lookup for the execution engine's own control flow."""
         with self.context.database.session() as session:
             return self.get_in_session(session, container_id)
+
+    def accepting_work(self, container_id: str) -> bool:
+        container = self.get(container_id)
+        worker = self.workers.get_worker(container.runtime_worker_id or "")
+        return worker is not None and bool(DeploymentReleaseService().admitted_workers([worker]))
 
     def get_in_session(
         self,
