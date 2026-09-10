@@ -24,14 +24,6 @@
 {{- end }}
 {{- end -}}
 
-{{/*
-One image reference, built from the registry, the repository and the tag.
-
-Refuses to render when the tag is absent. Helm's default for a missing value is
-the empty string, which produces a Deployment whose image ends in `:` and fails
-at the pod with `InvalidImageName` -- several steps from the values file that
-forgot it, and reported as though the image were wrong rather than missing.
-*/}}
 {{- define "lazycloud.image" -}}
 {{- $root := index . 0 -}}
 {{- $name := index . 1 -}}
@@ -47,13 +39,7 @@ forgot it, and reported as though the image were wrong rather than missing.
 {{- end -}}
 {{- end -}}
 
-{{/*
-The SDK profile the chain is written under and the workloads read.
-
-Both ends are in this chart, so it is a name rather than a setting: nothing
-outside picks it, and a value would be a way for the file and the process that
-reads it to disagree.
-*/}}
+{{/* The chart writes this profile and names it for every consumer. */}}
 {{- define "lazycloud.awsProfile" -}}control{{- end -}}
 
 {{/*
@@ -73,15 +59,6 @@ Auto Mode a reason to provision capacity in another node and zone.
 {{- end }}
 {{- end -}}
 
-{{/*
-One workload's database pool, as environment.
-
-Per workload rather than in the shared env block, because the processes differ:
-the API serves concurrent requests, the scheduler runs a few loops, and a
-bootstrap job is one thread that exits. A single value for all of them is either
-too small for the API or, multiplied across every pod, larger than the server
-allows.
-*/}}
 {{- define "lazycloud.databaseEnv" -}}
 - name: LAZYCLOUD_DATABASE_POOL_SIZE
   value: {{ .poolSize | quote }}

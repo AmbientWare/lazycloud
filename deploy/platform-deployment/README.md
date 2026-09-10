@@ -66,7 +66,7 @@ active lease while the other is ready to take over. The pair provides failover,
 not twice the packet throughput.
 
 Control-plane replicas run as a StatefulSet with one stable WireGuard keypair
-per ordinal. Keep `controlPlane.replicas` and `wireguard.platformPeers` equal.
+per ordinal. The chart derives the peer count from `controlPlane.replicas`.
 Agents generate and retain their own private keys. Postgres stores agent public
 keys, assigned addresses, revocation state, and handshake observations.
 
