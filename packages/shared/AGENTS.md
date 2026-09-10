@@ -41,13 +41,10 @@ That only works while an omitted value stays distinguishable from a chosen one,
 which is why the SDK sends nothing rather than the default it would have picked.
 A client that fills in defaults leaves the resolver with nothing to resolve.
 
-A container's memory reservation and its ceiling are deliberately different
-numbers, and the gap between them is the product. Placement reserves 1.25x the
-request so a node is never oversubscribed on what was promised; the ceiling lets
-a container grow several times past it into memory nobody reserved. beta9 keeps
-the two equal, which is safe by construction and means no burst at all. We do
-not, which is why eviction has to exist: the gap is only survivable because
-something chooses who leaves when it closes.
+A container's memory reservation and its ceiling are different. Placement
+reserves 1.25x the request to avoid oversubscribing promised memory. The higher
+ceiling allows bursts into unreserved memory. Eviction is required when a node
+can no longer accommodate competing bursts.
 
 Under gVisor the sentry and the gofer are charged to the container's cgroup
 alongside guest memory, so every value below is really "guest plus sandbox" and a
