@@ -406,21 +406,12 @@ services:
 
   administrator-bootstrap:
     image: database-bootstrap:local
-    entrypoint: ["/bin/sh", "-ec"]
+    entrypoint: ["lazycloud-admin", "--json", "auth", "bootstrap"]
     command:
-      - |
-        token_path=/var/lib/lazycloud/bootstrap/administrator-token
-        umask 077
-        # Empty expands to no flag at all, so an unset id leaves a token-only
-        # administrator rather than linking one nobody named.
-        github_id="${LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID:-}"
-        lazycloud-admin --json auth bootstrap \
-          --token-file /run/secrets/lazycloud-administrator-token \
-          $${github_id:+--github-user-id "$$github_id"} \
-          --output "$$token_path"
-        if test -e "$$token_path"; then
-          test "$$(stat -c '%a' "$$token_path")" = "600"
-        fi
+      - --token-file
+      - /run/secrets/lazycloud-administrator-token
+      - --output
+      - /var/lib/lazycloud/bootstrap/administrator-token
     environment:
       <<: [*database-bootstrap-env, *object-store-env, *gateway-env]
       LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID: "${LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID:-}"
