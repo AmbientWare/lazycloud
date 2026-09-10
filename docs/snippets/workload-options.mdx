@@ -4,7 +4,7 @@ Every workload decorator on `App` accepts these options:
 | --- | --- | --- |
 | `image` | `Image` | Container image the workload runs in. Defaults to the managed Python image. |
 | `name` | `str` | Resource name. Defaults to the decorated callable's name. |
-| `cpu` | `float` | CPU cores per container. |
+| `cpu` | `float` | CPUs per container. One CPU is one vCPU. |
 | `memory` | `str` | Memory per container, for example `"512Mi"` or `"2Gi"`. |
 | `gpu` | `str \| list[str]` | GPU model: `"t4"`, `"l4"`, `"a10g"`, `"l40s"`, `"a100-40"`, `"a100-80"`, `"h100"`, `"h200"`, or `"any"`. A list is a preference, best first: `["h100", "l4"]` takes an H100 where one is free and an L4 otherwise. `"any"` goes last. The two A100 sizes are separate names because they are not interchangeable, and plain `"a100"` is rejected. |
 | `gpu_count` | `int` | GPUs per container. Defaults to `0`. |
