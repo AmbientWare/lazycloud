@@ -80,6 +80,9 @@ class ProcessManager:
             raise self.ready_error
         return self.ready_value
 
+    def start_workload(self) -> None:
+        raise AssertionError("sandbox does not have a workload command")
+
     def ack(self, pid: int, seq: int, *, ok: bool) -> None:
         self.acknowledgements.append((pid, seq, ok))
 

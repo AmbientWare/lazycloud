@@ -45,6 +45,8 @@ class WorkerContainerRuntimeController(Protocol):
 class WorkerSandboxProcessManager(Protocol):
     def ready(self) -> bool: ...
 
+    def start_workload(self) -> None: ...
+
     def stream_exec(
         self,
         argv: list[str],

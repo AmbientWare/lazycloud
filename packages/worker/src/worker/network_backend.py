@@ -611,7 +611,7 @@ class AgentBridgeNetworkBackend:
         for command in setup_commands:
             self.system.run(command)
         commands.extend(setup_commands)
-        if context.startup_kind is WorkerStartupKind.Sandbox:
+        if context.startup_kind is WorkerStartupKind.Sandbox or context.docker_enabled:
             isolation_commands = self._sandbox_control_isolation_commands(
                 container_id,
                 ip_address,
