@@ -98,6 +98,7 @@ class ComputeUnitProviderState(ContractModel):
     """
     degraded_at: datetime | None = None
     """When the reason above was recorded, so a relaunch can be paced from it."""
+    last_capacity_failure_at: datetime | None = None
     launch_attempt_baseline: int = Field(default=0, ge=0)
     """Attempt ordinal the current failure streak counts from.
 
