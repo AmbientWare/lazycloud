@@ -26,7 +26,6 @@ export const Route = createLazyFileRoute("/pricing")({
 
 const SECONDS_PER_HOUR = 3600;
 
-/** Which unit every figure on the page is currently read in. */
 type Meter = "hour" | "second";
 
 function metered(nanosPerHour: number, meter: Meter): number {
@@ -38,12 +37,11 @@ const meters = [
   { value: "second", label: "Per second" },
 ] as const satisfies readonly { value: Meter; label: string }[];
 
-/** One priced line: what it is, what it costs, and the unit that price is in. */
 type RateLine = {
   label: string;
-  /** A published rate in nanodollars, or a figure that is not money — a share of one. */
   figure: number | string;
   unit: string;
+  fractionDigits?: number;
 };
 
 type RateGroup = {
@@ -70,6 +68,7 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
         label: rate.gpu_type,
         figure: metered(rate.nanos_per_gpu_card_hour, meter),
         unit: `/ ${per}`,
+        fractionDigits: meter === "hour" ? 4 : 6,
       })),
     },
     {
@@ -78,6 +77,7 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
           label: "CPU",
           figure: metered(shape.nanos_per_cpu_core_hour, meter),
           unit: `/ CPU / ${per}`,
+          fractionDigits: meter === "hour" ? 4 : 8,
         },
       ],
     },
@@ -87,6 +87,7 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
           label: "Memory",
           figure: metered(shape.nanos_per_memory_gib_hour, meter),
           unit: `/ GiB / ${per}`,
+          fractionDigits: meter === "hour" ? 4 : 8,
         },
       ],
     },
@@ -337,9 +338,6 @@ function PlanTerm({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* A group's heading sits in its own column beside the first price rather than
-   above the block, so the eye runs down one column of resources and one of
-   money. */
 function RateList({ groups, id }: { groups: readonly RateGroup[]; id: string }) {
   return (
     <div className="mt-6" id={id}>
@@ -353,7 +351,9 @@ function RateList({ groups, id }: { groups: readonly RateGroup[]; id: string }) 
                   {line.label}
                 </dt>
                 <dd className="shrink-0 font-mono text-[13px] whitespace-nowrap">
-                  {typeof line.figure === "number" ? formatCostNanos(line.figure) : line.figure}{" "}
+                  {typeof line.figure === "number"
+                    ? formatCostNanos(line.figure, "USD", line.fractionDigits ?? 4)
+                    : line.figure}{" "}
                   <span className="text-muted-foreground">{line.unit}</span>
                 </dd>
               </div>
