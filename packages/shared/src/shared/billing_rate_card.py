@@ -662,17 +662,8 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[MeteredRateChange, ...] = (
         platform_rate=None,
     ),
     MeteredRateChange(
-        pricing_version="2026-09-04.a",
-        effective_at=datetime(2026, 9, 11, tzinfo=timezone.utc),
-        compute_rates=_published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES),
-        platform_rate=PublishedPlatformRate(
-            nanos_per_egress_gib=130_000_000,
-            nanos_per_volume_gib_month=50_000_000,
-        ),
-    ),
-    MeteredRateChange(
-        pricing_version="2026-09-12.a",
-        effective_at=datetime(2026, 9, 12, tzinfo=timezone.utc),
+        pricing_version="2026-09-10.a",
+        effective_at=datetime(2026, 9, 10, 4, 9, 5, 835918, tzinfo=timezone.utc),
         compute_rates=tuple(
             rate
             for placement in _placement_rates(
@@ -680,7 +671,10 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[MeteredRateChange, ...] = (
             )
             for rate in placement.compute_rates
         ),
-        platform_rate=None,
+        platform_rate=PublishedPlatformRate(
+            nanos_per_egress_gib=130_000_000,
+            nanos_per_volume_gib_month=50_000_000,
+        ),
     ),
 )
 """Reviewed price history. Existing cards retain their original figures and dates."""

@@ -36,6 +36,12 @@ rates and completed ledger segments are preserved. If publication conflicts
 with usage already priced, review a new future card before deploying. Do not
 change an existing rate boundary or ledger row to make the sync pass.
 
+Rate card `2026-09-10.a` was activated at `2026-09-10T04:09:05.835918Z`.
+Migration `0030_withdraw_rate_schedule` removes only the unused September 11
+and 12 schedules, refusing withdrawal if either has priced ledger entries.
+The recorded activation time makes subsequent publication idempotent and
+preserves all charges before the cutover.
+
 ## The order the bootstrap runs in
 
 Sync waves, not preference. The schema must exist before an administrator can be
