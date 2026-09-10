@@ -132,6 +132,8 @@ class CapacityAcquisitionRequest(ContractModel):
     reservation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     operation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     shape: CapacityAcquisitionShape
+    # Warm pool sizing has no workload; demand keeps its own billing market.
+    workload_preemptible: bool | None = None
 
 
 class CapacityReleaseRequest(ContractModel):

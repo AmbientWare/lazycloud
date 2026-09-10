@@ -14,6 +14,7 @@ from compute.request_placement import ComputeCapacityPurchase
 from coordination.wake_signal import WakeSignalPublisher
 from pydantic import JsonValue
 from shared.billing_quotes import ContainerShape
+from shared.container_requests import capacity_memory_mib
 from shared.contracts import ContractModel
 from shared.placement import PlacementRateClass, placement_rate_class
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
@@ -55,7 +56,6 @@ from scheduler.state import (
     ContainerRequestClaimNotOwnedError,
     SchedulerContainerRequestClaim,
     WorkerReservedCapacity,
-    capacity_memory_mib,
 )
 from scheduler.tools import (
     SchedulingDecision,

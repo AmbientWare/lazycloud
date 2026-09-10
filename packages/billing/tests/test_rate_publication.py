@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -31,11 +32,14 @@ from shared.usage import (
 )
 from sqlalchemy import select
 
+from database import DatabaseClient
+
 
 @pytest.mark.parametrize("existing_installation", [False, True])
 def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
-    service_context: ServiceContext, existing_installation: bool
+    workspace_database: DatabaseClient, tmp_path: Path, existing_installation: bool
 ) -> None:
+    service_context = ServiceContext.create(workspace_database, root=tmp_path, create_schema=False)
     old = PUBLISHED_METERED_RATE_HISTORY[0]
     assert old.platform_rate is not None
     transfer_boundary = next(
@@ -172,7 +176,7 @@ def test_published_execution_choices_price_each_resource_and_preserve_customer_c
 def test_price_cutover_matches_quotes_and_preserves_customer_gpu_prices(
     service_context: ServiceContext,
 ) -> None:
-    boundary = datetime(2026, 9, 12, tzinfo=UTC)
+    boundary = PUBLISHED_METERED_RATE_HISTORY[-1].effective_at
     with service_context.database.session() as session:
         rates = ComputeRateRepository(session)
         for at, expected_cpu in (
