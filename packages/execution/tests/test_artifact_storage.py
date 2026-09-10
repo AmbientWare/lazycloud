@@ -93,9 +93,12 @@ def test_plan_artifacts_expire_and_cleanup_preserves_later_uploads(
     )
     result = retention.reconcile(active_recent_stub_keys=[], now=saved.expires_at)
     assert result.task_artifacts_removed == 1
-    assert artifacts.read_content(
-        workspace_id=workspace_id, task_id=task_id, artifact_id=later.id, filename="later"
-    )[0] == b"later"
+    assert (
+        artifacts.read_content(
+            workspace_id=workspace_id, task_id=task_id, artifact_id=later.id, filename="later"
+        )[0]
+        == b"later"
+    )
     with context.database.session() as session:
         assert ArtifactRepository(session).get(saved.id, workspace_id=workspace_id) is None
 

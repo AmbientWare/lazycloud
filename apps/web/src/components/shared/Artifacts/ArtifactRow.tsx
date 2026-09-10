@@ -176,9 +176,7 @@ export function ArtifactRow({
   const [downloading, setDownloading] = useState(false);
   const now = useLiveNow(true);
   const kind = previewKind(artifact.content_type);
-  const unavailable =
-    artifact.deleting ||
-    new Date(artifact.expires_at).getTime() <= now;
+  const unavailable = artifact.deleting || new Date(artifact.expires_at).getTime() <= now;
   const FileIcon = kind === "image" ? FileImage : kind === "text" ? FileText : File;
 
   async function download(): Promise<void> {
