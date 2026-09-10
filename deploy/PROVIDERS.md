@@ -15,8 +15,8 @@ their own scheduler loops, worker agent, billing flow, or application release.
 
 Terraform owns persistent platform infrastructure. Deployment image builders
 publish host images, and deployment configuration records their verified identities.
-Code owns capacity policy. Helm owns configured supplier prices and secret
-property bindings. Providers with price APIs supply current quotes.
+Provider code owns capacity policy and supplier price assumptions. Providers
+with price APIs supply current quotes. Helm owns secret property bindings.
 The normal deployment supplies
 configuration and credentials to the application. The compute service owns
 durable units, desired capacity, mutation fencing, retries, and drain decisions.
@@ -40,15 +40,19 @@ its capacity implements the same provider interface as platform capacity.
 4. Verify the real workload path, billing, scaling, and cleanup. An image build
    or healthy control plane alone is not provider acceptance.
 
-AWS infrastructure comes from Terraform. Provisioning policy is defined in
-`compute/aws_configuration.py`; the AWS instance catalog and Hetzner capacity
-policy live in their provider packages. These policies govern both platform and
-connected customer capacity. Change them through a reviewed PR. Customers select
-workload resources, while LazyCloud manages node selection and lifecycle.
-Before deploying a catalog removal, list the affected units and drain their work,
-then delete those units through the existing compute owner. Verify their AWS auto
-scaling groups and instances are gone before deploying. Catalog filtering alone
-does not stop an existing AWS group from replacing instances on its own.
+AWS infrastructure comes from Terraform. Typed provider definitions live in
+their provider packages and are registered in
+`provider_clients/provider_definitions.py`. Each definition owns its approved
+locations, instance catalog and `policy.purchases_enabled` switch. Change these
+through a reviewed PR. Customers select workload resources; LazyCloud manages
+node selection and lifecycle.
+
+Disabling purchases stops new capacity and replacements. Existing nodes remain
+observable and drain through the compute service. AWS reconciliation also
+suspends Auto Scaling launches so the provider cannot replace a node independently.
+The connection role needs `autoscaling:SuspendProcesses` and
+`autoscaling:ResumeProcesses` on its owned groups before changing AWS purchase
+permission. Keep management credentials until existing units have completed cleanup.
 
 Migration `0017_managed_compute_policy` requires stopping the old control-plane
 and scheduler processes before it runs. Old processes can restore the removed
@@ -57,25 +61,26 @@ release, stop those processes, then sync the new deployment. Restore automatic
 sync after the migration and new application processes are healthy.
 
 `fleet-ensure` registers and validates the cloud account through the API.
-The values renderer combines Hetzner's Terraform image catalog with deployment
-credentials and supplier prices, and composition resolves the provider registry.
-It needs no separate capacity-configuration command or manually copied workspace
-UUID. The bootstrap workspace reference resolves only when capacity is used,
-after administrator bootstrap has created it. Keep that configured workspace
-identity stable.
+The values renderer supplies Hetzner's Terraform image catalog as
+`LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES`. When images are present, it binds
+`LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS` from the operator secret to the API
+and scheduler. Helm renders these through its normal environment and secret
+bindings; it contains no provider registry. Application composition reads the
+Python registry and resolves the bootstrap workspace when capacity is used.
 
-AWS quotes also require `LAZYCLOUD_AWS_CAPACITY_REGIONAL_PRICES`, keyed by region,
-with `gp3_gib_monthly_micros` and `public_ipv4_hourly_micros`. Each node quote
-includes its requested gp3 disk size and one public IPv4 address. Disk estimates
+AWS provider code defines instance rates and regional gp3 and public IPv4 prices.
+Each node quote includes its requested gp3 disk size and one public IPv4 address.
+Disk estimates
 use a 30-day month, matching the normalization in [AWS's EBS pricing examples](https://aws.amazon.com/ebs/pricing/),
 and round upward to whole hourly USD micros. The production us-east-1 inputs
 are $0.08/GiB-month and [$0.005/public-IP-hour](https://aws.amazon.com/vpc/pricing/),
-verified on 2026-09-09. Missing regional prices fail deployment validation.
+verified on 2026-09-09. Add reviewed supplier cost data before enabling another region.
 
-The default deployment requires a verified Ashburn image catalog and a
-`hetzner:platform` token. Missing images fail Terraform validation; missing
-configured provider tokens fail application settings validation. Supplying
-credentials is still an operator prerequisite, just as it is for other services.
+Enabled Hetzner purchases require verified images for approved locations and a
+`hetzner:platform` token. Missing images fail deployment validation; missing
+configured provider tokens fail application settings validation. A fresh
+deployment with Hetzner purchases disabled may omit both. Disabling purchases
+on an existing deployment retains its images and credentials for cleanup.
 
 For an existing deployment, add the token-map field to its operator secret
 before applying the new secret mapping. Preserve all other fields and check for

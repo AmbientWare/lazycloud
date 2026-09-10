@@ -406,7 +406,11 @@ class HetznerPooledProvider:
             observed_machines=len(servers),
             instances=instances,
             provider_state=ComputeUnitProviderState(resource_id=request.unit_id),
-            current_template_version=self._template_version(request),
+            current_template_version=(
+                self._template_version(request)
+                if request.offer.region in self.images_by_location
+                else ""
+            ),
         )
 
 

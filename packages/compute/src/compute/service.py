@@ -2635,8 +2635,19 @@ class ComputeService:
 
     def _reconcile_platform_warm_markets(self, *, now: datetime) -> None:
         assert self.provider_resolver is not None
+        providers = tuple(self.provider_resolver.list_platform_providers())
+        disabled_refs = frozenset(
+            provider.ref
+            for provider in providers
+            if provider.policy is not None and not provider.policy.can_purchase
+        )
+        if disabled_refs:
+            for preemptible in (True, False):
+                self._clear_platform_warm_floors(
+                    preemptible=preemptible, keep_unit_id=None, provider_refs=disabled_refs
+                )
         offers: list[tuple[ResolvedComputeProvider, ComputeOffer]] = []
-        for provider in self.provider_resolver.list_platform_providers():
+        for provider in providers:
             policy = provider.policy
             if policy is None or provider.pooled is None or not policy.can_purchase:
                 continue
@@ -2847,12 +2858,20 @@ class ComputeService:
                 now=current.provider_state.degraded_at or now,
             )
 
-    def _clear_platform_warm_floors(self, *, preemptible: bool, keep_unit_id: str | None) -> None:
+    def _clear_platform_warm_floors(
+        self,
+        *,
+        preemptible: bool,
+        keep_unit_id: str | None,
+        provider_refs: frozenset[str] | None = None,
+    ) -> None:
         with self.context.database.session() as session:
             repository = ComputeUnitRepository(session)
             repository.lock_platform_capacity()
             for candidate in repository.list_platform_internal(preemptible=preemptible, gpu=False):
                 if candidate.id == keep_unit_id:
+                    continue
+                if provider_refs is not None and candidate.provider_ref not in provider_refs:
                     continue
                 unit = repository.get(candidate.id, for_update=True)
                 if unit is None:

@@ -603,7 +603,9 @@ def test_real_aws_offers_include_storage_and_ipv4_before_purchase() -> None:
     assert selected.cost_terms.complete_hourly_cost_micros == 367_223
     larger = choose_offer(list(provider.list_offers(root_volume_gib=400)), OfferRequest(nodes=1))
     assert larger.cost_terms.root_disk_hourly_micros == 44_445
-    unpriced = replace(provider, regional_prices={})
+    unpriced = replace(
+        provider, regional_prices={"us-west-2": provider.regional_prices["us-east-1"]}
+    )
     with pytest.raises(ValueError, match="no compute offers"):
         choose_offer(list(unpriced.list_offers(root_volume_gib=200)), OfferRequest(nodes=1))
 
@@ -818,6 +820,34 @@ def test_managed_pool_partial_failure_returns_last_durable_checkpoint() -> None:
     assert caught.value.resource_ids.launch_template_id == "lt-00000000000000001"
     assert caught.value.resource_ids.autoscaling_group_name is None
     assert checkpoints[-1] == caught.value.resource_ids
+
+
+def test_managed_pool_finishes_cleanup_when_group_disappears_during_delete() -> None:
+    class _DisappearingAutoScaling(_AutoScaling):
+        def delete_auto_scaling_group(self, **kwargs: object) -> Mapping[str, object]:
+            self.exists = False
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "ValidationError",
+                        "Message": (
+                            "AutoScalingGroup name not found - "
+                            f"AutoScalingGroup '{self.name}' not found"
+                        ),
+                    }
+                },
+                "DeleteAutoScalingGroup",
+            )
+
+    ec2 = _Ec2()
+    autoscaling = _DisappearingAutoScaling()
+    provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
+    spec = _spec(desired_nodes=0)
+    provisioner.ensure(spec)
+
+    provisioner.delete(spec)
+    assert provisioner.delete(spec).phase is AwsManagedPoolPhase.Deleted
+    assert not ec2.launch_template
 
 
 def test_managed_pool_rejects_same_named_group_without_ownership_tags() -> None:

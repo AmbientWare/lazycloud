@@ -860,7 +860,7 @@ class AwsManagedPoolProvisioner:
         state = self.discover(spec, resource_ids)
         group = self._describe_group(spec.autoscaling_group_name)
         if group is not None:
-            self._asg(
+            self._ignore_missing(
                 "delete Auto Scaling Group",
                 self._clients.autoscaling.delete_auto_scaling_group,
                 AutoScalingGroupName=group.name,
@@ -1585,6 +1585,10 @@ def _client_error(exc: ClientError, *, operation: str) -> AwsProviderControlErro
             "resourcecontentionfault",
         }
         or "notfound" in normalized
+        or (
+            normalized == "validationerror"
+            and message.startswith("AutoScalingGroup name not found")
+        )
     ):
         category = AwsProviderControlErrorCode.ResourceNotFound
     elif normalized in {

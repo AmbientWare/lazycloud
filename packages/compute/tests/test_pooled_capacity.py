@@ -797,6 +797,31 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
         "hetzner:regular": 0,
     }
 
+    desired_before_disable = {unit.id: unit.desired_machines for unit in units}
+    for index, provider in enumerate(providers):
+        assert provider.policy is not None
+        providers[index] = ResolvedComputeProvider(
+            ref=provider.ref,
+            capacity_mode=provider.capacity_mode,
+            pooled=provider.pooled,
+            policy=provider.policy.model_copy(update={"purchases_enabled": False}),
+        )
+    for supplier in suppliers.values():
+        supplier.catalog_failure = RuntimeError("disabled catalog must not be queried")
+
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=8))
+    with isolated_services.context.database.session() as session:
+        units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
+    assert all(
+        unit.initial_machines
+        == unit.min_machines
+        == unit.min_free_cpu_millicores
+        == unit.min_free_memory_mib
+        == 0
+        for unit in units
+    )
+    assert {unit.id: unit.desired_machines for unit in units} == desired_before_disable
+
 
 def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
     isolated_services: ApiServices,
