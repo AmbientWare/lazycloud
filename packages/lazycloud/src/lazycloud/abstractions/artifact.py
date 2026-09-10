@@ -13,7 +13,6 @@ from typing import BinaryIO, NamedTuple, Protocol
 
 from pydantic import JsonValue
 from shared.app_identity import NAME
-from shared.artifacts import ArtifactRetentionSource, InheritRetention
 from shared.http import artifacts
 from shared.http.artifacts import (
     ArtifactPublicUrlRequest,
@@ -21,7 +20,6 @@ from shared.http.artifacts import (
     ArtifactSaveResponse,
     ArtifactStatRequest,
     ArtifactStatResponse,
-    ArtifactSummary,
 )
 from shared.http.errors import HttpApiError
 from shared.task_context import current_task_id
@@ -51,8 +49,6 @@ class SavedArtifact:
     filename: str = ""
     remote: bool = False
     expires_at: datetime | None = None
-    retention_seconds: int | None = None
-    retention_source: ArtifactRetentionSource = ArtifactRetentionSource.Workspace
 
 
 class ArtifactSaveClient(Protocol):
@@ -63,16 +59,11 @@ class ArtifactSaveClient(Protocol):
         chunks: Iterable[bytes],
         *,
         content_type: str = "application/octet-stream",
-        retention_seconds: int | InheritRetention | None = InheritRetention.Workspace,
     ) -> ArtifactSaveResponse: ...
 
 
 class ArtifactMetadataClient(Protocol):
     def delete(self, artifact_id: str) -> None: ...
-
-    def update_retention(
-        self, artifact_id: str, retention_seconds: int | None
-    ) -> ArtifactSummary: ...
 
     def artifact_stat(self, request: ArtifactStatRequest) -> ArtifactStatResponse: ...
 
@@ -109,7 +100,6 @@ class Artifact:
         content_type: str | None = None,
         task_id: str | None = None,
         workspace: str | None = None,
-        retention_seconds: int | InheritRetention | None = InheritRetention.Workspace,
     ) -> None:
         self.prepare_tmp_dir()
         self.path = Path(path)
@@ -117,17 +107,6 @@ class Artifact:
             raise FileNotFoundError(self.path)
         self.value = str(self.path)
         self.content_type = content_type
-        if (
-            not isinstance(retention_seconds, InheritRetention)
-            and retention_seconds is not None
-            and (
-                isinstance(retention_seconds, bool)
-                or not isinstance(retention_seconds, int)
-                or retention_seconds <= 0
-            )
-        ):
-            raise ValueError("retention_seconds must be a positive integer or None")
-        self.retention_seconds = retention_seconds
         self._client: ArtifactRemoteClient | None = None
         self.task_id = task_id if task_id is not None else current_task_id()
         self.workspace = workspace
@@ -148,13 +127,11 @@ class Artifact:
         *,
         content_type: str | None = None,
         task_id: str | None = None,
-        retention_seconds: int | InheritRetention | None = InheritRetention.Workspace,
     ) -> Artifact:
         return cls(
             path=path,
             content_type=content_type,
             task_id=task_id,
-            retention_seconds=retention_seconds,
         )
 
     def _bind_control(
@@ -183,20 +160,17 @@ class Artifact:
         file_handle: BinaryIO,
         *,
         suffix: str = "",
-        retention_seconds: int | InheritRetention | None = InheritRetention.Workspace,
     ) -> Artifact:
         target = Path(tempfile.mkdtemp(prefix=f"{NAME}-artifact-")) / f"artifact{suffix}"
         with target.open("wb") as artifact:
             shutil.copyfileobj(file_handle, artifact)
-        return cls.file(target, retention_seconds=retention_seconds)
+        return cls.file(target)
 
     @classmethod
     def from_pil_image(
         cls,
         image: PILImage,
         format: str | None = "png",
-        *,
-        retention_seconds: int | InheritRetention | None = InheritRetention.Workspace,
     ) -> Artifact:
         cls.prepare_tmp_dir()
         target = Path(tempfile.mkdtemp(prefix=f"{NAME}-artifact-image-")) / "artifact"
@@ -204,7 +178,7 @@ class Artifact:
             suffix = format.lower() if format.startswith(".") else f".{format.lower()}"
             target = target.with_suffix(suffix)
         image.save(target, format=format.lstrip(".") if format else format)
-        return cls(path=target, retention_seconds=retention_seconds)
+        return cls(path=target)
 
     @classmethod
     def prepare_tmp_dir(cls) -> None:
@@ -222,8 +196,6 @@ class Artifact:
             "path": str(self.path),
             "content_type": self.content_type,
         }
-        if not isinstance(self.retention_seconds, InheritRetention):
-            result["retention_seconds"] = self.retention_seconds
         return result
 
     def stat(self) -> ArtifactStat | Stat:
@@ -252,14 +224,6 @@ class Artifact:
             self._artifact_client().delete(self.id)
         except HttpApiError as exc:
             raise ArtifactDeleteError(exc.detail or "failed to delete artifact") from exc
-
-    def set_retention(self, retention_seconds: int | None) -> ArtifactSummary:
-        if not self.id:
-            raise ArtifactNotSavedError("artifact has not been saved remotely")
-        try:
-            return self._artifact_client().update_retention(self.id, retention_seconds)
-        except HttpApiError as exc:
-            raise ArtifactRetentionError(exc.detail or "failed to update retention") from exc
 
     def exists(self) -> bool:
         if not self.id:
@@ -386,7 +350,6 @@ class Artifact:
                 packaged.name,
                 _file_chunks(packaged, chunk_size=chunk_size),
                 content_type=self.content_type or guess_content_type(packaged),
-                retention_seconds=self.retention_seconds,
             )
         except HttpApiError as exc:
             raise ArtifactSaveError(exc.detail or "failed to save artifact") from exc
@@ -405,8 +368,6 @@ class Artifact:
             filename=packaged.name,
             remote=True,
             expires_at=response.expires_at,
-            retention_seconds=response.retention_seconds,
-            retention_source=response.retention_source,
         )
         self.id = saved.artifact_id
         self.task_id = saved.task_id
@@ -460,10 +421,6 @@ class ArtifactReadError(RuntimeError):
 
 
 class ArtifactDeleteError(RuntimeError):
-    pass
-
-
-class ArtifactRetentionError(RuntimeError):
     pass
 
 
@@ -534,7 +491,6 @@ __all__ = [
     "ArtifactNotSavedError",
     "ArtifactReadError",
     "ArtifactRemoteClient",
-    "ArtifactRetentionError",
     "ArtifactSaveClient",
     "ArtifactSaveError",
     "ArtifactStat",

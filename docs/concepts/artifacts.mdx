@@ -72,52 +72,30 @@ read-only. For a writable shared filesystem, declare a `Volume` explicitly.
 
 ## Retention
 
-Set retention when constructing an artifact. All factory methods accept
-`retention_seconds`:
+Artifacts expire automatically using the same plan retention window as logs:
+Free keeps them for one day, Team for 30 days, and Business for 90 days.
+Complimentary accounts use the Team window.
 
-```python
-# Use the workspace default captured when the artifact is saved.
-artifact = Artifact.file("report.pdf")
-
-# Expire seven days after the upload succeeds.
-artifact = Artifact(path="report.pdf", retention_seconds=7 * 24 * 60 * 60)
-saved = artifact.save()
-print(saved.expires_at)
-
-# Retain indefinitely, regardless of the workspace default.
-artifact = Artifact.file("report.pdf", retention_seconds=None)
-```
-
-Omitting retention inherits the workspace default. Explicit `None` means keep
-until deleted; a positive integer specifies seconds. Zero, negative durations,
-and booleans are rejected. The initial workspace default is keep until deleted.
+The plan at upload determines the retention window. Expiration is measured from
+when the upload succeeds, and later plan changes do not reset that deletion date.
+There are no workspace or per-artifact retention settings. Read `saved.expires_at`
+after `artifact.save()`, or see the deletion date in the dashboard.
 Retention applies to remote storage, not locally packaged files.
 
-Change a saved artifact's retention or delete it with:
+Expired files become unavailable through the artifact API; background cleanup
+removes their stored bytes. Newly issued public URLs cannot outlive the artifact's
+expiration. Previously issued URLs may remain usable until their own expiry or
+physical deletion. Files can be deleted earlier with `artifact.delete()`.
 
-```python
-artifact.set_retention(30 * 24 * 60 * 60)
-artifact.delete()
-```
-
-Retention is measured from the original save time. Shortening it can expire a
-file immediately. Expired files become unavailable through the artifact API;
-background cleanup removes their stored bytes. Newly issued public URLs cannot
-outlive the artifact's expiration. Previously issued URLs may remain usable
-until their own expiry or physical deletion.
-
-Workspace default changes affect future saves. To update existing files, select
-them in Storage → Artifacts and preview **Apply workspace retention**. The preview
-shows affected files, bytes, and expiration dates. Explicit artifact settings are
-preserved. File deletion is permanent.
+Artifacts saved before automatic retention was introduced receive at most one
+plan retention window from rollout. An earlier scheduled deletion is preserved.
+For durable files, use a Volume or download a copy before expiration.
 
 ## CLI
 
 ```bash
 lazycloud artifact list --search report
 lazycloud artifact usage
-lazycloud artifact default-retention --seconds 604800
-lazycloud artifact retention ARTIFACT_ID --keep
 lazycloud artifact delete ARTIFACT_ID
 ```
 

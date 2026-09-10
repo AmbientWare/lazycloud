@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import Field
 
-from shared.artifacts import ArtifactRetentionSource
 from shared.bytes_transport import EncodedBytesBody
 from shared.http.base import HttpModel
 
@@ -16,14 +14,11 @@ class ArtifactSaveBody(EncodedBytesBody):
     task_id: str
     filename: str
     content_type: str = "application/octet-stream"
-    retention_seconds: int | None = Field(default=None, gt=0, strict=True)
 
 
 class ArtifactSaveResponse(HttpModel):
     id: str = ""
-    expires_at: datetime | None = None
-    retention_source: ArtifactRetentionSource = ArtifactRetentionSource.Workspace
-    retention_seconds: int | None = Field(default=None, gt=0)
+    expires_at: datetime
 
 
 class ArtifactStatRequest(HttpModel):
@@ -65,33 +60,9 @@ class ArtifactSummary(HttpModel):
     created_at: datetime | None = None
     app_id: str | None = None
     app_name: str = ""
-    expires_at: datetime | None = None
-    retention_source: ArtifactRetentionSource = ArtifactRetentionSource.Workspace
-    retention_seconds: int | None = Field(default=None, gt=0)
+    expires_at: datetime
     deleting: bool = False
     deletion_failed: bool = False
-
-
-class ArtifactRetentionUpdate(HttpModel):
-    retention_seconds: int | None = Field(gt=0, strict=True)
-
-
-class ArtifactRetentionPolicy(HttpModel):
-    retention_seconds: int | None = Field(default=None, gt=0)
-
-
-class ArtifactRetentionSelection(ArtifactRetentionUpdate):
-    ids: list[str] = Field(min_length=1, max_length=100)
-
-    @field_validator("ids")
-    @classmethod
-    def valid_ids(cls, values: list[str]) -> list[str]:
-        return [str(UUID(value)) for value in values]
-
-
-class ArtifactRetentionPreview(HttpModel):
-    data: list[ArtifactSummary]
-    total_bytes: int = Field(ge=0)
 
 
 class ArtifactStorageSummary(HttpModel):
@@ -100,7 +71,7 @@ class ArtifactStorageSummary(HttpModel):
     estimated_monthly_nanos: int | None = Field(default=None, ge=0)
     accrued_nanos: int = Field(ge=0)
     accrued_since: datetime
-    retention_seconds: int | None = Field(default=None, gt=0)
+    retention_seconds: int = Field(gt=0)
 
 
 class ArtifactListResponse(HttpModel):
@@ -113,10 +84,6 @@ __all__ = [
     "ArtifactListResponse",
     "ArtifactPublicUrlRequest",
     "ArtifactPublicUrlResponse",
-    "ArtifactRetentionPolicy",
-    "ArtifactRetentionPreview",
-    "ArtifactRetentionSelection",
-    "ArtifactRetentionUpdate",
     "ArtifactSaveBody",
     "ArtifactSaveResponse",
     "ArtifactStat",

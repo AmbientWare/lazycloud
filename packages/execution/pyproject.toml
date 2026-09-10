@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Execution tasks, resource services, Redis maps/queues/signals, outputs, volumes, and planners."
 requires-python = ">=3.12"
 dependencies = [
+    "billing",
     "cloudpickle>=3,<4",
     "compute",
     "lazycloud-shared==0.1.0",

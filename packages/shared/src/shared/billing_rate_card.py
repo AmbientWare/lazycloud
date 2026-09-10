@@ -305,11 +305,11 @@ class PlanEntitlements:
     connected_cloud: bool
     custom_domains: bool
     self_hosted: bool
-    log_retention_days: int
+    retention_days: int
     region_selection: bool = False
 
     def __post_init__(self) -> None:
-        if self.log_retention_days <= 0:
+        if self.retention_days <= 0:
             raise ValueError("log retention must be positive")
         if self.max_concurrent_cpu_containers <= 0:
             raise ValueError("a plan must allow at least one concurrent CPU container")
@@ -466,7 +466,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             connected_cloud=False,
             custom_domains=False,
             self_hosted=True,
-            log_retention_days=1,
+            retention_days=1,
         ),
         terms=(
             "Every workload the platform runs: applications, APIs, functions, jobs, "
@@ -489,7 +489,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             region_selection=True,
             custom_domains=True,
             self_hosted=True,
-            log_retention_days=30,
+            retention_days=30,
         ),
         terms=(
             "The same workloads at the same metered rates, with higher account limits.",
@@ -512,7 +512,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             region_selection=True,
             custom_domains=True,
             self_hosted=True,
-            log_retention_days=90,
+            retention_days=90,
         ),
         terms=("The same metered rates and capabilities as Team, with higher account limits.",),
     ),
