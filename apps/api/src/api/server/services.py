@@ -838,6 +838,7 @@ class ApiServices(ApiServiceCore):
                 aws_capacity_config,
                 agent_artifact_config,
                 connections=aws_connection_directory.list_for_workspace,
+                platform_connections=aws_connection_directory.list_platform,
                 capacity_workspace=aws_connection_directory.capacity_workspace,
                 platform_providers=configured_platform_compute_providers(
                     platform_capacity_config,

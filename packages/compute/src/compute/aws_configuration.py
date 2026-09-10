@@ -9,8 +9,6 @@ class AwsComputeConfiguration:
     default_instance_type: str = "m7i.2xlarge"
     initial_cpu_workers: int = 1
     min_cpu_workers: int = 1
-    max_cpu_instances: int = 500
-    max_gpu_instances: int = 100
     min_free_cpu_millicores: int = 1_000
     min_free_memory_mib: int = CONTAINER_MEMORY_BURST_FLOOR_MIB
     allowed_regions: tuple[str, ...] = ("us-east-1",)

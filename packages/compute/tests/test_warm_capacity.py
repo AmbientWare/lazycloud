@@ -1,10 +1,10 @@
 from datetime import UTC, datetime, timedelta
 
+from compute.fleet_policy import FleetCapacityPolicy
 from compute.offers import ComputeOffer
-from compute.providers import ResolvedProviderPolicy, next_billing_renewal
+from compute.providers import next_billing_renewal
 from compute.warm_capacity import warm_capacity_target
 from database.repositories.compute import PlatformCpuArrival
-from shared.compute_policy import MachinePool
 
 
 def test_provider_paid_hour_advances_only_after_its_boundary() -> None:
@@ -25,14 +25,7 @@ def test_provider_paid_hour_advances_only_after_its_boundary() -> None:
 
 def test_warm_capacity_absorbs_launch_window_demand_and_shrinks_gradually() -> None:
     now = datetime(2026, 9, 1, 1, tzinfo=UTC)
-    policy = ResolvedProviderPolicy(
-        workspace_id="11111111-1111-4111-8111-111111111111",
-        pool=MachinePool("lazycloud"),
-        platform_fleet=True,
-        default_region="ash",
-        allowed_regions=("ash",),
-        warm_cpu_min=1,
-    )
+    policy = FleetCapacityPolicy()
     offer = ComputeOffer(
         id="ccx23",
         provider="hetzner:platform",
@@ -49,6 +42,7 @@ def test_warm_capacity_absorbs_launch_window_demand_and_shrinks_gradually() -> N
         offer,
         arrivals,
         (),
+        preemptible=True,
         current=1,
         lower_since=None,
         now=now,
@@ -59,6 +53,7 @@ def test_warm_capacity_absorbs_launch_window_demand_and_shrinks_gradually() -> N
         offer,
         (),
         (),
+        preemptible=True,
         current=2,
         lower_since=None,
         now=now,
@@ -69,6 +64,7 @@ def test_warm_capacity_absorbs_launch_window_demand_and_shrinks_gradually() -> N
         offer,
         (),
         (),
+        preemptible=True,
         current=2,
         lower_since=held.lower_since,
         now=now + timedelta(seconds=policy.warm_decrease_after_seconds),
@@ -79,14 +75,7 @@ def test_warm_capacity_absorbs_launch_window_demand_and_shrinks_gradually() -> N
 def test_warm_capacity_counts_only_fitting_requests_using_reserved_memory() -> None:
     now = datetime(2026, 9, 1, 1, tzinfo=UTC)
     target = warm_capacity_target(
-        ResolvedProviderPolicy(
-            workspace_id="11111111-1111-4111-8111-111111111111",
-            pool=MachinePool("lazycloud"),
-            platform_fleet=True,
-            default_region="ash",
-            allowed_regions=("ash",),
-            warm_cpu_min=1,
-        ),
+        FleetCapacityPolicy(),
         ComputeOffer(
             id="memory-bound-node",
             provider="hetzner:platform",
@@ -101,6 +90,7 @@ def test_warm_capacity_counts_only_fitting_requests_using_reserved_memory() -> N
             PlatformCpuArrival(now, cpu_millicores=500, reserved_memory_mib=5000),
         ],
         (),
+        preemptible=True,
         current=1,
         lower_since=None,
         now=now,

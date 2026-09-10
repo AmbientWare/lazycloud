@@ -84,8 +84,8 @@ class HetznerPooledProvider:
         for shape in self.client.server_types():
             if (
                 not any(
-                    limit.instance_type == shape.name
-                    for limit in HETZNER_CAPACITY_POLICY.purchase_limits
+                    offer.instance_type == shape.name
+                    for offer in HETZNER_CAPACITY_POLICY.allowed_offers
                 )
                 or shape.architecture != "x86"
             ):

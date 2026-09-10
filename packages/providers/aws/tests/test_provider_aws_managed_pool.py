@@ -347,20 +347,12 @@ def _spec(*, desired_nodes: int = 1, max_nodes: int = 2) -> AwsManagedPoolSpec:
     )
 
 
-def test_managed_pool_accepts_fleet_capacity_and_enforces_its_ceiling() -> None:
+def test_managed_pool_rejects_desired_capacity_above_its_allocation() -> None:
     spec = _spec(desired_nodes=101, max_nodes=500)
     assert spec.desired_nodes == 101
     assert spec.max_nodes == 500
     with pytest.raises(ValidationError, match="desired_nodes cannot exceed max_nodes"):
         _spec(desired_nodes=501, max_nodes=500)
-
-
-def test_managed_pool_rejects_preemptible_capacity_without_an_enforceable_price() -> None:
-    values = _spec().model_dump() | {"preemptible": True}
-    with pytest.raises(ValidationError, match="maximum compute hourly price"):
-        AwsManagedPoolSpec.model_validate(values)
-    with pytest.raises(ValidationError, match="greater than 1000"):
-        AwsManagedPoolSpec.model_validate(values | {"max_compute_hourly_micros": 1_000})
 
 
 def test_managed_pool_rejects_unavailable_zone_before_creating_resources() -> None:
@@ -706,30 +698,6 @@ def test_managed_pool_agent_artifact_change_versions_template_and_updates_group(
     assert isinstance(encoded_user_data, str)
     user_data = base64.b64decode(encoded_user_data).decode()
     assert f"AGENT_SHA256={'c' * 64}" in user_data
-
-
-def test_managed_pool_scale_up_applies_current_spot_purchase_ceiling() -> None:
-    ec2 = _Ec2()
-    autoscaling = _AutoScaling()
-    provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
-    spec = _spec().model_copy(update={"preemptible": True, "max_compute_hourly_micros": 500_000})
-    provisioner.ensure(spec)
-
-    provisioner.scale(
-        spec.model_copy(update={"max_compute_hourly_micros": 250_000}),
-        desired_nodes=2,
-        max_nodes=spec.max_nodes,
-    )
-
-    version = int(str(autoscaling.launch_template["Version"]))
-    _, launch_data = ec2.launch_versions[version]
-    market = launch_data["InstanceMarketOptions"]
-    assert isinstance(market, Mapping)
-    assert market["SpotOptions"] == {
-        "MaxPrice": "0.25",
-        "SpotInstanceType": "one-time",
-        "InstanceInterruptionBehavior": "terminate",
-    }
 
 
 def test_managed_pool_delete_converges_after_asg_instance_cleanup() -> None:

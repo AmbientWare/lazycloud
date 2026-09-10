@@ -14,7 +14,7 @@ from compute.policy import AwsDefaultCapacityBaseline
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
-    ProviderPurchaseLimit,
+    ProviderOfferEligibility,
     ProviderUnitBootstrap,
     ProviderUnitRequest,
     ProviderUnitSnapshot,
@@ -207,15 +207,12 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
                 platform_fleet=False,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
-                purchase_limits=(
-                    ProviderPurchaseLimit(
+                allowed_offers=(
+                    ProviderOfferEligibility(
                         region="us-east-1",
                         instance_type="m7i.large",
-                        max_hourly_cost_micros=170_000,
                     ),
                 ),
-                max_cpu_instances=AWS_COMPUTE_CONFIGURATION.max_cpu_instances,
-                max_gpu_instances=AWS_COMPUTE_CONFIGURATION.max_gpu_instances,
             ),
         ),
         pool_bootstrap_factory=_bootstrap,
@@ -297,7 +294,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         id=pool.id,
         name=pool.name,
         desired_machines=0,
-        max_machines=AWS_COMPUTE_CONFIGURATION.max_cpu_instances,
+        max_machines=pool.max_machines,
         observed_machines=0,
         phase=ComputeUnitPhase.Ready,
         status=ComputeUnitPhase.Ready.value,

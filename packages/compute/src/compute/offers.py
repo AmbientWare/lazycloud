@@ -26,7 +26,6 @@ class ComputeOffer(ContractModel):
     region: str
     availability_zone: str = ""
     preemptible: bool = False
-    max_hourly_cost_micros: int | None = Field(default=None, gt=0)
     cpu_millicores: int = 0
     memory_mb: int = 0
     storage_mb: int = 0
@@ -82,7 +81,6 @@ def pooled_cloud_offer(
     capability_key: str,
     availability_zone: str = "",
     preemptible: bool = False,
-    max_hourly_cost_micros: int | None = None,
     supplier_cpu_unit: SupplierCpuUnit = SupplierCpuUnit.Unknown,
     supplier_cpu_count: int | None = None,
     gpu: str | None = None,
@@ -100,7 +98,6 @@ def pooled_cloud_offer(
         region=region,
         availability_zone=availability_zone,
         preemptible=preemptible,
-        max_hourly_cost_micros=max_hourly_cost_micros,
         cpu_millicores=cpu_millicores,
         memory_mb=memory_mb,
         storage_mb=storage_mb,
@@ -137,7 +134,6 @@ class OfferRequest(ContractModel):
     min_gpu_count: int = 0
     nodes: int = 0
     min_reliability: float = 0.0
-    max_hourly_cost_micros: int = 0
 
 
 def recorded_unit_offer(
@@ -154,7 +150,6 @@ def recorded_unit_offer(
         region=unit.region,
         availability_zone=unit.offer_availability_zone,
         preemptible=unit.worker_preemptible,
-        max_hourly_cost_micros=unit.offer_max_hourly_cost_micros,
         cpu_millicores=unit.worker_cpu_millicores,
         memory_mb=unit.worker_memory_mib,
         storage_mb=unit.offer_storage_mib if unit.offer_storage_mib is not None else 0,
@@ -177,7 +172,6 @@ def record_purchase_terms(unit: ComputeUnitRecord, offer: ComputeOffer) -> Compu
     return unit.model_copy(
         update={
             "offer_cost_terms": offer.cost_terms,
-            "offer_max_hourly_cost_micros": offer.max_hourly_cost_micros,
             "offer_availability_zone": offer.availability_zone,
         }
     )
@@ -221,11 +215,6 @@ def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[Com
             request.min_reliability > 0
             and offer.reliability > 0
             and offer.reliability < request.min_reliability
-        ):
-            continue
-        if request.max_hourly_cost_micros > 0 and (
-            offer.cost_terms.complete_hourly_cost_micros is None
-            or offer.cost_terms.complete_hourly_cost_micros > request.max_hourly_cost_micros
         ):
             continue
         if offer.available <= 0:
