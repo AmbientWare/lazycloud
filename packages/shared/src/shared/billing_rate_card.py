@@ -431,6 +431,17 @@ _SEPTEMBER_GPU_RATES = tuple(
     for rate in _INITIAL_GPU_RATES
 )
 
+_SPOT_GPU_RATES = (
+    PublishedGpuRate(GpuType.T4, 350_000_000),
+    PublishedGpuRate(GpuType.A10G, 750_000_000),
+    PublishedGpuRate(GpuType.L4, 500_000_000),
+    PublishedGpuRate(GpuType.L40S, 1_350_000_000),
+    PublishedGpuRate(GpuType.A100_40, 1_500_000_000),
+    PublishedGpuRate(GpuType.A100_80, 2_925_626_400),
+    PublishedGpuRate(GpuType.H100, 2_250_000_000),
+    PublishedGpuRate(GpuType.H200, 3_250_000_000),
+)
+
 _INITIAL_PLATFORM_RATE = PublishedPlatformRate(
     nanos_per_egress_gib=0,
     # Volumes are object storage, so this is priced against object storage rather
@@ -675,6 +686,19 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[MeteredRateChange, ...] = (
             nanos_per_egress_gib=130_000_000,
             nanos_per_volume_gib_month=50_000_000,
         ),
+    ),
+    MeteredRateChange(
+        pricing_version="2026-09-10.b",
+        effective_at=datetime(2026, 9, 10, 4, 58, 18, 736793, tzinfo=timezone.utc),
+        compute_rates=tuple(
+            rate
+            for placement in _placement_rates(
+                _published_compute_rates(_SEPTEMBER_SHAPE_RATES, _SPOT_GPU_RATES)
+            )
+            for rate in placement.compute_rates
+            if rate.gpu_type != NO_GPU
+        ),
+        platform_rate=None,
     ),
 )
 """Reviewed price history. Existing cards retain their original figures and dates."""

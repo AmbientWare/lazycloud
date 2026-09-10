@@ -66,7 +66,16 @@ offering must preserve customer hardware and historical billing identities.
 
 SUPPORTED_GPU_NAMES: frozenset[str] = frozenset(gpu.value for gpu in SUPPORTED_GPU_TYPES)
 
-PLATFORM_GPU_TYPES: tuple[GpuType, ...] = (GpuType.T4, GpuType.A10G, GpuType.L4)
+PLATFORM_GPU_TYPES: tuple[GpuType, ...] = (
+    GpuType.T4,
+    GpuType.A10G,
+    GpuType.L4,
+    GpuType.L40S,
+    GpuType.A100_40,
+    GpuType.A100_80,
+    GpuType.H100,
+    GpuType.H200,
+)
 """Products sold on managed capacity; other known models remain valid on customer hardware."""
 
 

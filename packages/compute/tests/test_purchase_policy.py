@@ -25,7 +25,7 @@ def test_purchase_margin_counts_packed_resources_and_all_supplier_components() -
         ),
     )
     policy = FleetCapacityPolicy(minimum_purchase_margin_percent=50)
-    now = datetime(2026, 9, 12, tzinfo=UTC)
+    now = datetime(2026, 9, 10, 4, 10, tzinfo=UTC)
     assessment = assess_fleet_purchase(offer, policy, preemptible=True, now=now)
     assert assessment.capacity_revenue_hourly_nanos == Decimal("1338153828.125")
     assert assessment.max_hourly_cost_micros == 669_076
@@ -61,7 +61,7 @@ def test_non_preemptible_purchase_uses_three_times_cpu_ram_but_the_same_gpu_rate
         ),
     )
     policy = FleetCapacityPolicy(minimum_purchase_margin_percent=50)
-    now = datetime(2026, 9, 12, tzinfo=UTC)
+    now = datetime(2026, 9, 10, 4, 10, tzinfo=UTC)
     regular = assess_fleet_purchase(offer, policy, preemptible=False, now=now)
     assert regular.capacity_revenue_hourly_nanos == Decimal("4764461484.375")
     assert regular.accepted
@@ -86,7 +86,7 @@ def test_purchase_refuses_unknown_supplier_costs_and_unpriced_capacity() -> None
         cost_terms=SupplierCostTerms(compute_hourly_micros=1),
     )
     policy = FleetCapacityPolicy()
-    now = datetime(2026, 9, 12, tzinfo=UTC)
+    now = datetime(2026, 9, 10, 4, 10, tzinfo=UTC)
     assert (
         assess_fleet_purchase(offer, policy, preemptible=False, now=now).rejection
         is PurchaseRejection.UnknownCost
