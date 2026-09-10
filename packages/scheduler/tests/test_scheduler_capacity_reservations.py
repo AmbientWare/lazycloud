@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -13,7 +13,7 @@ from compute.capacity_errors import (
     CapacityReservationLockContendedError,
 )
 from compute.request_placement import ComputeCapacityPurchase
-from coordination.redis_client import AsyncRedisClient, RedisSettings
+from coordination.redis_client import AsyncRedisClient
 from scheduler.capacity_reservations import (
     CapacityAcquisitionResult,
     CapacityAcquisitionStatus,
@@ -97,19 +97,6 @@ def _shape() -> CapacityRequestShape:
         memory_mib=8_192,
         runtime_classes=("runsc",),
     )
-
-
-@pytest.fixture
-async def async_redis(
-    real_redis_actors: RealRedisActors,
-) -> AsyncIterator[AsyncRedisClient]:
-    client = AsyncRedisClient.from_settings(
-        RedisSettings(url=real_redis_actors.url, key_prefix=real_redis_actors.prefix)
-    )
-    try:
-        yield client
-    finally:
-        await client.close()
 
 
 @dataclass(slots=True)

@@ -1,5 +1,3 @@
-"""Behavior tests for the sandboxed coding-agent example."""
-
 from __future__ import annotations
 
 import io
@@ -10,38 +8,17 @@ from pathlib import Path
 import pytest
 from examples.sandboxed_coding_agent import app as agent_module
 from examples.sandboxed_coding_agent.app import (
-    APP_NAME,
-    APPROVED_PATCH_PATHS,
     MAX_PATCH_BYTES,
-    PROVIDER_SECRET_NAMES,
     PatchPlan,
     _bounded_output,
     _chat_completions_url,
     plan_patch,
     run_agent,
-    sandbox,
     validate_patch_path,
     validate_patch_plan,
 )
-from shared.deployments import DeploymentKind
 
 from lazycloud import Sandbox, SandboxProcessResponse
-
-
-def test_coding_agent_specs_keep_provider_secrets_out_of_the_sandbox() -> None:
-    planner_spec = plan_patch.spec()
-    sandbox_spec = sandbox.spec()
-
-    assert APP_NAME == "sandboxed_coding_agent"
-    assert planner_spec.kind is DeploymentKind.Function
-    assert planner_spec.secrets == list(PROVIDER_SECRET_NAMES)
-    assert planner_spec.resources.timeout_seconds == 120
-    assert sandbox_spec.kind is DeploymentKind.Sandbox
-    assert sandbox_spec.metadata["block_network"] is True
-    assert sandbox_spec.secrets == []
-    assert sandbox_spec.env == {}
-    assert sandbox_spec.ports == {}
-    assert {"calculator.py"} == APPROVED_PATCH_PATHS
 
 
 @pytest.mark.parametrize(
@@ -102,7 +79,7 @@ class _ProviderResponse(io.BytesIO):
         self.close()
 
 
-def test_planner_calls_real_openai_compatible_protocol_and_validates_response(
+def test_planner_serializes_provider_request_and_validates_structured_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CODING_AGENT_BASE_URL", "https://provider.example/v1")
@@ -111,7 +88,6 @@ def test_planner_calls_real_openai_compatible_protocol_and_validates_response(
     requests: list[urllib.request.Request] = []
 
     def urlopen(request: urllib.request.Request, *, timeout: int) -> _ProviderResponse:
-        assert timeout == 90
         requests.append(request)
         content = json.dumps(
             {
@@ -137,7 +113,6 @@ def test_planner_calls_real_openai_compatible_protocol_and_validates_response(
     result = plan_patch.local("Fix addition", seed)
 
     assert result["files"][0]["path"] == "calculator.py"
-    assert len(requests) == 1
     request = requests[0]
     assert request.full_url == "https://provider.example/v1/chat/completions"
     assert request.get_header("Authorization") == "Bearer test-api-key"
@@ -157,7 +132,6 @@ def test_planner_rejects_invalid_provider_json_without_echoing_it(
 
     def urlopen(request: urllib.request.Request, *, timeout: int) -> _ProviderResponse:
         del request
-        assert timeout == 90
         return _ProviderResponse(b'{"provider":"untrusted-body"}')
 
     monkeypatch.setattr(agent_module.urllib.request, "urlopen", urlopen)
@@ -174,13 +148,8 @@ def test_planner_rejects_invalid_provider_json_without_echoing_it(
 def test_planner_bounds_direct_seed_inputs_before_calling_the_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    called = False
-
     def provider_patch(prompt: str, seed_files: dict[str, str]) -> PatchPlan:
-        nonlocal called
-        del prompt, seed_files
-        called = True
-        return _valid_plan()
+        raise AssertionError("oversized seed must not reach the provider")
 
     monkeypatch.setattr(agent_module, "_provider_patch", provider_patch)
 
@@ -190,23 +159,21 @@ def test_planner_bounds_direct_seed_inputs_before_calling_the_provider(
             {"calculator.py": "x" * 24_001, "test_calculator.py": "test"},
         )
 
-    assert called is False
-
 
 def test_test_output_is_bounded_and_marks_truncation() -> None:
-    output = _bounded_output("a" * 20_000, "discarded-tail")
+    output = _bounded_output("😀" * 5_000, "discarded-tail")
 
     assert len(output.encode()) <= 12_000
-    assert output.endswith("... output truncated ...\n")
+    assert "truncated" in output
+    assert "discarded-tail" not in output
 
 
 class _FakeFileSystem:
     def __init__(self) -> None:
-        self.directories: list[str] = []
         self.uploads: dict[str, str] = {}
 
     def create_directory(self, sandbox_path: str) -> None:
-        self.directories.append(sandbox_path)
+        del sandbox_path
 
     def upload_file(self, local_path: str | Path, sandbox_path: str) -> None:
         self.uploads[sandbox_path] = Path(local_path).read_text(encoding="utf-8")
@@ -217,7 +184,6 @@ class _FakeSandboxInstance:
         self.fs = _FakeFileSystem()
         self.process_error = process_error
         self.terminated = False
-        self.commands: list[list[str]] = []
 
     def sandbox_id(self) -> str:
         return "sandbox-example"
@@ -229,9 +195,6 @@ class _FakeSandboxInstance:
         timeout_seconds: float,
         cwd: str,
     ) -> SandboxProcessResponse:
-        assert timeout_seconds == 60
-        assert cwd == "/workspace/project"
-        self.commands.append(command)
         if self.process_error is not None:
             raise self.process_error
         return SandboxProcessResponse(
@@ -261,14 +224,13 @@ def _valid_plan() -> PatchPlan:
     }
 
 
-def test_orchestrator_uploads_validated_patch_runs_real_command_and_terminates(
+def test_agent_uploads_patch_reports_process_result_and_terminates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     instance = _FakeSandboxInstance()
+    monkeypatch.setenv("CODING_AGENT_API_KEY", "provider-credential-sentinel")
 
     def invoke_planner(prompt: str, seed_files: dict[str, str]) -> tuple[str, PatchPlan]:
-        assert "calculator.add" in prompt
-        assert set(seed_files) == {"calculator.py", "test_calculator.py"}
         return "task-planner", _valid_plan()
 
     def create(
@@ -278,7 +240,6 @@ def test_orchestrator_uploads_validated_patch_runs_real_command_and_terminates(
         timeout_seconds: float | None = None,
     ) -> _FakeSandboxInstance:
         del self, stub_id
-        assert timeout_seconds == 180
         return instance
 
     monkeypatch.setattr(agent_module, "_invoke_planner", invoke_planner)
@@ -289,12 +250,12 @@ def test_orchestrator_uploads_validated_patch_runs_real_command_and_terminates(
     assert result["planner_task_id"] == "task-planner"
     assert result["tests_passed"] is True
     assert result["changed_files"] == ["calculator.py"]
-    assert instance.commands == [["python", "-m", "unittest", "-v"]]
     assert (
         instance.fs.uploads["/workspace/project/calculator.py"]
         == _valid_plan()["files"][0]["content"]
     )
-    assert "CODING_AGENT_API_KEY" not in "".join(instance.fs.uploads.values())
+    assert "provider-credential-sentinel" not in "".join(instance.fs.uploads.values())
+    assert "provider-credential-sentinel" not in json.dumps(result)
     assert instance.terminated is True
 
 

@@ -39,10 +39,6 @@ from worker.runtime_config import (
     prepare_oci_spec_for_runtime,
 )
 
-type JsonObject = dict[str, JsonValue]
-
-_JSON_OBJECT: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
-_JSON_OBJECT_LIST: TypeAdapter[list[JsonObject]] = TypeAdapter(list[JsonObject])
 _STRING_LIST: TypeAdapter[list[str]] = TypeAdapter(list[str])
 
 
@@ -116,13 +112,6 @@ def _prepared_rootfs(tmp_path: Path, container_id: str = "ctr-1") -> ContainerRo
         root_path=str(merged),
         upper_path=str(tmp_path / "container-rootfs" / container_id / "upper"),
     )
-
-
-def _json_object(value: JsonValue, name: str) -> JsonObject:
-    try:
-        return _JSON_OBJECT.validate_python(value)
-    except ValueError as exc:
-        raise AssertionError(f"expected {name} to be an object") from exc
 
 
 @dataclass(slots=True)

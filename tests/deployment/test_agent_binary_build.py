@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -29,8 +30,10 @@ def test_stage_agent_binaries_writes_versioned_immutable_layout(tmp_path: Path) 
     assert (version_root / "lazycloud-agent-linux-amd64").read_bytes() == amd64.read_bytes()
     assert (version_root / "lazycloud-agent-linux-arm64").read_bytes() == arm64.read_bytes()
     assert json.loads((version_root / "manifest.json").read_text()) == manifest
-    assert [artifact["arch"] for artifact in manifest["artifacts"]] == ["amd64", "arm64"]
-    assert all(len(artifact["sha256"]) == 64 for artifact in manifest["artifacts"])
+    assert {artifact["arch"]: artifact["sha256"] for artifact in manifest["artifacts"]} == {
+        "amd64": sha256(amd64.read_bytes()).hexdigest(),
+        "arm64": sha256(arm64.read_bytes()).hexdigest(),
+    }
 
 
 def test_stage_agent_binaries_rejects_mutating_a_published_version(tmp_path: Path) -> None:

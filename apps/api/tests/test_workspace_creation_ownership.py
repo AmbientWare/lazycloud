@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
-
-from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
@@ -12,25 +9,17 @@ _DISPLAY_NAME = "creator"
 
 
 def test_workspace_created_through_the_api_is_owned_and_reached_by_its_creator(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
 ) -> None:
-    """A workspace nobody owns is a workspace nobody reaches.
-
-    A person reaches a workspace only through a membership row, and the account a
-    workspace's compute and domains resolve through is its owner row. Creation writes
-    both or it hands back a workspace the creator is refused from and nothing can
-    resolve an account for.
-    """
-    creator = isolated_services.users.create(
+    services, client = api_runtime
+    creator = services.users.create(
         display_name=_DISPLAY_NAME,
         role=PlatformRole.Administrator,
     )
-    raw_token, _record = AuthService(isolated_services.context).create_account_token(
+    raw_token, _record = AuthService(services.context).create_account_token(
         creator.id,
         "creator-cli",
     )
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
 
     created = client.post(

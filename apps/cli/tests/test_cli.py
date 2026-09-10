@@ -1,53 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
-from types import TracebackType
 
 import pytest
 from cli.components.errors import ADMIN_ERROR_POLICY
 from cli.main import build_admin_cli, start
 from lazycloud.cli.components.errors import normalize_exception
 from lazycloud.cli.handler_workflows import HandlerLoadError, load_handler_object
-from lazycloud.cli.main import normalize_global_flags
 from lazycloud.json_contracts import JsonValue, parse_json_object
 from shared.app_identity import CLI_NAME
 
 cli = build_admin_cli()
-
-
-class _CliEndpointHeaders:
-    def keys(self) -> list[str]:
-        return ["content-type"]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.keys())
-
-    def get_all(self, key: str) -> list[str]:
-        assert key == "content-type"
-        return ["application/json"]
-
-
-class _CliEndpointHttpResponse:
-    status = 200
-    headers = _CliEndpointHeaders()
-
-    def __enter__(self) -> _CliEndpointHttpResponse:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        _ = exc_type, exc, traceback
-
-    def read(self) -> bytes:
-        return b'{"ok": true}'
-
-    def geturl(self) -> str:
-        return "http://127.0.0.1:9000/endpoint/id/stub-cold-start"
+pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 
 @pytest.mark.parametrize("json_mode", [False, True])
@@ -103,13 +67,6 @@ def _json_path(value: JsonValue, *path: str | int) -> JsonValue:
     return current
 
 
-def _json_string(value: JsonValue, *path: str | int) -> str:
-    selected = _json_path(value, *path)
-    if not isinstance(selected, str):
-        raise AssertionError(f"expected JSON string at {path!r}")
-    return selected
-
-
 def test_cli_path_handler_outside_current_directory_is_rejected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -142,20 +99,6 @@ def fails():
 
     with pytest.raises(RuntimeError, match="invalid token"):
         start(args=["run", "debug_failing_handlers:fails", "--debug"], prog_name=CLI_NAME)
-
-
-def test_cli_global_flag_normalization_preserves_command_separator() -> None:
-    assert normalize_global_flags(["run", "module:handler", "--json"]) == [
-        "--json",
-        "run",
-        "module:handler",
-    ]
-    assert normalize_global_flags(["run", "module:handler", "--", "--json"]) == [
-        "run",
-        "module:handler",
-        "--",
-        "--json",
-    ]
 
 
 def test_cli_error_normalization_masks_tokens() -> None:

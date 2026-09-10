@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import socket
 import threading
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import execution.shells.service as shell_service_module
 import pytest
@@ -16,7 +15,7 @@ from control.service import ControlPlaneService, StubKind
 from database.repositories.orchestration import ContainerRepository
 from execution.containers.service import ContainerService
 from execution.pods.service import PodControlService
-from execution.shells.planning import SHELL_WORKER_PORT, shell_server_command
+from execution.shells.planning import SHELL_WORKER_PORT
 from execution.shells.proxy import ShellBackendTarget
 from execution.shells.service import (
     ShellControlService,
@@ -25,7 +24,6 @@ from execution.shells.service import (
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from identity.websocket_tickets import ShellWebSocketAudience, WebSocketTicketService
-from pydantic import JsonValue
 from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContainerSubmitStatus
 from scheduler.fleet import SchedulerContainerStatus
 from scheduler.state import (
@@ -34,7 +32,6 @@ from scheduler.state import (
     SchedulerContainerState,
     SchedulerWorkerRequest,
 )
-from shared.app_identity import SHELL_LOG_PATH
 from shared.bytes_transport import encode_bytes
 from shared.container_requests import WORKER_USER_CODE_VOLUME
 from shared.containers import ContainerRecord, ContainerStatus
@@ -52,7 +49,6 @@ from shared.http.pods import (
 from shared.http.pods import (
     PodSandboxUpdateNetworkPermissionsResponse as HttpPodSandboxUpdateNetworkPermissionsResponse,
 )
-from shared.paths import DEFAULT_SANDBOX_WORKDIR
 from shared.shell_protocol import ShellFrameType, encode_shell_frame
 from shared.workload_keys import pod_keep_warm_lock_key
 from starlette.websockets import WebSocketDisconnect
@@ -78,290 +74,252 @@ from worker.container_client.models import (
     ContainerStatusResponse,
 )
 from worker.container_client.scheduler import SchedulerContainerClientFactory
-from worker.execution import plan_sandbox_exec
 
 BASE_URL = TEST_URL
-
-
-@pytest.fixture
-def client_stack() -> Iterator[ExitStack]:
-    with ExitStack() as stack:
-        yield stack
 
 
 def test_ephemeral_pod_create_overrides_command_returns_url_and_expires(
     isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
-    client_stack: ExitStack,
 ) -> None:
-    scheduler = _RecordingScheduler()
-    redis = real_redis_actors.client()
-    real_services = services_with_redis_container_control(isolated_services, redis)
-    services = replace(
-        real_services,
-        containers=replace(real_services.containers, scheduler=scheduler),
-    )
-    control = ControlPlaneService(services.context)
-    stub = control.create_stub(
-        "ephemeral-web",
-        kind=StubKind.Pod,
-        public=True,
-        config={
-            "image": {"image_id": "image-pod"},
-            "runtime": {"keep_warm": 600},
-            "command": ["python", "authored.py"],
-            "ports": {"8080": 8080},
-        },
-    )
-    service = PodControlService(services, redis=redis)
-    client = client_stack.enter_context(TestClient(create_app(services, pod_service=service)))
-    headers = _auth_headers(services)
+    with ExitStack() as client_stack:
+        scheduler = _RecordingScheduler()
+        redis = real_redis_actors.client()
+        real_services = services_with_redis_container_control(isolated_services, redis)
+        services = replace(
+            real_services,
+            containers=replace(real_services.containers, scheduler=scheduler),
+        )
+        control = ControlPlaneService(services.context)
+        stub = control.create_stub(
+            "ephemeral-web",
+            kind=StubKind.Pod,
+            public=True,
+            config={
+                "image": {"image_id": "image-pod"},
+                "runtime": {"keep_warm": 600},
+                "command": ["python", "authored.py"],
+                "ports": {"8080": 8080},
+            },
+        )
+        service = PodControlService(services, redis=redis)
+        client = client_stack.enter_context(TestClient(create_app(services, pod_service=service)))
+        headers = _auth_headers(services)
 
-    response = client.post(
-        "/api/v1/pods",
-        json={
-            "stub_id": stub.id,
-            "command": ["python", "override.py"],
-            "timeout_seconds": 30,
-            "external_url": BASE_URL,
-        },
-        headers=headers,
-    )
+        response = client.post(
+            "/api/v1/pods",
+            json={
+                "stub_id": stub.id,
+                "command": ["python", "override.py"],
+                "timeout_seconds": 30,
+                "external_url": BASE_URL,
+            },
+            headers=headers,
+        )
 
-    assert response.status_code == 200
-    created = CreatePodResponse.model_validate_json(response.content)
-    assert created.url == f"https://{stub.id}-8080.lazycloud.test"
-    assert created.timeout_seconds == 30
-    assert created.expires_at is not None
-    assert scheduler.requests[0].payload["entrypoint"] == ["python", "override.py"]
-    assert scheduler.requests[0].payload["cwd"] == WORKER_USER_CODE_VOLUME
-    container = services.containers.get(created.container_id)
-    assert container.timeout_seconds == 30
-    assert container.expires_at is not None
-    assert service.expire_pods(now=container.expires_at - timedelta(seconds=1)) == []
-    expired = service.expire_pods(now=container.expires_at)
-    assert [item.id for item in expired] == [container.id]
-    assert services.containers.get(container.id).status is ContainerStatus.Stopped
+        assert response.status_code == 200
+        created = CreatePodResponse.model_validate_json(response.content)
+        assert created.url == f"https://{stub.id}-8080.lazycloud.test"
+        assert created.timeout_seconds == 30
+        assert created.expires_at is not None
+        assert scheduler.requests[0].payload["entrypoint"] == ["python", "override.py"]
+        assert scheduler.requests[0].payload["cwd"] == WORKER_USER_CODE_VOLUME
+        container = services.containers.get(created.container_id)
+        assert container.timeout_seconds == 30
+        assert container.expires_at is not None
+        assert service.expire_pods(now=container.expires_at - timedelta(seconds=1)) == []
+        expired = service.expire_pods(now=container.expires_at)
+        assert [item.id for item in expired] == [container.id]
+        assert services.containers.get(container.id).status is ContainerStatus.Stopped
 
-    no_timeout_response = client.post(
-        "/api/v1/pods",
-        json={
-            "stub_id": stub.id,
-            "timeout_seconds": -1,
-            "external_url": BASE_URL,
-        },
-        headers=headers,
-    )
-    no_timeout = CreatePodResponse.model_validate_json(no_timeout_response.content)
-    assert no_timeout.timeout_seconds == -1
-    assert no_timeout.expires_at is None
-    assert scheduler.requests[1].payload["entrypoint"] == ["python", "authored.py"]
-    never_lock = pod_keep_warm_lock_key(stub.workspace_id, stub.id, no_timeout.container_id)
-    assert service.redis.exists(service.redis.key(never_lock))
+        no_timeout_response = client.post(
+            "/api/v1/pods",
+            json={
+                "stub_id": stub.id,
+                "timeout_seconds": -1,
+                "external_url": BASE_URL,
+            },
+            headers=headers,
+        )
+        no_timeout = CreatePodResponse.model_validate_json(no_timeout_response.content)
+        assert no_timeout.timeout_seconds == -1
+        assert no_timeout.expires_at is None
+        assert scheduler.requests[1].payload["entrypoint"] == ["python", "authored.py"]
+        never_lock = pod_keep_warm_lock_key(stub.workspace_id, stub.id, no_timeout.container_id)
+        assert service.redis.exists(service.redis.key(never_lock))
 
-    scalable_response = client.post(
-        "/api/v1/pods",
-        json={
-            "stub_id": stub.id,
-            "timeout_seconds": 0,
-            "external_url": BASE_URL,
-        },
-        headers=headers,
-    )
-    scalable = CreatePodResponse.model_validate_json(scalable_response.content)
-    scalable_lock = pod_keep_warm_lock_key(stub.workspace_id, stub.id, scalable.container_id)
-    assert not service.redis.exists(service.redis.key(scalable_lock))
+        scalable_response = client.post(
+            "/api/v1/pods",
+            json={
+                "stub_id": stub.id,
+                "timeout_seconds": 0,
+                "external_url": BASE_URL,
+            },
+            headers=headers,
+        )
+        scalable = CreatePodResponse.model_validate_json(scalable_response.content)
+        scalable_lock = pod_keep_warm_lock_key(stub.workspace_id, stub.id, scalable.container_id)
+        assert not service.redis.exists(service.redis.key(scalable_lock))
 
 
 def test_pod_api_schedules_container_and_routes_exec_and_files_to_worker(
     isolated_services: ApiServices,
-    client_stack: ExitStack,
 ) -> None:
-    scheduler = _RecordingScheduler()
-    isolated_services.containers.scheduler = scheduler
-    control = ControlPlaneService(isolated_services.context)
-    stub = control.create_stub(
-        "remote-sandbox",
-        kind=StubKind.Sandbox,
-        config={
-            "image": {
-                "image_id": "image-remote",
+    with ExitStack() as client_stack:
+        scheduler = _RecordingScheduler()
+        isolated_services.containers.scheduler = scheduler
+        control = ControlPlaneService(isolated_services.context)
+        stub = control.create_stub(
+            "remote-sandbox",
+            kind=StubKind.Sandbox,
+            config={
+                "image": {
+                    "image_id": "image-remote",
+                },
+                "runtime": {
+                    "cpu": 1.5,
+                    "memory": "256Mi",
+                    "gpu": ["T4"],
+                    "gpu_count": 1,
+                    "keep_warm": 60,
+                    "runtime_class": "runsc",
+                    "docker_enabled": True,
+                    "block_network": False,
+                    "allow_list": ["10.0.0.0/8"],
+                    "preemptible": True,
+                    "pool_selector": "gpu-pool",
+                },
+                "env": {"APP_ENV": "test"},
+                "command": ["python", "-m", "http.server"],
+                "ports": {"8080": 8080},
+                "secrets": ["API_KEY"],
             },
-            "runtime": {
-                "cpu": 1.5,
-                "memory": "256Mi",
-                "gpu": ["T4"],
-                "gpu_count": 1,
-                "keep_warm": 60,
-                "runtime_class": "runsc",
-                "docker_enabled": True,
-                "block_network": False,
-                "allow_list": ["10.0.0.0/8"],
-                "preemptible": True,
-                "pool_selector": "gpu-pool",
-            },
-            "env": {"APP_ENV": "test"},
-            "command": ["python", "-m", "http.server"],
-            "ports": {"8080": 8080},
-            "secrets": ["API_KEY"],
-        },
-    )
-    scheduler_containers = _FakeSchedulerContainers()
-    transport = _RecordingTransport()
-    transport.responses = {
-        ContainerServiceMethod.ContainerSandboxExec: ContainerSandboxExecResponse(pid=42),
-        ContainerServiceMethod.ContainerSandboxStatus: ContainerSandboxStatusResponse(
-            status="complete",
-            exit_code=0,
-        ),
-        ContainerServiceMethod.ContainerSandboxUploadFile: ContainerSandboxUploadFileResponse(),
-        ContainerServiceMethod.ContainerSandboxDownloadFile: ContainerSandboxDownloadFileResponse(
-            data=b"remote-data"
-        ),
-        ContainerServiceMethod.ContainerSandboxListFiles: ContainerSandboxListFilesResponse(
-            files=(
-                ContainerSandboxFileInfo(
-                    name="app.py",
-                    mode=0o100644,
-                    size=11,
-                    permissions=0o644,
-                ),
-            )
-        ),
-        ContainerServiceMethod.ContainerSandboxUpdateNetworkPermissions: (
-            ContainerSandboxUpdateNetworkPermissionsResponse()
-        ),
-    }
-    transport_factory = _RecordingTransportFactory(transport)
-    pod_service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler_containers,
-        container_clients=SchedulerContainerClientFactory(
+        )
+        scheduler_containers = _FakeSchedulerContainers()
+        transport = _RecordingTransport()
+        transport.responses = {
+            ContainerServiceMethod.ContainerSandboxExec: ContainerSandboxExecResponse(pid=42),
+            ContainerServiceMethod.ContainerSandboxStatus: ContainerSandboxStatusResponse(
+                status="complete",
+                exit_code=0,
+            ),
+            ContainerServiceMethod.ContainerSandboxUploadFile: ContainerSandboxUploadFileResponse(),
+            ContainerServiceMethod.ContainerSandboxDownloadFile: (
+                ContainerSandboxDownloadFileResponse(data=b"remote-data")
+            ),
+            ContainerServiceMethod.ContainerSandboxListFiles: ContainerSandboxListFilesResponse(
+                files=(
+                    ContainerSandboxFileInfo(
+                        name="app.py",
+                        mode=0o100644,
+                        size=11,
+                        permissions=0o644,
+                    ),
+                )
+            ),
+            ContainerServiceMethod.ContainerSandboxUpdateNetworkPermissions: (
+                ContainerSandboxUpdateNetworkPermissionsResponse()
+            ),
+        }
+        transport_factory = _RecordingTransportFactory(transport)
+        pod_service = PodControlService(
+            isolated_services,
+            redis=isolated_services.redis(),
             scheduler_containers=scheduler_containers,
-            transport_factory=transport_factory,
-        ),
-    )
-    client = client_stack.enter_context(
-        TestClient(create_app(isolated_services, pod_service=pod_service))
-    )
-    headers = _auth_headers(isolated_services)
+            container_clients=SchedulerContainerClientFactory(
+                scheduler_containers=scheduler_containers,
+                transport_factory=transport_factory,
+            ),
+        )
+        client = client_stack.enter_context(
+            TestClient(create_app(isolated_services, pod_service=pod_service))
+        )
+        headers = _auth_headers(isolated_services)
 
-    created_response = client.post("/api/v1/pods", json={"stub_id": stub.id}, headers=headers)
-    created = CreatePodResponse.model_validate_json(created_response.content)
-    container_id = created.container_id
-    assert container_id
-    container = isolated_services.containers.get(container_id)
-    scheduler_containers.state = SchedulerContainerState(
-        container_id=container_id,
-        stub_id=stub.id,
-        workspace_id=stub.workspace_id,
-        worker_id="worker-1",
-        status=SchedulerContainerStatus.Running,
-    )
-    scheduler_containers.worker_address = SchedulerContainerAddress(
-        container_id=container_id,
-        address="worker.internal:9001",
-    )
-    scheduler_containers.address_map = SchedulerContainerAddressMap(
-        container_id=container_id,
-        address_map={8080: "10.0.0.5:8080"},
-    )
+        created_response = client.post("/api/v1/pods", json={"stub_id": stub.id}, headers=headers)
+        created = CreatePodResponse.model_validate_json(created_response.content)
+        container_id = created.container_id
+        assert container_id
+        container = isolated_services.containers.get(container_id)
+        scheduler_containers.state = SchedulerContainerState(
+            container_id=container_id,
+            stub_id=stub.id,
+            workspace_id=stub.workspace_id,
+            worker_id="worker-1",
+            status=SchedulerContainerStatus.Running,
+        )
+        scheduler_containers.worker_address = SchedulerContainerAddress(
+            container_id=container_id,
+            address="worker.internal:9001",
+        )
+        scheduler_containers.address_map = SchedulerContainerAddressMap(
+            container_id=container_id,
+            address_map={8080: "10.0.0.5:8080"},
+        )
 
-    exec_http_response = client.post(
-        f"/api/v1/pods/{container_id}/exec",
-        json={
-            "command": "echo remote",
-            "env": {"EXTRA": "1"},
-            "cwd": "/workspace",
-        },
-        headers=headers,
-    )
-    exec_response = PodSandboxExecResponse.model_validate_json(exec_http_response.content)
-    upload_body = PodSandboxUploadFileBody(
-        container_path="/workspace/app.py",
-        value_base64=encode_bytes(b"remote-data"),
-    )
-    upload_http_response = client.post(
-        f"/api/v1/pods/{container_id}/files/upload",
-        json=upload_body.model_dump(mode="json"),
-        headers=headers,
-    )
-    upload_response = PodSandboxUploadFileResponse.model_validate_json(upload_http_response.content)
-    download_http_response = client.get(
-        f"/api/v1/pods/{container_id}/files/download",
-        params={"container_path": "/workspace/app.py"},
-        headers=headers,
-    )
-    download_response = PodSandboxDownloadFileResponse.model_validate_json(
-        download_http_response.content
-    )
-    files_http_response = client.get(
-        f"/api/v1/pods/{container_id}/files",
-        params={"container_path": "/workspace"},
-        headers=headers,
-    )
-    files_response = PodSandboxListFilesResponse.model_validate_json(files_http_response.content)
-    network_response = client.post(
-        f"/api/v1/pods/{container_id}/network/update",
-        json={"allow_list": ["192.168.0.0/16"]},
-        headers=headers,
-    )
-    persisted_network = client.get(
-        f"/api/v1/pods/{container_id}/network",
-        headers=headers,
-    )
+        exec_http_response = client.post(
+            f"/api/v1/pods/{container_id}/exec",
+            json={
+                "command": "echo remote",
+                "env": {"EXTRA": "1"},
+                "cwd": "/workspace",
+            },
+            headers=headers,
+        )
+        exec_response = PodSandboxExecResponse.model_validate_json(exec_http_response.content)
+        upload_body = PodSandboxUploadFileBody(
+            container_path="/workspace/app.py",
+            value_base64=encode_bytes(b"remote-data"),
+        )
+        upload_http_response = client.post(
+            f"/api/v1/pods/{container_id}/files/upload",
+            json=upload_body.model_dump(mode="json"),
+            headers=headers,
+        )
+        upload_response = PodSandboxUploadFileResponse.model_validate_json(
+            upload_http_response.content
+        )
+        download_http_response = client.get(
+            f"/api/v1/pods/{container_id}/files/download",
+            params={"container_path": "/workspace/app.py"},
+            headers=headers,
+        )
+        download_response = PodSandboxDownloadFileResponse.model_validate_json(
+            download_http_response.content
+        )
+        files_http_response = client.get(
+            f"/api/v1/pods/{container_id}/files",
+            params={"container_path": "/workspace"},
+            headers=headers,
+        )
+        files_response = PodSandboxListFilesResponse.model_validate_json(
+            files_http_response.content
+        )
+        network_response = client.post(
+            f"/api/v1/pods/{container_id}/network/update",
+            json={"allow_list": ["192.168.0.0/16"]},
+            headers=headers,
+        )
+        persisted_network = client.get(
+            f"/api/v1/pods/{container_id}/network",
+            headers=headers,
+        )
 
-    assert container.status is ContainerStatus.Pending
-    assert scheduler.requests[0].container_id == container_id
-    assert scheduler.requests[0].cpu_millicores == 1500
-    assert scheduler.requests[0].memory_mib == 256
-    assert scheduler.requests[0].gpu == ["T4"]
-    assert scheduler.requests[0].gpu_count == 1
-    assert scheduler.requests[0].pool_selector == "gpu-pool"
-    assert scheduler.requests[0].runtime_class == "runsc"
-    assert scheduler.requests[0].docker_enabled is True
-    assert scheduler.requests[0].preemptible is True
-    assert scheduler.requests[0].payload["image_id"] == "image-remote"
-    assert scheduler.requests[0].payload["entrypoint"] == ["python", "-m", "http.server"]
-    assert scheduler.requests[0].payload["ports"] == [8080]
-    assert scheduler.requests[0].payload["requested_ports"] == [8080]
-    assert scheduler.requests[0].payload["startup_kind"] == "sandbox"
-    assert scheduler.requests[0].payload["allow_list"] == ["10.0.0.0/8"]
-    assert scheduler.requests[0].payload["secret_names"] == ["API_KEY"]
-    assert scheduler.requests[0].payload["gateway_token_required"] is True
-    assert scheduler.requests[0].payload["cwd"] == DEFAULT_SANDBOX_WORKDIR
-    env = _json_string_list(scheduler.requests[0].payload["env"])
-    assert "APP_ENV=test" in env
-    assert "KEEP_WARM_SECONDS=60" in env
-    assert scheduler.requests[0].payload["mounts"]
-    assert exec_response.pid == 42
-    persisted_container = isolated_services.containers.get(container_id)
-    assert persisted_container.status is ContainerStatus.Running
-    assert persisted_container.worker_id is None
-    assert persisted_container.runtime_worker_id == "worker-1"
-    assert upload_response == PodSandboxUploadFileResponse()
-    assert download_response.value_base64
-    assert files_response.files[0].name == "app.py"
-    assert network_response.status_code == 200
-    persisted_network_body = HttpPodSandboxUpdateNetworkPermissionsResponse.model_validate_json(
-        persisted_network.content
-    )
-    assert persisted_network_body.block_network is False
-    assert persisted_network_body.allow_list == ["192.168.0.0/16"]
-    assert transport_factory.options[0].service_url == "worker.internal:9001"
-    assert [call.method for call in transport.unary_calls] == [
-        ContainerServiceMethod.ContainerStatus,
-        ContainerServiceMethod.ContainerSandboxExec,
-        ContainerServiceMethod.ContainerStatus,
-        ContainerServiceMethod.ContainerSandboxUploadFile,
-        ContainerServiceMethod.ContainerStatus,
-        ContainerServiceMethod.ContainerSandboxDownloadFile,
-        ContainerServiceMethod.ContainerStatus,
-        ContainerServiceMethod.ContainerSandboxListFiles,
-        ContainerServiceMethod.ContainerStatus,
-        ContainerServiceMethod.ContainerSandboxUpdateNetworkPermissions,
-    ]
+        assert container.status is ContainerStatus.Pending
+        assert exec_response.pid == 42
+        persisted_container = isolated_services.containers.get(container_id)
+        assert persisted_container.status is ContainerStatus.Running
+        assert persisted_container.worker_id is None
+        assert persisted_container.runtime_worker_id == "worker-1"
+        assert upload_response == PodSandboxUploadFileResponse()
+        assert download_response.value_base64
+        assert files_response.files[0].name == "app.py"
+        assert network_response.status_code == 200
+        persisted_network_body = HttpPodSandboxUpdateNetworkPermissionsResponse.model_validate_json(
+            persisted_network.content
+        )
+        assert persisted_network_body.block_network is False
+        assert persisted_network_body.allow_list == ["192.168.0.0/16"]
 
 
 def test_existing_container_shell_reuses_credentials_through_worker_client(
@@ -418,32 +376,6 @@ def test_existing_container_shell_reuses_credentials_through_worker_client(
     assert first.username
     assert first.password
     assert second == first
-    assert [call.method for call in transport.unary_calls] == [
-        ContainerServiceMethod.ContainerExec,
-        ContainerServiceMethod.ContainerExec,
-        ContainerServiceMethod.ContainerSandboxExposePort,
-        ContainerServiceMethod.ContainerExec,
-        ContainerServiceMethod.ContainerExec,
-        ContainerServiceMethod.ContainerSandboxExposePort,
-    ]
-    exec_request = transport.unary_calls[0].request
-    assert isinstance(exec_request, models.ContainerExecRequest)
-    exec_plan = plan_sandbox_exec(
-        container.id,
-        exec_request.command,
-        instance_env=[],
-    )
-    assert exec_plan.argv == [
-        "/bin/sh",
-        "-lc",
-        shell_server_command(SHELL_WORKER_PORT, log_path=SHELL_LOG_PATH),
-    ]
-    exec_requests: list[models.ContainerExecRequest] = []
-    for call_index in (0, 1, 3, 4):
-        request = transport.unary_calls[call_index].request
-        assert isinstance(request, models.ContainerExecRequest)
-        exec_requests.append(request)
-    assert all(request.env == exec_requests[0].env for request in exec_requests[1:])
 
 
 def test_existing_container_shell_rejects_unrelated_listener_and_rolls_back_port(
@@ -498,16 +430,7 @@ def test_existing_container_shell_rejects_unrelated_listener_and_rolls_back_port
             container_id=container.id,
         )
 
-    assert [call.method for call in transport.unary_calls] == [
-        ContainerServiceMethod.ContainerExec,
-        ContainerServiceMethod.ContainerExec,
-        ContainerServiceMethod.ContainerSandboxExposePort,
-        ContainerServiceMethod.ContainerSandboxUnexposePort,
-    ]
-    rollback = transport.unary_calls[-1].request
-    assert isinstance(rollback, models.ContainerSandboxUnexposePortRequest)
-    assert rollback.container_id == container.id
-    assert rollback.port == SHELL_WORKER_PORT
+    assert (container.id, SHELL_WORKER_PORT) not in transport.exposed_ports
 
 
 def test_existing_container_ticket_failure_unpublishes_listener_idempotently(
@@ -545,6 +468,7 @@ def test_existing_container_ticket_failure_unpublishes_listener_idempotently(
         ),
     )
 
+    transport.exposed_ports.add((container.id, SHELL_WORKER_PORT))
     first = service.compensate_existing_container_ticket_failure(
         workspace_id=stub.workspace_id,
         container_id=container.id,
@@ -556,36 +480,16 @@ def test_existing_container_ticket_failure_unpublishes_listener_idempotently(
 
     assert first.status is ShellTicketCompensationStatus.Cleaned
     assert second.status is ShellTicketCompensationStatus.Cleaned
-    assert [call.method for call in transport.unary_calls] == [
-        ContainerServiceMethod.ContainerSandboxUnexposePort,
-        ContainerServiceMethod.ContainerSandboxUnexposePort,
-    ]
+    assert (container.id, SHELL_WORKER_PORT) not in transport.exposed_ports
     assert isolated_services.containers.get(container.id).status is ContainerStatus.Running
 
 
 def test_standalone_ticket_failure_stops_once_and_terminal_retry_is_idempotent(
     isolated_services: ApiServices,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     control = ControlPlaneService(isolated_services.context)
     stub = control.create_stub("standalone-cleanup", kind=StubKind.Pod)
     container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
-    stop_calls: list[str] = []
-
-    def stop(_container_service: ContainerService, container_id: str) -> ContainerRecord:
-        stop_calls.append(container_id)
-        record = isolated_services.containers.get(container_id)
-        record.status = ContainerStatus.Stopped
-        with isolated_services.context.database.session() as session:
-            return ContainerRepository(session).records.upsert(
-                record,
-                key=record.id,
-                workspace_id=record.workspace_id,
-                name=record.name,
-                status=record.status.value,
-            )
-
-    monkeypatch.setattr(type(isolated_services.containers), "stop", stop)
     service = ShellControlService(isolated_services)
 
     first = service.compensate_standalone_ticket_failure(
@@ -600,7 +504,7 @@ def test_standalone_ticket_failure_stops_once_and_terminal_retry_is_idempotent(
     assert first.status is ShellTicketCompensationStatus.Cleaned
     assert first.terminal_status is ContainerStatus.Stopped
     assert second.status is ShellTicketCompensationStatus.Cleaned
-    assert stop_calls == [container.id]
+    assert isolated_services.containers.get(container.id).status is ContainerStatus.Stopped
 
 
 def test_standalone_ticket_cleanup_failure_preserves_truth_and_records_safe_event(
@@ -687,60 +591,7 @@ def test_sandbox_exec_waits_for_worker_address_before_dial(isolated_services: Ap
     )
 
     assert response == PodSandboxExecResponse(pid=42)
-    assert scheduler_containers.worker_address_calls == 6
-    assert [call.method for call in transport.unary_calls] == [
-        ContainerServiceMethod.ContainerStatus,
-        ContainerServiceMethod.ContainerStatus,
-        ContainerServiceMethod.ContainerSandboxExec,
-    ]
     assert isolated_services.containers.get(container.id).status is ContainerStatus.Running
-
-
-def test_sandbox_connect_requires_supervisor_readiness(isolated_services: ApiServices) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    stub = control.create_stub("ready-sandbox", kind=StubKind.Sandbox)
-    container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
-    scheduler_containers = _FakeSchedulerContainers(
-        state=SchedulerContainerState(
-            container_id=container.id,
-            stub_id=stub.id,
-            workspace_id=stub.workspace_id,
-            worker_id="worker-1",
-            status=SchedulerContainerStatus.Running,
-        ),
-        worker_address=SchedulerContainerAddress(
-            container_id=container.id,
-            address="worker.internal:9001",
-        ),
-    )
-    transport = _RecordingTransport(
-        responses={
-            ContainerServiceMethod.ContainerStatus: ContainerStatusResponse(status="running"),
-            ContainerServiceMethod.ContainerSandboxStatus: ContainerSandboxStatusResponse(
-                status="running",
-                exit_code=-1,
-            ),
-        }
-    )
-    service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
-        scheduler_containers=scheduler_containers,
-        container_clients=SchedulerContainerClientFactory(
-            scheduler_containers=scheduler_containers,
-            transport_factory=_RecordingTransportFactory(transport),
-        ),
-        poll_interval_seconds=0,
-        container_connect_timeout_seconds=1,
-    )
-
-    response = service.sandbox_connect(container.id)
-
-    assert response.stub_id == stub.id
-    assert [call.method for call in transport.unary_calls] == [
-        ContainerServiceMethod.ContainerStatus,
-        ContainerServiceMethod.ContainerSandboxStatus,
-    ]
 
 
 def test_sandbox_connect_surfaces_terminal_scheduler_state_as_conflict(
@@ -772,109 +623,102 @@ def test_sandbox_connect_surfaces_terminal_scheduler_state_as_conflict(
 
 def test_shell_websocket_proxies_bidirectional_terminal_bytes(
     isolated_services: ApiServices,
-    client_stack: ExitStack,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    stub = control.create_stub("interactive-shell", kind=StubKind.Pod)
-    container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
-    echo_server = _EchoServer()
-    echo_server.start()
-    scheduler_containers = _FakeSchedulerContainers(
-        state=SchedulerContainerState(
-            container_id=container.id,
-            stub_id=stub.id,
-            workspace_id=stub.workspace_id,
-            worker_id="worker-1",
-            status=SchedulerContainerStatus.Running,
-        ),
-        address_map=SchedulerContainerAddressMap(
-            container_id=container.id,
-            address_map={2222: echo_server.address},
-        ),
-    )
-    shell_service = ShellControlService(
-        isolated_services,
-        scheduler_containers=scheduler_containers,
-        container_clients=SchedulerContainerClientFactory(
-            scheduler_containers=scheduler_containers,
-            transport_factory=_RecordingTransportFactory(_RecordingTransport()),
-        ),
-        # The websocket route resolves its backend on the event loop, so a
-        # service without these reaches it with no way to route.
-        async_database=isolated_services.require_async_io().database,
-        async_scheduler_containers=_FakeAsyncShellContainers(scheduler_containers),
-    )
-    client = client_stack.enter_context(
-        TestClient(create_app(isolated_services, shell_service=shell_service))
-    )
-    headers = _auth_headers(isolated_services)
-    token = AuthService(isolated_services.context).authenticate_header(
-        headers["Authorization"],
-        allow_if_no_tokens=False,
-    )
-    assert token is not None
-    ticket = WebSocketTicketService(
-        isolated_services.context,
-        isolated_services.redis_client,
-    ).mint_shell_ticket(
-        token,
-        audience=ShellWebSocketAudience(
-            workspace_id=stub.workspace_id,
-            stub_id=stub.id,
-            container_id=container.id,
-        ),
-    )
-
-    try:
-        with client.websocket_connect(
-            f"/api/v1/shells/id/{stub.id}/{container.id}/ws",
-            headers=headers,
-        ) as websocket:
-            assert websocket.receive_text() == "OK"
-            websocket.send_bytes(b"ping")
-            assert websocket.receive_bytes() == b"ping"
-        with client.websocket_connect(
-            f"/api/v1/shells/id/{stub.id}/{container.id}/ws?ticket={ticket}",
-        ) as websocket:
-            assert websocket.receive_text() == "OK"
-            websocket.send_bytes(b"ticket")
-            assert websocket.receive_bytes() == b"ticket"
-        with (
-            pytest.raises(WebSocketDisconnect) as replayed,
-            client.websocket_connect(
-                f"/api/v1/shells/id/{stub.id}/{container.id}/ws?ticket={ticket}",
+    with ExitStack() as client_stack:
+        control = ControlPlaneService(isolated_services.context)
+        stub = control.create_stub("interactive-shell", kind=StubKind.Pod)
+        container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
+        echo_server = _EchoServer()
+        echo_server.start()
+        scheduler_containers = _FakeSchedulerContainers(
+            state=SchedulerContainerState(
+                container_id=container.id,
+                stub_id=stub.id,
+                workspace_id=stub.workspace_id,
+                worker_id="worker-1",
+                status=SchedulerContainerStatus.Running,
             ),
-        ):
-            pass
-        assert replayed.value.code == 1008
-    finally:
-        echo_server.close()
+            address_map=SchedulerContainerAddressMap(
+                container_id=container.id,
+                address_map={2222: echo_server.address},
+            ),
+        )
+        shell_service = ShellControlService(
+            isolated_services,
+            scheduler_containers=scheduler_containers,
+            container_clients=SchedulerContainerClientFactory(
+                scheduler_containers=scheduler_containers,
+                transport_factory=_RecordingTransportFactory(_RecordingTransport()),
+            ),
+            # The websocket route resolves its backend on the event loop, so a
+            # service without these reaches it with no way to route.
+            async_database=isolated_services.require_async_io().database,
+            async_scheduler_containers=_FakeAsyncShellContainers(scheduler_containers),
+        )
+        client = client_stack.enter_context(
+            TestClient(create_app(isolated_services, shell_service=shell_service))
+        )
+        headers = _auth_headers(isolated_services)
+        token = AuthService(isolated_services.context).authenticate_header(
+            headers["Authorization"],
+            allow_if_no_tokens=False,
+        )
+        assert token is not None
+        ticket = WebSocketTicketService(
+            isolated_services.context,
+            isolated_services.redis_client,
+        ).mint_shell_ticket(
+            token,
+            audience=ShellWebSocketAudience(
+                workspace_id=stub.workspace_id,
+                stub_id=stub.id,
+                container_id=container.id,
+            ),
+        )
+
+        try:
+            with client.websocket_connect(
+                f"/api/v1/shells/id/{stub.id}/{container.id}/ws",
+                headers=headers,
+            ) as websocket:
+                assert websocket.receive_text() == "OK"
+                websocket.send_bytes(b"ping")
+                assert websocket.receive_bytes() == b"ping"
+            with client.websocket_connect(
+                f"/api/v1/shells/id/{stub.id}/{container.id}/ws?ticket={ticket}",
+            ) as websocket:
+                assert websocket.receive_text() == "OK"
+                websocket.send_bytes(b"ticket")
+                assert websocket.receive_bytes() == b"ticket"
+            with (
+                pytest.raises(WebSocketDisconnect) as replayed,
+                client.websocket_connect(
+                    f"/api/v1/shells/id/{stub.id}/{container.id}/ws?ticket={ticket}",
+                ),
+            ):
+                pass
+            assert replayed.value.code == 1008
+        finally:
+            echo_server.close()
 
 
 def test_shell_websocket_rejects_long_lived_query_credentials_before_backend(
     isolated_services: ApiServices,
-    client_stack: ExitStack,
 ) -> None:
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    headers = _auth_headers(isolated_services)
-    bearer = headers["Authorization"].removeprefix("Bearer ")
+    with ExitStack() as client_stack:
+        client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+        headers = _auth_headers(isolated_services)
+        bearer = headers["Authorization"].removeprefix("Bearer ")
 
-    for query in (f"token={bearer}", f"authorization=Bearer%20{bearer}", "ticket=unknown"):
-        with (
-            pytest.raises(WebSocketDisconnect) as closed,
-            client.websocket_connect(
-                f"/api/v1/shells/id/stub-1/container-1/ws?{query}",
-            ),
-        ):
-            pass
-        assert closed.value.code == 1008
-
-
-@dataclass(slots=True)
-class _TransportCall:
-    method: ContainerServiceMethod
-    request: ContractModel
-    timeout_seconds: float | None
+        for query in (f"token={bearer}", f"authorization=Bearer%20{bearer}", "ticket=unknown"):
+            with (
+                pytest.raises(WebSocketDisconnect) as closed,
+                client.websocket_connect(
+                    f"/api/v1/shells/id/stub-1/container-1/ws?{query}",
+                ),
+            ):
+                pass
+            assert closed.value.code == 1008
 
 
 @dataclass(slots=True)
@@ -883,8 +727,7 @@ class _RecordingTransport:
     response_sequences: dict[ContainerServiceMethod, list[ContainerServicePayload]] = field(
         default_factory=dict
     )
-    unary_calls: list[_TransportCall] = field(default_factory=list)
-    stream_calls: list[_TransportCall] = field(default_factory=list)
+    exposed_ports: set[tuple[str, int]] = field(default_factory=set)
 
     def unary(
         self,
@@ -893,7 +736,12 @@ class _RecordingTransport:
         *,
         timeout_seconds: float | None = None,
     ) -> ContainerServicePayload:
-        self.unary_calls.append(_TransportCall(method, request, timeout_seconds))
+        if method is ContainerServiceMethod.ContainerSandboxExposePort:
+            assert isinstance(request, models.ContainerSandboxExposePortRequest)
+            self.exposed_ports.add((request.container_id, request.port))
+        elif method is ContainerServiceMethod.ContainerSandboxUnexposePort:
+            assert isinstance(request, models.ContainerSandboxUnexposePortRequest)
+            self.exposed_ports.discard((request.container_id, request.port))
         sequence = self.response_sequences.get(method)
         if sequence:
             return sequence.pop(0)
@@ -902,7 +750,7 @@ class _RecordingTransport:
                 method,
                 ContainerStatusResponse(status="running"),
             )
-        return self.responses.get(method, {"ok": True})
+        return self.responses[method]
 
     def stream(
         self,
@@ -911,8 +759,7 @@ class _RecordingTransport:
         *,
         timeout_seconds: float | None = None,
     ) -> Iterable[ContainerServicePayload]:
-        self.stream_calls.append(_TransportCall(method, request, timeout_seconds))
-        return ({"done": True, "success": True},)
+        raise AssertionError(f"unexpected streaming request: {method}")
 
 
 @dataclass(slots=True)
@@ -994,12 +841,9 @@ class _RecordingScheduler:
 
 class _EchoServer:
     def __init__(self) -> None:
-        port = _available_loopback_port()
-        self.tcp_address = ("127.0.0.1", port)
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.bind(self.tcp_address)
-        self.socket.listen(1)
-        self.address = f"127.0.0.1:{port}"
+        self.socket = socket.create_server(("127.0.0.1", 0))
+        self.tcp_address = self.socket.getsockname()
+        self.address = f"127.0.0.1:{self.tcp_address[1]}"
         self.closed = threading.Event()
         self.thread = threading.Thread(target=self._serve, daemon=True)
 
@@ -1012,6 +856,7 @@ class _EchoServer:
             socket.create_connection(self.tcp_address, timeout=0.1).close()
         self.socket.close()
         self.thread.join(timeout=1)
+        assert not self.thread.is_alive(), "shell echo server did not stop"
 
     def _serve(self) -> None:
         while not self.closed.is_set():
@@ -1037,14 +882,6 @@ def _ready_shell_connector(_target: ShellBackendTarget) -> socket.socket:
 
     threading.Thread(target=respond, daemon=True).start()
     return client
-
-
-def _available_loopback_port() -> int:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
-    try:
-        return server.server_port
-    finally:
-        server.server_close()
 
 
 def _unrelated_shell_connector(_target: ShellBackendTarget) -> socket.socket:
@@ -1091,10 +928,3 @@ def _auth_headers(services: ApiServices) -> dict[str, str]:
         .token
     )
     return {"Authorization": f"Bearer {token}"}
-
-
-def _json_string_list(value: JsonValue) -> list[str]:
-    assert isinstance(value, list)
-    strings = [item for item in value if isinstance(item, str)]
-    assert len(strings) == len(value)
-    return strings

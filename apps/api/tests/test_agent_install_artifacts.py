@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
+from agent.binary import AgentBinarySettings
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from fastapi.testclient import TestClient
 
 
-def _write_artifact(root: Path, version: str) -> None:
+def _write_artifact(root: Path, version: str) -> Path:
     version_root = root / version
     version_root.mkdir(parents=True, exist_ok=True)
-    (version_root / "lazycloud-agent-linux-amd64").write_bytes(b"\x7fELF agent binary")
+    path = version_root / "lazycloud-agent-linux-amd64"
+    path.write_bytes(b"\x7fELF agent binary")
+    return path
 
 
 def test_versioned_agent_download_serves_only_the_configured_release(
@@ -24,15 +29,26 @@ def test_versioned_agent_download_serves_only_the_configured_release(
     """
 
     configured_version = isolated_services.agent_binary_settings.binary_version
-    _write_artifact(tmp_path, configured_version)
+    artifact = _write_artifact(tmp_path, configured_version)
+    data = artifact.read_bytes()
     _write_artifact(tmp_path, "0.0.1-previous")
 
-    with TestClient(create_app(isolated_services)) as client:
+    services = replace(
+        isolated_services,
+        agent_binary_settings=AgentBinarySettings(
+            binary_dir=tmp_path,
+            binary_version=configured_version,
+            binary_sha256_by_arch={"amd64": sha256(data).hexdigest()},
+        ),
+    )
+    with TestClient(create_app(services)) as client:
         previous = client.get("/install/agent/0.0.1-previous/linux/amd64")
         current = client.get(f"/install/agent/{configured_version}/linux/amd64")
+        artifact.write_bytes(b"altered release bytes")
+        corrupted = client.get(f"/install/agent/{configured_version}/linux/amd64")
 
     assert previous.status_code == 404
     assert previous.json()["detail"] == "agent binary version not found"
-    # The configured version clears the version gate and is stopped only by the
-    # digest the release published, which this placeholder artifact does not have.
-    assert current.status_code == 503
+    assert current.status_code == 200
+    assert current.content == data
+    assert corrupted.status_code == 503

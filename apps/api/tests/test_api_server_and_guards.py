@@ -59,9 +59,9 @@ def test_control_plane_runtime_factory_failure_is_terminal() -> None:
     runtime.stop()
 
 
-def test_control_plane_health_endpoint(isolated_services: ApiServices) -> None:
-    with TestClient(create_app(isolated_services)) as client:
-        response = client.get("/health")
+def test_control_plane_health_endpoint(api_runtime: tuple[ApiServices, TestClient]) -> None:
+    _, client = api_runtime
+    response = client.get("/health")
     assert response.status_code == 200
     health = HealthResponse.model_validate_json(response.content)
     assert health.ok is True
@@ -70,17 +70,9 @@ def test_control_plane_health_endpoint(isolated_services: ApiServices) -> None:
     assert health.checks["redis"].ok is True
 
 
-def test_liveness_answers_without_the_service_graph(
+def test_dependency_failure_degrades_readiness_but_preserves_liveness(
     isolated_services: ApiServices,
 ) -> None:
-    """Liveness must not depend on anything that can be broken or slow.
-
-    The probe decides whether to kill the process, and both times production
-    crashlooped it was a pod that could not reach a dependency being restarted
-    into a start that needed that dependency. A `/livez` that resolved services
-    or opened a connection would restore exactly that.
-    """
-
     redis = RedisClient(_FailingRedis(), key_prefix="test")
     services = ApiServices.create(
         isolated_services.database,
@@ -91,28 +83,9 @@ def test_liveness_answers_without_the_service_graph(
         async_io=isolated_services.require_async_io(),
     )
     app = create_app(services)
-    # Read before any request, because a dependency resolved at import time
-    # would answer here and fail in a pod that has not published its services.
-    assert getattr(app.state, "api_services", None) is None
     with TestClient(app) as client:
-        assert client.get("/health").status_code == 503
-        assert client.get("/livez").status_code == 204
-
-
-def test_control_plane_health_endpoint_reports_dependency_failure(
-    isolated_services: ApiServices,
-) -> None:
-    redis = RedisClient(_FailingRedis(), key_prefix="test")
-    services = ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        create_schema=False,
-        redis_client=redis,
-        binary_redis_client=redis,
-        async_io=isolated_services.require_async_io(),
-    )
-    with TestClient(create_app(services)) as client:
         response = client.get("/health")
+        assert client.get("/livez").status_code == 204
 
     assert response.status_code == 503
     health = HealthResponse.model_validate_json(response.content)

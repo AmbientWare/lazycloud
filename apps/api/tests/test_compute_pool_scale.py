@@ -190,122 +190,122 @@ class _Resolver(ComputeProviderResolver):
 
 def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacity(
     isolated_services: ApiServices,
-    client_stack: ExitStack,
 ) -> None:
-    provider = _PooledProvider()
-    mutations = _CapacityOwnerMutations()
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(
-            provider,
-            ResolvedProviderPolicy(
-                workspace_id=workspace_id,
-                pool=MachinePool("aws"),
-                platform_fleet=False,
-                default_region=AWS_COMPUTE_CONFIGURATION.default_region,
-                allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
-                allowed_offers=(
-                    ProviderOfferEligibility(
-                        region="us-east-1",
-                        instance_type="m7i.large",
+    with ExitStack() as client_stack:
+        provider = _PooledProvider()
+        mutations = _CapacityOwnerMutations()
+        with isolated_services.context.database.session() as session:
+            workspace_id = isolated_services.context.default_workspace_id(session)
+        compute = ComputeService(
+            isolated_services.context,
+            provider_resolver=_Resolver(
+                provider,
+                ResolvedProviderPolicy(
+                    workspace_id=workspace_id,
+                    pool=MachinePool("aws"),
+                    platform_fleet=False,
+                    default_region=AWS_COMPUTE_CONFIGURATION.default_region,
+                    allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
+                    allowed_offers=(
+                        ProviderOfferEligibility(
+                            region="us-east-1",
+                            instance_type="m7i.large",
+                        ),
                     ),
                 ),
             ),
-        ),
-        pool_bootstrap_factory=_bootstrap,
-        capacity_owner_mutations=mutations,
-    )
-    services_with_compute = replace(isolated_services, compute=compute)
-    # The graph's warm-baseline owner has to reach the same capacity service the
-    # request path uses, or control-plane startup reconciles through a different one.
-    services_with_compute.workspace_compute_policy_service.aws_default_capacity = (
-        AwsDefaultCapacityBaseline(compute)
-    )
-    gateway = replace(
-        services_with_compute.gateway_service,
-        services=services_with_compute,
-        capacity_reservations=mutations,
-    )
-    services = replace(services_with_compute, gateway_service=gateway)
-    raw_token, _record = administrator_credential(isolated_services.context, "pool-scale")
-    client = client_stack.enter_context(TestClient(create_app(services)))
-    _seed_connection(isolated_services)
-    # Provisioned after the control plane started, as in production: startup
-    # reconciles the baseline every connected account asks for.
-    pool = compute.prepare_pooled_capacity(
-        workspace="default",
-        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
-        region="us-east-1",
-        desired_machines=1,
-        root_volume_gib=200,
-    )
-    headers = {"Authorization": f"Bearer {raw_token}"}
-    path = f"/api/v1/units/{pool.id}/scale"
-    owned_workspace(ControlPlaneService(isolated_services.context), "other")
+            pool_bootstrap_factory=_bootstrap,
+            capacity_owner_mutations=mutations,
+        )
+        services_with_compute = replace(isolated_services, compute=compute)
+        # The graph's warm-baseline owner has to reach the same capacity service the
+        # request path uses, or control-plane startup reconciles through a different one.
+        services_with_compute.workspace_compute_policy_service.aws_default_capacity = (
+            AwsDefaultCapacityBaseline(compute)
+        )
+        gateway = replace(
+            services_with_compute.gateway_service,
+            services=services_with_compute,
+            capacity_reservations=mutations,
+        )
+        services = replace(services_with_compute, gateway_service=gateway)
+        raw_token, _record = administrator_credential(isolated_services.context, "pool-scale")
+        client = client_stack.enter_context(TestClient(create_app(services)))
+        _seed_connection(isolated_services)
+        # Provisioned after the control plane started, as in production: startup
+        # reconciles the baseline every connected account asks for.
+        pool = compute.prepare_pooled_capacity(
+            workspace="default",
+            requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+            region="us-east-1",
+            desired_machines=1,
+            root_volume_gib=200,
+        )
+        headers = {"Authorization": f"Bearer {raw_token}"}
+        path = f"/api/v1/units/{pool.id}/scale"
+        owned_workspace(ControlPlaneService(isolated_services.context), "other")
 
-    cross_workspace = client.put(
-        f"{path}?workspace=other",
-        headers=headers,
-        json={"desired_machines": 0},
-    )
-    invalid = client.put(
-        path,
-        headers=headers,
-        json={"desired_machines": -1},
-    )
-    mutations.open_reservations = True
-    blocked = client.put(
-        path,
-        headers=headers,
-        json={"desired_machines": 0},
-    )
-    mutations.open_reservations = False
-    first = client.put(
-        path,
-        headers=headers,
-        json={"desired_machines": 0},
-    )
-    repeated = client.put(
-        path,
-        headers=headers,
-        json={"desired_machines": 0},
-    )
-    state = client.get(f"/api/v1/units/{pool.id}/state", headers=headers)
-    cross_workspace_state = client.get(
-        f"/api/v1/units/{pool.id}/state?workspace=other",
-        headers=headers,
-    )
+        cross_workspace = client.put(
+            f"{path}?workspace=other",
+            headers=headers,
+            json={"desired_machines": 0},
+        )
+        invalid = client.put(
+            path,
+            headers=headers,
+            json={"desired_machines": -1},
+        )
+        mutations.open_reservations = True
+        blocked = client.put(
+            path,
+            headers=headers,
+            json={"desired_machines": 0},
+        )
+        mutations.open_reservations = False
+        first = client.put(
+            path,
+            headers=headers,
+            json={"desired_machines": 0},
+        )
+        repeated = client.put(
+            path,
+            headers=headers,
+            json={"desired_machines": 0},
+        )
+        state = client.get(f"/api/v1/units/{pool.id}/state", headers=headers)
+        cross_workspace_state = client.get(
+            f"/api/v1/units/{pool.id}/state?workspace=other",
+            headers=headers,
+        )
 
-    assert cross_workspace.status_code == 404
-    assert invalid.status_code == 422
-    assert blocked.status_code == 409
-    assert blocked.json() == {
-        "detail": f"compute pool {pool.name!r} has active capacity reservations",
-        "code": "conflict",
-    }
-    assert first.status_code == 200, first.text
-    assert repeated.status_code == 200, repeated.text
-    assert state.status_code == 200, state.text
-    assert cross_workspace_state.status_code == 404
-    expected = UnitScaleResponse(
-        id=pool.id,
-        name=pool.name,
-        desired_machines=0,
-        max_machines=pool.max_machines,
-        observed_machines=0,
-        phase=ComputeUnitPhase.Ready,
-        status=ComputeUnitPhase.Ready.value,
-    )
-    assert UnitScaleResponse.model_validate_json(first.content) == expected
-    assert UnitScaleResponse.model_validate_json(repeated.content) == expected
-    assert UnitScaleResponse.model_validate_json(state.content) == expected
-    with isolated_services.context.database.session() as session:
-        stored = ComputeUnitRepository(session).get_by_name(workspace_id, pool.name)
-    assert stored is not None
-    assert stored.desired_machines == 0
-    assert stored.observed_machines == 0
+        assert cross_workspace.status_code == 404
+        assert invalid.status_code == 422
+        assert blocked.status_code == 409
+        assert blocked.json() == {
+            "detail": f"compute pool {pool.name!r} has active capacity reservations",
+            "code": "conflict",
+        }
+        assert first.status_code == 200, first.text
+        assert repeated.status_code == 200, repeated.text
+        assert state.status_code == 200, state.text
+        assert cross_workspace_state.status_code == 404
+        expected = UnitScaleResponse(
+            id=pool.id,
+            name=pool.name,
+            desired_machines=0,
+            max_machines=pool.max_machines,
+            observed_machines=0,
+            phase=ComputeUnitPhase.Ready,
+            status=ComputeUnitPhase.Ready.value,
+        )
+        assert UnitScaleResponse.model_validate_json(first.content) == expected
+        assert UnitScaleResponse.model_validate_json(repeated.content) == expected
+        assert UnitScaleResponse.model_validate_json(state.content) == expected
+        with isolated_services.context.database.session() as session:
+            stored = ComputeUnitRepository(session).get_by_name(workspace_id, pool.name)
+        assert stored is not None
+        assert stored.desired_machines == 0
+        assert stored.observed_machines == 0
 
 
 def _seed_connection(services: ApiServices) -> str:

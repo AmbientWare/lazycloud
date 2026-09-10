@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -17,13 +16,6 @@ from shared.env import (
     WORKSPACE_ID_ENV,
     WORKSPACE_NAME_ENV,
 )
-
-
-@pytest.fixture(autouse=True)
-def reset_config_settings_cache() -> Iterator[None]:
-    reset_settings_cache()
-    yield
-    reset_settings_cache()
 
 
 @pytest.mark.parametrize(

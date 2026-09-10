@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -20,17 +19,14 @@ from typer.testing import CliRunner
 
 
 @pytest.fixture(autouse=True)
-def reset_config_settings_cache(
+def login_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> Iterator[None]:
+) -> None:
     monkeypatch.delenv("LAZYCLOUD_ENDPOINT", raising=False)
     monkeypatch.delenv("LAZYCLOUD_TOKEN", raising=False)
-    monkeypatch.delenv("LAZYCLOUD_HOME", raising=False)
     monkeypatch.delenv("LAZYCLOUD_CONFIG", raising=False)
     monkeypatch.chdir(tmp_path)
-    reset_settings_cache()
-    yield
     reset_settings_cache()
 
 

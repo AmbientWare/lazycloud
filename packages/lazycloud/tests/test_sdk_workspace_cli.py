@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -68,14 +67,12 @@ class _WorkspaceClient:
 def isolated_profile(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> Iterator[None]:
+) -> None:
     monkeypatch.setenv("LAZYCLOUD_HOME", str(tmp_path / "state"))
     monkeypatch.delenv("LAZYCLOUD_ENDPOINT", raising=False)
     monkeypatch.delenv("LAZYCLOUD_PROFILE", raising=False)
     monkeypatch.delenv("LAZYCLOUD_TOKEN", raising=False)
     monkeypatch.delenv("LAZYCLOUD_WORKSPACE", raising=False)
-    reset_settings_cache()
-    yield
     reset_settings_cache()
 
 

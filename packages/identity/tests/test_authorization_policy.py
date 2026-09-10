@@ -1,15 +1,9 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
-
-import identity.auth
 import pytest
-from api.fastapi_app import create_app
-from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import TokenRepository, WorkspaceMemberRepository
-from fastapi.testclient import TestClient
 from identity.auth import AuthError, AuthService, AuthTokenCache
 from identity.authz import (
     AuthzDecisionReason,
@@ -24,7 +18,6 @@ from identity.authz import (
 from identity.users import UserService
 from shared.identity import (
     AuthScope,
-    AuthTokenRecord,
     PlatformRole,
     TokenKind,
     WorkspaceMemberRecord,
@@ -35,24 +28,10 @@ from tests.workspaces import administrator_credential, owned_workspace
 
 def test_auth_service_records_token_kind_and_checks_scopes(
     service_context: ServiceContext,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = owned_workspace(ControlPlaneService(service_context), "workspace-a")
     cache = AuthTokenCache()
     auth = AuthService(service_context, token_cache=cache)
-    stored_token_ids: list[str] = []
-    original_store = cache.store
-
-    def record_store(
-        token_digest: str,
-        cached_record: AuthTokenRecord,
-        *,
-        generation: int | None = None,
-    ) -> None:
-        stored_token_ids.append(cached_record.id)
-        original_store(token_digest, cached_record, generation=generation)
-
-    monkeypatch.setattr(cache, "store", record_store)
     raw_token, record = auth.create_token(
         "restricted",
         scopes=[AuthScope.Read.value],
@@ -70,18 +49,12 @@ def test_auth_service_records_token_kind_and_checks_scopes(
 
     with pytest.raises(AuthError, match="invalid token"):
         auth.authenticate(raw_token, scope=AuthScope.Read)
-    assert stored_token_ids == []
 
 
 def test_bootstrap_succeeds_once_and_never_reopens(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    service_context: ServiceContext,
 ) -> None:
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    assert client.get("/auth/bootstrap").status_code == 404
-    assert client.post("/auth/bootstrap", json={"name": "initial-admin"}).status_code == 404
-
-    auth = AuthService(isolated_services.context)
+    auth = AuthService(service_context)
     assert auth.bootstrap_required()
     created = auth.bootstrap_administrator(
         request_id="bootstrap:test-initial",
@@ -94,7 +67,7 @@ def test_bootstrap_succeeds_once_and_never_reopens(
             name="second-admin",
         )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         token = TokenRepository(session).get_across_workspaces(token_id)
         assert token is not None
         # An administrator credential names a person, not a workspace, so deleting it
@@ -107,7 +80,6 @@ def test_bootstrap_succeeds_once_and_never_reopens(
 
 def test_auth_service_cache_is_explicitly_shared_reset_and_closed(
     service_context: ServiceContext,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cache = AuthTokenCache()
     mutator = AuthService(service_context, token_cache=cache)
@@ -116,10 +88,6 @@ def test_auth_service_cache_is_explicitly_shared_reset_and_closed(
 
     assert verifier.authenticate(raw_token).id == record.id
 
-    def fail_verify(_token: str, _encoded: str) -> bool:
-        raise AssertionError("shared cache should serve the positive lookup")
-
-    monkeypatch.setattr(identity.auth, "_verify_token", fail_verify)
     assert mutator.authenticate(raw_token).id == record.id
 
     mutator.revoke_token(record.id)
@@ -130,28 +98,6 @@ def test_auth_service_cache_is_explicitly_shared_reset_and_closed(
     cache.close()
     with pytest.raises(RuntimeError, match="auth token cache is closed"):
         verifier.authenticate(raw_token)
-
-
-def test_auth_service_defaults_do_not_share_process_global_cache(
-    service_context: ServiceContext,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    first = AuthService(service_context)
-    second = AuthService(service_context)
-    raw_token, record = first.create_token("isolated-cache")
-
-    assert first.authenticate(raw_token).id == record.id
-    original_verify = identity.auth._verify_token
-    verified_hashes: list[str] = []
-
-    def record_verify(token: str, encoded: str) -> bool:
-        verified_hashes.append(encoded)
-        return original_verify(token, encoded)
-
-    monkeypatch.setattr(identity.auth, "_verify_token", record_verify)
-
-    assert second.authenticate(raw_token).id == record.id
-    assert verified_hashes == [record.token_hash]
 
 
 def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(

@@ -15,7 +15,7 @@ from database.repositories.billing_rates import (
 )
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from observability.usage import UsageService
-from shared.billing_quotes import ContainerShape, LedgerComponent
+from shared.billing_quotes import BYTES_PER_GIB, ContainerShape, LedgerComponent
 from shared.billing_rate_card import (
     PUBLISHED_METERED_RATE_HISTORY,
     STORED_RATE_STEP,
@@ -184,6 +184,16 @@ def test_published_cutovers_match_stored_quotes(
             for moment in (card.effective_at - timedelta(seconds=1), card.effective_at)
         ):
             catalog = pricing_catalog_response(at=at)
+            storage_quotes = PlatformRateRepository(session).quotes_for(
+                component=LedgerComponent.VolumeStorage,
+                started_at=at,
+                ended_at=at + timedelta(seconds=1),
+            )
+            assert len(storage_quotes) == 1
+            monthly_units = BYTES_PER_GIB * catalog.platform_rate.storage_month_seconds
+            quoted = Decimal(catalog.platform_rate.nanos_per_volume_gib_month)
+            charged = storage_quotes[0].rate_nanos_per_unit * monthly_units
+            assert Decimal(0) <= quoted - charged < STORED_RATE_STEP * monthly_units
             assert all(placement.effective_at <= at for placement in catalog.placement_rates)
             for placement in catalog.placement_rates:
                 selected = next(

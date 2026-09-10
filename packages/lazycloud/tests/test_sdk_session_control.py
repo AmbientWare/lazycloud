@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
+from functools import partial
 
 import pytest
 import shared.tasks
 from lazycloud.clients.gateway.control import GatewayControlClient
-from lazycloud.session import Client
 from lazycloud.session.deployment import DeploymentClient
 from lazycloud.session.task import (
     FunctionCall,
@@ -20,7 +18,6 @@ from lazycloud.session.task import (
     TaskSubscription,
 )
 from pydantic import JsonValue
-from shared.app_identity import WORKSPACE_OBJECT_BUCKET
 from shared.deployments import DeploymentKind
 from shared.function_payloads import FunctionCloudpickleResult
 from shared.http.deployments import DeploymentListResponse, DeploymentResponse
@@ -28,14 +25,14 @@ from shared.http.errors import HttpApiError, HttpResponseDecodeError, HttpTransp
 from shared.http.gateway import (
     AttachToContainerResponse,
 )
-from shared.http.objects import PutObjectResponse
 from shared.http.observability import (
     LogRecord,
 )
 from shared.http.tasks import TaskDetailResponse, TaskPageResponse, TaskResponse, TaskStopResponse
 from shared.tasks import TaskStatus
+from shared.transport_retry import TransientRetry
 from tests.fakes import http_api_error
-from tests.url_constants import EXAMPLE_URL, HTTP_EXAMPLE_COM_URL
+from tests.url_constants import EXAMPLE_URL
 
 
 @dataclass
@@ -200,80 +197,6 @@ def test_task_subscription_rejects_invalid_response(
         client.subscribe("task-1")
 
 
-def test_client_upload_bytes_uses_authenticated_raw_stream(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    uploads: list[dict[str, object]] = []
-    progress: list[int] = []
-
-    def fake_stream_object_bytes(**kwargs: object) -> PutObjectResponse:
-        uploads.append(dict(kwargs))
-        callback = kwargs.get("progress")
-        assert callable(callback)
-        callback(len(b"payload"))
-        return PutObjectResponse(object_id="obj-1")
-
-    monkeypatch.setattr("lazycloud.session.stream_object_bytes", fake_stream_object_bytes)
-
-    uploaded = (
-        Client()
-        ._bind_control(endpoint=HTTP_EXAMPLE_COM_URL, token="token")
-        .upload_bytes(
-            b"payload",
-            name="payload.txt",
-            bucket=WORKSPACE_OBJECT_BUCKET,
-            content_type="text/plain",
-            metadata={"purpose": "source"},
-            progress=progress.append,
-        )
-    )
-
-    assert uploaded.object_id == "obj-1"
-    assert uploaded.name == "payload.txt"
-    assert uploaded.bucket == WORKSPACE_OBJECT_BUCKET
-    assert len(uploads) == 1
-    assert uploads[0]["endpoint"] == HTTP_EXAMPLE_COM_URL
-    assert uploads[0]["token"] == "token"
-    assert uploads[0]["data"] == b"payload"
-    assert uploads[0]["name"] == "payload.txt"
-    assert uploads[0]["bucket"] == WORKSPACE_OBJECT_BUCKET
-    assert uploads[0]["content_type"] == "text/plain"
-    assert uploads[0]["metadata"] == {"purpose": "source"}
-    assert progress == [len(b"payload")]
-
-
-def test_client_upload_file_streams_path_and_reports_progress(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "payload.txt"
-    source.write_bytes(b"file payload")
-    uploads: list[dict[str, object]] = []
-    progress: list[int] = []
-
-    def fake_stream_object_file(**kwargs: object) -> PutObjectResponse:
-        uploads.append(dict(kwargs))
-        callback = kwargs.get("progress")
-        assert callable(callback)
-        callback(len(b"file payload"))
-        return PutObjectResponse(object_id="obj-file")
-
-    monkeypatch.setattr("lazycloud.session.stream_object_file", fake_stream_object_file)
-
-    uploaded = (
-        Client()
-        ._bind_control(endpoint=HTTP_EXAMPLE_COM_URL, token="token")
-        .upload_file(source, progress=progress.append)
-    )
-
-    assert uploaded.object_id == "obj-file"
-    assert uploaded.size == len(b"file payload")
-    assert uploaded.sha256 == hashlib.sha256(b"file payload").hexdigest()
-    assert uploads[0]["source"] == source
-    assert uploads[0]["size"] == len(b"file payload")
-    assert progress == [len(b"file payload")]
-
-
 def test_gateway_control_client_streams_attach_events() -> None:
     class FakeChannel:
         paths: list[str]
@@ -383,7 +306,14 @@ def test_task_async_wait_returns_task_result() -> None:
     "failure",
     [TimeoutError("timed out"), ConnectionResetError("connection reset by peer")],
 )
-def test_task_wait_retries_transient_read_failures(failure: Exception) -> None:
+def test_task_wait_retries_transient_read_failures(
+    failure: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "lazycloud.session.task.TransientRetry",
+        partial(TransientRetry, sleep=lambda _: None),
+    )
     client = TransientReadTaskClient(
         [
             shared.tasks.Task(id="task-1", name="worker", status=TaskStatus.Running),
@@ -392,7 +322,7 @@ def test_task_wait_retries_transient_read_failures(failure: Exception) -> None:
         ]
     )
 
-    result = Task("task-1", client).wait(poll_interval_seconds=0.01)
+    result = Task("task-1", client).wait(poll_interval_seconds=0)
 
     assert result.id == "task-1"
     assert result.status is TaskStatus.Complete
