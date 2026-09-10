@@ -29,8 +29,9 @@ dates.
 The pricing page lists base rates for automatic placement. LazyCloud chooses
 where the workload runs, and workloads allow interruptions. These rates have
 no regional surcharge. The hour/second toggle changes the displayed unit;
-compute is always metered per second. Displayed prices round to two decimals;
-positive amounts below one cent show as `<$0.01`. Billing uses the full rate.
+compute is always metered per second. Hourly prices show up to four decimals.
+Per-second prices show up to six decimals for GPUs and eight for CPU and memory.
+Billing uses the full rate before display rounding.
 
 One CPU is one vCPU and matches `cpu=1` in a workload definition. CPU and memory
 are each billed at the greater of the reserved amount and measured usage.
