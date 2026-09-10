@@ -19,10 +19,9 @@ import { fetchArtifactBlob } from "@/lib/queries/artifacts";
 import type { ArtifactSummary } from "@/lib/api/schemas";
 
 export function ArtifactDeletionTime({ artifact }: { artifact: ArtifactSummary }) {
-  const now = useLiveNow(Boolean(artifact.expires_at));
+  const now = useLiveNow(true);
   if (artifact.deletion_failed) return <span className="text-destructive">Deletion failed</span>;
   if (artifact.deleting) return <span>Deleting…</span>;
-  if (!artifact.expires_at) return <span>No scheduled deletion</span>;
   const date = new Date(artifact.expires_at);
   return (
     <time dateTime={artifact.expires_at} title={exactTime(artifact.expires_at)}>
@@ -175,11 +174,9 @@ export function ArtifactRow({
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const now = useLiveNow(Boolean(artifact.expires_at));
+  const now = useLiveNow(true);
   const kind = previewKind(artifact.content_type);
-  const unavailable =
-    artifact.deleting ||
-    (artifact.expires_at !== null && new Date(artifact.expires_at).getTime() <= now);
+  const unavailable = artifact.deleting || new Date(artifact.expires_at).getTime() <= now;
   const FileIcon = kind === "image" ? FileImage : kind === "text" ? FileText : File;
 
   async function download(): Promise<void> {

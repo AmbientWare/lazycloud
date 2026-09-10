@@ -40,7 +40,7 @@ export const planEntitlementsSchema = z
     connected_cloud: z.boolean(),
     custom_domains: z.boolean(),
     self_hosted: z.boolean(),
-    log_retention_days: z.number().int().positive(),
+    retention_days: z.number().int().positive(),
     region_selection: z.boolean(),
   })
   .strict();

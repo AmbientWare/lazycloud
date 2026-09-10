@@ -796,6 +796,7 @@ name = "execution"
 version = "0.1.0"
 source = { editable = "packages/execution" }
 dependencies = [
+    { name = "billing" },
     { name = "cloudpickle" },
     { name = "compute" },
     { name = "control" },
@@ -814,6 +815,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "billing", editable = "packages/billing" },
     { name = "cloudpickle", specifier = ">=3,<4" },
     { name = "compute", editable = "packages/compute" },
     { name = "control", editable = "packages/control" },
@@ -1436,6 +1438,7 @@ name = "observability"
 version = "0.1.0"
 source = { editable = "packages/observability" }
 dependencies = [
+    { name = "billing" },
     { name = "coordination" },
     { name = "database" },
     { name = "lazycloud-shared" },
@@ -1448,6 +1451,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "billing", editable = "packages/billing" },
     { name = "coordination", editable = "packages/coordination" },
     { name = "database", editable = "packages/database" },
     { name = "lazycloud-shared", editable = "packages/shared" },

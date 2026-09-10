@@ -6,22 +6,16 @@ from uuid import UUID
 from execution.artifacts.service import ArtifactStorageService
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
-from shared.artifacts import InheritRetention
 from shared.http.artifacts import (
     ArtifactListResponse,
     ArtifactPublicUrlRequest,
     ArtifactPublicUrlResponse,
-    ArtifactRetentionPolicy,
-    ArtifactRetentionPreview,
-    ArtifactRetentionSelection,
-    ArtifactRetentionUpdate,
     ArtifactSaveBody,
     ArtifactSaveResponse,
     ArtifactStat,
     ArtifactStatRequest,
     ArtifactStatResponse,
     ArtifactStorageSummary,
-    ArtifactSummary,
 )
 from shared.http_headers import INLINE_RENDERABLE_CONTENT_TYPES, content_disposition
 
@@ -44,9 +38,6 @@ def save_artifact(
         filename=request.filename,
         content=request.bytes_value(),
         content_type=request.content_type,
-        retention_seconds=request.retention_seconds
-        if "retention_seconds" in request.model_fields_set
-        else InheritRetention.Workspace,
     )
 
 
@@ -81,49 +72,6 @@ def artifact_storage_summary(
     workspace_id: read_workspace, service: ArtifactStorageService = Depends(artifact_service)
 ) -> ArtifactStorageSummary:
     return service.summary(workspace_id=workspace_id)
-
-
-@router.put("/retention", operation_id="set_artifact_retention")
-def set_artifact_retention(
-    request: ArtifactRetentionUpdate,
-    workspace_id: write_workspace,
-    service: ArtifactStorageService = Depends(artifact_service),
-) -> ArtifactRetentionPolicy:
-    return service.set_workspace_retention(
-        workspace_id=workspace_id, retention_seconds=request.retention_seconds
-    )
-
-
-@router.post("/retention/preview", operation_id="preview_artifact_retention")
-def preview_artifact_retention(
-    request: ArtifactRetentionSelection,
-    workspace_id: read_workspace,
-    service: ArtifactStorageService = Depends(artifact_service),
-) -> ArtifactRetentionPreview:
-    return service.retention_selection(workspace_id=workspace_id, request=request)
-
-
-@router.post("/retention/apply", operation_id="apply_artifact_retention")
-def apply_artifact_retention(
-    request: ArtifactRetentionSelection,
-    workspace_id: write_workspace,
-    service: ArtifactStorageService = Depends(artifact_service),
-) -> ArtifactRetentionPreview:
-    return service.retention_selection(workspace_id=workspace_id, request=request, apply=True)
-
-
-@router.patch("/{artifact_id}/retention", operation_id="update_artifact_retention")
-def update_artifact_retention(
-    artifact_id: UUID,
-    request: ArtifactRetentionUpdate,
-    workspace_id: write_workspace,
-    service: ArtifactStorageService = Depends(artifact_service),
-) -> ArtifactSummary:
-    return service.update_retention(
-        workspace_id=workspace_id,
-        artifact_id=str(artifact_id),
-        retention_seconds=request.retention_seconds,
-    )
 
 
 @router.delete("/{artifact_id}", status_code=204, operation_id="delete_artifact")

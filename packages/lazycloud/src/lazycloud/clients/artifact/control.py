@@ -5,22 +5,16 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from pydantic import JsonValue
-from shared.artifacts import InheritRetention
 from shared.bytes_transport import encode_bytes
 from shared.http.artifacts import (
     ArtifactListResponse,
     ArtifactPublicUrlRequest,
     ArtifactPublicUrlResponse,
-    ArtifactRetentionPolicy,
-    ArtifactRetentionPreview,
-    ArtifactRetentionSelection,
-    ArtifactRetentionUpdate,
     ArtifactSaveBody,
     ArtifactSaveResponse,
     ArtifactStatRequest,
     ArtifactStatResponse,
     ArtifactStorageSummary,
-    ArtifactSummary,
 )
 from shared.http_transport import HttpChannel
 
@@ -28,8 +22,6 @@ from shared.http_transport import HttpChannel
 class ArtifactControlChannel(Protocol):
     def post(self, path: str, payload: Mapping[str, JsonValue] | None = None) -> JsonValue: ...
     def get(self, path: str) -> JsonValue: ...
-    def patch(self, path: str, payload: Mapping[str, JsonValue] | None = None) -> JsonValue: ...
-    def put(self, path: str, payload: Mapping[str, JsonValue] | None = None) -> JsonValue: ...
     def delete(self, path: str) -> JsonValue: ...
 
 
@@ -59,7 +51,6 @@ class ArtifactControlClient:
         content: bytes,
         *,
         content_type: str = "application/octet-stream",
-        retention_seconds: int | InheritRetention | None = InheritRetention.Workspace,
     ) -> ArtifactSaveResponse:
         body = ArtifactSaveBody(
             task_id=task_id,
@@ -67,8 +58,6 @@ class ArtifactControlClient:
             content_type=content_type,
             value_base64=encode_bytes(content),
         )
-        if not isinstance(retention_seconds, InheritRetention):
-            body.retention_seconds = retention_seconds
         return ArtifactSaveResponse.model_validate(
             self.channel.post(
                 self._path("save"),
@@ -83,7 +72,6 @@ class ArtifactControlClient:
         chunks: Iterable[bytes],
         *,
         content_type: str = "application/octet-stream",
-        retention_seconds: int | InheritRetention | None = InheritRetention.Workspace,
     ) -> ArtifactSaveResponse:
         content = b"".join(chunks)
         return self.save(
@@ -91,17 +79,10 @@ class ArtifactControlClient:
             filename,
             content,
             content_type=content_type,
-            retention_seconds=retention_seconds,
         )
 
     def delete(self, artifact_id: str) -> None:
         self.channel.delete(self._path(artifact_id))
-
-    def update_retention(self, artifact_id: str, retention_seconds: int | None) -> ArtifactSummary:
-        body = ArtifactRetentionUpdate(retention_seconds=retention_seconds)
-        return ArtifactSummary.model_validate(
-            self.channel.patch(self._path(f"{artifact_id}/retention"), body.model_dump(mode="json"))
-        )
 
     def list(
         self, *, task_id: str | None = None, search: str = "", cursor: str = ""
@@ -120,21 +101,6 @@ class ArtifactControlClient:
 
     def summary(self) -> ArtifactStorageSummary:
         return ArtifactStorageSummary.model_validate(self.channel.get(self._path("summary")))
-
-    def set_workspace_retention(self, retention_seconds: int | None) -> ArtifactRetentionPolicy:
-        body = ArtifactRetentionUpdate(retention_seconds=retention_seconds)
-        return ArtifactRetentionPolicy.model_validate(
-            self.channel.put(self._path("retention"), body.model_dump(mode="json"))
-        )
-
-    def apply_retention(
-        self, ids: list[str], retention_seconds: int | None, *, apply: bool = False
-    ) -> ArtifactRetentionPreview:
-        body = ArtifactRetentionSelection(ids=ids, retention_seconds=retention_seconds)
-        suffix = "apply" if apply else "preview"
-        return ArtifactRetentionPreview.model_validate(
-            self.channel.post(self._path(f"retention/{suffix}"), body.model_dump(mode="json"))
-        )
 
     def stat(self, artifact_id: str, task_id: str, filename: str) -> ArtifactStatResponse:
         return self.artifact_stat(
