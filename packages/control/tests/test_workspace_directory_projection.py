@@ -1,21 +1,21 @@
 from __future__ import annotations
 
-from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from shared.identity import WorkspaceStatus
 from tests.domain_fixtures import owned_workspace
 
 
 def test_workspace_directory_projects_active_deleting_and_deleted_lifecycles(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     active = owned_workspace(control, "projection-active")
     deleting = owned_workspace(control, "projection-deleting")
     deleted = owned_workspace(control, "projection-deleted")
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = WorkspaceRepository(session)
         deleting_record = repository.get(deleting.id)
         deleted_record = repository.get(deleted.id)

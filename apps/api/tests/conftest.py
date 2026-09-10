@@ -35,7 +35,7 @@ def client_stack() -> Iterator[ExitStack]:
 @pytest.fixture
 def isolated_services(
     tmp_path: Path,
-    database: DatabaseClient,
+    workspace_database: DatabaseClient,
     real_redis_actors: RealRedisActors,
 ) -> Iterator[ApiServices]:
     redis = real_redis_actors.client()
@@ -43,7 +43,7 @@ def isolated_services(
     maps = RedisMapService(binary_redis)
     simple_queues = RedisSimpleQueueService(binary_redis)
     async_io = ApiAsyncIo.from_settings(
-        database.settings,
+        workspace_database.settings,
         RedisSettings(
             url=real_redis_actors.url,
             key_prefix=real_redis_actors.prefix,
@@ -53,7 +53,7 @@ def isolated_services(
     )
 
     services = ApiServices.create(
-        database,
+        workspace_database,
         create_schema=False,
         object_store_client=FakeObjectClient(),
         volume_filesystem=LocalVolumeFilesystem(tmp_path / "volumes"),

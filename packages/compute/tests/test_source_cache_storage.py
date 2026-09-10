@@ -4,9 +4,9 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from api.server.services import ApiServices
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from shared.errors import ConflictError, NotFoundError
 from shared.source_cache_cleanup import (
@@ -21,18 +21,16 @@ from tests.domain_fixtures import owned_workspace
 
 
 def test_storage_owner_remains_incomplete_until_explicit_destruction_evidence(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context), "cache-storage-owner"
-    )
+    workspace = owned_workspace(ControlPlaneService(service_context), "cache-storage-owner")
     owner = WorkerCacheStorageOwnerRecord(
         kind=WorkerCacheStorageOwnerKind.Machine,
         owner_id="provider-machine-a",
     )
     generation_id = str(uuid4())
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = SourceCacheCleanupRepository(session)
         repository.register_generation(
             generation_id,
@@ -47,7 +45,7 @@ def test_storage_owner_remains_incomplete_until_explicit_destruction_evidence(
             now=started_at,
         )
 
-    lifecycle = SourceCacheStorageLifecycleService(isolated_services.context)
+    lifecycle = SourceCacheStorageLifecycleService(service_context)
     before = lifecycle.get(owner)
 
     assert before.generation_id == generation_id
@@ -67,7 +65,7 @@ def test_storage_owner_remains_incomplete_until_explicit_destruction_evidence(
     assert after.completed_count == 1
     assert after.storage_destroyed_at == destroyed_at
     assert after.complete
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         [target] = SourceCacheCleanupRepository(session).list_targets(
             generation_ids=[generation_id]
         )
@@ -77,7 +75,7 @@ def test_storage_owner_remains_incomplete_until_explicit_destruction_evidence(
 
 
 def test_storage_destruction_evidence_is_fenced_to_exact_owner_generation_and_time(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     owner = WorkerCacheStorageOwnerRecord(
         kind=WorkerCacheStorageOwnerKind.Node,
@@ -86,7 +84,7 @@ def test_storage_destruction_evidence_is_fenced_to_exact_owner_generation_and_ti
     other_owner = owner.model_copy(update={"owner_id": "cluster-node-b"})
     generation_id = str(uuid4())
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         SourceCacheCleanupRepository(session).register_generation(
             generation_id,
             worker_id="worker-a",
@@ -95,7 +93,7 @@ def test_storage_destruction_evidence_is_fenced_to_exact_owner_generation_and_ti
             now=started_at,
         )
 
-    lifecycle = SourceCacheStorageLifecycleService(isolated_services.context)
+    lifecycle = SourceCacheStorageLifecycleService(service_context)
     with pytest.raises(ConflictError, match="evidence predates"):
         lifecycle.record_destroyed(
             WorkerCacheStorageDestructionEvidence(
@@ -128,11 +126,9 @@ def test_storage_destruction_evidence_is_fenced_to_exact_owner_generation_and_ti
 
 
 def test_machine_without_registered_cache_has_no_cleanup_to_retire(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    assert SourceCacheStorageLifecycleService(
-        isolated_services.context
-    ).record_machine_storage_destroyed(
+    assert SourceCacheStorageLifecycleService(service_context).record_machine_storage_destroyed(
         "machine-without-cache",
         observed_at=datetime(2026, 7, 21, 12, tzinfo=UTC),
     )

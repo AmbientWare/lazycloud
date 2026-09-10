@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.custom_domains import CustomDomainRepository
@@ -44,19 +45,19 @@ def test_compute_requires_a_workspace_billing_owner(isolated_services: ApiServic
     assert _container_count(isolated_services, workspace_id) == 0
 
 
-def test_free_plan_refuses_paid_capabilities(isolated_services: ApiServices) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+def test_free_plan_refuses_paid_capabilities(service_context: ServiceContext) -> None:
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(service_context, workspace_id)
     admission = DatabaseBillingAdmission()
 
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="connected cloud accounts require"),
     ):
         admission.assert_may_use_connected_cloud(session, user_id=user_id)
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="custom domains require"),
     ):
         admission.assert_may_use_custom_domains(session, user_id=user_id)
@@ -85,7 +86,7 @@ def test_the_free_plan_counts_the_owner_as_its_one_member(
 
 
 def test_an_open_invitation_holds_the_seat_it_would_fill(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """The refusal belongs to the administrator inviting, not the person invited.
 
@@ -95,11 +96,11 @@ def test_an_open_invitation_holds_the_seat_it_would_fill(
     somebody else's plan.
     """
 
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
 
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(CapacityLimitReachedError, match="1 members"),
     ):
         DatabaseBillingAdmission().assert_may_invite_workspace_member(
@@ -110,12 +111,12 @@ def test_an_open_invitation_holds_the_seat_it_would_fill(
 
 
 def test_plan_change_refuses_to_drop_a_capability_still_in_use(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(service_context, workspace_id)
+    with service_context.database.session() as session:
         CustomDomainRepository(session).create(
             CustomDomain(
                 id=str(uuid4()),
@@ -126,7 +127,7 @@ def test_plan_change_refuses_to_drop_a_capability_still_in_use(
         )
 
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(ConflictError, match="1 custom domains"),
     ):
         DatabaseBillingAdmission().assert_plan_change_fits(
@@ -434,7 +435,7 @@ def _hold_gpu_cards(
 
 
 def test_a_complimentary_account_is_admitted_on_team_terms_without_a_subscription(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """A waived account runs on the Team plan's terms, and returns to its own when unwaived.
 
@@ -447,20 +448,20 @@ def test_a_complimentary_account_is_admitted_on_team_terms_without_a_subscriptio
     reconsiders.
     """
 
-    user_id, workspace_id = unbilled_account(isolated_services.context)
+    user_id, workspace_id = unbilled_account(service_context)
     admission = DatabaseBillingAdmission()
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="holds no subscription"),
     ):
         admission.admit_container_start(session, workspace_id=workspace_id, gpu=[], gpu_count=0)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         accounts = BillingAccountRepository(session)
         accounts.lock_for_registration(user_id)
         accounts.set_complimentary(user_id=user_id, present=True, at=utc_now())
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert (
             admission.admit_container_start(session, workspace_id=workspace_id, gpu=[], gpu_count=0)
             == []
@@ -472,17 +473,17 @@ def test_a_complimentary_account_is_admitted_on_team_terms_without_a_subscriptio
         admission.assert_may_use_connected_cloud(session, user_id=user_id)
         admission.assert_may_use_custom_domains(session, user_id=user_id)
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(ConflictError, match="complimentary"),
     ):
         admission.assert_plan_change_fits(session, user_id=user_id, target=BillingPlanId.Team)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         BillingAccountRepository(session).set_complimentary(
             user_id=user_id, present=False, at=utc_now()
         )
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="holds no subscription"),
     ):
         admission.admit_container_start(session, workspace_id=workspace_id, gpu=[], gpu_count=0)

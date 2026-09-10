@@ -61,8 +61,8 @@ def migrated_template_url(postgres_admin: Engine) -> Iterator[URL]:
 
 
 @pytest.fixture(scope="session")
-def seeded_template_url(postgres_admin: Engine, migrated_template_url: URL) -> Iterator[URL]:
-    with temporary_database(postgres_admin, template=migrated_template_url) as url:
+def seeded_template_url(postgres_admin: Engine, workspace_template_url: URL) -> Iterator[URL]:
+    with temporary_database(postgres_admin, template=workspace_template_url) as url:
         database = _client(url)
         try:
             with database.session() as session:
@@ -95,9 +95,20 @@ def database(migrated_database_url: URL) -> Iterator[DatabaseClient]:
 
 
 @pytest.fixture
+def workspace_database(
+    postgres_admin: Engine, workspace_template_url: URL
+) -> Iterator[DatabaseClient]:
+    with temporary_database(postgres_admin, template=workspace_template_url) as url:
+        client = _client(url)
+        try:
+            yield client
+        finally:
+            client.dispose()
+
+
+@pytest.fixture
 def seeded_database(postgres_admin: Engine, seeded_template_url: URL) -> Iterator[DatabaseClient]:
-    # Only immutable rates are shared. Accounts, workspaces, sequences and writes
-    # belong to each clone, including commits made by another connection or thread.
+    # Each clone owns its writes, including commits from independent connections.
     with temporary_database(postgres_admin, template=seeded_template_url) as url:
         client = _client(url)
         try:

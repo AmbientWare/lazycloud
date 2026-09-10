@@ -69,18 +69,21 @@ uv run --group dev basedpyright packages/scheduler
 uv run --group dev pytest -x -q packages/scheduler/tests
 ```
 
-For a larger owner scope, add `-n 2` or `-n 4`. Small scheduled batches balance the
-workers and stop promptly on failure; a single file usually starts faster without
-workers. To run the same selection as CI, including uncommitted changes:
+Tests run in one process locally and in CI. To run the same selection as CI,
+including uncommitted changes:
 
 ```bash
 uv run --group dev python .github/scripts/validate_changed_scope.py --base origin/main --list
-uv run --group dev python .github/scripts/validate_changed_scope.py --base origin/main --workers 2
+uv run --group dev python .github/scripts/validate_changed_scope.py --base origin/main
 ```
 
-CI runs four test shards with two workers each, alongside type checks, and uploads
-each shard's test timings. Every selected test belongs to one shard. To reproduce
-one shard locally, add `--splits 4 --group 1` to the changed-scope command.
+CI runs one test job alongside type checks and uploads its test timings.
+Templates build the schema, default account and workspace, and billing history once.
+Database-only owner tests use `service_context`, which shares a seeded database
+and rolls back each test through SQLAlchemy savepoints. Tests requiring independent
+connections, real commit visibility, or migrations use isolated database clones.
+API listing tests share one running app and use a separate workspace per test;
+their database and Redis namespace are removed when the module finishes.
 Local runs print the slowest setup, execution, and teardown phases. Add
 `--junitxml=test-results/python.xml` to retain a local report.
 Stop the test-only stack with `docker compose -f compose.test.yaml down -v`.

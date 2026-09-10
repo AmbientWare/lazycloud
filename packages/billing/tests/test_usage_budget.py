@@ -2,8 +2,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from api.server.services import ApiServices
 from billing.preferences import BillingPreferencesService
+from database.context import ServiceContext
 from database.repositories.billing_ledger import BillingLedgerRepository
 from database.repositories.billing_rates import PlatformRateRepository
 from database.repositories.observability import UsageRepository
@@ -19,12 +19,12 @@ from tests.domain_fixtures import unfunded_billing_account
 
 
 def test_monthly_budget_counts_recorded_usage_across_rollover_and_saved_edits(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     start = datetime(2026, 9, 30, 23, 59, 50, tzinfo=UTC)
     end = start + timedelta(seconds=20)
     user_id, workspace_id = unfunded_billing_account(
-        isolated_services.context,
+        service_context,
         period_started_at=start,
         period_ended_at=start + timedelta(days=30),
     )
@@ -42,7 +42,7 @@ def test_monthly_budget_counts_recorded_usage_across_rollover_and_saved_edits(
         },
         created_at=end,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         PlatformRateRepository(session).publish(
             pricing_version="monthly-budget",
             effective_at=start,

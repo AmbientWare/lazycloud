@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from tests.domain_fixtures import owned_workspace
 from tests.real_redis import RealRedisActors
 from worker.checkpoints import (
@@ -17,12 +17,12 @@ from worker_repository.checkpoint_records import (
 
 
 def test_automatic_checkpoint_creation_lease_serializes_first_creator(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
-    service = AutomaticCheckpointCreationLeaseService(isolated_services.context, redis)
-    control = ControlPlaneService(isolated_services.context)
+    service = AutomaticCheckpointCreationLeaseService(service_context, redis)
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "checkpoint-owner")
     stub = control.create_stub("checkpoint-lease", workspace=workspace.id)
 
@@ -57,14 +57,14 @@ def test_automatic_checkpoint_creation_lease_serializes_first_creator(
 
 
 def test_automatic_checkpoint_creation_lease_rechecks_available_artifact_after_lock(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "default")
     stub = control.create_stub("checkpoint-lease", workspace=workspace.id)
-    CheckpointService(isolated_services.context).save_state(
+    CheckpointService(service_context).save_state(
         CheckpointStatePayload(
             operation=CheckpointStateOperation.Create,
             checkpoint_id="checkpoint-available",
@@ -73,7 +73,7 @@ def test_automatic_checkpoint_creation_lease_rechecks_available_artifact_after_l
             stub_id=stub.id,
         )
     )
-    service = AutomaticCheckpointCreationLeaseService(isolated_services.context, redis)
+    service = AutomaticCheckpointCreationLeaseService(service_context, redis)
 
     decision = service.acquire(
         workspace_id=workspace.id,

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from shared.billing_accounts import BillingAccountStatus
@@ -152,7 +152,7 @@ class _Provider:
 
 
 def test_a_saved_card_becomes_the_one_charges_are_taken_from(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Saving a card does not make it the default, and nothing does it implicitly.
 
@@ -165,10 +165,10 @@ def test_a_saved_card_becomes_the_one_charges_are_taken_from(
 
     provider = _Provider()
     provider.payment_method_owners = {"pm_saved": "cus_webhook", "pm_theirs": "cus_someone_else"}
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(service_context, workspace_id)
+    with service_context.database.session() as session:
         BillingAccountRepository(session).upsert(
             user_id=user_id,
             status=BillingAccountStatus.Active,
@@ -181,7 +181,7 @@ def test_a_saved_card_becomes_the_one_charges_are_taken_from(
         )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         acted = BillingWebhookService(session, lambda: provider).apply(
             event=PaymentEvent(
                 id="evt_setup_1",
@@ -198,7 +198,7 @@ def test_a_saved_card_becomes_the_one_charges_are_taken_from(
 
     # A card saved by somebody else's integration on the same provider account
     # names a customer no account here claims, and is left alone.
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert not BillingWebhookService(session, lambda: provider).apply(
             event=PaymentEvent(
                 id="evt_setup_2",
@@ -215,7 +215,7 @@ def test_a_saved_card_becomes_the_one_charges_are_taken_from(
     # replacement, because deliveries are retried for days. Acting on it would
     # put the old card back and charge them on it.
     provider.payment_method_owners["pm_replaced"] = ""
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert not BillingWebhookService(session, lambda: provider).apply(
             event=PaymentEvent(
                 id="evt_setup_stale",
@@ -230,7 +230,7 @@ def test_a_saved_card_becomes_the_one_charges_are_taken_from(
 
 
 def test_a_failed_payment_leaves_the_account_admission_refuses(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """`past_due` is written by a delivery and read by admission, or by nobody.
 
@@ -247,10 +247,10 @@ def test_a_failed_payment_leaves_the_account_admission_refuses(
 
     provider = _Provider()
     provider.subscription_status = "past_due"
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(service_context, workspace_id)
+    with service_context.database.session() as session:
         BillingAccountRepository(session).upsert(
             user_id=user_id,
             status=BillingAccountStatus.Active,
@@ -263,7 +263,7 @@ def test_a_failed_payment_leaves_the_account_admission_refuses(
         )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert BillingWebhookService(session, lambda: provider).apply(
             event=PaymentEvent(
                 id="evt_invoice_failed",
@@ -278,7 +278,7 @@ def test_a_failed_payment_leaves_the_account_admission_refuses(
     # cycle the customer is part-way through are not what went wrong.
 
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(PaymentRequiredError),
     ):
         DatabaseBillingAdmission().admit_container_start(
@@ -287,7 +287,7 @@ def test_a_failed_payment_leaves_the_account_admission_refuses(
 
 
 def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """A plan change is a plan change whichever door it arrives through.
 
@@ -306,11 +306,11 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
     provider.terms_version = SubscriptionTermsVersion.TeamLegacy
     provider.cards_on_file.add("cus_webhook")
     user_id, _ = unfunded_billing_account(
-        isolated_services.context,
+        service_context,
         period_started_at=CYCLE_STARTED_AT,
         period_ended_at=CYCLE_ENDED_AT,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         BillingAccountRepository(session).upsert(
             user_id=user_id,
             status=BillingAccountStatus.Active,
@@ -336,7 +336,7 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
         )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert BillingWebhookService(session, lambda: provider).apply(
             event=PaymentEvent(
                 id="evt_plan_changed",
@@ -347,7 +347,7 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
         )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
         allowance = BillingAllowanceRepository(session).current_period(
             user_id=user_id, at=CYCLE_STARTED_AT
@@ -364,7 +364,7 @@ def test_a_plan_changed_at_the_provider_leaves_one_grant_over_the_cycle(
 
 
 def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """A cancellation clears the plan as well as the subscription.
 
@@ -380,10 +380,10 @@ def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
 
     provider = _Provider()
     provider.subscription_status = "canceled"
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(service_context, workspace_id)
+    with service_context.database.session() as session:
         BillingAccountRepository(session).upsert(
             user_id=user_id,
             status=BillingAccountStatus.Active,
@@ -396,7 +396,7 @@ def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
         )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert BillingWebhookService(session, lambda: provider).apply(
             event=PaymentEvent(
                 id="evt_subscription_deleted",
@@ -407,7 +407,7 @@ def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
         )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
 
     assert account is not None
@@ -418,7 +418,7 @@ def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
     # raises for the part-cycle it ends.
 
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="no subscription"),
     ):
         DatabaseBillingAdmission().admit_container_start(
@@ -427,17 +427,17 @@ def test_a_subscription_that_ends_leaves_an_account_on_no_plan_and_refused(
 
 
 def test_a_saved_card_preserves_existing_credit_without_replenishment(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
 
     provider = _Provider()
     provider.terms_version = SubscriptionTermsVersion.Free
     provider.payment_method_owners = {"pm_first": "cus_webhook"}
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+    user_id = workspace_owner_user_id(service_context, workspace_id)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         BillingAccountRepository(session).upsert(
             user_id=user_id,
             status=BillingAccountStatus.Active,
@@ -459,7 +459,7 @@ def test_a_saved_card_preserves_existing_credit_without_replenishment(
         )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert BillingWebhookService(session, lambda: provider).apply(
             event=PaymentEvent(
                 id="evt_first_card",
@@ -471,7 +471,7 @@ def test_a_saved_card_preserves_existing_credit_without_replenishment(
         )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
         allowance = BillingAllowanceRepository(session).current_period(
             user_id=user_id, at=CYCLE_STARTED_AT

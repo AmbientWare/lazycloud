@@ -11,6 +11,7 @@ import pytest
 from agent.binary import AgentBinarySettings
 from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
+from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient, RedisSettings
 from execution.collections.redis import (
     RedisMapService,
@@ -27,7 +28,7 @@ from storage.volume_filesystem import LocalVolumeFilesystem
 from storage_client.s3 import S3ObjectStoreSettings
 
 from database import DatabaseClient
-from tests.domain_fixtures import _fixture_account
+from tests.domain_fixtures import owned_workspace
 from tests.fakes import FakeObjectClient
 from tests.real_redis import RealRedisActors
 
@@ -92,10 +93,7 @@ def service_graph(
             binary_sha256_by_arch={"amd64": "a" * 64},
         ),
     )
-    services.control_plane_service.set_workspace(
-        "default",
-        owner_user_id=_fixture_account(services.context.database, "default-workspace-owner"),
-    )
+    owned_workspace(ControlPlaneService(services.context), "default")
     services.control_plane_service.ensure_workspace_storage("default")
     try:
         yield services

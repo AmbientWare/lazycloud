@@ -16,6 +16,7 @@ from api.server.services import ApiServices
 from api.server.worker_repository_service import WorkerRepositoryService
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.compute import AwsAccountConnectionRepository
 from database.repositories.identity import (
     DeviceAuthorizationRepository,
@@ -526,16 +527,16 @@ def test_workspace_deletion_purges_autoscaler_state_and_fences_stale_reconciliat
 
 
 def test_autoscaler_state_write_requires_active_workspace(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "disabled-tenant")
     workspace.status = WorkspaceStatus.Disabled
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         WorkspaceRepository(session).upsert(workspace)
 
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(NotFoundError, match="workspace not found"),
     ):
         AutoscalerStateRepository(session).upsert(

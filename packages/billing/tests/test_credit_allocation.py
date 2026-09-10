@@ -10,6 +10,7 @@ import pytest
 from api.server.services import ApiServices
 from billing.credits import fund_subscription_credits, recover_subscription_credits
 from billing.rate_publication import publish_metered_rate_history
+from database.context import ServiceContext
 from database.repositories import billing_credits
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
@@ -44,7 +45,7 @@ from tests.domain_fixtures import unfunded_billing_account
 
 
 def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     end = datetime(2027, 1, 1, tzinfo=UTC)
@@ -52,9 +53,9 @@ def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
     monkeypatch.setattr(billing_credits, "utc_now", lambda: now)
     start = end - timedelta(seconds=10)
     user_id, workspace_id = unfunded_billing_account(
-        isolated_services.context, period_started_at=start, period_ended_at=end
+        service_context, period_started_at=start, period_ended_at=end
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         credits = BillingCreditRepository(session)
         PlatformRateRepository(session).publish(
             pricing_version="late-credit",
@@ -89,7 +90,7 @@ def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
 
 
 def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_proration_terms(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     start = datetime(2027, 1, 1, tzinfo=UTC)
@@ -97,11 +98,11 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
     now = end + timedelta(days=1)
     monkeypatch.setattr(billing_credits, "utc_now", lambda: now)
     user_id, workspace_id = unfunded_billing_account(
-        isolated_services.context,
+        service_context,
         period_started_at=start - timedelta(days=30),
         period_ended_at=start,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
         assert account is not None
         credits = BillingCreditRepository(session)
@@ -163,7 +164,7 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
     monkeypatch.setattr(StripeBilling, "paid_subscription_periods", receipts)
     with httpx.Client() as client:
         payments = StripeBilling(client)
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             recover_subscription_credits(
                 session, payments, account=account, subscription=subscription
             )
@@ -173,12 +174,12 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
             )
         line = line.model_copy(update={"prorated": False})
         for _ in range(2):
-            with isolated_services.context.database.session() as session:
+            with service_context.database.session() as session:
                 recover_subscription_credits(
                     session, payments, account=account, subscription=subscription
                 )
                 assert BillingCreditRepository(session).balance(user_id=user_id, at=now) == -10
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             lot = session.scalars(
                 select(BillingCreditLotTable).where(BillingCreditLotTable.user_id == user_id)
             ).one()
@@ -192,12 +193,12 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
 
 
 def test_storage_grace_waives_only_retained_time_and_top_up_resumes_charges(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     start = datetime(2027, 1, 1, tzinfo=UTC)
     end = start + timedelta(seconds=10)
     user_id, workspace_id = unfunded_billing_account(
-        isolated_services.context,
+        service_context,
         period_started_at=start,
         period_ended_at=start + timedelta(days=30),
     )
@@ -215,7 +216,7 @@ def test_storage_grace_waives_only_retained_time_and_top_up_resumes_charges(
         },
         created_at=end,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         credits = BillingCreditRepository(session)
         BillingAllowanceRepository(session).confirm_credit(
             user_id=user_id, period_started_at=start, at=start

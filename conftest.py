@@ -12,7 +12,7 @@ from tests.metric_helpers import install_metric_reader
 from tests.real_redis import RealRedisActors
 
 TEST_ENVIRONMENT_FILE = Path(__file__).parent / "tests" / "env.test"
-pytest_plugins = ["tests.database_fixtures"]
+pytest_plugins = ["tests.database_fixtures", "tests.domain_fixtures"]
 
 # Cleared from the environment before the suite declares its own configuration.
 # `LAZYCLOUD_TEST_` is exempt: those name the real Redis and PostgreSQL services
@@ -63,8 +63,7 @@ def metric_reader() -> None:
     install_metric_reader()
 
 
-@pytest.fixture(autouse=True)
-def isolated_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def _configure_environment(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
     # Clear first, then declare. A positive list cannot express "unset", and it
     # silently grows stale as settings classes are added; clearing the prefixes
     # outright makes the suite's configuration exactly what this file states,
@@ -74,12 +73,25 @@ def isolated_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Ite
             monkeypatch.delenv(name, raising=False)
     for name in _FORCED_COLOR_VARIABLES:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("LAZYCLOUD_HOME", str(tmp_path))
+    monkeypatch.setenv("LAZYCLOUD_HOME", str(home))
     # Endpoints resolve nowhere on purpose: a unit test that reaches a real
     # object store should fail loudly rather than depend on one running.
     for name, value in _test_environment().items():
         monkeypatch.setenv(name, value)
     lazycloud.config.reset_settings_cache()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def suite_environment(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        _configure_environment(monkeypatch, tmp_path_factory.mktemp("suite"))
+        yield
+    lazycloud.config.reset_settings_cache()
+
+
+@pytest.fixture(autouse=True)
+def isolated_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    _configure_environment(monkeypatch, tmp_path)
     yield
     lazycloud.config.reset_settings_cache()
 

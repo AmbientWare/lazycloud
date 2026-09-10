@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from billing.rate_publication import publish_metered_rate_history
+from database.context import ServiceContext
 from database.repositories.billing_rates import (
     ComputeRateRepository,
     PlatformRateRepository,
@@ -124,15 +125,14 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
     ],
 )
 def test_published_execution_choices_price_each_resource_and_preserve_customer_cloud_fees(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     pinned: bool,
     preemptible: bool,
     cpu_memory_multiplier: str,
     gpu_multiplier: str,
 ) -> None:
     started_at = datetime(2026, 9, 9, 1, tzinfo=UTC)
-    with isolated_services.context.database.session() as session:
-        publish_metered_rate_history(session)
+    with service_context.database.session() as session:
         rates = ComputeRateRepository(session)
         for owner in (UsageBillingOwner.PlatformFleet, UsageBillingOwner.ConnectedCloud):
             for component, multiplier in (
@@ -170,11 +170,10 @@ def test_published_execution_choices_price_each_resource_and_preserve_customer_c
 
 
 def test_price_cutover_matches_quotes_and_preserves_customer_gpu_prices(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     boundary = datetime(2026, 9, 12, tzinfo=UTC)
-    with isolated_services.context.database.session() as session:
-        publish_metered_rate_history(session)
+    with service_context.database.session() as session:
         rates = ComputeRateRepository(session)
         for at, expected_cpu in (
             (boundary - timedelta(seconds=1), 55_126_800),

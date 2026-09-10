@@ -10,6 +10,7 @@ from api.server.services import ApiServices
 from billing.costs import BillingStandingService
 from billing.periods import carry_plan_into_cycle
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_credits import BillingCreditRepository
@@ -210,7 +211,7 @@ def _plan_changes(services: ApiServices, provider: _Provider) -> BillingPlanChan
 
 
 def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Who pays is reached through the workspace's owner, and stops there.
 
@@ -222,12 +223,12 @@ def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
     starts work.
     """
 
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     stranger = owned_workspace(control, "stranger")
-    with isolated_services.context.database.session() as session:
-        paying_workspace_id = isolated_services.context.default_workspace_id(session)
-    paying_user_id = workspace_owner_user_id(isolated_services.context, paying_workspace_id)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
+        paying_workspace_id = service_context.default_workspace_id(session)
+    paying_user_id = workspace_owner_user_id(service_context, paying_workspace_id)
+    with service_context.database.session() as session:
         # Provisioned, and past due on top of it. Both workspaces' owners hold a
         # subscription — admission asks every account whether its usage has
         # anywhere to be billed — so what separates the two answers here is the
@@ -250,7 +251,7 @@ def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
         session.commit()
 
     admission = DatabaseBillingAdmission()
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         with pytest.raises(PaymentRequiredError):
             admission.admit_container_start(
                 session, workspace_id=paying_workspace_id, gpu=(), gpu_count=0
@@ -259,13 +260,13 @@ def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
 
 
 def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("billing.admission.utc_now", lambda: CYCLE_STARTED_AT)
     provider = _Provider()
-    user_id, workspace_id = unbilled_account(isolated_services.context)
-    with isolated_services.context.database.session() as session:
+    user_id, workspace_id = unbilled_account(service_context)
+    with service_context.database.session() as session:
         service = BillingAccountService(session)
         first = service.billing_account_for(provider, user_id=user_id, workspace_id=workspace_id)
         again = service.billing_account_for(provider, user_id=user_id, workspace_id=workspace_id)
@@ -295,7 +296,7 @@ def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
 
     provider.cycle_started_at = CYCLE_ENDED_AT
     provider.cycle_ended_at = CYCLE_ENDED_AT + timedelta(days=30)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         subscription = provider.subscription(
             provider_subscription_id=first.provider_subscription_id
         )
@@ -527,7 +528,7 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
 
 
 def test_an_account_with_no_subscription_cannot_start_work(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Refused, because its usage has nowhere to be billed.
 
@@ -542,18 +543,18 @@ def test_an_account_with_no_subscription_cannot_start_work(
     should reach. The refusal is what makes that a fact rather than a hope.
     """
 
-    user_id, workspace_id = unbilled_account(isolated_services.context)
+    user_id, workspace_id = unbilled_account(service_context)
     admission = DatabaseBillingAdmission()
 
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="no subscription"),
     ):
         admission.admit_container_start(session, workspace_id=workspace_id, gpu=(), gpu_count=0)
 
     # A registration that stopped after the customer is the same answer: half of
     # what provisioning writes is not somewhere work may start from.
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         BillingAccountRepository(session).upsert(
             user_id=user_id,
             status=BillingAccountStatus.Active,
@@ -567,7 +568,7 @@ def test_an_account_with_no_subscription_cannot_start_work(
         session.commit()
 
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(PaymentRequiredError, match="no subscription"),
     ):
         admission.admit_container_start(session, workspace_id=workspace_id, gpu=(), gpu_count=0)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -29,8 +29,12 @@ from shared.identity import (
     WorkspaceStorageConfig,
 )
 from shared.timestamps import utc_now
+from sqlalchemy import Engine
+from sqlalchemy.engine import URL
+from sqlalchemy.orm import sessionmaker
 
-from database import DatabaseClient
+from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
+from tests.database_fixtures import temporary_database
 
 
 def _fixture_account(database: DatabaseClient, display_name: str) -> str:
@@ -193,8 +197,56 @@ def workspace_owner_user_id(context: ServiceContext, workspace_id: str) -> str:
     return user_id
 
 
+@pytest.fixture(scope="session")
+def workspace_template_url(
+    postgres_admin: Engine, migrated_template_url: URL, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[URL]:
+    with temporary_database(postgres_admin, template=migrated_template_url) as url:
+        database = DatabaseClient.from_settings(
+            DatabaseSettings(
+                url=url.render_as_string(hide_password=False),
+                application_name=DatabaseApplicationName.Test,
+            )
+        )
+        try:
+            context = ServiceContext.create(
+                database, root=tmp_path_factory.mktemp("domain"), create_schema=False
+            )
+            owned_workspace(ControlPlaneService(context), "default")
+        finally:
+            database.dispose()
+        yield url
+
+
+@pytest.fixture(scope="session")
+def domain_database(postgres_admin: Engine, seeded_template_url: URL) -> Iterator[DatabaseClient]:
+    with temporary_database(postgres_admin, template=seeded_template_url) as url:
+        database = DatabaseClient.from_settings(
+            DatabaseSettings(
+                url=url.render_as_string(hide_password=False),
+                application_name=DatabaseApplicationName.Test,
+            )
+        )
+        try:
+            yield database
+        finally:
+            database.dispose()
+
+
 @pytest.fixture
-def service_context(seeded_database: DatabaseClient, tmp_path: Path) -> ServiceContext:
-    context = ServiceContext.create(seeded_database, root=tmp_path, create_schema=False)
-    owned_workspace(ControlPlaneService(context), "default")
-    return context
+def service_context(domain_database: DatabaseClient, tmp_path: Path) -> Iterator[ServiceContext]:
+    # Only single-connection owner tests use this fixture. A commit releases a
+    # savepoint; tests of cross-connection visibility keep their real commits.
+    with domain_database.engine.connect() as connection, connection.begin() as transaction:
+        database = DatabaseClient(
+            settings=domain_database.settings,
+            engine=domain_database.engine,
+            sessions=sessionmaker(
+                bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint"
+            ),
+        )
+        try:
+            yield ServiceContext.create(database, root=tmp_path, create_schema=False)
+        finally:
+            assert transaction.is_active, "owner test ended its outer isolation transaction"
+            transaction.rollback()
