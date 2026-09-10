@@ -172,7 +172,7 @@ def test_published_execution_choices_price_each_resource_and_preserve_customer_c
 def test_price_cutover_matches_quotes_and_preserves_customer_gpu_prices(
     isolated_services: ApiServices,
 ) -> None:
-    boundary = datetime(2026, 9, 12, tzinfo=UTC)
+    boundary = PUBLISHED_METERED_RATE_HISTORY[-1].effective_at
     with isolated_services.context.database.session() as session:
         publish_metered_rate_history(session)
         rates = ComputeRateRepository(session)
