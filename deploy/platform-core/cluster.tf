@@ -27,12 +27,11 @@ resource "aws_eks_cluster" "control_plane" {
     public_access_cidrs     = length(var.cluster_api_cidrs) > 0 ? var.cluster_api_cidrs : null
   }
 
-  # The node role also retains EKS-managed node access. Custom capacity is
-  # bootstrapped by the Helm release; no built-in On-Demand pool is enabled.
+  # Custom node access is declared in cluster_iam.tf. EKS requires the built-in
+  # node role to be absent when no built-in pools are enabled.
   compute_config {
-    enabled       = true
-    node_pools    = []
-    node_role_arn = aws_iam_role.node.arn
+    enabled    = true
+    node_pools = []
   }
 
   kubernetes_network_config {

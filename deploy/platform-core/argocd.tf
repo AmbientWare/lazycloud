@@ -155,7 +155,11 @@ resource "helm_release" "argocd" {
   # The credential has to exist before the root Application is reconciled, or the
   # first sync fails on a repository it cannot read and retries with a backoff
   # nobody is watching.
-  depends_on = [kubernetes_secret.argocd_repository_credentials]
+  depends_on = [
+    kubernetes_secret.argocd_repository_credentials,
+    aws_eks_access_policy_association.node,
+    aws_iam_role_policy_attachment.node,
+  ]
 }
 
 # How Argo reaches every repository in the organisation.

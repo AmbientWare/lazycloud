@@ -57,3 +57,19 @@ resource "aws_iam_role_policy_attachment" "node" {
   role       = aws_iam_role.node.name
   policy_arn = "${local.arn_prefix}:iam::aws:policy/${each.value}"
 }
+
+resource "aws_eks_access_entry" "node" {
+  cluster_name  = aws_eks_cluster.control_plane.name
+  principal_arn = aws_iam_role.node.arn
+  type          = "EC2"
+}
+
+resource "aws_eks_access_policy_association" "node" {
+  cluster_name  = aws_eks_access_entry.node.cluster_name
+  principal_arn = aws_eks_access_entry.node.principal_arn
+  policy_arn    = "${local.arn_prefix}:eks::aws:cluster-access-policy/AmazonEKSAutoNodePolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+}
