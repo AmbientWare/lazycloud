@@ -334,6 +334,7 @@ class AuthTokenRecord(ContractModel):
     token_hash: str
     prefix: str
     kind: TokenKind = TokenKind.Workspace
+    device_login: bool = False
     # Exactly one of these names the token's principal, which the schema enforces.
     # Empty rather than None because a UUID column round-trips "" as NULL here, and
     # every existing reader already treats an absent scope id as empty.

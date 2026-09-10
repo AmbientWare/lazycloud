@@ -252,6 +252,7 @@ class TokenIssuer:
         scopes: list[str] | None = None,
         expires_in_seconds: int | None = None,
         reusable: bool = True,
+        device_login: bool = False,
     ) -> tuple[str, AuthTokenRecord]:
         """Mint a credential that names a person rather than one workspace."""
         if kind not in USER_PRINCIPAL_TOKEN_KINDS:
@@ -265,6 +266,7 @@ class TokenIssuer:
             kind=kind,
             user_id=user_id,
             reusable=reusable,
+            device_login=device_login,
         )
 
     def issue_configured_administrator(
@@ -299,6 +301,7 @@ class TokenIssuer:
         workspace_id: str = "",
         worker_id: str = "",
         reusable: bool,
+        device_login: bool = False,
     ) -> tuple[str, AuthTokenRecord]:
         if bool(user_id) == bool(workspace_id):
             msg = "a token names exactly one principal: a user or a workspace"
@@ -320,6 +323,7 @@ class TokenIssuer:
             token_hash=_hash_token(raw_token),
             prefix=raw_token[:10],
             kind=TokenKind(kind),
+            device_login=device_login,
             user_id=user_id,
             workspace_id=owner_workspace_id,
             worker_id=worker_id,
@@ -994,6 +998,7 @@ class AuthService:
         *,
         limit: int = 50,
         cursor: str | None = None,
+        include_device: bool = True,
     ) -> AccountTokenResult:
         if limit < 1 or limit > 100:
             raise InvalidInputError("account token limit must be between 1 and 100")
@@ -1005,6 +1010,7 @@ class AuthService:
                 user_id,
                 limit=limit,
                 cursor=decoded,
+                include_device=include_device,
             )
         return AccountTokenResult(
             page=page,

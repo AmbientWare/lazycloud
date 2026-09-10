@@ -63,8 +63,9 @@ def test_device_claim_rolls_back_consumption_when_token_insert_fails(
         scopes: list[str] | None = None,
         expires_in_seconds: int | None = None,
         reusable: bool = True,
+        device_login: bool = False,
     ) -> Never:
-        del (self, session, name, user_id, kind, scopes, expires_in_seconds, reusable)
+        del (self, session, name, user_id, kind, scopes, expires_in_seconds, reusable, device_login)
         raise RuntimeError("token insert failed")
 
     monkeypatch.setattr(TokenIssuer, "issue_for_user", fail_issue)

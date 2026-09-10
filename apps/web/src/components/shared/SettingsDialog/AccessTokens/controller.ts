@@ -74,9 +74,9 @@ const IDLE: ControllerState = {
   action: { mode: "idle" },
 };
 
-export function useAccessTokensController(): AccessTokensController {
+export function useAccessTokensController(showDeviceTokens: boolean): AccessTokensController {
   const queryClient = useQueryClient();
-  const query = useInfiniteQuery(tokensQueryOptions());
+  const query = useInfiniteQuery(tokensQueryOptions(showDeviceTokens));
   const list = selectTokenList(query.data, query.hasNextPage);
   const [state, setState] = useState<ControllerState>(IDLE);
   // One command at a time, so a double submit cannot mint two credentials and a
@@ -196,7 +196,7 @@ function isDraftable(mode: CreateMode): boolean {
 
 /** Newest first, matching the order the server pages in, so the row lands where it will stay. */
 function insertTokenRecord(queryClient: QueryClient, record: AuthToken): void {
-  queryClient.setQueryData<TokenPages>(accountQueryKeys.tokens(), (current) => {
+  queryClient.setQueriesData<TokenPages>({ queryKey: accountQueryKeys.tokens() }, (current) => {
     if (!current) return current;
     const [first, ...rest] = withoutToken(current.pages, record.id);
     if (!first) return current;
@@ -205,7 +205,7 @@ function insertTokenRecord(queryClient: QueryClient, record: AuthToken): void {
 }
 
 function removeTokenRecord(queryClient: QueryClient, tokenId: string): void {
-  queryClient.setQueryData<TokenPages>(accountQueryKeys.tokens(), (current) =>
+  queryClient.setQueriesData<TokenPages>({ queryKey: accountQueryKeys.tokens() }, (current) =>
     current ? { ...current, pages: withoutToken(current.pages, tokenId) } : current,
   );
 }

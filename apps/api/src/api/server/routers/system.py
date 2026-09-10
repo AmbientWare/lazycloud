@@ -172,11 +172,14 @@ def api_v1_workspace_signing_key(
 def api_v1_list_account_tokens(
     limit: int = 50,
     cursor: str | None = None,
+    include_device: bool = True,
     *,
     user_id: read_user,
     services: ApiServices = Depends(current_services),
 ) -> TokenListResponse:
-    result = services.auth.list_account_tokens(user_id, limit=limit, cursor=cursor)
+    result = services.auth.list_account_tokens(
+        user_id, limit=limit, cursor=cursor, include_device=include_device
+    )
     return TokenListResponse(
         data=[_public_token(item) for item in result.page.records],
         next=result.next,
