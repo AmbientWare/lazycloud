@@ -115,6 +115,7 @@ from compute.providers import (
     ResolvedComputeProvider,
     internal_unit_identity,
 )
+from compute.purchase_policy import assess_fleet_purchase
 from compute.reclaim import ComputeReclaimPolicy
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
 from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
@@ -201,6 +202,29 @@ class ComputeService:
 
     def __post_init__(self) -> None:
         self.source_cache_lifecycle = SourceCacheStorageLifecycleService(self.context)
+
+    def pooled_offer_rejection(
+        self,
+        provider: ResolvedComputeProvider,
+        offer: ComputeOffer,
+        *,
+        preemptible: bool,
+        now: datetime | None = None,
+    ) -> str | None:
+        policy = provider.policy
+        if policy is None or offer.provider != provider.ref or not policy.accepts(offer):
+            return "provider offer is outside its approved catalog"
+        if not policy.platform_fleet:
+            return None
+        assessment = assess_fleet_purchase(
+            offer, self.fleet_policy, preemptible=preemptible, now=_utc(now)
+        )
+        if assessment.rejection is None:
+            return None
+        return (
+            f"{assessment.rejection.value}: cost={assessment.hourly_cost_micros} "
+            f"limit={assessment.max_hourly_cost_micros} USD micros/hour"
+        )
 
     def _available_fleet_machines(
         self,
@@ -542,11 +566,19 @@ class ComputeService:
                     failure_code=CapacityFailureCode.CapacityPlanningFailed,
                     desired_unit=desired_unit,
                 )
-            if not provider.policy.accepts(offer):
+            if rejection := self.pooled_offer_rejection(
+                provider,
+                offer,
+                preemptible=(
+                    request.shape.preemptible
+                    if request.workload_preemptible is None
+                    else request.workload_preemptible
+                ),
+            ):
                 return _capacity_result(
                     request,
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
-                    reason="provider offer is outside its approved catalog",
+                    reason=rejection,
                     desired_unit=desired_unit,
                 )
         if not _offer_matches_capacity_shape(offer, request.shape):
@@ -1427,8 +1459,10 @@ class ComputeService:
         policy = provider.policy
         if policy is None or provider.pooled is None or offer.provider != provider.ref:
             raise InvalidInputError("offer does not belong to a pooled provider")
-        if not policy.accepts(offer):
-            raise InvalidInputError("offer is outside the approved provider catalog")
+        if rejection := self.pooled_offer_rejection(
+            provider, offer, preemptible=requirements.preemptible
+        ):
+            raise InvalidInputError(rejection)
         return self._prepare_pooled_offer(
             provider=provider,
             offer=offer,
@@ -1607,7 +1641,10 @@ class ComputeService:
                 offer
                 for offer in pooled.list_offers(root_volume_gib=root_volume_gib)
                 if (not region or offer.region == region)
-                and provider.policy.accepts(offer)
+                and self.pooled_offer_rejection(
+                    provider, offer, preemptible=requirements.preemptible
+                )
+                is None
                 and (not allowed_instance_types or offer.instance_type in allowed_instance_types)
             )
         try:
@@ -1678,8 +1715,14 @@ class ComputeService:
             if self.provider_resolver is None:
                 raise UpstreamUnavailableError("compute provider resolver is unavailable")
             provider = self.provider_resolver.resolve(workspace_id, provider.ref)
-            if provider.policy is None or not provider.policy.accepts(offer):
+            if provider.policy is None:
                 raise ConflictError("provider no longer accepts this capacity purchase")
+            if rejection := self.pooled_offer_rejection(
+                provider, offer, preemptible=requirements.preemptible
+            ):
+                raise ConflictError(
+                    f"provider no longer accepts this capacity purchase: {rejection}"
+                )
             current = repository.get_by_identity(
                 workspace_id=workspace_id,
                 provider_ref=provider.ref,
@@ -2005,8 +2048,13 @@ class ComputeService:
                 raise ConflictError("compute pool still has active workloads")
             if desired_machines > 0 and desired_machines >= unit.desired_machines:
                 purchase_offer = self._available_unit_offer(provider, unit)
-                if not provider.policy.accepts(purchase_offer):
-                    raise ConflictError("provider offer is outside its approved catalog")
+                if rejection := self.pooled_offer_rejection(
+                    provider,
+                    purchase_offer,
+                    preemptible=unit.worker_preemptible,
+                    now=current_time,
+                ):
+                    raise ConflictError(rejection)
             if unit.provider_state.degraded_reason is not None:
                 # An explicit capacity mutation supersedes the durable degraded
                 # reason and re-enables capacity restoration.
@@ -2595,7 +2643,10 @@ class ComputeService:
                     (provider, offer)
                     for offer in provider.pooled.list_offers(root_volume_gib=policy.root_volume_gib)
                     if offer.provider == provider.ref
-                    and policy.accepts(offer)
+                    and self.pooled_offer_rejection(
+                        provider, offer, preemptible=offer.preemptible, now=now
+                    )
+                    is None
                     and offer.storage_mb >= policy.root_volume_gib * 1024
                     and offer.cost_terms.complete_hourly_cost_micros is not None
                     and offer.gpu_count == 0
@@ -2892,10 +2943,15 @@ class ComputeService:
                     now=now,
                 )
             offer = self._available_unit_offer(provider, current)
-            placement_allows = provider.policy is not None and provider.policy.accepts(offer)
+            rejection = self.pooled_offer_rejection(
+                provider, offer, preemptible=current.worker_preemptible, now=now
+            )
+            placement_allows = rejection is None
             degraded = current.provider_state.degraded_reason is not None or not placement_allows
             if not placement_allows:
-                LOGGER.warning("provider placement policy prevents restoring pool %s", current.id)
+                LOGGER.warning(
+                    "purchase policy prevents restoring pool %s: %s", current.id, rejection
+                )
             if not degraded:
                 with self.context.database.session() as session:
                     current = ComputeUnitRepository(session).upsert(

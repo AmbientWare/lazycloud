@@ -245,6 +245,7 @@ def _service(
             gateway_url="https://control.example.com",
             state_dir=str(state_dir),
             executor=WorkerExecutor.External,
+            route_proxy=AgentRouteProxyConfig(bind_port=0),
             once=True,
         ),
         client=gateway,

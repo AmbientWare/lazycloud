@@ -75,7 +75,6 @@ from scheduler.state import (
     WorkerCapacityChange,
     WorkerRepositoryLockKind,
     WorkerReservedCapacity,
-    capacity_memory_mib,
     plan_move_network_container_ip,
     plan_remove_network_container_ip,
     plan_worker_capacity_change,
@@ -85,7 +84,7 @@ from scheduler.state import (
 from scheduler.workers import SchedulerWorkerAdminService
 from shared.billing_quotes import ContainerShape
 from shared.compute_policy import MachinePool
-from shared.container_requests import OciRuntimeName, StopContainerReason
+from shared.container_requests import OciRuntimeName, StopContainerReason, capacity_memory_mib
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.cron import CronJobRecord

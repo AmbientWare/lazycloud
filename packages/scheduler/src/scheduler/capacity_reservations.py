@@ -31,7 +31,7 @@ from shared.capacity import CapacityAcquisitionStatus as ComputeCapacityStatus
 from shared.capacity import CapacityOwnerKind, CapacityPoolSizingSnapshot
 from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequest
 from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
-from shared.container_requests import OciRuntimeName
+from shared.container_requests import OciRuntimeName, capacity_memory_mib
 from shared.contracts import ContractModel
 from shared.gpu import GPU_ANY, gpu_preference_accepts
 from shared.placement import ProductRegion, product_region
@@ -58,7 +58,6 @@ from scheduler.pool_sizing import (
 from scheduler.state import (
     CapacityReservationDispatchAllocation,
     WorkerReservedCapacity,
-    capacity_memory_mib,
     capacity_owner_key_segment,
 )
 
@@ -218,6 +217,7 @@ class CapacityProvisioningReservation(ContractModel):
     owner_kind: CapacityOwnerKind
     status: CapacityReservationStatus = CapacityReservationStatus.Pending
     acquisition_shape: CapacityRequestShape
+    workload_preemptible: bool = True
     schedulable_shape: CapacityRequestShape | None = None
     operation_id: str
     target_worker_id: str = ""
@@ -560,6 +560,7 @@ class ComputeUnitCapacityController:
                 reservation_id=reservation.id,
                 operation_id=reservation.operation_id,
                 shape=_compute_capacity_shape(reservation.acquisition_shape),
+                workload_preemptible=reservation.workload_preemptible,
             )
         )
         return _compute_acquisition_result(reservation, result)
@@ -848,6 +849,7 @@ class RedisCapacityReservationRepository:
                 pool=pool,
                 owner_kind=owner_kind,
                 acquisition_shape=shape,
+                workload_preemptible=request.preemptible,
                 operation_id=reservation_id,
                 desired_unit=desired_unit,
                 registration_deadline_at=current_time + registration_timeout,

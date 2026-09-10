@@ -1,5 +1,12 @@
 # Provider provisioning
 
+Platform purchases require a 30% margin at full sellable CPU, RAM and GPU
+capacity. Compute subtracts scheduler headroom and includes supplier compute,
+root disk and public IPv4 costs. Missing quotes and offers below the floor are
+excluded before purchase. Non-preemptible work uses the published CPU/RAM
+premium; Spot-tolerant work retains its lower rate on On-Demand capacity.
+The floor does not guarantee utilization or cap later Spot price changes.
+
 One scheduler and compute service manage provider capacity. A cloud adapter
 translates that service's requests into cloud API calls. Providers do not add
 their own scheduler loops, worker agent, billing flow, or application release.

@@ -23,6 +23,14 @@ LOGGER = logging.getLogger(__name__)
 class PooledCapacityOwner(Protocol):
     def pooled_providers(self, workspace_id: str) -> tuple[ResolvedComputeProvider, ...]: ...
 
+    def pooled_offer_rejection(
+        self,
+        provider: ResolvedComputeProvider,
+        offer: ComputeOffer,
+        *,
+        preemptible: bool,
+    ) -> str | None: ...
+
     def pooled_offer_owner_id(
         self, provider: ResolvedComputeProvider, offer: ComputeOffer
     ) -> str: ...
@@ -100,7 +108,10 @@ class ComputeCapacityPlacementService:
                             root_volume_gib=policy.root_volume_gib
                         )
                         if offer.provider == provider.ref
-                        and policy.accepts(offer)
+                        and self.compute.pooled_offer_rejection(
+                            provider, offer, preemptible=requirements.preemptible
+                        )
+                        is None
                         and offer.storage_mb >= policy.root_volume_gib * 1024
                         and (
                             request.region is None or product_region(offer.region) is request.region
@@ -131,7 +142,7 @@ class ComputeCapacityPlacementService:
                 f"; unavailable providers: {', '.join(sorted(set(failures)))}" if failures else ""
             )
             raise UpstreamUnavailableError(
-                f"no approved provider capacity meets the workload requirements{detail}",
+                f"no provider capacity meets the workload requirements and purchase policy{detail}",
                 code="offer_unavailable",
             )
         return tuple(purchases.values())

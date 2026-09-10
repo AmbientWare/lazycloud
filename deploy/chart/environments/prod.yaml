@@ -14,6 +14,10 @@ runtime:
   # Existing us-east-1 on-demand rates. Update deliberately because these rank offers.
   LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS: |-
     {
+      "c6a.2xlarge": 306000,
+      "c6a.4xlarge": 612000,
+      "c6a.8xlarge": 1224000,
+      "c6i.8xlarge": 1360000,
       "g4dn.12xlarge": 3912000,
       "g4dn.2xlarge": 752000,
       "g4dn.4xlarge": 1204000,
@@ -35,9 +39,15 @@ runtime:
       "g6.4xlarge": 1323200,
       "g6.8xlarge": 2014400,
       "g6.xlarge": 804800,
+      "m6a.2xlarge": 345600,
+      "m6a.4xlarge": 691200,
+      "m6a.8xlarge": 1382400,
       "m7i.12xlarge": 2419200,
       "m7i.16xlarge": 3225600,
       "m7i.2xlarge": 403200,
       "m7i.4xlarge": 806400,
-      "m7i.8xlarge": 1612800
+      "m7i.8xlarge": 1612800,
+      "r6a.2xlarge": 453600,
+      "r6a.4xlarge": 907200,
+      "r6a.8xlarge": 1814400
     }

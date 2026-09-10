@@ -60,6 +60,20 @@ def schedulable_capacity(total: int) -> int:
     return int(total / NODE_OVERHEAD_FACTOR)
 
 
+CONTAINER_MEMORY_RESERVATION_PERCENT = 125
+
+
+def capacity_memory_mib(memory_mib: int) -> int:
+    if memory_mib <= 0:
+        return memory_mib
+    return (memory_mib * CONTAINER_MEMORY_RESERVATION_PERCENT + 99) // 100
+
+
+def billable_memory_capacity(memory_mib: int) -> int:
+    """Requested memory that fits after placement reserves its additional headroom."""
+    return memory_mib * 100 // CONTAINER_MEMORY_RESERVATION_PERCENT
+
+
 # How far past its request a container may expand when its author named no limit.
 #
 # Proportional rather than a flat addend. A fixed number of gibibytes above the
@@ -422,6 +436,8 @@ __all__ = [
     "StopContainerReason",
     "WorkerContainerRequestPayload",
     "WorkerStartupKind",
+    "billable_memory_capacity",
+    "capacity_memory_mib",
     "capacity_with_overhead",
     "container_cpu_ceiling_millicores",
     "container_memory_ceiling_mib",

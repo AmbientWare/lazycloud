@@ -474,6 +474,7 @@ def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
         ("unused", 300_000),
         ("cheap", 200_000),
         ("unknown", None),
+        ("unprofitable", 10_000_000),
     ):
         offer = _offer().model_copy(
             update={
@@ -669,7 +670,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
     providers: list[ResolvedComputeProvider] = []
     suppliers: dict[str, _PooledProvider] = {}
     for name, cost, preemptible in (
-        ("expensive", 400_000, True),
+        ("expensive", 120_000, True),
         ("cheap", 100_000, True),
         ("regular", 200_000, False),
     ):
@@ -797,7 +798,7 @@ def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
         workspace_id = isolated_services.context.default_workspace_id(session)
     providers: list[ResolvedComputeProvider] = []
     suppliers: list[_PooledProvider] = []
-    for name, price in (("cheap", 100_000), ("fallback", 200_000)):
+    for name, price in (("cheap", 100_000), ("fallback", 120_000)):
         offer = _offer().model_copy(
             update={
                 "provider": f"hetzner:{name}",
@@ -1545,6 +1546,61 @@ def test_pooled_capacity_does_not_import_provider_surplus_into_logical_intent(
     assert provider.desired == 3
     durable = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
     assert durable.desired_machines == 1
+
+
+def test_platform_growth_checks_workload_rates_and_new_quotes_without_blocking_drain(
+    isolated_services: ApiServices,
+) -> None:
+    _seed_connection(isolated_services, platform_fleet=True)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=_Resolver(provider, isolated_services),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        root_volume_gib=200,
+    )
+    request = CapacityAcquisitionRequest(
+        capacity_owner_id=pool.capacity_owner_id,
+        reservation_id=str(uuid4()),
+        operation_id=str(uuid4()),
+        shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
+        workload_preemptible=True,
+    )
+    assert (
+        compute.ensure_capacity(request).status is CapacityAcquisitionStatus.TemporarilyUnavailable
+    )
+    assert provider.desired == 0
+    assert (
+        compute.ensure_capacity(request.model_copy(update={"workload_preemptible": False})).status
+        is CapacityAcquisitionStatus.Requested
+    )
+    assert provider.desired == 1
+
+    provider.offer = provider.offer.model_copy(
+        update={
+            "cost_terms": SupplierCostTerms(
+                compute_hourly_micros=10_000_000,
+                root_disk_hourly_micros=0,
+                public_ipv4_hourly_micros=0,
+            )
+        }
+    )
+    with pytest.raises(ConflictError):
+        compute.scale_internal_unit(
+            pool.workspace_id, pool.capacity_owner_id, 2, before_mutation=_allow_scale
+        )
+    assert provider.desired == 1
+    compute.scale_internal_unit(
+        pool.workspace_id, pool.capacity_owner_id, 0, before_mutation=_allow_scale
+    )
+    assert provider.desired == 0
 
 
 @pytest.mark.parametrize("replacement", [False, True])

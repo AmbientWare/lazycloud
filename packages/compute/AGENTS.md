@@ -68,12 +68,19 @@ choose workload resources, not node types, warm floors, or acquisition limits.
 Provider catalogs define the supported machine types. Removing a type must stop
 new purchases while preserving observation, draining, and deletion of owned nodes.
 
-Catalog review owns profitability assumptions. Provider catalogs approve regions,
-instance types and purchase markets. Acquisition ranks suitable approved offers
-by quoted compute, root disk and public IPv4 cost. Unknown component costs cannot
-rank as free capacity. Do not add purchase ceilings, per-workload revenue
-forecasts or a runtime margin engine. Owned nodes remain observable and removable
-after their types leave the catalog.
+Provider catalogs approve regions, instance types and purchase markets. Compute
+owns purchase admission, using the effective shared rate card and the fleet
+margin policy. Revenue includes sellable CPU, requested RAM after reservation
+headroom, and GPUs. It describes a fully packed node, not realized profit. Use
+the applicable customer placement rate without assuming a location premium or
+charging Spot-tolerant work the non-preemptible premium.
+
+Compare revenue with the complete compute, root disk and public IPv4 quote.
+Unknown prices refuse platform purchases. Apply the same decision to selection,
+warm capacity, growth and platform-controlled restoration. Customer-owned
+infrastructure stays outside the platform margin policy. Existing nodes remain
+observable and drainable after their offer fails purchase admission. Application
+admission does not cap an autonomous provider replacement or future Spot prices.
 
 A connected cloud account belongs to a user, not a workspace, and backs every
 workspace that user owns. Runtime lookups therefore resolve
