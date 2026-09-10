@@ -18,26 +18,16 @@ def _arguments() -> argparse.Namespace:
     )
     parser.add_argument("--base", required=True, help="Git revision used as the comparison base")
     parser.add_argument("--check", choices=("all", "types", "tests"), default="all")
-    parser.add_argument("--workers", type=int, default=2)
-    parser.add_argument("--splits", type=int, default=1)
-    parser.add_argument("--group", type=int, default=1)
     parser.add_argument("--junitxml", type=Path)
     parser.add_argument(
         "--list", action="store_true", help="Print selected paths without running checks"
     )
-    args = parser.parse_args()
-    if not 1 <= args.group <= args.splits:
-        parser.error("--group must be between 1 and --splits")
-    return args
+    return parser.parse_args()
 
 
-def _run(command: Sequence[str], *, allow_empty_group: bool = False) -> None:
+def _run(command: Sequence[str]) -> None:
     print(f"+ {shlex.join(command)}", flush=True)
-    result = subprocess.run(command, cwd=REPOSITORY_ROOT, check=False)
-    if allow_empty_group and result.returncode == 5:
-        print("This shard has no selected tests.", flush=True)
-        return
-    result.check_returncode()
+    subprocess.run(command, cwd=REPOSITORY_ROOT, check=True)
 
 
 def _output(command: Sequence[str]) -> str:
@@ -187,6 +177,7 @@ def _validate(args: argparse.Namespace) -> None:
         Path("compose.test.yaml"),
         Path(".github/scripts/validate_changed_scope.py"),
         Path(".github/workflows/ci.yml"),
+        Path("apps/api/tests/runtime.py"),
     }
     if any(
         path in global_paths
@@ -218,21 +209,10 @@ def _validate(args: argparse.Namespace) -> None:
         _run(["uv", "run", "--group", "dev", "basedpyright", *typing])
 
     if tests and args.check in ("all", "tests"):
-        command = ["uv", "run", "--group", "dev", "pytest", "-x", "-q", "-n", str(args.workers)]
-        if args.splits > 1:
-            command.extend(
-                [
-                    "--splits",
-                    str(args.splits),
-                    "--group",
-                    str(args.group),
-                    "--splitting-algorithm",
-                    "least_duration",
-                ]
-            )
+        command = ["uv", "run", "--group", "dev", "pytest", "-x", "-q"]
         if args.junitxml:
             command.extend(["--junitxml", str(args.junitxml)])
-        _run([*command, *tests], allow_empty_group=args.splits > 1)
+        _run([*command, *tests])
 
     if not python_files and not typing_targets and not test_targets:
         print("No changed Python validation scope.", flush=True)

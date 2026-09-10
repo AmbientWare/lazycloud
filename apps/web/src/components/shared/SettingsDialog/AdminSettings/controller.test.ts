@@ -1,13 +1,11 @@
 import { createElement, type PropsWithChildren } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { BillingAccountAdmin, User } from "@/lib/api/schemas";
 
 import { useAdminSettingsController } from "./controller";
-
-afterEach(() => vi.restoreAllMocks());
 
 describe("admin settings controller", () => {
   it("sends nothing for a demotion, a disable, or a revoke until it is confirmed", async () => {

@@ -1,29 +1,14 @@
-from __future__ import annotations
-
-import asyncio
 from collections.abc import Iterator
 from contextlib import ExitStack
-from pathlib import Path
 
 import pytest
-from agent.binary import AgentBinarySettings
-from api.server.async_io import ApiAsyncIo
-from api.server.services import ApiServices
-from control.service import ControlPlaneService
-from coordination.redis_client import RedisSettings
-from execution.collections.redis import (
-    RedisMapService,
-    RedisSimpleQueueService,
+from apps.api.tests.runtime import (
+    api_client,
+    api_runtime,
+    api_workspace,
+    isolated_services,
+    unpriced_services,
 )
-from provider_aws import AwsRegionalPrices
-from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
-from storage.volume_filesystem import LocalVolumeFilesystem
-from tests.domain_fixtures import owned_workspace
-from tests.fakes import FakeObjectClient
-from tests.real_redis import RealRedisActors
-from tests.service_fixtures import _InMemoryWorkspaceBuckets
-
-from database import DatabaseClient
 
 
 @pytest.fixture
@@ -32,67 +17,4 @@ def client_stack() -> Iterator[ExitStack]:
         yield stack
 
 
-@pytest.fixture
-def isolated_services(
-    tmp_path: Path,
-    database: DatabaseClient,
-    real_redis_actors: RealRedisActors,
-) -> Iterator[ApiServices]:
-    redis = real_redis_actors.client()
-    binary_redis = real_redis_actors.client(decode_responses=False)
-    maps = RedisMapService(binary_redis)
-    simple_queues = RedisSimpleQueueService(binary_redis)
-    async_io = ApiAsyncIo.from_settings(
-        database.settings,
-        RedisSettings(
-            url=real_redis_actors.url,
-            key_prefix=real_redis_actors.prefix,
-            socket_timeout_seconds=2.0,
-            health_check_interval_seconds=1,
-        ),
-    )
-
-    services = ApiServices.create(
-        database,
-        create_schema=False,
-        object_store_client=FakeObjectClient(),
-        volume_filesystem=LocalVolumeFilesystem(tmp_path / "volumes"),
-        root=tmp_path,
-        redis_client=redis,
-        binary_redis_client=binary_redis,
-        async_io=async_io,
-        workspace_storage_client=_InMemoryWorkspaceBuckets(),
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-        agent_binary_settings=AgentBinarySettings(
-            binary_dir=tmp_path,
-            binary_version="test",
-            binary_sha256_by_arch={"amd64": "0" * 64},
-        ),
-        aws_account_connection_settings=AwsAccountConnectionSettings(),
-        aws_capacity_settings=AwsCapacitySettings(
-            worker_image_digest=f"worker@sha256:{'0' * 64}",
-            agent_binary_url=(
-                f"https://s3.us-east-1.amazonaws.com/releases/agents/test/{'0' * 64}/"
-                "lazycloud-agent-linux-amd64"
-            ),
-            cpu_ami_ids={"us-east-1": "ami-00000000000000000"},
-            gpu_ami_ids={"us-east-1": "ami-00000000000000000"},
-            instance_hourly_micros={"test.instance": 1},
-            regional_prices={
-                "us-east-1": AwsRegionalPrices(
-                    gp3_gib_monthly_micros=80_000, public_ipv4_hourly_micros=5_000
-                )
-            },
-        ),
-        map_service=maps,
-        simple_queue_service=simple_queues,
-    )
-    owned_workspace(ControlPlaneService(services.context), "default")
-    try:
-        yield services
-    finally:
-        try:
-            services.close()
-        finally:
-            asyncio.run(async_io.close())
+__all__ = ["api_client", "api_runtime", "api_workspace", "isolated_services", "unpriced_services"]

@@ -21,10 +21,9 @@ from shared.http.workspace_changes import (
     WorkspaceChangeTopic,
     WorkspaceChangeType,
 )
-from tests.domain_fixtures import owned_workspace
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential, owned_workspace
 
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
@@ -47,7 +46,7 @@ def test_workspace_change_stream_resumes_and_isolates_workspaces(
     control = ControlPlaneService(isolated_services.context)
     default = owned_workspace(control, "default")
     tenant = owned_workspace(control, "tenant")
-    token, _ = administrator_credential(isolated_services, "admin")
+    token, _ = administrator_credential(isolated_services.context, "admin")
     repository = isolated_services.workspace_changes.repository
     first_default_id = repository.append(
         _change(default.id, "default-first", event_id="event-default-first")
@@ -89,7 +88,7 @@ def test_workspace_change_stream_starts_at_current_tail(
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-    token, _ = administrator_credential(isolated_services, "admin")
+    token, _ = administrator_credential(isolated_services.context, "admin")
     repository = isolated_services.workspace_changes.repository
     repository.append(_change(workspace_id, "before-connect", event_id="event-before"))
     broker = isolated_services.require_async_io().realtime
@@ -129,7 +128,7 @@ def test_workspace_change_stream_rejects_invalid_resume_cursor(
 ) -> None:
     with isolated_services.context.database.session() as session:
         isolated_services.context.default_workspace_id(session)
-    token, _ = administrator_credential(isolated_services, "admin")
+    token, _ = administrator_credential(isolated_services.context, "admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.get(

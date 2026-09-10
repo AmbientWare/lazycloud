@@ -21,7 +21,7 @@ from shared.usage import (
     UsageRecord,
     UsageUnit,
 )
-from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
+from tests.workspaces import owned_workspace, workspace_owner_user_id
 
 _RATE_AT = timedelta(minutes=1)
 _WINDOW_AT = timedelta(minutes=2)
@@ -29,7 +29,7 @@ _WINDOW = timedelta(seconds=60)
 
 
 def test_account_costs_sum_what_this_account_pays_for_and_nothing_else(
-    isolated_services: ApiServices,
+    unpriced_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
     """One figure for the account, over exactly the rows it is invoiced for.
@@ -51,28 +51,28 @@ def test_account_costs_sum_what_this_account_pays_for_and_nothing_else(
     now = utc_now()
     started_at = now + _WINDOW_AT
     ended_at = started_at + _WINDOW
-    control = ControlPlaneService(isolated_services.context)
-    with isolated_services.context.database.session() as session:
+    control = ControlPlaneService(unpriced_services.context)
+    with unpriced_services.context.database.session() as session:
         PlatformRateRepository(session).publish(
             pricing_version="test.account-costs",
             effective_at=now + _RATE_AT,
             nanos_per_egress_byte=Decimal(1),
             nanos_per_volume_byte_second=Decimal(0),
         )
-        held = isolated_services.context.default_workspace_id(session)
-    owner_user_id = workspace_owner_user_id(isolated_services.context, held)
+        held = unpriced_services.context.default_workspace_id(session)
+    owner_user_id = workspace_owner_user_id(unpriced_services.context, held)
 
     # A workspace somebody else pays for and this person was added to, and one
     # they cannot reach at all.
     colleague = owned_workspace(control, f"colleague-{uuid4().hex[:8]}")
     stranger = owned_workspace(control, f"stranger-{uuid4().hex[:8]}")
-    with isolated_services.context.database.session() as session:
+    with unpriced_services.context.database.session() as session:
         WorkspaceMemberRepository(session).add(
             workspace_id=colleague.id, user_id=owner_user_id, role=WorkspaceRole.Member
         )
 
     for workspace_id, quantity in ((held, 300), (colleague.id, 200), (stranger.id, 900)):
-        isolated_services.usage.append(
+        unpriced_services.usage.append(
             UsageRecord(
                 id=str(uuid4()),
                 workspace_id=workspace_id,
@@ -89,12 +89,12 @@ def test_account_costs_sum_what_this_account_pays_for_and_nothing_else(
             )
         )
 
-    issuer = TokenIssuer(isolated_services.context)
-    with isolated_services.context.database.session() as session:
+    issuer = TokenIssuer(unpriced_services.context)
+    with unpriced_services.context.database.session() as session:
         raw_token, _ = issuer.issue_for_user(
             session, "account-costs-owner", user_id=owner_user_id, kind=TokenKind.User
         )
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    client = client_stack.enter_context(TestClient(create_app(unpriced_services)))
 
     response = client.get(
         "/api/v1/billing/costs",
@@ -119,7 +119,7 @@ def test_account_costs_sum_what_this_account_pays_for_and_nothing_else(
 
 
 def test_account_cost_series_buckets_the_window_and_stops_at_the_payer(
-    isolated_services: ApiServices,
+    unpriced_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
     """The shape of an account's spend, over exactly the intervals it was asked for.
@@ -140,18 +140,18 @@ def test_account_cost_series_buckets_the_window_and_stops_at_the_payer(
     # An hour boundary far enough ahead that the rate below is already effective
     # when the first metering window opens.
     origin = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
-    control = ControlPlaneService(isolated_services.context)
-    with isolated_services.context.database.session() as session:
+    control = ControlPlaneService(unpriced_services.context)
+    with unpriced_services.context.database.session() as session:
         PlatformRateRepository(session).publish(
             pricing_version="test.account-series",
             effective_at=now + _RATE_AT,
             nanos_per_egress_byte=Decimal(1),
             nanos_per_volume_byte_second=Decimal(0),
         )
-        held = isolated_services.context.default_workspace_id(session)
-    owner_user_id = workspace_owner_user_id(isolated_services.context, held)
+        held = unpriced_services.context.default_workspace_id(session)
+    owner_user_id = workspace_owner_user_id(unpriced_services.context, held)
     colleague = owned_workspace(control, f"colleague-{uuid4().hex[:8]}")
-    with isolated_services.context.database.session() as session:
+    with unpriced_services.context.database.session() as session:
         WorkspaceMemberRepository(session).add(
             workspace_id=colleague.id, user_id=owner_user_id, role=WorkspaceRole.Member
         )
@@ -162,7 +162,7 @@ def test_account_cost_series_buckets_the_window_and_stops_at_the_payer(
         (colleague.id, 1, 900),
     ):
         started_at = origin + timedelta(hours=hour)
-        isolated_services.usage.append(
+        unpriced_services.usage.append(
             UsageRecord(
                 id=str(uuid4()),
                 workspace_id=workspace_id,
@@ -179,12 +179,12 @@ def test_account_cost_series_buckets_the_window_and_stops_at_the_payer(
             )
         )
 
-    issuer = TokenIssuer(isolated_services.context)
-    with isolated_services.context.database.session() as session:
+    issuer = TokenIssuer(unpriced_services.context)
+    with unpriced_services.context.database.session() as session:
         raw_token, _ = issuer.issue_for_user(
             session, "account-series-owner", user_id=owner_user_id, kind=TokenKind.User
         )
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    client = client_stack.enter_context(TestClient(create_app(unpriced_services)))
 
     response = client.get(
         "/api/v1/billing/cost-series",

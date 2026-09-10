@@ -14,7 +14,7 @@ from shared.billing_preferences import AutomaticReloadPauseReason, usage_budget_
 from shared.credit_payments import CreditPaymentStatus
 from shared.http.billing_preferences import BillingPreferences
 from shared.timestamps import utc_now
-from tests.domain_fixtures import workspace_owner_user_id
+from tests.workspaces import workspace_owner_user_id
 
 
 def test_reload_serializes_payments_preserves_pause_and_counts_refunds_and_old_pending(

@@ -7,6 +7,7 @@ import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.identity import TokenRepository, WorkspaceMemberRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthError, AuthService, AuthTokenCache
@@ -29,17 +30,16 @@ from shared.identity import (
     WorkspaceMemberRecord,
     WorkspaceRole,
 )
-from tests.domain_fixtures import owned_workspace
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential, owned_workspace
 
 
 def test_auth_service_records_token_kind_and_checks_scopes(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "workspace-a")
+    workspace = owned_workspace(ControlPlaneService(service_context), "workspace-a")
     cache = AuthTokenCache()
-    auth = AuthService(isolated_services.context, token_cache=cache)
+    auth = AuthService(service_context, token_cache=cache)
     stored_token_ids: list[str] = []
     original_store = cache.store
 
@@ -106,12 +106,12 @@ def test_bootstrap_succeeds_once_and_never_reopens(
 
 
 def test_auth_service_cache_is_explicitly_shared_reset_and_closed(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cache = AuthTokenCache()
-    mutator = AuthService(isolated_services.context, token_cache=cache)
-    verifier = AuthService(isolated_services.context, token_cache=cache)
+    mutator = AuthService(service_context, token_cache=cache)
+    verifier = AuthService(service_context, token_cache=cache)
     raw_token, record = mutator.create_token("shared-cache")
 
     assert verifier.authenticate(raw_token).id == record.id
@@ -133,11 +133,11 @@ def test_auth_service_cache_is_explicitly_shared_reset_and_closed(
 
 
 def test_auth_service_defaults_do_not_share_process_global_cache(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first = AuthService(isolated_services.context)
-    second = AuthService(isolated_services.context)
+    first = AuthService(service_context)
+    second = AuthService(service_context)
     raw_token, record = first.create_token("isolated-cache")
 
     assert first.authenticate(raw_token).id == record.id
@@ -155,19 +155,19 @@ def test_auth_service_defaults_do_not_share_process_global_cache(
 
 
 def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     workspace_a = owned_workspace(control, "workspace-a")
     workspace_b = owned_workspace(control, "workspace-b")
-    auth = AuthService(isolated_services.context)
+    auth = AuthService(service_context)
     _, restricted = auth.create_token(
         "reader",
         scopes=[AuthScope.Read.value],
         kind=TokenKind.WorkspaceRestricted,
         workspace_id=workspace_a.id,
     )
-    _, admin = administrator_credential(isolated_services, "policy-admin")
+    _, admin = administrator_credential(service_context, "policy-admin")
 
     workspace_read = workspace_requirement(workspace_a.id, action=AuthScope.Read)
     assert decide_authorization(restricted, workspace_read).allowed
@@ -196,10 +196,10 @@ def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(
 
 
 def test_policy_decisions_cover_worker_machine_and_external_input(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "workspace-a")
-    auth = AuthService(isolated_services.context)
+    workspace = owned_workspace(ControlPlaneService(service_context), "workspace-a")
+    auth = AuthService(service_context)
     _, public_worker = auth.create_token(
         "worker",
         scopes=[AuthScope.Worker.value, AuthScope.Machine.value],
@@ -236,8 +236,8 @@ def test_policy_decisions_cover_worker_machine_and_external_input(
     assert policy_input.resource_kind == AuthzResourceKind.Worker
 
 
-def test_disabled_tokens_are_rejected_by_policy(isolated_services: ApiServices) -> None:
-    _, record = AuthService(isolated_services.context).create_token("disabled")
+def test_disabled_tokens_are_rejected_by_policy(service_context: ServiceContext) -> None:
+    _, record = AuthService(service_context).create_token("disabled")
     disabled = record.model_copy(update={"disabled_by_admin": True})
 
     decision = decide_authorization(disabled, workspace_requirement("default"))
@@ -247,7 +247,7 @@ def test_disabled_tokens_are_rejected_by_policy(isolated_services: ApiServices) 
 
 
 def test_a_users_credential_reaches_only_the_workspaces_they_belong_to(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Membership is the whole of a person's reach, and the role bounds what they may do.
 
@@ -255,14 +255,14 @@ def test_a_users_credential_reaches_only_the_workspaces_they_belong_to(
     credential must not act in another customer's workspace, and a member must not
     perform an action reserved for the owner.
     """
-    control = ControlPlaneService(isolated_services.context)
-    users = UserService(isolated_services.context)
+    control = ControlPlaneService(service_context)
+    users = UserService(service_context)
     me = users.create(display_name="me-user")
     them = users.create(display_name="them-user")
     mine = control.set_workspace("mine", owner_user_id=me.id)
     theirs = control.set_workspace("theirs", owner_user_id=them.id)
 
-    _raw, my_token = AuthService(isolated_services.context).create_account_token(me.id, "cli")
+    _raw, my_token = AuthService(service_context).create_account_token(me.id, "cli")
 
     assert decide_authorization(
         my_token,
@@ -293,7 +293,7 @@ def test_a_users_credential_reaches_only_the_workspaces_they_belong_to(
         ),
     ).allowed
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         WorkspaceMemberRepository(session).add(
             workspace_id=theirs.id,
             user_id=me.id,
@@ -315,14 +315,14 @@ def test_a_users_credential_reaches_only_the_workspaces_they_belong_to(
 
 
 def test_a_workspace_credential_cannot_be_widened_by_a_membership_row(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Automation keeps its single-workspace blast radius whatever else is presented."""
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     mine = owned_workspace(control, "mine")
     theirs = owned_workspace(control, "theirs")
-    me = UserService(isolated_services.context).create(display_name="me-user")
-    _raw, workspace_token = AuthService(isolated_services.context).create_token(
+    me = UserService(service_context).create(display_name="me-user")
+    _raw, workspace_token = AuthService(service_context).create_token(
         "ci",
         workspace_id=mine.id,
     )

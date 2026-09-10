@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.images import (
@@ -48,7 +49,7 @@ from storage.service import (
     ObjectStorage,
 )
 from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 from worker.checkpoints import (
     WorkerCheckpointStatus,
     create_checkpoint_state_payload,
@@ -501,22 +502,20 @@ def test_durable_retention_prunes_only_unreferenced_production_artifacts(
 
 
 def test_source_retention_preserves_cleanup_target_through_later_workspace_deletion(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     tmp_path: Path,
 ) -> None:
     now = utc_now()
     future = now + timedelta(days=30)
     client = _MemoryObjectClient()
     objects = ObjectStorage(
-        isolated_services.context,
+        service_context,
         object_client=client,
         default_bucket="objects",
     )
-    workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context), "retained-source-owner"
-    )
+    workspace = owned_workspace(ControlPlaneService(service_context), "retained-source-owner")
     generation_id = str(uuid4())
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         generation = SourceCacheCleanupRepository(session).register_generation(
             generation_id,
             worker_id="worker-1",
@@ -531,10 +530,10 @@ def test_source_retention_preserves_cleanup_target_through_later_workspace_delet
         data=b"cached source",
     )
     service = RetentionService(
-        context=isolated_services.context,
+        context=service_context,
         object_storage=objects,
         cache_storage=CacheStorage(
-            isolated_services.context,
+            service_context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
         config=RetentionConfig(checkpoint_bucket="objects"),
@@ -549,14 +548,14 @@ def test_source_retention_preserves_cleanup_target_through_later_workspace_delet
         )
         == 1
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         targets = SourceCacheCleanupRepository(session).list_targets(workspace_id=workspace.id)
         assert ObjectRepository(session).get_owned(source.id, include_operations=True) is None
     assert len(targets) == 1
     assert targets[0].source_object_id == source.id
     assert targets[0].status is SourceCacheCleanupStatus.Pending
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         workspaces = WorkspaceRepository(session)
         deleting = workspaces.lock_for_deletion(workspace.id)
         workspaces.mark_deleting(deleting)
@@ -564,7 +563,7 @@ def test_source_retention_preserves_cleanup_target_through_later_workspace_delet
         deleted = workspaces.tombstone(deleting)
     assert deleted.status is WorkspaceStatus.Deleted
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         cleanup = SourceCacheCleanupRepository(session)
         claimed = cleanup.claim_due(
             generation_id,
@@ -584,23 +583,23 @@ def test_source_retention_preserves_cleanup_target_through_later_workspace_delet
             claim_token=claimed[0].claim_token,
             now=future,
         )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         summary = SourceCacheCleanupRepository(session).summarize(workspace_id=workspace.id)
     assert summary.complete
     assert summary.completed_count == 1
 
 
 def test_checkpoint_retention_survives_empty_hot_state_index(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     now = utc_now()
     client = _MemoryObjectClient()
     objects = ObjectStorage(
-        isolated_services.context,
+        service_context,
         object_client=client,
         default_bucket="objects",
     )
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
     records = (
         CheckpointRecord(
             checkpoint_id="checkpoint-legacy",
@@ -623,7 +622,7 @@ def test_checkpoint_retention_survives_empty_hot_state_index(
             retention_expires_at=now - timedelta(seconds=1),
         ),
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = CheckpointRepository(session)
         for record in records:
             repository.upsert(record)
@@ -646,7 +645,7 @@ def test_checkpoint_retention_survives_empty_hot_state_index(
         )
 
     result = DurableCheckpointRetentionService(
-        context=isolated_services.context,
+        context=service_context,
         object_storage=objects,
         checkpoint_bucket="objects",
     ).prune([], now=now)
@@ -667,11 +666,11 @@ def test_checkpoint_retention_survives_empty_hot_state_index(
 
 
 def test_checkpoint_creation_and_restore_record_durable_retention_deadline(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
     service = CheckpointService(
-        isolated_services.context,
+        service_context,
         retention_seconds=60,
         restore_lease_seconds=1800,
     )
@@ -694,7 +693,7 @@ def test_checkpoint_creation_and_restore_record_durable_retention_deadline(
         )
     )
     assert created.retention_expires_at is not None
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         CheckpointRepository(session).upsert(
             created.model_copy(update={"retention_expires_at": utc_now() - timedelta(days=1)})
         )
@@ -713,7 +712,7 @@ def test_checkpoint_creation_and_restore_record_durable_retention_deadline(
     assert utc_now() + timedelta(seconds=55) < restored.retention_expires_at
     assert restored.retention_expires_at < utc_now() + timedelta(seconds=65)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         CheckpointRepository(session).upsert(
             restored.model_copy(update={"retention_expires_at": utc_now() + timedelta(minutes=30)})
         )
@@ -791,25 +790,25 @@ def test_source_and_image_candidates_recheck_references_before_physical_delete(
 
 
 def test_cleaned_image_tombstone_blocks_reference_until_republication(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     tmp_path: Path,
 ) -> None:
     future = utc_now() + timedelta(days=30)
     client = _MemoryObjectClient()
     objects = ObjectStorage(
-        isolated_services.context,
+        service_context,
         object_client=client,
         default_bucket="objects",
     )
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
     image = ImageRecord(workspace_id=workspace.id, image_id="image-cleaned")
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         ImageRepository(session).upsert(image)
     service = RetentionService(
-        context=isolated_services.context,
+        context=service_context,
         object_storage=objects,
         cache_storage=CacheStorage(
-            isolated_services.context,
+            service_context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
         config=RetentionConfig(checkpoint_bucket="objects"),
@@ -823,7 +822,7 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
     )
 
     assert removed[0] == 1
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         images = ImageRepository(session)
         assert images.get(image.image_id, workspace_id=workspace.id) is None
         cleaned = images.get(
@@ -834,14 +833,14 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
     assert cleaned is not None
     assert cleaned.cleanup_completed_at is not None
     with pytest.raises(ConflictError, match="cleanup is in progress"):
-        ControlPlaneService(isolated_services.context).create_stub(
+        ControlPlaneService(service_context).create_stub(
             "cleaned-image",
             workspace=workspace.id,
             config=StubConfig(image=StubImageConfig(image_id=image.image_id)),
         )
 
     republished_after = utc_now()
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         images = ImageRepository(session)
         republished = images.upsert(image)
         immediately_eligible = ObjectReferenceRepository(session).list_image_cleanup_candidates(
@@ -852,7 +851,7 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
         )
     assert republished.cleanup_completed_at is None
     assert immediately_eligible == []
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert (
             ImageRepository(session).get(
                 image.image_id,
@@ -863,17 +862,17 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
 
 
 def test_image_archive_survives_until_the_last_authorized_workspace_is_cleaned(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     tmp_path: Path,
 ) -> None:
     future = utc_now() + timedelta(days=30)
     client = _MemoryObjectClient()
     objects = ObjectStorage(
-        isolated_services.context,
+        service_context,
         object_client=client,
         default_bucket="objects",
     )
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     first = owned_workspace(control, "default")
     second = owned_workspace(control, "second-archive-owner")
     archive_settings = _archive_settings()
@@ -881,7 +880,7 @@ def test_image_archive_survives_until_the_last_authorized_workspace_is_cleaned(
     object_key = f"image-archives/{image_id}.clip"
     physical_key = archive_settings.physical_key(object_key)
     client.put_bytes(physical_key, b"shared-archive", bucket=archive_settings.bucket)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         images = ImageRepository(session)
         images.upsert(ImageRecord(workspace_id=first.id, image_id=image_id))
         images.upsert(ImageRecord(workspace_id=second.id, image_id=image_id))
@@ -898,10 +897,10 @@ def test_image_archive_survives_until_the_last_authorized_workspace_is_cleaned(
         )
     workload_registry = _RecordingWorkloadImageRegistry()
     service = RetentionService(
-        context=isolated_services.context,
+        context=service_context,
         object_storage=objects,
         cache_storage=CacheStorage(
-            isolated_services.context,
+            service_context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
         config=RetentionConfig(
@@ -921,7 +920,7 @@ def test_image_archive_survives_until_the_last_authorized_workspace_is_cleaned(
     assert partial.image_records_removed == 1
     assert partial.image_archives_removed == 0
     assert client.exists(physical_key, bucket=archive_settings.bucket)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert ImageArchiveRepository(session).get(image_id) is not None
 
     final = service.reconcile(active_recent_stub_keys=[], now=future)
@@ -930,21 +929,21 @@ def test_image_archive_survives_until_the_last_authorized_workspace_is_cleaned(
     assert final.image_archives_removed == 1
     assert workload_registry.deleted == [f"registry.example.com/workloads@sha256:{'c' * 64}"]
     assert not client.exists(physical_key, bucket=archive_settings.bucket)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert ImageArchiveRepository(session).get(image_id) is None
 
 
 def test_duplicate_build_cleanup_preserves_shared_path_and_cache_key(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     tmp_path: Path,
 ) -> None:
     now = utc_now()
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
-    shared_path = isolated_services.context.paths.root / "image-builds" / "shared.rclip"
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    shared_path = service_context.paths.root / "image-builds" / "shared.rclip"
     shared_path.parent.mkdir(parents=True, exist_ok=True)
     shared_path.write_bytes(b"shared")
     cache = CacheStorage(
-        isolated_services.context,
+        service_context,
         cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
     )
     source = tmp_path / "cache-source"
@@ -970,15 +969,15 @@ def test_duplicate_build_cleanup_preserves_shared_path_and_cache_key(
             "finished_at": now,
         }
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         builds = ImageBuildRepository(session)
         builds.upsert(old_build, workspace_id=workspace.id)
         builds.upsert(retained_build, workspace_id=workspace.id)
 
     result = RetentionService(
-        context=isolated_services.context,
+        context=service_context,
         object_storage=ObjectStorage(
-            isolated_services.context,
+            service_context,
             object_client=_MemoryObjectClient(),
             default_bucket="objects",
         ),
@@ -990,7 +989,7 @@ def test_duplicate_build_cleanup_preserves_shared_path_and_cache_key(
         image_archive_settings=_archive_settings(),
     ).reconcile(active_recent_stub_keys=[], now=now)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         builds = ImageBuildRepository(session)
         assert builds.get_across_workspaces(old_build.id) is None
         assert builds.get_across_workspaces(retained_build.id) is not None
@@ -1002,10 +1001,10 @@ def test_duplicate_build_cleanup_preserves_shared_path_and_cache_key(
 
 
 def test_build_retention_age_starts_when_the_build_finishes(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     now = utc_now()
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
     old_finished = ImageBuildRecord(
         id=str(uuid4()),
         image=ImageSpec(image_id="old-finished"),
@@ -1025,7 +1024,7 @@ def test_build_retention_age_starts_when_the_build_finishes(
             "finished_at": now,
         }
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         builds = ImageBuildRepository(session)
         builds.upsert(old_finished, workspace_id=workspace.id)
         builds.upsert(just_finished, workspace_id=workspace.id)
@@ -1040,16 +1039,16 @@ def test_build_retention_age_starts_when_the_build_finishes(
 
 
 def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     tmp_path: Path,
 ) -> None:
     now = utc_now()
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
     image = ImageRecord(workspace_id=workspace.id, image_id="image-many-builds")
-    shared_path = isolated_services.context.paths.root / "image-builds" / "many-shared.rclip"
+    shared_path = service_context.paths.root / "image-builds" / "many-shared.rclip"
     shared_path.parent.mkdir(parents=True, exist_ok=True)
     shared_path.write_bytes(b"shared-build-artifact")
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         ImageRepository(session).upsert(image)
         builds = ImageBuildRepository(session)
         for index in range(31):
@@ -1068,14 +1067,14 @@ def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
                 workspace_id=workspace.id,
             )
     service = RetentionService(
-        context=isolated_services.context,
+        context=service_context,
         object_storage=ObjectStorage(
-            isolated_services.context,
+            service_context,
             object_client=_MemoryObjectClient(),
             default_bucket="objects",
         ),
         cache_storage=CacheStorage(
-            isolated_services.context,
+            service_context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
         config=RetentionConfig(
@@ -1093,7 +1092,7 @@ def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
     assert first[0] == 0
     assert first[1] == 7
     assert shared_path.exists()
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         builds = ImageBuildRepository(session)
         assert builds.count_for_image(image.image_id, workspace_id=workspace.id) == 24
         claimed_image = ImageRepository(session).get(
@@ -1115,7 +1114,7 @@ def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
     assert removed_builds == 31
     assert removed_images == 1
     assert not shared_path.exists()
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert (
             ImageBuildRepository(session).count_for_image(
                 image.image_id,
@@ -1134,13 +1133,13 @@ def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
 
 
 def test_resumed_image_cleanup_shares_one_build_budget_across_images(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     tmp_path: Path,
 ) -> None:
     now = utc_now()
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
     image_ids = ("claimed-image-a", "claimed-image-b")
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         images = ImageRepository(session)
         builds = ImageBuildRepository(session)
         claims = CleanupRepository(session)
@@ -1165,14 +1164,14 @@ def test_resumed_image_cleanup_shares_one_build_budget_across_images(
                 claimed_at=now,
             )
     service = RetentionService(
-        context=isolated_services.context,
+        context=service_context,
         object_storage=ObjectStorage(
-            isolated_services.context,
+            service_context,
             object_client=_MemoryObjectClient(),
             default_bucket="objects",
         ),
         cache_storage=CacheStorage(
-            isolated_services.context,
+            service_context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
         config=RetentionConfig(
@@ -1185,7 +1184,7 @@ def test_resumed_image_cleanup_shares_one_build_budget_across_images(
     removed = service._resume_claimed_images()
 
     assert removed[1] == 7
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         builds = ImageBuildRepository(session)
         assert (
             sum(
@@ -1197,13 +1196,13 @@ def test_resumed_image_cleanup_shares_one_build_budget_across_images(
 
 
 def test_artifact_reference_age_starts_when_the_build_finishes(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     now = utc_now()
     recent_after = now - timedelta(minutes=1)
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
     objects = ObjectStorage(
-        isolated_services.context,
+        service_context,
         object_client=_MemoryObjectClient(),
         default_bucket=SOURCE_PACKAGE_BUCKET,
     )
@@ -1244,7 +1243,7 @@ def test_artifact_reference_age_starts_when_the_build_finishes(
             "finished_at": None,
         }
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         builds = ImageBuildRepository(session)
         builds.upsert(build, workspace_id=workspace.id)
         builds.upsert(unfinished_terminal, workspace_id=workspace.id)
@@ -1282,12 +1281,12 @@ def test_artifact_reference_age_starts_when_the_build_finishes(
 
 
 def test_build_candidate_rechecks_status_before_deleting_physical_data(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     tmp_path: Path,
 ) -> None:
     now = utc_now()
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
-    artifact = isolated_services.context.paths.root / "image-builds" / "claimed.rclip"
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    artifact = service_context.paths.root / "image-builds" / "claimed.rclip"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     artifact.write_bytes(b"claimed")
     candidate = ImageBuildRecord(
@@ -1301,7 +1300,7 @@ def test_build_candidate_rechecks_status_before_deleting_physical_data(
         created_at=now - timedelta(days=30),
         finished_at=now - timedelta(days=30),
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         builds = ImageBuildRepository(session)
         builds.upsert(candidate, workspace_id=workspace.id)
         builds.upsert(
@@ -1314,14 +1313,14 @@ def test_build_candidate_rechecks_status_before_deleting_physical_data(
             workspace_id=workspace.id,
         )
     service = RetentionService(
-        context=isolated_services.context,
+        context=service_context,
         object_storage=ObjectStorage(
-            isolated_services.context,
+            service_context,
             object_client=_MemoryObjectClient(),
             default_bucket="objects",
         ),
         cache_storage=CacheStorage(
-            isolated_services.context,
+            service_context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
         config=RetentionConfig(checkpoint_bucket="objects"),
@@ -1334,7 +1333,7 @@ def test_build_candidate_rechecks_status_before_deleting_physical_data(
         recent_build_after=now,
     ) == (0, 0, 0)
     assert artifact.exists()
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         retained = ImageBuildRepository(session).get_across_workspaces(candidate.id)
     assert retained is not None
     assert retained.status is BuildStatus.Running
@@ -1417,17 +1416,17 @@ def test_source_cleanup_claim_survives_crash_and_rejects_new_reference(
 
 
 def test_slow_object_delete_does_not_block_unrelated_database_write(
-    isolated_services: ApiServices,
+    committed_service_context: ServiceContext,
     tmp_path: Path,
 ) -> None:
     future = utc_now() + timedelta(days=30)
     client = _BlockingDeleteObjectClient()
     objects = ObjectStorage(
-        isolated_services.context,
+        committed_service_context,
         object_client=client,
         default_bucket="objects",
     )
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(committed_service_context)
     workspace = owned_workspace(control, "default")
     source = objects.put_bytes_for_workspace(
         workspace_id=workspace.id,
@@ -1435,14 +1434,14 @@ def test_slow_object_delete_does_not_block_unrelated_database_write(
         key="sources/slow.zip",
         data=b"source",
     )
-    with isolated_services.context.database.session() as session:
+    with committed_service_context.database.session() as session:
         candidate = ObjectRepository(session).get_owned(source.id)
     assert candidate is not None
     service = RetentionService(
-        context=isolated_services.context,
+        context=committed_service_context,
         object_storage=objects,
         cache_storage=CacheStorage(
-            isolated_services.context,
+            committed_service_context,
             cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
         ),
         config=RetentionConfig(checkpoint_bucket="objects"),
@@ -1482,15 +1481,15 @@ def test_slow_object_delete_does_not_block_unrelated_database_write(
 
 
 def test_object_delete_claim_does_not_block_another_workspace_location(
-    isolated_services: ApiServices,
+    committed_service_context: ServiceContext,
 ) -> None:
     client = _BlockingDeleteObjectClient()
     objects = ObjectStorage(
-        isolated_services.context,
+        committed_service_context,
         object_client=client,
         default_bucket="objects",
     )
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(committed_service_context)
     first = owned_workspace(control, "default")
     second = owned_workspace(control, "second-object-workspace")
     objects.put_bytes_for_workspace(
@@ -1529,15 +1528,15 @@ def test_object_delete_claim_does_not_block_another_workspace_location(
 
 
 def test_object_write_claim_blocks_delete_without_holding_database_transaction(
-    isolated_services: ApiServices,
+    committed_service_context: ServiceContext,
 ) -> None:
     client = _BlockingPutObjectClient()
     objects = ObjectStorage(
-        isolated_services.context,
+        committed_service_context,
         object_client=client,
         default_bucket="objects",
     )
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(committed_service_context)
     workspace = owned_workspace(control, "default")
     client.block_put = True
     errors: list[BaseException] = []
@@ -1576,15 +1575,15 @@ def test_object_write_claim_blocks_delete_without_holding_database_transaction(
 
 
 def test_stale_object_write_claim_finalizes_matching_atomic_upload(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     client = _MemoryObjectClient()
     objects = ObjectStorage(
-        isolated_services.context,
+        service_context,
         object_client=client,
         default_bucket="objects",
     )
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
     physical_key = objects.physical_key_for_workspace(
         workspace.id,
         bucket="objects",
@@ -1597,7 +1596,7 @@ def test_stale_object_write_claim_finalizes_matching_atomic_upload(
         size=7,
         sha256="a" * 64,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         claim = ObjectRepository(session).begin_write(
             command,
             workspace_id=workspace.id,
@@ -1625,15 +1624,15 @@ def test_stale_object_write_claim_finalizes_matching_atomic_upload(
 
 
 def test_stale_object_operations_roll_back_missing_write_and_resume_delete(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     client = _MemoryObjectClient()
     objects = ObjectStorage(
-        isolated_services.context,
+        service_context,
         object_client=client,
         default_bucket="objects",
     )
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
     missing_physical_key = objects.physical_key_for_workspace(
         workspace.id,
         bucket="objects",
@@ -1646,7 +1645,7 @@ def test_stale_object_operations_roll_back_missing_write_and_resume_delete(
         size=7,
         sha256="b" * 64,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         missing = ObjectRepository(session).begin_write(
             command,
             workspace_id=workspace.id,
@@ -1659,7 +1658,7 @@ def test_stale_object_operations_roll_back_missing_write_and_resume_delete(
         data=b"delete",
     )
     stale = utc_now() - timedelta(hours=3)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         ObjectRepository(session).claim_delete(
             doomed.id,
             cleanup_kind="object-delete",
@@ -1667,7 +1666,7 @@ def test_stale_object_operations_roll_back_missing_write_and_resume_delete(
         )
     with pytest.raises(NotFoundError, match=doomed.id):
         objects.get_by_id(doomed.id)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         abandoned_owned = ObjectRepository(session).get_owned(doomed.id, include_operations=True)
     assert abandoned_owned is not None
     abandoned = abandoned_owned.record

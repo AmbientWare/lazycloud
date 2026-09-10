@@ -4,13 +4,14 @@ from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.billing_costs import (
     BillingLedgerCostRepository,
     LedgerCostCursor,
     WorkspaceCostScope,
 )
 from database.repositories.billing_rates import PlatformRateRepository
+from observability.usage import UsageService
 from shared.billing_rate_card import PUBLISHED_METERED_RATE_HISTORY
 from shared.http.usage import UsageCostGroupKey
 from shared.timestamps import utc_now
@@ -29,7 +30,7 @@ _WINDOW = timedelta(seconds=60)
 
 
 def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Every priced group is read exactly once, at a level most rows do not reach.
 
@@ -43,8 +44,8 @@ def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
     now = max(utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY))
     started_at = now + _WINDOW_AT
     ended_at = started_at + _WINDOW
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         PlatformRateRepository(session).publish(
             pricing_version="test.paging",
             effective_at=now + _RATE_AT,
@@ -57,7 +58,7 @@ def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
     for cost_nanos in (300, 200, 200, 100, 100):
         workload_id = str(uuid4())
         expected[(app_id, workload_id, "")] = cost_nanos
-        isolated_services.usage.append(
+        UsageService(service_context).append(
             UsageRecord(
                 id=str(uuid4()),
                 workspace_id=workspace_id,
@@ -77,7 +78,7 @@ def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
     read: list[tuple[tuple[str, str, str], int]] = []
     cursor: LedgerCostCursor | None = None
     while True:
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             page = BillingLedgerCostRepository(session).page(
                 scope=WorkspaceCostScope((workspace_id,)),
                 start=started_at - _WINDOW,
@@ -98,7 +99,7 @@ def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
 
 
 def test_app_level_costs_keep_image_builds_apart_from_other_unattributed_usage(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Image builds reach no app, and still are not the same thing as the rest of
     what reached no app: a build is work someone asked for, a volume byte-second
@@ -106,8 +107,8 @@ def test_app_level_costs_keep_image_builds_apart_from_other_unattributed_usage(
     now = max(utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY))
     started_at = now + _WINDOW_AT
     ended_at = started_at + _WINDOW
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         PlatformRateRepository(session).publish(
             pricing_version="test.category",
             effective_at=now + _RATE_AT,
@@ -115,7 +116,7 @@ def test_app_level_costs_keep_image_builds_apart_from_other_unattributed_usage(
             nanos_per_volume_byte_second=Decimal(0),
         )
     for stub_id, quantity in ((IMAGE_BUILD_WORKLOAD_ID, 300), ("", 100)):
-        isolated_services.usage.append(
+        UsageService(service_context).append(
             UsageRecord(
                 id=str(uuid4()),
                 workspace_id=workspace_id,
@@ -131,7 +132,7 @@ def test_app_level_costs_keep_image_builds_apart_from_other_unattributed_usage(
                 },
             )
         )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         page = BillingLedgerCostRepository(session).page(
             scope=WorkspaceCostScope(workspace_ids=(workspace_id,)),
             start=started_at,

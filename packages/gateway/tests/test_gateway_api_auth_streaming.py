@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import sys
-import threading
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
@@ -26,16 +25,15 @@ from shared.compute_policy import (
     MachinePool,
     UnitName,
 )
-from shared.contracts import ContractModel
 from shared.events import EventLevel
 from shared.identity import TokenKind
 from shared.worker_events import GATEWAY_REQUEST_EVENT_ACTION
 from starlette.types import Receive, Scope, Send
 from storage.service import ObjectStorage
 from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
-from tests.domain_fixtures import owned_workspace
+from tests.http_server import running_http_server
 from tests.redis_fakes import FakeRedis
-from worker.container_client import models
+from tests.workspaces import owned_workspace
 
 _JSON_OBJECT: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
 _JSON_OBJECT_LIST: TypeAdapter[list[dict[str, JsonValue]]] = TypeAdapter(list[dict[str, JsonValue]])
@@ -506,58 +504,6 @@ def _redis() -> RedisClient:
 
 
 @dataclass
-class _TransportCall:
-    method: models.ContainerServiceMethod
-    request: ContractModel
-    timeout_seconds: float | None
-
-
-@dataclass
-class _RecordingTransport:
-    unary_calls: list[_TransportCall] = field(default_factory=list)
-
-    def unary(
-        self,
-        method: models.ContainerServiceMethod,
-        request: ContractModel,
-        *,
-        timeout_seconds: float | None = None,
-    ) -> ContractModel:
-        self.unary_calls.append(_TransportCall(method, request, timeout_seconds))
-        if method is models.ContainerServiceMethod.ContainerSyncWorkspace:
-            assert isinstance(request, models.SyncContainerWorkspaceRequest)
-            return models.SyncContainerWorkspaceResponse(path=request.path)
-        if method is models.ContainerServiceMethod.ContainerStatus:
-            return models.ContainerStatusResponse(status="running")
-        if method is models.ContainerServiceMethod.ContainerCheckpoint:
-            assert isinstance(request, models.ContainerCheckpointRequest)
-            return models.ContainerCheckpointResponse(checkpoint_id=request.checkpoint_id)
-        raise AssertionError(f"unexpected container service method: {method}")
-
-    def stream(
-        self,
-        method: models.ContainerServiceMethod,
-        request: ContractModel,
-        *,
-        timeout_seconds: float | None = None,
-    ) -> list[ContractModel]:
-        self.unary_calls.append(_TransportCall(method, request, timeout_seconds))
-        return []
-
-
-@dataclass
-class _RecordingTransportFactory:
-    transport: _RecordingTransport
-
-    def create_transport(
-        self,
-        options: models.ContainerClientConnectionOptions,
-    ) -> _RecordingTransport:
-        _ = options
-        return self.transport
-
-
-@dataclass
 class _ObjectClient:
     http_upload_payloads: list[bytes] = field(default_factory=list)
     objects: dict[tuple[str, str], bytes] = field(default_factory=dict)
@@ -714,13 +660,5 @@ def _serve_object_uploads(client: _ObjectClient) -> Iterator[str]:
             del format, args
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), UploadHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        host = str(server.server_address[0])
-        port = int(server.server_address[1])
-        yield f"http://{host}:{port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+    with running_http_server(server):
+        yield f"http://127.0.0.1:{server.server_port}"

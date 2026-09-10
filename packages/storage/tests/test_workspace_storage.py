@@ -13,6 +13,7 @@ from control.service import (
     WorkspaceStorageAlreadyExistsError,
     WorkspaceStorageError,
 )
+from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.images import ImageArchiveRepository, ImageRepository
 from fastapi.testclient import TestClient
@@ -33,8 +34,8 @@ from shared.image_building.records import ImageRecord
 from storage.service import OBJECT_SHA256_METADATA_KEY, ObjectStorage
 from storage.workspace_storage_issuers import external_workspace_storage_settings
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings
-from tests.domain_fixtures import owned_workspace
 from tests.fakes import FakeObjectClient
+from tests.workspaces import owned_workspace
 
 
 def test_external_storage_never_inherits_platform_credentials(
@@ -189,11 +190,11 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
 
 
 def test_workspace_storage_creation_validates_before_persisting(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     bucket_client = BucketClient(fail_validate=True)
     service = ControlPlaneService(
-        isolated_services.context,
+        service_context,
         workspace_storage_client=bucket_client,
     )
     workspace = owned_workspace(service, "broken")
@@ -208,7 +209,7 @@ def test_workspace_storage_creation_validates_before_persisting(
 
 
 def test_external_workspace_storage_validates_and_rejects_duplicates(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     external_client = BucketClient()
     validated_configs: list[WorkspaceStorageConfig] = []
@@ -218,7 +219,7 @@ def test_external_workspace_storage_validates_and_rejects_duplicates(
         return external_client
 
     service = ControlPlaneService(
-        isolated_services.context,
+        service_context,
         workspace_storage_client_factory=client_factory,
     )
     workspace = owned_workspace(service, "tenant")
@@ -296,15 +297,15 @@ def test_workspace_storage_api_keeps_token_active_after_cache_invalidation_hook(
 
 
 def test_workspace_objects_with_same_logical_location_are_physically_isolated(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     client = MetadataObjectClient()
     storage = ObjectStorage(
-        isolated_services.context,
+        service_context,
         object_client=client,
         default_bucket="physical-objects",
     )
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     first = owned_workspace(control, "first-object-owner")
     second = owned_workspace(control, "second-object-owner")
 
@@ -329,7 +330,7 @@ def test_workspace_objects_with_same_logical_location_are_physically_isolated(
     assert storage.object_is_complete(first_record)
     assert storage.object_is_complete(second_record)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         workspaces = WorkspaceRepository(session)
         deleting = workspaces.lock_for_deletion(first.id)
         workspaces.mark_deleting(deleting)
@@ -348,16 +349,16 @@ def test_workspace_objects_with_same_logical_location_are_physically_isolated(
 
 
 def test_logical_object_purposes_share_one_physical_bucket_with_distinct_prefixes(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     client = MetadataObjectClient()
     storage = ObjectStorage(
-        isolated_services.context,
+        service_context,
         object_client=client,
         default_bucket="physical-objects",
     )
     workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context), "logical-object-purpose-owner"
+        ControlPlaneService(service_context), "logical-object-purpose-owner"
     )
 
     records = tuple(
@@ -389,18 +390,16 @@ def test_logical_object_purposes_share_one_physical_bucket_with_distinct_prefixe
 
 
 def test_immutable_file_replay_reuses_complete_object_and_repairs_missing_bytes(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     tmp_path: Path,
 ) -> None:
     client = MetadataObjectClient()
     storage = ObjectStorage(
-        isolated_services.context,
+        service_context,
         object_client=client,
         default_bucket="physical-objects",
     )
-    workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context), "immutable-object-owner"
-    )
+    workspace = owned_workspace(ControlPlaneService(service_context), "immutable-object-owner")
     source = tmp_path / "artifact.bin"
     source.write_bytes(b"immutable payload")
 
@@ -449,17 +448,15 @@ def test_immutable_file_replay_reuses_complete_object_and_repairs_missing_bytes(
 
 
 def test_object_completeness_requires_exact_metadata_and_maps_store_outages(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     client = MetadataObjectClient()
     storage = ObjectStorage(
-        isolated_services.context,
+        service_context,
         object_client=client,
         default_bucket="physical-objects",
     )
-    workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context), "object-completeness-owner"
-    )
+    workspace = owned_workspace(ControlPlaneService(service_context), "object-completeness-owner")
     record = storage.put_bytes_for_workspace(
         workspace_id=workspace.id,
         bucket=WORKSPACE_OBJECT_BUCKET,
@@ -508,7 +505,7 @@ def _auth(token: str) -> dict[str, str]:
 
 
 def test_workspace_deletion_preserves_a_published_archive_a_sibling_still_uses(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Deleting a tenant must not destroy bytes another tenant is authorized for.
 
@@ -519,11 +516,11 @@ def test_workspace_deletion_preserves_a_published_archive_a_sibling_still_uses(
 
     client = MetadataObjectClient()
     storage = ObjectStorage(
-        isolated_services.context,
+        service_context,
         object_client=client,
         default_bucket="physical-objects",
     )
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     leaving = owned_workspace(control, "archive-leaving-owner")
     staying = owned_workspace(control, "archive-staying-owner")
     image_id = "shared-image"
@@ -536,7 +533,7 @@ def test_workspace_deletion_preserves_a_published_archive_a_sibling_still_uses(
         key="models/owned.bin",
         data=b"leaving",
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         ImageArchiveRepository(session).reserve(
             image_id,
             bucket="image-archives",
@@ -552,11 +549,11 @@ def test_workspace_deletion_preserves_a_published_archive_a_sibling_still_uses(
         images.upsert(ImageRecord(workspace_id=leaving.id, image_id=image_id))
         images.upsert(ImageRecord(workspace_id=staying.id, image_id=image_id))
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         workspaces = WorkspaceRepository(session)
         workspaces.mark_deleting(workspaces.lock_for_deletion(leaving.id))
     assert storage.delete_workspace_objects_for_deletion(leaving.id) == 1
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         workspaces = WorkspaceRepository(session)
         purged = workspaces.purge_owned_records(leaving.id)
         deleted = workspaces.tombstone(workspaces.lock_for_deletion(leaving.id))
@@ -564,7 +561,7 @@ def test_workspace_deletion_preserves_a_published_archive_a_sibling_still_uses(
     assert purged.get("images") == 1
     assert deleted.status is WorkspaceStatus.Deleted
     assert client.exists(archive_key, bucket="image-archives")
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         archives = ImageArchiveRepository(session)
         assert archives.get(image_id) is not None
         assert archives.get_authorized(image_id, workspace_id=leaving.id) is None

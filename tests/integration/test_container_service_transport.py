@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Thread
 from time import sleep
 
 import pytest
 from gateway.container_transport import HttpContainerServiceTransportFactory
 from networking.dialer import BackendRouteDialerConfig, SocketBackendConnector
 from shared.compute_policy import MachinePool
-from shared.contracts import ContractModel
 from shared.http_transport import HttpChannel
 from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
+from tests.http_server import running_http_server
 from worker.container_client.control import (
     ContainerServiceClient,
     plan_container_client_connection_options,
@@ -20,10 +18,7 @@ from worker.container_client.control import (
 from worker.container_client.models import (
     ContainerCheckpointRequest,
     ContainerCheckpointResponse,
-    ContainerClientConnectionOptions,
-    ContainerSandboxExecResponse,
     ContainerServiceMethod,
-    ContainerServicePayload,
 )
 
 
@@ -47,10 +42,8 @@ def test_checkpoint_requests_can_outlast_connection_timeouts() -> None:
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), CheckpointHandler)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
     address = f"127.0.0.1:{server.server_port}"
-    try:
+    with running_http_server(server):
         transport = HttpContainerServiceTransportFactory(
             route_resolver=_ReadyRouteResolver(address=address),
             route_dialer_config=BackendRouteDialerConfig(timeout_seconds=0.05),
@@ -68,11 +61,6 @@ def test_checkpoint_requests_can_outlast_connection_timeouts() -> None:
         channel = HttpChannel(endpoint=f"http://{address}", timeout_seconds=0.05)
         response = channel.post("/checkpoint", request.model_dump(mode="json"), timeout_seconds=1.0)
         assert ContainerCheckpointResponse.model_validate(response).checkpoint_id == "checkpoint-1"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-        assert not thread.is_alive()
 
 
 def test_http_container_service_transport_rejects_non_socket_route_connections(
@@ -134,41 +122,3 @@ class _ReadyRouteResolver:
             transport=BackendRouteTransport.Direct,
             state=BackendRouteState.Ready,
         )
-
-
-@dataclass(slots=True)
-class _RecordingTransportFactory:
-    transport: _RecordingTransport
-    options: list[ContainerClientConnectionOptions] = field(default_factory=list)
-
-    def create_transport(
-        self,
-        options: ContainerClientConnectionOptions,
-    ) -> _RecordingTransport:
-        self.options.append(options)
-        return self.transport
-
-
-@dataclass(slots=True)
-class _RecordingTransport:
-    def unary(
-        self,
-        method: ContainerServiceMethod,
-        request: ContractModel,
-        *,
-        timeout_seconds: float | None = None,
-    ) -> ContainerServicePayload:
-        _ = request, timeout_seconds
-        if method is ContainerServiceMethod.ContainerSandboxExec:
-            return ContainerSandboxExecResponse(pid=42)
-        return {"ok": True}
-
-    def stream(
-        self,
-        method: ContainerServiceMethod,
-        request: ContractModel,
-        *,
-        timeout_seconds: float | None = None,
-    ) -> Iterable[ContainerServicePayload]:
-        _ = method, request, timeout_seconds
-        return ()

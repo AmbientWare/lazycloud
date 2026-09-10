@@ -21,7 +21,7 @@ from shared.realtime.contracts import EventRecordType, create_cloud_event_record
 from shared.realtime.streams import LogStreamQuery
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential
 
 
 @pytest.fixture
@@ -288,7 +288,7 @@ def test_api_log_history_and_stream_support_filters_wait_and_resume(
     _append_container_log(repo, message="needle second", workspace_id=workspace_id)
     second_cursor = repo.read_logs(LogStreamQuery(workspace_id=workspace_id))[-1].entry_id
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    admin_token, _record = administrator_credential(isolated_services, "root")
+    admin_token, _record = administrator_credential(isolated_services.context, "root")
 
     history = client.get(
         f"/api/v1/logs?workspace={workspace_id}&task_id={task.id}&query=durable",
@@ -339,7 +339,7 @@ def test_api_deployment_logs_resolve_deployment_to_owned_stream(
     )
     isolated_services.tasks.append_log(task.id, "stdout", "deployment line")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    admin_token, _record = administrator_credential(isolated_services, "root")
+    admin_token, _record = administrator_credential(isolated_services.context, "root")
 
     response = client.get(
         "/api/v1/logs",

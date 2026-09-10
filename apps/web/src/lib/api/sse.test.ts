@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
 import { streamServerSentEvents, type ServerSentEvent } from "@/lib/api/sse";
@@ -16,10 +16,6 @@ function streamResponse(chunks: string[]): Response {
     headers: { "Content-Type": "text/event-stream" },
   });
 }
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 describe("streamServerSentEvents", () => {
   it("parses id, event, and data fields into frames", async () => {

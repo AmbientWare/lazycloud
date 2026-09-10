@@ -3,22 +3,22 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from shared.errors import ConflictError
 from shared.identity import TokenKind
 from shared.source_cache_cleanup import SourceCacheCleanupStatus
 from shared.timestamps import utc_now
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
 
 
 def test_private_worker_cannot_resolve_another_workspace_cache_claim(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(service_context)
     owner_workspace = owned_workspace(control, "source-cache-owner")
     other_workspace = owned_workspace(control, "source-cache-other")
     worker_id = "private-worker"
@@ -28,7 +28,7 @@ def test_private_worker_cannot_resolve_another_workspace_cache_claim(
         token_kind=TokenKind.WorkerPrivate,
     )
     other = owner.model_copy(update={"workspace_id": other_workspace.id})
-    service = WorkerSourceCacheService(isolated_services.context)
+    service = WorkerSourceCacheService(service_context)
     generation = service.register(
         principal=owner,
         worker_id=worker_id,
@@ -37,7 +37,7 @@ def test_private_worker_cannot_resolve_another_workspace_cache_claim(
         storage_id="machine:private-cache-machine",
     )
     source_object_id = str(uuid4())
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         SourceCacheCleanupRepository(session).add_targets(
             workspace_id=owner_workspace.id,
             source_object_ids=[source_object_id],
@@ -71,7 +71,7 @@ def test_private_worker_cannot_resolve_another_workspace_cache_claim(
             claim_token=target.claim_token,
         )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         [current] = SourceCacheCleanupRepository(session).list_targets(
             generation_ids=[generation.id]
         )

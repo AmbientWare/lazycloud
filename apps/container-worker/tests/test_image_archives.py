@@ -6,10 +6,10 @@ from contextlib import contextmanager
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread
 
 from container_worker_app.image_archives import BrokeredImageArchiveSourceLoader
 from pydantic import JsonValue
+from tests.http_server import running_http_server
 from worker.container_startup import WorkerImageSourceLoadRequest
 from worker.origin_access import CacheOriginCredentials, ImageRegistryCredentials
 from worker.repository_client import WorkerRepositoryHttpClient
@@ -23,14 +23,8 @@ def _serve_directory(root: Path) -> Iterator[str]:
         directory=str(root),
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with running_http_server(server):
         yield f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
 
 
 def test_brokered_image_source_loader_downloads_authorized_index(tmp_path: Path) -> None:

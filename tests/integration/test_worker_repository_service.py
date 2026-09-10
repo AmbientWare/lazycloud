@@ -112,10 +112,10 @@ from shared.usage import (
 )
 from storage.image_archive import ImageArchiveSettings
 from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
-from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 from tests.scheduler_composition import scheduler_request_service_for_redis
+from tests.workspaces import owned_workspace, workspace_owner_user_id
 from worker.checkpoints import (
     CheckpointStateOperation,
     CheckpointStatePayload,

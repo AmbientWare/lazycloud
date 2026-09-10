@@ -5,9 +5,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from api.server.services import ApiServices
 from billing.meter_outbox import METER_EVENT_ABANDONED_ACTION, BillingMeterOutboxService
+from database.context import ServiceContext
 from database.tables.billing_outbox import BillingMeterOutboxTable
+from observability.events import EventService
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.events import EventLevel
@@ -21,7 +22,7 @@ from shared.payments import (
 )
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import select
-from tests.domain_fixtures import workspace_owner_user_id
+from tests.workspaces import workspace_owner_user_id
 
 ACCEPTED = "usage-accepted"
 UNREACHABLE = "usage-unreachable"
@@ -116,7 +117,7 @@ class _Provider:
 
 
 def test_a_refused_meter_event_is_settled_alone_and_holds_up_nothing_behind_it(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """The property the outbox exists for.
 
@@ -130,11 +131,11 @@ def test_a_refused_meter_event_is_settled_alone_and_holds_up_nothing_behind_it(
     """
 
     now = utc_now()
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    workspace_owner_user_id(isolated_services.context, workspace_id)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+    workspace_owner_user_id(service_context, workspace_id)
     _enqueue(
-        isolated_services,
+        service_context,
         workspace_id=workspace_id,
         identifiers=(ACCEPTED, UNREACHABLE, REFUSED),
         now=now,
@@ -142,9 +143,9 @@ def test_a_refused_meter_event_is_settled_alone_and_holds_up_nothing_behind_it(
 
     provider = _Provider()
     service = BillingMeterOutboxService(
-        database=isolated_services.context.database,
+        database=service_context.database,
         payments=lambda: provider,
-        events=isolated_services.events,
+        events=EventService(service_context),
     )
     result = service.drain(now=now)
     backlog = service.abandoned_backlog()
@@ -158,7 +159,7 @@ def test_a_refused_meter_event_is_settled_alone_and_holds_up_nothing_behind_it(
     # a figure that went quiet then would go quiet exactly when it is needed.
     assert (backlog.count, backlog.value_nanos) == (1, 1_500)
 
-    rows = _rows(isolated_services)
+    rows = _rows(service_context)
     assert rows[ACCEPTED].status == "sent"
     assert rows[REFUSED].status == "abandoned"
     refused_again = rows[UNREACHABLE]
@@ -167,7 +168,7 @@ def test_a_refused_meter_event_is_settled_alone_and_holds_up_nothing_behind_it(
     assert to_utc(refused_again.next_attempt_at) > now
     assert all(row.claim_token is None for row in rows.values())
 
-    abandonment = isolated_services.events.list(
+    abandonment = EventService(service_context).list(
         workspace_id=workspace_id, actions=[METER_EVENT_ABANDONED_ACTION]
     )
     assert [(event.level, event.resource_id) for event in abandonment] == [
@@ -176,13 +177,13 @@ def test_a_refused_meter_event_is_settled_alone_and_holds_up_nothing_behind_it(
 
 
 def _enqueue(
-    services: ApiServices,
+    services: ServiceContext,
     *,
     workspace_id: str,
     identifiers: tuple[str, ...],
     now: datetime,
 ) -> None:
-    with services.context.database.session() as session:
+    with services.database.session() as session:
         for identifier in identifiers:
             session.add(
                 BillingMeterOutboxTable(
@@ -203,8 +204,8 @@ def _enqueue(
             )
 
 
-def _rows(services: ApiServices) -> dict[str, BillingMeterOutboxTable]:
-    with services.context.database.session() as session:
+def _rows(services: ServiceContext) -> dict[str, BillingMeterOutboxTable]:
+    with services.database.session() as session:
         return {
             row.identifier: row for row in session.scalars(select(BillingMeterOutboxTable)).all()
         }

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -29,11 +29,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  cleanup();
   client.clear();
-  vi.clearAllTimers();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
 });
 
 it("keeps late previews from replacing a newer selection or reopening after navigation", async () => {

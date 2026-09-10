@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
-
 import pytest
-from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from pydantic import JsonValue
-from shared.identity import TokenKind
-from tests.domain_fixtures import owned_workspace
+from shared.identity import TokenKind, WorkspaceRecord
+from tests.workspaces import owned_workspace
 
 
 @pytest.mark.parametrize(
@@ -30,21 +27,21 @@ from tests.domain_fixtures import owned_workspace
     ],
 )
 def test_workspace_token_cannot_forge_operator_workspace_override(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
+    api_workspace: WorkspaceRecord,
     method: str,
     path: str,
     payload: dict[str, JsonValue] | None,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    workspace_a = control.get_workspace("default")
-    workspace_b = owned_workspace(control, "forged-target")
-    workspace_token, _record = AuthService(isolated_services.context).create_token(
+    services, client = api_runtime
+    control = ControlPlaneService(services.context)
+    workspace_a = api_workspace
+    workspace_b = owned_workspace(control, f"forged-target-{api_workspace.id}")
+    workspace_token, _record = AuthService(services.context).create_token(
         "workspace-authority",
         kind=TokenKind.Workspace,
         workspace_id=workspace_a.id,
     )
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.request(
         method,

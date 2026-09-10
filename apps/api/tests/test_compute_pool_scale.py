@@ -43,8 +43,7 @@ from shared.compute_policy import (
 from shared.http.compute import UnitScaleResponse
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.supplier_costs import SupplierCostTerms
-from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential, owned_workspace, workspace_owner_user_id
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 _OFFER_ID = "us-east-1:m7i.large"
@@ -230,7 +229,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         capacity_reservations=mutations,
     )
     services = replace(services_with_compute, gateway_service=gateway)
-    raw_token, _record = administrator_credential(isolated_services, "pool-scale")
+    raw_token, _record = administrator_credential(isolated_services.context, "pool-scale")
     client = client_stack.enter_context(TestClient(create_app(services)))
     _seed_connection(isolated_services)
     # Provisioned after the control plane started, as in production: startup

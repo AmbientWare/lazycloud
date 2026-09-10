@@ -1,15 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { expect, it, vi } from "vitest";
 
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { MapInspector } from "./CollectionInspectors";
-
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
-});
 
 it("loads the value of an empty-string map key", async () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });

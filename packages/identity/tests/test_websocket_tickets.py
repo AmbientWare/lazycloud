@@ -18,9 +18,9 @@ from identity.websocket_tickets import (
     WebSocketTicketStoreError,
 )
 from shared.identity import AuthScope
-from tests.domain_fixtures import owned_workspace
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
+from tests.workspaces import owned_workspace
 
 
 def _ticket_service(isolated_services: ApiServices) -> tuple[WebSocketTicketService, FakeRedis]:

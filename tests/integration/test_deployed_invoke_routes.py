@@ -36,8 +36,8 @@ from shared.http.functions import (
     FunctionSetResultResponse,
 )
 from starlette.routing import BaseRoute, Mount, Route
-from tests.domain_fixtures import owned_workspace
 from tests.url_constants import TEST_URL
+from tests.workspaces import owned_workspace
 
 BASE_URL = TEST_URL
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])

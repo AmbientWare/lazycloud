@@ -10,8 +10,7 @@ from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.http.workspaces import WorkspaceListResponse
 from shared.identity import WorkspaceStatus
-from tests.domain_fixtures import owned_workspace
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential, owned_workspace
 
 
 def test_admin_current_workspace_honors_explicit_workspace_override(
@@ -21,7 +20,7 @@ def test_admin_current_workspace_honors_explicit_workspace_override(
     control = ControlPlaneService(isolated_services.context)
     control.get_workspace("default")
     target = owned_workspace(control, "provider-acceptance")
-    admin_token, _ = administrator_credential(isolated_services, "workspace-override-admin")
+    admin_token, _ = administrator_credential(isolated_services.context, "workspace-override-admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.get(
@@ -49,7 +48,7 @@ def test_admin_can_include_deleting_workspaces_but_not_deleted_tombstones(
         deleting_workspace_id=deleting.id,
         deleted_workspace_id=deleted.id,
     )
-    admin_token, _ = administrator_credential(isolated_services, "directory-admin")
+    admin_token, _ = administrator_credential(isolated_services.context, "directory-admin")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.get(

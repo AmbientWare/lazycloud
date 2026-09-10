@@ -7,16 +7,8 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  renderHook,
-  screen,
-  waitFor,
-} from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CurrentSession, Workspace } from "@/lib/api/schemas";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
@@ -38,8 +30,6 @@ const updateWorkspaceMock = vi.mocked(updateWorkspace);
 beforeEach(() => {
   vi.clearAllMocks();
 });
-
-afterEach(cleanup);
 
 describe("workspace identity controller", () => {
   it.each(["acme", "platform"])(

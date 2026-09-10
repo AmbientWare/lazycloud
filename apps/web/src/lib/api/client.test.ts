@@ -1,11 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { ApiError, apiRequest, responseErrorMessage } from "./client";
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 describe("responseErrorMessage", () => {
   it("extracts FastAPI detail without rendering JSON", () => {

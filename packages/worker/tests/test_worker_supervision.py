@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.observability import UsageRepository
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.container_requests import StopContainerReason
@@ -166,10 +166,10 @@ def test_worker_supervision_records_cgroup_oom_without_stop() -> None:
     )
 
 
-def test_worker_supervision_records_usage_records(isolated_services: ApiServices) -> None:
+def test_worker_supervision_records_usage_records(service_context: ServiceContext) -> None:
     sink = EventSink()
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         service = WorkerSupervisionService(
             worker_id="worker-1",
             event_sink=sink,
@@ -270,11 +270,11 @@ def test_worker_supervision_records_usage_records(isolated_services: ApiServices
 
 
 def test_worker_supervision_usage_windows_are_idempotent(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     sink = EventSink()
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         service = WorkerSupervisionService(
             worker_id="worker-1",
             event_sink=sink,

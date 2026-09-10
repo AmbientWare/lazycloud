@@ -1,15 +1,8 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import { LogViewer } from "./index";
-
-afterEach(() => {
-  cleanup();
-  vi.clearAllTimers();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
 
 it("keeps loaded logs visible when older history fails and retries the missing page", async () => {
   vi.useFakeTimers();

@@ -2,7 +2,7 @@ from collections.abc import Iterator
 from contextlib import ExitStack
 
 import pytest
-from tests.service_fixtures import isolated_services
+from apps.api.tests.runtime import isolated_services
 
 
 @pytest.fixture

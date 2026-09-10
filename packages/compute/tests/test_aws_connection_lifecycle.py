@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 import pytest
-from api.server.services import ApiServices
 from compute.aws_connections import (
     AwsAccountConnectionService,
     AwsAccountConnectionValidationError,
@@ -14,6 +13,8 @@ from compute.aws_connections import (
 )
 from compute.bucket_access import AwsConnectionBucketAccessReconciler
 from compute.policy import WorkspaceComputePolicyService
+from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     AwsAuthorizationCleanupTombstoneRepository,
@@ -42,7 +43,7 @@ from shared.http.aws_connections import (
     AwsFleetEnsureRequest,
 )
 from shared.timestamps import utc_now
-from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
+from tests.workspaces import owned_workspace, workspace_owner_user_id
 
 ACCOUNT_ID = "123456789012"
 TEMPLATE_SHA256 = "a" * 64
@@ -224,15 +225,15 @@ class _CapacityBaseline:
         self.workspaces.append(workspace_id)
 
 
-def _owner(services: ApiServices, *, workspace: str = "default") -> str:
+def _owner(services: ServiceContext, *, workspace: str = "default") -> str:
     """The account that owns a workspace, which is what a connection now belongs to."""
-    with services.context.database.session() as session:
-        workspace_id = services.context.workspace(session, workspace).id
-    return workspace_owner_user_id(services.context, workspace_id)
+    with services.database.session() as session:
+        workspace_id = services.workspace(session, workspace).id
+    return workspace_owner_user_id(services, workspace_id)
 
 
 def _service(
-    services: ApiServices,
+    services: ServiceContext,
     *,
     lifecycle: _Lifecycle | None = None,
     validator: _Validator | None = None,
@@ -240,7 +241,7 @@ def _service(
     capacity_baseline: _CapacityBaseline | None = None,
 ) -> AwsAccountConnectionService:
     return AwsAccountConnectionService(
-        context=services.context,
+        context=services,
         authorization_planner=_Planner(),
         validator=validator or _Validator(),
         authorization_lifecycle=lifecycle or _Lifecycle(),
@@ -252,10 +253,10 @@ def _service(
 
 
 def test_customer_pool_survives_retries_and_cannot_change_during_authorization(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    owner = _owner(isolated_services)
-    service = _service(isolated_services)
+    owner = _owner(service_context)
+    service = _service(service_context)
     request = AwsConnectionCreateRequest(account_id=ACCOUNT_ID, pool=MachinePool("training"))
 
     created = service.connect(request, user_id=owner)
@@ -269,7 +270,7 @@ def test_customer_pool_survives_retries_and_cannot_change_during_authorization(
             user_id=owner,
         )
     ready = service.validate(user_id=owner)
-    policies = WorkspaceComputePolicyService(isolated_services.context)
+    policies = WorkspaceComputePolicyService(service_context)
     assert policies.connection_for_machine_pool(workspace="default", pool=ready.pool) == ready
     assert (
         policies.connection_for_machine_pool(workspace="default", pool=MachinePool("lazycloud"))
@@ -278,14 +279,14 @@ def test_customer_pool_survives_retries_and_cannot_change_during_authorization(
 
 
 def test_bucket_access_reconciliation_retries_through_durable_connection_claim(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     bucket_access = _BucketAccessReconciler(failures=1)
-    owner = _owner(isolated_services)
-    service = _service(isolated_services, bucket_access=bucket_access)
+    owner = _owner(service_context)
+    service = _service(service_context, bucket_access=bucket_access)
     service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
     ready = service.validate(user_id=owner)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = AwsAccountConnectionRepository(session)
         current = repository.get(ready.id, for_update=True)
         assert current is not None
@@ -305,7 +306,7 @@ def test_bucket_access_reconciliation_retries_through_durable_connection_claim(
     pending = service.get(user_id=owner)
     assert pending.bucket_access_reconcile_pending
     assert pending.next_reconcile_at is not None
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = AwsAccountConnectionRepository(session)
         current = repository.get(pending.id, for_update=True)
         assert current is not None
@@ -321,11 +322,11 @@ def test_bucket_access_reconciliation_retries_through_durable_connection_claim(
 
 
 def test_uncompleted_setup_removal_hides_connection_and_reconciles_tombstone(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     lifecycle = _Lifecycle()
-    owner = _owner(isolated_services)
-    service = _service(isolated_services, lifecycle=lifecycle)
+    owner = _owner(service_context)
+    service = _service(service_context, lifecycle=lifecycle)
     created = service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
 
     assert created.connection.phase is AwsAccountConnectionPhase.AwaitingAuthorization
@@ -336,22 +337,22 @@ def test_uncompleted_setup_removal_hides_connection_and_reconciles_tombstone(
     assert created.connection.customer_action_label == "Create the connection stack"
     assert service.remove(user_id=owner) is None
     assert service.current(user_id=owner) is None
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert AwsAuthorizationCleanupTombstoneRepository(session).pending_count() == 1
 
     batch = service.reconcile_due()
 
     assert batch.completed_count == 1
     assert lifecycle.remove_node_identity == [True]
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert AwsAuthorizationCleanupTombstoneRepository(session).pending_count() == 0
 
 
 def test_cancel_reconnect_preserves_ready_generation_and_placement(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    owner = _owner(isolated_services)
-    service = _service(isolated_services)
+    owner = _owner(service_context)
+    service = _service(service_context)
     service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
     ready = service.validate(user_id=owner)
     assert ready.hosts_workloads is True
@@ -372,11 +373,11 @@ def test_cancel_reconnect_preserves_ready_generation_and_placement(
 
 
 def test_initial_assume_role_miss_remains_authorization_required(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    owner = _owner(isolated_services)
+    owner = _owner(service_context)
     service = _service(
-        isolated_services,
+        service_context,
         validator=_Validator(failures=[AwsAccountConnectionErrorCode.AssumeRoleDenied]),
     )
     created = service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
@@ -391,7 +392,7 @@ def test_initial_assume_role_miss_remains_authorization_required(
 
 
 def test_active_removal_reuses_provider_operation_across_restart_safe_observation(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     lifecycle = _Lifecycle(
         results=[
@@ -400,8 +401,8 @@ def test_active_removal_reuses_provider_operation_across_restart_safe_observatio
             AwsAuthorizationCleanupStatus.Complete,
         ]
     )
-    owner = _owner(isolated_services)
-    service = _service(isolated_services, lifecycle=lifecycle)
+    owner = _owner(service_context)
+    service = _service(service_context, lifecycle=lifecycle)
     service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
     service.validate(user_id=owner)
 
@@ -414,7 +415,7 @@ def test_active_removal_reuses_provider_operation_across_restart_safe_observatio
     for _ in range(3):
         current = service.get(user_id=owner)
         assert current.next_reconcile_at is not None
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             row = AwsAccountConnectionRepository(session).get(current.id, for_update=True)
             assert row is not None
             AwsAccountConnectionRepository(session).save(
@@ -428,7 +429,7 @@ def test_active_removal_reuses_provider_operation_across_restart_safe_observatio
 
 
 def test_stuck_provider_cleanup_becomes_action_required_after_bounded_attempts(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     lifecycle = _Lifecycle(
         results=[
@@ -436,8 +437,8 @@ def test_stuck_provider_cleanup_becomes_action_required_after_bounded_attempts(
             AwsAuthorizationCleanupStatus.Pending,
         ]
     )
-    owner = _owner(isolated_services)
-    service = _service(isolated_services, lifecycle=lifecycle)
+    owner = _owner(service_context)
+    service = _service(service_context, lifecycle=lifecycle)
     service.cleanup_max_attempts = 2
     service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
     service.validate(user_id=owner)
@@ -446,7 +447,7 @@ def test_stuck_provider_cleanup_becomes_action_required_after_bounded_attempts(
 
     for _ in range(2):
         current = service.get(user_id=owner)
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             row = AwsAccountConnectionRepository(session).get(current.id, for_update=True)
             assert row is not None
             AwsAccountConnectionRepository(session).save(
@@ -462,22 +463,22 @@ def test_stuck_provider_cleanup_becomes_action_required_after_bounded_attempts(
 
 
 def test_connection_claim_is_exclusive_and_stale_writer_is_fenced(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    owner = _owner(isolated_services)
-    service = _service(isolated_services)
+    owner = _owner(service_context)
+    service = _service(service_context)
     connection = service.connect(
         AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner
     ).connection
     now = utc_now()
     lease_until = now + timedelta(seconds=30)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         first = AwsAccountConnectionRepository(session).claim_due(
             now=now,
             lease_until=lease_until,
             limit=1,
         )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         competing = AwsAccountConnectionRepository(session).claim_due(
             now=now,
             lease_until=lease_until,
@@ -487,7 +488,7 @@ def test_connection_claim_is_exclusive_and_stale_writer_is_fenced(
     assert competing == []
 
     restarted_at = lease_until + timedelta(seconds=1)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         replacement = AwsAccountConnectionRepository(session).claim_due(
             now=restarted_at,
             lease_until=restarted_at + timedelta(seconds=30),
@@ -496,7 +497,7 @@ def test_connection_claim_is_exclusive_and_stale_writer_is_fenced(
     assert len(replacement) == 1
     assert replacement[0].claim_token != first[0].claim_token
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         stale = AwsAccountConnectionRepository(session).finish_claim(
             first[0],
             first[0].model_copy(update={"next_reconcile_at": None}),
@@ -506,7 +507,7 @@ def test_connection_claim_is_exclusive_and_stale_writer_is_fenced(
 
 
 def test_first_connection_reaching_ready_holds_the_accounts_warm_baseline(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """The pass that drives a connection to Ready is the one that must apply it.
 
@@ -515,9 +516,9 @@ def test_first_connection_reaching_ready_holds_the_accounts_warm_baseline(
     never runs. The account then holds the floor it asked for as a number and no
     machine, until a configuration write that may never come.
     """
-    owner = _owner(isolated_services)
+    owner = _owner(service_context)
     baseline = _CapacityBaseline()
-    service = _service(isolated_services, capacity_baseline=baseline)
+    service = _service(service_context, capacity_baseline=baseline)
     service.connect(AwsConnectionCreateRequest(account_id=ACCOUNT_ID), user_id=owner)
 
     ready = service.validate(user_id=owner)
@@ -525,13 +526,13 @@ def test_first_connection_reaching_ready_holds_the_accounts_warm_baseline(
     assert ready.phase is AwsAccountConnectionPhase.Ready
     assert ready.next_reconcile_at is None
     assert ready.pool == "aws"
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.workspace(session, "default").id
+    with service_context.database.session() as session:
+        workspace_id = service_context.workspace(session, "default").id
     assert baseline.workspaces == [workspace_id]
 
 
 def test_a_workspace_without_its_own_account_still_reaches_the_shared_fleet(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """What the shared fleet is for, and what naming a pool decides.
 
@@ -543,8 +544,8 @@ def test_a_workspace_without_its_own_account_still_reaches_the_shared_fleet(
     account. The pool answers instead: theirs when they connected one, and
     whatever feeds it otherwise.
     """
-    owner = _owner(isolated_services)
-    service = _service(isolated_services)
+    owner = _owner(service_context)
+    service = _service(service_context)
     service.connect(
         AwsConnectionCreateRequest(account_id=ACCOUNT_ID),
         user_id=owner,
@@ -556,8 +557,8 @@ def test_a_workspace_without_its_own_account_still_reaches_the_shared_fleet(
     assert fleet.pool == "lazycloud"
 
     # A separate account, holding no connection of its own.
-    customer = owned_workspace(isolated_services.control_plane_service, "customer")
-    policies = WorkspaceComputePolicyService(isolated_services.context)
+    customer = owned_workspace(ControlPlaneService(service_context), "customer")
+    policies = WorkspaceComputePolicyService(service_context)
 
     resolved = policies.connection_for_machine_pool(workspace=customer.name, pool=fleet.pool)
 
@@ -572,10 +573,10 @@ def test_a_workspace_without_its_own_account_still_reaches_the_shared_fleet(
 
 
 def test_fleet_ensure_preserves_authorization_on_retry(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    service = _service(isolated_services)
-    owner = _owner(isolated_services)
+    service = _service(service_context)
+    owner = _owner(service_context)
     request = AwsFleetEnsureRequest(
         account_id=ACCOUNT_ID,
         role_arn=f"arn:aws:iam::{ACCOUNT_ID}:role/fleet",
@@ -610,10 +611,10 @@ def test_fleet_ensure_preserves_authorization_on_retry(
 
 
 def test_fleet_ensure_rejects_changed_infrastructure_without_changing_connection(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    service = _service(isolated_services)
-    owner = _owner(isolated_services)
+    service = _service(service_context)
+    owner = _owner(service_context)
     request = AwsFleetEnsureRequest(
         account_id=ACCOUNT_ID,
         role_arn=f"arn:aws:iam::{ACCOUNT_ID}:role/fleet",
@@ -636,11 +637,11 @@ def test_fleet_ensure_rejects_changed_infrastructure_without_changing_connection
 
 
 def test_fleet_subnet_validation_failure_preserves_ready_connection(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     validator = _Validator()
-    service = _service(isolated_services, validator=validator)
-    owner = _owner(isolated_services)
+    service = _service(service_context, validator=validator)
+    owner = _owner(service_context)
     request = AwsFleetEnsureRequest(
         account_id=ACCOUNT_ID,
         role_arn=f"arn:aws:iam::{ACCOUNT_ID}:role/fleet",
@@ -669,9 +670,9 @@ def test_fleet_subnet_validation_failure_preserves_ready_connection(
 
 
 def test_fleet_subnet_validation_cannot_overwrite_concurrent_reconnect(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    owner = _owner(isolated_services)
+    owner = _owner(service_context)
     request = AwsFleetEnsureRequest(
         account_id=ACCOUNT_ID,
         role_arn=f"arn:aws:iam::{ACCOUNT_ID}:role/fleet",
@@ -682,7 +683,7 @@ def test_fleet_subnet_validation_cannot_overwrite_concurrent_reconnect(
             security_group_id="sg-01234567",
         ),
     )
-    service = _service(isolated_services)
+    service = _service(service_context)
     service.ensure_fleet(request, user_id=owner)
     ready = service.validate(user_id=owner)
 
@@ -697,7 +698,7 @@ def test_fleet_subnet_validation_cannot_overwrite_concurrent_reconnect(
             )
             return super().validate(connection, authorization)
 
-    updating_service = _service(isolated_services, validator=ReconnectingValidator())
+    updating_service = _service(service_context, validator=ReconnectingValidator())
     expanded_request = request.model_copy(
         update={
             "network": request.network.model_copy(

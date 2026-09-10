@@ -18,8 +18,8 @@ from shared.deployment_records import DeploymentSpec
 from sqlalchemy.exc import IntegrityError
 from storage.volume_filesystem import LocalVolumeFilesystem
 from storage_client.s3 import _add_delete_objects_content_md5
-from tests.domain_fixtures import owned_workspace
 from tests.redis_fakes import FakeRedis
+from tests.workspaces import owned_workspace
 
 from database import (
     DatabaseApplicationName,

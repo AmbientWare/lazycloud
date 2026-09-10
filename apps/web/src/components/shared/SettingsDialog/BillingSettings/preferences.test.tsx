@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { expect, it, vi } from "vitest";
 
 import {
   billingPreferencesSchema,
@@ -15,11 +15,6 @@ import {
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 
 import { BillingPreferences as BillingPreferencesForm } from "./BillingPreferences";
-
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
-});
 
 it("saves reload and usage limits together and preserves untouched settings", async () => {
   vi.stubGlobal(

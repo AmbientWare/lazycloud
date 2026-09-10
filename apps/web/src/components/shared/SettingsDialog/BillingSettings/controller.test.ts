@@ -1,13 +1,11 @@
 import { createElement, type PropsWithChildren } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { BillingSummary, PricingCatalog } from "@/lib/api/schemas";
 
 import { useBillingSettingsController } from "./controller";
-
-afterEach(() => vi.restoreAllMocks());
 
 describe("billing settings controller", () => {
   it("sends a cardless account to the card page and starts no plan change", async () => {

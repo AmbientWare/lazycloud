@@ -4,6 +4,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.observability import (
     UsageRepository,
     WorkerEventRepository,
@@ -101,10 +102,10 @@ def test_worker_event_prune_deletes_aged_rows(isolated_services: ApiServices) ->
 
 
 def test_usage_repository_aggregation_groups_by_label_with_metadata_fallback(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         usage = UsageRepository(session)
         usage.record(
             workspace_id=workspace_id,

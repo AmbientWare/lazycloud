@@ -1,14 +1,3 @@
-from collections.abc import Iterator
-from contextlib import ExitStack
+from apps.api.tests.runtime import isolated_services
 
-import pytest
-from tests.service_fixtures import isolated_services
-
-
-@pytest.fixture
-def client_stack() -> Iterator[ExitStack]:
-    with ExitStack() as stack:
-        yield stack
-
-
-__all__ = ["client_stack", "isolated_services"]
+__all__ = ["isolated_services"]

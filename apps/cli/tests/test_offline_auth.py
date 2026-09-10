@@ -6,6 +6,7 @@ from pathlib import Path
 from secrets import token_urlsafe
 
 import pytest
+from botocore.exceptions import ClientError
 from cli.main import build_admin_cli
 from cli.offline_auth import _read_configured_token
 from control.service import WorkspaceStorageError
@@ -13,6 +14,7 @@ from identity.auth import AuthService, IdentityDatabaseContext
 from identity.credential_files import CredentialFileError
 from shared.errors import ConflictError
 from shared.identity import TokenKind
+from storage_client.s3 import S3ObjectStoreClient
 from typer.testing import CliRunner
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -24,6 +26,13 @@ def _token() -> str:
     return f"rt_{token_urlsafe(32)}"
 
 
+def _refuse_bucket_creation(self: S3ObjectStoreClient, bucket: str | None = None) -> None:
+    raise ClientError(
+        {"Error": {"Code": "ServiceUnavailable", "Message": "storage is unavailable"}},
+        "CreateBucket",
+    )
+
+
 def test_offline_bootstrap_publishes_a_private_credential_and_fails_loudly_without_storage(
     database: DatabaseClient,
     tmp_path: Path,
@@ -32,14 +41,14 @@ def test_offline_bootstrap_publishes_a_private_credential_and_fails_loudly_witho
     """Bootstrap never reports success when it cannot provision workspace storage.
 
     The command creates the administrator credential and then provisions the
-    bootstrap workspace's bucket. The suite points object storage at an
-    unroutable endpoint on purpose, so this covers the CLI-owned half of the
-    contract: the credential is published privately, no secret reaches stdout
+    bootstrap workspace's bucket. Storage refuses the bucket creation. The
+    credential is published privately, no secret reaches stdout
     or the raised error, and the failure surfaces with its reason instead of a
     payload claiming the workspace is ready. The success path's exact-once
     replay is proven by the identity owner.
     """
     database_url = database.settings.url
+    monkeypatch.setattr(S3ObjectStoreClient, "create_bucket", _refuse_bucket_creation)
     monkeypatch.setenv("LAZYCLOUD_DATABASE_URL", database_url)
     monkeypatch.setenv("LAZYCLOUD_DATABASE_DIRECT_URL", database_url)
     output = tmp_path / "admin-token"
@@ -107,6 +116,7 @@ def test_offline_bootstrap_accepts_configured_token_only_through_private_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database_url = database.settings.url
+    monkeypatch.setattr(S3ObjectStoreClient, "create_bucket", _refuse_bucket_creation)
     monkeypatch.setenv("LAZYCLOUD_DATABASE_URL", database_url)
     monkeypatch.setenv("LAZYCLOUD_DATABASE_DIRECT_URL", database_url)
     configured = _token()

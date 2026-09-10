@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import threading
 import time
 import urllib.parse
 import urllib.request
@@ -19,6 +18,7 @@ from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.client_version import RECOMMENDED_CLIENT_VERSION_HEADER, observe_client_versions
 from shared.http.errors import HttpApiError, HttpResponseDecodeError
 from shared.http_transport import HttpChannel
+from tests.http_server import running_http_server
 from typer.testing import CliRunner
 
 
@@ -127,14 +127,8 @@ class _TransportHandler(BaseHTTPRequestHandler):
 def _http_server() -> Iterator[str]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _TransportHandler)
     server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with running_http_server(server):
         yield f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=1)
 
 
 def test_raw_transport_sends_a_bounded_readable_body_without_json_encoding() -> None:

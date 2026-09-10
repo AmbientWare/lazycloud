@@ -9,12 +9,11 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
-from billing.rate_publication import publish_metered_rate_history
+from apps.api.tests.runtime import service_graph
 from control.service import ControlPlaneService, StubKind
 from coordination.redis_client import RedisSettings
 from database.tables.endpoint_dispatch import EndpointDispatchTable
@@ -31,16 +30,14 @@ from shared.scheduling import (
     SchedulerContainerSubmitStatus,
     SchedulerWorkerRequest,
 )
-from sqlalchemy import func, select, text
-from tests.backing_services import postgres_url
+from sqlalchemy import func, select
+from sqlalchemy.engine import URL
 from tests.real_redis import RealRedisActors
-from tests.service_fixtures import service_graph
 
 from database import (
     DatabaseApplicationName,
     DatabaseClient,
     DatabaseSettings,
-    bootstrap_database,
 )
 
 CONTENDERS = 8
@@ -98,8 +95,9 @@ class _NoEndpointDispatcher:
 async def test_postgresql_endpoint_admission_holds_one_buffer_slot_across_replicas(
     tmp_path: Path,
     real_redis_actors: RealRedisActors,
+    seeded_database_url: URL,
 ) -> None:
-    async with _postgres_services(tmp_path, real_redis_actors) as services:
+    async with _postgres_services(tmp_path, real_redis_actors, seeded_database_url) as services:
         stub = ControlPlaneService(services.context).create_stub(
             "concurrent-endpoint-admission",
             kind=StubKind.Endpoint,
@@ -139,52 +137,36 @@ async def test_postgresql_endpoint_admission_holds_one_buffer_slot_across_replic
 async def _postgres_services(
     tmp_path: Path,
     real_redis_actors: RealRedisActors,
+    seeded_database_url: URL,
 ) -> AsyncIterator[ApiServices]:
-    base_url = postgres_url()
-    database_name = f"endpoint_admission_{uuid4().hex}"
-    admin = DatabaseClient.from_settings(
-        DatabaseSettings(
-            url=base_url.render_as_string(hide_password=False),
-            application_name=DatabaseApplicationName.Test,
-        )
+    database_settings = DatabaseSettings(
+        url=seeded_database_url.render_as_string(hide_password=False),
+        pool_size=CONTENDERS + 2,
+        max_overflow=0,
+        application_name=DatabaseApplicationName.Test,
+    )
+    database = DatabaseClient.from_settings(database_settings)
+    async_io = ApiAsyncIo.from_settings(
+        database_settings,
+        RedisSettings(
+            url=real_redis_actors.url,
+            key_prefix=real_redis_actors.prefix,
+            socket_timeout_seconds=2.0,
+            health_check_interval_seconds=1,
+        ),
     )
     try:
-        with admin.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            connection.execute(text(f'CREATE DATABASE "{database_name}"'))
-        database_settings = DatabaseSettings(
-            url=base_url.set(database=database_name).render_as_string(hide_password=False),
-            pool_size=CONTENDERS + 2,
-            max_overflow=0,
-            application_name=DatabaseApplicationName.Test,
-        )
-        bootstrap_database(database_settings.url)
-        database = DatabaseClient.from_settings(database_settings)
-        async_io = ApiAsyncIo.from_settings(
-            database_settings,
-            RedisSettings(
-                url=real_redis_actors.url,
-                key_prefix=real_redis_actors.prefix,
-                socket_timeout_seconds=2.0,
-                health_check_interval_seconds=1,
-            ),
-        )
-        try:
-            with database.session() as session:
-                publish_metered_rate_history(session)
-            with service_graph(
-                database,
-                tmp_path,
-                redis_client=real_redis_actors.client(),
-                binary_redis_client=real_redis_actors.client(decode_responses=False),
-                async_io=async_io,
-            ) as graph:
-                yield replace(
-                    graph,
-                    containers=replace(graph.containers, scheduler=_AcceptingScheduler()),
-                )
-        finally:
-            await async_io.close()
+        with service_graph(
+            database,
+            tmp_path,
+            redis_client=real_redis_actors.client(),
+            binary_redis_client=real_redis_actors.client(decode_responses=False),
+            async_io=async_io,
+        ) as graph:
+            yield replace(
+                graph,
+                containers=replace(graph.containers, scheduler=_AcceptingScheduler()),
+            )
     finally:
-        with admin.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'))
-        admin.dispose()
+        await async_io.close()
+        database.dispose()

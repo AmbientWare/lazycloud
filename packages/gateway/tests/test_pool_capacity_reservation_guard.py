@@ -49,8 +49,8 @@ from shared.scheduling import (
     SchedulerWorkerStatus,
 )
 from shared.usage import UsageBillingOwner
-from tests.domain_fixtures import workspace_owner_user_id
 from tests.redis_fakes import FakeRedis
+from tests.workspaces import workspace_owner_user_id
 
 
 class _RecordingCapacityReservationGuard:

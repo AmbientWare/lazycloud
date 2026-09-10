@@ -19,7 +19,7 @@ from provider_clients import AwsProviderNodeIdentityAdapter
 from shared.external_identity import ExternalIdentityProfile
 from shared.http.errors import ErrorResponse
 from shared.identity import IdentityProvider, WorkspaceRecord
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential
 
 
 def _client(
@@ -28,7 +28,7 @@ def _client(
     *,
     raise_server_exceptions: bool = True,
 ) -> tuple[FastAPI, TestClient, dict[str, str]]:
-    raw_token, _ = administrator_credential(isolated_services, "error-handling-admin")
+    raw_token, _ = administrator_credential(isolated_services.context, "error-handling-admin")
     app = create_app(isolated_services)
     client = client_stack.enter_context(
         TestClient(app, raise_server_exceptions=raise_server_exceptions)
@@ -37,10 +37,8 @@ def _client(
 
 
 def test_missing_resources_return_typed_not_found(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_client: TestClient,
 ) -> None:
-    _, client, headers = _client(isolated_services, client_stack)
     missing = "3e1f5a52-9d5c-4b57-9c25-1e35a0f2f6a1"
 
     for path in (
@@ -49,20 +47,17 @@ def test_missing_resources_return_typed_not_found(
         "/api/v1/secrets/does-not-exist",
         "/api/v1/apps/does-not-exist",
     ):
-        response = client.get(path, headers=headers)
+        response = api_client.get(path)
         assert response.status_code == 404, path
         body = ErrorResponse.model_validate_json(response.content)
         assert "Traceback" not in body.detail, path
 
 
 def test_invalid_deployment_version_returns_typed_invalid_input(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_client: TestClient,
 ) -> None:
-    _, client, headers = _client(isolated_services, client_stack)
-    response = client.get(
+    response = api_client.get(
         "/api/v1/deployments/by-name/endpoint/some-deployment/not-a-number/url",
-        headers=headers,
     )
     assert response.status_code == 400
     assert ErrorResponse.model_validate_json(response.content).detail == (
@@ -71,13 +66,10 @@ def test_invalid_deployment_version_returns_typed_invalid_input(
 
 
 def test_invalid_stub_type_returns_typed_invalid_input(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_client: TestClient,
 ) -> None:
-    _, client, headers = _client(isolated_services, client_stack)
-    response = client.get(
+    response = api_client.get(
         "/api/v1/deployments/by-name/bogus-kind/some-deployment/latest/url",
-        headers=headers,
     )
     assert response.status_code == 400
     assert ErrorResponse.model_validate_json(response.content).detail == (

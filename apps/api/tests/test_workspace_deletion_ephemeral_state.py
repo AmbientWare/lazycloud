@@ -7,8 +7,7 @@ from api.server.services import ApiServices
 from api.server.workspace_deletion import _delete_workspace_workload_state
 from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
-from tests.domain_fixtures import owned_workspace
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential, owned_workspace
 
 _WORKLOAD_KEY_ROOTS: tuple[tuple[str, ...], ...] = (
     ("endpoint",),
@@ -39,7 +38,9 @@ def test_workspace_deletion_removes_only_its_ephemeral_workload_state(
     for key in deleted_keys | peer_keys | {unrelated_key}:
         assert redis.set(key, "present")
 
-    admin_token, _record = administrator_credential(isolated_services, "ephemeral-cleanup-admin")
+    admin_token, _record = administrator_credential(
+        isolated_services.context, "ephemeral-cleanup-admin"
+    )
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     response = client.delete(
         f"/api/v1/workspaces/{deleted_workspace.id}",

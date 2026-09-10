@@ -1,14 +1,10 @@
 import { QueryClient } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LIVE_LIST_MAX_PAGES } from "./infinite-list";
 
 import type { ContainerWithAppPage } from "@/lib/api/schemas";
 
 import { containersQueryOptions, nextContainerCursor, selectContainerList } from "./containers";
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 describe("container pagination", () => {
   it("deduplicates overlapping live pages while preserving server order", () => {

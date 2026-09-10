@@ -24,7 +24,7 @@ from shared.realtime.contracts import (
 )
 from shared.realtime.streams import EventHistoryQuery, LogStreamQuery
 from tests.real_redis import RealRedisActors
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential
 
 
 @pytest.fixture
@@ -229,7 +229,7 @@ def test_api_maps_expired_event_cursor_to_409(
         )
 
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    token, _record = administrator_credential(isolated_services, "cursor-admin")
+    token, _record = administrator_credential(isolated_services.context, "cursor-admin")
     headers = {"Authorization": f"Bearer {token}"}
     event_response = client.get(
         "/api/v1/events/tasks/api-task/stream",

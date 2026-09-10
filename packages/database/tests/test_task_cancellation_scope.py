@@ -10,7 +10,7 @@ from database.repositories.execution import TaskRepository
 from database.repositories.orchestration import ContainerRepository
 from shared.containers import ContainerRecord
 from shared.tasks import Task, TaskStatus
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 
 
 def test_deleting_an_app_retires_its_queued_work_and_nothing_else(

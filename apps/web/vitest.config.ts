@@ -21,6 +21,7 @@ export default defineConfig({
         test: {
           name: "node",
           environment: "node",
+          setupFiles: ["./src/test/isolation.ts"],
           include: ["src/**/*.test.ts"],
           exclude: domTests,
         },
@@ -30,7 +31,7 @@ export default defineConfig({
         test: {
           name: "dom",
           environment: "jsdom",
-          setupFiles: ["./src/test/setup.ts"],
+          setupFiles: ["./src/test/isolation.ts", "./src/test/setup.ts"],
           include: domTests,
         },
       },

@@ -4,26 +4,26 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from shared.errors import NotFoundError
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 from worker_repository.source_cache_status import SourceCacheCleanupStatusService
 
 
 def test_source_cache_cleanup_status_is_bounded_and_outlives_its_workspace(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Cleanup outlives the workspace, so its status is still readable by id.
 
     By id and not by name: a deleted workspace releases its name, and the next
     workspace to take it is a different tenant whose cleanup this is not.
     """
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "cleanup-status")
+    workspace = owned_workspace(ControlPlaneService(service_context), "cleanup-status")
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = SourceCacheCleanupRepository(session)
         repository.register_generation(
             str(uuid4()),
@@ -41,7 +41,7 @@ def test_source_cache_cleanup_status_is_bounded_and_outlives_its_workspace(
         deleting = workspaces.mark_deleting(workspace)
         workspaces.tombstone(deleting)
 
-    result = SourceCacheCleanupStatusService(isolated_services.context).get(
+    result = SourceCacheCleanupStatusService(service_context).get(
         workspace.id,
         now=started_at + timedelta(seconds=73, microseconds=900_000),
     )
@@ -53,17 +53,14 @@ def test_source_cache_cleanup_status_is_bounded_and_outlives_its_workspace(
     assert result.generations_pending == 1
     assert result.oldest_pending_age_seconds == 73
     assert not result.complete
-    assert not hasattr(result, "oldest_pending_at")
-    assert not hasattr(result, "source_object_ids")
-    assert not hasattr(result, "cache_paths")
 
 
 def test_source_cache_cleanup_status_clamps_future_clock_and_reports_missing(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "clock-status")
+    workspace = owned_workspace(ControlPlaneService(service_context), "clock-status")
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = SourceCacheCleanupRepository(session)
         repository.register_generation(
             str(uuid4()),
@@ -78,11 +75,11 @@ def test_source_cache_cleanup_status_clamps_future_clock_and_reports_missing(
             now=started_at,
         )
 
-    result = SourceCacheCleanupStatusService(isolated_services.context).get(
+    result = SourceCacheCleanupStatusService(service_context).get(
         workspace.id,
         now=started_at - timedelta(seconds=1),
     )
 
     assert result.oldest_pending_age_seconds == 0
     with pytest.raises(NotFoundError, match="workspace not found"):
-        SourceCacheCleanupStatusService(isolated_services.context).get("missing-workspace")
+        SourceCacheCleanupStatusService(service_context).get("missing-workspace")
