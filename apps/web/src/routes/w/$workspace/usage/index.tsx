@@ -5,14 +5,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { Panel } from "@/components/shared/Panel";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
-import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
-import { countLabel } from "@/lib/format";
-import { formatCostNanos } from "@/lib/money";
 import { accountCostSeriesQueryOptions } from "@/lib/queries/usage";
-import { useWorkspace } from "@/lib/workspace-context";
 import { cn } from "@/lib/utils";
 
-import { AccountCeilingLine } from "./-components/AccountCeilingLine";
 import { AppCostAccordion } from "./-components/AppCostAccordion";
 import { usageRange, usageRangeKeys, type UsageRangeKey } from "./-components/ranges";
 import { SpendChart } from "./-components/SpendChart";
@@ -34,7 +29,6 @@ export const Route = createFileRoute("/w/$workspace/usage/")({
 });
 
 function UsagePage() {
-  const { workspaces } = useWorkspace();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   const [byCategory, setByCategory] = useState(false);
@@ -45,18 +39,6 @@ function UsagePage() {
   return (
     <WorkspacePage
       title="Usage"
-      description={
-        <>
-          <PageFacts
-            items={[
-              series.data ? formatCostNanos(series.data.cost_nanos, series.data.currency) : null,
-              countLabel(workspaces.length, "workspace"),
-              range.caption,
-            ]}
-          />
-          <AccountCeilingLine />
-        </>
-      }
       actions={
         <UsageRangeControl
           value={range.key}
@@ -65,14 +47,13 @@ function UsagePage() {
       }
       contentClassName="flex min-h-0 flex-col gap-3 overflow-y-auto lg:overflow-hidden"
     >
-      <Panel
-        title="Spend over time"
-        description={`${range.bucket === "hour" ? "Hourly" : "Daily"}, UTC`}
-        action={
+      <section aria-label="Spend" className="panel shrink-0 overflow-hidden rounded-md">
+        <header className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-5 px-4 py-5 sm:px-5 lg:grid-cols-[minmax(10rem,auto)_minmax(0,1fr)_auto]">
+          <SpendTotals series={series.data} error={series.error} />
           <div
             role="group"
             aria-label="Chart breakdown"
-            className="flex shrink-0 gap-0.5 rounded-md border border-input bg-card p-0.5"
+            className="col-start-2 row-start-1 flex gap-0.5 rounded-md border border-input bg-card p-0.5 lg:col-start-3"
           >
             {[false, true].map((category) => (
               <button
@@ -92,22 +73,18 @@ function UsagePage() {
               </button>
             ))}
           </div>
-        }
-        // The chart's flex content needs an explicit height on its parent.
-        className="h-60 shrink-0 sm:h-72"
-        contentClassName="overflow-hidden p-3"
-      >
-        <SpendChart
-          window={range.window}
-          bucket={range.bucket}
-          caption={range.caption}
-          byCategory={byCategory}
-        />
-      </Panel>
-      <SpendTotals series={series.data} error={series.error} />
+        </header>
+        <div className="h-48 px-3 pb-3 sm:h-56">
+          <SpendChart
+            window={range.window}
+            bucket={range.bucket}
+            caption={range.caption}
+            byCategory={byCategory}
+          />
+        </div>
+      </section>
       <Panel
         title="Apps"
-        description="Open an app to see its workloads"
         className="min-h-[22rem] flex-1 lg:min-h-0"
         contentClassName="flex min-h-0 flex-col overflow-hidden"
       >
