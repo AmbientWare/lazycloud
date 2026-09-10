@@ -102,9 +102,8 @@ x-agent-binary-env: &agent-binary-env
 
 x-aws-compute-env: &aws-compute-env
   LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN: "${LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN:-}"
-  LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS: "${LAZYCLOUD_AWS_CAPACITY_INSTANCE_HOURLY_MICROS:-{}}"
-  LAZYCLOUD_AWS_CAPACITY_REGIONAL_PRICES: "${LAZYCLOUD_AWS_CAPACITY_REGIONAL_PRICES:-{}}"
-  LAZYCLOUD_PLATFORM_CAPACITY_HETZNER: "${LAZYCLOUD_PLATFORM_CAPACITY_HETZNER:-[]}"
+  LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES: "${LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES:-{}}"
+  LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS: "${LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS:-{}}"
 
 x-scheduler-env: &scheduler-env
   LAZYCLOUD_COMPUTE_RECLAIM_REGISTRATION_DEADLINE_SECONDS: "3600"
@@ -407,21 +406,12 @@ services:
 
   administrator-bootstrap:
     image: database-bootstrap:local
-    entrypoint: ["/bin/sh", "-ec"]
+    entrypoint: ["lazycloud-admin", "--json", "auth", "bootstrap"]
     command:
-      - |
-        token_path=/var/lib/lazycloud/bootstrap/administrator-token
-        umask 077
-        # Empty expands to no flag at all, so an unset id leaves a token-only
-        # administrator rather than linking one nobody named.
-        github_id="${LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID:-}"
-        lazycloud-admin --json auth bootstrap \
-          --token-file /run/secrets/lazycloud-administrator-token \
-          $${github_id:+--github-user-id "$$github_id"} \
-          --output "$$token_path"
-        if test -e "$$token_path"; then
-          test "$$(stat -c '%a' "$$token_path")" = "600"
-        fi
+      - --token-file
+      - /run/secrets/lazycloud-administrator-token
+      - --output
+      - /var/lib/lazycloud/bootstrap/administrator-token
     environment:
       <<: [*database-bootstrap-env, *object-store-env, *gateway-env]
       LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID: "${LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID:-}"
@@ -856,11 +846,7 @@ services:
           "CMD",
           "python",
           "-m",
-          "shared.process_liveness",
-          "/tmp/lazycloud-scheduler.heartbeat.placement",
-          "/tmp/lazycloud-scheduler.heartbeat.capacity",
-          "/tmp/lazycloud-scheduler.heartbeat.housekeeping",
-          "/tmp/lazycloud-scheduler.heartbeat.dispatch",
+          "scheduler_app.health",
           "--max-age-seconds",
           "${LAZYCLOUD_COMPOSE_SCHEDULER_LIVENESS_MAX_AGE_SECONDS:-300}",
         ]

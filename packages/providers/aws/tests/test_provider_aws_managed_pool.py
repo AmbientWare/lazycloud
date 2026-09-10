@@ -241,6 +241,7 @@ class _AutoScaling:
         self.update_count = 0
         self.terminate_count = 0
         self.instances: list[Mapping[str, object]] = []
+        self.suspended_processes: set[str] = set()
 
     def describe_auto_scaling_groups(self, **kwargs: object) -> Mapping[str, object]:
         groups: list[Mapping[str, object]] = (
@@ -255,12 +256,29 @@ class _AutoScaling:
                     "LaunchTemplate": self.launch_template,
                     "Instances": self.instances,
                     "Tags": self.tags,
+                    "SuspendedProcesses": [
+                        {"ProcessName": name} for name in sorted(self.suspended_processes)
+                    ],
                 }
             ]
             if self.exists
             else []
         )
         return {"AutoScalingGroups": groups}
+
+    def suspend_processes(
+        self, *, AutoScalingGroupName: str, ScalingProcesses: list[str]
+    ) -> Mapping[str, object]:
+        assert AutoScalingGroupName == self.name
+        self.suspended_processes.update(ScalingProcesses)
+        return {}
+
+    def resume_processes(
+        self, *, AutoScalingGroupName: str, ScalingProcesses: list[str]
+    ) -> Mapping[str, object]:
+        assert AutoScalingGroupName == self.name
+        self.suspended_processes.difference_update(ScalingProcesses)
+        return {}
 
     def create_auto_scaling_group(self, **kwargs: object) -> Mapping[str, object]:
         self.exists = True
@@ -353,6 +371,67 @@ def test_managed_pool_rejects_desired_capacity_above_its_allocation() -> None:
     assert spec.max_nodes == 500
     with pytest.raises(ValidationError, match="desired_nodes cannot exceed max_nodes"):
         _spec(desired_nodes=501, max_nodes=500)
+
+
+def test_disabled_pool_does_not_create_capacity_or_launch_templates() -> None:
+    ec2 = _Ec2()
+    autoscaling = _AutoScaling()
+    provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
+
+    snapshot = provisioner.ensure(_spec().model_copy(update={"purchases_enabled": False}))
+
+    assert snapshot.phase is AwsManagedPoolPhase.Deleted
+    assert snapshot.desired_nodes == 0
+    assert not autoscaling.exists
+    assert not ec2.launch_template
+
+
+def test_disabled_pool_preserves_instances_and_other_suspended_processes() -> None:
+    ec2 = _Ec2()
+    autoscaling = _AutoScaling()
+    provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
+    spec = _spec(desired_nodes=2)
+    provisioner.ensure(spec)
+    autoscaling.instances = [
+        {
+            "InstanceId": f"i-{index:017x}",
+            "LifecycleState": "InService",
+            "HealthStatus": "Healthy",
+            "ProtectedFromScaleIn": True,
+        }
+        for index in (1, 2)
+    ]
+    autoscaling.suspended_processes.add("AZRebalance")
+    disabled = spec.model_copy(update={"purchases_enabled": False, "root_volume_gib": 100})
+
+    observed = provisioner.ensure(disabled)
+    assert observed.desired_nodes == 2
+    assert len(observed.instances) == 2
+    assert autoscaling.suspended_processes == {"Launch", "AZRebalance"}
+    assert len(ec2.launch_versions) == 1
+
+    provisioner.scale(disabled, desired_nodes=1, max_nodes=2)
+    assert autoscaling.desired == 1
+    assert autoscaling.suspended_processes == {"Launch", "AZRebalance"}
+    assert len(ec2.launch_versions) == 1
+    with pytest.raises(ValueError, match="purchases are disabled"):
+        provisioner.scale(disabled, desired_nodes=2, max_nodes=2)
+    assert autoscaling.desired == 1
+
+    assert provisioner.release_instance(disabled, "i-00000000000000001")
+    assert autoscaling.terminate_count == 1
+    assert autoscaling.suspended_processes == {"Launch", "AZRebalance"}
+
+    enabled = disabled.model_copy(update={"purchases_enabled": True, "desired_nodes": 1})
+    provisioner.ensure(enabled)
+    assert autoscaling.desired == 1
+    assert autoscaling.launch_template["Version"] == "2"
+    assert autoscaling.suspended_processes == {"AZRebalance"}
+
+    provisioner.delete(disabled)
+    provisioner.delete(disabled)
+    assert not autoscaling.exists
+    assert not ec2.launch_template
 
 
 def test_managed_pool_rejects_unavailable_zone_before_creating_resources() -> None:
@@ -508,10 +587,11 @@ def test_real_aws_offers_include_storage_and_ipv4_before_purchase() -> None:
                 cpu_ami_id="ami-0123456789abcdef0",
             )
         },
-        instance_hourly_micros={"m7i.2xlarge": 340_000},
         regional_prices={
             "us-east-1": AwsRegionalPrices(
-                gp3_gib_monthly_micros=80_000, public_ipv4_hourly_micros=5_000
+                gp3_gib_monthly_micros=80_000,
+                public_ipv4_hourly_micros=5_000,
+                instance_hourly_micros={"m7i.2xlarge": 340_000},
             )
         },
         client_provider=_ClientProvider(
@@ -523,7 +603,9 @@ def test_real_aws_offers_include_storage_and_ipv4_before_purchase() -> None:
     assert selected.cost_terms.complete_hourly_cost_micros == 367_223
     larger = choose_offer(list(provider.list_offers(root_volume_gib=400)), OfferRequest(nodes=1))
     assert larger.cost_terms.root_disk_hourly_micros == 44_445
-    unpriced = replace(provider, regional_prices={})
+    unpriced = replace(
+        provider, regional_prices={"us-west-2": provider.regional_prices["us-east-1"]}
+    )
     with pytest.raises(ValueError, match="no compute offers"):
         choose_offer(list(unpriced.list_offers(root_volume_gib=200)), OfferRequest(nodes=1))
 
@@ -541,7 +623,6 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
                 cpu_ami_id="ami-0123456789abcdef0",
             )
         },
-        instance_hourly_micros={"m7i.2xlarge": 340_000},
         client_provider=_ClientProvider(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling)),
     )
     request = _pool_request(provider.provider_ref)
@@ -631,6 +712,12 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
     assert launching.phase is not ProviderCapacityPhase.Ready
     assert launching_statuses[second_instance] is ProviderMachineStatus.Pending
 
+    disabled = observed_request.model_copy(update={"purchases_enabled": False})
+    provider.ensure_unit(disabled)
+    assert autoscaling.suspended_processes == {"Launch"}
+    provider.set_unit_capacity(observed_request, desired_machines=2, max_machines=3)
+    assert autoscaling.suspended_processes == set()
+
 
 def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
     provider = AwsConnectedAccountPooledProvider(
@@ -650,7 +737,6 @@ def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
                 cpu_ami_id="ami-0123456789abcdef0",
             )
         },
-        instance_hourly_micros={"m7i.2xlarge": 340_000},
         client_provider=_ClientProvider(
             AwsManagedPoolClients(ec2=_Ec2(), autoscaling=_AutoScaling())
         ),
@@ -736,6 +822,34 @@ def test_managed_pool_partial_failure_returns_last_durable_checkpoint() -> None:
     assert checkpoints[-1] == caught.value.resource_ids
 
 
+def test_managed_pool_finishes_cleanup_when_group_disappears_during_delete() -> None:
+    class _DisappearingAutoScaling(_AutoScaling):
+        def delete_auto_scaling_group(self, **kwargs: object) -> Mapping[str, object]:
+            self.exists = False
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "ValidationError",
+                        "Message": (
+                            "AutoScalingGroup name not found - "
+                            f"AutoScalingGroup '{self.name}' not found"
+                        ),
+                    }
+                },
+                "DeleteAutoScalingGroup",
+            )
+
+    ec2 = _Ec2()
+    autoscaling = _DisappearingAutoScaling()
+    provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
+    spec = _spec(desired_nodes=0)
+    provisioner.ensure(spec)
+
+    provisioner.delete(spec)
+    assert provisioner.delete(spec).phase is AwsManagedPoolPhase.Deleted
+    assert not ec2.launch_template
+
+
 def test_managed_pool_rejects_same_named_group_without_ownership_tags() -> None:
     ec2 = _Ec2()
     autoscaling = _AutoScaling()
@@ -748,6 +862,33 @@ def test_managed_pool_rejects_same_named_group_without_ownership_tags() -> None:
 
     assert caught.value.code is AwsProviderControlErrorCode.InvalidResponse
     assert "not owned" in caught.value.detail
+    with pytest.raises(AwsProviderControlError, match="not owned"):
+        provisioner.ensure(_spec().model_copy(update={"purchases_enabled": False}))
+    assert autoscaling.suspended_processes == set()
+
+
+def test_reenable_keeps_launches_suspended_when_capacity_update_fails() -> None:
+    class _FailingAutoScaling(_AutoScaling):
+        def update_auto_scaling_group(self, **kwargs: object) -> Mapping[str, object]:
+            raise AwsProviderControlError(
+                AwsProviderControlErrorCode.UpstreamUnavailable,
+                operation="update Auto Scaling Group",
+                detail="capacity API unavailable",
+            )
+
+    ec2 = _Ec2()
+    autoscaling = _FailingAutoScaling()
+    provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
+    spec = _spec(desired_nodes=2)
+    provisioner.ensure(spec)
+    provisioner.ensure(spec.model_copy(update={"purchases_enabled": False}))
+
+    with pytest.raises(AwsManagedPoolProvisioningError, match="capacity API unavailable"):
+        provisioner.ensure(spec.model_copy(update={"desired_nodes": 1, "root_volume_gib": 100}))
+
+    assert autoscaling.suspended_processes == {"Launch"}
+    assert autoscaling.desired == 2
+    assert autoscaling.launch_template["Version"] == "1"
 
 
 def test_managed_pool_maps_malformed_aws_inventory_to_typed_error() -> None:

@@ -6,7 +6,7 @@ import type { PricingCatalog, PublishedPlacementRate } from "@/lib/api/schemas";
 import { gpuModelsLabel, limitFigure, memberLimitFigure } from "@/lib/entitlements";
 import { DOCS_URL } from "@/lib/env";
 import { countLabel } from "@/lib/format";
-import { exactDollars } from "@/lib/money";
+import { formatCostNanos } from "@/lib/money";
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 import { cn } from "@/lib/utils";
 
@@ -29,14 +29,8 @@ const SECONDS_PER_HOUR = 3600;
 /** Which unit every figure on the page is currently read in. */
 type Meter = "hour" | "second";
 
-function metered(nanosPerHour: number, meter: Meter): number | string {
-  if (meter === "hour") return nanosPerHour;
-  if (nanosPerHour % SECONDS_PER_HOUR === 0) return nanosPerHour / SECONDS_PER_HOUR;
-  return `≈ ${new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 12,
-  }).format(nanosPerHour / SECONDS_PER_HOUR / 1_000_000_000)}`;
+function metered(nanosPerHour: number, meter: Meter): number {
+  return meter === "hour" ? nanosPerHour : nanosPerHour / SECONDS_PER_HOUR;
 }
 
 const meters = [
@@ -53,7 +47,7 @@ type RateLine = {
 };
 
 type RateGroup = {
-  heading: string;
+  heading?: string;
   lines: readonly RateLine[];
 };
 
@@ -61,12 +55,6 @@ function perLabel(meter: Meter): string {
   return meter === "second" ? "sec" : "hr";
 }
 
-/* Dearest first, ranked once. The page lists cards for one capacity now — what a
-   container costs elsewhere is a percentage of these, stated as one line — and
-   nothing in the ranking reads the meter, so the toggle cannot change an answer
-   fixed by the catalog. */
-/* What a container costs on one kind of capacity: the figures that change with
-   where it runs, in the order somebody sizing one asks in. */
 function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonly RateGroup[] {
   const rates = placement.compute_rates.filter((rate) => rate.billing_owner === "platform_fleet");
   const shape = rates.find((rate) => rate.gpu_type === "");
@@ -85,25 +73,18 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
       })),
     },
     {
-      heading: "CPU",
       lines: [
         {
-          label: "Reserved or used CPU, whichever is greater",
+          label: "CPU",
           figure: metered(shape.nanos_per_cpu_core_hour, meter),
           unit: `/ CPU / ${per}`,
-        },
-        {
-          label: "2 CPUs, for physical-core price comparisons",
-          figure: metered(shape.nanos_per_cpu_core_hour * 2, meter),
-          unit: `/ ${per}`,
         },
       ],
     },
     {
-      heading: "Memory",
       lines: [
         {
-          label: "Reserved or used memory, whichever is greater",
+          label: "Memory",
           figure: metered(shape.nanos_per_memory_gib_hour, meter),
           unit: `/ GiB / ${per}`,
         },
@@ -115,39 +96,29 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
 function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
   return [
     {
-      heading: "Volume storage",
       lines: [
         {
-          label: "Volumes and artifacts",
+          label: "Volumes",
           figure: catalog.platform_rate.nanos_per_volume_gib_month,
-          /* Thirty days, said rather than implied. Storage meters by the second,
-           so a calendar month is charged for the days it actually has — and a
-           reader who took "mo" for January would find 31 days on the invoice
-           against a figure that quoted 30. */
           unit: "/ GiB / 30 days",
         },
       ],
     },
     {
-      heading: "Egress",
       lines: [
         {
-          label: "Traffic leaving LazyCloud",
+          label: "Egress",
           figure: catalog.platform_rate.nanos_per_egress_gib,
           unit: "/ GiB",
         },
       ],
     },
     {
-      heading: "Bring your own cloud",
       lines: [
         {
-          /* The compute rates, not every rate above it: volumes and egress are this
-           platform's own infrastructure and are charged whole wherever a container
-           ran. Saying "the rates above" would quietly include them. */
-          label: "Management fee on base compute rates. Your provider bills the machine.",
+          label: "Bring your own cloud",
           figure: `${catalog.connected_cloud_management_fee_percent}%`,
-          unit: "",
+          unit: "management fee",
         },
       ],
     },
@@ -158,14 +129,12 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
    before they have paid for anything. The rest is disclosure, not pricing. */
 function accountTerm(catalog: PricingCatalog): string {
   const terms = catalog.no_payment_method;
-  return `New accounts receive a one-time ${exactDollars(catalog.trial.amount_nanos)} usage credit, valid for ${catalog.trial.duration_days} days. Without a saved card, you can run ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once and ${countLabel(terms.max_concurrent_gpus, "GPU card")}. Further usage needs prepaid credit.`;
+  return `New accounts receive a one-time ${formatCostNanos(catalog.trial.amount_nanos)} usage credit, valid for ${catalog.trial.duration_days} days. Without a saved card, you can run ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once and ${countLabel(terms.max_concurrent_gpus, "GPU card")}. Further usage needs prepaid credit.`;
 }
 
 const sectionTitle =
   "font-serif text-[clamp(1.75rem,4.2vw,2.5rem)] leading-[1.05] font-normal tracking-[-0.005em] text-balance [&_em]:text-brand [&_em]:italic";
 
-/* Both rate lists share one meter, so the two columns are the same column read
-   twice rather than two units a reader has to hold at once. */
 function MarketingPricing() {
   const [meter, setMeter] = useState<Meter>("hour");
   const fleetRatesId = useId();
@@ -186,11 +155,6 @@ function MarketingPricing() {
 
   const placement = catalog.placement_rates.find((rate) => rate.rate_class === "auto");
   if (!placement) throw new Error("the pricing catalog has no base compute rates");
-  const nonPreemptible = catalog.placement_rates.find((rate) => !rate.pinned && !rate.preemptible);
-  const pinned = catalog.placement_rates.find((rate) => rate.pinned && rate.preemptible);
-  const pinnedNonPreemptible = catalog.placement_rates.find(
-    (rate) => rate.pinned && !rate.preemptible,
-  );
 
   return (
     <MarketingLayout>
@@ -233,28 +197,6 @@ function MarketingPricing() {
                 groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
                 id={fleetRatesId}
               />
-              <p className="mb-3 text-[12.5px] leading-relaxed text-muted-foreground">
-                One CPU matches <code>cpu=1</code> and represents one vCPU. Modal and Beam quote
-                physical cores as two vCPUs, so compare their one-core price with our two-CPU price.
-                This compares billing units, not processor performance.
-              </p>
-              <p className="mb-3 text-[12.5px] leading-relaxed text-muted-foreground">
-                GPU prices are per card and exclude CPU and memory. Add all three for your workload
-                cost. GPU availability depends on the model and interruption setting.
-                {meter === "second" ? " Figures marked ≈ are rounded for display." : ""}
-              </p>
-              <p className="mb-3 text-[12.5px] leading-relaxed text-muted-foreground">
-                Compute rates shown allow interruptions and use automatic location selection.
-                {nonPreemptible
-                  ? ` Disabling interruptions costs ${nonPreemptible.cpu_memory_multiplier}x for CPU and memory.`
-                  : ""}
-                {pinned
-                  ? ` Selecting a region or availability zone costs ${pinned.cpu_memory_multiplier}x for CPU and memory and ${pinned.gpu_multiplier}x for GPUs.`
-                  : ""}
-                {pinnedNonPreemptible
-                  ? ` Combining both choices costs ${pinnedNonPreemptible.cpu_memory_multiplier}x for CPU and memory and ${pinnedNonPreemptible.gpu_multiplier}x for GPUs.`
-                  : ""}
-              </p>
               <a
                 className="interactive-link text-[12.5px] text-muted-foreground underline underline-offset-4"
                 href={new URL("/platform/plans#compute-pricing", DOCS_URL).href}
@@ -280,7 +222,7 @@ function MarketingPricing() {
                       </h3>
                       <p className="flex items-baseline gap-2">
                         <span className="font-mono text-[22px] leading-none tracking-[-0.02em]">
-                          {exactDollars(plan.monthly_nanos)}
+                          {formatCostNanos(plan.monthly_nanos)}
                         </span>
                         <span className="text-[12px] text-muted-foreground">per month</span>
                       </p>
@@ -292,7 +234,7 @@ function MarketingPricing() {
                       <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
                         <dt className="text-muted-foreground">Monthly usage credit</dt>
                         <dd className="font-mono font-medium text-brand">
-                          {exactDollars(plan.included_nanos)}{" "}
+                          {formatCostNanos(plan.included_nanos)}{" "}
                           <span className="text-muted-foreground">/ month</span>
                         </dd>
                       </div>
@@ -400,32 +342,26 @@ function PlanTerm({ children }: { children: React.ReactNode }) {
    money. */
 function RateList({ groups, id }: { groups: readonly RateGroup[]; id: string }) {
   return (
-    <dl className="mt-6" id={id}>
+    <div className="mt-6" id={id}>
       {groups.map((group) => (
-        <div
-          className="grid grid-cols-[8.5rem_minmax(0,1fr)] gap-x-6 border-t border-border py-5 max-sm:grid-cols-1 max-sm:gap-y-2.5"
-          key={group.heading}
-        >
-          <dt className="text-[13px] font-medium">{group.heading}</dt>
-          <dd className="min-w-0">
+        <div className="border-t border-border py-5" key={group.heading ?? group.lines[0].label}>
+          {group.heading ? <h3 className="mb-4 text-[13px] font-medium">{group.heading}</h3> : null}
+          <dl className="space-y-3">
             {group.lines.map((line) => (
-              <p
-                className="flex items-baseline justify-between gap-5 py-1.5 first:pt-0"
-                key={line.label}
-              >
-                <span className="min-w-0 text-[13px] leading-snug text-muted-foreground">
+              <div className="flex items-baseline justify-between gap-4" key={line.label}>
+                <dt className="min-w-0 text-[13px] leading-snug text-muted-foreground">
                   {line.label}
-                </span>
-                <span className="shrink-0 font-mono text-[13px] whitespace-nowrap">
-                  {typeof line.figure === "number" ? <Rate nanos={line.figure} /> : line.figure}{" "}
+                </dt>
+                <dd className="shrink-0 font-mono text-[13px] whitespace-nowrap">
+                  {typeof line.figure === "number" ? formatCostNanos(line.figure) : line.figure}{" "}
                   <span className="text-muted-foreground">{line.unit}</span>
-                </span>
-              </p>
+                </dd>
+              </div>
             ))}
-          </dd>
+          </dl>
         </div>
       ))}
-    </dl>
+    </div>
   );
 }
 
@@ -463,22 +399,5 @@ function MeterToggle({
         ))}
       </div>
     </fieldset>
-  );
-}
-
-/* A per-second rate is mostly leading zeros, and the length of that run is the
-   part of it the eye compares two rows by. Dimming the run leaves the exact
-   published figure on the page while the significant digits carry the scan. */
-function Rate({ nanos }: { nanos: number }) {
-  const figure = exactDollars(nanos);
-  const significant = figure.search(/[1-9]/);
-  if (significant <= 0) {
-    return figure;
-  }
-  return (
-    <>
-      <span className="text-muted-foreground">{figure.slice(0, significant)}</span>
-      {figure.slice(significant)}
-    </>
   );
 }

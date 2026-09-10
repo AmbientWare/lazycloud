@@ -22,7 +22,6 @@ from provider_clients.release_manifest import AwsReleaseManifest
 from provider_clients.settings import (
     AwsAccountConnectionEnvironmentSettings,
     AwsAccountConnectionSettings,
-    AwsCapacityEnvironmentSettings,
     AwsCapacitySettings,
 )
 
@@ -108,7 +107,6 @@ def resolve_deployment_release(
         worker_manifest=manifests.get(manifest_settings.worker_manifest_url),
         host_manifest=manifests.get(manifest_settings.host_manifest_url),
         agent_binaries=AgentBinaryEnvironmentSettings(),
-        aws_capacity=AwsCapacityEnvironmentSettings(),
         aws_connections=AwsAccountConnectionEnvironmentSettings(),
     )
 
@@ -119,7 +117,6 @@ def deployment_release(
     worker_manifest: AwsReleaseManifest | None,
     host_manifest: AwsReleaseManifest | None,
     agent_binaries: AgentBinaryEnvironmentSettings,
-    aws_capacity: AwsCapacityEnvironmentSettings,
     aws_connections: AwsAccountConnectionEnvironmentSettings,
 ) -> DeploymentRelease:
     if any(item is not None for item in (manifest, worker_manifest, host_manifest)):
@@ -145,8 +142,6 @@ def deployment_release(
             else host_manifest.agent_artifact_object.public_url,
             cpu_ami_ids={} if host_manifest is None else host_manifest.capacity_cpu_ami_ids,
             gpu_ami_ids={} if host_manifest is None else host_manifest.capacity_gpu_ami_ids,
-            instance_hourly_micros=aws_capacity.instance_hourly_micros,
-            regional_prices=aws_capacity.regional_prices,
         ),
         aws_connections=AwsAccountConnectionSettings(
             template_url=(

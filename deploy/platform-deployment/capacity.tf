@@ -4,12 +4,13 @@ variable "hetzner_node_images" {
     image_id      = number
     recipe_sha256 = string
   }))
+  default = {}
 
   validation {
-    condition = contains(keys(var.hetzner_node_images), "ash") && alltrue([
+    condition = alltrue([
       for image in values(var.hetzner_node_images) :
       image.image_id > 0 && floor(image.image_id) == image.image_id && can(regex("^[0-9a-f]{64}$", image.recipe_sha256))
     ])
-    error_message = "The default Ashburn provider requires a verified numeric snapshot ID and full SHA-256 recipe digest."
+    error_message = "Each image requires a positive integer snapshot ID and full SHA-256 recipe digest."
   }
 }

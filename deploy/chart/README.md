@@ -88,8 +88,8 @@ with `docker compose run --rm --no-deps --entrypoint lazycloud-admin log-retenti
 ## Private network
 
 Each control-plane pod has a `wireguard-platform` sidecar in the same network
-namespace. The StatefulSet ordinal selects a stable platform keypair, so
-`controlPlane.replicas` and `wireguard.platformPeers` must match. The sidecar
+namespace. The StatefulSet ordinal selects a stable platform keypair. The chart
+derives the keypair count from `controlPlane.replicas`. The sidecar
 needs `NET_ADMIN` and `/dev/net/tun`; those are pod requirements, not reasons to
 select an instance type.
 

@@ -19,7 +19,6 @@ from execution.collections.redis import (
 )
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
-from provider_aws import AwsRegionalPrices
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
 from shared.identity import WorkspaceRecord
 from sqlalchemy import Engine
@@ -77,12 +76,6 @@ def service_graph(
             ),
             cpu_ami_ids={"us-east-1": "ami-00000000000000000"},
             gpu_ami_ids={"us-east-1": "ami-00000000000000000"},
-            instance_hourly_micros={"test.instance": 1},
-            regional_prices={
-                "us-east-1": AwsRegionalPrices(
-                    gp3_gib_monthly_micros=80_000, public_ipv4_hourly_micros=5_000
-                )
-            },
         ),
     )
     try:

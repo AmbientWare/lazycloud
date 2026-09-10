@@ -110,10 +110,12 @@ def test_offline_recovery_refuses_non_postgresql_authority(
     assert not output.exists()
 
 
-def test_offline_bootstrap_accepts_configured_token_only_through_private_file(
+@pytest.mark.parametrize("source", ["file", "environment"])
+def test_offline_bootstrap_preserves_configured_credential_when_storage_fails(
     database: DatabaseClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    source: str,
 ) -> None:
     database_url = database.settings.url
     monkeypatch.setattr(S3ObjectStoreClient, "create_bucket", _refuse_bucket_creation)
@@ -124,6 +126,9 @@ def test_offline_bootstrap_accepts_configured_token_only_through_private_file(
     token_file.write_text(f"{configured}\n", encoding="utf-8")
     os.chmod(token_file, 0o400)
     output = tmp_path / "administrator-token"
+    if source == "environment":
+        monkeypatch.setenv("LAZYCLOUD_TOKEN", configured)
+    credential_args = ["--token-file", str(token_file)] if source == "file" else []
 
     result = CliRunner().invoke(
         cli,
@@ -131,8 +136,7 @@ def test_offline_bootstrap_accepts_configured_token_only_through_private_file(
             "--json",
             "auth",
             "bootstrap",
-            "--token-file",
-            str(token_file),
+            *credential_args,
             "--output",
             str(output),
         ],
@@ -153,6 +157,26 @@ def test_offline_bootstrap_accepts_configured_token_only_through_private_file(
     finally:
         verification_database.dispose()
     assert record.kind is TokenKind.Admin
+
+
+def test_bootstrap_rejects_conflicting_credentials_without_disclosing_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    environment_token = _token()
+    file_token = _token()
+    monkeypatch.setenv("LAZYCLOUD_TOKEN", environment_token)
+    token_file = tmp_path / "administrator-token"
+    token_file.write_text(file_token, encoding="utf-8")
+    token_file.chmod(0o600)
+
+    result = CliRunner().invoke(cli, ["auth", "bootstrap", "--token-file", str(token_file)])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, CredentialFileError)
+    assert "different credentials" in str(result.exception)
+    for token in (environment_token, file_token):
+        assert token not in result.output
+        assert token not in str(result.exception)
 
 
 def test_configured_token_file_requires_private_mode(tmp_path: Path) -> None:

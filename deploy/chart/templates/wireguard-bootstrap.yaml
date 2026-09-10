@@ -23,6 +23,6 @@ spec:
             - --region
             - {{ required "aws.region is required" .Values.aws.region | quote }}
             - --platform-peers
-            - {{ .Values.wireguard.platformPeers | quote }}
+            - {{ .Values.controlPlane.replicas | quote }}
           resources:
             {{- toYaml .Values.bootstrap.resources | nindent 12 }}

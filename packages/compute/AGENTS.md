@@ -79,8 +79,12 @@ Compare revenue with the complete compute, root disk and public IPv4 quote.
 Unknown prices refuse platform purchases. Apply the same decision to selection,
 warm capacity, growth and platform-controlled restoration. Customer-owned
 infrastructure stays outside the platform margin policy. Existing nodes remain
-observable and drainable after their offer fails purchase admission. Application
-admission does not cap an autonomous provider replacement or future Spot prices.
+observable and drainable after their offer fails purchase admission. Purchase
+permission belongs to the code-defined provider policy. Disabled platform providers
+remain resolvable for cleanup but cannot grow or receive warm targets. Their
+provider-managed launch processes must also stop; in-flight launches still settle
+through enrollment and reconciliation. The margin assessment does not cap future
+Spot prices or autonomous replacement prices on enabled providers.
 
 A connected cloud account belongs to a user, not a workspace, and backs every
 workspace that user owns. Runtime lookups therefore resolve

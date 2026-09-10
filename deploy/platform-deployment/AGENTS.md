@@ -21,8 +21,8 @@ state. `README.md` is the operator runbook.
   allowlist and the core's providers.
 - Production is persistent. Review every resource replacement against the live
   installation. Resolve provider/state discrepancies before applying.
-- Export resource identities through configuration.tf. Application policy, prices,
-  limits and secret property bindings belong to Helm, not Terraform variables.
+- Export resource identities through configuration.tf. Python owns provider policy,
+  prices and fleet limits. Helm owns process settings and secret property bindings.
   The deploy role reads only this descriptor and has no state-bucket access.
 - A deployment's credentials are two JSON documents, split by who can produce
   the value. `<deployment>/platform` is written here when its inputs change; `<deployment>/operator` is declared here and written by a person.

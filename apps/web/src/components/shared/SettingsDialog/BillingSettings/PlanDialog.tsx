@@ -21,7 +21,7 @@ import {
 import type { BillingSummary } from "@/lib/api/schemas";
 import { gpuModelsPhrase, limitPhrase, memberLimitPhrase } from "@/lib/entitlements";
 import { countLabel } from "@/lib/format";
-import { exactDollars } from "@/lib/money";
+import { formatCostNanos } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
 import type { BillingSettingsController, PlanOffer } from "./controller";
@@ -139,14 +139,14 @@ function PlanCard({
         {current ? <span className="text-xs font-medium text-brand">Current</span> : null}
       </div>
       <p className="mt-3 font-mono text-2xl font-semibold tracking-tight">
-        {exactDollars(offer.monthly_nanos)}
+        {formatCostNanos(offer.monthly_nanos)}
         <span className="ml-1 font-sans text-xs font-normal text-muted-foreground">/ month</span>
       </p>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">{offer.summary}</p>
       <ul className="mt-4 flex-1 space-y-2 border-t border-border/80 pt-4 text-xs leading-5">
         <PlanPoint>
           {offer.included_nanos > 0
-            ? `${exactDollars(offer.included_nanos)} usage credit each month`
+            ? `${formatCostNanos(offer.included_nanos)} usage credit each month`
             : "Pay for usage with prepaid credit"}
         </PlanPoint>
         <PlanPoint>
@@ -241,7 +241,7 @@ function ChangeConfirmation({
           {movingDown ? (
             <>
               <li>
-                Your next monthly price will be {exactDollars(offer.monthly_nanos)}. This period
+                Your next monthly price will be {formatCostNanos(offer.monthly_nanos)}. This period
                 isn&apos;t refunded.
               </li>
               <li>You can cancel the scheduled change before renewal.</li>
@@ -249,8 +249,8 @@ function ChangeConfirmation({
             </>
           ) : (
             <li>
-              Future months cost {exactDollars(offer.monthly_nanos)} and include{" "}
-              {exactDollars(offer.included_nanos)} of usage credit.
+              Future months cost {formatCostNanos(offer.monthly_nanos)} and include{" "}
+              {formatCostNanos(offer.included_nanos)} of usage credit.
             </li>
           )}
           {summary ? (

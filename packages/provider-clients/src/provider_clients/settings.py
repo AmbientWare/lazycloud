@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from decimal import Decimal
 from urllib.parse import urlparse
 
 from agent.binary import AgentBinarySettings
-from provider_aws import AwsManagedPoolBinaries, AwsRegionalPrices
+from provider_aws import AwsManagedPoolBinaries
 from provider_hetzner import HetznerNodeImage
-from provider_hetzner.capacity_policy import HETZNER_CAPACITY_POLICY
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 
+from .provider_definitions import PROVIDER_DEFINITIONS
 from .release_manifest import WORKER_IMAGE_PATTERN
 
 _AMI_PATTERN = re.compile(r"ami-[0-9a-f]{8,17}")
@@ -35,23 +34,6 @@ def normalize_ami_catalog(value: Mapping[str, str]) -> dict[str, str]:
         if _AMI_PATTERN.fullmatch(ami_id) is None:
             raise ValueError("AWS AMI catalog has invalid AMI ID")
         normalized[region] = ami_id
-    return normalized
-
-
-def normalize_instance_prices(value: Mapping[str, int]) -> dict[str, int]:
-    normalized: dict[str, int] = {}
-    for raw_instance_type, hourly_micros in value.items():
-        instance_type = raw_instance_type.strip().lower()
-        if not instance_type:
-            raise ValueError("AWS capacity instance price keys cannot be empty")
-        if hourly_micros <= 0:
-            # Zero is the dangerous one. Offers are ranked by cost per node, so a
-            # free instance hour wins every comparison it is entered in, and the
-            # AWS price list answers zero for types with no published on-demand
-            # rate rather than declining to answer. An instance whose price is
-            # not known is left out of this map and is simply not offered.
-            raise ValueError(f"AWS capacity instance price for {instance_type!r} must be positive")
-        normalized[instance_type] = hourly_micros
     return normalized
 
 
@@ -124,27 +106,13 @@ class AwsAccountConnectionSettings(BaseModel):
         return self
 
 
-class AwsCapacityEnvironmentSettings(BaseSettings):
-    """Deployment-owned supplier rates, separate from released host artifacts."""
-
-    instance_hourly_micros: dict[str, int] = Field(default_factory=dict)
-    regional_prices: dict[str, AwsRegionalPrices] = Field(default_factory=dict)
-
-    model_config = SettingsConfigDict(
-        env_prefix=f"{ENV_PREFIX}_AWS_CAPACITY_",
-        extra="ignore",
-    )
-
-
 class AwsCapacitySettings(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     worker_image_digest: str = ""
     agent_binary_url: str = ""
     cpu_ami_ids: dict[str, str] = Field(default_factory=dict)
     gpu_ami_ids: dict[str, str] = Field(default_factory=dict)
-    instance_hourly_micros: dict[str, int] = Field(default_factory=dict)
-    regional_prices: dict[str, AwsRegionalPrices] = Field(default_factory=dict)
 
     @field_validator("worker_image_digest")
     @classmethod
@@ -178,11 +146,6 @@ class AwsCapacitySettings(BaseModel):
     def validate_ami_catalogs(cls, value: dict[str, str]) -> dict[str, str]:
         return normalize_ami_catalog(value)
 
-    @field_validator("instance_hourly_micros")
-    @classmethod
-    def validate_instance_prices(cls, value: dict[str, int]) -> dict[str, int]:
-        return normalize_instance_prices(value)
-
     @property
     def configured(self) -> bool:
         """Whether managed AWS capacity can launch anything at all.
@@ -193,18 +156,14 @@ class AwsCapacitySettings(BaseModel):
         wanted no GPUs could not use AWS at all. A region without a GPU AMI
         simply offers no GPU instance types there.
         """
-        return bool(
-            self.worker_image_digest
-            and self.agent_binary_url
-            and self.cpu_ami_ids
-            and self.instance_hourly_micros
-        )
+        return bool(self.worker_image_digest and self.agent_binary_url and self.cpu_ami_ids)
 
     @model_validator(mode="after")
     def validate_atomic_configuration(self) -> AwsCapacitySettings:
-        """Configured instance prices require host artifacts and complete regional prices."""
-
-        if not self.instance_hourly_micros:
+        """A release supplies all required host artifacts together."""
+        if not any(
+            (self.worker_image_digest, self.agent_binary_url, self.cpu_ami_ids, self.gpu_ami_ids)
+        ):
             return self
         missing_from_release = [
             name
@@ -221,14 +180,6 @@ class AwsCapacitySettings(BaseModel):
                 f"the release at {RELEASE_MANIFEST_URL_ENV} published no "
                 + ", ".join(missing_from_release)
             )
-        missing_prices = (
-            self.cpu_ami_ids.keys() | self.gpu_ami_ids.keys()
-        ) - self.regional_prices.keys()
-        if missing_prices:
-            raise ValueError(
-                f"{ENV_PREFIX}_AWS_CAPACITY_REGIONAL_PRICES has no storage and IPv4 prices for "
-                + ", ".join(sorted(missing_prices))
-            )
         return self
 
     def binaries_by_region(
@@ -239,7 +190,7 @@ class AwsCapacitySettings(BaseModel):
         if not self.worker_image_digest:
             raise ValueError("AWS capacity is not configured")
         regions = sorted(self.cpu_ami_ids.keys() | self.gpu_ami_ids.keys())
-        if not regions or not self.instance_hourly_micros:
+        if not regions:
             raise ValueError("AWS capacity is not configured")
         return {
             region: AwsManagedPoolBinaries(
@@ -262,24 +213,8 @@ class AwsCapacityReconciliationSettings(BaseSettings):
     )
 
 
-class HetznerCapacityBinding(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
-
-    ref: str = Field(pattern=r"^hetzner:[a-z0-9][a-z0-9-]{0,119}$")
-    workspace: str = Field(default="default", min_length=1)
-    images_by_location: dict[str, HetznerNodeImage]
-    usd_per_currency_unit: Decimal = Field(gt=0)
-    primary_ipv4_hourly_micros: int = Field(ge=0)
-
-    @model_validator(mode="after")
-    def validate_binding(self) -> HetznerCapacityBinding:
-        if not set(HETZNER_CAPACITY_POLICY.allowed_regions) <= self.images_by_location.keys():
-            raise ValueError(f"{self.ref} requires a release image for every allowed location")
-        return self
-
-
 class PlatformCapacitySettings(BaseSettings):
-    hetzner: tuple[HetznerCapacityBinding, ...] = ()
+    hetzner_images: dict[str, HetznerNodeImage] = Field(default_factory=dict)
     hetzner_tokens: dict[str, SecretStr] = Field(default_factory=dict, repr=False)
 
     model_config = SettingsConfigDict(
@@ -290,19 +225,16 @@ class PlatformCapacitySettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_bindings(self) -> PlatformCapacitySettings:
-        if len({binding.ref for binding in self.hetzner}) != len(self.hetzner):
-            raise ValueError("platform provider refs must be unique")
-        if len({binding.workspace for binding in self.hetzner}) > 1:
-            raise ValueError("platform providers require one capacity workspace")
-        for binding in self.hetzner:
-            token = self.hetzner_tokens.get(binding.ref)
+        if self.hetzner_images:
+            ref = PROVIDER_DEFINITIONS["hetzner"].platform_ref
+            token = self.hetzner_tokens.get(ref)
             if token is None or not token.get_secret_value().strip():
-                raise ValueError(f"{binding.ref} requires a provider token")
+                raise ValueError(f"{ref} requires a provider token")
         return self
 
     @property
     def configured(self) -> bool:
-        return bool(self.hetzner)
+        return bool(self.hetzner_images or self.hetzner_tokens)
 
 
 __all__ = [
@@ -310,9 +242,7 @@ __all__ = [
     "RELEASE_MANIFEST_URL_ENV",
     "AwsAccountConnectionEnvironmentSettings",
     "AwsAccountConnectionSettings",
-    "AwsCapacityEnvironmentSettings",
     "AwsCapacityReconciliationSettings",
     "AwsCapacitySettings",
-    "HetznerCapacityBinding",
     "PlatformCapacitySettings",
 ]

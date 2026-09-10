@@ -27,22 +27,34 @@ dates.
 ## Compute pricing
 
 The pricing page lists base rates for automatic placement. LazyCloud chooses
-where the workload runs. These rates have no regional surcharge.
+where the workload runs, and workloads allow interruptions. These rates have
+no regional surcharge. The hour/second toggle changes the displayed unit;
+compute is always metered per second. Displayed prices round to two decimals;
+positive amounts below one cent show as `<$0.01`. Billing uses the full rate.
 
-One CPU is one vCPU and matches `cpu=1` in a workload definition. For comparisons
-with [Modal](https://modal.com/pricing) and [Beam](https://www.beam.cloud/pricing),
-their published physical core represents two vCPUs. Compare one of their cores
-with two LazyCloud CPUs. This normalizes billing units; processor performance
-depends on the hardware.
+One CPU is one vCPU and matches `cpu=1` in a workload definition. CPU and memory
+are each billed at the greater of the reserved amount and measured usage.
 
 GPU rates are per card. Add the CPU and memory charges for the same workload
-size when comparing total compute costs. GPU availability depends on the model
+size to calculate total compute costs. GPU availability depends on the model
 and whether the workload allows interruptions.
 
-Pinning a region or availability zone requires a plan that allows it and adds
-the published location premium to CPU, memory and GPU rates. Choosing
-non-preemptible execution applies its CPU and memory premium as well. Storage
-and transfer rates do not change with these choices.
+Pinning a region or availability zone requires a plan that allows it. Placement
+choices apply the following multipliers to base compute prices:
+
+| Workload setting | CPU and memory | GPU |
+| --- | --- | --- |
+| Non-preemptible execution | 3× | 1× |
+| Pinned region or availability zone | 1.5× | 1.5× |
+| Both | 4.5× | 1.5× |
+
+Storage and transfer rates do not change with these choices. Volume storage
+includes artifacts and uses a 30-day month for the quoted rate, with charges
+prorated to the time stored.
+
+For a connected cloud account, the management fee is a percentage of base compute
+rates. Your cloud provider bills the underlying machines separately. Storage and
+transfer retain their full published rates.
 
 The [pricing catalog](https://lazycloud.dev/api/v1/pricing) lists published
 rates, regional multipliers, and the date the rates take effect.

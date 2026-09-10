@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { BillingSummary } from "@/lib/api/schemas";
 import { usagePhrase } from "@/lib/entitlements";
-import { exactDollars } from "@/lib/money";
+import { formatCostNanos } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
 import { useBillingSettingsController } from "./controller";
@@ -178,8 +178,8 @@ function SubscriptionTerms({ summary }: { summary: BillingSummary }) {
       <p>
         <span className="font-medium">{plan.name}</span>{" "}
         <span className="text-muted-foreground">
-          {exactDollars(plan.monthly_nanos)} / month
-          {plan.included_nanos > 0 ? ` with ${exactDollars(plan.included_nanos)} credit` : ""}
+          {formatCostNanos(plan.monthly_nanos)} / month
+          {plan.included_nanos > 0 ? ` with ${formatCostNanos(plan.included_nanos)} credit` : ""}
         </span>
       </p>
       {plan.scheduled_change_at ? (
