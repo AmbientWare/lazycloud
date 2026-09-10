@@ -3,13 +3,77 @@
 Status: proposed, no infrastructure changes applied. Evidence collected on
 2026-09-10 UTC with AWS profile `default` against the `lazycloud` cluster.
 
-Use one On-Demand node and two Spot nodes, retaining the existing application
-replica counts. This is the best supported cost/availability tradeoff for the
-current requests and architecture. Qualify it only if measured net savings are
-at least $50 per 730-hour month and single-node recovery passes. This $50 floor
+Keep EKS Auto Mode, as selected by the owner. The protected serving-path option
+uses one On-Demand node and two Spot nodes, retaining the existing application
+replica counts. It is not the cheapest possible layout. Qualify it only if
+measured net savings are at least $50 per 730-hour month and single-node
+recovery passes. This $50 floor
 is the proposed threshold for making the operational work worthwhile.
 
-## Cost decision
+## Refined estimates
+
+Use time-weighted EC2 Spot prices for the seven days ending September 10 at
+04:07 UTC, rather than a generic Spot discount. All observations cover the
+full seven days. These are monthly projections at 730 hours, not future price
+guarantees. The cache disk, database, Redis, load balancer and variable traffic
+are excluded from every row, consistently.
+
+| Layout with Auto Mode | EC2 | Auto Mode | Node IPv4 | Node disks | Node total | Including EKS cluster fee |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Current, three On-Demand `c6a.large` | $167.54 | $20.10 | $10.95 | $20.16 | $218.75 | $291.75 |
+| One On-Demand plus two Spot `c6a.large` | $99.05 | $20.10 | $10.95 | $20.16 | $150.26 | $223.26 |
+| Three Spot `c6a.large` | $64.89 | $20.10 | $10.95 | $20.16 | $116.11 | $189.11 |
+| Spot `c6a.large` plus Spot `c6a.xlarge` | $68.19 | $20.10 | $7.30 | $13.44 | $109.04 | $182.04 |
+
+Totals use unrounded inputs. The mixed case puts On-Demand in `us-east-1c`
+and Spot in `1a` and `1b`. The three-Spot case uses all three zones. The
+two-Spot case puts the large instance in `1a` and xlarge in `1c`, where the
+cache volume is bound. Time-weighted prices were $0.02698121/hour for
+`c6a.large` in `1a`, $0.03220031 in `1b`, $0.02971000 in `1c`, and
+$0.06643164/hour for `c6a.xlarge` in `1c`. Auto Mode costs $0.00918/hour for
+large and $0.01836/hour for xlarge. The two-node case retains six raw vCPUs,
+so its management fee stays the same. Every node retains 84 GiB of gp3 storage.
+
+The mixed layout saves $68.49/month before changed traffic and replacement
+costs. Three Spot nodes save $102.64; two differently sized Spot nodes save
+$109.71. Subtract the provisional $10/month overhead allowance from each
+saving. Actual selected types, prices and node-hours decide acceptance.
+
+### Cheaper all-Spot candidate
+
+Two differently sized Spot nodes are the cheapest quoted candidate here.
+Retain all replica counts and place one API, scheduler, connector and gateway
+on each node. Put Argo, External Secrets and the cache on the larger node.
+Effective requests would be 1,500m CPU and 2,144 MiB on the small node, and
+2,200m CPU and 3,520 MiB on the larger one. This fits the current small node's
+allocatable resources and the larger instance's raw capacity; confirm actual
+xlarge allocatable resources, overhead and burst behavior before acceptance.
+
+This differs from trying to fit everything on two current-size nodes, which
+cannot hold the current CPU requests. It requires no speculative request cuts.
+It is a packing candidate, not a guarantee Auto Mode will choose exactly that
+pair. Let it choose among viable families, and measure whether the selected
+layout preserves the saving. Keep host and zone separation across rollouts;
+remove the mixed option's capacity-type split if this candidate is selected.
+
+Choosing two Spot nodes saves another $41.22/month over the mixed layout at
+these observed prices. A Spot shortage can then take down the whole
+platform. Loss of the larger node also stops the cache and deployment/secret
+controllers until replacement; the surviving small node cannot host every
+replica and controller. Its cache volume still requires replacement capacity
+in `1c`. Preserve the PVC and allow temporary replacement/rollout surge rather
+than imposing a hard two-node ceiling. Test the same application outcomes and
+cost gates below. Selecting this availability tradeoff remains separate from
+the owner's decision to retain Auto Mode.
+
+Auto Mode is retained because its approximately $20.10/month fee covers
+services this deployment uses: node provisioning/replacement, pod networking
+and DNS, the WireGuard NLB, EBS storage, and Pod Identity integration.
+Disabling it would require replacing those services, while the separate
+$73/month EKS cluster charge would remain.
+[AWS EKS pricing](https://aws.amazon.com/eks/pricing/)
+
+## Cost inputs and sensitivity
 
 The live cluster has three `c6a.large` On-Demand nodes. Each has a public IPv4
 address, a 4 GiB root disk and an 80 GiB data disk. The separate 20 GiB cache
@@ -58,7 +122,7 @@ overlap. The latest-price case still saves about $59/month; the $0.04 Spot case
 would miss the $50 net target. Recalculate using actual selected instances and
 usage before accepting the migration. Spot cannot guarantee a permanent saving.
 
-## Placement and availability
+## Placement for the protected serving-path option
 
 Keep two API replicas, two schedulers, two Cloudflare connectors, two WireGuard
 gateways, and one cache server. Retain `wireguard.platformPeers: 2` and existing
@@ -111,7 +175,7 @@ the entire platform exposed to a Spot capacity shortage. Disruption budgets
 limit voluntary disruption; they do not stop AWS reclaiming capacity.
 [Kubernetes disruptions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)
 
-## Implementation sequence
+## Implementation of the protected serving-path option
 
 1. Capture a comparable baseline before changing placement. Reuse existing
    history and collect only missing evidence. Record seven days
