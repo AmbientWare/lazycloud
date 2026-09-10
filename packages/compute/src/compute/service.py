@@ -1507,6 +1507,8 @@ class ComputeService:
             )
             if connection is None:
                 return
+            if connection.platform_fleet:
+                raise InvalidInputError("platform warm capacity belongs to the fleet policy")
             provider_ref = f"aws:{connection.id}"
             self._clear_other_internal_pool_floors(
                 session,
@@ -1669,6 +1671,11 @@ class ComputeService:
                 repository.lock_platform_capacity()
             else:
                 repository.lock_capacity_workspace(provider.policy.workspace_id)
+            if self.provider_resolver is None:
+                raise UpstreamUnavailableError("compute provider resolver is unavailable")
+            provider = self.provider_resolver.resolve(workspace_id, provider.ref)
+            if provider.policy is None or not provider.policy.accepts(offer):
+                raise ConflictError("provider no longer accepts this capacity purchase")
             current = repository.get_by_identity(
                 workspace_id=workspace_id,
                 provider_ref=provider.ref,
@@ -1885,7 +1892,7 @@ class ComputeService:
         """
         units = ComputeUnitRepository(session)
         for unit in units.list_internal(workspace_id=workspace_id):
-            if unit.id == keep_pool_id or unit.provider_ref != provider_ref or unit.platform_fleet:
+            if unit.id == keep_pool_id or unit.provider_ref != provider_ref:
                 continue
             cleared = _without_warm_floor(unit)
             if cleared != unit:
@@ -3106,56 +3113,69 @@ class ComputeService:
         the capacity disagree about who owns them.
         """
         owned = set(workspace_ids)
+        mutations = self._required_capacity_owner_mutations()
         with self.context.database.session() as session:
-            pools = ComputeUnitRepository(session).list_for_provider_connection(connection_id)
+            units = ComputeUnitRepository(session)
+            # Include purchases admitted before the connection stopped accepting work.
+            units.lock_platform_capacity()
+            for workspace_id in sorted(owned):
+                units.lock_capacity_workspace(workspace_id)
+            pools = units.list_for_provider_connection(connection_id)
         if any(unit.workspace_id not in owned for unit in pools):
             raise UpstreamUnavailableError("AWS capacity ownership is inconsistent")
-        with self.context.database.session() as session:
-            for workspace_id in owned:
-                self._clear_other_internal_pool_floors(
-                    session,
-                    workspace_id=workspace_id,
-                    keep_pool_id=None,
-                    provider_ref=f"aws:{connection_id}",
-                )
 
         for unit in pools:
-            if unit.phase is ComputeUnitPhase.Deleted:
-                self._retire_proven_provider_pool_machines(unit, now=utc_now())
-                continue
-            current = unit
-            if unit.phase is not ComputeUnitPhase.Deleting:
-                with self.context.database.session() as session:
-                    current = ComputeUnitRepository(session).update_capacity(
-                        unit.id,
-                        expected_generation=unit.generation,
-                        desired_machines=0,
-                        max_machines=max(unit.max_machines, 1),
-                        observed_machines=unit.observed_machines,
-                        phase=ComputeUnitPhase.Deleting,
-                        provider_state=unit.provider_state,
-                    )
-                if current is None:
-                    raise UpstreamUnavailableError("AWS capacity drain was superseded")
             try:
-                durable, provider, offer = self._internal_unit_provider(
-                    # The unit's own workspace: pools drained together may belong to
-                    # different workspaces of the same owner.
-                    current.workspace_id,
-                    current.capacity_owner_id,
-                )
-                if provider.pooled is None:
-                    raise RuntimeError("AWS capacity provider is not pooled")
-                snapshot = provider.pooled.delete_unit(self._provider_unit_request(durable, offer))
-                self.provider_machines._apply_pooled_snapshot(
-                    durable,
-                    offer,
-                    snapshot,
-                    provider=provider.pooled,
-                )
+                with (
+                    mutations.mutation_lock(unit.capacity_owner_id),
+                    mutations.dispatch_lock(unit.capacity_owner_id),
+                ):
+                    with self.context.database.session() as session:
+                        units = ComputeUnitRepository(session)
+                        if unit.platform_fleet:
+                            units.lock_platform_capacity()
+                        else:
+                            units.lock_capacity_workspace(unit.workspace_id)
+                        current = units.get(unit.id, for_update=True)
+                        if current is None:
+                            raise UpstreamUnavailableError("AWS capacity disappeared during drain")
+                        if current.phase not in {
+                            ComputeUnitPhase.Deleting,
+                            ComputeUnitPhase.Deleted,
+                        }:
+                            current = units.upsert(
+                                _without_warm_floor(current).model_copy(
+                                    update={
+                                        "desired_machines": 0,
+                                        "generation": current.generation + 1,
+                                        "phase": ComputeUnitPhase.Deleting,
+                                        "status": ComputeUnitPhase.Deleting.value,
+                                        "replacement_machine_id": "",
+                                        "replacement_template_version": "",
+                                        "worker_rollout_surge": False,
+                                    }
+                                )
+                            )
+                    if current.phase is ComputeUnitPhase.Deleted:
+                        self._retire_proven_provider_pool_machines(current, now=utc_now())
+                        continue
+                    provider, offer = self._resolved_internal_unit_provider(current)
+                    if provider.pooled is None:
+                        raise RuntimeError("AWS capacity provider is not pooled")
+                    snapshot = provider.pooled.delete_unit(
+                        self._provider_unit_request(current, offer)
+                    )
+                    self.provider_machines._apply_pooled_snapshot(
+                        current,
+                        offer,
+                        snapshot,
+                        provider=provider.pooled,
+                    )
+            except ConflictError:
+                raise
             except Exception as exc:
                 raise UpstreamUnavailableError(
-                    f"AWS capacity {current.name!r} could not be drained"
+                    f"AWS capacity {unit.name!r} could not be drained"
                 ) from exc
 
         with self.context.database.session() as session:
