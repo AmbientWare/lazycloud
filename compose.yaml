@@ -855,11 +855,7 @@ services:
           "CMD",
           "python",
           "-m",
-          "shared.process_liveness",
-          "/tmp/lazycloud-scheduler.heartbeat.placement",
-          "/tmp/lazycloud-scheduler.heartbeat.capacity",
-          "/tmp/lazycloud-scheduler.heartbeat.housekeeping",
-          "/tmp/lazycloud-scheduler.heartbeat.dispatch",
+          "scheduler_app.health",
           "--max-age-seconds",
           "${LAZYCLOUD_COMPOSE_SCHEDULER_LIVENESS_MAX_AGE_SECONDS:-300}",
         ]

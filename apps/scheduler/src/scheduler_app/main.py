@@ -27,11 +27,11 @@ from storage.image_archive import ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
 from storage_client.s3 import S3ObjectStoreSettings
 
+from scheduler_app.health import scheduler_heartbeat_paths
 from scheduler_app.loops import (
     CAPACITY_INTERVAL_SECONDS,
     LOOP_SHUTDOWN_TIMEOUT_SECONDS,
     LOOP_SUPERVISOR_POLL_SECONDS,
-    SCHEDULER_LOOP_NAMES,
     scheduler_shutdown_handlers,
     start_scheduler_loops,
 )
@@ -290,18 +290,11 @@ def run_scheduler(
 
 
 def _loop_heartbeats(heartbeat_file: Path | None) -> dict[str, Callable[[], None]]:
-    """One heartbeat file per loop, beside the one the process is named for.
-
-    Separate files because a single one answers the wrong question: it says some
-    loop is alive, and the failure worth catching is one loop wedged while the
-    others carry on. The liveness check reads all of them, so the oldest decides.
-    """
-
     if heartbeat_file is None:
         return {}
     return {
-        name: HeartbeatFile(heartbeat_file.with_name(f"{heartbeat_file.name}.{name}")).beat
-        for name in SCHEDULER_LOOP_NAMES
+        name: HeartbeatFile(path).beat
+        for name, path in scheduler_heartbeat_paths(heartbeat_file).items()
     }
 
 
