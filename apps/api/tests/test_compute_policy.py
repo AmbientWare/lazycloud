@@ -392,8 +392,8 @@ def _seed_ready_aws_connection(
             status=BillingAccountStatus.Active,
             provider_customer_id=f"cus_fixture_{owner_id}",
             provider_subscription_id=f"sub_fixture_{owner_id}",
-            plan=BillingPlanId.Team,
-            subscription_terms_version=SubscriptionTermsVersion.Team,
+            plan=BillingPlanId.Business,
+            subscription_terms_version=SubscriptionTermsVersion.Business,
             scheduled_terms_version=None,
             scheduled_change_at=None,
         )

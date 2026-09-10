@@ -257,8 +257,8 @@ def _account_token(services: ApiServices, name: str) -> str:
             status=BillingAccountStatus.Active,
             provider_customer_id=f"cus_{user_id}",
             provider_subscription_id=f"sub_{user_id}",
-            plan=BillingPlanId.Team,
-            subscription_terms_version=SubscriptionTermsVersion.Team,
+            plan=BillingPlanId.Business,
+            subscription_terms_version=SubscriptionTermsVersion.Business,
             scheduled_terms_version=None,
             scheduled_change_at=None,
         )
