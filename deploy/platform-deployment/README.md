@@ -41,7 +41,7 @@ rejected while registering the fleet.
 For this rollout, apply and publish the version-6 infrastructure descriptor,
 publish CPU and GPU images through Connected AWS Node Images, then publish a
 host release containing both regional image catalogs. Deploy the application
-with that host release pinned. Migration `0032_aws_regional_networks` preserves
+with that host release pinned. Migration `0033_aws_regional_networks` preserves
 existing connection networks before fleet registration adds West. Existing
 customer-managed authorization stacks retain their own region.
 

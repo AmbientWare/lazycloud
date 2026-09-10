@@ -2,8 +2,8 @@
 
 from alembic import op
 
-revision = "0032_aws_regional_networks"
-down_revision = "0031_artifact_plan_retention"
+revision = "0033_aws_regional_networks"
+down_revision = "0032_subscription_offers"
 branch_labels = None
 depends_on = None
 

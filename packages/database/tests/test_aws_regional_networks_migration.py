@@ -16,7 +16,7 @@ def test_existing_networks_keep_their_region_and_other_connection_facts(
 ) -> None:
     url = postgres_database_url.render_as_string(hide_password=False)
     config = alembic_config(url)
-    command.upgrade(config, "0031_artifact_plan_retention")
+    command.upgrade(config, "0032_subscription_offers")
     engine = create_engine(url)
     network: dict[str, JsonValue] = {
         "vpc_id": "vpc-01234567",
@@ -51,7 +51,7 @@ def test_existing_networks_keep_their_region_and_other_connection_facts(
                         payload=payload,
                     )
                 )
-        command.upgrade(config, "0032_aws_regional_networks")
+        command.upgrade(config, "0033_aws_regional_networks")
         with engine.connect() as connection:
             rows = connection.execute(select(AwsAccountConnectionTable.payload)).scalars().all()
         by_name = {row["marker"]: row for row in rows}
