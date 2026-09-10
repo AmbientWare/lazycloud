@@ -73,6 +73,7 @@ from shared.routing import BackendRouteTransport, PrivateUnitFallback
 from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageBillingOwner
 
+from compute.agent_control import machine_serves_workloads
 from compute.aws_connections import AwsAccountPoolDrain
 from compute.context import ComputeContext
 from compute.fleet_policy import FleetCapacityPolicy
@@ -1883,19 +1884,12 @@ class ComputeService:
         size still holding one; without this the workspace pays for both.
         """
         units = ComputeUnitRepository(session)
-        cleared = {
-            "initial_machines": 0,
-            "min_machines": 0,
-            "min_free_cpu_millicores": 0,
-            "min_free_memory_mib": 0,
-            "min_free_gpu_count": 0,
-        }
         for unit in units.list_internal(workspace_id=workspace_id):
             if unit.id == keep_pool_id or unit.provider_ref != provider_ref or unit.platform_fleet:
                 continue
-            if all(getattr(unit, field) == value for field, value in cleared.items()):
-                continue
-            units.upsert(unit.model_copy(update=cleared))
+            cleared = _without_warm_floor(unit)
+            if cleared != unit:
+                units.upsert(cleared)
 
     def _required_capacity_owner_mutations(self) -> CapacityOwnerMutationLease:
         if self.capacity_owner_mutations is None:
@@ -2581,6 +2575,8 @@ class ComputeService:
                 for unit in units
                 for machine in ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
             ]
+        for unit in units:
+            self._release_failed_warm_capacity(unit, now=now)
         lower_times = [
             to_utc(datetime.fromisoformat(value))
             for unit in units
@@ -2610,7 +2606,7 @@ class ComputeService:
                 arrivals,
                 machines,
                 preemptible=preemptible,
-                current=sum(unit.min_machines for unit in units),
+                current=max((unit.min_machines for unit in units), default=0),
                 lower_since=max(lower_times) if lower_times else None,
                 now=now,
             )
@@ -2656,13 +2652,81 @@ class ComputeService:
                                 }
                             )
                         )
-                self._clear_platform_warm_floors(preemptible=preemptible, keep_unit_id=unit.id)
+                handing_over = any(
+                    previous.id != unit.id and previous.min_machines > 0 for previous in units
+                )
+                if not handing_over or self._warm_unit_ready(unit):
+                    self._clear_platform_warm_floors(preemptible=preemptible, keep_unit_id=unit.id)
                 return
             except Exception:
+                with self.context.database.session() as session:
+                    prepared = ComputeUnitRepository(session).get(unit_id)
+                if prepared is not None and prepared.min_machines >= target.machines:
+                    raise
                 LOGGER.exception("platform warm capacity preparation failed for %s", offer.id)
         raise UpstreamUnavailableError(
             f"no approved capacity can supply the warm target for preemptible={preemptible}"
         )
+
+    def _warm_unit_ready(self, unit: ComputeUnitRecord) -> bool:
+        if self.scheduler_hooks is None:
+            raise UpstreamUnavailableError("warm capacity requires scheduler worker state")
+        with self.context.database.session() as session:
+            records = ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
+            enrollments = ComputeMachineEnrollmentRepository(session)
+            serving = sum(
+                machine_serves_workloads(
+                    enrollments.by_machine(unit.workspace_id, record.machine_id),
+                    machine_id=record.machine_id,
+                    worker_state=self.scheduler_hooks,
+                )
+                for record in records
+                if record.machine_id is not None and record.status == ReservationStatus.Active.value
+            )
+        return serving >= unit.min_machines
+
+    def _release_failed_warm_capacity(self, unit: ComputeUnitRecord, *, now: datetime) -> None:
+        if (
+            unit.phase is not ComputeUnitPhase.Degraded
+            or unit.min_machines == 0
+            or unit.desired_machines > unit.min_machines
+            or unit.observed_machines > 0
+        ):
+            return
+        mutations = self._required_capacity_owner_mutations()
+        with (
+            mutations.mutation_lock(unit.capacity_owner_id),
+            mutations.dispatch_lock(unit.capacity_owner_id),
+        ):
+            with self.context.database.session() as session:
+                repository = ComputeUnitRepository(session)
+                repository.lock_platform_capacity()
+                current = repository.get(unit.id, for_update=True)
+                if (
+                    current is None
+                    or current.phase is not ComputeUnitPhase.Degraded
+                    or current.min_machines == 0
+                    or current.desired_machines > current.min_machines
+                    or current.observed_machines > 0
+                    or ComputeCapacityOperationRepository(session).list_open_for_owner(
+                        unit.capacity_owner_id
+                    )
+                    or self._machines_holding_active_work(session, pool_id=unit.id)
+                ):
+                    return
+                repository.upsert(_without_warm_floor(current))
+            cancelled = self._scale_internal_unit_under_lease(
+                unit.workspace_id,
+                unit.capacity_owner_id,
+                0,
+                before_mutation=_policy_owned_scale,
+                now=now,
+            )
+            self._mark_pooled_capacity_degraded(
+                cancelled,
+                reason=current.provider_state.degraded_reason or "provider_acquisition_rejected",
+                now=current.provider_state.degraded_at or now,
+            )
 
     def _clear_platform_warm_floors(self, *, preemptible: bool, keep_unit_id: str | None) -> None:
         with self.context.database.session() as session:
@@ -2674,30 +2738,9 @@ class ComputeService:
                 unit = repository.get(candidate.id, for_update=True)
                 if unit is None:
                     continue
-                cleared = {
-                    "initial_machines": 0,
-                    "min_machines": 0,
-                    "min_free_cpu_millicores": 0,
-                    "min_free_memory_mib": 0,
-                    "min_free_gpu_count": 0,
-                }
-                if (
-                    all(getattr(unit, key) == value for key, value in cleared.items())
-                    and "warm_lower_since" not in unit.config
-                ):
-                    continue
-                repository.upsert(
-                    unit.model_copy(
-                        update={
-                            **cleared,
-                            "config": {
-                                key: value
-                                for key, value in unit.config.items()
-                                if key != "warm_lower_since"
-                            },
-                        }
-                    )
-                )
+                cleared = _without_warm_floor(unit)
+                if cleared != unit:
+                    repository.upsert(cleared)
 
     def reconcile_unit_capacity(
         self, unit_id: str, *, now: datetime | None = None
@@ -2833,9 +2876,13 @@ class ComputeService:
         dispatch_fence: CapacityOwnerMutationLease,
     ) -> ProviderUnitSnapshot:
         if pool.observed_machines <= pool.desired_machines:
-            return pooled.ensure_unit(request)
-        with dispatch_fence.dispatch_lock(pool.capacity_owner_id):
-            return pooled.ensure_unit(request)
+            snapshot = pooled.ensure_unit(request)
+        else:
+            with dispatch_fence.dispatch_lock(pool.capacity_owner_id):
+                snapshot = pooled.ensure_unit(request)
+        if snapshot.observed_machines < snapshot.desired_machines:
+            return pooled.describe_unit(request)
+        return snapshot
 
     def _unit_matching_its_provider(
         self,
@@ -3685,6 +3732,21 @@ def _operation_result(
 
 def _json_object(model: ContractModel) -> dict[str, JsonValue]:
     return _JSON_OBJECT_ADAPTER.validate_json(model.model_dump_json())
+
+
+def _without_warm_floor(unit: ComputeUnitRecord) -> ComputeUnitRecord:
+    return unit.model_copy(
+        update={
+            "initial_machines": 0,
+            "min_machines": 0,
+            "min_free_cpu_millicores": 0,
+            "min_free_memory_mib": 0,
+            "min_free_gpu_count": 0,
+            "config": {
+                key: value for key, value in unit.config.items() if key != "warm_lower_since"
+            },
+        }
+    )
 
 
 def _policy_owned_scale(pool: ComputeUnitRecord) -> None:

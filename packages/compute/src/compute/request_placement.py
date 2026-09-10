@@ -131,8 +131,7 @@ class ComputeCapacityPlacementService:
                 f"; unavailable providers: {', '.join(sorted(set(failures)))}" if failures else ""
             )
             raise UpstreamUnavailableError(
-                "no approved provider capacity meets "
-                f"the workload requirements{detail}",
+                f"no approved provider capacity meets the workload requirements{detail}",
                 code="offer_unavailable",
             )
         return tuple(purchases.values())

@@ -142,9 +142,7 @@ def test_catalog_admission_depends_on_type_region_and_market() -> None:
     policy = ProviderCapacityPolicy(
         default_region="us-east-1",
         allowed_regions=("us-east-1", "us-west-2"),
-        allowed_offers=(
-            ProviderOfferEligibility(region="us-east-1", instance_type="approved"),
-        ),
+        allowed_offers=(ProviderOfferEligibility(region="us-east-1", instance_type="approved"),),
     )
     offer = _offer("approved", 4_000, 8 * 1024)
     assert policy.accepts(offer)

@@ -603,12 +603,13 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
     assert scaled.desired_machines == 3
 
 
-def test_fleet_warm_targets_choose_cheapest_provider_per_market_and_clear_disabled_floor(
+def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
     isolated_services: ApiServices,
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
     providers: list[ResolvedComputeProvider] = []
+    suppliers: dict[str, _PooledProvider] = {}
     for name, cost, preemptible in (
         ("expensive", 400_000, True),
         ("cheap", 100_000, True),
@@ -625,11 +626,12 @@ def test_fleet_warm_targets_choose_cheapest_provider_per_market_and_clear_disabl
                 ),
             }
         )
+        suppliers[name] = _PooledProvider(offer=offer)
         providers.append(
             ResolvedComputeProvider(
                 ref=offer.provider,
                 capacity_mode=ComputeCapacityMode.Pooled,
-                pooled=_PooledProvider(offer=offer),
+                pooled=suppliers[name],
                 policy=ResolvedProviderPolicy(
                     workspace_id=workspace_id,
                     pool=MachinePool("lazycloud"),
@@ -655,10 +657,13 @@ def test_fleet_warm_targets_choose_cheapest_provider_per_market_and_clear_disabl
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
         platform_providers=lambda: tuple(providers),
     )
+    hooks = _SchedulerHooks()
     compute = ComputeService(
         isolated_services.context,
         provider_resolver=resolver,
         capacity_owner_mutations=_MutationLeases(),
+        pool_bootstrap_factory=_bootstrap,
+        scheduler_hooks=hooks,
         fleet_policy=FleetCapacityPolicy(warm_cpu_non_preemptible_min=1),
     )
     now = datetime.now(UTC)
@@ -679,6 +684,142 @@ def test_fleet_warm_targets_choose_cheapest_provider_per_market_and_clear_disabl
         "hetzner:cheap": 1,
         "hetzner:regular": 0,
     }
+
+    cheap = next(unit for unit in units if unit.provider_ref == "hetzner:cheap")
+    compute.reconcile_unit_capacity(cheap.id, now=now + timedelta(seconds=2))
+    _seed_serving_machine(
+        isolated_services,
+        cheap,
+        hooks,
+        machine_id=str(uuid4()),
+        instance_id="i-00000000000000000",
+        now=now + timedelta(seconds=2),
+    )
+    suppliers["cheap"].offer = suppliers["cheap"].offer.model_copy(
+        update={
+            "cost_terms": suppliers["cheap"].offer.cost_terms.model_copy(
+                update={"compute_hourly_micros": 500_000}
+            )
+        }
+    )
+
+    for offset in (3, 4):
+        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=offset))
+        with isolated_services.context.database.session() as session:
+            units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
+        assert {unit.provider_ref: unit.min_machines for unit in units} == {
+            "hetzner:cheap": 1,
+            "hetzner:expensive": 1,
+            "hetzner:regular": 0,
+        }
+    replacement = next(unit for unit in units if unit.provider_ref == "hetzner:expensive")
+    compute.reconcile_unit_capacity(replacement.id, now=now + timedelta(seconds=5))
+    _seed_serving_machine(
+        isolated_services,
+        replacement,
+        hooks,
+        machine_id=str(uuid4()),
+        instance_id="i-00000000000000000",
+        now=now + timedelta(seconds=6),
+    )
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=7))
+    with isolated_services.context.database.session() as session:
+        units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
+    assert {unit.provider_ref: unit.min_machines for unit in units} == {
+        "hetzner:cheap": 0,
+        "hetzner:expensive": 1,
+        "hetzner:regular": 0,
+    }
+
+
+def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
+    isolated_services: ApiServices,
+) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    providers: list[ResolvedComputeProvider] = []
+    suppliers: list[_PooledProvider] = []
+    for name, price in (("cheap", 100_000), ("fallback", 200_000)):
+        offer = _offer().model_copy(
+            update={
+                "provider": f"hetzner:{name}",
+                "preemptible": True,
+                "cost_terms": SupplierCostTerms(
+                    compute_hourly_micros=price,
+                    root_disk_hourly_micros=0,
+                    public_ipv4_hourly_micros=0,
+                ),
+            }
+        )
+        suppliers.append(_PooledProvider(offer=offer))
+        providers.append(
+            ResolvedComputeProvider(
+                ref=offer.provider,
+                capacity_mode=ComputeCapacityMode.Pooled,
+                pooled=suppliers[-1],
+                policy=ResolvedProviderPolicy(
+                    workspace_id=workspace_id,
+                    pool=MachinePool("lazycloud"),
+                    platform_fleet=True,
+                    default_region=offer.region,
+                    allowed_regions=(offer.region,),
+                    allowed_offers=(
+                        ProviderOfferEligibility(
+                            region=offer.region,
+                            instance_type=offer.instance_type,
+                            preemptible=True,
+                        ),
+                    ),
+                ),
+            )
+        )
+    resolver = WorkspaceComputeProviderResolver(
+        connections=lambda _workspace: (),
+        platform_connections=tuple,
+        capacity_workspace=lambda _connection: workspace_id,
+        binaries_by_region={},
+        instance_hourly_micros={},
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+        platform_providers=lambda: tuple(providers),
+    )
+    compute = ComputeService(
+        isolated_services.context,
+        provider_resolver=resolver,
+        capacity_owner_mutations=_MutationLeases(),
+        pool_bootstrap_factory=_bootstrap,
+        scheduler_hooks=_SchedulerHooks(),
+        fleet_policy=FleetCapacityPolicy(max_cpu_instances=1),
+    )
+    now = datetime.now(UTC)
+    compute.reconcile_platform_warm_capacity(now=now)
+    with isolated_services.context.database.session() as session:
+        cheap = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)[0]
+    suppliers[0].max_observed_machines = 0
+    suppliers[0].last_capacity_failure_at = now
+    failed = compute.reconcile_unit_capacity(cheap.id, now=now + timedelta(seconds=1))
+    assert failed is not None
+    assert failed.provider_state.degraded_reason == "provider_acquisition_rejected"
+    assert failed.provider_state.last_capacity_failure_at == now
+
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=2))
+    with isolated_services.context.database.session() as session:
+        units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
+    assert {unit.provider_ref: (unit.desired_machines, unit.min_machines) for unit in units} == {
+        "hetzner:cheap": (0, 0),
+        "hetzner:fallback": (1, 1),
+    }
+    assert suppliers[0].desired == 0
+    fallback = next(unit for unit in units if unit.provider_ref == "hetzner:fallback")
+    compute.reconcile_unit_capacity(fallback.id, now=now + timedelta(seconds=3))
+    assert suppliers[1].desired == 1
+
+    compute.fleet_policy = FleetCapacityPolicy(max_cpu_instances=1, warm_cpu_preemptible_min=0)
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=4))
+    compute.scale_internal_unit(workspace_id, fallback.id, 0, before_mutation=_allow_scale)
+    compute.clear_capacity_degradation(workspace_id, cheap.capacity_owner_id)
+    retried = compute.scale_internal_unit(workspace_id, cheap.id, 1, before_mutation=_allow_scale)
+    assert retried.provider_state.degraded_reason is None
+    assert retried.provider_state.last_capacity_failure_at == now
 
 
 def test_acquired_node_costs_survive_offer_changes_and_catalog_loss(
@@ -2575,9 +2716,8 @@ def _seed_serving_machine(
     """Enrol one provider instance as a machine that takes work."""
 
     worker_id = agent_machine_worker_id(machine_id)
+    owner_id = workspace_owner_user_id(isolated_services.context, pool.workspace_id)
     with isolated_services.context.database.session() as session:
-        connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id or "")
-        assert connection is not None
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
@@ -2598,7 +2738,7 @@ def _seed_serving_machine(
         )
         credential = ComputeJoinCredentialRepository(session).create(
             token_hash=machine_id.replace("-", "")[:16].ljust(64, "a"),
-            user_id=connection.user_id,
+            user_id=owner_id,
             workspace_id=pool.workspace_id,
             capacity_owner_id=pool.capacity_owner_id,
             pool=pool.pool,
@@ -2608,14 +2748,14 @@ def _seed_serving_machine(
         )
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
-                user_id=connection.user_id,
+                user_id=owner_id,
                 workspace_id=pool.workspace_id,
                 capacity_owner_id=pool.capacity_owner_id,
                 pool=pool.pool,
                 machine_id=machine_id,
-                machine_fingerprint_hash="b" * 64,
+                machine_fingerprint_hash=hashlib.sha256(machine_id.encode()).hexdigest(),
                 join_credential_id=credential.id,
-                credential_hash="c" * 64,
+                credential_hash=hashlib.sha256(f"credential:{machine_id}".encode()).hexdigest(),
                 status=ComputeMachineEnrollmentStatus.Active,
                 preflight_passed=True,
                 heartbeat_confirmed=True,
