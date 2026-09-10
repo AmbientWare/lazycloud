@@ -68,7 +68,7 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
         label: rate.gpu_type,
         figure: metered(rate.nanos_per_gpu_card_hour, meter),
         unit: `/ ${per}`,
-        fractionDigits: meter === "hour" ? 4 : 6,
+        fractionDigits: meter === "hour" ? 2 : 6,
       })),
     },
     {
