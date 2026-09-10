@@ -77,7 +77,7 @@ def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
 
     read: list[tuple[tuple[str, str, str], int]] = []
     cursor: LedgerCostCursor | None = None
-    while True:
+    for _ in range(len(expected) + 1):
         with service_context.database.session() as session:
             page = BillingLedgerCostRepository(session).page(
                 scope=WorkspaceCostScope((workspace_id,)),
@@ -94,6 +94,7 @@ def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
         if cursor is None:
             break
 
+    assert cursor is None
     assert len(read) == len(expected)
     assert dict(read) == expected
 

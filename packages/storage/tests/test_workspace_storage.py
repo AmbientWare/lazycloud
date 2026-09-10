@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from api.fastapi_app import create_app
-from api.server.services import ApiServices
 from control.service import (
     ControlPlaneService,
     WorkspaceStorageAlreadyExistsError,
@@ -16,8 +13,8 @@ from control.service import (
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.images import ImageArchiveRepository, ImageRepository
-from fastapi.testclient import TestClient
 from identity.auth import AuthService
+from identity.users import UserService
 from shared.app_identity import (
     IMAGE_BUILD_CONTEXT_BUCKET,
     SOURCE_PACKAGE_BUCKET,
@@ -25,8 +22,6 @@ from shared.app_identity import (
 )
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.identity import (
-    TokenKind,
-    TokenStatus,
     WorkspaceStatus,
     WorkspaceStorageConfig,
 )
@@ -159,15 +154,15 @@ class MetadataObjectClient(FakeObjectClient):
 
 
 def test_workspace_create_sets_up_default_storage_and_primary_token(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     bucket_client = BucketClient()
     service = ControlPlaneService(
-        isolated_services.context,
+        service_context,
         workspace_storage_client=bucket_client,
     )
 
-    owner = isolated_services.users.create(display_name="tenant-owner")
+    owner = UserService(service_context).create(display_name="tenant-owner")
 
     created = service.create_workspace("tenant", owner_user_id=owner.id)
     workspace = service.get_workspace(created.workspace_id)
@@ -184,7 +179,7 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
     assert "secret_key" not in workspace.storage.config
     assert bucket_client.created == [f"workspace-{created.workspace_id}"]
     assert bucket_client.validated == [f"workspace-{created.workspace_id}"]
-    assert AuthService(isolated_services.context).authenticate(created.token).workspace_id == (
+    assert AuthService(service_context).authenticate(created.token).workspace_id == (
         created.workspace_id
     )
 
@@ -243,57 +238,6 @@ def test_external_workspace_storage_validates_and_rejects_duplicates(
     assert validated_configs == [storage]
     with pytest.raises(WorkspaceStorageAlreadyExistsError, match="already exists"):
         service.attach_external_workspace_storage(workspace.id, storage)
-
-
-def test_workspace_storage_api_keeps_token_active_after_cache_invalidation_hook(
-    isolated_services: ApiServices,
-    request: pytest.FixtureRequest,
-    client_stack: ExitStack,
-) -> None:
-    bucket_client = BucketClient()
-    services = _services_with_object_storage(
-        isolated_services,
-        ObjectStorage(
-            isolated_services.context,
-            object_client=bucket_client,
-        ),
-        request,
-    )
-    control = ControlPlaneService(services.context)
-    workspace = owned_workspace(control, "tenant")
-    raw_token, token_record = AuthService(services.context).create_token(
-        "tenant-storage",
-        kind=TokenKind.WorkspacePrimary,
-        workspace_id=workspace.id,
-    )
-    client = client_stack.enter_context(TestClient(create_app(services)))
-
-    response = client.post(
-        "/api/v1/workspaces/create-storage",
-        headers=_auth(raw_token),
-    )
-
-    assert response.status_code == 201
-    assert response.json()["storage"]["bucket"] == f"workspace-{workspace.id}"
-    assert bucket_client.created == [f"workspace-{workspace.id}"]
-    assert bucket_client.validated == [f"workspace-{workspace.id}"]
-    assert AuthService(services.context).authenticate(raw_token).id == token_record.id
-    assert AuthService(services.context).list_tokens()[0].status is TokenStatus.Active
-
-    duplicate_raw_token, duplicate_record = AuthService(services.context).create_token(
-        "tenant-storage-duplicate",
-        kind=TokenKind.WorkspacePrimary,
-        workspace_id=workspace.id,
-    )
-    duplicate = client.post(
-        "/api/v1/workspaces/create-storage",
-        headers=_auth(duplicate_raw_token),
-    )
-
-    assert duplicate.status_code == 400
-    tokens = {token.id: token for token in AuthService(services.context).list_tokens()}
-    assert tokens[token_record.id].status is TokenStatus.Active
-    assert tokens[duplicate_record.id].status is TokenStatus.Active
 
 
 def test_workspace_objects_with_same_logical_location_are_physically_isolated(
@@ -475,33 +419,6 @@ def test_object_completeness_requires_exact_metadata_and_maps_store_outages(
     client.fail_head = True
     with pytest.raises(UpstreamUnavailableError, match="completeness check failed"):
         storage.object_is_complete(record)
-
-
-def _services_with_object_storage(
-    isolated_services: ApiServices,
-    object_storage: ObjectStorage,
-    request: pytest.FixtureRequest,
-) -> ApiServices:
-    services = ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        create_schema=False,
-        workspace_storage_issuer=isolated_services.workspace_storage_issuer,
-        object_storage=object_storage,
-        volume_filesystem=isolated_services.volume_filesystem,
-        redis_client=isolated_services.redis_client,
-        binary_redis_client=isolated_services.binary_redis_client,
-        async_io=isolated_services.require_async_io(),
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-        agent_binary_settings=isolated_services.agent_binary_settings,
-    )
-    request.addfinalizer(services.close)
-    return services
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def test_workspace_deletion_preserves_a_published_archive_a_sibling_still_uses(

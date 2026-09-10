@@ -15,25 +15,20 @@ from observability.usage import UsageService
 from shared.timestamps import utc_now
 from shared.usage import UsageMetric
 from sqlalchemy import select
-from sqlalchemy.engine import URL
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
 from tests.workspaces import unfunded_billing_account
 
-from database import AsyncDatabaseClient, DatabaseApplicationName, DatabaseClient, DatabaseSettings
+from database import AsyncDatabaseClient, DatabaseClient
 
 
 def test_only_verified_public_response_bytes_reach_charges(
-    postgres_database_url: URL, tmp_path: Path
+    workspace_database: DatabaseClient, tmp_path: Path
 ) -> None:
-    settings = DatabaseSettings(
-        url=postgres_database_url.render_as_string(hide_password=False),
-        application_name=DatabaseApplicationName.Test,
-    )
-    database = DatabaseClient.from_settings(settings)
-    context = ServiceContext.create(database, root=tmp_path)
+    database = workspace_database
+    context = ServiceContext.create(database, root=tmp_path, create_schema=False)
     now = utc_now()
     _, workspace_id = unfunded_billing_account(
         context, period_started_at=now, period_ended_at=now + timedelta(days=30)
@@ -48,7 +43,7 @@ def test_only_verified_public_response_bytes_reach_charges(
         )
 
     async def exercise() -> None:
-        async_database = AsyncDatabaseClient.from_settings(settings)
+        async_database = AsyncDatabaseClient.from_settings(database.settings)
         usage = UsageService(context, async_database=async_database)
 
         async def download(request: Request) -> Response:
@@ -83,7 +78,4 @@ def test_only_verified_public_response_bytes_reach_charges(
         finally:
             await async_database.dispose()
 
-    try:
-        asyncio.run(exercise())
-    finally:
-        database.dispose()
+    asyncio.run(exercise())

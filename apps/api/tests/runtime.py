@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
@@ -18,6 +18,7 @@ from execution.collections.redis import (
     RedisSimpleQueueService,
 )
 from fastapi.testclient import TestClient
+from identity.auth import AuthService
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
 from shared.identity import WorkspaceRecord
 from sqlalchemy import Engine
@@ -27,7 +28,7 @@ from tests.backing_services import redis_url
 from tests.database_fixtures import temporary_database
 from tests.fakes import FakeObjectClient, FakeWorkspaceBuckets
 from tests.real_redis import RealRedisActors
-from tests.workspaces import administrator_credential, owned_workspace
+from tests.workspaces import owned_workspace, workspace_owner_user_id
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
@@ -83,11 +84,8 @@ def service_graph(
         services.close()
 
 
-@contextmanager
-def composed_services(
-    database: DatabaseClient, root: Path, actors: RealRedisActors
-) -> Iterator[ApiServices]:
-    async_io = ApiAsyncIo.from_settings(
+def _async_io(database: DatabaseClient, actors: RealRedisActors) -> ApiAsyncIo:
+    return ApiAsyncIo.from_settings(
         database.settings,
         RedisSettings(
             url=actors.url,
@@ -96,6 +94,13 @@ def composed_services(
             health_check_interval_seconds=1,
         ),
     )
+
+
+@contextmanager
+def composed_services(
+    database: DatabaseClient, root: Path, actors: RealRedisActors
+) -> Iterator[ApiServices]:
+    async_io = _async_io(database, actors)
     try:
         with service_graph(
             database,
@@ -115,6 +120,25 @@ def isolated_services(
 ) -> Iterator[ApiServices]:
     with composed_services(seeded_database, tmp_path, real_redis_actors) as services:
         yield services
+
+
+@pytest.fixture
+async def async_services(
+    seeded_database: DatabaseClient, tmp_path: Path, real_redis_actors: RealRedisActors
+) -> AsyncIterator[ApiServices]:
+    async_io = _async_io(seeded_database, real_redis_actors)
+    try:
+        await async_io.start()
+        with service_graph(
+            seeded_database,
+            tmp_path,
+            redis_client=real_redis_actors.client(),
+            binary_redis_client=real_redis_actors.client(decode_responses=False),
+            async_io=async_io,
+        ) as services:
+            yield services
+    finally:
+        await async_io.close()
 
 
 @pytest.fixture
@@ -165,7 +189,9 @@ def api_client(
     api_runtime: tuple[ApiServices, TestClient], api_workspace: WorkspaceRecord
 ) -> Iterator[TestClient]:
     services, client = api_runtime
-    raw_token, _ = administrator_credential(services.context, "api-admin")
+    raw_token, _ = AuthService(services.context).create_account_token(
+        workspace_owner_user_id(services.context, api_workspace.id), "api-owner"
+    )
     client.headers["Authorization"] = f"Bearer {raw_token}"
     client.params = {"workspace": api_workspace.id}
     try:

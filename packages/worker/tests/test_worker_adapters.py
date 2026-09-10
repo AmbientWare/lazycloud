@@ -11,7 +11,6 @@ from worker.adapters import (
 )
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_service.state import LocalWorkerContainerInstanceStore
-from worker.events import ContainerRequestContext
 from worker.runtime_config import RuntimeContainerStatus
 
 
@@ -121,15 +120,6 @@ def test_worker_runtime_container_stopper_rejects_foreign_assignment() -> None:
         stopper.stop_container("ctr-1", force=True)
 
     assert runtime.kill_calls == []
-
-
-def _request() -> ContainerRequestContext:
-    return ContainerRequestContext(
-        container_id="ctr-1",
-        workspace_id="workspace-1",
-        stub_id="stub-1",
-        app_id="app-1",
-    )
 
 
 @dataclass(slots=True)

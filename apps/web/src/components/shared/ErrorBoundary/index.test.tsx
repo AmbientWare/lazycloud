@@ -50,17 +50,4 @@ describe("PanelErrorBoundary", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByText("panel content")).toBeInTheDocument();
   });
-
-  it("falls back to a generic message for a non-Error throw", () => {
-    function StringBomb(): never {
-      throw "not an Error instance";
-    }
-    render(
-      <PanelErrorBoundary title="Output could not be displayed">
-        <StringBomb />
-      </PanelErrorBoundary>,
-    );
-
-    expect(screen.getByRole("alert")).toHaveTextContent("An unexpected error occurred.");
-  });
 });

@@ -1,37 +1,21 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import ExitStack
-
 import pytest
-from api.fastapi_app import create_app
-from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
-from fastapi.testclient import TestClient
+from coordination.redis_client import AsyncRedisClient
+from coordination.stream_tail import RedisStreamTailBroker
 from observability.stream_state import (
     AsyncRedisEventStreamRepository,
     RedisEventStreamRepository,
     log_record_from_redis,
 )
 from pydantic import JsonValue
-from shared.deployment_records import DeploymentSpec
 from shared.errors import ExpiredCursorError
 from shared.http.observability import LogRecord
 from shared.realtime.contracts import EventRecordType, create_cloud_event_record
 from shared.realtime.streams import LogStreamQuery
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
-from tests.workspaces import administrator_credential
-
-
-@pytest.fixture
-async def async_io(isolated_services: ApiServices) -> AsyncIterator[ApiAsyncIo]:
-    io = isolated_services.require_async_io()
-    await io.start()
-    try:
-        yield io
-    finally:
-        await io.close()
 
 
 def test_redis_log_repository_applies_filter_combinations(
@@ -67,7 +51,8 @@ def test_redis_log_repository_applies_filter_combinations(
 
 @pytest.mark.anyio
 async def test_redis_log_stream_resumes_by_sequence_through_skipped_records(
-    async_io: ApiAsyncIo,
+    async_redis: AsyncRedisClient,
+    stream_broker: RedisStreamTailBroker,
     real_redis_actors: RealRedisActors,
 ) -> None:
     repo = RedisEventStreamRepository(real_redis_actors.client())
@@ -78,8 +63,8 @@ async def test_redis_log_stream_resumes_by_sequence_through_skipped_records(
     _append_container_log(repo, message="skip", task_id="other-task")
     _append_container_log(repo, message="second", task_id="task-1")
 
-    followed = await AsyncRedisEventStreamRepository(async_io.redis).follow_logs(
-        async_io.realtime,
+    followed = await AsyncRedisEventStreamRepository(async_redis).follow_logs(
+        stream_broker,
         LogStreamQuery(
             workspace_id="workspace-1",
             task_id="task-1",
@@ -96,7 +81,8 @@ async def test_redis_log_stream_resumes_by_sequence_through_skipped_records(
 
 @pytest.mark.anyio
 async def test_log_follow_caps_replay_and_continues_with_new_output(
-    async_io: ApiAsyncIo,
+    async_redis: AsyncRedisClient,
+    stream_broker: RedisStreamTailBroker,
     real_redis_actors: RealRedisActors,
 ) -> None:
     repo = RedisEventStreamRepository(real_redis_actors.client())
@@ -113,8 +99,8 @@ async def test_log_follow_caps_replay_and_continues_with_new_output(
             for index in range(2_000)
         ),
     )
-    followed = await AsyncRedisEventStreamRepository(async_io.redis).follow_logs(
-        async_io.realtime,
+    followed = await AsyncRedisEventStreamRepository(async_redis).follow_logs(
+        stream_broker,
         LogStreamQuery(workspace_id="workspace-1", task_id="task-1", limit=200),
         max_events=201,
         heartbeat_seconds=0.1,
@@ -126,14 +112,15 @@ async def test_log_follow_caps_replay_and_continues_with_new_output(
 
 @pytest.mark.anyio
 async def test_task_log_write_reaches_live_stream_with_durable_identity(
-    async_io: ApiAsyncIo,
+    async_redis: AsyncRedisClient,
+    stream_broker: RedisStreamTailBroker,
     isolated_services: ApiServices,
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
     task = isolated_services.tasks.create("live-output", workspace_id=workspace_id)
-    followed = await AsyncRedisEventStreamRepository(async_io.redis).follow_logs(
-        async_io.realtime,
+    followed = await AsyncRedisEventStreamRepository(async_redis).follow_logs(
+        stream_broker,
         LogStreamQuery(workspace_id=workspace_id, task_id=task.id),
         max_events=1,
         heartbeat_seconds=0.1,
@@ -146,7 +133,7 @@ async def test_task_log_write_reaches_live_stream_with_durable_identity(
     try:
         for _ in range(10):
             record = await anext(followed)
-            print("task log stream", async_io.realtime.status(), "record", record is not None)
+            print("task log stream", stream_broker.status(), "record", record is not None)
             if record is not None:
                 live.append(log_record_from_redis(record))
                 break
@@ -272,91 +259,6 @@ def test_redis_event_repository_deletes_only_workspace_streams(
     assert any("workspace-2" in key for key in remaining)
 
 
-def test_api_log_history_and_stream_support_filters_wait_and_resume(
-    isolated_services: ApiServices,
-    real_redis_actors: RealRedisActors,
-    client_stack: ExitStack,
-) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    task = isolated_services.tasks.create("durable-log", workspace_id=workspace_id)
-    isolated_services.tasks.append_log(task.id, "stdout", "needle durable")
-    redis = real_redis_actors.client()
-    repo = RedisEventStreamRepository(redis)
-    _append_container_log(repo, message="needle first", workspace_id=workspace_id)
-    first_cursor = repo.read_logs(LogStreamQuery(workspace_id=workspace_id))[-1].entry_id
-    _append_container_log(repo, message="needle second", workspace_id=workspace_id)
-    second_cursor = repo.read_logs(LogStreamQuery(workspace_id=workspace_id))[-1].entry_id
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    admin_token, _record = administrator_credential(isolated_services.context, "root")
-
-    history = client.get(
-        f"/api/v1/logs?workspace={workspace_id}&task_id={task.id}&query=durable",
-        headers=_auth(admin_token),
-    )
-    stream = client.get(
-        "/api/v1/logs/stream"
-        f"?workspace_id={workspace_id}"
-        "&follow=true&max_events=1&wait=2&container_id=container-1",
-        headers=_auth(admin_token) | {"Last-Event-ID": first_cursor},
-    )
-
-    assert history.status_code == 200
-    payload = history.json()
-    assert [item["message"] for item in payload["data"]] == ["needle durable"]
-    assert payload["data"][0]["task_id"] == task.id
-    assert stream.status_code == 200
-    assert f"id: {second_cursor}" in stream.text
-    assert "needle second" in stream.text
-
-
-def test_api_deployment_logs_resolve_deployment_to_owned_stream(
-    isolated_services: ApiServices,
-    real_redis_actors: RealRedisActors,
-    client_stack: ExitStack,
-) -> None:
-    redis = real_redis_actors.client()
-    deployment = isolated_services.deployments.deploy(
-        DeploymentSpec(name="deployment-logs", handler="pkg.module:handler")
-    )
-    assert deployment.app_id
-    assert deployment.stub_id
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    _append_container_log(
-        RedisEventStreamRepository(redis),
-        message="deployment line",
-        workspace_id=workspace_id,
-        stub_id=deployment.stub_id,
-        app_id=deployment.app_id,
-    )
-    task = isolated_services.tasks.create(
-        "deployment-log",
-        workspace_id=workspace_id,
-        app_id=deployment.app_id,
-        stub_id=deployment.stub_id,
-        deployment_id=deployment.id,
-    )
-    isolated_services.tasks.append_log(task.id, "stdout", "deployment line")
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    admin_token, _record = administrator_credential(isolated_services.context, "root")
-
-    response = client.get(
-        "/api/v1/logs",
-        params={
-            "workspace_id": workspace_id,
-            "object_type": "deployment",
-            "object_id": deployment.id,
-        },
-        headers=_auth(admin_token),
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert [item["message"] for item in payload["data"]] == ["deployment line"]
-    assert payload["data"][0]["deployment_id"] == deployment.id
-
-
 def _container_log_data(
     *,
     message: str,
@@ -410,7 +312,3 @@ def _append_container_log(
         ),
         event_id=f"event-{message.replace(' ', '-')}",
     )
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}

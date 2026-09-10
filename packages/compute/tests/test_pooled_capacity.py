@@ -10,7 +10,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
-from api.server.services import ApiServices
 from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.capacity_errors import CapacityReservationLeaseLostError
@@ -35,6 +34,7 @@ from compute.request_placement import (
 )
 from compute.service import ComputeService
 from compute.supplier_costs import SupplierCostInspectionService
+from database.context import ServiceContext
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
@@ -299,7 +299,7 @@ class _MutationLeases:
 @dataclass(slots=True)
 class _Resolver(ComputeProviderResolver):
     provider: _PooledProvider
-    services: ApiServices
+    context: ServiceContext
     purchases_enabled: bool = True
 
     def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
@@ -316,9 +316,9 @@ class _Resolver(ComputeProviderResolver):
         return self._resolved()
 
     def _resolved(self) -> ResolvedComputeProvider:
-        with self.services.context.database.session() as session:
+        with self.context.database.session() as session:
             connection = AwsAccountConnectionRepository(session).get(_CONNECTION_ID)
-            workspace_id = self.services.context.workspace(session, "default").id
+            workspace_id = self.context.workspace(session, "default").id
         assert connection is not None
         return ResolvedComputeProvider(
             ref=f"aws:{_CONNECTION_ID}",
@@ -394,7 +394,7 @@ class _SchedulerHooks:
     ],
 )
 def test_internal_pool_scale_enforces_fleet_capacity_across_providers(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     initial_desired: int,
     fleet_limit: int,
     requested_desired: int,
@@ -402,11 +402,11 @@ def test_internal_pool_scale_enforces_fleet_capacity_across_providers(
     expected_max: int,
     expect_capacity_conflict: bool,
 ) -> None:
-    _seed_connection(isolated_services, platform_fleet=True)
+    _seed_connection(service_context, platform_fleet=True)
     provider = _PooledProvider()
-    resolver = _Resolver(provider, isolated_services)
+    resolver = _Resolver(provider, service_context)
     compute = ComputeService(
-        isolated_services.context,
+        service_context,
         provider_resolver=resolver,
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
@@ -423,7 +423,7 @@ def test_internal_pool_scale_enforces_fleet_capacity_across_providers(
     )
     compute.reconcile_pooled_capacity()
     if fleet_limit == 20:
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             sibling_pool_id = str(uuid4())
             ComputeUnitRepository(session).upsert(
                 pool.model_copy(
@@ -467,10 +467,10 @@ def test_internal_pool_scale_enforces_fleet_capacity_across_providers(
 
 
 def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.workspace(session, "default").id
+    with service_context.database.session() as session:
+        workspace_id = service_context.workspace(session, "default").id
     providers: list[ResolvedComputeProvider] = []
     for name, cost in (
         ("existing", 400_000),
@@ -524,7 +524,7 @@ def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
         platform_providers=lambda: tuple(providers),
     )
-    compute = ComputeService(isolated_services.context, provider_resolver=resolver)
+    compute = ComputeService(service_context, provider_resolver=resolver)
     requirements = ComputeResourceRequirements(cpu_millicores=1000, memory_mb=1024)
     existing = providers[0]
     assert existing.pooled is not None
@@ -533,8 +533,8 @@ def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
         provider=existing, offer=existing_offer, requirements=requirements
     )
     placement = ComputeCapacityPlacementService(
-        isolated_services.context,
-        WorkspaceComputePolicyService(isolated_services.context),
+        service_context,
+        WorkspaceComputePolicyService(service_context),
         compute,
     )
     candidates = placement.purchase_candidates(
@@ -544,13 +544,13 @@ def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
             requirements=requirements,
         )
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert [
             item.id
             for item in ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
         ] == [unit.id]
     candidates[0].prepare()
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
     assert {item.provider_ref for item in units} == {"hetzner:existing", "hetzner:cheap"}
     assert len(candidates) == 3
@@ -558,10 +558,10 @@ def test_fresh_purchase_chooses_cheaper_provider_without_preparing_unused_units(
 
 
 def test_platform_capacity_reconciles_without_an_aws_connection(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.workspace(session, "default").id
+    with service_context.database.session() as session:
+        workspace_id = service_context.workspace(session, "default").id
     offer = _offer().model_copy(update={"provider": "hetzner:platform", "cloud": "hetzner"})
     provider = _PooledProvider(offer=offer)
     resolved = ResolvedComputeProvider(
@@ -591,7 +591,7 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
         platform_providers=lambda: (resolved,),
     )
     compute = ComputeService(
-        isolated_services.context,
+        service_context,
         provider_resolver=resolver,
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
@@ -607,7 +607,7 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
     assert unit.platform_fleet
     compute.reconcile_pooled_capacity()
     restarted = ComputeService(
-        isolated_services.context,
+        service_context,
         provider_resolver=resolver,
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
@@ -618,14 +618,14 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
 
 
 def test_warm_lock_contention_does_not_skip_provider_reconciliation(
-    isolated_services: ApiServices,
+    committed_service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(committed_service_context)
     leases = RedisCapacityReservationRepository(real_redis_actors.client())
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(_PooledProvider(), isolated_services),
+        committed_service_context,
+        provider_resolver=_Resolver(_PooledProvider(), committed_service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=leases,
     )
@@ -643,22 +643,22 @@ def test_warm_lock_contention_does_not_skip_provider_reconciliation(
 
 
 def test_warm_reconciliation_propagates_lost_capacity_lease(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services, platform_fleet=True)
+    _seed_connection(service_context, platform_fleet=True)
 
     class PlatformResolver(_Resolver):
         def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
             return (self._resolved(),)
 
-    resolver = PlatformResolver(_PooledProvider(), isolated_services)
+    resolver = PlatformResolver(_PooledProvider(), service_context)
 
     def lose_unit_lease(capacity_owner_id: str) -> None:
         if capacity_owner_id == owner_id:
             raise CapacityReservationLeaseLostError("capacity lease was replaced")
 
     compute = ComputeService(
-        isolated_services.context,
+        service_context,
         provider_resolver=resolver,
         capacity_owner_mutations=_MutationLeases(on_acquire=lose_unit_lease),
         fleet_policy=FleetCapacityPolicy(
@@ -671,10 +671,10 @@ def test_warm_reconciliation_propagates_lost_capacity_lease(
 
 
 def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
     providers: list[ResolvedComputeProvider] = []
     suppliers: dict[str, _PooledProvider] = {}
     for name, cost, preemptible in (
@@ -725,7 +725,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
     )
     hooks = _SchedulerHooks()
     compute = ComputeService(
-        isolated_services.context,
+        service_context,
         provider_resolver=resolver,
         capacity_owner_mutations=_MutationLeases(),
         pool_bootstrap_factory=_bootstrap,
@@ -734,7 +734,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
     )
     now = datetime.now(UTC)
     compute.reconcile_platform_warm_capacity(now=now)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
     assert {unit.provider_ref: unit.min_machines for unit in units} == {
         "hetzner:cheap": 1,
@@ -744,7 +744,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
 
     compute.fleet_policy = FleetCapacityPolicy()
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=1))
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
     assert {unit.provider_ref: unit.min_machines for unit in units} == {
         "hetzner:cheap": 1,
@@ -754,7 +754,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
     cheap = next(unit for unit in units if unit.provider_ref == "hetzner:cheap")
     compute.reconcile_unit_capacity(cheap.id, now=now + timedelta(seconds=2))
     _seed_serving_machine(
-        isolated_services,
+        service_context,
         cheap,
         hooks,
         machine_id=str(uuid4()),
@@ -771,7 +771,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
 
     for offset in (3, 4):
         compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=offset))
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
         assert {unit.provider_ref: unit.min_machines for unit in units} == {
             "hetzner:cheap": 1,
@@ -781,7 +781,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
     replacement = next(unit for unit in units if unit.provider_ref == "hetzner:expensive")
     compute.reconcile_unit_capacity(replacement.id, now=now + timedelta(seconds=5))
     _seed_serving_machine(
-        isolated_services,
+        service_context,
         replacement,
         hooks,
         machine_id=str(uuid4()),
@@ -789,7 +789,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
         now=now + timedelta(seconds=6),
     )
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=7))
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
     assert {unit.provider_ref: unit.min_machines for unit in units} == {
         "hetzner:cheap": 0,
@@ -810,7 +810,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
         supplier.catalog_failure = RuntimeError("disabled catalog must not be queried")
 
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=8))
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
     assert all(
         unit.initial_machines
@@ -824,10 +824,10 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
 
 
 def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
     providers: list[ResolvedComputeProvider] = []
     suppliers: list[_PooledProvider] = []
     for name, price in (("cheap", 100_000), ("fallback", 120_000)):
@@ -873,7 +873,7 @@ def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
         platform_providers=lambda: tuple(providers),
     )
     compute = ComputeService(
-        isolated_services.context,
+        service_context,
         provider_resolver=resolver,
         capacity_owner_mutations=_MutationLeases(),
         pool_bootstrap_factory=_bootstrap,
@@ -882,7 +882,7 @@ def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
     )
     now = datetime.now(UTC)
     compute.reconcile_platform_warm_capacity(now=now)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         cheap = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)[0]
     suppliers[0].max_observed_machines = 0
     suppliers[0].last_capacity_failure_at = now
@@ -892,7 +892,7 @@ def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
     assert failed.provider_state.last_capacity_failure_at == now
 
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=2))
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
     assert {unit.provider_ref: (unit.desired_machines, unit.min_machines) for unit in units} == {
         "hetzner:cheap": (0, 0),
@@ -913,9 +913,9 @@ def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
 
 
 def test_acquired_node_costs_survive_offer_changes_and_catalog_loss(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     original = SupplierCostTerms(
         compute_hourly_micros=340_000,
         root_disk_hourly_micros=20_000,
@@ -926,8 +926,8 @@ def test_acquired_node_costs_survive_offer_changes_and_catalog_loss(
     )
     provider = _PooledProvider(offer=_offer().model_copy(update={"cost_terms": original}))
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -952,7 +952,7 @@ def test_acquired_node_costs_survive_offer_changes_and_catalog_loss(
     provider.catalog_failure = RuntimeError("supplier catalog unavailable")
     compute.reconcile_pooled_capacity()
 
-    inspection = SupplierCostInspectionService(isolated_services.context.database)
+    inspection = SupplierCostInspectionService(service_context.database)
     report = inspection.inspect(workspace_id=unit.workspace_id, unit_id=unit.id)
     assert report.offer.terms == replacement
     assert {node.provider_instance_id: node.costs.terms for node in report.nodes} == {
@@ -963,11 +963,11 @@ def test_acquired_node_costs_survive_offer_changes_and_catalog_loss(
         inspection.inspect(workspace_id=str(uuid4()), unit_id=unit.id)
 
 
-def test_internal_pool_lookup_is_workspace_scoped(isolated_services: ApiServices) -> None:
-    _seed_connection(isolated_services)
+def test_internal_pool_lookup_is_workspace_scoped(service_context: ServiceContext) -> None:
+    _seed_connection(service_context)
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(_PooledProvider(), isolated_services),
+        service_context,
+        provider_resolver=_Resolver(_PooledProvider(), service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -984,13 +984,13 @@ def test_internal_pool_lookup_is_workspace_scoped(isolated_services: ApiServices
 
 
 def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1006,7 +1006,7 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
         root_volume_gib=200,
         idle_timeout_seconds=300,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         sibling_id = str(uuid4())
         ComputeUnitRepository(session).upsert(
             baseline.model_copy(
@@ -1047,7 +1047,7 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
         root_volume_gib=200,
     )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         internal = ComputeUnitRepository(session).list_internal(workspace_id=baseline.workspace_id)
     units = {item.name: item for item in internal}
     assert placed.id == baseline.id
@@ -1066,7 +1066,7 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
     assert larger.min_free_memory_mib == 0
 
     compute.clear_aws_default_capacity(workspace="default", release_capacity=False)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         cleared = ComputeUnitRepository(session).get(baseline.id)
     assert cleared is not None
     assert cleared.min_machines == 0
@@ -1083,14 +1083,14 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
 
 
 def test_scale_zero_persists_intent_and_releases_operations_before_provider_mutation(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     leases = _MutationLeases()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=leases,
     )
@@ -1111,7 +1111,7 @@ def test_scale_zero_persists_intent_and_releases_operations_before_provider_muta
         guard_observations.append(current.desired_machines)
 
     def inspect_durable_intent(request: ProviderUnitRequest) -> None:
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             durable = ComputeUnitRepository(session).get(request.unit_id)
             open_operations = ComputeCapacityOperationRepository(session).list_open_for_owner(
                 pool.capacity_owner_id
@@ -1140,13 +1140,13 @@ def test_scale_zero_persists_intent_and_releases_operations_before_provider_muta
 
 
 def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1188,9 +1188,9 @@ def test_scale_zero_retains_degraded_intent_and_repairs_provider_failure(
 
 
 def test_internal_pool_scale_maps_mutation_coordinator_failure(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
 
     def fail_acquire(_capacity_owner_id: str) -> None:
@@ -1198,8 +1198,8 @@ def test_internal_pool_scale_maps_mutation_coordinator_failure(
 
     leases = _MutationLeases(on_acquire=fail_acquire)
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=leases,
     )
@@ -1221,13 +1221,13 @@ def test_internal_pool_scale_maps_mutation_coordinator_failure(
 
 
 def test_scale_zero_skips_provider_only_after_durable_convergence(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1263,13 +1263,13 @@ def test_scale_zero_skips_provider_only_after_durable_convergence(
 
 
 def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_intent(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1290,7 +1290,7 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
     provider.desired = 1
 
     def inspect_repair_intent(request: ProviderUnitRequest) -> None:
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             durable = ComputeUnitRepository(session).get(request.unit_id)
         assert durable is not None
         assert durable.desired_machines == 0
@@ -1313,13 +1313,13 @@ def test_scale_zero_repairs_fresh_provider_drift_without_restoring_nonzero_inten
 
 
 def test_zero_capacity_reconciliation_releases_drift_without_a_supplier_catalog(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1335,7 +1335,7 @@ def test_zero_capacity_reconciliation_releases_drift_without_a_supplier_catalog(
 
     compute.reconcile_pooled_capacity()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         reconciled = ComputeUnitRepository(session).get(pool.id)
     assert reconciled is not None
     assert reconciled.phase is ComputeUnitPhase.Ready
@@ -1345,13 +1345,13 @@ def test_zero_capacity_reconciliation_releases_drift_without_a_supplier_catalog(
 
 
 def test_partial_scale_down_releases_capacity_without_a_supplier_catalog(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1391,13 +1391,13 @@ def test_partial_scale_down_releases_capacity_without_a_supplier_catalog(
 
 
 def test_scale_zero_terminalizes_missing_provider_instance_projections(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1410,7 +1410,7 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
     )
     compute.reconcile_pooled_capacity()
     missing_since = datetime.now(UTC) - timedelta(minutes=5)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = ComputeProviderInstanceRepository(session)
         [active] = repository.list_for_pool(pool.id)
         pending_with_instance = active.model_copy(
@@ -1463,7 +1463,7 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
         before_mutation=_allow_scale,
     )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         after = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         released_operation = ComputeCapacityOperationRepository(session).get(
             orphaned_operation.capacity_owner_id,
@@ -1482,13 +1482,13 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
 
 
 def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     scale_compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1516,8 +1516,8 @@ def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
 
     reconcile_leases.on_acquire = scale_before_reconcile
     reconciler = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=reconcile_leases,
     )
@@ -1531,22 +1531,22 @@ def test_reconcile_rereads_zero_intent_after_capacity_owner_lease(
 
 
 def test_pooled_reconcile_fails_closed_without_capacity_owner_lease(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    compute = ComputeService(isolated_services.context)
+    compute = ComputeService(service_context)
 
     with pytest.raises(UpstreamUnavailableError, match="mutation lease"):
         compute.reconcile_pooled_capacity()
 
 
 def test_pooled_capacity_does_not_import_provider_surplus_into_logical_intent(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1581,13 +1581,13 @@ def test_pooled_capacity_does_not_import_provider_surplus_into_logical_intent(
 
 @pytest.mark.parametrize("platform_fleet", [True, False])
 def test_provider_disable_preserves_cleanup_and_customer_cloud(
-    isolated_services: ApiServices, platform_fleet: bool
+    service_context: ServiceContext, platform_fleet: bool
 ) -> None:
-    _seed_connection(isolated_services, platform_fleet=platform_fleet)
+    _seed_connection(service_context, platform_fleet=platform_fleet)
     supplier = _PooledProvider()
-    resolver = _Resolver(supplier, isolated_services)
+    resolver = _Resolver(supplier, service_context)
     compute = ComputeService(
-        isolated_services.context,
+        service_context,
         provider_resolver=resolver,
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
@@ -1620,13 +1620,13 @@ def test_provider_disable_preserves_cleanup_and_customer_cloud(
 
 
 def test_platform_growth_checks_workload_rates_and_new_quotes_without_blocking_drain(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services, platform_fleet=True)
+    _seed_connection(service_context, platform_fleet=True)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1676,14 +1676,14 @@ def test_platform_growth_checks_workload_rates_and_new_quotes_without_blocking_d
 
 @pytest.mark.parametrize("replacement", [False, True])
 def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     replacement: bool,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1711,7 +1711,7 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
     requested = compute.ensure_capacity(first)
     retried = compute.ensure_capacity(first)
     if replacement:
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             units = ComputeUnitRepository(session)
             current = units.get(pool.id)
             assert current is not None
@@ -1741,7 +1741,7 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
     assert provider.desired == 1 + int(replacement)
     durable = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
     assert durable.desired_machines == 1
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         operations = ComputeCapacityOperationRepository(session).list_for_owner(
             pool.capacity_owner_id
         )
@@ -1750,14 +1750,14 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
 
 @pytest.mark.parametrize("failure_after_operation", [True, False])
 def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_owned_capacity(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     failure_after_operation: bool,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider(max_observed_machines=0)
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1777,7 +1777,7 @@ def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_ow
     requested = compute.ensure_capacity(request)
     assert requested.status is CapacityAcquisitionStatus.Requested
     assert requested.owns_capacity
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         operation = ComputeCapacityOperationRepository(session).get(
             request.capacity_owner_id, request.operation_id
         )
@@ -1810,7 +1810,7 @@ def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_ow
         is CapacityAcquisitionStatus.ExistingPending
     )
     assert provider.desired == 0
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         released = ComputeCapacityOperationRepository(session).get(
             request.capacity_owner_id, request.operation_id
         )
@@ -1819,7 +1819,7 @@ def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_ow
 
 
 def test_named_retirement_keeps_its_intent_across_provider_failure_and_stale_observation(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     class UnavailableRetirement(_PooledProvider):
         def release_machine(
@@ -1827,11 +1827,11 @@ def test_named_retirement_keeps_its_intent_across_provider_failure_and_stale_obs
         ) -> ProviderUnitSnapshot:
             raise RuntimeError("provider unavailable")
 
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = UnavailableRetirement()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1844,7 +1844,7 @@ def test_named_retirement_keeps_its_intent_across_provider_failure_and_stale_obs
     )
     compute.reconcile_pooled_capacity()
     machine_id = str(uuid4())
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         MachineRepository(session).upsert(
             Machine(id=machine_id, capacity_owner_id=pool.capacity_owner_id),
             workspace_id=pool.workspace_id,
@@ -1862,7 +1862,7 @@ def test_named_retirement_keeps_its_intent_across_provider_failure_and_stale_obs
             pool.workspace_id, pool.capacity_owner_id
         )
         assert durable.desired_machines == 1
-        with isolated_services.context.database.session() as session:
+        with service_context.database.session() as session:
             retired = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
         assert retired is not None
         assert retired.status == "terminating"
@@ -1870,13 +1870,13 @@ def test_named_retirement_keeps_its_intent_across_provider_failure_and_stale_obs
 
 
 def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -1908,7 +1908,7 @@ def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
     assert requested.status is CapacityAcquisitionStatus.Requested
     assert concurrent_results == [CapacityAcquisitionStatus.ExistingPending]
     assert provider.desired == 1
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         operations = ComputeCapacityOperationRepository(session).list_for_owner(
             pool.capacity_owner_id
         )
@@ -1916,12 +1916,12 @@ def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
 
 
 def test_disconnecting_connection_rejects_a_previously_selected_purchase(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services, platform_fleet=True)
-    with isolated_services.context.database.session() as session:
+    _seed_connection(service_context, platform_fleet=True)
+    with service_context.database.session() as session:
         stored_connection = AwsAccountConnectionRepository(session).get(_CONNECTION_ID)
-        workspace_id = isolated_services.context.default_workspace_id(session)
+        workspace_id = service_context.default_workspace_id(session)
     assert stored_connection is not None
     connection = stored_connection
     resolver = WorkspaceComputeProviderResolver(
@@ -1949,7 +1949,7 @@ def test_disconnecting_connection_rejects_a_previously_selected_purchase(
     connection = connection.model_copy(
         update={"phase": AwsAccountConnectionPhase.DisconnectDraining}
     )
-    compute = ComputeService(isolated_services.context, provider_resolver=resolver)
+    compute = ComputeService(service_context, provider_resolver=resolver)
 
     with pytest.raises(ConflictError, match="no longer accepts"):
         compute.prepare_pooled_offer(
@@ -1958,21 +1958,22 @@ def test_disconnecting_connection_rejects_a_previously_selected_purchase(
             requirements=ComputeResourceRequirements(cpu_millicores=1000, memory_mb=1024),
         )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert ComputeUnitRepository(session).list_for_provider_connection(_CONNECTION_ID) == []
 
 
 @pytest.mark.parametrize("platform_fleet", [False, True])
 def test_connection_drain_deletes_hidden_capacity_idempotently(
-    isolated_services: ApiServices,
+    committed_service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
     platform_fleet: bool,
 ) -> None:
-    _seed_connection(isolated_services, platform_fleet=platform_fleet)
+    _seed_connection(committed_service_context, platform_fleet=platform_fleet)
     provider = _PooledProvider()
-    mutations = isolated_services.capacity_reservation_repository
+    mutations = RedisCapacityReservationRepository(real_redis_actors.client())
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        committed_service_context,
+        provider_resolver=_Resolver(provider, committed_service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=mutations,
     )
@@ -1988,7 +1989,7 @@ def test_connection_drain_deletes_hidden_capacity_idempotently(
     )
     compute.reconcile_pooled_capacity()
 
-    with isolated_services.context.database.session() as session:
+    with committed_service_context.database.session() as session:
         units = ComputeUnitRepository(session)
         stored = units.get(pool.id)
         assert stored is not None
@@ -1996,7 +1997,7 @@ def test_connection_drain_deletes_hidden_capacity_idempotently(
     if platform_fleet:
         with pytest.raises(InvalidInputError, match="fleet policy"):
             compute.clear_aws_default_capacity(workspace="default", release_capacity=True)
-        with isolated_services.context.database.session() as session:
+        with committed_service_context.database.session() as session:
             stored = ComputeUnitRepository(session).get(pool.id)
             assert stored is not None
             assert stored.min_machines == 1
@@ -2033,7 +2034,7 @@ def test_connection_drain_deletes_hidden_capacity_idempotently(
 
 
 def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Deleting a pool has to delete the capacity the provider holds for it.
 
@@ -2044,11 +2045,11 @@ def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
     the pool owned for the next attempt.
     """
 
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -2066,7 +2067,7 @@ def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
     with pytest.raises(UpstreamUnavailableError, match="provider pool deletion failed"):
         compute.delete_unit(pool.capacity_owner_id, workspace=pool.workspace_id)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         retained = ComputeUnitRepository(session).get(pool.id)
     assert retained is not None
     assert provider.delete_calls == []
@@ -2074,21 +2075,21 @@ def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
     provider.delete_failure = None
     compute.delete_unit(pool.capacity_owner_id, workspace=pool.workspace_id)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         deleted = ComputeUnitRepository(session).get(pool.id)
     assert [request.unit_id for request in provider.delete_calls] == [pool.id]
     assert deleted is None
 
 
 def test_pooled_scale_down_waits_for_exact_volume_absence(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     instance_id = "i-00000000000000000"
     provider = _PooledProvider(lingering_storage={instance_id})
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -2103,7 +2104,7 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
     compute.reconcile_pooled_capacity(now=started_at)
     machine_id = "33333333-3333-4333-8333-333333333333"
     generation_id = "44444444-4444-4444-8444-444444444444"
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
@@ -2135,7 +2136,7 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
     assert scaling.phase is ComputeUnitPhase.Updating
 
     compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=121))
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         [lingering] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         active_generation = SourceCacheCleanupRepository(session).get_generation(generation_id)
         updating_pool = ComputeUnitRepository(session).get(pool.id)
@@ -2148,7 +2149,7 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
 
     provider.lingering_storage.clear()
     compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=122))
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         [destroyed] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         retired_generation = SourceCacheCleanupRepository(session).get_generation(generation_id)
         ready_pool = ComputeUnitRepository(session).get(pool.id)
@@ -2167,7 +2168,7 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
         before_mutation=_allow_scale,
     )
     assert settled.phase is ComputeUnitPhase.Ready
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         [preserved] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         preserved_generation = SourceCacheCleanupRepository(session).get_generation(generation_id)
     assert preserved.updated_at == destroyed.updated_at
@@ -2177,13 +2178,13 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
 
 
 def test_pooled_scale_down_projects_updating_during_provider_termination(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _AsyncScaleDownProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -2209,14 +2210,14 @@ def test_pooled_scale_down_projects_updating_during_provider_termination(
 
 
 def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     hooks = _SchedulerHooks()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         scheduler_hooks=hooks,
@@ -2239,7 +2240,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
     machine_id = "33333333-3333-4333-8333-333333333333"
     worker_id = agent_machine_worker_id(machine_id)
     now = datetime.now(UTC)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id or "")
         assert connection is not None
         owner_user_id = connection.user_id
@@ -2325,7 +2326,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
     assert repeated == first
     assert len(provider.delete_calls) == 1
     assert compute.list_machines(workspace=pool.workspace_id) == []
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
             pool.workspace_id,
             machine_id,
@@ -2352,14 +2353,14 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
 
 
 def test_internal_pool_bootstrap_phase_deadline_reclaims_only_after_it_elapses(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     hooks = _SchedulerHooks(intake_observing_since=datetime.now(UTC) - timedelta(hours=1))
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         scheduler_hooks=hooks,
@@ -2373,11 +2374,11 @@ def test_internal_pool_bootstrap_phase_deadline_reclaims_only_after_it_elapses(
     )
     started_at = datetime.now(UTC)
     compute.reconcile_pooled_capacity(now=started_at)
-    booting = _mark_open_record_booting(isolated_services, pool.id, at=started_at)
+    booting = _mark_open_record_booting(service_context, pool.id, at=started_at)
     assert booting.machine_id is None
 
     compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=200))
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         [waiting] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
     assert provider.release_calls == []
     assert waiting.status not in {"terminating", "deleted", "failed"}
@@ -2385,7 +2386,7 @@ def test_internal_pool_bootstrap_phase_deadline_reclaims_only_after_it_elapses(
     assert waiting.bootstrap_observed_at == started_at
 
     compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=301))
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         [replacement] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         current = ComputeUnitRepository(session).get(pool.id)
     assert provider.release_calls == [booting.instance_id]
@@ -2401,14 +2402,14 @@ def test_internal_pool_bootstrap_phase_deadline_reclaims_only_after_it_elapses(
 
 
 def test_repeated_bootstrap_failures_do_not_extend_the_reclaim_deadline(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     started_at = datetime.now(UTC)
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         scheduler_hooks=_SchedulerHooks(intake_observing_since=started_at - timedelta(hours=1)),
@@ -2428,7 +2429,7 @@ def test_repeated_bootstrap_failures_do_not_extend_the_reclaim_deadline(
         failure_reason=MachineBootstrapFailureReason.WorkerReadinessFailed,
         now=started_at + timedelta(seconds=10),
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         ComputeProviderInstanceRepository(session).upsert(
             first_failure.model_copy(update={"bootstrap_phase_started_at": None})
         )
@@ -2446,7 +2447,7 @@ def test_repeated_bootstrap_failures_do_not_extend_the_reclaim_deadline(
     compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=311))
 
     assert first_failure.instance_id in provider.release_calls
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         [replacement] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
     assert replacement.launch_attempt == 2
     assert replacement.bootstrap_phase is MachineBootstrapPhase.Provisioning
@@ -2454,13 +2455,13 @@ def test_repeated_bootstrap_failures_do_not_extend_the_reclaim_deadline(
 
 
 def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutation(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         reclaim=ComputeReclaimPolicy(max_launch_attempts=2),
@@ -2477,7 +2478,7 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
     )
     moment = datetime.now(UTC)
     compute.reconcile_pooled_capacity(now=moment)
-    first = _mark_open_record_booting(isolated_services, pool.id, at=moment)
+    first = _mark_open_record_booting(service_context, pool.id, at=moment)
     assert first.launch_attempt == 1
 
     # Two looks per reclaim: the deadline says a machine is late, and a second
@@ -2485,14 +2486,14 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
     compute.reconcile_pooled_capacity(now=moment + timedelta(seconds=200))
     moment += timedelta(seconds=301)
     compute.reconcile_pooled_capacity(now=moment)
-    relaunched = _mark_open_record_booting(isolated_services, pool.id, at=moment)
+    relaunched = _mark_open_record_booting(service_context, pool.id, at=moment)
     assert relaunched.launch_attempt == 2
 
     compute.reconcile_pooled_capacity(now=moment + timedelta(seconds=200))
     moment += timedelta(seconds=301)
     ensure_calls_before_exhaustion = len(provider.ensure_calls)
     compute.reconcile_pooled_capacity(now=moment)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         degraded = ComputeUnitRepository(session).get(pool.id)
         [reclaimed] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
     assert degraded is not None
@@ -2507,7 +2508,7 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
     assert len(provider.ensure_calls) == ensure_calls_before_exhaustion
 
     compute.reconcile_pooled_capacity(now=moment + timedelta(seconds=301))
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         still_degraded = ComputeUnitRepository(session).get(pool.id)
     assert still_degraded is not None
     assert still_degraded.provider_state.degraded_reason == "bootstrap_launch_attempts_exhausted"
@@ -2516,7 +2517,7 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
     # After the relaunch interval the pool buys machines again on its own, and
     # the next failure counts from this point rather than degrading it at once.
     compute.reconcile_pooled_capacity(now=moment + timedelta(seconds=601))
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         relaunching = ComputeUnitRepository(session).get(pool.id)
     assert relaunching is not None
     assert relaunching.provider_state.degraded_reason is None
@@ -2536,13 +2537,13 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
 
 
 def test_clearing_warm_capacity_releases_internal_pool_machines(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -2563,7 +2564,7 @@ def test_clearing_warm_capacity_releases_internal_pool_machines(
 
     compute.clear_aws_default_capacity(workspace=baseline.workspace_id, release_capacity=True)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         drained = ComputeUnitRepository(session).get(baseline.id)
     assert drained is not None
     assert drained.min_machines == 0
@@ -2572,13 +2573,13 @@ def test_clearing_warm_capacity_releases_internal_pool_machines(
 
 
 def test_customer_baseline_releases_its_floor_and_preserves_demand(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
-    resolver = _Resolver(provider, isolated_services)
+    resolver = _Resolver(provider, service_context)
     compute = ComputeService(
-        isolated_services.context,
+        service_context,
         provider_resolver=resolver,
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
@@ -2614,13 +2615,13 @@ def test_customer_baseline_releases_its_floor_and_preserves_demand(
 
 
 def test_clearing_warm_capacity_preserves_work_from_another_workspace(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -2639,7 +2640,7 @@ def test_clearing_warm_capacity_preserves_work_from_another_workspace(
     assert provider.desired == 1
 
     machine_id = "44444444-4444-4444-8444-444444444444"
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         customer_workspace = WorkspaceRepository(session).create(name="capacity-customer")
         MachineRepository(session).upsert(
             Machine(
@@ -2670,7 +2671,7 @@ def test_clearing_warm_capacity_preserves_work_from_another_workspace(
 
     compute.clear_aws_default_capacity(workspace=pool.workspace_id, release_capacity=True)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         held = ComputeUnitRepository(session).get(pool.id)
     assert held is not None
     # The provider scales in by picking its own victim, so the running workload is
@@ -2692,12 +2693,12 @@ def test_clearing_warm_capacity_preserves_work_from_another_workspace(
 
 
 def _mark_open_record_booting(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     pool_id: str,
     *,
     at: datetime,
 ) -> ComputeProviderInstanceRecord:
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = ComputeProviderInstanceRepository(session)
         record = next(
             item
@@ -2769,7 +2770,7 @@ def _allow_scale(pool: ComputeUnitRecord) -> None:
     del pool
 
 
-def _seed_connection(isolated_services: ApiServices, *, platform_fleet: bool = False) -> None:
+def _seed_connection(service_context: ServiceContext, *, platform_fleet: bool = False) -> None:
     now = datetime.now(UTC)
     account_id = "123456789012"
     authorization = AwsAccountAuthorizationGeneration(
@@ -2782,10 +2783,10 @@ def _seed_connection(isolated_services: ApiServices, *, platform_fleet: bool = F
         created_at=now,
         updated_at=now,
     )
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-    owner_id = workspace_owner_user_id(isolated_services.context, workspace_id)
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+    owner_id = workspace_owner_user_id(service_context, workspace_id)
+    with service_context.database.session() as session:
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(
                 id=_CONNECTION_ID,
@@ -2806,7 +2807,7 @@ def _seed_connection(isolated_services: ApiServices, *, platform_fleet: bool = F
 
 
 def test_degraded_pool_refuses_acquisition_and_placement_does_not_clear_it(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """A pool that exhausted its launch attempts must stop buying machines.
 
@@ -2816,11 +2817,11 @@ def test_degraded_pool_refuses_acquisition_and_placement_does_not_clear_it(
     scheduler tick, so a bounded bootstrap failure billed as an unbounded one.
     """
 
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -2832,7 +2833,7 @@ def test_degraded_pool_refuses_acquisition_and_placement_does_not_clear_it(
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity()
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         pools = ComputeUnitRepository(session)
         stored = pools.get(pool.id)
         assert stored is not None
@@ -2868,14 +2869,14 @@ def test_degraded_pool_refuses_acquisition_and_placement_does_not_clear_it(
         desired_machines=1,
         root_volume_gib=200,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         after = ComputeUnitRepository(session).get(pool.id)
     assert after is not None
     assert after.provider_state.degraded_reason == "bootstrap_launch_attempts_exhausted"
 
 
 def test_capacity_asked_for_again_revives_a_deleted_pool(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """A deleted row is a name and a shape, not a standing decision.
 
@@ -2886,11 +2887,11 @@ def test_capacity_asked_for_again_revives_a_deleted_pool(
     build. Nothing raised, so the account simply held no capacity.
     """
 
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     provider = _PooledProvider()
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -2909,7 +2910,7 @@ def test_capacity_asked_for_again_revives_a_deleted_pool(
         )
 
     unit = ask_for_the_floor()
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         repository = ComputeUnitRepository(session)
         stored = repository.get(unit.id)
         assert stored is not None
@@ -2929,7 +2930,7 @@ def test_capacity_asked_for_again_revives_a_deleted_pool(
 
 
 def test_an_unbuilt_pool_is_not_deleted_by_the_account_it_has_not_been_built_in(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """The provider cannot tell a torn-down pool from one it has not built.
 
@@ -2940,10 +2941,10 @@ def test_an_unbuilt_pool_is_not_deleted_by_the_account_it_has_not_been_built_in(
     held a floor of one and no machine for as long as it existed.
     """
 
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(_EmptyAccountProvider(), isolated_services),
+        service_context,
+        provider_resolver=_Resolver(_EmptyAccountProvider(), service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
     )
@@ -2966,7 +2967,7 @@ def test_an_unbuilt_pool_is_not_deleted_by_the_account_it_has_not_been_built_in(
 
 
 def _seed_serving_machine(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     pool: ComputeUnitRecord,
     hooks: _SchedulerHooks,
     *,
@@ -2977,8 +2978,8 @@ def _seed_serving_machine(
     """Enrol one provider instance as a machine that takes work."""
 
     worker_id = agent_machine_worker_id(machine_id)
-    owner_id = workspace_owner_user_id(isolated_services.context, pool.workspace_id)
-    with isolated_services.context.database.session() as session:
+    owner_id = workspace_owner_user_id(service_context, pool.workspace_id)
+    with service_context.database.session() as session:
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
@@ -3030,7 +3031,7 @@ def _seed_serving_machine(
     # The bootstrap status opens its own session, so the seed above must have
     # committed first: a second writer inside an uncommitted one deadlocks.
     ComputeService(
-        isolated_services.context,
+        service_context,
         capacity_owner_mutations=_MutationLeases(),
     ).record_provider_bootstrap_status(
         pool_id=pool.id,
@@ -3047,17 +3048,17 @@ def _wireguard_public_key(identity: str) -> str:
 
 
 def _serving_pool(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     hooks: _SchedulerHooks,
     provider: _PooledProvider,
     *,
     now: datetime,
     reclaim: ComputeReclaimPolicy | None = None,
 ) -> tuple[ComputeService, ComputeUnitRecord]:
-    _seed_connection(isolated_services)
+    _seed_connection(service_context)
     compute = ComputeService(
-        isolated_services.context,
-        provider_resolver=_Resolver(provider, isolated_services),
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         scheduler_hooks=hooks,
@@ -3072,7 +3073,7 @@ def _serving_pool(
     )
     compute.reconcile_pooled_capacity(now=now)
     _seed_serving_machine(
-        isolated_services,
+        service_context,
         pool,
         hooks,
         machine_id="44444444-4444-4444-8444-444444444444",
@@ -3085,10 +3086,10 @@ def _serving_pool(
 
 
 def _open_record(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     pool_id: str,
 ) -> ComputeProviderInstanceRecord | None:
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         return next(
             (
                 item
@@ -3100,7 +3101,7 @@ def _open_record(
 
 
 def test_a_machine_that_serves_is_not_reclaimed_when_its_worker_record_lapses(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """The invariant the production outage broke.
 
@@ -3113,9 +3114,9 @@ def test_a_machine_that_serves_is_not_reclaimed_when_its_worker_record_lapses(
     started_at = datetime.now(UTC)
     hooks = _SchedulerHooks(intake_observing_since=started_at - timedelta(hours=1))
     provider = _PooledProvider()
-    compute, pool = _serving_pool(isolated_services, hooks, provider, now=started_at)
+    compute, pool = _serving_pool(service_context, hooks, provider, now=started_at)
 
-    served = _open_record(isolated_services, pool.id)
+    served = _open_record(service_context, pool.id)
     assert served is not None
     assert served.first_served_at is not None
 
@@ -3124,7 +3125,7 @@ def test_a_machine_that_serves_is_not_reclaimed_when_its_worker_record_lapses(
     for offset in range(1, 12):
         compute.reconcile_pooled_capacity(now=started_at + timedelta(minutes=offset))
 
-    survived = _open_record(isolated_services, pool.id)
+    survived = _open_record(service_context, pool.id)
     assert survived is not None
     assert survived.id == served.id
     assert survived.unserved_observations == 0
@@ -3132,7 +3133,7 @@ def test_a_machine_that_serves_is_not_reclaimed_when_its_worker_record_lapses(
 
 
 def test_a_machine_that_served_and_stopped_is_reclaimed_once_its_window_passes(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """The other half: not reclaiming is a meter that never stops."""
 
@@ -3143,20 +3144,20 @@ def test_a_machine_that_served_and_stopped_is_reclaimed_once_its_window_passes(
     # a reclaim and its replacement land in one pass, and the reason the machine
     # was taken away is only readable while no replacement has overwritten it.
     compute, pool = _serving_pool(
-        isolated_services,
+        service_context,
         hooks,
         provider,
         now=started_at,
         reclaim=ComputeReclaimPolicy(max_launch_attempts=1),
     )
-    served = _open_record(isolated_services, pool.id)
+    served = _open_record(service_context, pool.id)
     assert served is not None
 
     hooks.available_machines.clear()
     for offset in range(1, 13):
         compute.reconcile_pooled_capacity(now=started_at + timedelta(minutes=offset))
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         records = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
     reclaimed = next(item for item in records if item.id == served.id)
     assert reclaimed.bootstrap_failure_reason is MachineBootstrapFailureReason.ServiceLost
@@ -3165,7 +3166,7 @@ def test_a_machine_that_served_and_stopped_is_reclaimed_once_its_window_passes(
 
 
 def test_a_control_plane_that_just_started_reclaims_nothing(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Silence measured across an outage is a fact about the outage.
 
@@ -3177,8 +3178,8 @@ def test_a_control_plane_that_just_started_reclaims_nothing(
     started_at = datetime.now(UTC)
     hooks = _SchedulerHooks(intake_observing_since=started_at - timedelta(hours=1))
     provider = _PooledProvider()
-    compute, pool = _serving_pool(isolated_services, hooks, provider, now=started_at)
-    served = _open_record(isolated_services, pool.id)
+    compute, pool = _serving_pool(service_context, hooks, provider, now=started_at)
+    served = _open_record(service_context, pool.id)
     assert served is not None
 
     hooks.available_machines.clear()
@@ -3187,7 +3188,7 @@ def test_a_control_plane_that_just_started_reclaims_nothing(
     for offset in range(1, 13):
         compute.reconcile_pooled_capacity(now=restarted_at + timedelta(seconds=offset * 30))
 
-    survived = _open_record(isolated_services, pool.id)
+    survived = _open_record(service_context, pool.id)
     assert survived is not None
     assert survived.id == served.id
     assert provider.release_calls == []

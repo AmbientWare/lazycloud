@@ -16,7 +16,6 @@ from images.scheduling import (
     ImageBuildSchedulerCredentialSource,
     plan_image_build_container_request,
 )
-from pydantic import JsonValue
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.credentials import ImageCredentialEnvVar
 
@@ -91,8 +90,3 @@ def _request(
         session=session,
         build_args=build_args or {},
     )
-
-
-def _json_object(value: JsonValue, *, name: str) -> dict[str, JsonValue]:
-    assert isinstance(value, dict), f"{name} must be a JSON object"
-    return value

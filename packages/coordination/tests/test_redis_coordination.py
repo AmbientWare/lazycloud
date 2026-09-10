@@ -8,7 +8,6 @@ from coordination.event_bus import EventBusEvent, EventBusEventType, RedisEventB
 from coordination.redis_client import (
     RedisClient,
     RedisSettings,
-    sanitize_redis_client_name,
 )
 from coordination.request_cooldown import RedisRequestCooldown
 from coordination.token_lock import (
@@ -18,7 +17,6 @@ from coordination.token_lock import (
 )
 from coordination.wake_signal import RedisWakeSignal
 from tests.real_redis import RealRedisActors
-from tests.redis_fakes import FakeRedis
 
 
 def test_request_cooldown_keeps_longest_cross_replica_deadline(
@@ -41,37 +39,6 @@ def test_request_cooldown_keeps_longest_cross_replica_deadline(
     assert RedisRequestCooldown(first.redis, "other-project").blocked_until() is None
 
 
-def test_redis_client_name_sanitization_removes_protocol_unsafe_characters() -> None:
-    assert sanitize_redis_client_name("Worker Pod\n#1!") == "WorkerPod1"
-
-
-def test_redis_settings_build_explicit_tcp_tls_and_unix_clients() -> None:
-    tcp = RedisClient.from_settings(
-        RedisSettings(
-            url="redis://redis.internal:6381/4",
-            client_name="Scheduler Pod #1",
-        )
-    )
-    tls = RedisClient.from_settings(RedisSettings(url="rediss://redis.internal:6382?db=5"))
-    unix = RedisClient.from_settings(RedisSettings(url="unix:///var/run/redis.sock?db=6"))
-    try:
-        assert tcp.connection_info is not None
-        assert tcp.connection_info.host == "redis.internal"
-        assert tcp.connection_info.port == 6381
-        assert tcp.connection_info.database == 4
-        assert tcp.connection_info.client_name == "SchedulerPod1"
-        assert tls.connection_info is not None
-        assert tls.connection_info.scheme == "rediss"
-        assert tls.connection_info.database == 5
-        assert unix.connection_info is not None
-        assert unix.connection_info.socket_path == "/var/run/redis.sock"
-        assert unix.connection_info.database == 6
-    finally:
-        tcp.close()
-        tls.close()
-        unix.close()
-
-
 def test_redis_settings_reject_implicit_query_knobs_and_invalid_urls() -> None:
     with pytest.raises(ValueError, match="query options"):
         RedisClient.from_settings(RedisSettings(url="redis://redis.internal/0?socket_timeout=1"))
@@ -81,8 +48,10 @@ def test_redis_settings_reject_implicit_query_knobs_and_invalid_urls() -> None:
         RedisClient.from_settings(RedisSettings(url="redis://redis.internal/not-a-db"))
 
 
-def test_token_lock_rejects_empty_tokens_and_non_positive_ttl() -> None:
-    redis = RedisClient(_TokenLockRedis())
+def test_token_lock_rejects_empty_tokens_and_non_positive_ttl(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
     with pytest.raises(ValueError, match="TTL"):
         try_acquire_token_lock(redis, "lock", "owner", ttl_seconds=0)
     with pytest.raises(ValueError, match="token is required"):
@@ -98,7 +67,7 @@ def test_real_redis_scripts_locks_and_pubsub_leave_no_keys(
         RedisSettings(
             url=real_redis_actors.url,
             key_prefix=real_redis_actors.prefix,
-            client_name="coordination-acceptance",
+            client_name="Coordination Acceptance #1!",
             socket_timeout_seconds=2.0,
             health_check_interval_seconds=1,
         )
@@ -178,26 +147,3 @@ def test_real_redis_scripts_locks_and_pubsub_leave_no_keys(
 def _signal_wake(item: tuple[RedisWakeSignal, int]) -> bool:
     wake, _index = item
     return wake.signal()
-
-
-class _TokenLockRedis(FakeRedis):
-    def set(
-        self,
-        name: str,
-        value: str | bytes | int | float | bool,
-        *,
-        ex: int | None = None,
-        px: int | None = None,
-        nx: bool = False,
-    ) -> bool:
-        del name, value, ex, px, nx
-        return True
-
-    def eval(
-        self,
-        script: str,
-        numkeys: int,
-        *keys_and_args: str | bytes | int | float | bool,
-    ) -> int:
-        del script, numkeys, keys_and_args
-        return TokenLockReleaseStatus.Released

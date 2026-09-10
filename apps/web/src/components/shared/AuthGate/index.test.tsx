@@ -1,3 +1,4 @@
+import { testQueryClient } from "@/test/query-client";
 import { StrictMode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -38,7 +39,7 @@ const session: CurrentSession = {
 };
 
 beforeEach(() => {
-  queryClient = new QueryClient({
+  queryClient = testQueryClient({
     defaultOptions: { queries: { retry: false, staleTime: 15_000 } },
   });
   fetchMock.mockReset();
@@ -47,7 +48,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  queryClient.clear();
   clearStoredAuthToken();
   window.history.replaceState(null, "", "/");
 });

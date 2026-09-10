@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
-from shared.identity import WorkspaceRole
+from shared.identity import WorkspaceRecord, WorkspaceRole
 from shared.timestamps import utc_now
 from tests.workspaces import owned_workspace
 
@@ -69,7 +69,6 @@ def _credential(
 
 def test_invitations_are_an_administrators_to_send_read_and_answered_by_their_addressee(
     isolated_services: ApiServices,
-    client_stack: ExitStack,
 ) -> None:
     """The authorization each route applies, which only the routes decide.
 
@@ -78,69 +77,68 @@ def test_invitations_are_an_administrators_to_send_read_and_answered_by_their_ad
     read it would learn who the workspace is recruiting. Leaving needs no
     administrator, and removing somebody else still does.
     """
-    workspace = owned_workspace(isolated_services.control_plane_service, "team")
-    owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
-    member_id, member = _signed_in(isolated_services, "member", "member@example.test")
-    isolated_services.users.add_member(
-        workspace_id=workspace.id,
-        user_id=member_id,
-        admission=DatabaseBillingAdmission(),
-    )
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    with ExitStack() as client_stack:
+        workspace = owned_workspace(isolated_services.control_plane_service, "team")
+        owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
+        member_id, member = _signed_in(isolated_services, "member", "member@example.test")
+        isolated_services.users.add_member(
+            workspace_id=workspace.id,
+            user_id=member_id,
+            admission=DatabaseBillingAdmission(),
+        )
+        client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
-    refused = client.post(
-        "/api/v1/workspaces/team/invitations",
-        json={"email": "new@example.test", "role": "member"},
-        headers=member,
-    )
-    assert refused.status_code == 403, refused.text
+        refused = client.post(
+            "/api/v1/workspaces/team/invitations",
+            json={"email": "new@example.test", "role": "member"},
+            headers=member,
+        )
+        assert refused.status_code == 403, refused.text
 
-    created = client.post(
-        "/api/v1/workspaces/team/invitations",
-        json={"email": "New@Example.test", "role": "administrator"},
-        headers=owner,
-    )
-    assert created.status_code == 201, created.text
+        created = client.post(
+            "/api/v1/workspaces/team/invitations",
+            json={"email": "New@Example.test", "role": "administrator"},
+            headers=owner,
+        )
+        assert created.status_code == 201, created.text
 
-    assert client.get("/api/v1/workspaces/team/invitations", headers=member).status_code == 403
-    listed = client.get("/api/v1/workspaces/team/invitations", headers=owner)
-    assert [item["id"] for item in listed.json()["data"]] == [created.json()["id"]]
+        assert client.get("/api/v1/workspaces/team/invitations", headers=member).status_code == 403
+        listed = client.get("/api/v1/workspaces/team/invitations", headers=owner)
+        assert [item["id"] for item in listed.json()["data"]] == [created.json()["id"]]
 
-    # Deliberately an address unlike the one invited: the link is what joins.
-    invited_id, invited = _signed_in(isolated_services, "new", "elsewhere@other.test")
-    token = _queued_link(isolated_services)
-    accepted = client.post(f"/api/v1/invitations/{token}/accept", headers=invited)
-    assert accepted.status_code == 201, accepted.text
-    assert client.post(f"/api/v1/invitations/{token}/accept", headers=invited).status_code == 404
+        # Deliberately an address unlike the one invited: the link is what joins.
+        invited_id, invited = _signed_in(isolated_services, "new", "elsewhere@other.test")
+        token = _queued_link(isolated_services)
+        accepted = client.post(f"/api/v1/invitations/{token}/accept", headers=invited)
+        assert accepted.status_code == 201, accepted.text
+        assert (
+            client.post(f"/api/v1/invitations/{token}/accept", headers=invited).status_code == 404
+        )
 
-    kept = client.delete(f"/api/v1/workspaces/team/members/{invited_id}", headers=member)
-    assert kept.status_code == 403, kept.text
-    left = client.delete(f"/api/v1/workspaces/team/members/{member_id}", headers=member)
-    assert left.status_code == 204, left.text
-    assert client.get("/api/v1/workspaces/team/members", headers=member).status_code == 403
-    assert {owner_id, invited_id} == {
-        item["user_id"]
-        for item in client.get("/api/v1/workspaces/team/members", headers=owner).json()["data"]
-    }
+        kept = client.delete(f"/api/v1/workspaces/team/members/{invited_id}", headers=member)
+        assert kept.status_code == 403, kept.text
+        left = client.delete(f"/api/v1/workspaces/team/members/{member_id}", headers=member)
+        assert left.status_code == 204, left.text
+        assert client.get("/api/v1/workspaces/team/members", headers=member).status_code == 403
+        assert {owner_id, invited_id} == {
+            item["user_id"]
+            for item in client.get("/api/v1/workspaces/team/members", headers=owner).json()["data"]
+        }
 
 
 def test_an_unknown_link_and_a_malformed_id_are_refused_rather_than_faulting(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
+    api_workspace: WorkspaceRecord,
 ) -> None:
-    """A link that opens nothing is a 404, and a bad id is a 400.
-
-    The invitation id reaches a uuid column, and unvalidated it raises inside the
-    driver, which nothing maps, so the caller gets a 500 for their own typo. A
-    token is opaque and simply matches nothing.
-    """
-    workspace = owned_workspace(isolated_services.control_plane_service, "team")
-    _owner_id, owner = _owner(isolated_services, workspace.id, "owner@example.test")
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    services, client = api_runtime
+    workspace = api_workspace
+    _owner_id, owner = _owner(services, workspace.id, f"owner-{workspace.id}@example.test")
 
     assert client.get("/api/v1/invitations/nothing-here", headers=owner).status_code == 404
     assert client.post("/api/v1/invitations/nothing-here/accept", headers=owner).status_code == 404
     assert (
-        client.delete("/api/v1/workspaces/team/invitations/not-a-uuid", headers=owner).status_code
+        client.delete(
+            f"/api/v1/workspaces/{workspace.name}/invitations/not-a-uuid", headers=owner
+        ).status_code
         == 400
     )

@@ -27,6 +27,7 @@ from tests.url_constants import EXAMPLE_COM_URL
 from typer.testing import CliRunner
 
 cli = build_public_cli()
+pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 
 @dataclass

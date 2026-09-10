@@ -1,17 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 from api.server.services import ApiServices
 from compute.state import ComputeUnitState, RedisComputeStateRepository
-from coordination.redis_client import RedisClient
-from scheduler.capacity_reservations import (
-    CapacityReservationService,
-    RedisCapacityReservationRepository,
-)
 from scheduler.fleet import SchedulerWorkerStatus, WorkerPoolStateSnapshot
 from scheduler.state import (
-    RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
     RedisWorkerPoolStateRepository,
     SchedulerWorkerRecord,
@@ -20,13 +12,6 @@ from shared.compute_policy import MachinePool, UnitName
 from tests.real_redis import RealRedisActors
 
 _FOREIGN_CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
-
-
-def _capacity_reservations(redis: RedisClient) -> CapacityReservationService:
-    return CapacityReservationService(
-        RedisCapacityReservationRepository(redis),
-        lambda: [],
-    )
 
 
 def test_delete_pool_cleans_private_agent_state(
@@ -39,7 +24,6 @@ def test_delete_pool_cleans_private_agent_state(
     redis = real_redis_actors.client()
     compute_states = RedisComputeStateRepository(redis)
     scheduler_workers = RedisSchedulerWorkerRepository(redis)
-    scheduler_containers = RedisSchedulerContainerRepository(redis)
     scheduler_pool_states = RedisWorkerPoolStateRepository(redis)
     scheduler_pool_states.set_state(
         unit.capacity_owner_id,
@@ -88,14 +72,7 @@ def test_delete_pool_cleans_private_agent_state(
             requires_pool_selector=True,
         )
     )
-    gateway = replace(
-        isolated_services.gateway_service,
-        compute_state=compute_states,
-        scheduler_workers=scheduler_workers,
-        scheduler_containers=scheduler_containers,
-        scheduler_pool_states=scheduler_pool_states,
-        capacity_reservations=_capacity_reservations(redis),
-    )
+    gateway = isolated_services.gateway_service
 
     gateway.delete_unit(unit.id, workspace_id=workspace_id)
 

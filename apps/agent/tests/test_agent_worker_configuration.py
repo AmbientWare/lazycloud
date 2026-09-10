@@ -57,6 +57,9 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(tmp_path:
         machine_id="machine-one",
         cpu_millicores=4000,
         memory_mb=8192,
+        gpu="L4",
+        gpu_count=1,
+        gpu_assignment="0",
         network_prefix="private-pool:machine-one",
     )
 
@@ -78,13 +81,13 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(tmp_path:
     assert applied
     assert config.execution.capacity.cpu_millicores == 4000
     assert config.execution.capacity.memory_mib == 8192
+    assert config.execution.capacity.gpu_type == "L4"
+    assert config.execution.capacity.gpu_count == 1
     assert "WORKER_NETWORK_PREFIX=private-pool:machine-one" in docker_run
     assert "worker-secret" not in contents
     assert config_path.stat().st_mode & 0o777 == 0o600
     assert f"{config_path}:/etc/lazycloud/worker/worker.yaml:ro" in docker_run
-    # One origin, not two. These were computed separately and only one honoured
-    # the agent's runtime-URL override, so a worker could hold a reachable
-    # gateway and an unreachable repository and stay pending forever.
+    # Both clients must reach the control plane through the runtime origin.
     assert "WORKER_REPOSITORY_URL=http://host.docker.internal:8000" in docker_run
     assert "GATEWAY_HTTP_URL=http://host.docker.internal:8000" in docker_run
     assert "WORKER_ROUTE_TARGET=127.0.0.1" in docker_run
@@ -130,10 +133,10 @@ def test_agent_gives_all_workers_one_bounded_graceful_shutdown_window(
 
 
 @dataclass(slots=True)
-class _ConcurrentRemovalRunner(_Runner):
+class _ConcurrentRemovalRunner(_RunningWorkerRunner):
     def run(self, args: list[str]) -> CommandResult:
-        self.calls.append(args)
         if len(args) > 1 and args[1] == "rm":
+            self.calls.append(args)
             return CommandResult(
                 args=args,
                 returncode=1,
@@ -142,17 +145,14 @@ class _ConcurrentRemovalRunner(_Runner):
                     "lazycloud-agent-worker-one is already in progress"
                 ),
             )
-        return CommandResult(args=args, returncode=0)
+        return _RunningWorkerRunner.run(self, args)
 
 
 def test_agent_stop_treats_concurrent_container_removal_as_settled(tmp_path: Path) -> None:
-    """A slot already being removed is the desired end state, not a failure.
-
-    Raising here makes reconciliation retry forever, so the slot is never
-    recreated and its worker never leaves `pending`.
-    """
     runner = _ConcurrentRemovalRunner()
-    controller = DockerAgentWorkerController(state_dir=tmp_path, runner=runner)
+    controller = DockerAgentWorkerController(
+        state_dir=tmp_path, runner=runner, worker_image_override="container-worker:test"
+    )
     slot = AgentWorkerSlot(
         worker_id="worker-one",
         worker_token="worker-secret",
@@ -161,6 +161,10 @@ def test_agent_stop_treats_concurrent_container_removal_as_settled(tmp_path: Pat
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
     )
 
-    controller._stop(slot)
+    bootstrap = AgentBootstrap(gateway_public_http_url="https://gateway.example.test")
+    controller.apply(plan_worker_slot_reconciliation([slot], []), bootstrap)
+    assert [active.worker_id for active in controller.active_slots()] == [slot.worker_id]
 
-    assert any(args[1] == "rm" for args in runner.calls if len(args) > 1)
+    controller.apply(plan_worker_slot_reconciliation([], controller.active_slots()), bootstrap)
+
+    assert controller.active_slots() == []

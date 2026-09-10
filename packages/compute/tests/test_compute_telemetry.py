@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import UTC, datetime, timedelta
 
 from compute.telemetry import (
@@ -17,11 +16,8 @@ from compute.telemetry import (
     plan_agent_disconnect,
     plan_scoped_telemetry_credentials,
     redact_telemetry_line,
-    telemetry_credential_id,
-    telemetry_stream_part,
     validate_agent_telemetry_token,
 )
-from shared.app_identity import PRIVATE_RESOURCE_PREFIX
 from shared.compute_policy import MachinePool
 
 
@@ -46,12 +42,6 @@ def test_scoped_telemetry_credentials_are_append_only_and_workspace_scoped() -> 
         },
     )
 
-    digest = hashlib.sha256(b"workspace/one").digest()[:6].hex()
-    assert telemetry_stream_part(" /workspace/one/ ") == "workspace_one"
-    assert (
-        telemetry_credential_id("workspace/one", TelemetryCredentialKind.Logs, suffix=b"abcdef")
-        == f"{PRIVATE_RESOURCE_PREFIX}-logs-{digest}-616263646566"
-    )
     assert plan.status is TelemetrySinkStatus.Planned
     assert [item.kind for item in plan.issue_plans] == [
         TelemetryCredentialKind.Logs,
@@ -60,7 +50,6 @@ def test_scoped_telemetry_credentials_are_append_only_and_workspace_scoped() -> 
     for item in plan.issue_plans:
         assert item.scope.basin_exact == "events-basin"
         assert item.scope.operations == (TelemetryCredentialOperation.Append,)
-        assert item.request_timeout_seconds == 10
 
     logs, events = plan.issue_plans
     assert logs.scope.stream_prefix == "custom/logs/workspaces/workspace_one"

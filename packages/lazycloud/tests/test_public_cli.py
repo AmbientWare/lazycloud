@@ -167,6 +167,7 @@ def test_public_entrypoint_formats_usage_errors_as_json(
     assert "does-not-exist" in payload["error"]["message"]
 
 
+@pytest.mark.usefixtures("isolated_imports")
 def test_handler_argument_named_json_does_not_enable_machine_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

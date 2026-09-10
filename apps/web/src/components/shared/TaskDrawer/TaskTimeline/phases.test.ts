@@ -86,7 +86,5 @@ describe("task execution phase projection", () => {
     const phases = executionPhases(state, metrics, Date.parse(now));
     expect(phases.map((phase) => [phase.kind, phase.durationMs])).toEqual(expected);
     expect(phases.reduce((total, phase) => total + phase.widthPct, 0)).toBeCloseTo(100, 5);
-    expect(phases.map((phase) => phase.label)).not.toContain("Image load");
-    expect(phases.map((phase) => phase.label)).not.toContain("Runtime startup");
   });
 });

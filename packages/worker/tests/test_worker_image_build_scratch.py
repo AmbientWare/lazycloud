@@ -12,10 +12,6 @@ from worker.image_build_scratch import (
 )
 
 
-def _buildah_path(_binary: str) -> str:
-    return "/usr/bin/buildah"
-
-
 def _manager(
     root: Path,
     *,

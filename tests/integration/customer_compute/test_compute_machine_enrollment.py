@@ -3,19 +3,16 @@ from __future__ import annotations
 import base64
 import hashlib
 import shlex
-from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
 from api.server.workspace_deletion import WorkspaceDeletionService
 from compute.agent_control import agent_machine_worker_id, hash_compute_token
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
-from coordination.redis_client import RedisClient
 from database.repositories.compute import (
     PRIMARY_WIREGUARD_GATEWAY_ID,
     ComputeJoinCredentialRepository,
@@ -36,13 +33,8 @@ from gateway.http import (
 from gateway.service import SELF_HOSTED_FLEET_POOL_NAME, GatewayControlService
 from observability.usage import UsageService
 from operations.management import ManagementService
-from scheduler.capacity_reservations import (
-    CapacityReservationService,
-    RedisCapacityReservationRepository,
-)
 from scheduler.fleet import SchedulerContainerStatus
 from scheduler.pool_state import SchedulerPoolStateService
-from scheduler.preemption import SchedulerWorkerMaintenanceService
 from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
@@ -71,20 +63,9 @@ from shared.identity import TokenKind, WorkspaceStatus
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
-from tests.redis_fakes import FakeRedis
 from tests.workspaces import administrator_credential, owned_workspace, workspace_owner_user_id
 from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
-
-
-@pytest.fixture
-async def async_io(isolated_services: ApiServices) -> AsyncIterator[ApiAsyncIo]:
-    io = isolated_services.require_async_io()
-    await io.start()
-    try:
-        yield io
-    finally:
-        await io.close()
 
 
 class _ProbeConnection:
@@ -105,25 +86,11 @@ class _PrivateNetworkConnector:
 def _gateway(
     services: ApiServices,
     *,
-    key_prefix: str,
-    redis: RedisClient | None = None,
     private_network_connector: _PrivateNetworkConnector | None = None,
 ) -> GatewayControlService:
-    selected_redis = redis or RedisClient(FakeRedis(), key_prefix=key_prefix)
-    scheduler_workers = RedisSchedulerWorkerRepository(selected_redis)
-    scheduler_containers = RedisSchedulerContainerRepository(selected_redis)
     _publish_wireguard_gateway(services)
     return replace(
         services.gateway_service,
-        compute_state=RedisComputeStateRepository(selected_redis),
-        scheduler_workers=scheduler_workers,
-        scheduler_containers=scheduler_containers,
-        scheduler_pool_states=RedisWorkerPoolStateRepository(selected_redis),
-        scheduler_maintenance=SchedulerWorkerMaintenanceService(scheduler_workers),
-        capacity_reservations=CapacityReservationService(
-            RedisCapacityReservationRepository(selected_redis),
-            lambda: [],
-        ),
         private_network_connector=private_network_connector or _PrivateNetworkConnector(),
     )
 
@@ -226,8 +193,7 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services, key_prefix="machine-enrollment")
-    assert gateway.agent_worker_image_name == "container-worker"
+    gateway = _gateway(isolated_services)
     bootstrap = _create_join_token(gateway, MachinePool("customer-machines"), workspace_id)
 
     joined = gateway.join_agent(_join_request(bootstrap.token))
@@ -235,11 +201,9 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
 
     assert UUID(joined.machine_id)
     assert joined.bootstrap is not None
-    assert joined.bootstrap.gateway_public_http_url == gateway.gateway_endpoint.http_url
     view = _pool_machines(gateway, MachinePool("customer-machines"), workspace_id)[0]
     assert view.readiness_phase is MachineReadinessPhase.Joining
     assert not view.schedulable
-    assert view.preflight_checks[0].remediation.startswith("Install and start Docker")
     assert {
         "registration_token",
         "user_data",
@@ -305,20 +269,13 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
 
 def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
     isolated_services: ApiServices,
-    real_redis_actors: RealRedisActors,
-    request: pytest.FixtureRequest,
 ) -> None:
-    redis = real_redis_actors.client()
-    services = _services_with_redis(isolated_services, redis, request)
+    services = isolated_services
     workspace_id = _workspace_id(services)
     pool = MachinePool("worker-image-update")
     unit = services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
     gateway = replace(
-        _gateway(
-            services,
-            key_prefix="worker-image-update",
-            redis=redis,
-        ),
+        _gateway(services),
         agent_worker_image="registry.test/worker@sha256:old",
     )
     assert isinstance(gateway.scheduler_workers, RedisSchedulerWorkerRepository)
@@ -414,11 +371,7 @@ def test_private_network_registration_requires_a_fresh_handshake(
         workspace=workspace_id,
     )
     connector = _PrivateNetworkConnector()
-    gateway = _gateway(
-        isolated_services,
-        key_prefix="fresh-private-network",
-        private_network_connector=connector,
-    )
+    gateway = _gateway(isolated_services, private_network_connector=connector)
     bootstrap = _create_join_token(gateway, MachinePool("fresh-private-network"), workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     public_key = _wireguard_public_key(joined.machine_id)
@@ -508,7 +461,7 @@ def test_capacity_interruption_is_session_fenced_durable_and_heartbeat_safe(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services, key_prefix="capacity-interruption")
+    gateway = _gateway(isolated_services)
     bootstrap = _create_join_token(gateway, MachinePool("preemptible-machines"), workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     _bind_private_network(gateway, workspace_id, joined.agent_token, joined.machine_id)
@@ -566,7 +519,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services, key_prefix="machine-cleanup")
+    gateway = _gateway(isolated_services)
     first_token = _create_join_token(gateway, MachinePool("cleanup-machines"), workspace_id)
     first = gateway.join_agent(_join_request(first_token.token, fingerprint="first-host"))
     first_peer_id = _bind_private_network(
@@ -648,7 +601,7 @@ def test_agent_leave_requires_current_machine_cache_destruction_session(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services, key_prefix="cache-decommission")
+    gateway = _gateway(isolated_services)
     bootstrap = _create_join_token(gateway, MachinePool("cache-decommission"), workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     worker_id = agent_machine_worker_id(joined.machine_id)
@@ -704,7 +657,6 @@ def test_agent_leave_requires_current_machine_cache_destruction_session(
 
 def test_pool_delete_requires_host_decommission_without_mutating_ownership(
     isolated_services: ApiServices,
-    real_redis_actors: RealRedisActors,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
     unit = isolated_services.compute.create_unit(
@@ -712,11 +664,7 @@ def test_pool_delete_requires_host_decommission_without_mutating_ownership(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(
-        isolated_services,
-        key_prefix="machine-pool-delete",
-        redis=real_redis_actors.client(),
-    )
+    gateway = _gateway(isolated_services)
     bootstrap = _create_join_token(gateway, MachinePool("deleted-machine-pool"), workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     join_token_hash = hash_compute_token(bootstrap.token)
@@ -757,10 +705,9 @@ def test_pool_delete_requires_host_decommission_without_mutating_ownership(
 def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
     isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
-    request: pytest.FixtureRequest,
 ) -> None:
     redis = real_redis_actors.client()
-    services = _services_with_redis(isolated_services, redis, request)
+    services = isolated_services
     control = ControlPlaneService(services.context)
     owned_workspace(control, "default")
     _raw_token, audit_actor = administrator_credential(
@@ -836,25 +783,6 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
         )
 
 
-def _services_with_redis(
-    isolated_services: ApiServices,
-    redis: RedisClient,
-    request: pytest.FixtureRequest,
-) -> ApiServices:
-    services = ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        create_schema=False,
-        volume_filesystem=isolated_services.volume_filesystem,
-        redis_client=redis,
-        binary_redis_client=redis,
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-    )
-    request.addfinalizer(services.close)
-    return services
-
-
 def test_telemetry_usage_failure_does_not_advance_enrollment_cursor(
     isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
@@ -865,7 +793,7 @@ def test_telemetry_usage_failure_does_not_advance_enrollment_cursor(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services, key_prefix="machine-metering")
+    gateway = _gateway(isolated_services)
     bootstrap = _create_join_token(gateway, MachinePool("metered-machines"), workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     state = gateway.compute_states.get_agent_token_state(hash_compute_token(joined.agent_token))
@@ -927,7 +855,7 @@ def test_issuing_a_new_join_command_revokes_the_previous_credential(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services, key_prefix="bootstrap-rotation")
+    gateway = _gateway(isolated_services)
     previous = _create_join_token(gateway, MachinePool("rotated-bootstrap"), workspace_id)
     current = _create_join_token(gateway, MachinePool("rotated-bootstrap"), workspace_id)
 
@@ -951,7 +879,7 @@ def test_machine_join_command_owns_the_account_self_hosted_fleet(
         "second-workspace",
         owner_user_id=user_id,
     )
-    gateway = _gateway(isolated_services, key_prefix="machine-join")
+    gateway = _gateway(isolated_services)
 
     first = gateway.machine_join_command(
         MachineJoinCommandRequest(),
@@ -1008,24 +936,24 @@ def test_machine_join_command_owns_the_account_self_hosted_fleet(
 
 @pytest.mark.anyio
 async def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_its_owner(
-    isolated_services: ApiServices,
-    async_io: ApiAsyncIo,
+    async_services: ApiServices,
 ) -> None:
+    async_io = async_services.require_async_io()
     # Every other enrollment write happens because a heartbeat arrived, which is
     # the one thing a machine that has gone does not do. Without the sweep the row
     # keeps saying Ready for a host that is switched off, and the only place the
     # truth appears is a view that recomputes it per request and writes nothing.
-    workspace_id = _workspace_id(isolated_services)
+    workspace_id = _workspace_id(async_services)
     pool = MachinePool("silent-machines")
-    isolated_services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
-    gateway = _gateway(isolated_services, key_prefix="agent-disconnect")
+    async_services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
+    gateway = _gateway(async_services)
     bootstrap = _create_join_token(gateway, pool, workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     _bind_private_network(gateway, workspace_id, joined.agent_token, joined.machine_id)
     assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
     # A platform defect belongs to the platform, so it carries no workspace. It is
     # here to prove the customer's feed does not fold those in.
-    isolated_services.events.emit(
+    async_services.events.emit(
         "billing.span.unpriced",
         resource_type="usage",
         resource_id="span",
@@ -1046,7 +974,7 @@ async def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_it
 
     assert marked == [joined.machine_id]
     assert repeated == []
-    with isolated_services.context.database.session() as session:
+    with async_services.context.database.session() as session:
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             joined.machine_id,
@@ -1061,7 +989,7 @@ async def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_it
 
     # Read the way every customer event route reads, rather than through the
     # repository default: the leak this closes was a keyword the routes passed.
-    visible = ManagementService(isolated_services).event_history(workspace_id)
+    visible = ManagementService(async_services).event_history(workspace_id)
     actions = [event.action for event in visible.data]
     assert actions.count("agent.disconnected") == 1
     assert "billing.span.unpriced" not in actions

@@ -1,0 +1,1646 @@
+from __future__ import annotations
+
+import threading
+from datetime import datetime, timedelta
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+from api.server.services import ApiServices
+from control.service import ControlPlaneService
+from database.context import ServiceContext
+from database.repositories.cleanup import CleanupRepository
+from database.repositories.identity import WorkspaceRepository
+from database.repositories.images import (
+    CheckpointRepository,
+    ImageArchiveRepository,
+    ImageBuildRepository,
+    ImageRepository,
+)
+from database.repositories.source_cache import SourceCacheCleanupRepository
+from database.repositories.storage import (
+    ObjectReferenceRepository,
+    ObjectRepository,
+    OwnedObjectRecord,
+)
+from shared.app_identity import SOURCE_PACKAGE_BUCKET
+from shared.checkpoints import CheckpointRecord, CheckpointStatus, checkpoint_recent_stub_key
+from shared.errors import ConflictError, NotFoundError
+from shared.identity import WorkspaceStatus
+from shared.image_building.authoring import ImageSpec
+from shared.image_building.records import (
+    BuildStatus,
+    ImageBuildPhase,
+    ImageBuildRecord,
+    ImageRecord,
+)
+from shared.objects import ObjectWriteCommand
+from shared.source_cache_cleanup import SourceCacheCleanupStatus
+from shared.timestamps import utc_now
+from shared.workload_config import StubConfig, StubImageConfig
+from storage.checkpoint_retention import DurableCheckpointRetentionService
+from storage.image_archive import ImageArchiveSettings
+from storage.retention import RetentionConfig, RetentionService
+from storage.service import (
+    OBJECT_SHA256_METADATA_KEY,
+    CacheStorage,
+    MountedCacheClient,
+    MountedCacheSettings,
+    ObjectStorage,
+)
+from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
+from tests.workspaces import owned_workspace
+from worker.checkpoints import (
+    WorkerCheckpointStatus,
+    create_checkpoint_state_payload,
+    mark_checkpoint_restored_payload,
+    update_checkpoint_status_payload,
+)
+from worker_repository.checkpoint_records import CheckpointService
+
+
+def _archive_settings() -> ImageArchiveSettings:
+    return ImageArchiveSettings(
+        bucket="image-archives",
+        presign_seconds=900,
+    )
+
+
+class _MemoryObjectClient:
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+        self.object_metadata: dict[tuple[str, str], dict[str, str]] = {}
+
+    def put_bytes(
+        self,
+        key: str,
+        data: bytes,
+        *,
+        bucket: str | None = None,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+    ) -> S3ObjectInfo:
+        _ = content_type
+        location = (bucket or "objects", key)
+        self.objects[location] = data
+        self.object_metadata[location] = dict(metadata or {})
+        return S3ObjectInfo(
+            bucket=location[0],
+            key=key,
+            size=len(data),
+            metadata=dict(metadata or {}),
+        )
+
+    def put_file(
+        self,
+        key: str,
+        source: str | Path,
+        *,
+        bucket: str | None = None,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+    ) -> S3ObjectInfo:
+        return self.put_bytes(
+            key,
+            Path(source).read_bytes(),
+            bucket=bucket,
+            content_type=content_type,
+            metadata=metadata,
+        )
+
+    def read_bytes(self, key: str, *, bucket: str | None = None) -> bytes:
+        return self.objects[(bucket or "objects", key)]
+
+    def download_file(
+        self,
+        key: str,
+        target: str | Path,
+        *,
+        bucket: str | None = None,
+    ) -> S3ObjectInfo:
+        data = self.read_bytes(key, bucket=bucket)
+        Path(target).write_bytes(data)
+        return S3ObjectInfo(bucket=bucket or "objects", key=key, size=len(data))
+
+    def exists(self, key: str, *, bucket: str | None = None) -> bool:
+        return (bucket or "objects", key) in self.objects
+
+    def head(self, key: str, *, bucket: str | None = None) -> S3ObjectInfo:
+        data = self.read_bytes(key, bucket=bucket)
+        location = (bucket or "objects", key)
+        return S3ObjectInfo(
+            bucket=location[0],
+            key=key,
+            size=len(data),
+            metadata=self.object_metadata.get(location, {}),
+        )
+
+    def generate_presigned_get_url(
+        self,
+        key: str,
+        *,
+        bucket: str | None = None,
+        expires_seconds: int = 3600,
+    ) -> str:
+        return f"memory://{bucket or 'objects'}/{key}?expires={expires_seconds}"
+
+    def generate_presigned_put_url(
+        self,
+        key: str,
+        *,
+        bucket: str | None = None,
+        expires_seconds: int = 3600,
+        content_length: int = 0,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        _ = (content_length, content_type)
+        return f"memory://{bucket or 'objects'}/{key}?expires={expires_seconds}"
+
+    def generate_presigned_put(
+        self,
+        key: str,
+        *,
+        bucket: str | None = None,
+        expires_seconds: int = 3600,
+        content_length: int,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+        checksum_sha256: str = "",
+    ) -> S3PresignedUpload:
+        return S3PresignedUpload(
+            url=self.generate_presigned_put_url(
+                key,
+                bucket=bucket,
+                expires_seconds=expires_seconds,
+                content_length=content_length,
+                content_type=content_type,
+            ),
+            headers={
+                "content-length": str(content_length),
+                "content-type": content_type,
+                **({"x-amz-checksum-sha256": checksum_sha256} if checksum_sha256 else {}),
+                **{f"x-amz-meta-{name}": value for name, value in (metadata or {}).items()},
+            },
+        )
+
+    def delete(self, key: str, *, bucket: str | None = None) -> None:
+        location = (bucket or "objects", key)
+        self.objects.pop(location, None)
+        self.object_metadata.pop(location, None)
+
+
+class _RecordingWorkloadImageRegistry:
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+
+    def delete_manifest(self, registry_ref: str) -> None:
+        self.deleted.append(registry_ref)
+
+
+class _BlockingDeleteObjectClient(_MemoryObjectClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.delete_started = threading.Event()
+        self.continue_delete = threading.Event()
+
+    def delete(self, key: str, *, bucket: str | None = None) -> None:
+        self.delete_started.set()
+        if not self.continue_delete.wait(timeout=5):
+            raise TimeoutError("blocking object deletion was not released")
+        super().delete(key, bucket=bucket)
+
+
+class _BlockingPutObjectClient(_MemoryObjectClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.block_put = False
+        self.put_started = threading.Event()
+        self.continue_put = threading.Event()
+
+    def put_bytes(
+        self,
+        key: str,
+        data: bytes,
+        *,
+        bucket: str | None = None,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+    ) -> S3ObjectInfo:
+        if self.block_put:
+            self.put_started.set()
+            if not self.continue_put.wait(timeout=5):
+                raise TimeoutError("blocking object write was not released")
+        return super().put_bytes(
+            key,
+            data,
+            bucket=bucket,
+            content_type=content_type,
+            metadata=metadata,
+        )
+
+
+def test_durable_retention_prunes_only_unreferenced_production_artifacts(
+    isolated_services: ApiServices,
+    tmp_path: Path,
+) -> None:
+    now = utc_now()
+    future = now + timedelta(days=30)
+    client = _MemoryObjectClient()
+    objects = ObjectStorage(
+        isolated_services.context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    cache = CacheStorage(
+        isolated_services.context,
+        cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
+    )
+    control = ControlPlaneService(isolated_services.context)
+    workspace = owned_workspace(control, "default")
+    retained_source = objects.put_bytes_for_workspace(
+        workspace_id=workspace.id,
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key="sources/retained.zip",
+        data=b"retained",
+    )
+    stale_source = objects.put_bytes_for_workspace(
+        workspace_id=workspace.id,
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key="sources/stale.zip",
+        data=b"stale",
+    )
+    stub = control.create_stub(
+        "retained-artifacts",
+        workspace=workspace.id,
+        config=StubConfig(
+            object_id=retained_source.id,
+            image=StubImageConfig(image_id="image-live"),
+        ),
+    )
+    stale_checkpoint_stub = control.create_stub(
+        "stale-checkpoint-artifacts",
+        workspace=workspace.id,
+    )
+    isolated_services.apps.create("retained_artifacts", stub_id=stub.id, workspace=workspace.id)
+
+    build_path = isolated_services.context.paths.root / "image-builds" / "stale.rclip"
+    build_path.parent.mkdir(parents=True, exist_ok=True)
+    build_path.write_bytes(b"build-artifact")
+    stale_build = ImageBuildRecord(
+        id=str(uuid4()),
+        image=ImageSpec(image_id="image-stale"),
+        fingerprint="stale-fingerprint",
+        image_id="image-stale",
+        status=BuildStatus.Complete,
+        phase=ImageBuildPhase.Complete,
+        artifact_path=str(build_path),
+        created_at=now,
+        finished_at=now,
+    )
+    archive_settings = _archive_settings()
+    live_archive_key = "image-archives/image-live.rclip"
+    stale_archive_key = "image-archives/image-stale.rclip"
+    for archive_key in (live_archive_key, stale_archive_key):
+        client.put_bytes(
+            archive_settings.physical_key(archive_key),
+            b"data",
+            bucket=archive_settings.bucket,
+        )
+    with isolated_services.context.database.session() as session:
+        images = ImageRepository(session)
+        images.upsert(ImageRecord(workspace_id=workspace.id, image_id="image-live"))
+        images.upsert(ImageRecord(workspace_id=workspace.id, image_id="image-stale"))
+        archives = ImageArchiveRepository(session)
+        archives.reserve(
+            "image-live",
+            bucket=archive_settings.bucket,
+            object_key=live_archive_key,
+            size_bytes=4,
+            sha256="a" * 64,
+            registry_ref=f"registry.example.com/workloads@sha256:{'a' * 64}",
+            manifest_digest="sha256:" + "a" * 64,
+            architecture="amd64",
+            format_version=2,
+        )
+        archives.reserve(
+            "image-stale",
+            bucket=archive_settings.bucket,
+            object_key=stale_archive_key,
+            size_bytes=4,
+            sha256="b" * 64,
+            registry_ref=f"registry.example.com/workloads@sha256:{'b' * 64}",
+            manifest_digest="sha256:" + "b" * 64,
+            architecture="amd64",
+            format_version=2,
+        )
+        ImageBuildRepository(session).upsert(stale_build, workspace_id=workspace.id)
+        CheckpointRepository(session).upsert(
+            CheckpointRecord(
+                checkpoint_id="checkpoint-live",
+                workspace_id=workspace.id,
+                stub_id=stub.id,
+                status=CheckpointStatus.Available,
+                origin_key="checkpoints/live.tar",
+                retention_expires_at=now + timedelta(days=1),
+            )
+        )
+        CheckpointRepository(session).upsert(
+            CheckpointRecord(
+                checkpoint_id="checkpoint-stale",
+                workspace_id=workspace.id,
+                stub_id=stale_checkpoint_stub.id,
+                status=CheckpointStatus.Available,
+                origin_key="checkpoints/stale.tar",
+                retention_expires_at=now + timedelta(days=1),
+            )
+        )
+    for key in (
+        "checkpoints/live.tar",
+        "checkpoints/stale.tar",
+    ):
+        objects.put_bytes_for_workspace(
+            workspace_id=workspace.id,
+            bucket="objects",
+            key=key,
+            data=b"data",
+        )
+
+    workload_registry = _RecordingWorkloadImageRegistry()
+    result = RetentionService(
+        context=isolated_services.context,
+        object_storage=objects,
+        cache_storage=cache,
+        config=RetentionConfig(
+            checkpoint_bucket="objects",
+            source_grace_seconds=1,
+            build_retention_seconds=1,
+            image_retention_seconds=1,
+            image_archive_retention_seconds=1,
+        ),
+        image_archive_settings=archive_settings,
+        workload_image_registry=workload_registry,
+    ).reconcile(
+        active_recent_stub_keys=[checkpoint_recent_stub_key(workspace.id, stub.id)],
+        now=future,
+    )
+
+    assert objects.get_by_id(retained_source.id).id == retained_source.id
+    with pytest.raises(NotFoundError, match=stale_source.id):
+        objects.get_by_id(stale_source.id)
+    physical_bucket = objects.physical_bucket("objects")
+    assert client.exists(
+        archive_settings.physical_key(live_archive_key),
+        bucket=archive_settings.bucket,
+    )
+    assert not client.exists(
+        archive_settings.physical_key(stale_archive_key),
+        bucket=archive_settings.bucket,
+    )
+    assert client.exists(
+        objects.physical_key_for_workspace(
+            workspace.id,
+            bucket="objects",
+            key="checkpoints/live.tar",
+        ),
+        bucket=physical_bucket,
+    )
+    assert not client.exists(
+        objects.physical_key_for_workspace(
+            workspace.id,
+            bucket="objects",
+            key="checkpoints/stale.tar",
+        ),
+        bucket=physical_bucket,
+    )
+    assert not build_path.exists()
+    with isolated_services.context.database.session() as session:
+        assert ImageRepository(session).get("image-live", workspace_id=workspace.id) is not None
+        assert ImageRepository(session).get("image-stale", workspace_id=workspace.id) is None
+        archives = ImageArchiveRepository(session)
+        assert archives.get("image-live") is not None
+        assert archives.get("image-stale") is None
+        assert ImageBuildRepository(session).get_across_workspaces(stale_build.id) is None
+        assert CheckpointRepository(session).get_across_workspaces("checkpoint-live") is not None
+        assert CheckpointRepository(session).get_across_workspaces("checkpoint-stale") is None
+    assert result.source_objects_removed == 1
+    assert result.image_records_removed == 1
+    assert result.image_archives_removed == 1
+    assert workload_registry.deleted == [f"registry.example.com/workloads@sha256:{'b' * 64}"]
+    assert result.build_records_removed == 1
+    assert result.checkpoints_removed == 1
+
+
+def test_source_retention_preserves_cleanup_target_through_later_workspace_deletion(
+    service_context: ServiceContext,
+    tmp_path: Path,
+) -> None:
+    now = utc_now()
+    future = now + timedelta(days=30)
+    client = _MemoryObjectClient()
+    objects = ObjectStorage(
+        service_context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    workspace = owned_workspace(ControlPlaneService(service_context), "retained-source-owner")
+    generation_id = str(uuid4())
+    with service_context.database.session() as session:
+        generation = SourceCacheCleanupRepository(session).register_generation(
+            generation_id,
+            worker_id="worker-1",
+            storage_id="cache-storage-1",
+            workspace_id=None,
+            now=now,
+        )
+    source = objects.put_bytes_for_workspace(
+        workspace_id=workspace.id,
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key="sources/retention-before-workspace-delete.zip",
+        data=b"cached source",
+    )
+    service = RetentionService(
+        context=service_context,
+        object_storage=objects,
+        cache_storage=CacheStorage(
+            service_context,
+            cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
+        ),
+        config=RetentionConfig(checkpoint_bucket="objects"),
+        image_archive_settings=_archive_settings(),
+    )
+
+    result = service.reconcile(active_recent_stub_keys=[], now=future)
+    assert result.source_objects_removed == 1
+    with service_context.database.session() as session:
+        targets = SourceCacheCleanupRepository(session).list_targets(workspace_id=workspace.id)
+        assert ObjectRepository(session).get_owned(source.id, include_operations=True) is None
+    assert len(targets) == 1
+    assert targets[0].source_object_id == source.id
+    assert targets[0].status is SourceCacheCleanupStatus.Pending
+
+    with service_context.database.session() as session:
+        workspaces = WorkspaceRepository(session)
+        deleting = workspaces.lock_for_deletion(workspace.id)
+        workspaces.mark_deleting(deleting)
+        workspaces.purge_owned_records(workspace.id)
+        deleted = workspaces.tombstone(deleting)
+    assert deleted.status is WorkspaceStatus.Deleted
+
+    with service_context.database.session() as session:
+        cleanup = SourceCacheCleanupRepository(session)
+        claimed = cleanup.claim_due(
+            generation_id,
+            worker_id="worker-1",
+            session_fence=generation.session_fence,
+            now=future,
+            lease_until=future + timedelta(minutes=1),
+            limit=10,
+        )
+        assert len(claimed) == 1
+        assert claimed[0].claim_token is not None
+        assert cleanup.complete_claim(
+            claimed[0].id,
+            generation_id=generation_id,
+            worker_id="worker-1",
+            session_fence=generation.session_fence,
+            claim_token=claimed[0].claim_token,
+            now=future,
+        )
+    with service_context.database.session() as session:
+        summary = SourceCacheCleanupRepository(session).summarize(workspace_id=workspace.id)
+    assert summary.complete
+    assert summary.completed_count == 1
+
+
+def test_checkpoint_retention_survives_empty_hot_state_index(
+    service_context: ServiceContext,
+) -> None:
+    now = utc_now()
+    client = _MemoryObjectClient()
+    objects = ObjectStorage(
+        service_context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    records = (
+        CheckpointRecord(
+            checkpoint_id="checkpoint-legacy",
+            workspace_id=workspace.id,
+            origin_key="checkpoints/legacy-retained.tar",
+            status=CheckpointStatus.Available,
+        ),
+        CheckpointRecord(
+            checkpoint_id="checkpoint-future",
+            workspace_id=workspace.id,
+            origin_key="checkpoints/future-retained.tar",
+            status=CheckpointStatus.Available,
+            retention_expires_at=now + timedelta(days=1),
+        ),
+        CheckpointRecord(
+            checkpoint_id="checkpoint-expired",
+            workspace_id=workspace.id,
+            origin_key="checkpoints/expired.tar",
+            status=CheckpointStatus.Available,
+            retention_expires_at=now - timedelta(seconds=1),
+        ),
+    )
+    with service_context.database.session() as session:
+        repository = CheckpointRepository(session)
+        for record in records:
+            repository.upsert(record)
+    for record in records:
+        objects.reserve_for_workspace(
+            workspace_id=workspace.id,
+            bucket="objects",
+            key=record.origin_key,
+            size=4,
+            sha256="0" * 64,
+        )
+        client.put_bytes(
+            objects.physical_key_for_workspace(
+                workspace.id,
+                bucket="objects",
+                key=record.origin_key,
+            ),
+            b"data",
+            bucket=objects.physical_bucket("objects"),
+        )
+
+    result = DurableCheckpointRetentionService(
+        context=service_context,
+        object_storage=objects,
+        checkpoint_bucket="objects",
+    ).prune([], now=now)
+
+    assert [checkpoint.checkpoint_id for checkpoint in result.pruned] == ["checkpoint-expired"]
+    physical_bucket = objects.physical_bucket("objects")
+    physical_keys = {
+        record.checkpoint_id: objects.physical_key_for_workspace(
+            workspace.id,
+            bucket="objects",
+            key=record.origin_key,
+        )
+        for record in records
+    }
+    assert client.exists(physical_keys["checkpoint-legacy"], bucket=physical_bucket)
+    assert client.exists(physical_keys["checkpoint-future"], bucket=physical_bucket)
+    assert not client.exists(physical_keys["checkpoint-expired"], bucket=physical_bucket)
+
+
+def test_checkpoint_creation_and_restore_record_durable_retention_deadline(
+    service_context: ServiceContext,
+) -> None:
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    service = CheckpointService(
+        service_context,
+        retention_seconds=60,
+        restore_lease_seconds=1800,
+    )
+    pending = service.save_state(
+        create_checkpoint_state_payload(
+            checkpoint_id="checkpoint-deadline",
+            source_container_id="container-deadline",
+            status=WorkerCheckpointStatus.Pending,
+            workspace_id=workspace.id,
+        )
+    )
+    assert pending.retention_expires_at is None
+
+    created = service.save_state(
+        create_checkpoint_state_payload(
+            checkpoint_id=pending.checkpoint_id,
+            source_container_id="container-deadline",
+            status=WorkerCheckpointStatus.Available,
+            workspace_id=workspace.id,
+        )
+    )
+    assert created.retention_expires_at is not None
+    with service_context.database.session() as session:
+        CheckpointRepository(session).upsert(
+            created.model_copy(update={"retention_expires_at": utc_now() - timedelta(days=1)})
+        )
+
+    retained = service.get_for_restore(
+        created.checkpoint_id,
+        workspace_id=workspace.id,
+    )
+
+    assert retained.retention_expires_at is not None
+    assert retained.retention_expires_at > utc_now() + timedelta(minutes=29)
+
+    restored = service.save_state(mark_checkpoint_restored_payload(created.checkpoint_id))
+    assert restored.status is CheckpointStatus.Available
+    assert restored.retention_expires_at is not None
+    assert utc_now() + timedelta(seconds=55) < restored.retention_expires_at
+    assert restored.retention_expires_at < utc_now() + timedelta(seconds=65)
+
+    with service_context.database.session() as session:
+        CheckpointRepository(session).upsert(
+            restored.model_copy(update={"retention_expires_at": utc_now() + timedelta(minutes=30)})
+        )
+    failed = service.save_state(
+        update_checkpoint_status_payload(
+            created.checkpoint_id,
+            WorkerCheckpointStatus.RestoreFailed,
+        )
+    )
+    assert failed.status is CheckpointStatus.RestoreFailed
+    assert failed.retention_expires_at is not None
+    assert utc_now() + timedelta(seconds=55) < failed.retention_expires_at
+    assert failed.retention_expires_at < utc_now() + timedelta(seconds=65)
+
+
+def test_source_and_image_candidates_recheck_references_before_physical_delete(
+    isolated_services: ApiServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = utc_now()
+    future = now + timedelta(days=30)
+    client = _MemoryObjectClient()
+    objects = ObjectStorage(
+        isolated_services.context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    service = RetentionService(
+        context=isolated_services.context,
+        object_storage=objects,
+        cache_storage=CacheStorage(
+            isolated_services.context,
+            cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
+        ),
+        config=RetentionConfig(checkpoint_bucket="objects"),
+        image_archive_settings=_archive_settings(),
+    )
+    control = ControlPlaneService(isolated_services.context)
+    workspace = owned_workspace(control, "default")
+    source = objects.put_bytes_for_workspace(
+        workspace_id=workspace.id,
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key="sources/race.zip",
+        data=b"source",
+    )
+    image = ImageRecord(workspace_id=workspace.id, image_id="image-race")
+    with isolated_services.context.database.session() as session:
+        ImageRepository(session).upsert(image)
+        source_candidate = ObjectRepository(session).get_owned(source.id)
+    assert source_candidate is not None
+
+    stub = control.create_stub(
+        "race-reference",
+        workspace=workspace.id,
+        config=StubConfig(
+            object_id=source.id,
+            image=StubImageConfig(image_id=image.image_id),
+        ),
+    )
+    isolated_services.apps.create("race_reference", stub_id=stub.id, workspace=workspace.id)
+
+    def stale_sources(
+        self: ObjectReferenceRepository,
+        *,
+        source_bucket: str,
+        created_before: datetime,
+        recent_build_after: datetime,
+        excluded_object_ids: frozenset[str],
+        limit: int,
+    ) -> list[OwnedObjectRecord]:
+        return [source_candidate]
+
+    def stale_images(
+        self: ObjectReferenceRepository,
+        *,
+        updated_before: datetime,
+        recent_build_after: datetime,
+        excluded_image_ids: frozenset[str],
+        limit: int,
+    ) -> list[ImageRecord]:
+        return [image]
+
+    monkeypatch.setattr(ObjectReferenceRepository, "list_source_cleanup_candidates", stale_sources)
+    monkeypatch.setattr(ObjectReferenceRepository, "list_image_cleanup_candidates", stale_images)
+    result = service.reconcile(active_recent_stub_keys=[], now=future)
+    assert result.source_objects_removed == 0
+    assert result.image_records_removed == 0
+    assert objects.get_by_id(source.id).id == source.id
+    with isolated_services.context.database.session() as session:
+        assert ImageRepository(session).get(image.image_id, workspace_id=workspace.id) is not None
+
+
+def test_cleaned_image_tombstone_blocks_reference_until_republication(
+    service_context: ServiceContext,
+    tmp_path: Path,
+) -> None:
+    future = utc_now() + timedelta(days=30)
+    client = _MemoryObjectClient()
+    objects = ObjectStorage(
+        service_context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    image = ImageRecord(workspace_id=workspace.id, image_id="image-cleaned")
+    with service_context.database.session() as session:
+        ImageRepository(session).upsert(image)
+    service = RetentionService(
+        context=service_context,
+        object_storage=objects,
+        cache_storage=CacheStorage(
+            service_context,
+            cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
+        ),
+        config=RetentionConfig(checkpoint_bucket="objects"),
+        image_archive_settings=_archive_settings(),
+    )
+
+    removed = service._prune_image_candidate(
+        image,
+        updated_before=future,
+        recent_build_after=future,
+    )
+
+    assert removed[0] == 1
+    with service_context.database.session() as session:
+        images = ImageRepository(session)
+        assert images.get(image.image_id, workspace_id=workspace.id) is None
+        cleaned = images.get(
+            image.image_id,
+            workspace_id=workspace.id,
+            include_cleaned=True,
+        )
+    assert cleaned is not None
+    assert cleaned.cleanup_completed_at is not None
+    with pytest.raises(ConflictError, match="cleanup is in progress"):
+        ControlPlaneService(service_context).create_stub(
+            "cleaned-image",
+            workspace=workspace.id,
+            config=StubConfig(image=StubImageConfig(image_id=image.image_id)),
+        )
+
+    republished_after = utc_now()
+    with service_context.database.session() as session:
+        images = ImageRepository(session)
+        republished = images.upsert(image)
+        immediately_eligible = ObjectReferenceRepository(session).list_image_cleanup_candidates(
+            excluded_image_ids=frozenset(),
+            updated_before=republished_after,
+            recent_build_after=republished_after,
+            limit=10,
+        )
+    assert republished.cleanup_completed_at is None
+    assert immediately_eligible == []
+    with service_context.database.session() as session:
+        assert (
+            ImageRepository(session).get(
+                image.image_id,
+                workspace_id=workspace.id,
+            )
+            is not None
+        )
+
+
+def test_image_archive_survives_until_the_last_authorized_workspace_is_cleaned(
+    service_context: ServiceContext,
+    tmp_path: Path,
+) -> None:
+    future = utc_now() + timedelta(days=30)
+    client = _MemoryObjectClient()
+    objects = ObjectStorage(
+        service_context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    control = ControlPlaneService(service_context)
+    first = owned_workspace(control, "default")
+    second = owned_workspace(control, "second-archive-owner")
+    archive_settings = _archive_settings()
+    image_id = "img_shared_archive"
+    object_key = f"image-archives/{image_id}.clip"
+    physical_key = archive_settings.physical_key(object_key)
+    client.put_bytes(physical_key, b"shared-archive", bucket=archive_settings.bucket)
+    with service_context.database.session() as session:
+        images = ImageRepository(session)
+        images.upsert(ImageRecord(workspace_id=first.id, image_id=image_id))
+        images.upsert(ImageRecord(workspace_id=second.id, image_id=image_id))
+        ImageArchiveRepository(session).reserve(
+            image_id,
+            bucket=archive_settings.bucket,
+            object_key=object_key,
+            size_bytes=14,
+            sha256="c" * 64,
+            registry_ref=f"registry.example.com/workloads@sha256:{'c' * 64}",
+            manifest_digest="sha256:" + "c" * 64,
+            architecture="amd64",
+            format_version=2,
+        )
+    workload_registry = _RecordingWorkloadImageRegistry()
+    service = RetentionService(
+        context=service_context,
+        object_storage=objects,
+        cache_storage=CacheStorage(
+            service_context,
+            cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
+        ),
+        config=RetentionConfig(
+            checkpoint_bucket="objects",
+            image_retention_seconds=1,
+            image_archive_retention_seconds=1,
+            # One authorization row per cycle, so the archive has to survive a
+            # complete cycle while the other workspace still holds it.
+            max_items_per_cycle=1,
+        ),
+        image_archive_settings=archive_settings,
+        workload_image_registry=workload_registry,
+    )
+
+    partial = service.reconcile(active_recent_stub_keys=[], now=future)
+
+    assert partial.image_records_removed == 1
+    assert partial.image_archives_removed == 0
+    assert client.exists(physical_key, bucket=archive_settings.bucket)
+    with service_context.database.session() as session:
+        assert ImageArchiveRepository(session).get(image_id) is not None
+
+    final = service.reconcile(active_recent_stub_keys=[], now=future)
+
+    assert final.image_records_removed == 1
+    assert final.image_archives_removed == 1
+    assert workload_registry.deleted == [f"registry.example.com/workloads@sha256:{'c' * 64}"]
+    assert not client.exists(physical_key, bucket=archive_settings.bucket)
+    with service_context.database.session() as session:
+        assert ImageArchiveRepository(session).get(image_id) is None
+
+
+def test_duplicate_build_cleanup_preserves_shared_path_and_cache_key(
+    service_context: ServiceContext,
+    tmp_path: Path,
+) -> None:
+    now = utc_now()
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    shared_path = service_context.paths.root / "image-builds" / "shared.rclip"
+    shared_path.parent.mkdir(parents=True, exist_ok=True)
+    shared_path.write_bytes(b"shared")
+    cache = CacheStorage(
+        service_context,
+        cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
+    )
+    source = tmp_path / "cache-source"
+    source.write_bytes(b"cache")
+    cache_record = cache.put("build", "shared", source)
+    old_build = ImageBuildRecord(
+        id=str(uuid4()),
+        image=ImageSpec(image_id="image-shared"),
+        fingerprint="old",
+        image_id="image-shared",
+        status=BuildStatus.Complete,
+        phase=ImageBuildPhase.Complete,
+        artifact_path=str(shared_path),
+        cache_metadata={"cache_publish_key": cache_record.key},
+        created_at=now - timedelta(days=30),
+        finished_at=now - timedelta(days=30),
+    )
+    retained_build = old_build.model_copy(
+        update={
+            "id": str(uuid4()),
+            "fingerprint": "new",
+            "created_at": now,
+            "finished_at": now,
+        }
+    )
+    with service_context.database.session() as session:
+        builds = ImageBuildRepository(session)
+        builds.upsert(old_build, workspace_id=workspace.id)
+        builds.upsert(retained_build, workspace_id=workspace.id)
+
+    result = RetentionService(
+        context=service_context,
+        object_storage=ObjectStorage(
+            service_context,
+            object_client=_MemoryObjectClient(),
+            default_bucket="objects",
+        ),
+        cache_storage=cache,
+        config=RetentionConfig(
+            checkpoint_bucket="objects",
+            build_retention_seconds=7 * 24 * 60 * 60,
+        ),
+        image_archive_settings=_archive_settings(),
+    ).reconcile(active_recent_stub_keys=[], now=now)
+
+    with service_context.database.session() as session:
+        builds = ImageBuildRepository(session)
+        assert builds.get_across_workspaces(old_build.id) is None
+        assert builds.get_across_workspaces(retained_build.id) is not None
+    assert shared_path.exists()
+    assert cache.list() == [cache_record]
+    assert result.build_records_removed == 1
+    assert result.build_paths_removed == 0
+    assert result.cache_entries_removed == 0
+
+
+def test_build_retention_age_starts_when_the_build_finishes(
+    service_context: ServiceContext,
+) -> None:
+    now = utc_now()
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    old_finished = ImageBuildRecord(
+        id=str(uuid4()),
+        image=ImageSpec(image_id="old-finished"),
+        fingerprint="old-finished",
+        image_id="old-finished",
+        status=BuildStatus.Complete,
+        phase=ImageBuildPhase.Complete,
+        created_at=now - timedelta(days=30),
+        finished_at=now - timedelta(days=30),
+    )
+    just_finished = old_finished.model_copy(
+        update={
+            "id": str(uuid4()),
+            "image": ImageSpec(image_id="just-finished"),
+            "fingerprint": "just-finished",
+            "image_id": "just-finished",
+            "finished_at": now,
+        }
+    )
+    with service_context.database.session() as session:
+        builds = ImageBuildRepository(session)
+        builds.upsert(old_finished, workspace_id=workspace.id)
+        builds.upsert(just_finished, workspace_id=workspace.id)
+        candidates = ObjectReferenceRepository(session).list_build_cleanup_candidates(
+            excluded_build_ids=frozenset(),
+            finished_before=now - timedelta(seconds=1),
+            recent_build_after=now - timedelta(seconds=1),
+            limit=10,
+        )
+
+    assert [build.id for build in candidates] == [old_finished.id]
+
+
+def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
+    service_context: ServiceContext,
+    tmp_path: Path,
+) -> None:
+    now = utc_now()
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    image = ImageRecord(workspace_id=workspace.id, image_id="image-many-builds")
+    shared_path = service_context.paths.root / "image-builds" / "many-shared.rclip"
+    shared_path.parent.mkdir(parents=True, exist_ok=True)
+    shared_path.write_bytes(b"shared-build-artifact")
+    with service_context.database.session() as session:
+        ImageRepository(session).upsert(image)
+        builds = ImageBuildRepository(session)
+        for index in range(31):
+            builds.upsert(
+                ImageBuildRecord(
+                    id=str(uuid4()),
+                    image=ImageSpec(image_id=image.image_id),
+                    fingerprint=f"many-builds-{index}",
+                    image_id=image.image_id,
+                    status=BuildStatus.Complete,
+                    phase=ImageBuildPhase.Complete,
+                    artifact_path=str(shared_path),
+                    created_at=now - timedelta(days=30),
+                    finished_at=now - timedelta(days=30),
+                ),
+                workspace_id=workspace.id,
+            )
+    service = RetentionService(
+        context=service_context,
+        object_storage=ObjectStorage(
+            service_context,
+            object_client=_MemoryObjectClient(),
+            default_bucket="objects",
+        ),
+        cache_storage=CacheStorage(
+            service_context,
+            cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
+        ),
+        config=RetentionConfig(
+            checkpoint_bucket="objects",
+            max_items_per_cycle=7,
+        ),
+        image_archive_settings=_archive_settings(),
+    )
+    first = service._prune_image_candidate(
+        image,
+        updated_before=now + timedelta(days=1),
+        recent_build_after=now,
+    )
+
+    assert first[0] == 0
+    assert first[1] == 7
+    assert shared_path.exists()
+    with service_context.database.session() as session:
+        builds = ImageBuildRepository(session)
+        assert builds.count_for_image(image.image_id, workspace_id=workspace.id) == 24
+        claimed_image = ImageRepository(session).get(
+            image.image_id,
+            workspace_id=workspace.id,
+            include_cleaned=True,
+        )
+    assert claimed_image is not None
+    assert claimed_image.cleanup_claimed_at is not None
+    assert claimed_image.cleanup_completed_at is None
+
+    removed_builds = first[1]
+    removed_images = first[0]
+    while removed_images == 0:
+        batch = service._delete_claimed_image(claimed_image)
+        removed_images += batch[0]
+        removed_builds += batch[1]
+
+    assert removed_builds == 31
+    assert removed_images == 1
+    assert not shared_path.exists()
+    with service_context.database.session() as session:
+        assert (
+            ImageBuildRepository(session).count_for_image(
+                image.image_id,
+                workspace_id=workspace.id,
+            )
+            == 0
+        )
+        completed = ImageRepository(session).get(
+            image.image_id,
+            workspace_id=workspace.id,
+            include_cleaned=True,
+        )
+    assert completed is not None
+    assert completed.cleanup_claimed_at is None
+    assert completed.cleanup_completed_at is not None
+
+
+def test_resumed_image_cleanup_shares_one_build_budget_across_images(
+    service_context: ServiceContext,
+    tmp_path: Path,
+) -> None:
+    now = utc_now()
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    image_ids = ("claimed-image-a", "claimed-image-b")
+    with service_context.database.session() as session:
+        images = ImageRepository(session)
+        builds = ImageBuildRepository(session)
+        claims = CleanupRepository(session)
+        for image_id in image_ids:
+            images.upsert(ImageRecord(workspace_id=workspace.id, image_id=image_id))
+            for index in range(6):
+                builds.upsert(
+                    ImageBuildRecord(
+                        id=str(uuid4()),
+                        image=ImageSpec(image_id=image_id),
+                        fingerprint=f"{image_id}-{index}",
+                        image_id=image_id,
+                        status=BuildStatus.Complete,
+                        phase=ImageBuildPhase.Complete,
+                        created_at=now - timedelta(days=30),
+                    ),
+                    workspace_id=workspace.id,
+                )
+            claims.mark_image_claimed(
+                image_id,
+                workspace_id=workspace.id,
+                claimed_at=now,
+            )
+    service = RetentionService(
+        context=service_context,
+        object_storage=ObjectStorage(
+            service_context,
+            object_client=_MemoryObjectClient(),
+            default_bucket="objects",
+        ),
+        cache_storage=CacheStorage(
+            service_context,
+            cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
+        ),
+        config=RetentionConfig(
+            checkpoint_bucket="objects",
+            max_items_per_cycle=7,
+        ),
+        image_archive_settings=_archive_settings(),
+    )
+
+    removed = service._resume_claimed_images()
+
+    assert removed[1] == 7
+    with service_context.database.session() as session:
+        builds = ImageBuildRepository(session)
+        assert (
+            sum(
+                builds.count_for_image(image_id, workspace_id=workspace.id)
+                for image_id in image_ids
+            )
+            == 5
+        )
+
+
+def test_artifact_reference_age_starts_when_the_build_finishes(
+    service_context: ServiceContext,
+) -> None:
+    now = utc_now()
+    recent_after = now - timedelta(minutes=1)
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    objects = ObjectStorage(
+        service_context,
+        object_client=_MemoryObjectClient(),
+        default_bucket=SOURCE_PACKAGE_BUCKET,
+    )
+    context_object_id = objects.put_bytes_for_workspace(
+        workspace_id=workspace.id,
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key="sources/recently-published.zip",
+        data=b"recent",
+    ).id
+    build = ImageBuildRecord(
+        id=str(uuid4()),
+        image=ImageSpec(
+            context_object_id=context_object_id,
+            image_id="recently-published-image",
+        ),
+        fingerprint="recently-published-image",
+        image_id="recently-published-image",
+        status=BuildStatus.Complete,
+        phase=ImageBuildPhase.Complete,
+        created_at=now - timedelta(days=30),
+        finished_at=now,
+    )
+    unfinished_context_object_id = objects.put_bytes_for_workspace(
+        workspace_id=workspace.id,
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key="sources/missing-finished-at.zip",
+        data=b"unfinished",
+    ).id
+    unfinished_terminal = build.model_copy(
+        update={
+            "id": str(uuid4()),
+            "image": ImageSpec(
+                context_object_id=unfinished_context_object_id,
+                image_id="missing-finished-at-image",
+            ),
+            "fingerprint": "missing-finished-at-image",
+            "image_id": "missing-finished-at-image",
+            "finished_at": None,
+        }
+    )
+    with service_context.database.session() as session:
+        builds = ImageBuildRepository(session)
+        builds.upsert(build, workspace_id=workspace.id)
+        builds.upsert(unfinished_terminal, workspace_id=workspace.id)
+        references = ObjectReferenceRepository(session)
+        assert references.object_is_referenced(
+            context_object_id,
+            workspace_id=workspace.id,
+            recent_build_after=recent_after,
+        )
+        assert references.image_is_referenced(
+            build.image_id or "",
+            workspace_id=workspace.id,
+            recent_build_after=recent_after,
+        )
+        assert references.build_is_retained(
+            build,
+            workspace_id=workspace.id,
+            recent_build_after=recent_after,
+        )
+        assert references.object_is_referenced(
+            unfinished_context_object_id,
+            workspace_id=workspace.id,
+            recent_build_after=recent_after,
+        )
+        assert references.image_is_referenced(
+            unfinished_terminal.image_id or "",
+            workspace_id=workspace.id,
+            recent_build_after=recent_after,
+        )
+        assert references.build_is_retained(
+            unfinished_terminal,
+            workspace_id=workspace.id,
+            recent_build_after=recent_after,
+        )
+
+
+def test_build_candidate_rechecks_status_before_deleting_physical_data(
+    service_context: ServiceContext,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = utc_now()
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    artifact = service_context.paths.root / "image-builds" / "claimed.rclip"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"claimed")
+    candidate = ImageBuildRecord(
+        id=str(uuid4()),
+        image=ImageSpec(image_id="image-claimed"),
+        fingerprint="claimed",
+        image_id="image-claimed",
+        status=BuildStatus.Complete,
+        phase=ImageBuildPhase.Complete,
+        artifact_path=str(artifact),
+        created_at=now - timedelta(days=30),
+        finished_at=now - timedelta(days=30),
+    )
+    with service_context.database.session() as session:
+        builds = ImageBuildRepository(session)
+        builds.upsert(candidate, workspace_id=workspace.id)
+        builds.upsert(
+            candidate.model_copy(
+                update={
+                    "status": BuildStatus.Running,
+                    "phase": ImageBuildPhase.Submitted,
+                }
+            ),
+            workspace_id=workspace.id,
+        )
+    service = RetentionService(
+        context=service_context,
+        object_storage=ObjectStorage(
+            service_context,
+            object_client=_MemoryObjectClient(),
+            default_bucket="objects",
+        ),
+        cache_storage=CacheStorage(
+            service_context,
+            cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
+        ),
+        config=RetentionConfig(checkpoint_bucket="objects"),
+        image_archive_settings=_archive_settings(),
+    )
+
+    def stale_builds(
+        self: ObjectReferenceRepository,
+        *,
+        excluded_build_ids: frozenset[str],
+        finished_before: datetime,
+        recent_build_after: datetime,
+        limit: int,
+    ) -> list[ImageBuildRecord]:
+        return [candidate]
+
+    monkeypatch.setattr(ObjectReferenceRepository, "list_build_cleanup_candidates", stale_builds)
+    result = service.reconcile(active_recent_stub_keys=[], now=now)
+    assert result.build_records_removed == 0
+    assert result.build_paths_removed == 0
+    assert artifact.exists()
+    with service_context.database.session() as session:
+        retained = ImageBuildRepository(session).get_across_workspaces(candidate.id)
+    assert retained is not None
+    assert retained.status is BuildStatus.Running
+
+
+def test_source_cleanup_claim_survives_crash_and_rejects_new_reference(
+    isolated_services: ApiServices,
+    tmp_path: Path,
+) -> None:
+    now = utc_now()
+    future = now + timedelta(days=30)
+    client = _MemoryObjectClient()
+    objects = ObjectStorage(
+        isolated_services.context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    control = ControlPlaneService(isolated_services.context)
+    workspace = owned_workspace(control, "default")
+    source = objects.put_bytes_for_workspace(
+        workspace_id=workspace.id,
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key="sources/crash.zip",
+        data=b"source",
+    )
+    unbound_stub = control.create_stub(
+        "claimed-binding",
+        workspace=workspace.id,
+        config=StubConfig(object_id=source.id),
+    )
+    with isolated_services.context.database.session() as session:
+        candidate = ObjectRepository(session).get_owned(source.id)
+    assert candidate is not None
+    service = RetentionService(
+        context=isolated_services.context,
+        object_storage=objects,
+        cache_storage=CacheStorage(
+            isolated_services.context,
+            cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
+        ),
+        config=RetentionConfig(
+            checkpoint_bucket="objects",
+            source_grace_seconds=1,
+        ),
+        image_archive_settings=_archive_settings(),
+    )
+
+    claimed = service._claim_source_candidate(
+        candidate,
+        created_before=future,
+        recent_build_after=future,
+    )
+    assert claimed is not None
+    assert claimed.cleanup_claimed_at is not None
+    with pytest.raises(ConflictError, match="cleanup is in progress"):
+        isolated_services.apps.create(
+            "claimed_binding",
+            stub_id=unbound_stub.id,
+            workspace=workspace.id,
+        )
+    with pytest.raises(ConflictError, match="cleanup is in progress"):
+        control.create_stub(
+            "claimed-source",
+            workspace=workspace.id,
+            config=StubConfig(object_id=source.id),
+        )
+
+    result = service.reconcile(active_recent_stub_keys=[], now=future)
+
+    assert result.source_objects_removed == 1
+    assert not client.exists("sources/crash.zip", bucket=SOURCE_PACKAGE_BUCKET)
+    with pytest.raises(NotFoundError, match=source.id):
+        objects.get_by_id(source.id)
+    with pytest.raises(ConflictError, match="unavailable"):
+        control.create_stub(
+            "deleted-source",
+            workspace=workspace.id,
+            config=StubConfig(object_id=source.id),
+        )
+
+
+def test_slow_object_delete_does_not_block_unrelated_database_write(
+    committed_service_context: ServiceContext,
+    tmp_path: Path,
+) -> None:
+    future = utc_now() + timedelta(days=30)
+    client = _BlockingDeleteObjectClient()
+    objects = ObjectStorage(
+        committed_service_context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    control = ControlPlaneService(committed_service_context)
+    workspace = owned_workspace(control, "default")
+    source = objects.put_bytes_for_workspace(
+        workspace_id=workspace.id,
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key="sources/slow.zip",
+        data=b"source",
+    )
+    with committed_service_context.database.session() as session:
+        candidate = ObjectRepository(session).get_owned(source.id)
+    assert candidate is not None
+    service = RetentionService(
+        context=committed_service_context,
+        object_storage=objects,
+        cache_storage=CacheStorage(
+            committed_service_context,
+            cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
+        ),
+        config=RetentionConfig(checkpoint_bucket="objects"),
+        image_archive_settings=_archive_settings(),
+    )
+    cleanup_errors: list[BaseException] = []
+
+    def cleanup() -> None:
+        try:
+            service._prune_source_candidate(
+                candidate,
+                created_before=future,
+                recent_build_after=future,
+            )
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+
+    cleanup_thread = threading.Thread(target=cleanup)
+    cleanup_thread.start()
+    assert client.delete_started.wait(timeout=2)
+    write_finished = threading.Event()
+
+    def write_unrelated_workspace() -> None:
+        owned_workspace(control, "unrelated-write")
+        write_finished.set()
+
+    write_thread = threading.Thread(target=write_unrelated_workspace)
+    write_thread.start()
+    assert write_finished.wait(timeout=2)
+    client.continue_delete.set()
+    cleanup_thread.join(timeout=5)
+    write_thread.join(timeout=5)
+
+    assert not cleanup_errors
+    assert not cleanup_thread.is_alive()
+    assert not write_thread.is_alive()
+
+
+def test_object_delete_claim_does_not_block_another_workspace_location(
+    committed_service_context: ServiceContext,
+) -> None:
+    client = _BlockingDeleteObjectClient()
+    objects = ObjectStorage(
+        committed_service_context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    control = ControlPlaneService(committed_service_context)
+    first = owned_workspace(control, "default")
+    second = owned_workspace(control, "second-object-workspace")
+    objects.put_bytes_for_workspace(
+        workspace_id=first.id,
+        bucket="objects",
+        key="shared/location.bin",
+        data=b"first",
+    )
+    errors: list[BaseException] = []
+
+    def delete() -> None:
+        try:
+            objects.delete_for_workspace(
+                workspace_id=first.id,
+                bucket="objects",
+                key="shared/location.bin",
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=delete)
+    thread.start()
+    assert client.delete_started.wait(timeout=2)
+    written = objects.put_bytes_for_workspace(
+        workspace_id=second.id,
+        bucket="objects",
+        key="shared/location.bin",
+        data=b"second",
+    )
+    client.continue_delete.set()
+    thread.join(timeout=5)
+
+    assert not errors
+    assert not thread.is_alive()
+    assert written.sha256
+
+
+def test_object_write_claim_blocks_delete_without_holding_database_transaction(
+    committed_service_context: ServiceContext,
+) -> None:
+    client = _BlockingPutObjectClient()
+    objects = ObjectStorage(
+        committed_service_context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    control = ControlPlaneService(committed_service_context)
+    workspace = owned_workspace(control, "default")
+    client.block_put = True
+    errors: list[BaseException] = []
+
+    def write() -> None:
+        try:
+            objects.put_bytes_for_workspace(
+                workspace_id=workspace.id,
+                bucket="objects",
+                key="slow/write.bin",
+                data=b"content",
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=write)
+    thread.start()
+    assert client.put_started.wait(timeout=2)
+    owned_workspace(control, "write-does-not-block-database")
+    with pytest.raises(ConflictError, match="write is in progress"):
+        objects.delete_for_workspace(
+            workspace_id=workspace.id,
+            bucket="objects",
+            key="slow/write.bin",
+        )
+    client.continue_put.set()
+    thread.join(timeout=5)
+
+    assert not errors
+    assert not thread.is_alive()
+    assert objects.get_for_workspace(
+        workspace_id=workspace.id,
+        bucket="objects",
+        key="slow/write.bin",
+    ).sha256
+
+
+def test_stale_object_write_claim_finalizes_matching_atomic_upload(
+    service_context: ServiceContext,
+) -> None:
+    client = _MemoryObjectClient()
+    objects = ObjectStorage(
+        service_context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    physical_key = objects.physical_key_for_workspace(
+        workspace.id,
+        bucket="objects",
+        key="crash/write.bin",
+    )
+    command = ObjectWriteCommand(
+        bucket="objects",
+        key="crash/write.bin",
+        path=f"s3://objects/{physical_key}",
+        size=7,
+        sha256="a" * 64,
+    )
+    with service_context.database.session() as session:
+        claim = ObjectRepository(session).begin_write(
+            command,
+            workspace_id=workspace.id,
+            overwrite=True,
+        )
+    client.put_bytes(
+        physical_key,
+        b"content",
+        bucket=objects.physical_bucket("objects"),
+        metadata={OBJECT_SHA256_METADATA_KEY: "a" * 64},
+    )
+
+    assert (
+        objects.reconcile_operations(
+            now=utc_now() + timedelta(hours=3),
+            lease_seconds=2 * 60 * 60,
+            limit=10,
+        )
+        == 1
+    )
+
+    recovered = objects.get_by_id(claim.record.id)
+    assert recovered.write_claimed_at is None
+    assert recovered.sha256 == "a" * 64
+
+
+def test_stale_object_operations_roll_back_missing_write_and_resume_delete(
+    service_context: ServiceContext,
+) -> None:
+    client = _MemoryObjectClient()
+    objects = ObjectStorage(
+        service_context,
+        object_client=client,
+        default_bucket="objects",
+    )
+    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    missing_physical_key = objects.physical_key_for_workspace(
+        workspace.id,
+        bucket="objects",
+        key="crash/missing.bin",
+    )
+    command = ObjectWriteCommand(
+        bucket="objects",
+        key="crash/missing.bin",
+        path=f"s3://objects/{missing_physical_key}",
+        size=7,
+        sha256="b" * 64,
+    )
+    with service_context.database.session() as session:
+        missing = ObjectRepository(session).begin_write(
+            command,
+            workspace_id=workspace.id,
+            overwrite=True,
+        )
+    doomed = objects.put_bytes_for_workspace(
+        workspace_id=workspace.id,
+        bucket="objects",
+        key="crash/delete.bin",
+        data=b"delete",
+    )
+    stale = utc_now() - timedelta(hours=3)
+    with service_context.database.session() as session:
+        ObjectRepository(session).claim_delete(
+            doomed.id,
+            cleanup_kind="object-delete",
+            claimed_at=stale,
+        )
+    with pytest.raises(NotFoundError, match=doomed.id):
+        objects.get_by_id(doomed.id)
+    with service_context.database.session() as session:
+        abandoned_owned = ObjectRepository(session).get_owned(doomed.id, include_operations=True)
+    assert abandoned_owned is not None
+    abandoned = abandoned_owned.record
+    assert abandoned.cleanup_kind == "object-delete"
+    assert abandoned.cleanup_claimed_at == stale
+
+    assert (
+        objects.reconcile_operations(
+            now=utc_now() + timedelta(hours=3),
+            lease_seconds=2 * 60 * 60,
+            limit=10,
+        )
+        == 2
+    )
+
+    with pytest.raises(NotFoundError, match=missing.record.id):
+        objects.get_by_id(missing.record.id)
+    with pytest.raises(NotFoundError, match=doomed.id):
+        objects.get_by_id(doomed.id)
+    assert not client.exists(
+        objects.physical_key_for_workspace(
+            workspace.id,
+            bucket="objects",
+            key="crash/delete.bin",
+        ),
+        bucket=objects.physical_bucket("objects"),
+    )

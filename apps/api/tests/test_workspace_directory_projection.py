@@ -9,19 +9,17 @@ from database.repositories.identity import WorkspaceRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.http.workspaces import WorkspaceListResponse
-from shared.identity import WorkspaceStatus
+from shared.identity import WorkspaceRecord, WorkspaceStatus
 from tests.workspaces import administrator_credential, owned_workspace
 
 
 def test_admin_current_workspace_honors_explicit_workspace_override(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
+    api_workspace: WorkspaceRecord,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    control.get_workspace("default")
-    target = owned_workspace(control, "provider-acceptance")
-    admin_token, _ = administrator_credential(isolated_services.context, "workspace-override-admin")
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    services, client = api_runtime
+    target = api_workspace
+    admin_token, _ = administrator_credential(services.context, "workspace-override-admin")
 
     response = client.get(
         "/api/v1/workspaces/current",
@@ -36,53 +34,53 @@ def test_admin_current_workspace_honors_explicit_workspace_override(
 
 def test_admin_can_include_deleting_workspaces_but_not_deleted_tombstones(
     isolated_services: ApiServices,
-    client_stack: ExitStack,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    control.get_workspace("default")
-    active = owned_workspace(control, "projection-active")
-    deleting = owned_workspace(control, "projection-deleting")
-    deleted = owned_workspace(control, "projection-deleted")
-    _set_lifecycle_states(
-        isolated_services,
-        deleting_workspace_id=deleting.id,
-        deleted_workspace_id=deleted.id,
-    )
-    admin_token, _ = administrator_credential(isolated_services.context, "directory-admin")
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    with ExitStack() as client_stack:
+        control = ControlPlaneService(isolated_services.context)
+        control.get_workspace("default")
+        active = owned_workspace(control, "projection-active")
+        deleting = owned_workspace(control, "projection-deleting")
+        deleted = owned_workspace(control, "projection-deleted")
+        _set_lifecycle_states(
+            isolated_services,
+            deleting_workspace_id=deleting.id,
+            deleted_workspace_id=deleted.id,
+        )
+        admin_token, _ = administrator_credential(isolated_services.context, "directory-admin")
+        client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
-    response = client.get(
-        "/api/v1/workspaces",
-        params={"include_deleting": "true"},
-        headers=_auth(admin_token),
-    )
+        response = client.get(
+            "/api/v1/workspaces",
+            params={"include_deleting": "true"},
+            headers=_auth(admin_token),
+        )
 
-    assert response.status_code == 200, response.text
-    assert _projection(response.content) == {
-        "default": WorkspaceStatus.Active,
-        active.name: WorkspaceStatus.Active,
-        deleting.name: WorkspaceStatus.Deleting,
-    }
+        assert response.status_code == 200, response.text
+        assert _projection(response.content) == {
+            "default": WorkspaceStatus.Active,
+            active.name: WorkspaceStatus.Active,
+            deleting.name: WorkspaceStatus.Deleting,
+        }
 
 
 def test_workspace_token_cannot_expand_its_workspace_directory(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
+    api_workspace: WorkspaceRecord,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    active = owned_workspace(control, "projection-active")
-    deleting = owned_workspace(control, "projection-deleting")
-    deleted = owned_workspace(control, "projection-deleted")
-    token, _ = AuthService(isolated_services.context).create_token(
+    services, client = api_runtime
+    control = ControlPlaneService(services.context)
+    active = api_workspace
+    deleting = owned_workspace(control, f"projection-deleting-{active.id}")
+    deleted = owned_workspace(control, f"projection-deleted-{active.id}")
+    token, _ = AuthService(services.context).create_token(
         "directory-workspace",
         workspace_id=active.id,
     )
     _set_lifecycle_states(
-        isolated_services,
+        services,
         deleting_workspace_id=deleting.id,
         deleted_workspace_id=deleted.id,
     )
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.get(
         "/api/v1/workspaces",

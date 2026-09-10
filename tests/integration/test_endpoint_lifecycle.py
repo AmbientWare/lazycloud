@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import threading
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import TracebackType
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 import uvicorn
-import websockets.asyncio.server
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubRecord
@@ -39,7 +39,6 @@ from fastapi.testclient import TestClient
 from gateway.container_readiness import AsyncRedisContainerReadiness
 from identity.auth import AuthService
 from networking.async_http import AsyncBackendHttpClient
-from pydantic import JsonValue
 from runner.serve import EndpointServeRunner, RunnerASGIApplication
 from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContainerSubmitStatus
 from scheduler.fleet import SchedulerContainerStatus
@@ -62,10 +61,12 @@ from shared.http_transport import HttpChannel
 from shared.tasks import RetryPolicy, Task, TaskStatus
 from sqlalchemy.orm import Session
 from starlette.websockets import WebSocketDisconnect
+from tests.http_server import running_http_server
 from tests.metric_helpers import metric_value
 from tests.real_redis import RealRedisActors
 from tests.scheduler_composition import services_with_redis_container_control
-from websockets.asyncio.server import ServerConnection
+
+pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 # Container ids are UUID columns in production, so a fabricated name would fail
 # validation rather than exercise dispatch.
@@ -220,17 +221,17 @@ async def app(scope, receive, send):
 
 @pytest.mark.anyio
 async def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
-    isolated_services: ApiServices,
+    async_services: ApiServices,
 ) -> None:
-    deployment = isolated_services.deployments.deploy(
+    deployment = async_services.deployments.deploy(
         DeploymentSpec(
             name="realtime-heartbeat",
             kind=DeploymentKind.Asgi,
             handler="module:app",
         )
     )
-    stub = _stub_for_deployment(isolated_services, deployment.id)
-    _record_dispatch_container(isolated_services, stub, _HEARTBEAT_CONTAINER_ID)
+    stub = _stub_for_deployment(async_services, deployment.id)
+    _record_dispatch_container(async_services, stub, _HEARTBEAT_CONTAINER_ID)
     containers = _EndpointContainers(
         states=[
             SchedulerContainerState(
@@ -242,7 +243,7 @@ async def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
         ],
         addresses={_HEARTBEAT_CONTAINER_ID: "127.0.0.1:8001"},
     )
-    service = _endpoint_service(isolated_services, containers)
+    service = _endpoint_service(async_services, containers)
 
     session = await service.prepare_asgi_websocket(
         EndpointForwardRequest(
@@ -252,41 +253,40 @@ async def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
             headers={"x-client": ["realtime"]},
         )
     )
-    task = isolated_services.tasks.get(session.task_id)
-    before = _dispatch_record(isolated_services, task).heartbeat_at
+    task = async_services.tasks.get(session.task_id)
+    before = _dispatch_record(async_services, task).heartbeat_at
 
     await service.heartbeat_asgi_websocket(session.task_id)
-    task = isolated_services.tasks.get(session.task_id)
-    after = _dispatch_record(isolated_services, task).heartbeat_at
+    task = async_services.tasks.get(session.task_id)
+    after = _dispatch_record(async_services, task).heartbeat_at
     await service.finish_asgi_websocket(session.task_id)
 
-    finished = isolated_services.tasks.get(session.task_id)
+    finished = async_services.tasks.get(session.task_id)
     assert session.target.container_id == _HEARTBEAT_CONTAINER_ID
     assert session.headers["X-Task-Id"] == [session.task_id]
     assert before is not None
     assert after is not None
     assert after >= before
     assert finished.status is TaskStatus.Complete
-    assert _dispatch_record(isolated_services, finished).status is EndpointDispatchStatus.Complete
-    await isolated_services.require_async_io().close()
+    assert _dispatch_record(async_services, finished).status is EndpointDispatchStatus.Complete
 
 
 @pytest.mark.anyio
 async def test_endpoint_service_without_running_container_schedules_warmup(
-    isolated_services: ApiServices,
+    async_services: ApiServices,
 ) -> None:
     scheduler = _RecordingScheduler()
-    isolated_services.containers.scheduler = scheduler
-    deployment = isolated_services.deployments.deploy(
+    async_services.containers.scheduler = scheduler
+    deployment = async_services.deployments.deploy(
         DeploymentSpec(
             name="cold",
             kind=DeploymentKind.Endpoint,
             handler="module:handler",
         )
     )
-    stub = _stub_for_deployment(isolated_services, deployment.id)
-    _set_endpoint_dispatch_limits(isolated_services, stub, timeout_seconds=0.1)
-    service = _endpoint_service(isolated_services, _EndpointContainers())
+    stub = _stub_for_deployment(async_services, deployment.id)
+    _set_endpoint_dispatch_limits(async_services, stub, timeout_seconds=0.1)
+    service = _endpoint_service(async_services, _EndpointContainers())
 
     response = await service.forward_endpoint_request(
         EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
@@ -298,15 +298,14 @@ async def test_endpoint_service_without_running_container_schedules_warmup(
     payload = WorkerContainerRequestPayload.model_validate(scheduler.requests[0].payload)
     assert payload.ports == [CONTAINER_INNER_PORT]
     assert payload.requested_ports == [CONTAINER_INNER_PORT]
-    task = isolated_services.tasks.list()[0]
-    dispatch = _dispatch_record(isolated_services, task)
+    task = async_services.tasks.list()[0]
+    dispatch = _dispatch_record(async_services, task)
     assert dispatch.status is EndpointDispatchStatus.Timeout
-    await isolated_services.require_async_io().close()
 
 
 @pytest.mark.anyio
 async def test_endpoint_service_waits_for_warm_capacity_before_dispatch(
-    isolated_services: ApiServices,
+    async_services: ApiServices,
     tmp_path: Path,
 ) -> None:
     handler_file = tmp_path / "delayed_endpoint_handlers.py"
@@ -317,18 +316,18 @@ def predict():
 """.strip()
     )
     scheduler = _RecordingScheduler()
-    isolated_services.containers.scheduler = scheduler
-    deployment = isolated_services.deployments.deploy(
+    async_services.containers.scheduler = scheduler
+    deployment = async_services.deployments.deploy(
         DeploymentSpec(
             name="delayed",
             kind=DeploymentKind.Endpoint,
             handler=f"{handler_file}:predict",
         )
     )
-    stub = _stub_for_deployment(isolated_services, deployment.id)
-    _set_endpoint_dispatch_limits(isolated_services, stub, timeout_seconds=1)
+    stub = _stub_for_deployment(async_services, deployment.id)
+    _set_endpoint_dispatch_limits(async_services, stub, timeout_seconds=1)
     containers = _EndpointContainers()
-    service = _endpoint_service(isolated_services, containers)
+    service = _endpoint_service(async_services, containers, readiness=_readiness(async_services))
     invocation = asyncio.create_task(
         service.forward_endpoint_request(
             EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
@@ -337,7 +336,6 @@ def predict():
     with _serve_handler(
         f"{handler_file}:predict",
         stub_type=DeploymentKind.Endpoint.value,
-        stub_id=stub.id,
     ) as served:
         for _ in range(100):
             if scheduler.requests:
@@ -347,7 +345,7 @@ def predict():
         # The dispatch in flight commits its transaction from this loop, so a
         # sync write here must not block the loop while it waits on that lock.
         await asyncio.to_thread(
-            _record_dispatch_container, isolated_services, stub, _WARM_CONTAINER_ID
+            _record_dispatch_container, async_services, stub, _WARM_CONTAINER_ID
         )
         containers.states.append(
             SchedulerContainerState(
@@ -362,18 +360,17 @@ def predict():
 
     assert response.status_code == 200
     assert response.body == b"ready"
-    task = isolated_services.tasks.list()[0]
-    dispatch = _dispatch_record(isolated_services, task)
+    task = async_services.tasks.list()[0]
+    dispatch = _dispatch_record(async_services, task)
     assert dispatch.status is EndpointDispatchStatus.Complete
     assert dispatch.container_id == _WARM_CONTAINER_ID
-    await isolated_services.require_async_io().close()
 
 
 @pytest.mark.anyio
 async def test_endpoint_retry_requeues_the_relational_dispatch(
-    isolated_services: ApiServices,
+    async_services: ApiServices,
 ) -> None:
-    deployment = isolated_services.deployments.deploy(
+    deployment = async_services.deployments.deploy(
         DeploymentSpec(
             name="retry-dispatch",
             kind=DeploymentKind.Endpoint,
@@ -381,10 +378,10 @@ async def test_endpoint_retry_requeues_the_relational_dispatch(
             retry_policy=RetryPolicy(max_attempts=2),
         )
     )
-    stub = _stub_for_deployment(isolated_services, deployment.id)
-    _set_endpoint_dispatch_limits(isolated_services, stub, timeout_seconds=1)
+    stub = _stub_for_deployment(async_services, deployment.id)
+    _set_endpoint_dispatch_limits(async_services, stub, timeout_seconds=1)
     container_id = str(uuid5(NAMESPACE_URL, "lazycloud:test:retry-container"))
-    _record_dispatch_container(isolated_services, stub, container_id)
+    _record_dispatch_container(async_services, stub, container_id)
     containers = _EndpointContainers(
         states=[
             SchedulerContainerState(
@@ -403,45 +400,44 @@ async def test_endpoint_retry_requeues_the_relational_dispatch(
     )
 
     response = await _endpoint_service(
-        isolated_services,
+        async_services,
         containers,
         dispatcher=dispatcher,
     ).forward_endpoint_request(EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"))
 
-    task = next(task for task in isolated_services.tasks.list() if task.stub_id == stub.id)
-    dispatch = _dispatch_record(isolated_services, task)
+    task = next(task for task in async_services.tasks.list() if task.stub_id == stub.id)
+    dispatch = _dispatch_record(async_services, task)
     assert response.status_code == 200
     assert dispatcher.attempts == 2
     assert task.status is TaskStatus.Complete
     assert dispatch.status is EndpointDispatchStatus.Complete
     assert dispatch.attempts == 2
-    await isolated_services.require_async_io().close()
 
 
 @pytest.mark.anyio
 async def test_endpoint_and_asgi_reject_before_creating_runs_when_request_buffer_is_full(
-    isolated_services: ApiServices,
+    async_services: ApiServices,
 ) -> None:
     for kind in (DeploymentKind.Endpoint, DeploymentKind.Asgi):
-        deployment = isolated_services.deployments.deploy(
+        deployment = async_services.deployments.deploy(
             DeploymentSpec(
                 name=f"busy-{kind.value}",
                 kind=kind,
                 handler="module:handler",
             )
         )
-        stub = _stub_for_deployment(isolated_services, deployment.id)
+        stub = _stub_for_deployment(async_services, deployment.id)
         _set_endpoint_dispatch_limits(
-            isolated_services,
+            async_services,
             stub,
             timeout_seconds=1,
             max_pending=1,
         )
-        existing = _record_active_dispatch(isolated_services, stub)
-        task_ids_before = {task.id for task in isolated_services.tasks.list()}
+        existing = _record_active_dispatch(async_services, stub)
+        task_ids_before = {task.id for task in async_services.tasks.list()}
 
         response = await _endpoint_service(
-            isolated_services,
+            async_services,
             _EndpointContainers(),
         ).forward_endpoint_request(
             EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
@@ -449,9 +445,9 @@ async def test_endpoint_and_asgi_reject_before_creating_runs_when_request_buffer
 
         assert response.status_code == 429
         assert response.headers.get("X-Task-Id") is None
-        assert {task.id for task in isolated_services.tasks.list()} == task_ids_before
+        assert {task.id for task in async_services.tasks.list()} == task_ids_before
         assert (
-            _dispatch_record(isolated_services, existing).status
+            _dispatch_record(async_services, existing).status
             is EndpointDispatchStatus.WaitingCapacity
         )
         assert (
@@ -463,40 +459,38 @@ async def test_endpoint_and_asgi_reject_before_creating_runs_when_request_buffer
             )
             == 1
         )
-    await isolated_services.require_async_io().close()
 
 
 @pytest.mark.anyio
 async def test_asgi_websocket_rejects_before_creating_run_when_request_buffer_is_full(
-    isolated_services: ApiServices,
+    async_services: ApiServices,
 ) -> None:
-    deployment = isolated_services.deployments.deploy(
+    deployment = async_services.deployments.deploy(
         DeploymentSpec(
             name="busy-websocket",
             kind=DeploymentKind.Asgi,
             handler="module:handler",
         )
     )
-    stub = _stub_for_deployment(isolated_services, deployment.id)
-    _set_endpoint_dispatch_limits(isolated_services, stub, timeout_seconds=1, max_pending=1)
-    existing = _record_active_dispatch(isolated_services, stub)
-    task_ids_before = {task.id for task in isolated_services.tasks.list()}
+    stub = _stub_for_deployment(async_services, deployment.id)
+    _set_endpoint_dispatch_limits(async_services, stub, timeout_seconds=1, max_pending=1)
+    existing = _record_active_dispatch(async_services, stub)
+    task_ids_before = {task.id for task in async_services.tasks.list()}
 
     with pytest.raises(
         EndpointWebSocketDispatchRejected,
         match="endpoint request buffer is full",
     ) as exc_info:
         await _endpoint_service(
-            isolated_services,
+            async_services,
             _EndpointContainers(),
         ).prepare_asgi_websocket(EndpointForwardRequest(stub_id=stub.id, method="GET", path="/ws"))
 
     assert exc_info.value.status_code == 429
     assert exc_info.value.task_id == ""
-    assert {task.id for task in isolated_services.tasks.list()} == task_ids_before
+    assert {task.id for task in async_services.tasks.list()} == task_ids_before
     assert (
-        _dispatch_record(isolated_services, existing).status
-        is EndpointDispatchStatus.WaitingCapacity
+        _dispatch_record(async_services, existing).status is EndpointDispatchStatus.WaitingCapacity
     )
     assert (
         metric_value(
@@ -507,16 +501,15 @@ async def test_asgi_websocket_rejects_before_creating_run_when_request_buffer_is
         )
         == 1
     )
-    await isolated_services.require_async_io().close()
 
 
 @pytest.mark.anyio
 async def test_endpoint_service_ignores_stale_dispatch_records_for_backpressure(
-    isolated_services: ApiServices,
+    async_services: ApiServices,
     real_redis_actors: RealRedisActors,
 ) -> None:
     services = services_with_redis_container_control(
-        isolated_services,
+        async_services,
         real_redis_actors.client(),
     )
     deployment = services.deployments.deploy(
@@ -554,16 +547,15 @@ async def test_endpoint_service_ignores_stale_dispatch_records_for_backpressure(
     assert response.status_code == 504
     newest_task = services.tasks.list()[0]
     assert _dispatch_record(services, newest_task).status is EndpointDispatchStatus.Timeout
-    await services.require_async_io().close()
 
 
 @pytest.mark.anyio
 async def test_endpoint_service_cancelled_request_stops_waiting_for_capacity(
-    isolated_services: ApiServices,
+    async_services: ApiServices,
     real_redis_actors: RealRedisActors,
 ) -> None:
     services = services_with_redis_container_control(
-        isolated_services,
+        async_services,
         real_redis_actors.client(),
     )
     deployment = services.deployments.deploy(
@@ -593,7 +585,6 @@ async def test_endpoint_service_cancelled_request_stops_waiting_for_capacity(
     cancelled = services.tasks.get(task.id)
     assert cancelled.status is TaskStatus.Cancelled
     assert _dispatch_record(services, cancelled).status is EndpointDispatchStatus.Cancelled
-    await services.require_async_io().close()
 
 
 def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecord:
@@ -604,11 +595,6 @@ def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecor
     ]
     assert len(matches) == 1
     return matches[0]
-
-
-def _json_object(value: JsonValue) -> dict[str, JsonValue]:
-    assert isinstance(value, dict)
-    return value
 
 
 def _dispatch_record(services: ApiServices, task: Task) -> EndpointDispatchRecord:
@@ -712,55 +698,19 @@ def _set_endpoint_dispatch_limits(
     )
 
 
-def _wait_until(
-    predicate: Callable[[], bool],
-    *,
-    timeout_seconds: float = 1.0,
-) -> None:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        if predicate():
-            return
-        time.sleep(0.01)
-    raise AssertionError("condition was not reached before timeout")
-
-
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class _ServedEndpoint:
-    server: ThreadingHTTPServer
-    thread: threading.Thread
-
-    @property
-    def address(self) -> str:
-        return f"127.0.0.1:{self.server.server_port}"
-
-    def __enter__(self) -> _ServedEndpoint:
-        self.thread.start()
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        _ = exc_type, exc, tb
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=2)
+    address: str
 
 
-def _serve_handler(handler_ref: str, *, stub_type: str, stub_id: str) -> _ServedEndpoint:
-    _ = stub_id
+@contextmanager
+def _serve_handler(handler_ref: str, *, stub_type: str) -> Iterator[_ServedEndpoint]:
     runner = EndpointServeRunner(
-        handler_ref=handler_ref,
-        stub_type=stub_type,
-        host="127.0.0.1",
-        port=0,
+        handler_ref=handler_ref, stub_type=stub_type, host="127.0.0.1", port=0
     )
     server = runner.create_server()
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    return _ServedEndpoint(server=server, thread=thread)
+    with running_http_server(server):
+        yield _ServedEndpoint(f"127.0.0.1:{server.server_port}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -825,15 +775,24 @@ def _endpoint_service(
 class _ServedASGI:
     server: uvicorn.Server
     thread: threading.Thread
+    listener: socket.socket
 
     @property
     def address(self) -> str:
-        return f"127.0.0.1:{self.server.config.port}"
+        return f"127.0.0.1:{self.listener.getsockname()[1]}"
 
     def __enter__(self) -> _ServedASGI:
         self.thread.start()
-        _wait_until(lambda: self.server.started, timeout_seconds=2)
-        return self
+        for _ in range(200):
+            if self.server.started:
+                return self
+            if not self.thread.is_alive():
+                break
+            time.sleep(0.01)
+        self.server.should_exit = True
+        self.thread.join(timeout=2)
+        self.listener.close()
+        raise AssertionError("ASGI server did not finish startup")
 
     def __exit__(
         self,
@@ -844,10 +803,15 @@ class _ServedASGI:
         _ = exc_type, exc, tb
         self.server.should_exit = True
         self.thread.join(timeout=2)
+        self.listener.close()
+        assert not self.thread.is_alive(), "ASGI server did not stop"
 
 
 def _serve_asgi_handler(handler_ref: str) -> _ServedASGI:
-    port = _available_loopback_port()
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(128)
+    port = listener.getsockname()[1]
     runner = EndpointServeRunner(
         handler_ref=handler_ref,
         stub_type=DeploymentKind.Asgi.value,
@@ -864,7 +828,8 @@ def _serve_asgi_handler(handler_ref: str) -> _ServedASGI:
     )
     return _ServedASGI(
         server=server,
-        thread=threading.Thread(target=server.run, daemon=True),
+        thread=threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True),
+        listener=listener,
     )
 
 
@@ -964,67 +929,6 @@ class _RetryingEndpointDispatcher(AsyncEndpointInstanceDispatcher):
 
 
 @dataclass
-class _WebSocketEchoBackend:
-    paths: list[str] = field(default_factory=list)
-    task_headers: list[str] = field(default_factory=list)
-    _thread: threading.Thread | None = field(default=None, init=False)
-    _loop: asyncio.AbstractEventLoop | None = field(default=None, init=False)
-    _stop: asyncio.Event | None = field(default=None, init=False)
-    _ready: threading.Event = field(default_factory=threading.Event, init=False)
-    _port: int = field(default=0, init=False)
-
-    @property
-    def address(self) -> str:
-        return f"127.0.0.1:{self._port}"
-
-    def __enter__(self) -> _WebSocketEchoBackend:
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        if not self._ready.wait(timeout=2):
-            raise AssertionError("websocket backend did not start")
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        _ = exc_type, exc, tb
-        if self._loop is not None and self._stop is not None:
-            self._loop.call_soon_threadsafe(self._stop.set)
-        if self._thread is not None:
-            self._thread.join(timeout=2)
-
-    def _run(self) -> None:
-        asyncio.run(self._serve())
-
-    async def _serve(self) -> None:
-        self._loop = asyncio.get_running_loop()
-        self._stop = asyncio.Event()
-        self._port = _available_loopback_port()
-        async with websockets.asyncio.server.serve(
-            self._handler,
-            "127.0.0.1",
-            self._port,
-        ):
-            self._ready.set()
-            await self._stop.wait()
-
-    async def _handler(self, connection: ServerConnection) -> None:
-        request = connection.request
-        assert request is not None
-        self.paths.append(request.path)
-        self.task_headers.append(request.headers.get("x-task-id", ""))
-        async for message in connection:
-            if isinstance(message, str):
-                await connection.send(f"echo:{message}:{request.headers.get('x-task-id', '')}")
-            else:
-                await connection.send(b"echo:" + bytes(message))
-                await connection.close()
-
-
-@dataclass
 class _RecordingScheduler:
     requests: list[SchedulerWorkerRequest] = field(default_factory=list)
 
@@ -1040,14 +944,6 @@ class _RecordingScheduler:
             status=SchedulerContainerSubmitStatus.Queued,
             container_id=request.container_id,
         )
-
-
-def _available_loopback_port() -> int:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
-    try:
-        return server.server_port
-    finally:
-        server.server_close()
 
 
 def _auth_headers(
