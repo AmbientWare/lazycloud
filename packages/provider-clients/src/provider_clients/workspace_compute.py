@@ -208,7 +208,6 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
             external_id=SecretStr(connection.external_id),
             node_role_arn=connection.node_role_arn or "",
             node_instance_profile_arn=connection.node_instance_profile_arn or "",
-            network=connection.network,
         )
         provider_ref = _provider_ref(connection.id)
         return ResolvedComputeProvider(
@@ -219,9 +218,13 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
                 **PROVIDER_DEFINITIONS["aws"]
                 .policy.model_copy(
                     update={
-                        "allowed_offers": PROVIDER_DEFINITIONS["aws"].policy.allowed_offers
-                        if _connection_ready(connection)
-                        else ()
+                        "allowed_offers": tuple(
+                            offer
+                            for offer in PROVIDER_DEFINITIONS["aws"].policy.allowed_offers
+                            if _connection_ready(connection)
+                            and offer.region in connection.networks
+                            and offer.region in self.binaries_by_region
+                        )
                     }
                 )
                 .model_dump(),
@@ -232,6 +235,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
             pooled=AwsConnectedAccountPooledProvider(
                 provider_ref=provider_ref,
                 connection=target,
+                networks=connection.networks,
                 binaries_by_region=self.binaries_by_region,
                 regional_prices=self.regional_prices,
                 client_provider=self.client_provider,

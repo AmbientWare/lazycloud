@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -30,6 +30,7 @@ def _bounded_authorization_error_message(value: object) -> object:
 _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 _OPERATION_ID_PATTERN = r"^[A-Za-z][-A-Za-z0-9]{0,127}$"
 AWS_REGION_PATTERN = r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$"
+AwsRegion = Annotated[str, Field(pattern=AWS_REGION_PATTERN)]
 
 
 def _matches_aws_region(region: str) -> bool:
@@ -254,14 +255,8 @@ class AwsAccountConnection(ContractModel):
         default=None,
         pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:instance-profile/[A-Za-z0-9+=,.@_/-]{1,512}$",
     )
-    network: AwsAccountNetwork | None = None
-    """Where this account's managed pools launch, once the network is known.
-
-    Absent until an authorization is validated: a managed-stack connection has no
-    network before its stack reports outputs, and an existing-role connection has
-    none before the operator supplies one. A pool requested against a connection
-    without it is refused rather than launched somewhere chosen by default.
-    """
+    networks: dict[AwsRegion, AwsAccountNetwork] = Field(default_factory=dict)
+    """Configured regional networks. Managed stacks populate their own region."""
     drain_total_pools: int = Field(default=0, ge=0)
     drain_remaining_pools: int = Field(default=0, ge=0)
     customer_action_url: str | None = Field(default=None, pattern=r"^https://[^\s]+$")
@@ -506,12 +501,7 @@ class AwsAccountAuthorizationPlan(ContractModel):
     node_instance_profile_arn: str = Field(
         pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:instance-profile/[A-Za-z0-9+=,.@_/-]{1,512}$"
     )
-    network: AwsAccountNetwork | None = None
-    """Known at plan time only for an existing role, where the operator supplies it.
-
-    A managed stack has not been deployed yet at this point, so its network
-    arrives later, when validation reads the stack outputs.
-    """
+    networks: dict[AwsRegion, AwsAccountNetwork] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_authorization(self) -> AwsAccountAuthorizationPlan:
@@ -535,7 +525,7 @@ class AwsAccountValidationResult(ContractModel):
     node_instance_profile_arn: str = Field(
         pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:instance-profile/[A-Za-z0-9+=,.@_/-]{1,512}$"
     )
-    network: AwsAccountNetwork | None = None
+    networks: dict[AwsRegion, AwsAccountNetwork] = Field(default_factory=dict)
     validated_at: datetime
 
 
@@ -557,6 +547,7 @@ __all__ = [
     "AwsAuthorizationCleanupTombstone",
     "AwsConnectionStackAction",
     "AwsManagedAuthorizationReference",
+    "AwsRegion",
     "AwsStackCreateRequest",
     "AwsStackParameter",
 ]

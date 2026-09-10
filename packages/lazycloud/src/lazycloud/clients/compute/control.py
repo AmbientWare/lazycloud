@@ -81,14 +81,14 @@ class ComputeClient:
         account_id: str,
         pool: str = AWS_CONNECTED_MACHINE_POOL,
         role_arn: str | None = None,
-        network: AwsAccountNetwork | None = None,
+        networks: dict[str, AwsAccountNetwork] | None = None,
         external_id: str | None = None,
     ) -> AwsConnectionAuthorizationResponse:
         request = AwsConnectionCreateRequest(
             account_id=account_id,
             pool=MachinePool(pool),
             role_arn=role_arn,
-            network=network,
+            networks=networks if networks is not None else {},
             external_id=external_id,
         )
         return AwsConnectionAuthorizationResponse.model_validate(

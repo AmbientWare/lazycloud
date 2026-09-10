@@ -183,6 +183,23 @@ Resources:
                   StringEquals:
                     ec2:ResourceTag/cloud-pool:managed-by: control-plane
 
+  RegionalBakeInventoryPolicy:
+    Type: AWS::IAM::Policy
+    Condition: GitHubPublisherConfigured
+    Properties:
+      PolicyName: inspect-regional-image-bakes
+      Roles: [!Ref GitHubReleaseRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - ec2:DescribeSubnets
+              - ec2:DescribeRouteTables
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeSnapshots
+            Resource: "*"
+
 Outputs:
   ContainerWorkerRepositoryName:
     Value: !Ref ContainerWorkerRepository

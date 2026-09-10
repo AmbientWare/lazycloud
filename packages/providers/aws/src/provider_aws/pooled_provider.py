@@ -19,6 +19,7 @@ from compute.providers import (
     ProviderUnitSnapshot,
 )
 from pydantic import ValidationError
+from shared.aws_connections import AwsAccountNetwork
 from shared.compute_policy import (
     ComputeUnitProviderState,
     ComputeUnitRecord,
@@ -60,6 +61,7 @@ _PHASES = {
 class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     provider_ref: str
     connection: AwsAccountConnectionTarget
+    networks: Mapping[str, AwsAccountNetwork]
     binaries_by_region: Mapping[str, AwsManagedPoolBinaries]
     client_provider: AwsManagedPoolClientProvider
     regional_prices: Mapping[str, AwsRegionalPrices] = field(
@@ -69,12 +71,8 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     def unbilled_network_destinations(
         self, unit: ComputeUnitRecord, provider_instance_id: str
     ) -> NetworkEgressRouteEvidence:
-        network = self.connection.network
-        if network is None:
-            raise ValueError("AWS network evidence requires a configured network")
-        clients = self.client_provider.assume(
-            self.connection.model_copy(update={"region": unit.region})
-        )
+        network = self._network(unit.region)
+        clients = self.client_provider.assume(self._target(unit.region))
         return same_region_storage_destinations(
             clients.ec2,
             region=unit.region,
@@ -104,6 +102,8 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
     def list_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
         offers: list[ComputeOffer] = []
         for region, artifacts in sorted(self.binaries_by_region.items()):
+            if region not in self.networks:
+                continue
             regional_prices = self.regional_prices.get(region)
             instances: list[AwsInstanceCatalogEntry] = []
             on_demand: list[ComputeOffer] = []
@@ -134,12 +134,8 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
                             regional_prices=regional_prices,
                         )
                     )
-            network = self.connection.network
-            if network is None:
-                raise ValueError("AWS account connection has no network for managed pools")
-            clients = self.client_provider.assume(
-                self.connection.model_copy(update={"region": region})
-            )
+            network = self._network(region)
+            clients = self.client_provider.assume(self._target(region))
             market = load_aws_spot_quotes(
                 clients.ec2,
                 network=network,
@@ -327,8 +323,19 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         return _snapshot(snapshot, details=details)
 
     def _provisioner(self, region: str) -> AwsManagedPoolProvisioner:
-        target = self.connection.model_copy(update={"region": region})
+        target = self._target(region)
         return AwsManagedPoolProvisioner.assume(target, client_provider=self.client_provider)
+
+    def _network(self, region: str) -> AwsAccountNetwork:
+        network = self.networks.get(region)
+        if network is None:
+            raise ValueError(f"AWS managed pool network is not configured for {region!r}")
+        return network
+
+    def _target(self, region: str) -> AwsAccountConnectionTarget:
+        return self.connection.model_copy(
+            update={"region": region, "network": self._network(region)}
+        )
 
     def _spec(self, request: ProviderUnitRequest) -> AwsManagedPoolSpec:
         artifacts = self.binaries_by_region.get(request.offer.region)
@@ -339,9 +346,7 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         ami_id = artifacts.gpu_ami_id if request.offer.gpu_count > 0 else artifacts.cpu_ami_id
         if ami_id is None:
             raise ValueError(f"AWS managed pool AMI is not configured for {request.offer.region!r}")
-        network = self.connection.network
-        if network is None:
-            raise ValueError("AWS account connection has no network for managed pools")
+        network = self._network(request.offer.region)
         return AwsManagedPoolSpec(
             workspace_id=request.workspace_id,
             unit_name=request.unit_name,

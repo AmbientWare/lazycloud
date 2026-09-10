@@ -15,9 +15,14 @@
     "aws": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["region"],
+      "required": [
+        "region"
+      ],
       "properties": {
-        "region": {"type": "string", "minLength": 1}
+        "region": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "controlPlane": {
@@ -222,9 +227,7 @@
       "required": [
         "account_id",
         "role_arn",
-        "vpc_id",
-        "subnet_ids",
-        "security_group_id"
+        "networks"
       ],
       "properties": {
         "account_id": {
@@ -235,22 +238,40 @@
           "type": "string",
           "minLength": 1
         },
-        "vpc_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "subnet_ids": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "minLength": 1
+        "networks": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$"
           },
-          "minItems": 2
-        },
-        "security_group_id": {
-          "type": "string",
-          "minLength": 1
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "vpc_id",
+              "subnet_ids",
+              "security_group_id"
+            ],
+            "properties": {
+              "vpc_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "subnet_ids": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 2
+              },
+              "security_group_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
         }
       }
     },
