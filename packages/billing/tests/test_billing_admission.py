@@ -16,7 +16,7 @@ from database.tables.storage import VolumeTable
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
-from shared.billing_rate_card import FREE_PLAN_GPU_TYPES
+from shared.billing_rate_card import NO_CARD_GPU_TYPES
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.custom_domains import CustomDomain
 from shared.errors import CapacityLimitReachedError, ConflictError, PaymentRequiredError
@@ -250,23 +250,28 @@ def _container_count(services: ApiServices, workspace_id: str) -> int:
         )
 
 
-def test_a_free_plan_gpu_request_is_held_to_the_models_the_plan_offers(
+def test_a_free_account_unlocks_all_gpu_models_with_a_saved_card(
     isolated_services: ApiServices,
 ) -> None:
-    """A card the plan does not sell is refused; `any` narrows to the ones it does.
-
-    The narrowing is the half that would otherwise be silent. A wildcard passed
-    through reaches the scheduler as "whatever is going", and the first offer
-    taken would be the hardware this account may not hold, so the plan has to
-    answer with its own models rather than only with yes.
-    """
-
     workspace_id = _carded_free_account(isolated_services)
+    user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
     admission = DatabaseBillingAdmission()
+
+    with isolated_services.context.database.session() as session:
+        assert admission.admit_container_start(
+            session, workspace_id=workspace_id, gpu=["H100"], gpu_count=1
+        ) == ["H100"]
+        assert admission.admit_container_start(
+            session, workspace_id=workspace_id, gpu=[GPU_ANY], gpu_count=1
+        ) == [model.value for model in SUPPORTED_GPU_TYPES]
+        BillingAccountRepository(session).set_payment_method_present(
+            user_id=user_id, present=False, at=utc_now()
+        )
+        session.commit()
 
     with (
         isolated_services.context.database.session() as session,
-        pytest.raises(PaymentRequiredError, match=r"H100.*Team plan"),
+        pytest.raises(PaymentRequiredError, match=r"add a payment method to use H100"),
     ):
         admission.admit_container_start(
             session,
@@ -281,7 +286,7 @@ def test_a_free_plan_gpu_request_is_held_to_the_models_the_plan_offers(
             workspace_id=workspace_id,
             gpu=[GPU_ANY],
             gpu_count=1,
-        ) == [model.value for model in SUPPORTED_GPU_TYPES if model in FREE_PLAN_GPU_TYPES]
+        ) == [model.value for model in SUPPORTED_GPU_TYPES if model in NO_CARD_GPU_TYPES]
 
 
 def test_the_gpu_limit_counts_cards_and_leaves_the_cpu_pool_alone(
@@ -353,16 +358,9 @@ def test_the_first_workspace_needs_no_account_and_the_second_needs_the_plan(
         admission.assert_may_create_workspace(session, owner_user_id=owner_user_id)
 
 
-def test_a_plan_change_names_the_gpu_model_the_target_plan_does_not_offer(
+def test_a_plan_change_requires_a_card_for_running_advanced_gpus(
     isolated_services: ApiServices,
 ) -> None:
-    """Moving down while holding hardware the smaller plan does not sell.
-
-    The model is what the customer has to act on, so it is what the refusal
-    says: told only that they are over a limit, there is nothing for them to
-    stop.
-    """
-
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
     user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
@@ -388,6 +386,14 @@ def test_a_plan_change_names_the_gpu_model_the_target_plan_does_not_offer(
             session,
             user_id=user_id,
             target=BillingPlanId.Free,
+        )
+
+    with isolated_services.context.database.session() as session:
+        BillingAccountRepository(session).set_payment_method_present(
+            user_id=user_id, present=True, at=utc_now()
+        )
+        DatabaseBillingAdmission().assert_plan_change_fits(
+            session, user_id=user_id, target=BillingPlanId.Free
         )
 
 

@@ -3,11 +3,22 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import httpx
+import pytest
 from provider_stripe import API_BASE_URL, StripeBilling
-from shared.billing_plans import BillingPlanId
+from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 
 
-def test_paid_plan_proof_uses_paginated_subscription_lines_including_paid_proration() -> None:
+@pytest.mark.parametrize(
+    ("lookup_key", "amount_cents", "version"),
+    [
+        ("lazycloud_plan_team_monthly_usd", 10000, SubscriptionTermsVersion.TeamLegacy),
+        ("lazycloud_plan_team_v2_monthly_usd", 4900, SubscriptionTermsVersion.TeamV2),
+        ("lazycloud_plan_team_v3_monthly_usd", 4900, SubscriptionTermsVersion.Team),
+    ],
+)
+def test_paid_plan_proof_uses_paginated_subscription_lines_including_paid_proration(
+    lookup_key: str, amount_cents: int, version: SubscriptionTermsVersion
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/subscriptions/sub_current"):
             return httpx.Response(
@@ -23,9 +34,9 @@ def test_paid_plan_proof_uses_paginated_subscription_lines_including_paid_prorat
                                 "price": {
                                     "id": "price_plan_old",
                                     "product": "lazycloud_plan_team",
-                                    "lookup_key": "lazycloud_plan_team_monthly_usd",
+                                    "lookup_key": lookup_key,
                                     "currency": "usd",
-                                    "unit_amount": 10000,
+                                    "unit_amount": amount_cents,
                                     "recurring": {
                                         "interval": "month",
                                         "interval_count": 1,
@@ -75,9 +86,9 @@ def test_paid_plan_proof_uses_paginated_subscription_lines_including_paid_prorat
                                     "price": {
                                         "id": "price_plan_old",
                                         "product": "lazycloud_plan_team",
-                                        "lookup_key": "lazycloud_plan_team_monthly_usd",
+                                        "lookup_key": lookup_key,
                                         "currency": "usd",
-                                        "unit_amount": 10000,
+                                        "unit_amount": amount_cents,
                                         "recurring": {
                                             "interval": "month",
                                             "interval_count": 1,
@@ -113,6 +124,7 @@ def test_paid_plan_proof_uses_paginated_subscription_lines_including_paid_prorat
     assert len(periods) == 1
     assert periods[0].provider_invoice_line_id == "il_upgrade"
     assert periods[0].plan is BillingPlanId.Team
+    assert periods[0].terms_version is version
     assert periods[0].prorated
     assert periods[0].amount_nanos == periods[0].invoice_paid_nanos == 29_000_000_000
     assert periods[0].period_started_at == datetime(2026, 9, 2, tzinfo=UTC)

@@ -89,9 +89,19 @@ def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
         assert session.scalar(select(func.count()).select_from(BillingMeterOutboxTable)) == 0
 
 
+@pytest.mark.parametrize(
+    ("paid_version", "paid_amount", "included_amount"),
+    [
+        (SubscriptionTermsVersion.BusinessV1, 249_000_000_000, 50_000_000_000),
+        (SubscriptionTermsVersion.Business, 199_000_000_000, 100_000_000_000),
+    ],
+)
 def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_proration_terms(
     service_context: ServiceContext,
     monkeypatch: pytest.MonkeyPatch,
+    paid_version: SubscriptionTermsVersion,
+    paid_amount: int,
+    included_amount: int,
 ) -> None:
     start = datetime(2027, 1, 1, tzinfo=UTC)
     end = start + timedelta(days=30)
@@ -143,12 +153,12 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
         provider_invoice_line_id="il_missing_renewal",
         provider_subscription_id=account.provider_subscription_id,
         plan=BillingPlanId.Business,
-        terms_version=SubscriptionTermsVersion.Business,
+        terms_version=paid_version,
         period_started_at=start,
         period_ended_at=end,
         prorated=True,
-        amount_nanos=249_000_000_000,
-        invoice_paid_nanos=249_000_000_000,
+        amount_nanos=paid_amount,
+        invoice_paid_nanos=paid_amount,
         paid_at=now,
     )
 
@@ -185,7 +195,7 @@ def test_paid_renewal_recovers_a_missing_expired_period_without_inventing_prorat
             ).one()
             assert lot.expires_at is not None
             assert (to_utc(lot.effective_at), to_utc(lot.expires_at)) == (start, end)
-            assert lot.amount_nanos == 50_000_000_000
+            assert lot.amount_nanos == included_amount
             settlement = session.get(BillingCreditSettlementTable, record.id)
             assert settlement is not None
             assert (settlement.credited_nanos, settlement.payable_nanos) == (10, 10)
@@ -338,7 +348,7 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
                 )
             ).all()
             assert len(lots) == 1
-            assert lots[0].amount_nanos == 50_000_000_000 // (30 * 24 * 60)
+            assert lots[0].amount_nanos == 100_000_000_000 // (30 * 24 * 60)
             period = BillingAllowanceRepository(session).current_period(user_id=user_id, at=start)
             assert period is not None and period.allowance_nanos == lots[0].amount_nanos
 
@@ -357,8 +367,8 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
                     "period_started_at": start,
                     "period_ended_at": end,
                     "prorated": False,
-                    "amount_nanos": 249_000_000_000,
-                    "invoice_paid_nanos": 249_000_000_000,
+                    "amount_nanos": 199_000_000_000,
+                    "invoice_paid_nanos": 199_000_000_000,
                     "paid_at": start,
                 }
             ),
@@ -378,7 +388,7 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
                     user_id=user_id,
                     period_ended_at=end,
                 )
-                == 50_000_000_000
+                == 100_000_000_000
             )
 
         start, end = end, end + timedelta(days=30)
@@ -410,8 +420,8 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
                     "period_started_at": middle,
                     "period_ended_at": end,
                     "paid_at": middle,
-                    "amount_nanos": 124_500_000_000,
-                    "invoice_paid_nanos": 74_500_000_000,
+                    "amount_nanos": 99_500_000_000,
+                    "invoice_paid_nanos": 49_500_000_000,
                     "prorated": True,
                 }
             ),
@@ -425,7 +435,7 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
                     "period_ended_at": end,
                     "paid_at": middle,
                     "amount_nanos": -50_000_000_000,
-                    "invoice_paid_nanos": 74_500_000_000,
+                    "invoice_paid_nanos": 49_500_000_000,
                     "prorated": True,
                 }
             ),
@@ -456,7 +466,7 @@ def test_paid_proration_funds_only_covered_credit_and_preserves_legacy_lots(
                     BillingCreditLotTable.expires_at == end,
                 )
             ).all()
-            assert {row[0] for row in lots} == {30_000_000_000, 10_000_000_000}
+            assert {row[0] for row in lots} == {30_000_000_000, 35_000_000_000}
 
 
 def test_credit_expiry_and_start_split_a_frozen_charge_and_preserve_purchased_funds(

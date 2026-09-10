@@ -256,6 +256,7 @@ function pricingCatalog(): PricingCatalog {
     no_payment_method: {
       max_concurrent_cpu_containers: 10,
       max_concurrent_gpus: 1,
+      gpu_types: ["T4", "L4", "A10G"],
     },
     plans: [
       {

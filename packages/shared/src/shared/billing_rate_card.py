@@ -25,7 +25,7 @@ FREE_PLAN_MAX_CPU_CONTAINERS = 30
 FREE_PLAN_MAX_GPUS = 5
 """Count cards across the account separately from CPU containers."""
 
-FREE_PLAN_GPU_TYPES: frozenset[GpuType] = frozenset({GpuType.T4, GpuType.L4, GpuType.A10G})
+NO_CARD_GPU_TYPES: frozenset[GpuType] = frozenset({GpuType.T4, GpuType.L4, GpuType.A10G})
 
 FREE_PLAN_MAX_WORKSPACES = 1
 FREE_PLAN_MAX_MEMBERS = 1
@@ -49,9 +49,9 @@ NO_CARD_MAX_GPUS = 1
 TEAM_PLAN_MONTHLY_NANOS = 49 * NANOS_PER_USD
 """The subscription, charged by the payment provider as a flat monthly price."""
 
-TEAM_PLAN_INCLUDED_NANOS = 10 * NANOS_PER_USD
-BUSINESS_PLAN_MONTHLY_NANOS = 249 * NANOS_PER_USD
-BUSINESS_PLAN_INCLUDED_NANOS = 50 * NANOS_PER_USD
+TEAM_PLAN_INCLUDED_NANOS = 25 * NANOS_PER_USD
+BUSINESS_PLAN_MONTHLY_NANOS = 199 * NANOS_PER_USD
+BUSINESS_PLAN_INCLUDED_NANOS = 100 * NANOS_PER_USD
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +80,18 @@ SUBSCRIPTION_TERMS: tuple[SubscriptionTerms, ...] = (
         BillingPlanId.Free,
         FREE_PLAN_MONTHLY_NANOS,
         FREE_PLAN_INCLUDED_NANOS,
+    ),
+    SubscriptionTerms(
+        SubscriptionTermsVersion.TeamV2,
+        BillingPlanId.Team,
+        49 * NANOS_PER_USD,
+        10 * NANOS_PER_USD,
+    ),
+    SubscriptionTerms(
+        SubscriptionTermsVersion.BusinessV1,
+        BillingPlanId.Business,
+        249 * NANOS_PER_USD,
+        50 * NANOS_PER_USD,
     ),
     SubscriptionTerms(
         SubscriptionTermsVersion.Team,
@@ -346,7 +358,7 @@ class AccountTerms:
 
 
 def account_terms(plan: BillingPlanId, *, has_payment_method: bool) -> AccountTerms:
-    """A saved card affects concurrency, never evidence that credits were funded."""
+    """A saved card expands resource access but does not fund credits."""
 
     published = published_plan(plan)
     if not has_payment_method:
@@ -356,6 +368,7 @@ def account_terms(plan: BillingPlanId, *, has_payment_method: bool) -> AccountTe
                 published.entitlements,
                 max_concurrent_cpu_containers=NO_CARD_MAX_CPU_CONTAINERS,
                 max_concurrent_gpus=NO_CARD_MAX_GPUS,
+                gpu_types=NO_CARD_GPU_TYPES,
             ),
         )
     return AccountTerms(
@@ -460,7 +473,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
         entitlements=PlanEntitlements(
             max_concurrent_cpu_containers=FREE_PLAN_MAX_CPU_CONTAINERS,
             max_concurrent_gpus=FREE_PLAN_MAX_GPUS,
-            gpu_types=FREE_PLAN_GPU_TYPES,
+            gpu_types="all",
             max_workspaces=FREE_PLAN_MAX_WORKSPACES,
             max_members=FREE_PLAN_MAX_MEMBERS,
             connected_cloud=False,
@@ -776,7 +789,6 @@ __all__ = [
     "BUSINESS_PLAN_INCLUDED_NANOS",
     "BUSINESS_PLAN_MONTHLY_NANOS",
     "CONNECTED_CLOUD_MANAGEMENT_FEE",
-    "FREE_PLAN_GPU_TYPES",
     "FREE_PLAN_INCLUDED_NANOS",
     "FREE_PLAN_MAX_CPU_CONTAINERS",
     "FREE_PLAN_MAX_GPUS",
@@ -785,6 +797,7 @@ __all__ = [
     "FREE_PLAN_MONTHLY_NANOS",
     "METERED_RATES_EFFECTIVE_AT",
     "METERED_RATE_VERSION",
+    "NO_CARD_GPU_TYPES",
     "NO_CARD_MAX_CPU_CONTAINERS",
     "NO_CARD_MAX_GPUS",
     "ONE_TIME_TRIAL_NANOS",

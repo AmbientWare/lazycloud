@@ -126,11 +126,9 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
   ];
 }
 
-/* The one account-wide fact a reader needs before choosing a plan: what they get
-   before they have paid for anything. The rest is disclosure, not pricing. */
 function accountTerm(catalog: PricingCatalog): string {
   const terms = catalog.no_payment_method;
-  return `New accounts receive a one-time ${formatCostNanos(catalog.trial.amount_nanos)} usage credit, valid for ${catalog.trial.duration_days} days. Without a saved card, you can run ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} at once and ${countLabel(terms.max_concurrent_gpus, "GPU card")}. Further usage needs prepaid credit.`;
+  return `New accounts get ${formatCostNanos(catalog.trial.amount_nanos)} in one-time trial credit, valid for ${catalog.trial.duration_days} days. Without a saved card, the limit is ${countLabel(terms.max_concurrent_cpu_containers, "CPU container")} and ${countLabel(terms.max_concurrent_gpus, "GPU card")} at once, using ${gpuModelsLabel(terms.gpu_types)}. Add a card and credit to use all offered GPU models on any plan, subject to availability. Monthly plan credit expires at the end of the billing period. Purchased credit never expires.`;
 }
 
 const sectionTitle =
