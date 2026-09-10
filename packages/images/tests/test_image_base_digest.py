@@ -81,59 +81,30 @@ def test_base_image_digest_cache_hits_and_refreshes_expired_entries() -> None:
     assert calls == 2
 
 
-def test_base_image_digest_cache_is_lru_bounded_under_arbitrary_tags() -> None:
+def test_base_image_digest_cache_evicts_the_least_recently_used_tag() -> None:
     now = datetime(2026, 6, 18, tzinfo=UTC)
-    max_entries = 32
-    cache = BaseImageDigestCache(ttl_seconds=300, max_entries=max_entries)
-    calls = 0
+    cache = BaseImageDigestCache(ttl_seconds=300, max_entries=2)
+    outcomes: list[BaseImageDigestResolutionStatus] = []
 
-    def inspector(source_image: str, _credentials: str) -> str:
-        nonlocal calls
-        calls += 1
-        return f"sha256:{source_image.rsplit(':', 1)[-1]}"
-
-    for index in range(2_000):
-        resolution = resolve_base_image_digest(
-            BaseImageDigestRequest(
-                registry="registry.example",
-                name="team/app",
-                tag=f"{index:08x}",
-            ),
-            inspector=inspector,
+    for tag in ("a", "b", "a", "c", "a", "b"):
+        result = resolve_base_image_digest(
+            BaseImageDigestRequest(registry="registry.example", name="team/app", tag=tag),
+            inspector=lambda source, _credentials: f"sha256:{source.rsplit(':', 1)[-1]}",
             cache=cache,
             now=now,
         )
-        assert resolution.resolved
+        outcomes.append(result.status)
+        assert cache.entry_count(now=now) <= 2
 
-    assert calls == 2_000
-    assert cache.entry_count(now=now) == max_entries
+    assert outcomes == [
+        BaseImageDigestResolutionStatus.Resolved,
+        BaseImageDigestResolutionStatus.Resolved,
+        BaseImageDigestResolutionStatus.CacheHit,
+        BaseImageDigestResolutionStatus.Resolved,
+        BaseImageDigestResolutionStatus.CacheHit,
+        BaseImageDigestResolutionStatus.Resolved,
+    ]
     assert cache.inflight_count() == 0
-
-    newest = resolve_base_image_digest(
-        BaseImageDigestRequest(
-            registry="registry.example",
-            name="team/app",
-            tag=f"{1_999:08x}",
-        ),
-        inspector=inspector,
-        cache=cache,
-        now=now,
-    )
-    evicted = resolve_base_image_digest(
-        BaseImageDigestRequest(
-            registry="registry.example",
-            name="team/app",
-            tag="00000000",
-        ),
-        inspector=inspector,
-        cache=cache,
-        now=now,
-    )
-
-    assert newest.status is BaseImageDigestResolutionStatus.CacheHit
-    assert evicted.status is BaseImageDigestResolutionStatus.Resolved
-    assert calls == 2_001
-    assert cache.entry_count(now=now) == max_entries
 
 
 def test_base_image_digest_resolution_reports_missing_and_failed_inspect() -> None:

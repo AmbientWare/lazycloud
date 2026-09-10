@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
-from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubConfigUpdateValue, StubKind, StubRecord
 from coordination.redis_client import RedisClient
@@ -51,16 +49,6 @@ from shared.workload_keys import (
 from tests.metric_helpers import metric_value
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
-
-
-@pytest.fixture
-async def async_io(isolated_services: ApiServices) -> AsyncIterator[ApiAsyncIo]:
-    io = isolated_services.require_async_io()
-    await io.start()
-    try:
-        yield io
-    finally:
-        await io.close()
 
 
 def test_pod_autoscaler_scales_immediately_idle_deployment_to_zero(
@@ -355,25 +343,25 @@ def test_pod_autoscaler_scales_down_only_idle_deployment_containers(
 
 @pytest.mark.anyio
 async def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_stop(
-    isolated_services: ApiServices,
-    async_io: ApiAsyncIo,
+    async_services: ApiServices,
 ) -> None:
+    async_io = async_services.require_async_io()
     scheduler = _Scheduler()
-    isolated_services = replace(
-        isolated_services,
-        containers=replace(isolated_services.containers, scheduler=scheduler),
+    async_services = replace(
+        async_services,
+        containers=replace(async_services.containers, scheduler=scheduler),
     )
-    redis = isolated_services.redis_client
-    isolated_services = replace(
-        isolated_services,
+    redis = async_services.redis_client
+    async_services = replace(
+        async_services,
         containers=replace(
-            isolated_services.containers,
-            scheduler_cancellation=_scheduler_request_service(isolated_services, redis),
+            async_services.containers,
+            scheduler_cancellation=_scheduler_request_service(async_services, redis),
         ),
     )
-    stub = _create_pod_stub(isolated_services, keep_warm_seconds=2)
+    stub = _create_pod_stub(async_services, keep_warm_seconds=2)
     container = _record_container(
-        isolated_services,
+        async_services,
         stub,
         "00000000-0000-4000-8000-000000000405",
         created_at=utc_now() - timedelta(seconds=60),
@@ -381,7 +369,7 @@ async def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_st
     )
     connections = AsyncRedisPodProxyConnectionRepository(async_io.redis)
     service = PodControlService(
-        isolated_services,
+        async_services,
         redis=redis,
         pod_proxy_connections=connections,
     )
@@ -394,10 +382,8 @@ async def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_st
         container.id,
         keep_warm_seconds=stub.config.runtime.keep_warm,
     )
-    await asyncio.sleep(1.1)
-
     assert redis.ttl(lock_key) == -1
-    active = _pod_autoscaler(isolated_services, redis).reconcile()[0]
+    active = _pod_autoscaler(async_services, redis).reconcile()[0]
     assert active.signal_value == 1
     assert active.actions == []
 
@@ -411,30 +397,30 @@ async def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_st
     )
 
     assert 1 <= redis.ttl(lock_key) <= 2
-    idle_but_warm = _pod_autoscaler(isolated_services, redis).reconcile()[0]
+    idle_but_warm = _pod_autoscaler(async_services, redis).reconcile()[0]
     assert idle_but_warm.signal_value == 0
     assert idle_but_warm.desired_containers == 0
     assert idle_but_warm.actions == []
-    assert isolated_services.containers.get(container.id).status is ContainerStatus.Running
+    assert async_services.containers.get(container.id).status is ContainerStatus.Running
 
     redis.delete(lock_key)
-    cooled = _pod_autoscaler(isolated_services, redis).reconcile()[0]
+    cooled = _pod_autoscaler(async_services, redis).reconcile()[0]
     assert [action.container_id for action in cooled.actions] == [container.id]
-    assert isolated_services.containers.get(container.id).status is ContainerStatus.Stopped
+    assert async_services.containers.get(container.id).status is ContainerStatus.Stopped
 
 
 @pytest.mark.parametrize("keep_warm_seconds", [2, -1])
 @pytest.mark.anyio
 async def test_pod_proxy_finalization_is_idempotent_after_stub_deletion(
-    isolated_services: ApiServices,
-    async_io: ApiAsyncIo,
+    async_services: ApiServices,
     keep_warm_seconds: int,
 ) -> None:
-    redis = isolated_services.redis_client
-    stub = _create_pod_stub(isolated_services, keep_warm_seconds=keep_warm_seconds)
+    async_io = async_services.require_async_io()
+    redis = async_services.redis_client
+    stub = _create_pod_stub(async_services, keep_warm_seconds=keep_warm_seconds)
     connections = AsyncRedisPodProxyConnectionRepository(async_io.redis)
     service = PodControlService(
-        isolated_services,
+        async_services,
         redis=redis,
         pod_proxy_connections=connections,
     )
@@ -455,7 +441,7 @@ async def test_pod_proxy_finalization_is_idempotent_after_stub_deletion(
         keep_warm_seconds=stub.config.runtime.keep_warm,
     )
     assert redis.ttl(lock_key) == -1
-    with isolated_services.context.database.session() as database_session:
+    with async_services.context.database.session() as database_session:
         assert StubRepository(database_session).delete(
             stub.id,
             workspace_id=stub.workspace_id,

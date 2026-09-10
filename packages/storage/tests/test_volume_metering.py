@@ -4,11 +4,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.billing_rates import PlatformRateRepository
 from database.repositories.observability import UsageRepository
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.storage import VolumeTable
+from execution.volumes.records import VolumeService
 from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.billing_rate_card import PUBLISHED_METERED_RATE_HISTORY
 from shared.timestamps import utc_now
@@ -25,34 +26,31 @@ from storage.volume_metering import PersistentVolumeMeteringService
 
 from storage import volume_metering
 
-# Ten tebibytes held for an hour and a millisecond: past the range a binary float
-# holds every integer in, and not a figure one can represent at all. A window that
-# long is what a stalled metering loop leaves behind, and the volume is a size the
-# product places no cap below.
+# This quantity exceeds float integer precision and protects exact billing.
 _LARGE_SIZE_BYTES = 10 * 2**40
 _LARGE_WINDOW = timedelta(hours=1, milliseconds=1)
 _LARGE_BYTE_SECONDS = Decimal("39582429595052277.76")
 
 
 def test_volume_metering_records_byte_seconds_and_advances_checkpoint(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     started_at = datetime(2026, 1, 1, tzinfo=UTC)
     observed_at = started_at + _LARGE_WINDOW
     finished_at = observed_at + timedelta(seconds=5)
-    record = isolated_services.volumes.get_or_create("metered-data", admit=None)
+    record = VolumeService(service_context).get_or_create("metered-data", admit=None)
     workspace_id = _set_checkpoint(
-        isolated_services,
+        service_context,
         volume_name=record.name,
         size_bytes=_LARGE_SIZE_BYTES,
         metered_at=started_at,
     )
     payload = b"persistent-volume-payload"
-    filesystem = isolated_services.volume_filesystem
+    filesystem = LocalVolumeFilesystem(service_context.paths.root / "volumes")
     namespace = VolumeNamespace(workspace_id=workspace_id, volume_id=record.id)
     filesystem.ensure_volume(namespace)
     filesystem.write_path(namespace, "nested/payload.bin", (payload,))
-    metering = PersistentVolumeMeteringService(isolated_services.context, filesystem)
+    metering = PersistentVolumeMeteringService(service_context, filesystem)
 
     initial = metering.reconcile_volume(
         record.name,
@@ -80,7 +78,7 @@ def test_volume_metering_records_byte_seconds_and_advances_checkpoint(
     assert measured.usage_record.unit is UsageUnit.ByteSeconds
     assert measured.usage_record.metadata["previous_size_bytes"] == len(payload)
     assert duplicate is None
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         records = UsageRepository(session).list(workspace_id=workspace_id)
         checkpoint = session.scalars(
             select(VolumeTable).where(VolumeTable.name == record.name)
@@ -94,25 +92,25 @@ def test_volume_metering_records_byte_seconds_and_advances_checkpoint(
 
 
 def test_volume_metering_scans_only_the_stable_volume_namespace(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    first = isolated_services.volumes.get_or_create("first", admit=None)
-    second = isolated_services.volumes.get_or_create("second", admit=None)
+    first = VolumeService(service_context).get_or_create("first", admit=None)
+    second = VolumeService(service_context).get_or_create("second", admit=None)
     started_at = datetime(2026, 1, 1, tzinfo=UTC)
     workspace_id = _set_checkpoint(
-        isolated_services,
+        service_context,
         volume_name=first.name,
         size_bytes=3,
         metered_at=started_at,
     )
-    filesystem = isolated_services.volume_filesystem
+    filesystem = LocalVolumeFilesystem(service_context.paths.root / "volumes")
     first_namespace = VolumeNamespace(workspace_id, first.id)
     second_namespace = VolumeNamespace(workspace_id, second.id)
     filesystem.write_path(first_namespace, "a.bin", (b"1234",))
     filesystem.write_path(second_namespace, "unrelated.bin", (b"x" * 100,))
 
     result = PersistentVolumeMeteringService(
-        isolated_services.context,
+        service_context,
         filesystem,
     ).reconcile_volume(
         first.name,
@@ -129,22 +127,20 @@ def test_volume_metering_scans_only_the_stable_volume_namespace(
 
 
 def test_final_volume_metering_closes_checkpoint_window_when_scan_fails(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    record = isolated_services.volumes.get_or_create("degraded-final", admit=None)
+    record = VolumeService(service_context).get_or_create("degraded-final", admit=None)
     started_at = datetime(2026, 1, 1, tzinfo=UTC)
     observed_at = started_at + timedelta(seconds=5)
     workspace_id = _set_checkpoint(
-        isolated_services,
+        service_context,
         volume_name=record.name,
         size_bytes=7,
         metered_at=started_at,
     )
-    filesystem = _FailingOccupancyFilesystem(
-        isolated_services.context.paths.root / "unavailable-volumes"
-    )
-    metering = PersistentVolumeMeteringService(isolated_services.context, filesystem)
+    filesystem = _FailingOccupancyFilesystem(service_context.paths.root / "unavailable-volumes")
+    metering = PersistentVolumeMeteringService(service_context, filesystem)
     monkeypatch.setattr(volume_metering, "utc_now", lambda: observed_at)
 
     result = metering.finalize_volume_deletion(
@@ -162,7 +158,7 @@ def test_final_volume_metering_closes_checkpoint_window_when_scan_fails(
         "TimeoutError"
     )
     assert "observed_size_bytes" not in result.usage_record.metadata
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         checkpoint = session.scalars(
             select(VolumeTable).where(VolumeTable.name == record.name)
         ).one()
@@ -171,7 +167,7 @@ def test_final_volume_metering_closes_checkpoint_window_when_scan_fails(
 
 
 def test_a_metered_volume_window_prices_byte_seconds_exactly(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Small storage rates retain exact costs over large byte-second quantities."""
 
@@ -179,14 +175,14 @@ def test_a_metered_volume_window_prices_byte_seconds_exactly(
     now = max(utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY))
     started_at = now + timedelta(minutes=2)
     observed_at = started_at + timedelta(hours=1)
-    record = isolated_services.volumes.get_or_create("priced-data", admit=None)
+    record = VolumeService(service_context).get_or_create("priced-data", admit=None)
     workspace_id = _set_checkpoint(
-        isolated_services,
+        service_context,
         volume_name=record.name,
         size_bytes=2**30,
         metered_at=started_at,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         PlatformRateRepository(session).publish(
             pricing_version="test.a",
             effective_at=now + timedelta(minutes=1),
@@ -195,12 +191,12 @@ def test_a_metered_volume_window_prices_byte_seconds_exactly(
         )
 
     result = PersistentVolumeMeteringService(
-        isolated_services.context,
-        isolated_services.volume_filesystem,
+        service_context,
+        LocalVolumeFilesystem(service_context.paths.root / "volumes"),
     ).reconcile_volume(record.name, workspace_id=workspace_id, now=observed_at)
 
     assert result is not None
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         segments = list(
             session.scalars(
                 select(BillingLedgerSegmentTable).where(
@@ -222,13 +218,13 @@ class _FailingOccupancyFilesystem(LocalVolumeFilesystem):
 
 
 def _set_checkpoint(
-    services: ApiServices,
+    context: ServiceContext,
     *,
     volume_name: str,
     size_bytes: int,
     metered_at: datetime,
 ) -> str:
-    with services.context.database.session() as session:
+    with context.database.session() as session:
         row = session.scalars(select(VolumeTable).where(VolumeTable.name == volume_name)).one()
         row.size_bytes = size_bytes
         row.metered_at = metered_at

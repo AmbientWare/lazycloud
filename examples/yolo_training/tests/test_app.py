@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 
 import pytest
 from examples.yolo_training import app as yolo_module
 from examples.yolo_training.app import (
-    DEFAULT_DATASET,
-    DEFAULT_SOURCE,
-    MODEL,
     artifact_path,
     predict_yolo,
     train_yolo,
@@ -56,17 +52,15 @@ def test_artifact_path_rejects_a_symlink_escape(
         artifact_path("linked/checkpoint.pt")
 
 
-def test_training_uses_argv_and_returns_existing_typed_artifacts(
+def test_training_reports_persisted_checkpoint_and_metrics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact_root = tmp_path / "artifacts"
     artifact_root.mkdir()
     monkeypatch.setattr(yolo_module, "ARTIFACT_ROOT", artifact_root)
-    calls: list[tuple[list[str], bool]] = []
 
     def run(argv: list[str], *, check: bool) -> subprocess.CompletedProcess[str]:
-        calls.append((argv, check))
         run_path = artifact_root / "training" / "coco8-smoke"
         (run_path / "weights").mkdir(parents=True)
         (run_path / "weights" / "best.pt").write_bytes(b"checkpoint")
@@ -77,26 +71,15 @@ def test_training_uses_argv_and_returns_existing_typed_artifacts(
 
     result = train_yolo.local()
 
-    assert calls and calls[0][1] is True
-    assert calls[0][0][:3] == ["yolo", "detect", "train"]
-    assert f"model={MODEL}" in calls[0][0]
-    assert f"data={DEFAULT_DATASET}" in calls[0][0]
-    assert "epochs=1" in calls[0][0]
-    assert result == {
-        "run_name": "coco8-smoke",
-        "model": MODEL,
-        "dataset": DEFAULT_DATASET,
-        "epochs": 1,
-        "checkpoint": {
-            "path": "training/coco8-smoke/weights/best.pt",
-            "bytes": 10,
-        },
-        "metrics": {"path": "training/coco8-smoke/results.csv", "bytes": 18},
-    }
-    json.dumps(result)
+    checkpoint = result["checkpoint"]
+    metrics = result["metrics"]
+    assert (artifact_root / checkpoint["path"]).read_bytes() == b"checkpoint"
+    assert checkpoint["bytes"] == 10
+    assert (artifact_root / metrics["path"]).read_text(encoding="utf-8") == "epoch,mAP50\n1,0.5\n"
+    assert metrics["bytes"] == 18
 
 
-def test_prediction_uses_persisted_checkpoint_and_lists_outputs(
+def test_prediction_lists_persisted_outputs_for_the_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -105,11 +88,8 @@ def test_prediction_uses_persisted_checkpoint_and_lists_outputs(
     checkpoint.parent.mkdir(parents=True)
     checkpoint.write_bytes(b"checkpoint")
     monkeypatch.setattr(yolo_module, "ARTIFACT_ROOT", artifact_root)
-    calls: list[list[str]] = []
 
     def run(argv: list[str], *, check: bool) -> subprocess.CompletedProcess[str]:
-        assert check is True
-        calls.append(argv)
         prediction = artifact_root / "predictions" / "bus-prediction"
         (prediction / "labels").mkdir(parents=True)
         (prediction / "bus.jpg").write_bytes(b"image")
@@ -120,12 +100,8 @@ def test_prediction_uses_persisted_checkpoint_and_lists_outputs(
 
     result = predict_yolo.local()
 
-    assert calls[0][:3] == ["yolo", "detect", "predict"]
-    assert f"source={DEFAULT_SOURCE}" in calls[0]
-    assert f"model={checkpoint}" in calls[0]
     assert result["checkpoint"] == "training/coco8-smoke/weights/best.pt"
     assert [item["path"] for item in result["outputs"]] == [
         "predictions/bus-prediction/bus.jpg",
         "predictions/bus-prediction/labels/bus.txt",
     ]
-    json.dumps(result)

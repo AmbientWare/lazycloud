@@ -1,5 +1,6 @@
+import { testQueryClient } from "@/test/query-client";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { expect, it, vi } from "vitest";
 
 import { LogViewer } from "./index";
@@ -31,7 +32,7 @@ it("keeps loaded logs visible when older history fails and retries the missing p
       next: older ? "" : "older-page",
     });
   });
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = testQueryClient({ defaultOptions: { queries: { retry: false } } });
   const view = render(
     <QueryClientProvider client={client}>
       <LogViewer workspaceId="workspace-1" scope={{ taskId: "task-1" }} />
@@ -51,10 +52,10 @@ it("keeps loaded logs visible when older history fails and retries the missing p
   expect(screen.getByText("older output")).toBeVisible();
   view.unmount();
   sink?.close();
-  client.clear();
 });
 
 it("appends live output and bounds the visible history during a large burst", async () => {
+  vi.useFakeTimers();
   let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
   const stream = new ReadableStream<Uint8Array>({
     start: (controller) => {
@@ -66,15 +67,13 @@ it("appends live output and bounds the visible history during a large burst", as
       ? new Response(stream, { headers: { "Content-Type": "text/event-stream" } })
       : Response.json({ data: [], next: "" }),
   );
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = testQueryClient({ defaultOptions: { queries: { retry: false } } });
   const view = render(
     <QueryClientProvider client={client}>
       <LogViewer workspaceId="workspace-1" scope={{ taskId: "task-1" }} />
     </QueryClientProvider>,
   );
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  });
+  await act(async () => vi.advanceTimersByTimeAsync(1));
   const encoder = new TextEncoder();
   await act(async () => {
     sink?.enqueue(
@@ -105,5 +104,4 @@ it("appends live output and bounds the visible history during a large burst", as
   expect(screen.getAllByRole("listitem")).toHaveLength(1_000);
   view.unmount();
   sink?.close();
-  client.clear();
 });

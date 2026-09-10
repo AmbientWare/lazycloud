@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from coordination.redis_client import AsyncRedisClient, RedisSettings
+from coordination.redis_client import AsyncRedisClient
 from database.records.apps import StubRecord
 from database.repositories.apps import StubRepository
 from database.repositories.container_rollouts import ContainerRolloutRepository
@@ -45,19 +44,6 @@ from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
-
-
-@pytest.fixture
-async def async_redis(
-    real_redis_actors: RealRedisActors,
-) -> AsyncIterator[AsyncRedisClient]:
-    client = AsyncRedisClient.from_settings(
-        RedisSettings(url=real_redis_actors.url, key_prefix=real_redis_actors.prefix)
-    )
-    try:
-        yield client
-    finally:
-        await client.close()
 
 
 @dataclass(slots=True)

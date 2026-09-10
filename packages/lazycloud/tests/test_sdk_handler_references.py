@@ -13,6 +13,8 @@ from lazycloud.references import (
     source_root_handler_reference,
 )
 
+pytestmark = pytest.mark.usefixtures("isolated_imports")
+
 
 def _module_function() -> int:
     return 1

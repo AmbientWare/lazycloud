@@ -3,24 +3,30 @@ from __future__ import annotations
 import os
 import signal
 import threading
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Never
 
 import pytest
+from container_worker_app import main as container_worker
 from container_worker_app.main import (
-    MAX_WORKER_KEEPALIVE_INTERVAL_SECONDS,
     ContainerWorkerRegistrationError,
     ContainerWorkerShutdownRequested,
-    _validate_keepalive_interval,
     run_container_worker,
 )
+from container_worker_app.runtime import ContainerWorkerServices
 from container_worker_app.settings import WorkerSettings
 from shared.container_requests import StopContainerReason
 from shared.scheduling import WorkerUnavailableReason
 from worker.configuration import WorkerConfiguration, WorkerExecutionConfiguration
 from worker.repository_client import WorkerRepositoryClientError
-from worker.status import WorkerSpindownPlan
+from worker.scheduler_requests import (
+    WorkerSchedulerRequestAction,
+    WorkerSchedulerRequestResult,
+    WorkerSchedulerRequestStatus,
+)
+from worker.status import WorkerSpindownPlan, plan_worker_spindown
 from worker.worker_lifecycle import (
     DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS,
     WorkerLifecycleAction,
@@ -30,17 +36,20 @@ from worker.worker_lifecycle import (
 )
 
 
-def test_worker_keepalive_interval_bound_is_lease_safe() -> None:
-    _validate_keepalive_interval(MAX_WORKER_KEEPALIVE_INTERVAL_SECONDS)
-    # An interval that fits fewer than three renewals into the lease lets a
-    # healthy worker be reaped after a single missed keepalive.
+@pytest.mark.parametrize("interval", [0, DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS / 2])
+def test_worker_refuses_intervals_that_cannot_keep_registration_alive(interval: float) -> None:
+    lifecycle = _Lifecycle()
     with pytest.raises(ValueError):
-        _validate_keepalive_interval(DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS / 2)
-    with pytest.raises(ValueError):
-        _validate_keepalive_interval(0)
+        run_container_worker(
+            settings=WorkerSettings(container_service_port=0),
+            keepalive_interval_seconds=interval,
+            services=_Services(processor=_UnexpectedProcessor(), lifecycle=lifecycle),
+        )
+    assert not lifecycle.registered
 
 
 def test_worker_stops_when_repository_error_masks_signal_interrupt() -> None:
+    previous_handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
     processor = _SignalMaskingProcessor()
     lifecycle = _Lifecycle()
     services = _Services(processor=processor, lifecycle=lifecycle)
@@ -56,6 +65,7 @@ def test_worker_stops_when_repository_error_masks_signal_interrupt() -> None:
     assert lifecycle.shutdown_calls == 1
     assert lifecycle.shutdown_remove_worker == [True]
     assert lifecycle.shutdown_reasons == [StopContainerReason.Admin]
+    assert {sig: signal.getsignal(sig) for sig in previous_handlers} == previous_handlers
 
 
 def test_worker_renews_lease_while_pickup_is_blocked(tmp_path: Path) -> None:
@@ -140,6 +150,76 @@ def test_a_worker_that_never_registered_leaves_no_record_behind() -> None:
     assert lifecycle.shutdown_remove_worker == [True]
 
 
+def test_worker_deregisters_when_startup_after_registration_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processor = _UnexpectedProcessor()
+    lifecycle = _Lifecycle()
+
+    def fail_start_event_loop(
+        _services: ContainerWorkerServices,
+        *,
+        interval_seconds: float,
+        stop_event: threading.Event | None = None,
+    ) -> Never:
+        raise RuntimeError("event loop unavailable")
+
+    monkeypatch.setattr(container_worker, "_start_worker_event_loop", fail_start_event_loop)
+    with pytest.raises(RuntimeError, match="event loop unavailable"):
+        run_container_worker(
+            settings=WorkerSettings(container_service_port=0),
+            services=_Services(processor=processor, lifecycle=lifecycle),
+        )
+
+    assert processor.calls == 0
+    assert not lifecycle.registered
+    assert lifecycle.shutdown_remove_worker == [True]
+
+
+def test_idle_nonpersistent_worker_deregisters_after_its_spindown_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lifecycle = _Lifecycle()
+    processor = _IdleProcessor()
+    monkeypatch.setattr(container_worker, "time", _Clock(iter((100.0, 401.0))))
+
+    run_container_worker(
+        settings=WorkerSettings(
+            container_service_port=0,
+            worker_spindown_seconds=300,
+            configuration=WorkerConfiguration(
+                execution=WorkerExecutionConfiguration(persistent=False)
+            ),
+        ),
+        services=_Services(processor=processor, lifecycle=lifecycle),
+    )
+
+    assert processor.calls == 1
+    assert not lifecycle.registered
+    assert lifecycle.shutdown_remove_worker == [True]
+
+
+@dataclass(slots=True)
+class _Clock:
+    ticks: Iterator[float]
+
+    def monotonic(self) -> float:
+        return next(self.ticks)
+
+
+@dataclass(slots=True)
+class _IdleProcessor:
+    calls: int = 0
+
+    def run_once(self) -> WorkerSchedulerRequestResult:
+        self.calls += 1
+        return WorkerSchedulerRequestResult(
+            worker_id="worker-1",
+            status=WorkerSchedulerRequestStatus.Idle,
+            action=WorkerSchedulerRequestAction.Idle,
+        )
+
+
 @dataclass(slots=True)
 class _SignalMaskingProcessor:
     calls: int = 0
@@ -178,6 +258,7 @@ class _UnexpectedProcessor:
 
 @dataclass(slots=True)
 class _Lifecycle:
+    registered: bool = False
     shutdown_calls: int = 0
     shutdown_remove_worker: list[bool] = field(default_factory=list)
     shutdown_reasons: list[StopContainerReason] = field(default_factory=list)
@@ -192,6 +273,7 @@ class _Lifecycle:
     )
 
     def register_available(self) -> list[WorkerLifecycleStepResult]:
+        self.registered = True
         return self.registration_steps
 
     def keepalive(self) -> WorkerLifecycleStepResult:
@@ -208,8 +290,12 @@ class _Lifecycle:
         seconds_since_last_request: float = 0.0,
         spindown_seconds: float,
     ) -> WorkerSpindownPlan:
-        del persistent, seconds_since_last_request, spindown_seconds
-        raise AssertionError("spindown should not run after shutdown is requested")
+        return plan_worker_spindown(
+            persistent=persistent,
+            seconds_since_last_request=seconds_since_last_request,
+            active_container_count=0,
+            spindown_seconds=spindown_seconds,
+        )
 
     def shutdown(
         self,
@@ -220,6 +306,8 @@ class _Lifecycle:
         unavailable_detail: str = "",
     ) -> WorkerShutdownResult:
         self.shutdown_calls += 1
+        if remove_worker:
+            self.registered = False
         self.shutdown_remove_worker.append(remove_worker)
         self.shutdown_reasons.append(stop_reason)
         self.shutdown_unavailable.append((unavailable_reason, unavailable_detail))
@@ -229,7 +317,12 @@ class _Lifecycle:
 
 @dataclass(slots=True)
 class _Services:
-    processor: _SignalMaskingProcessor | _KeepaliveBlockingProcessor | _UnexpectedProcessor
+    processor: (
+        _SignalMaskingProcessor
+        | _KeepaliveBlockingProcessor
+        | _UnexpectedProcessor
+        | _IdleProcessor
+    )
     lifecycle: _Lifecycle
     event_source: None = None
     worker_events: None = None

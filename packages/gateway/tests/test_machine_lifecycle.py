@@ -13,7 +13,7 @@ WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 
 @dataclass(slots=True)
 class _Gateway:
-    calls: list[tuple[str, str, str]]
+    machines: set[tuple[str, str]]
 
     def delete_machine(
         self,
@@ -23,12 +23,13 @@ class _Gateway:
         pool: MachinePool = MachinePool(""),
     ) -> None:
         del pool
-        self.calls.append(("delete", workspace_id, machine_id))
+        self.machines.remove((workspace_id, machine_id))
 
 
 @dataclass(slots=True)
 class _ProviderCompute:
-    calls: list[tuple[str, str, str]]
+    machines: set[tuple[str, str]]
+    unavailable: bool = False
 
     def release_bound_internal_pool_machine(
         self,
@@ -36,35 +37,40 @@ class _ProviderCompute:
         *,
         workspace: str,
     ) -> bool:
-        self.calls.append(("release", workspace, machine_id))
+        if self.unavailable:
+            raise ConnectionError("provider unavailable")
+        self.machines.remove((workspace, machine_id))
         return True
 
 
-def test_machine_deletion_releases_provider_capacity_before_gateway_cleanup() -> None:
-    # Deleting the gateway record first strands the paid provider machine:
-    # nothing is left that names the capacity still to be released.
-    calls: list[tuple[str, str, str]] = []
+def test_failed_machine_release_keeps_authority_until_cleanup_can_retry() -> None:
+    gateway = _Gateway({(WORKSPACE_ID, MACHINE_ID)})
+    provider = _ProviderCompute({(WORKSPACE_ID, MACHINE_ID)}, unavailable=True)
     lifecycle = MachineLifecycleService(
-        gateway=_Gateway(calls),
-        provider_compute=_ProviderCompute(calls),
+        gateway=gateway,
+        provider_compute=provider,
     )
 
+    with pytest.raises(ConnectionError, match="provider unavailable"):
+        lifecycle.delete_machine(MACHINE_ID, workspace_id=WORKSPACE_ID)
+
+    assert gateway.machines == provider.machines == {(WORKSPACE_ID, MACHINE_ID)}
+    provider.unavailable = False
     lifecycle.delete_machine(MACHINE_ID, workspace_id=WORKSPACE_ID)
 
-    assert calls == [
-        ("release", WORKSPACE_ID, MACHINE_ID),
-        ("delete", WORKSPACE_ID, MACHINE_ID),
-    ]
+    assert not gateway.machines
+    assert not provider.machines
 
 
 def test_machine_deletion_rejects_a_malformed_machine_id_without_touching_capacity() -> None:
-    calls: list[tuple[str, str, str]] = []
+    gateway = _Gateway({(WORKSPACE_ID, MACHINE_ID)})
+    provider = _ProviderCompute({(WORKSPACE_ID, MACHINE_ID)})
     lifecycle = MachineLifecycleService(
-        gateway=_Gateway(calls),
-        provider_compute=_ProviderCompute(calls),
+        gateway=gateway,
+        provider_compute=provider,
     )
 
     with pytest.raises(NotFoundError):
         lifecycle.delete_machine("not-a-uuid", workspace_id=WORKSPACE_ID)
 
-    assert calls == []
+    assert gateway.machines == provider.machines == {(WORKSPACE_ID, MACHINE_ID)}

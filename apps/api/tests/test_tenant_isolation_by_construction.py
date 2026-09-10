@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
 from uuid import uuid4
 
-from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from database.repositories.apps import DeploymentRepository
@@ -15,26 +13,26 @@ from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind
 from shared.http.deployments import DeploymentListResponse
 from shared.http.tasks import TaskPageResponse
-from shared.identity import TokenKind
+from shared.http.volumes import GetOrCreateVolumeResponse, ListVolumesResponse
+from shared.identity import TokenKind, TokenStatus
 from tests.workspaces import owned_workspace
 
 
 def test_cross_workspace_resource_ids_are_not_found_from_another_workspace(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
 ) -> None:
-    """A workspace B token gets typed not-found for workspace A's resource ids."""
-    control = ControlPlaneService(isolated_services.context)
+    services, client = api_runtime
+    control = ControlPlaneService(services.context)
     owner = owned_workspace(control, "isolation-owner")
     intruder = owned_workspace(control, "isolation-intruder")
-    owner_token = _workspace_token(isolated_services, owner.id, "owner-token")
-    intruder_token = _workspace_token(isolated_services, intruder.id, "intruder-token")
+    owner_token = _workspace_token(services, owner.id, "owner-token")
+    intruder_token = _workspace_token(services, intruder.id, "intruder-token")
 
-    isolated_services.secrets.set("owned-secret", "owned-value", workspace=owner.id)
-    task = isolated_services.tasks.create("owned-task", workspace_id=owner.id)
+    services.secrets.set("owned-secret", "owned-value", workspace=owner.id)
+    task = services.tasks.create("owned-task", workspace_id=owner.id)
     container_id = str(uuid4())
     deployment_id = str(uuid4())
-    with isolated_services.context.database.session() as session:
+    with services.context.database.session() as session:
         ContainerRepository(session).upsert(
             ContainerRecord(
                 id=container_id,
@@ -54,24 +52,25 @@ def test_cross_workspace_resource_ids_are_not_found_from_another_workspace(
             ),
             workspace_id=owner.id,
         )
-    _, owned_token_record = AuthService(isolated_services.context).create_token(
+    _, owned_token_record = AuthService(services.context).create_token(
         "owned-secondary-token",
         kind=TokenKind.Workspace,
         workspace_id=owner.id,
     )
 
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     owner_headers = _headers(owner_token)
     intruder_headers = _headers(intruder_token)
+    created = client.post("/api/v1/volumes", json={"name": "owned-volume"}, headers=owner_headers)
+    assert created.status_code == 201, created.text
+    volume = GetOrCreateVolumeResponse.model_validate_json(created.content).volume
+    assert volume is not None
 
-    # Owner sanity: every resource resolves inside its own workspace.
     assert client.get(f"/api/v1/tasks/{task.id}", headers=owner_headers).status_code == 200
     assert client.get("/api/v1/secrets/owned-secret", headers=owner_headers).status_code == 200
     assert (
         client.get(f"/api/v1/containers/{container_id}", headers=owner_headers).status_code == 200
     )
 
-    # Cross-workspace get is a typed not-found.
     assert client.get(f"/api/v1/tasks/{task.id}", headers=intruder_headers).status_code == 404
     assert client.get("/api/v1/secrets/owned-secret", headers=intruder_headers).status_code == 404
     assert (
@@ -79,7 +78,6 @@ def test_cross_workspace_resource_ids_are_not_found_from_another_workspace(
         == 404
     )
 
-    # Cross-workspace delete is a typed not-found and does not remove the resource.
     assert (
         client.delete("/api/v1/secrets/owned-secret", headers=intruder_headers).status_code == 404
     )
@@ -104,9 +102,20 @@ def test_cross_workspace_resource_ids_are_not_found_from_another_workspace(
         == 404
     )
     assert client.get("/api/v1/secrets/owned-secret", headers=owner_headers).status_code == 200
-    assert AuthService(isolated_services.context).list_workspace_tokens(owner.id)
+    assert (
+        client.get(f"/api/v1/containers/{container_id}", headers=owner_headers).status_code == 200
+    )
+    tokens = AuthService(services.context).list_workspace_tokens(owner.id)
+    assert (
+        next(token for token in tokens if token.id == owned_token_record.id).status
+        is TokenStatus.Active
+    )
+    remaining = client.get("/api/v1/volumes", headers=owner_headers)
+    assert remaining.status_code == 200, remaining.text
+    assert [
+        item.id for item in ListVolumesResponse.model_validate_json(remaining.content).volumes
+    ] == [volume.id]
 
-    # Cross-workspace listings never include the other tenant's resources.
     deployments = client.get("/api/v1/deployments", headers=intruder_headers)
     assert deployments.status_code == 200
     deployment_page = DeploymentListResponse.model_validate_json(deployments.content)
@@ -117,8 +126,8 @@ def test_cross_workspace_resource_ids_are_not_found_from_another_workspace(
     assert task.id not in {item.id for item in task_page.data}
 
 
-def _workspace_token(isolated_services: ApiServices, workspace_id: str, name: str) -> str:
-    token, _record = AuthService(isolated_services.context).create_token(
+def _workspace_token(services: ApiServices, workspace_id: str, name: str) -> str:
+    token, _record = AuthService(services.context).create_token(
         name,
         kind=TokenKind.Workspace,
         workspace_id=workspace_id,

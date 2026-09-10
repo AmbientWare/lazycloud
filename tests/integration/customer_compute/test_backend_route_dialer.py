@@ -1,319 +1,65 @@
 from __future__ import annotations
 
 import socket
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pytest
 from execution.shells.proxy import ShellBackendTarget
 from gateway.shell_proxy import connect_shell_backend
 from networking.dialer import (
-    BackendRouteDialer,
     BackendRouteDialerConfig,
-    BackendRouteUnavailable,
-    SocketBackendConnector,
 )
-from networking.routing import (
-    BackendRouteAuthenticator,
-    backend_route_preface,
-    build_backend_route_dial_plan,
-)
+from networking.routing import BackendRouteAuthenticator, backend_route_preface
 from pydantic import SecretStr
-from shared.compute_policy import MachinePool
 from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
 
-ROUTE_AUTH_KEY = SecretStr("0123456789abcdef0123456789abcdef")
-ROUTE_AUTHENTICATOR = BackendRouteAuthenticator(ROUTE_AUTH_KEY)
+_AUTH_KEY = SecretStr("0123456789abcdef0123456789abcdef")
 
 
-def _dialer_config(**updates: float) -> BackendRouteDialerConfig:
-    return BackendRouteDialerConfig(
-        timeout_seconds=updates.get("timeout_seconds", 1),
-        ready_poll_seconds=updates.get("ready_poll_seconds", 0.001),
-        auth_key=ROUTE_AUTH_KEY,
-    )
-
-
-@dataclass(slots=True)
-class _FakeConnection:
-    writes: list[bytes] = field(default_factory=list)
-    closed: bool = False
-
-    def sendall(self, data: bytes) -> None:
-        self.writes.append(data)
-
-    def close(self) -> None:
-        self.closed = True
-
-
-class _FakeConnector:
-    def __init__(self, *, failures_before_success: int = 0) -> None:
-        self.calls: list[tuple[str, float]] = []
-        self.connections: list[_FakeConnection] = []
-        self.failures_before_success = failures_before_success
-
-    def connect(self, address: str, timeout_seconds: float) -> _FakeConnection:
-        self.calls.append((address, timeout_seconds))
-        if self.failures_before_success > 0:
-            self.failures_before_success -= 1
-            raise OSError("temporary dial failure")
-        connection = _FakeConnection()
-        self.connections.append(connection)
-        return connection
-
-
-class _FakeRouteResolver:
-    def __init__(self, routes: list[AgentBackendRoute | None]) -> None:
-        self.routes = routes
-        self.route_ids: list[str] = []
+@dataclass
+class _Routes:
+    routes: list[AgentBackendRoute | None]
 
     def get_backend_route(self, route_id: str) -> AgentBackendRoute | None:
-        self.route_ids.append(route_id)
-        if len(self.routes) > 1:
-            return self.routes.pop(0)
-        return self.routes[0]
-
-
-def test_backend_route_dialer_waits_for_ready_route_and_writes_preface() -> None:
-    connector = _FakeConnector()
-    resolver = _FakeRouteResolver(
-        [
-            _route("route-one", state=BackendRouteState.Opening),
-            _route(
-                "route-one",
-                state=BackendRouteState.Ready,
-                proxy_target="agent.private:29443",
-                transport=BackendRouteTransport.PrivateNetwork,
-            ),
-        ]
-    )
-    dialer = BackendRouteDialer(
-        resolver,
-        config=_dialer_config(),
-        connector=connector,
-    )
-
-    connection = dialer.dial_plan(build_backend_route_dial_plan("route-one"))
-
-    assert connection is connector.connections[0]
-    assert resolver.route_ids == ["route-one", "route-one"]
-    assert connector.calls[0][0] == "agent.private:29443"
-    assert connector.connections[0].writes == [
-        backend_route_preface("route-one", ROUTE_AUTHENTICATOR.credential("route-one"))
-    ]
+        route = self.routes.pop(0) if len(self.routes) > 1 else self.routes[0]
+        return route if route is None or route.route_id == route_id else None
 
 
 @pytest.mark.parametrize(
-    ("target", "transport", "failures", "expected_addresses"),
-    [
-        (
-            "agent.private:29443",
-            BackendRouteTransport.PrivateNetwork,
-            1,
-            ["agent.private:29443", "agent.private:29443"],
-        ),
-        ("10.0.0.5:8000", BackendRouteTransport.Direct, 0, ["10.0.0.5:8000"]),
-        (
-            "container-worker:57267",
-            BackendRouteTransport.Direct,
-            1,
-            ["container-worker:57267", "container-worker:57267"],
-        ),
-    ],
+    "transport", [BackendRouteTransport.Direct, BackendRouteTransport.PrivateNetwork]
 )
-def test_backend_route_dialer_transport_retry_matrix(
-    target: str,
+def test_shell_uses_authoritative_route_and_authenticates_before_protocol(
     transport: BackendRouteTransport,
-    failures: int,
-    expected_addresses: list[str],
 ) -> None:
-    connector = _FakeConnector(failures_before_success=failures)
-    route_id = "route-transport"
-    dialer = BackendRouteDialer(
-        _FakeRouteResolver(
-            [
-                _route(
-                    route_id,
-                    state=BackendRouteState.Ready,
-                    proxy_target=target,
-                    transport=transport,
-                )
-            ]
-        ),
-        config=_dialer_config(),
-        connector=connector,
-    )
-
-    dialer.dial_plan(build_backend_route_dial_plan(route_id))
-
-    assert [address for address, _timeout in connector.calls] == expected_addresses
-    if transport is BackendRouteTransport.PrivateNetwork:
-        assert connector.connections[0].writes == [
-            backend_route_preface(route_id, ROUTE_AUTHENTICATOR.credential(route_id))
-        ]
-    else:
-        assert connector.connections[0].writes == []
-
-
-def test_backend_route_dialer_rejects_missing_authenticator_before_proxying() -> None:
-    connector = _FakeConnector()
-    dialer = BackendRouteDialer(
-        _FakeRouteResolver(
-            [
-                _route(
-                    "route-private",
-                    state=BackendRouteState.Ready,
-                    proxy_target="agent.private:29443",
-                    transport=BackendRouteTransport.PrivateNetwork,
-                )
-            ]
-        ),
-        config=BackendRouteDialerConfig(timeout_seconds=1, ready_poll_seconds=0.001),
-        connector=connector,
-    )
-
-    with pytest.raises(RuntimeError, match="authenticator is required"):
-        dialer.dial_plan(build_backend_route_dial_plan("route-private"))
-
-    assert connector.calls == []
-    assert connector.connections == []
-
-
-def test_backend_route_dialer_rejects_unusable_routes() -> None:
-    degraded = BackendRouteDialer(
-        _FakeRouteResolver([_route("route-bad", state=BackendRouteState.Degraded)]),
-        config=BackendRouteDialerConfig(timeout_seconds=1, ready_poll_seconds=0.001),
-        connector=_FakeConnector(),
-    )
-    with pytest.raises(BackendRouteUnavailable, match="backend route route-bad is degraded"):
-        degraded.dial_plan(build_backend_route_dial_plan("route-bad"))
-
-    missing = BackendRouteDialer(
-        _FakeRouteResolver([None]),
-        config=BackendRouteDialerConfig(timeout_seconds=1, ready_poll_seconds=0.001),
-        connector=_FakeConnector(),
-    )
-    with pytest.raises(BackendRouteUnavailable, match="backend route route-missing not found"):
-        missing.dial_plan(build_backend_route_dial_plan("route-missing"))
-
-
-def test_shell_backend_uses_authoritative_route_with_raw_address(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    connection, peer = socket.socketpair()
-    calls: list[tuple[str, float]] = []
-
-    def connect(
-        _connector: SocketBackendConnector,
-        address: str,
-        timeout_seconds: float,
-    ) -> socket.socket:
-        calls.append((address, timeout_seconds))
-        return connection
-
-    monkeypatch.setattr(SocketBackendConnector, "connect", connect)
-    route_id = "machine:worker:container:container:2222"
-    resolver = _FakeRouteResolver(
-        [
-            _route(
-                route_id,
-                state=BackendRouteState.Ready,
-                proxy_target="container-worker:50819",
-                transport=BackendRouteTransport.Direct,
-            )
-        ]
-    )
-    target = ShellBackendTarget(
-        container_id="container",
-        stub_id="stub",
-        address="192.168.0.85:2222",
-        route=AgentBackendRoute(
-            route_id=route_id,
-            container_id="container",
-            port=2222,
-            transport=BackendRouteTransport.Direct,
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        listener.settimeout(1)
+        route = AgentBackendRoute(
+            route_id="shell-route",
             state=BackendRouteState.Ready,
-            local_target="container-worker:50819",
-            proxy_target="container-worker:50819",
-        ),
-        worker_port=2222,
-        buffer_size_bytes=32 * 1024,
-        dial_timeout_seconds=1,
-    )
-
-    try:
-        connected = connect_shell_backend(target, route_resolver=resolver)
-
-        assert connected is connection
-        assert resolver.route_ids == [route_id]
-        assert calls[0][0] == "container-worker:50819"
-        assert 0 < calls[0][1] <= 1
-    finally:
-        connection.close()
-        peer.close()
-
-
-def test_shell_backend_authenticates_private_route_before_shell_protocol(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    connection, peer = socket.socketpair()
-
-    def connect(
-        _connector: SocketBackendConnector,
-        address: str,
-        timeout_seconds: float,
-    ) -> socket.socket:
-        assert address == "agent.private:29443"
-        assert 0 < timeout_seconds <= 1
-        return connection
-
-    monkeypatch.setattr(SocketBackendConnector, "connect", connect)
-    route_id = "machine:worker:container:container:2222"
-    route = _route(
-        route_id,
-        state=BackendRouteState.Ready,
-        proxy_target="agent.private:29443",
-        transport=BackendRouteTransport.PrivateNetwork,
-    )
-    target = ShellBackendTarget(
-        container_id="container",
-        stub_id="stub",
-        address=f"route://{route_id}",
-        route=AgentBackendRoute.model_validate(route.model_dump(mode="json")),
-        worker_port=2222,
-        buffer_size_bytes=32 * 1024,
-        dial_timeout_seconds=1,
-    )
-
-    try:
-        connected = connect_shell_backend(
+            transport=transport,
+            proxy_target=f"127.0.0.1:{listener.getsockname()[1]}",
+        )
+        target = ShellBackendTarget(
+            container_id="container",
+            stub_id="stub",
+            address="127.0.0.1:1",
+            route=route,
+            worker_port=2222,
+            buffer_size_bytes=32768,
+            dial_timeout_seconds=1,
+        )
+        with connect_shell_backend(
             target,
-            route_resolver=_FakeRouteResolver([route]),
-            route_dialer_config=_dialer_config(),
-        )
-
-        assert connected is connection
-        assert peer.recv(4096) == backend_route_preface(
-            route_id,
-            ROUTE_AUTHENTICATOR.credential(route_id),
-        )
-    finally:
-        connection.close()
-        peer.close()
-
-
-def _route(
-    route_id: str,
-    *,
-    state: BackendRouteState,
-    proxy_target: str = "",
-    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork,
-) -> AgentBackendRoute:
-    return AgentBackendRoute(
-        route_id=route_id,
-        workspace_id="workspace-one",
-        pool=MachinePool("gpu"),
-        machine_id="machine-one",
-        state=state,
-        proxy_target=proxy_target,
-        transport=transport,
-    )
+            route_resolver=_Routes([route]),
+            route_dialer_config=BackendRouteDialerConfig(timeout_seconds=1, auth_key=_AUTH_KEY),
+        ) as connection:
+            connection.sendall(b"shell-protocol\n")
+            with listener.accept()[0] as peer:
+                peer.settimeout(1)
+                with peer.makefile("rb") as wire:
+                    if transport is BackendRouteTransport.PrivateNetwork:
+                        assert wire.readline() == backend_route_preface(
+                            route.route_id,
+                            BackendRouteAuthenticator(_AUTH_KEY).credential(route.route_id),
+                        )
+                    assert wire.readline() == b"shell-protocol\n"

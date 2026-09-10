@@ -1,6 +1,6 @@
-import { QueryClient } from "@tanstack/react-query";
+import { testQueryClient } from "@/test/query-client";
+import { InfiniteQueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import { LIVE_LIST_MAX_PAGES } from "./infinite-list";
 
 import type { ContainerWithAppPage } from "@/lib/api/schemas";
 
@@ -24,7 +24,7 @@ describe("container pagination", () => {
     expect(nextContainerCursor(repeated, [first, repeated])).toBeUndefined();
   });
 
-  it("sends repeated typed statuses and relies on workspace live invalidation", async () => {
+  it("sends workspace, app, repeated statuses, and cursor to the API", async () => {
     const fetchMock = vi.fn<typeof fetch>();
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify({ data: [], next: "" }), {
@@ -42,7 +42,7 @@ describe("container pagination", () => {
     if (typeof options.queryFn !== "function") throw new Error("container query is missing");
 
     await options.queryFn({
-      client: new QueryClient(),
+      client: testQueryClient(),
       direction: "forward",
       meta: undefined,
       pageParam: "cursor-1",
@@ -54,20 +54,30 @@ describe("container pagination", () => {
     expect(requestUrl.searchParams.getAll("status")).toEqual(["pending", "running"]);
     expect(requestUrl.searchParams.getAll("stub_id")).toEqual(["stub-1"]);
     expect(requestUrl.searchParams.get("cursor")).toBe("cursor-1");
-    expect(options.refetchInterval).toBeUndefined();
-    expect(options.meta).toEqual({
-      workspaceLiveEnabled: true,
-      workspaceLiveCritical: true,
-      workspaceLiveRecoverErrors: true,
-    });
+    expect(requestUrl.searchParams.get("workspace")).toBe("workspace-1");
+    expect(requestUrl.searchParams.get("app_id")).toBe("app-1");
   });
 
-  it("keeps a live list bounded, so one change event is not twenty requests", () => {
-    // The change stream refetches every page a list holds. Unbounded, an app
-    // view that had scrolled through two thousand containers re-requested all
-    // of them each time anything in the workspace moved.
-    expect(containersQueryOptions("workspace-1").maxPages).toBe(LIVE_LIST_MAX_PAGES);
-    expect(LIVE_LIST_MAX_PAGES).toBeLessThanOrEqual(5);
+  it("bounds retained pages and refresh requests after scrolling through a long list", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const cursor = new URL(String(input), "http://localhost").searchParams.get("cursor");
+      const page = Number(cursor ?? 0);
+      return Response.json(containerPage([`container-${page}`], String(page + 1)));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = testQueryClient({ defaultOptions: { queries: { retry: false } } });
+    const observer = new InfiniteQueryObserver(client, containersQueryOptions("workspace-1"));
+    try {
+      for (let page = 0; page < 12; page++) await observer.fetchNextPage();
+      const beforeRefresh = fetchMock.mock.calls.length;
+      const refreshed = await observer.refetch();
+
+      expect(refreshed.data?.pages.length).toBeLessThanOrEqual(5);
+      expect(refreshed.data?.pages.at(-1)?.data[0]?.container.id).toBe("container-11");
+      expect(fetchMock.mock.calls.length - beforeRefresh).toBeLessThanOrEqual(5);
+    } finally {
+      observer.destroy();
+    }
   });
 });
 

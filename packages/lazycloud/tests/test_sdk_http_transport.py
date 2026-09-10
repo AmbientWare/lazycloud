@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 import urllib.parse
 import urllib.request
 from collections.abc import Iterator
@@ -13,7 +12,8 @@ from pathlib import Path
 import pytest
 from lazycloud.cli.main import build_public_cli
 from lazycloud.http_transport import request_raw
-from lazycloud.session.uploads import stream_object_bytes, stream_object_file
+from lazycloud.session import Client
+from lazycloud.session.uploads import stream_object_bytes
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.client_version import RECOMMENDED_CLIENT_VERSION_HEADER, observe_client_versions
 from shared.http.errors import HttpApiError, HttpResponseDecodeError
@@ -45,22 +45,6 @@ class _TransportHandler(BaseHTTPRequestHandler):
                 content_type="application/json",
             )
             return
-        if parsed.path == "/redirect":
-            self.send_response(302)
-            self.send_header("Location", "/final?redirected=1")
-            self.end_headers()
-            return
-        if parsed.path == "/slow":
-            time.sleep(0.1)
-            self.send_response(204)
-            self.end_headers()
-            return
-        if parsed.path == "/malformed":
-            self._respond(200, b"not-json", content_type="application/json")
-            return
-        if parsed.path == "/empty-object":
-            self._respond(200, b'{"task_id": []}', content_type="application/json")
-            return
         if parsed.path == "/api/v1/functions/invoke/stream":
             self._respond(200, b'{"task_id": []}\n', content_type="application/x-ndjson")
             return
@@ -86,6 +70,8 @@ class _TransportHandler(BaseHTTPRequestHandler):
                 return
             assert query["hash"] == [hashlib.sha256(body).hexdigest()]
             assert query["size"] == [str(len(body))]
+            assert query["workspace"] == ["tenant-a"]
+            assert query["bucket"] == [SOURCE_PACKAGE_BUCKET]
             assert self.headers.get("Authorization") == "Bearer test-token"
             assert self.headers.get("X-Object-Meta-kind") == "source"
             self._respond(200, b'{"object_id":"obj-stream"}', content_type="application/json")
@@ -190,54 +176,61 @@ def test_object_upload_streams_with_progress_and_validates_response() -> None:
     completed: list[int] = []
 
     with _http_server() as endpoint:
-        response = stream_object_bytes(
-            endpoint=endpoint,
-            token="test-token",
-            workspace="tenant-a",
-            data=data,
-            name="source.tar.gz",
-            object_hash=hashlib.sha256(data).hexdigest(),
-            bucket=SOURCE_PACKAGE_BUCKET,
-            overwrite=False,
-            content_type="application/gzip",
-            metadata={"kind": "source"},
-            timeout_seconds=2.0,
-            progress=completed.append,
-            chunk_size=3,
+        response = (
+            Client(workspace="tenant-a")
+            ._bind_control(endpoint=endpoint, token="test-token")
+            .upload_bytes(
+                data,
+                name="source.tar.gz",
+                bucket=SOURCE_PACKAGE_BUCKET,
+                overwrite=False,
+                content_type="application/gzip",
+                metadata={"kind": "source"},
+                progress=completed.append,
+            )
         )
 
     assert response.object_id == "obj-stream"
-    assert completed == [3, 6, 9, 12, len(data)]
+    assert response.size == len(data)
+    assert response.sha256 == hashlib.sha256(data).hexdigest()
+    assert completed[-1] == len(data)
 
 
 def test_object_file_upload_streams_without_loading_a_second_copy(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    data = b"streamed file source"
+    data = b"streamed file source" * 100_000
     source = tmp_path / "source.tar.gz"
     source.write_bytes(data)
     completed: list[int] = []
 
+    def reject_read_bytes(path: Path) -> bytes:
+        pytest.fail(f"upload must stream {path.name}")
+
+    monkeypatch.setattr(Path, "read_bytes", reject_read_bytes)
+
     with _http_server() as endpoint:
-        response = stream_object_file(
-            endpoint=endpoint,
-            token="test-token",
-            workspace="tenant-a",
-            source=source,
-            size=len(data),
-            name=source.name,
-            object_hash=hashlib.sha256(data).hexdigest(),
-            bucket=SOURCE_PACKAGE_BUCKET,
-            overwrite=False,
-            content_type="application/gzip",
-            metadata={"kind": "source"},
-            timeout_seconds=2.0,
-            progress=completed.append,
-            chunk_size=4,
+        response = (
+            Client(workspace="tenant-a")
+            ._bind_control(endpoint=endpoint, token="test-token")
+            .upload_file(
+                source,
+                name=source.name,
+                bucket=SOURCE_PACKAGE_BUCKET,
+                overwrite=False,
+                content_type="application/gzip",
+                metadata={"kind": "source"},
+                progress=completed.append,
+            )
         )
 
     assert response.object_id == "obj-stream"
-    assert completed == [4, 8, 12, 16, len(data)]
+    assert response.size == len(data)
+    assert response.sha256 == hashlib.sha256(data).hexdigest()
+    assert len(completed) > 1
+    assert completed == sorted(completed)
+    assert completed[-1] == len(data)
 
 
 def test_object_upload_maps_http_failures_and_rejects_invalid_success() -> None:

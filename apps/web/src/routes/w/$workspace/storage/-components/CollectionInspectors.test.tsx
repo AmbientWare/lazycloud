@@ -1,4 +1,5 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { testQueryClient } from "@/test/query-client";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 
@@ -7,7 +8,7 @@ import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { MapInspector } from "./CollectionInspectors";
 
 it("loads the value of an empty-string map key", async () => {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  const queryClient = testQueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   queryClient.setQueryData(workspaceQueryKeys.collections.mapCount("workspace-1", "map"), {
     count: 1,
   });
@@ -32,5 +33,4 @@ it("loads the value of an empty-string map key", async () => {
 
   await screen.findByText("value for the empty key");
   expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/maps/map/get?key=&workspace=workspace-1");
-  queryClient.clear();
 });

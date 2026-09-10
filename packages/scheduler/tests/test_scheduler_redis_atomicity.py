@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from typing import Never
 
 import pytest
-from coordination.redis_client import AsyncRedisClient, RedisClient, RedisSettings
+from coordination.redis_client import AsyncRedisClient, RedisClient
 from scheduler.state import (
     ConcurrencyReservationStatus,
     RedisSchedulerContainerRepository,
@@ -23,19 +22,6 @@ from shared.compute_policy import MachinePool
 from shared.placement import ProductRegion
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
-
-
-@pytest.fixture
-async def async_redis(
-    real_redis_actors: RealRedisActors,
-) -> AsyncIterator[AsyncRedisClient]:
-    client = AsyncRedisClient.from_settings(
-        RedisSettings(url=real_redis_actors.url, key_prefix=real_redis_actors.prefix)
-    )
-    try:
-        yield client
-    finally:
-        await client.close()
 
 
 class _FailingEvalRedis(FakeRedis):

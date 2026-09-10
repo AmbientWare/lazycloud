@@ -1,3 +1,4 @@
+import { testQueryClient } from "@/test/query-client";
 import { createElement, type PropsWithChildren } from "react";
 import { QueryClient, QueryClientProvider, type InfiniteData } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
@@ -91,12 +92,6 @@ describe("access tokens controller", () => {
 function wrapper(queryClient: QueryClient) {
   return ({ children }: PropsWithChildren) =>
     createElement(QueryClientProvider, { client: queryClient }, children);
-}
-
-function testQueryClient(): QueryClient {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
 }
 
 function cachedTokens(queryClient: QueryClient): AuthToken[] {

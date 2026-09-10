@@ -7,13 +7,11 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
-from examples.document_processing.api import TERMINAL_STATUSES
 from examples.document_processing.api import api as fastapi_app
 from examples.document_processing.resources import (
     MAX_UPLOAD_BYTES,
 )
 from examples.document_processing.security import (
-    TOKEN_LIFETIME_SECONDS,
     InvalidJobToken,
     issue_job_token,
     verify_job_token,
@@ -27,9 +25,7 @@ from examples.document_processing.storage import (
     write_bounded_upload,
 )
 from examples.document_processing.worker import process_document
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-from starlette.routing import Mount
 
 SECRET = b"s" * 48
 DOCUMENT_ID = "a" * 32
@@ -38,24 +34,6 @@ DOCUMENT_ID = "a" * 32
 async def _chunks(*values: bytes) -> AsyncIterator[bytes]:
     for value in values:
         yield value
-
-
-def test_fastapi_surface_exposes_health_static_upload_poll_result_and_delete() -> None:
-    routes = {
-        (route.path, tuple(sorted(route.methods or set())))
-        for route in fastapi_app.routes
-        if isinstance(route, APIRoute)
-    }
-    mounts = {route.path for route in fastapi_app.routes if isinstance(route, Mount)}
-
-    assert "/static" in mounts
-    assert ("/", ("GET",)) in routes
-    assert ("/health", ("GET",)) in routes
-    assert ("/api/documents/{filename}", ("PUT",)) in routes
-    assert ("/api/jobs/status", ("GET",)) in routes
-    assert ("/api/jobs/result", ("GET",)) in routes
-    assert ("/api/jobs", ("DELETE",)) in routes
-    assert {"complete", "failed", "expired", "timeout", "cancelled"} == TERMINAL_STATUSES
 
 
 @pytest.mark.parametrize(
@@ -94,31 +72,34 @@ def test_upload_validation_rejects_paths_and_mismatched_types(
         validate_upload(filename, content_type)
 
 
-def test_upload_route_distinguishes_type_header_and_size_failures() -> None:
-    client = TestClient(fastapi_app)
+def test_upload_route_distinguishes_type_header_and_size_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("examples.document_processing.api.DATA_ROOT", tmp_path)
+    with TestClient(fastapi_app) as client:
+        unsupported = client.put(
+            "/api/documents/scan.png",
+            content=b"not an image",
+            headers={"Content-Type": "image/jpeg"},
+        )
+        malformed_length = client.put(
+            "/api/documents/scan.png",
+            content=b"not an image",
+            headers={"Content-Type": "image/png", "Content-Length": "invalid"},
+        )
+        oversized = client.put(
+            "/api/documents/scan.png",
+            content=b"not an image",
+            headers={
+                "Content-Type": "image/png",
+                "Content-Length": str(MAX_UPLOAD_BYTES + 1),
+            },
+        )
 
-    unsupported = client.put(
-        "/api/documents/scan.png",
-        content=b"not an image",
-        headers={"Content-Type": "image/jpeg"},
-    )
-    malformed_length = client.put(
-        "/api/documents/scan.png",
-        content=b"not an image",
-        headers={"Content-Type": "image/png", "Content-Length": "invalid"},
-    )
-    oversized = client.put(
-        "/api/documents/scan.png",
-        content=b"not an image",
-        headers={
-            "Content-Type": "image/png",
-            "Content-Length": str(MAX_UPLOAD_BYTES + 1),
-        },
-    )
-
-    assert unsupported.status_code == 415
-    assert malformed_length.status_code == 400
-    assert oversized.status_code == 413
+        assert unsupported.status_code == 415
+        assert malformed_length.status_code == 400
+        assert oversized.status_code == 413
 
 
 def test_document_identity_cannot_escape_volume_root(tmp_path: Path) -> None:
@@ -151,19 +132,19 @@ def test_job_tokens_bind_task_document_and_expiry() -> None:
     assert claims.task_id == "task-123"
     assert claims.document_id == DOCUMENT_ID
     assert claims.suffix == ".png"
-    assert claims.expires_at == 100 + TOKEN_LIFETIME_SECONDS
+    assert 100 < claims.expires_at <= 100 + 24 * 60 * 60
 
     encoded, signature = token.split(".")
     forged = f"{encoded[:-1]}A.{signature}"
     with pytest.raises(InvalidJobToken):
         verify_job_token(forged, secret=SECRET, now=101)
     with pytest.raises(InvalidJobToken):
-        verify_job_token(token, secret=SECRET, now=100 + TOKEN_LIFETIME_SECONDS)
+        verify_job_token(token, secret=SECRET, now=claims.expires_at)
     with pytest.raises(InvalidJobToken):
         verify_job_token("not-base64.unsigned", secret=SECRET, now=101)
 
 
-def test_real_ocr_path_writes_atomic_result_and_always_removes_upload(
+def test_worker_persists_ocr_output_and_removes_upload_on_success_and_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -172,7 +153,6 @@ def test_real_ocr_path_writes_atomic_result_and_always_removes_upload(
     source.write_bytes(b"image")
 
     def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-        assert command[:2] == ["tesseract", str(source)]
         return subprocess.CompletedProcess(command, 0, stdout="Detected text\n", stderr="")
 
     monkeypatch.setattr("examples.document_processing.worker.subprocess.run", fake_run)

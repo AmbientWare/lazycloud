@@ -1,4 +1,5 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { testQueryClient } from "@/test/query-client";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 
@@ -25,7 +26,7 @@ it("saves reload and usage limits together and preserves untouched settings", as
       disconnect() {}
     },
   );
-  const client = new QueryClient({
+  const client = testQueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
   let stored: BillingPreferences = {
@@ -103,5 +104,4 @@ it("saves reload and usage limits together and preserves untouched settings", as
   expect(stored.reload_enabled).toBe(true);
   expect(stored.monthly_usage_limit_nanos).toBe(50_000_000_000);
   expect(stored.reload_monthly_payment_limit_cents).toBe(2500);
-  client.clear();
 });

@@ -3,12 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import pytest
-from api.server.services import ApiServices
+from control.service import ControlPlaneService
+from database.context import ServiceContext
 from database.repositories.identity import UserIdentityRepository, WorkspaceMemberRepository
 from identity.sign_in import SignInService
 from shared.errors import UpstreamUnavailableError
 from shared.external_identity import ExternalIdentityProfile
 from shared.identity import IdentityProvider
+from tests.fakes import FakeWorkspaceBuckets
+from tests.real_redis import RealRedisActors
 
 _SUBJECT = "4815162342"
 _LOGIN = "octo"
@@ -51,7 +54,8 @@ class _FailingThenRecordingProvisioner:
 
 
 def test_a_sign_in_whose_provisioning_fails_mints_no_session(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     """A refused provisioning leaves an account that cannot be signed in as.
 
@@ -65,10 +69,12 @@ def test_a_sign_in_whose_provisioning_fails_mints_no_session(
     identity = _RecordingIdentityProvider()
     provisioner = _FailingThenRecordingProvisioner()
     service = SignInService(
-        context=isolated_services.context,
-        redis=isolated_services.sign_in.redis,
+        context=service_context,
+        redis=real_redis_actors.client(),
         provider_factory=lambda: identity,
-        provision_default_workspace=isolated_services.control_plane_service.ensure_default_workspace,
+        provision_default_workspace=ControlPlaneService(
+            service_context, workspace_storage_client=FakeWorkspaceBuckets()
+        ).ensure_default_workspace,
         provision_billing_account=provisioner,
     )
 
@@ -76,7 +82,7 @@ def test_a_sign_in_whose_provisioning_fails_mints_no_session(
     with pytest.raises(UpstreamUnavailableError):
         service.complete(code="auth-code", state=identity.states[-1])
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         linked = UserIdentityRepository(session).by_subject(
             provider=IdentityProvider.Github,
             subject=_SUBJECT,

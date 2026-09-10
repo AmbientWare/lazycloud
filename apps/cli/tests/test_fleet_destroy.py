@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from shared.http.errors import ErrorResponse, HttpApiError
 
@@ -42,7 +40,9 @@ def _use_client(monkeypatch: pytest.MonkeyPatch, client: _Client) -> None:
 def _destroy(
     monkeypatch: pytest.MonkeyPatch,
     client: _Client,
-    **kwargs: Any,
+    *,
+    timeout_seconds: float = 600.0,
+    interval_seconds: float = 0.01,
 ) -> fleet.FleetUnitTeardown:
     _use_client(monkeypatch, client)
 
@@ -54,20 +54,14 @@ def _destroy(
         workspace_id="ws",
         unit_id="unit-1",
         unit_name="managed-pool",
-        timeout_seconds=kwargs.get("timeout_seconds", 600.0),
-        interval_seconds=kwargs.get("interval_seconds", 0.01),
+        timeout_seconds=timeout_seconds,
+        interval_seconds=interval_seconds,
     )
 
 
 def test_a_held_capacity_lease_is_waited_out_rather_than_reported(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The whole reason this command exists.
-
-    The lease a delete contends with is held for up to five minutes and clears
-    on its own. Reading it as a refusal is what left two units standing, and the
-    scheduler rebuilt their autoscaling groups from the rows that survived.
-    """
 
     client = _Client(
         [
@@ -87,12 +81,6 @@ def test_a_held_capacity_lease_is_waited_out_rather_than_reported(
 def test_a_provider_still_tearing_down_is_waited_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Deleting an autoscaling group returns before the group is gone.
-
-    The first delete tears it down and reports the provider unavailable; a later
-    one removes the launch template and succeeds. Both are the same teardown, so
-    only the second answer means anything.
-    """
 
     client = _Client([_api_error(503, "upstream_unavailable"), None])
 
@@ -105,12 +93,6 @@ def test_a_provider_still_tearing_down_is_waited_out(
 def test_a_unit_holding_reservations_is_reported_not_retried(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Not every conflict is a lease.
-
-    A unit with open reservations answers 409 too, and waiting does not change
-    it. Retrying that one until the budget runs out would turn a fact into a
-    timeout and bury the reason.
-    """
 
     client = _Client([_api_error(409, "conflict")])
 
@@ -122,7 +104,6 @@ def test_a_unit_holding_reservations_is_reported_not_retried(
 
 
 def test_a_unit_already_gone_counts_as_done(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Absent is the state this is trying to reach, however it got there."""
 
     outcome = _destroy(monkeypatch, _Client([_api_error(404, "not_found")]))
 
@@ -133,17 +114,17 @@ def test_a_unit_already_gone_counts_as_done(monkeypatch: pytest.MonkeyPatch) -> 
 def test_a_lease_that_never_clears_ends_the_budget_and_reports(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A teardown that cannot finish has to say so.
-
-    Reporting success here is the one outcome worth preventing: the next step
-    destroys the cluster that would otherwise have stopped the machines.
-    """
 
     client = _Client([_api_error(409, "capacity_reservation_lock_contended")] * 200)
-    # Real waiting here, briefly. The budget is a wall-clock deadline, so a
-    # stubbed sleep would spin without ever reaching it and prove nothing about
-    # the thing under test.
     _use_client(monkeypatch, client)
+    elapsed = 0.0
+
+    def advance(seconds: float) -> None:
+        nonlocal elapsed
+        elapsed += seconds
+
+    monkeypatch.setattr(fleet.time, "monotonic", lambda: elapsed)
+    monkeypatch.setattr(fleet.time, "sleep", advance)
 
     outcome = fleet._destroy_unit(
         workspace_id="ws",

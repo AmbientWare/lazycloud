@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.images import ImageArchiveRepository
 from images.control import ImageControlService
 from images.publication import (
@@ -14,10 +14,7 @@ from images.publication import (
     ImageBuildPublicationPublishStatus,
     ImageBuildPublicationStatus,
 )
-from pydantic import JsonValue, TypeAdapter
 from shared.http.images import (
-    BuildImageRequest,
-    BuildImageResponse,
     VerifyImageBuildRequest,
     VerifyImageBuildResponse,
 )
@@ -27,7 +24,6 @@ from storage.image_archive import ImageArchiveSettings
 from storage_client.s3 import S3ObjectInfo
 
 _TEST_BASE_IMAGE_DIGEST = f"sha256:{'a' * 64}"
-_JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
 def _archive_settings() -> ImageArchiveSettings:
@@ -55,17 +51,6 @@ def _verify_image(
     request: VerifyImageBuildRequest,
 ) -> VerifyImageBuildResponse:
     return service.verify_image_build(
-        request,
-        workspace_id=_default_workspace_id(services),
-    )
-
-
-def _build_image(
-    service: ImageControlService,
-    services: ApiServices,
-    request: BuildImageRequest,
-) -> Generator[BuildImageResponse, None, None]:
-    return service.build_image(
         request,
         workspace_id=_default_workspace_id(services),
     )
@@ -142,16 +127,17 @@ def test_image_control_rejects_oversized_context_before_download(
     ],
 )
 def test_archive_publication_rejects_head_integrity_mismatch(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     head_size: int,
     head_sha256: str,
 ) -> None:
-    workspace_id = _default_workspace_id(isolated_services)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
     image_id = "image-integrity"
     build_id = "build-integrity"
     archive_sha256 = "a" * 64
     archive_key = f"image-archives/{image_id}.rclip"
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         archive, _ = ImageArchiveRepository(session).reserve(
             image_id,
             bucket="image-archives",
@@ -179,7 +165,7 @@ def test_archive_publication_rejects_head_integrity_mismatch(
     result = ArchiveImageBuildPublicationPublisher(
         object_store=IntegrityMismatchStore(),
         settings=_archive_settings(),
-        context=isolated_services.context,
+        context=service_context,
     ).publish(
         ImageBuildRecord(
             id=build_id,
@@ -224,8 +210,3 @@ def test_image_control_secret_version_invalidates_identity_and_inline_values_fai
     assert first.image_id != second.image_id
     assert not inline.valid
     assert "stored secret names" in inline.reason
-
-
-def _json_object(value: JsonValue, *, name: str) -> dict[str, JsonValue]:
-    assert isinstance(value, dict), f"{name} must be a JSON object"
-    return value

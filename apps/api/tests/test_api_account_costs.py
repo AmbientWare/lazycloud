@@ -30,7 +30,6 @@ _WINDOW = timedelta(seconds=60)
 
 def test_account_costs_sum_what_this_account_pays_for_and_nothing_else(
     unpriced_services: ApiServices,
-    client_stack: ExitStack,
 ) -> None:
     """One figure for the account, over exactly the rows it is invoiced for.
 
@@ -48,79 +47,79 @@ def test_account_costs_sum_what_this_account_pays_for_and_nothing_else(
     either rule, and stays here as the coarser half of the boundary.
     """
 
-    now = utc_now()
-    started_at = now + _WINDOW_AT
-    ended_at = started_at + _WINDOW
-    control = ControlPlaneService(unpriced_services.context)
-    with unpriced_services.context.database.session() as session:
-        PlatformRateRepository(session).publish(
-            pricing_version="test.account-costs",
-            effective_at=now + _RATE_AT,
-            nanos_per_egress_byte=Decimal(1),
-            nanos_per_volume_byte_second=Decimal(0),
-        )
-        held = unpriced_services.context.default_workspace_id(session)
-    owner_user_id = workspace_owner_user_id(unpriced_services.context, held)
-
-    # A workspace somebody else pays for and this person was added to, and one
-    # they cannot reach at all.
-    colleague = owned_workspace(control, f"colleague-{uuid4().hex[:8]}")
-    stranger = owned_workspace(control, f"stranger-{uuid4().hex[:8]}")
-    with unpriced_services.context.database.session() as session:
-        WorkspaceMemberRepository(session).add(
-            workspace_id=colleague.id, user_id=owner_user_id, role=WorkspaceRole.Member
-        )
-
-    for workspace_id, quantity in ((held, 300), (colleague.id, 200), (stranger.id, 900)):
-        unpriced_services.usage.append(
-            UsageRecord(
-                id=str(uuid4()),
-                workspace_id=workspace_id,
-                resource_type="workspace",
-                resource_id=workspace_id,
-                metric=UsageMetric.NetworkEgressBytes,
-                quantity=quantity,
-                unit=UsageUnit.Bytes,
-                labels={"app_id": str(uuid4()), "stub_id": str(uuid4())},
-                metadata={
-                    METERING_WINDOW_STARTED_AT_METADATA_KEY: started_at.isoformat(),
-                    METERING_WINDOW_ENDED_AT_METADATA_KEY: ended_at.isoformat(),
-                },
+    with ExitStack() as client_stack:
+        now = utc_now()
+        started_at = now + _WINDOW_AT
+        ended_at = started_at + _WINDOW
+        control = ControlPlaneService(unpriced_services.context)
+        with unpriced_services.context.database.session() as session:
+            PlatformRateRepository(session).publish(
+                pricing_version="test.account-costs",
+                effective_at=now + _RATE_AT,
+                nanos_per_egress_byte=Decimal(1),
+                nanos_per_volume_byte_second=Decimal(0),
             )
+            held = unpriced_services.context.default_workspace_id(session)
+        owner_user_id = workspace_owner_user_id(unpriced_services.context, held)
+
+        # A workspace somebody else pays for and this person was added to, and one
+        # they cannot reach at all.
+        colleague = owned_workspace(control, f"colleague-{uuid4().hex[:8]}")
+        stranger = owned_workspace(control, f"stranger-{uuid4().hex[:8]}")
+        with unpriced_services.context.database.session() as session:
+            WorkspaceMemberRepository(session).add(
+                workspace_id=colleague.id, user_id=owner_user_id, role=WorkspaceRole.Member
+            )
+
+        for workspace_id, quantity in ((held, 300), (colleague.id, 200), (stranger.id, 900)):
+            unpriced_services.usage.append(
+                UsageRecord(
+                    id=str(uuid4()),
+                    workspace_id=workspace_id,
+                    resource_type="workspace",
+                    resource_id=workspace_id,
+                    metric=UsageMetric.NetworkEgressBytes,
+                    quantity=quantity,
+                    unit=UsageUnit.Bytes,
+                    labels={"app_id": str(uuid4()), "stub_id": str(uuid4())},
+                    metadata={
+                        METERING_WINDOW_STARTED_AT_METADATA_KEY: started_at.isoformat(),
+                        METERING_WINDOW_ENDED_AT_METADATA_KEY: ended_at.isoformat(),
+                    },
+                )
+            )
+
+        issuer = TokenIssuer(unpriced_services.context)
+        with unpriced_services.context.database.session() as session:
+            raw_token, _ = issuer.issue_for_user(
+                session, "account-costs-owner", user_id=owner_user_id, kind=TokenKind.User
+            )
+        client = client_stack.enter_context(TestClient(create_app(unpriced_services)))
+
+        response = client.get(
+            "/api/v1/billing/costs",
+            params={
+                "start": (started_at - _WINDOW).isoformat(),
+                "end": (ended_at + _WINDOW).isoformat(),
+                "group_by": "app",
+            },
+            headers={"Authorization": f"Bearer {raw_token}"},
         )
 
-    issuer = TokenIssuer(unpriced_services.context)
-    with unpriced_services.context.database.session() as session:
-        raw_token, _ = issuer.issue_for_user(
-            session, "account-costs-owner", user_id=owner_user_id, kind=TokenKind.User
+        assert response.status_code == 200
+        body = response.json()
+        assert body["cost_nanos"] == 300, (
+            "the account total is not the sum of what this account is invoiced for: "
+            f"{body['cost_nanos']} against 300"
         )
-    client = client_stack.enter_context(TestClient(create_app(unpriced_services)))
-
-    response = client.get(
-        "/api/v1/billing/costs",
-        params={
-            "start": (started_at - _WINDOW).isoformat(),
-            "end": (ended_at + _WINDOW).isoformat(),
-            "group_by": "app",
-        },
-        headers={"Authorization": f"Bearer {raw_token}"},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["cost_nanos"] == 300, (
-        "the account total is not the sum of what this account is invoiced for: "
-        f"{body['cost_nanos']} against 300"
-    )
-    assert body["workspace_id"] == "", "an account-wide page named one of its workspaces"
-    assert [(row["workspace_id"], row["cost_nanos"]) for row in body["data"]] == [(held, 300)], (
-        f"an account page's rows no longer name the workspace each cost arose in: {body['data']}"
-    )
+        assert body["workspace_id"] == "", "an account-wide page named one of its workspaces"
+        assert [(row["workspace_id"], row["cost_nanos"]) for row in body["data"]] == [
+            (held, 300)
+        ], f"an account page's rows no longer name the workspace each cost arose in: {body['data']}"
 
 
 def test_account_cost_series_buckets_the_window_and_stops_at_the_payer(
     unpriced_services: ApiServices,
-    client_stack: ExitStack,
 ) -> None:
     """The shape of an account's spend, over exactly the intervals it was asked for.
 
@@ -136,79 +135,80 @@ def test_account_cost_series_buckets_the_window_and_stops_at_the_payer(
     not add up to itself.
     """
 
-    now = utc_now()
-    # An hour boundary far enough ahead that the rate below is already effective
-    # when the first metering window opens.
-    origin = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
-    control = ControlPlaneService(unpriced_services.context)
-    with unpriced_services.context.database.session() as session:
-        PlatformRateRepository(session).publish(
-            pricing_version="test.account-series",
-            effective_at=now + _RATE_AT,
-            nanos_per_egress_byte=Decimal(1),
-            nanos_per_volume_byte_second=Decimal(0),
-        )
-        held = unpriced_services.context.default_workspace_id(session)
-    owner_user_id = workspace_owner_user_id(unpriced_services.context, held)
-    colleague = owned_workspace(control, f"colleague-{uuid4().hex[:8]}")
-    with unpriced_services.context.database.session() as session:
-        WorkspaceMemberRepository(session).add(
-            workspace_id=colleague.id, user_id=owner_user_id, role=WorkspaceRole.Member
-        )
-
-    for workspace_id, hour, quantity in (
-        (held, 0, 300),
-        (held, 2, 500),
-        (colleague.id, 1, 900),
-    ):
-        started_at = origin + timedelta(hours=hour)
-        unpriced_services.usage.append(
-            UsageRecord(
-                id=str(uuid4()),
-                workspace_id=workspace_id,
-                resource_type="workspace",
-                resource_id=workspace_id,
-                metric=UsageMetric.NetworkEgressBytes,
-                quantity=quantity,
-                unit=UsageUnit.Bytes,
-                labels={"app_id": str(uuid4()), "stub_id": str(uuid4())},
-                metadata={
-                    METERING_WINDOW_STARTED_AT_METADATA_KEY: started_at.isoformat(),
-                    METERING_WINDOW_ENDED_AT_METADATA_KEY: (started_at + _WINDOW).isoformat(),
-                },
+    with ExitStack() as client_stack:
+        now = utc_now()
+        # An hour boundary far enough ahead that the rate below is already effective
+        # when the first metering window opens.
+        origin = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+        control = ControlPlaneService(unpriced_services.context)
+        with unpriced_services.context.database.session() as session:
+            PlatformRateRepository(session).publish(
+                pricing_version="test.account-series",
+                effective_at=now + _RATE_AT,
+                nanos_per_egress_byte=Decimal(1),
+                nanos_per_volume_byte_second=Decimal(0),
             )
+            held = unpriced_services.context.default_workspace_id(session)
+        owner_user_id = workspace_owner_user_id(unpriced_services.context, held)
+        colleague = owned_workspace(control, f"colleague-{uuid4().hex[:8]}")
+        with unpriced_services.context.database.session() as session:
+            WorkspaceMemberRepository(session).add(
+                workspace_id=colleague.id, user_id=owner_user_id, role=WorkspaceRole.Member
+            )
+
+        for workspace_id, hour, quantity in (
+            (held, 0, 300),
+            (held, 2, 500),
+            (colleague.id, 1, 900),
+        ):
+            started_at = origin + timedelta(hours=hour)
+            unpriced_services.usage.append(
+                UsageRecord(
+                    id=str(uuid4()),
+                    workspace_id=workspace_id,
+                    resource_type="workspace",
+                    resource_id=workspace_id,
+                    metric=UsageMetric.NetworkEgressBytes,
+                    quantity=quantity,
+                    unit=UsageUnit.Bytes,
+                    labels={"app_id": str(uuid4()), "stub_id": str(uuid4())},
+                    metadata={
+                        METERING_WINDOW_STARTED_AT_METADATA_KEY: started_at.isoformat(),
+                        METERING_WINDOW_ENDED_AT_METADATA_KEY: (started_at + _WINDOW).isoformat(),
+                    },
+                )
+            )
+
+        issuer = TokenIssuer(unpriced_services.context)
+        with unpriced_services.context.database.session() as session:
+            raw_token, _ = issuer.issue_for_user(
+                session, "account-series-owner", user_id=owner_user_id, kind=TokenKind.User
+            )
+        client = client_stack.enter_context(TestClient(create_app(unpriced_services)))
+
+        response = client.get(
+            "/api/v1/billing/cost-series",
+            params={
+                "start": origin.isoformat(),
+                "end": (origin + timedelta(hours=4)).isoformat(),
+                "bucket": "hour",
+            },
+            headers={"Authorization": f"Bearer {raw_token}"},
         )
 
-    issuer = TokenIssuer(unpriced_services.context)
-    with unpriced_services.context.database.session() as session:
-        raw_token, _ = issuer.issue_for_user(
-            session, "account-series-owner", user_id=owner_user_id, kind=TokenKind.User
+        assert response.status_code == 200
+        body = response.json()
+        assert [bucket["cost_nanos"] for bucket in body["data"]] == [300, 0, 500, 0], (
+            "the series is not one interval per hour of the window, holding only this "
+            f"account's spend: {body['data']}"
         )
-    client = client_stack.enter_context(TestClient(create_app(unpriced_services)))
-
-    response = client.get(
-        "/api/v1/billing/cost-series",
-        params={
-            "start": origin.isoformat(),
-            "end": (origin + timedelta(hours=4)).isoformat(),
-            "bucket": "hour",
-        },
-        headers={"Authorization": f"Bearer {raw_token}"},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert [bucket["cost_nanos"] for bucket in body["data"]] == [300, 0, 500, 0], (
-        "the series is not one interval per hour of the window, holding only this "
-        f"account's spend: {body['data']}"
-    )
-    assert body["cost_nanos"] == 800, (
-        f"the total and the intervals it is drawn from disagree: {body['cost_nanos']}"
-    )
-    assert [datetime.fromisoformat(bucket["started_at"]) for bucket in body["data"]] == [
-        origin + timedelta(hours=hour) for hour in range(4)
-    ]
-    assert [total["dimension"] for total in body["data"][0]["dimensions"]] == ["network_egress"]
-    assert body["data"][1]["dimensions"] == [], (
-        "an interval nothing was metered in reported a measurement"
-    )
+        assert body["cost_nanos"] == 800, (
+            f"the total and the intervals it is drawn from disagree: {body['cost_nanos']}"
+        )
+        assert [datetime.fromisoformat(bucket["started_at"]) for bucket in body["data"]] == [
+            origin + timedelta(hours=hour) for hour in range(4)
+        ]
+        assert [total["dimension"] for total in body["data"][0]["dimensions"]] == ["network_egress"]
+        assert body["data"][1]["dimensions"] == [], (
+            "an interval nothing was metered in reported a measurement"
+        )

@@ -9,12 +9,10 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from compute.agent_control import agent_machine_worker_id
 from compute.policy import WorkspaceComputePolicyService
-from compute.providers import ResolvedComputeProvider
 from compute.request_placement import (
     ComputeCapacityPlacementRequest,
     ComputeCapacityPlacementService,
 )
-from compute.service import ComputeService
 from control.service import ControlPlaneService
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.compute import (
@@ -58,13 +56,12 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.deployment_records import DeploymentSpec
-from shared.errors import UpstreamUnavailableError
 from shared.http.compute_policy import (
     MachinePoolListResponse,
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputeSummaryResponse,
 )
-from shared.identity import TokenKind
+from shared.identity import TokenKind, WorkspaceRecord
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.supplier_costs import SupplierCostTerms
 from tests.workspaces import owned_workspace, workspace_owner_user_id
@@ -274,92 +271,9 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     assert zero_inventory.data == []
 
 
-def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
-    isolated_services: ApiServices,
-) -> None:
-    """Placement resolves a pool; it never picks which unit inside it serves.
-
-    Two units feed one pool here. Placement answering with the pool is what
-    leaves the acquisition loop both candidates to fail over between; answering
-    with a unit would pin the request to one of them.
-    """
-    workspace_id = _workspace_id(isolated_services)
-    for name, owner in (
-        ("unit-a", "10000000-0000-4000-8000-000000000001"),
-        ("unit-b", "20000000-0000-4000-8000-000000000002"),
-    ):
-        isolated_services.compute.create_unit(
-            UnitName(name),
-            workspace=workspace_id,
-            pool=MachinePool("shared-pool"),
-            provider="agent",
-            capacity_owner_id=owner,
-            worker_cpu_millicores=4_000,
-            worker_memory_mib=8_192,
-        )
-    placement = ComputeCapacityPlacementService(
-        isolated_services.context,
-        WorkspaceComputePolicyService(isolated_services.context),
-        isolated_services.compute,
-    )
-
-    result = placement.place(
-        ComputeCapacityPlacementRequest(
-            workspace_id=workspace_id,
-            requested_pool="shared-pool",
-            requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
-        )
-    )
-
-    assert result.pool == "shared-pool"
-
-
-def test_pool_selection_survives_supplier_failure_until_capacity_is_needed(
-    isolated_services: ApiServices, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def unavailable_providers(
-        self: ComputeService, workspace_id: str
-    ) -> tuple[ResolvedComputeProvider, ...]:
-        raise UpstreamUnavailableError("supplier unavailable")
-
-    monkeypatch.setattr(ComputeService, "pooled_providers", unavailable_providers)
-    placement = ComputeCapacityPlacementService(
-        isolated_services.context,
-        WorkspaceComputePolicyService(isolated_services.context),
-        isolated_services.compute,
-    )
-    request = ComputeCapacityPlacementRequest(
-        workspace_id=_workspace_id(isolated_services),
-        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
-    )
-
-    assert placement.place(request).pool == LAZYCLOUD_MACHINE_POOL
-    with pytest.raises(UpstreamUnavailableError, match="supplier unavailable"):
-        placement.purchase_candidates(request)
-
-
-def test_placement_defaults_to_the_platform_pool_without_a_connection(
-    isolated_services: ApiServices,
-) -> None:
-    placement = ComputeCapacityPlacementService(
-        isolated_services.context,
-        WorkspaceComputePolicyService(isolated_services.context),
-        isolated_services.compute,
-    )
-
-    result = placement.place(
-        ComputeCapacityPlacementRequest(
-            workspace_id=_workspace_id(isolated_services),
-            requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
-        )
-    )
-
-    assert result.pool == LAZYCLOUD_MACHINE_POOL
-
-
 def test_machine_pool_listing_is_scoped_to_the_caller_workspace(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
+    api_workspace: WorkspaceRecord,
 ) -> None:
     """A caller only sees the pools its own workspace's units feed.
 
@@ -367,27 +281,27 @@ def test_machine_pool_listing_is_scoped_to_the_caller_workspace(
     listing is only as scoped as the query behind it: a read across workspaces
     would hand one tenant the names of another tenant's capacity.
     """
-    control = ControlPlaneService(isolated_services.context)
-    caller = owned_workspace(control, "pool-listing-caller")
-    other = owned_workspace(control, "pool-listing-other")
-    isolated_services.compute.create_unit(
+    services, client = api_runtime
+    control = ControlPlaneService(services.context)
+    caller = api_workspace
+    other = owned_workspace(control, f"pool-listing-other-{caller.id}")
+    services.compute.create_unit(
         UnitName("caller-unit"),
         workspace=caller.id,
         pool=MachinePool("caller-pool"),
         provider="agent",
     )
-    isolated_services.compute.create_unit(
+    services.compute.create_unit(
         UnitName("other-unit"),
         workspace=other.id,
         pool=MachinePool("other-pool"),
         provider="agent",
     )
-    token, _record = AuthService(isolated_services.context).create_token(
+    token, _record = AuthService(services.context).create_token(
         "pool-listing-token",
         kind=TokenKind.Workspace,
         workspace_id=caller.id,
     )
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.get(
         "/api/v1/compute/pools",

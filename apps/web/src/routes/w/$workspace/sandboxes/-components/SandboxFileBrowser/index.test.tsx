@@ -1,6 +1,7 @@
+import { testQueryClient } from "@/test/query-client";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
 import type { Workspace } from "@/lib/api/schemas";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
@@ -25,11 +26,7 @@ let client: QueryClient;
 
 beforeEach(() => {
   vi.useFakeTimers();
-  client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
-});
-
-afterEach(() => {
-  client.clear();
+  client = testQueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
 });
 
 it("keeps late previews from replacing a newer selection or reopening after navigation", async () => {

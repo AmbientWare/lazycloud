@@ -160,6 +160,7 @@ def test_serve_preview_retries_attach_timeout() -> None:
         resource_client=gateway,
         terminal=Terminal(quiet=True),
         sync_dir=None,
+        attach_poll_seconds=0,
     )
 
     session.run()

@@ -10,6 +10,8 @@ from typer.testing import CliRunner
 
 from lazycloud import App
 
+pytestmark = pytest.mark.usefixtures("isolated_imports")
+
 
 def test_file_deploy_selects_the_whole_app_and_deduplicates_aliases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -1,11 +1,6 @@
+import { testQueryClient } from "@/test/query-client";
 import { act, render } from "@testing-library/react";
-import {
-  focusManager,
-  QueryClient,
-  QueryClientProvider,
-  useQuery,
-  type QueryKey,
-} from "@tanstack/react-query";
+import { focusManager, QueryClientProvider, useQuery, type QueryKey } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "@/lib/queries/workspace-keys";
@@ -64,7 +59,7 @@ function Watcher({ queryKey, onFetch }: { queryKey: QueryKey; onFetch: () => voi
 
 async function mountProvider(fetchMock: ReturnType<typeof vi.fn>) {
   vi.stubGlobal("fetch", fetchMock);
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = testQueryClient({ defaultOptions: { queries: { retry: false } } });
   const summaryFetches = vi.fn();
   const view = render(
     <QueryClientProvider client={client}>

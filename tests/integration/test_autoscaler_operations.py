@@ -4,33 +4,22 @@ from collections.abc import Mapping
 
 import pytest
 from api.fastapi_app import create_app
-from api.server.services import ApiEndpointDispatchAutoscalingReader, ApiServices
+from api.server.services import ApiServices
 from cli.api_client import AdminApiClient
 from cli.main import build_admin_cli
 from control.service import ControlPlaneService, StubKind, StubRecord
-from coordination.redis_client import RedisClient
-from execution.endpoints.service import EndpointControlService, EndpointDispatchStateRepository
-from execution.functions.service import FunctionControlService
-from execution.pods.service import PodControlService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from pydantic import BaseModel, JsonValue, TypeAdapter
-from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaling import (
     ENDPOINT_AUTOSCALER_SOURCE,
-    AutoscalingDriver,
-    EndpointAutoscaler,
-    FunctionAutoscaler,
-    PodAutoscaler,
 )
-from scheduler.state import RedisSchedulerContainerRepository, RedisSchedulerWorkerRepository
 from shared.autoscaler_state import (
     AutoscalerStateRecord,
     AutoscalerTargetKind,
     autoscaler_state_name,
 )
 from shared.http_transport import HttpChannel
-from tests.redis_fakes import FakeRedis
 from typer.testing import CliRunner
 
 from cli import operations
@@ -140,9 +129,9 @@ def test_autoscaler_cli_controls_real_api_and_persists_owner_state(
         )
         history_actions = [
             event.action
-            for event in _autoscaler_operations(isolated_services, _redis())
-            .history(workspace="default", target_id=stub.id)
-            .events
+            for event in isolated_services.autoscaler_operations_service.history(
+                workspace="default", target_id=stub.id
+            ).events
         ]
 
     assert status.exit_code == 0, status.output
@@ -153,50 +142,6 @@ def test_autoscaler_cli_controls_real_api_and_persists_owner_state(
     assert _AutoscalerCliControl.model_validate_json(resumed.output).autoscaling_enabled
     assert persisted_metadata == {"autoscaling_enabled": True}
     assert history_actions == ["endpoint.autoscaler.scale_decision"]
-
-
-def _redis() -> RedisClient:
-    return RedisClient(FakeRedis(), key_prefix="test")
-
-
-def _autoscaler_operations(
-    services: ApiServices,
-    redis: RedisClient,
-    *,
-    gateway_http_url: str = "http://gateway.internal:9000",
-) -> AutoscalerOperationsService:
-    endpoints = EndpointControlService(services, gateway_http_url=lambda: gateway_http_url)
-    pods = PodControlService(services, redis=redis)
-    return AutoscalerOperationsService(
-        services,
-        function_autoscaler=AutoscalingDriver(
-            services,
-            redis=redis,
-            workload=FunctionAutoscaler(services, functions=FunctionControlService(services)),
-            container_states=RedisSchedulerContainerRepository(redis),
-            container_requests=RedisSchedulerWorkerRepository(redis),
-        ),
-        endpoint_autoscaler=AutoscalingDriver(
-            services,
-            container_states=RedisSchedulerContainerRepository(redis),
-            container_requests=RedisSchedulerWorkerRepository(redis),
-            redis=redis,
-            workload=EndpointAutoscaler(
-                services,
-                endpoints=endpoints,
-                dispatches=ApiEndpointDispatchAutoscalingReader(
-                    EndpointDispatchStateRepository(services)
-                ),
-            ),
-        ),
-        pod_autoscaler=AutoscalingDriver(
-            services,
-            redis=redis,
-            workload=PodAutoscaler(services, redis=redis, pods=pods),
-            container_states=RedisSchedulerContainerRepository(redis),
-            container_requests=RedisSchedulerWorkerRepository(redis),
-        ),
-    )
 
 
 def _create_endpoint_stub(

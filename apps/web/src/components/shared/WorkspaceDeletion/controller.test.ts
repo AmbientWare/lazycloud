@@ -1,3 +1,4 @@
+import { testQueryClient } from "@/test/query-client";
 import { createElement, type PropsWithChildren } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
@@ -124,15 +125,6 @@ function renderController({
 function controllerWrapper(queryClient: QueryClient) {
   return ({ children }: PropsWithChildren) =>
     createElement(QueryClientProvider, { client: queryClient }, children);
-}
-
-function testQueryClient() {
-  return new QueryClient({
-    defaultOptions: {
-      mutations: { retry: false },
-      queries: { retry: false },
-    },
-  });
 }
 
 function sessionUser(): CurrentSession["user"] {

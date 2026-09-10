@@ -3,14 +3,17 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import uuid4
 
-from api.server.services import ApiServices
 from database.context import ServiceContext
 from database.repositories.observability import (
     UsageRepository,
     WorkerEventRepository,
 )
+from database.repositories.orchestration import WorkerRepository
 from database.tables.execution import EventTable
 from database.tables.observability import WorkerEventTable
+from observability.events import EventService
+from observability.usage import WorkerEventService
+from shared.compute_fleet import Worker
 from shared.timestamps import utc_now
 from shared.usage import UsageGroupKey, UsageMetric, UsageUnit
 from shared.usage_query import UsageQuery
@@ -22,11 +25,11 @@ from sqlalchemy import update
 
 
 def test_event_prune_uses_short_telemetry_and_long_audit_retention(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    events = isolated_services.events
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    events = EventService(service_context)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
     stale_telemetry = events.emit(
         WORKER_POOL_SIZER_DECISION_ACTION,
         resource_type="worker_pool",
@@ -48,7 +51,7 @@ def test_event_prune_uses_short_telemetry_and_long_audit_retention(
         workspace_id=workspace_id,
     )
     now = utc_now()
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         session.execute(
             update(EventTable)
             .where(EventTable.id == stale_telemetry.id)
@@ -68,9 +71,12 @@ def test_event_prune_uses_short_telemetry_and_long_audit_retention(
     assert [item.id for item in remaining] == [recent_audit.id]
 
 
-def test_worker_event_prune_deletes_aged_rows(isolated_services: ApiServices) -> None:
-    worker = isolated_services.compute.register_worker()
-    with isolated_services.context.database.session() as session:
+def test_worker_event_prune_deletes_aged_rows(service_context: ServiceContext) -> None:
+    events = WorkerEventService(service_context)
+    with service_context.database.session() as session:
+        worker = WorkerRepository(session).upsert(
+            Worker(id=str(uuid4())), workspace_id=service_context.default_workspace_id(session)
+        )
         repository = WorkerEventRepository(session)
         stale = repository.append(
             WorkerEventRecord(
@@ -94,10 +100,10 @@ def test_worker_event_prune_deletes_aged_rows(isolated_services: ApiServices) ->
             .values(created_at=utc_now() - timedelta(days=40))
         )
 
-    pruned = isolated_services.worker_events.prune()
+    pruned = events.prune()
 
     assert pruned == 1
-    remaining = isolated_services.worker_events.list()
+    remaining = events.list()
     assert [item.id for item in remaining] == [fresh.id]
 
 

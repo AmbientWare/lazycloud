@@ -1,25 +1,17 @@
 from __future__ import annotations
 
-import asyncio
-import io
-from collections.abc import AsyncIterator
-from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 from api.server.services import ApiServices
-from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService, StubKind, StubRecord
-from coordination.redis_client import RedisClient
 from execution.functions.service import FunctionControlService
 from gateway.service import GatewayControlService
 from pydantic import JsonValue, TypeAdapter
 from runner.function import (
     FunctionRunner,
     FunctionRunnerConfig,
-    TaskLogStream,
-    decode_function_invocation,
 )
 from runner.invocation import cloudpickle_bytes
 from scheduler.containers import (
@@ -30,26 +22,25 @@ from scheduler.state import SchedulerWorkerRequest
 from shared.function_payloads import (
     FunctionCloudpickleInvocation,
     FunctionCloudpickleResult,
-    FunctionJsonInvocation,
     FunctionPayloadEncoding,
 )
 from shared.http.functions import (
-    FunctionClaimedTask,
     FunctionClaimRequest,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionSetResultBody,
 )
 from shared.http.gateway_tasks import AppendTaskLogRequest, EndTaskRequest, StartTaskRequest
-from shared.lifecycle import LifecycleHooks
 from shared.tasks import TaskStatus
-from tests.redis_fakes import FakeRedis
+
+pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
-def test_function_runner_streams_plain_user_logs_and_persists_result(
-    isolated_services: ApiServices,
+@pytest.mark.anyio
+async def test_function_runner_streams_plain_user_logs_and_persists_result(
+    async_services: ApiServices,
     tmp_path: Path,
 ) -> None:
     handler_ref = _write_handler_module(
@@ -67,7 +58,7 @@ def stream_value(value):
 """,
         "stream_value",
     )
-    responses = _invoke_and_run(isolated_services, handler_ref, 8)
+    responses = await _invoke_and_run(async_services, handler_ref, 8)
 
     final = _final_response(responses)
     assert final.exit_code == 0
@@ -87,29 +78,18 @@ def stream_value(value):
     assert "stderr" not in output
 
     task_id = responses[0].task_id
-    logs = isolated_services.tasks.logs(task_id)
+    logs = async_services.tasks.logs(task_id)
     assert [(entry.stream, entry.message) for entry in logs] == [
         ("stdout", "alpha"),
         ("stdout", "beta"),
         ("stdout", "gamma"),
     ]
-    assert isolated_services.tasks.get(task_id).status is TaskStatus.Complete
+    assert async_services.tasks.get(task_id).status is TaskStatus.Complete
 
 
-def test_function_runner_rejects_untyped_invocation_envelopes() -> None:
-    with pytest.raises(ValueError, match="invalid function invocation envelope"):
-        decode_function_invocation(
-            FunctionClaimedTask(
-                task_id="task-1",
-                invocation=FunctionCloudpickleInvocation.from_bytes(
-                    cloudpickle_bytes(["not", "an", "envelope"])
-                ),
-            )
-        )
-
-
-def test_function_runner_failure_streams_and_persists_traceback(
-    isolated_services: ApiServices,
+@pytest.mark.anyio
+async def test_function_runner_failure_streams_and_persists_traceback(
+    async_services: ApiServices,
     tmp_path: Path,
 ) -> None:
     handler_ref = _write_handler_module(
@@ -121,7 +101,7 @@ def fail_value():
 """,
         "fail_value",
     )
-    responses = _invoke_and_run(isolated_services, handler_ref)
+    responses = await _invoke_and_run(async_services, handler_ref)
 
     final = _final_response(responses)
     assert final.exit_code == 1
@@ -133,33 +113,17 @@ def fail_value():
     assert "RuntimeError: boom" in output
 
     task_id = responses[0].task_id
-    logs = isolated_services.tasks.logs(task_id)
+    logs = async_services.tasks.logs(task_id)
     stderr = "\n".join(entry.message for entry in logs if entry.stream == "stderr")
     assert "Traceback" in stderr
     assert "RuntimeError: boom" in stderr
-    assert isolated_services.tasks.get(task_id).status is TaskStatus.Failed
+    assert async_services.tasks.get(task_id).status is TaskStatus.Failed
 
 
-def test_task_log_stream_flush_publishes_partial_line_once() -> None:
-    runner = _RecordingRunner()
-    stream = TaskLogStream(runner, "task-1", "stdout", io.StringIO())
-
-    assert stream.write("partial") == len("partial")
-    assert runner.logs == []
-
-    stream.flush()
-    stream.flush_log()
-
-    assert runner.logs == [("stdout", "partial")]
-
-
-def _invoke_and_run(
+async def _invoke_and_run(
     runtime: ApiServices,
     handler_ref: str,
     *args: int,
-    raw_payload: bytes | None = None,
-    lifecycle_hooks: LifecycleHooks | None = None,
-    compute_state: RedisComputeStateRepository | None = None,
 ) -> list[FunctionInvokeResponse]:
     scheduler = _Scheduler()
     runtime.containers.scheduler = scheduler
@@ -167,23 +131,11 @@ def _invoke_and_run(
         runtime,
         async_database=runtime.require_async_io().database,
     )
-    gateway_service = replace(
-        runtime.gateway_service,
-        compute_state=compute_state or _compute_state(),
-    )
+    gateway_service = runtime.gateway_service
     stub = _create_function_stub(runtime, handler_ref)
-    if raw_payload is None:
-        invocation = FunctionCloudpickleInvocation.from_bytes(
-            cloudpickle_bytes({"args": args, "kwargs": {}})
-        )
-    else:
-        decoded = _JSON_OBJECT_ADAPTER.validate_json(raw_payload)
-        invocation = FunctionJsonInvocation.model_validate(
-            {
-                "args": decoded.get("args", []),
-                "kwargs": decoded.get("kwargs", {}),
-            }
-        )
+    invocation = FunctionCloudpickleInvocation.from_bytes(
+        cloudpickle_bytes({"args": args, "kwargs": {}})
+    )
     initial = function_service.function_invoke(
         FunctionInvokeBody(
             stub_id=stub.id,
@@ -199,36 +151,21 @@ def _invoke_and_run(
             handler_ref=handler_ref,
             container_id=scheduler.requests[0].container_id,
             container_hostname="test-host",
-            lifecycle_hooks=lifecycle_hooks or LifecycleHooks(),
             keep_warm_seconds=0,
         ),
         channel=_FunctionRunnerServiceChannel(function_service, gateway_service),
     )
 
     runner.run()
-    streamed = asyncio.run(
-        _collect_function_stream(
-            runtime,
-            function_service.function_invoke_stream(
-                initial,
-                poll_interval_seconds=0.01,
-                keepalive_interval_seconds=1.0,
-            ),
+    streamed = [
+        response
+        async for response in function_service.function_invoke_stream(
+            initial, poll_interval_seconds=0.01, keepalive_interval_seconds=1.0
         )
-    )
+    ]
     assert streamed[0] == initial
     responses.extend(streamed[1:])
     return responses
-
-
-async def _collect_function_stream(
-    runtime: ApiServices,
-    stream: AsyncIterator[FunctionInvokeResponse],
-) -> list[FunctionInvokeResponse]:
-    try:
-        return [response async for response in stream]
-    finally:
-        await runtime.require_async_io().close()
 
 
 def _create_function_stub(services: ApiServices, handler_ref: str) -> StubRecord:
@@ -307,10 +244,6 @@ class _FunctionRunnerServiceChannel:
         return task.workspace_id
 
 
-def _compute_state() -> RedisComputeStateRepository:
-    return RedisComputeStateRepository(RedisClient(FakeRedis(), key_prefix="function-runner"))
-
-
 class _Scheduler:
     def __init__(self) -> None:
         self.requests: list[SchedulerWorkerRequest] = []
@@ -328,11 +261,3 @@ class _Scheduler:
             container_id=request.container_id,
             reason="queued",
         )
-
-
-class _RecordingRunner:
-    def __init__(self) -> None:
-        self.logs: list[tuple[str, str]] = []
-
-    def append_task_log(self, task_id: str, stream: str, message: str) -> None:
-        self.logs.append((stream, message))

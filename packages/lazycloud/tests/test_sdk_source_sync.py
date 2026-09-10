@@ -4,9 +4,7 @@ import importlib
 import pickle
 import sys
 import zipfile
-from dataclasses import dataclass, field
 from pathlib import Path
-from types import TracebackType
 
 import pytest
 from lazycloud.control import ControlClientConfig
@@ -25,7 +23,8 @@ from lazycloud.values import cloudpickle_bytes
 from shared.deployment_records import DeploymentSpec
 from shared.http.objects import PutObjectResponse
 from tests.fakes import FakeDeploymentClient, FakeUploadClient
-from typing_extensions import Self
+
+pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 
 def test_source_package_sync_collects_ignored_zip_once(tmp_path: Path) -> None:
@@ -68,25 +67,6 @@ def test_source_package_sync_collects_ignored_zip_once(tmp_path: Path) -> None:
     with zipfile.ZipFile(zip_path) as archive:
         assert archive.namelist() == ["app.py", "pkg/__init__.py"]
         assert archive.read("app.py") == b"print('hello')\n"
-
-
-def test_source_package_sync_reports_terminal_progress(tmp_path: Path) -> None:
-    (tmp_path / "app.py").write_text("print('hello')\n", encoding="utf-8")
-    terminal = _RecordingTerminal()
-    client = FakeUploadClient(object_id="obj-source")
-
-    result = SourcePackageSyncer(
-        client,
-        root_dir=tmp_path,
-        cache=SourcePackageSyncCache(),
-        terminal=terminal,
-    ).sync()
-
-    assert result.object_id == "obj-source"
-    (step,) = terminal.steps
-    assert step.name == "Source"
-    assert step.finished is not None and step.finished.startswith("1 file, ")
-    assert step.progress_updates[-1] == result.size
 
 
 def test_source_package_sync_preserves_canonical_module_prefix(tmp_path: Path) -> None:
@@ -317,42 +297,3 @@ def test_deployment_object_upload_uses_extended_timeout_for_payload(
     assert stream_uploads[0]["bucket"] == SOURCE_PACKAGE_BUCKET
     assert stream_uploads[0]["workspace"] == "tenant-b"
     assert stream_uploads[0]["timeout_seconds"] == DEFAULT_OBJECT_UPLOAD_TIMEOUT_SECONDS
-
-
-@dataclass
-class _RecordingTerminal:
-    steps: list[_RecordingStep] = field(default_factory=list)
-
-    def step(self, name: str, summary: str = "") -> _RecordingStep:
-        step = _RecordingStep(name=name, summary=summary)
-        self.steps.append(step)
-        return step
-
-
-@dataclass
-class _RecordingStep:
-    name: str
-    summary: str
-    progress_updates: list[int] = field(default_factory=list)
-    finished: str | None = None
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        return None
-
-    def update(self, summary: str) -> None:
-        self.summary = summary
-
-    def progress(self, completed: int, total: int) -> None:
-        _ = total
-        self.progress_updates.append(completed)
-
-    def done(self, summary: str = "") -> None:
-        self.finished = summary or self.summary

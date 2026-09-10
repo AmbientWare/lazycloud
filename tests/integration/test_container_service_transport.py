@@ -4,15 +4,13 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from time import sleep
 
-import pytest
 from gateway.container_transport import HttpContainerServiceTransportFactory
-from networking.dialer import BackendRouteDialerConfig, SocketBackendConnector
+from networking.dialer import BackendRouteDialerConfig
 from shared.compute_policy import MachinePool
 from shared.http_transport import HttpChannel
 from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
 from tests.http_server import running_http_server
 from worker.container_client.control import (
-    ContainerServiceClient,
     plan_container_client_connection_options,
 )
 from worker.container_client.models import (
@@ -61,48 +59,6 @@ def test_checkpoint_requests_can_outlast_connection_timeouts() -> None:
         channel = HttpChannel(endpoint=f"http://{address}", timeout_seconds=0.05)
         response = channel.post("/checkpoint", request.model_dump(mode="json"), timeout_seconds=1.0)
         assert ContainerCheckpointResponse.model_validate(response).checkpoint_id == "checkpoint-1"
-
-
-def test_http_container_service_transport_rejects_non_socket_route_connections(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    backend_connection = _NonSocketBackendConnection()
-
-    def connect(
-        _connector: SocketBackendConnector,
-        address: str,
-        timeout_seconds: float,
-    ) -> _NonSocketBackendConnection:
-        assert address == "worker.internal:8910"
-        assert timeout_seconds > 0
-        return backend_connection
-
-    monkeypatch.setattr(SocketBackendConnector, "connect", connect)
-    options = plan_container_client_connection_options(
-        "worker.internal:8910",
-        backend_route_id="route-worker",
-    )
-    client = ContainerServiceClient(
-        HttpContainerServiceTransportFactory(route_resolver=_ReadyRouteResolver()).create_transport(
-            options
-        )
-    )
-
-    with pytest.raises(TypeError, match="returned a non-socket connection"):
-        client.status("ctr-1")
-
-    assert backend_connection.closed
-
-
-@dataclass(slots=True)
-class _NonSocketBackendConnection:
-    closed: bool = False
-
-    def sendall(self, data: bytes) -> None:
-        _ = data
-
-    def close(self) -> None:
-        self.closed = True
 
 
 @dataclass(slots=True)

@@ -89,6 +89,10 @@ def test_a_queued_message_is_delivered_once_and_then_pruned(
     # it records what became of the message.
     assert drain.redact(now=utc_now() + timedelta(days=30)) == 1
     assert _status(service_context, message_id) == "sent"
+    with service_context.database.session() as session:
+        row = session.get(EmailOutboxTable, message_id)
+        assert row is not None
+        assert (row.html_body, row.text_body) == ("", "")
 
 
 def test_a_refusal_that_a_later_attempt_could_fix_is_retried(

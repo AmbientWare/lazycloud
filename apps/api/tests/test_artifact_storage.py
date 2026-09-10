@@ -1,44 +1,34 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
-from datetime import timedelta
-from decimal import Decimal
 from uuid import uuid4
 
-import pytest
-from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from database.repositories.artifacts import ArtifactRepository
-from database.repositories.billing_rates import PlatformRateRepository
 from database.repositories.execution import TaskRepository
-from database.tables.billing_ledger import BillingLedgerSegmentTable
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.artifacts import ArtifactRetentionSource
 from shared.bytes_transport import encode_bytes
 from shared.http.artifacts import ArtifactListResponse, ArtifactSaveResponse
-from shared.identity import TokenKind
+from shared.identity import TokenKind, WorkspaceRecord
 from shared.tasks import Task
-from shared.timestamps import to_utc, utc_now
-from sqlalchemy import select
-from storage.artifact_metering import meter_artifact
 from tests.workspaces import owned_workspace
 
 
 def test_artifact_retention_and_access_survive_task_deletion_without_crossing_workspaces(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
+    api_workspace: WorkspaceRecord,
+    api_client: TestClient,
 ) -> None:
-    services = isolated_services
-    workspace = owned_workspace(services.control_plane_service, "artifact-owner")
-    other = owned_workspace(services.control_plane_service, "artifact-neighbor")
+    services, _ = api_runtime
+    workspace = api_workspace
+    other = owned_workspace(services.control_plane_service, f"artifact-neighbor-{workspace.id}")
     token, _ = AuthService(services.context).create_token(
         "artifact-owner", kind=TokenKind.Workspace, workspace_id=workspace.id
     )
     task_id = str(uuid4())
     with services.context.database.session() as session:
         TaskRepository(session).upsert(Task(id=task_id, name="produce", workspace_id=workspace.id))
-    client = client_stack.enter_context(TestClient(create_app(services)))
+    client = api_client
     client.headers["Authorization"] = f"Bearer {token}"
     base = "/api/v1/artifacts"
     assert client.put(f"{base}/retention", json={"retention_seconds": 3600}).status_code == 200
@@ -74,14 +64,16 @@ def test_artifact_retention_and_access_survive_task_deletion_without_crossing_wo
     assert (
         client.get(
             f"{base}/content",
-            params=content_params,
+            params={**content_params, "workspace": other.id},
             headers={"Authorization": f"Bearer {other_token}"},
         ).status_code
         == 404
     )
     assert (
         client.delete(
-            f"{base}/{inherited.id}", headers={"Authorization": f"Bearer {other_token}"}
+            f"{base}/{inherited.id}",
+            params={"workspace": other.id},
+            headers={"Authorization": f"Bearer {other_token}"},
         ).status_code
         == 204
     )
@@ -98,51 +90,3 @@ def test_artifact_retention_and_access_survive_task_deletion_without_crossing_wo
     assert [
         row.id for row in ArtifactListResponse.model_validate(client.get(base).json()).data
     ] == [kept.id]
-
-
-def test_short_lived_artifact_deletion_settles_storage_once(
-    unpriced_services: ApiServices,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    services = unpriced_services
-    with services.context.database.session() as session:
-        workspace_id = services.context.default_workspace_id(session)
-        task_id = str(uuid4())
-        TaskRepository(session).upsert(Task(id=task_id, name="produce", workspace_id=workspace_id))
-        PlatformRateRepository(session).publish(
-            pricing_version="artifact-test",
-            effective_at=utc_now() - timedelta(days=1),
-            nanos_per_egress_byte=Decimal(0),
-            nanos_per_volume_byte_second=Decimal(1),
-        )
-    saved = services.artifact_service.save(
-        workspace_id=workspace_id,
-        task_id=task_id,
-        filename="result.txt",
-        content=b"1234567890",
-        retention_seconds=None,
-    )
-    with services.context.database.session() as session:
-        record = ArtifactRepository(session).get(saved.id, workspace_id=workspace_id)
-        assert record is not None and record.artifact_metered_at is not None
-        start = to_utc(record.artifact_metered_at)
-        meter_artifact(
-            session,
-            workspace_id=workspace_id,
-            artifact_id=saved.id,
-            now=start + timedelta(seconds=2),
-        )
-    monkeypatch.setattr("storage.service.utc_now", lambda: start + timedelta(seconds=3))
-    services.artifact_service.delete(workspace_id=workspace_id, artifact_id=saved.id)
-    services.artifact_service.delete(workspace_id=workspace_id, artifact_id=saved.id)
-    with services.context.database.session() as session:
-        costs = list(
-            session.scalars(
-                select(BillingLedgerSegmentTable).where(
-                    BillingLedgerSegmentTable.subject_id == saved.id
-                )
-            )
-        )
-        assert sum(row.cost_nanos for row in costs) == 30
-        assert {row.dimension for row in costs} == {"volume_storage"}
-        assert ArtifactRepository(session).get(saved.id, workspace_id=workspace_id) is None

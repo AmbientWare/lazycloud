@@ -6,6 +6,7 @@ from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
+from shared.http.apps import AppSummaryListResponse
 from shared.http.deployments import DeploymentListResponse
 from shared.http.stubs import StubListResponse
 from shared.http.tasks import TaskTimeWindowBucketListResponse
@@ -128,7 +129,7 @@ def test_deployment_pages_are_app_and_workload_scoped_with_opaque_cursors(
     cursor = ""
     received_ids: list[str] = []
     page_sizes: list[int] = []
-    while True:
+    for _ in range(len(versions) + 1):
         response = api_client.get(
             "/api/v1/deployments",
             params={
@@ -147,6 +148,7 @@ def test_deployment_pages_are_app_and_workload_scoped_with_opaque_cursors(
             break
         assert not cursor.isdigit()
 
+    assert cursor == ""
     assert page_sizes == [2, 2, 1]
     assert received_ids == [deployment.id for deployment in reversed(versions)]
     assert unrelated.id not in received_ids
@@ -167,10 +169,19 @@ def test_aggregate_tasks_by_time_window_filters_by_stub_id(
     services, _ = api_runtime
     control = ControlPlaneService(services.context)
     app = services.apps.create("aggregate_app", workspace=api_workspace.id)
+    services.deployments.deploy(
+        DeploymentSpec(
+            name="published-metrics",
+            kind=DeploymentKind.Function,
+            handler="metrics:run",
+            metadata={"app_id": app.id},
+        ),
+        workspace=api_workspace.id,
+    )
     first_stub = control.create_stub("aggregate-first", app_id=app.id, workspace=api_workspace.id)
     second_stub = control.create_stub("aggregate-second", app_id=app.id, workspace=api_workspace.id)
 
-    def seed(name: str, *, app_id: str | None, stub_id: str | None) -> None:
+    def seed(name: str, *, app_id: str | None, stub_id: str | None, status: TaskStatus) -> None:
         task = services.tasks.create(
             name,
             workspace_id=api_workspace.id,
@@ -178,13 +189,13 @@ def test_aggregate_tasks_by_time_window_filters_by_stub_id(
             stub_id=stub_id,
             command=[],
         )
-        task.status = TaskStatus.Complete
+        task.status = status
         services.tasks.save(task)
 
-    seed("first-run", app_id=app.id, stub_id=first_stub.id)
-    seed("first-run-again", app_id=app.id, stub_id=first_stub.id)
-    seed("second-run", app_id=app.id, stub_id=second_stub.id)
-    seed("unscoped-run", app_id=None, stub_id=None)
+    seed("first-run", app_id=app.id, stub_id=first_stub.id, status=TaskStatus.Complete)
+    seed("first-run-again", app_id=app.id, stub_id=first_stub.id, status=TaskStatus.Failed)
+    seed("second-run", app_id=app.id, stub_id=second_stub.id, status=TaskStatus.Pending)
+    seed("unscoped-run", app_id=None, stub_id=None, status=TaskStatus.Complete)
 
     def bucket_total(params: dict[str, str | int]) -> int:
         response = api_client.get(
@@ -200,3 +211,14 @@ def test_aggregate_tasks_by_time_window_filters_by_stub_id(
     assert bucket_total({"stub_id": second_stub.id}) == 1
     assert bucket_total({"app_id": app.id}) == 3
     assert bucket_total({"app_id": app.id, "stub_id": first_stub.id}) == 2
+
+    response = api_client.get("/api/v1/apps/summaries")
+    assert response.status_code == 200, response.text
+    summaries = AppSummaryListResponse.model_validate_json(response.content).items
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary.app.id == app.id
+    assert summary.runs_24h == sum(summary.activity_24h) == 3
+    assert summary.failed_runs_24h == sum(summary.failures_24h) == 1
+    assert summary.pending_runs_24h == sum(summary.pending_24h) == 1
+    assert summary.succeeded_runs_24h == sum(summary.succeeded_24h) == 1

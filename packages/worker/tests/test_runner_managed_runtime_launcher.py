@@ -106,8 +106,6 @@ def _run_launcher(
     catalog_digest: str,
     artifact_digest: str,
     user_root: Path,
-    *,
-    disable_site_packages: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.update(
@@ -118,16 +116,14 @@ def _run_launcher(
             MANAGED_RUNTIME_DIGEST_ENV: artifact_digest,
         }
     )
-    command = [sys.executable]
-    if disable_site_packages:
-        command.append("-S")
-    command.extend((str(root / "launcher.py"), "runner.probe"))
+    command = [sys.executable, str(root / "launcher.py"), "runner.probe"]
     return subprocess.run(
         command,
         env=env,
         text=True,
         capture_output=True,
         check=False,
+        timeout=10,
     )
 
 

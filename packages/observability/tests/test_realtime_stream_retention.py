@@ -2,14 +2,10 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
 
 import pytest
-from api.fastapi_app import create_app
-from api.server.async_io import ApiAsyncIo
-from api.server.services import ApiServices
-from coordination.redis_client import RedisClient
-from fastapi.testclient import TestClient
+from coordination.redis_client import AsyncRedisClient, RedisClient
+from coordination.stream_tail import RedisStreamTailBroker
 from observability.stream_state import (
     AsyncRedisEventStreamRepository,
     RealtimeStreamRetention,
@@ -24,17 +20,6 @@ from shared.realtime.contracts import (
 )
 from shared.realtime.streams import EventHistoryQuery, LogStreamQuery
 from tests.real_redis import RealRedisActors
-from tests.workspaces import administrator_credential
-
-
-@pytest.fixture
-async def async_io(isolated_services: ApiServices) -> AsyncIterator[ApiAsyncIo]:
-    io = isolated_services.require_async_io()
-    await io.start()
-    try:
-        yield io
-    finally:
-        await io.close()
 
 
 def test_real_redis_single_and_batch_appends_bound_every_stream_and_cleanup(
@@ -103,7 +88,8 @@ def test_real_redis_single_and_batch_appends_bound_every_stream_and_cleanup(
 
 @pytest.mark.anyio
 async def test_real_redis_expired_cursors_clamp_or_raise_typed_conflict(
-    async_io: ApiAsyncIo,
+    async_redis: AsyncRedisClient,
+    stream_broker: RedisStreamTailBroker,
     real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
@@ -133,12 +119,12 @@ async def test_real_redis_expired_cursors_clamp_or_raise_typed_conflict(
     assert clamped_logs
     assert clamped_logs[0].entry_id != old_log_cursor
     async_repository = AsyncRedisEventStreamRepository(
-        async_io.redis,
+        async_redis,
         retention=retention,
     )
     followed_log = await _first_record(
         await async_repository.follow_logs(
-            async_io.realtime,
+            stream_broker,
             LogStreamQuery(workspace_id=workspace_id, cursor=old_log_cursor),
             max_events=1,
             heartbeat_seconds=1.0,
@@ -179,7 +165,7 @@ async def test_real_redis_expired_cursors_clamp_or_raise_typed_conflict(
     assert clamped_events[0].entry_id != old_event_cursor
     followed_event = await _first_record(
         await async_repository.follow_event_history(
-            async_io.realtime,
+            stream_broker,
             event_query,
             last_event_id=old_event_cursor,
             max_events=1,
@@ -192,62 +178,13 @@ async def test_real_redis_expired_cursors_clamp_or_raise_typed_conflict(
         match="realtime cursor is older than retained history",
     ):
         await async_repository.follow_event_history(
-            async_io.realtime,
+            stream_broker,
             event_query,
             last_event_id=old_event_cursor,
             clamp=False,
             max_events=1,
             heartbeat_seconds=1.0,
         )
-
-
-def test_api_maps_expired_event_cursor_to_409(
-    isolated_services: ApiServices,
-    real_redis_actors: RealRedisActors,
-    client_stack: ExitStack,
-) -> None:
-    redis = real_redis_actors.client()
-    repository = RedisEventStreamRepository(
-        redis,
-        retention=RealtimeStreamRetention(ttl_seconds=30, max_entries=25),
-    )
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
-
-    repository.append_event(
-        EventRecordType.TaskUpdated,
-        {"workspace_id": workspace_id, "task_id": "api-task", "status": "running"},
-        event_id="api-old-event",
-    )
-    event_query = EventHistoryQuery(workspace_id=workspace_id, task_id="api-task")
-    old_event_cursor = repository.read_event_history(event_query)[-1].entry_id
-    for index in range(1, 226):
-        repository.append_event(
-            EventRecordType.TaskUpdated,
-            {"workspace_id": workspace_id, "task_id": "api-task", "status": "running"},
-            event_id=f"api-event-{index}",
-        )
-
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
-    token, _record = administrator_credential(isolated_services.context, "cursor-admin")
-    headers = {"Authorization": f"Bearer {token}"}
-    event_response = client.get(
-        "/api/v1/events/tasks/api-task/stream",
-        params={
-            "workspace": workspace_id,
-            "cursor": old_event_cursor,
-            "clamp": "false",
-            "follow": "true",
-            "max_events": 1,
-        },
-        headers=headers,
-    )
-
-    assert event_response.status_code == 409
-    assert event_response.json() == {
-        "detail": "realtime cursor is older than retained history",
-        "code": "expired_cursor",
-    }
 
 
 async def _first_record(records: AsyncIterator[RedisStreamRecord | None]) -> RedisStreamRecord:

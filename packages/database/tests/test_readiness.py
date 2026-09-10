@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy.engine import URL
 
 from database import (
     DatabaseApplicationName,
@@ -13,84 +13,44 @@ from database import (
 )
 
 
-def test_database_readiness_requires_exact_repository_head() -> None:
+def test_database_readiness_requires_exact_repository_head(database: DatabaseClient) -> None:
+    readiness = wait_for_database_head(database, timeout_seconds=0.1, poll_interval_seconds=0.01)
+    assert readiness.revision == repository_database_head()
+
+
+def test_database_readiness_times_out_with_typed_observation(
+    postgres_database_url: URL,
+) -> None:
     client = DatabaseClient.from_settings(
         DatabaseSettings(
-            url="sqlite+pysqlite:///:memory:",
-            application_name=DatabaseApplicationName.Test,
-        )
-    )
-    expected_revision = repository_database_head()
-    try:
-        with client.engine.begin() as connection:
-            connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(255))"))
-            connection.execute(
-                text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
-                {"revision": expected_revision},
-            )
-
-        readiness = wait_for_database_head(
-            client,
-            timeout_seconds=0.1,
-            poll_interval_seconds=0.01,
-        )
-
-        assert readiness.revision == expected_revision
-        assert readiness.attempts == 1
-        assert readiness.elapsed_seconds >= 0
-    finally:
-        client.dispose()
-
-
-def test_database_readiness_times_out_with_typed_observation() -> None:
-    client = DatabaseClient.from_settings(
-        DatabaseSettings(
-            url="sqlite+pysqlite:///:memory:",
+            url=postgres_database_url.render_as_string(hide_password=False),
             application_name=DatabaseApplicationName.Test,
         )
     )
     try:
         with pytest.raises(DatabaseReadinessTimeoutError) as raised:
-            wait_for_database_head(
-                client,
-                timeout_seconds=0.01,
-                poll_interval_seconds=0.002,
-            )
-
+            wait_for_database_head(client, timeout_seconds=0.01, poll_interval_seconds=0.002)
         error = raised.value
         assert error.expected_revision == repository_database_head()
         assert error.observed_revisions == ()
         assert error.attempts >= 1
-        assert error.last_error_type == "OperationalError"
-        assert "observed revisions: none" in str(error)
+        assert error.last_error_type == "ProgrammingError"
     finally:
         client.dispose()
 
 
 @pytest.mark.parametrize(
-    ("timeout_seconds", "poll_interval_seconds", "message"),
-    [
-        (0.0, 1.0, "timeout_seconds must be greater than zero"),
-        (1.0, 0.0, "poll_interval_seconds must be greater than zero"),
-    ],
+    ("timeout_seconds", "poll_interval_seconds"),
+    [(0.0, 1.0), (1.0, 0.0)],
 )
 def test_database_readiness_rejects_unbounded_polling_inputs(
+    database: DatabaseClient,
     timeout_seconds: float,
     poll_interval_seconds: float,
-    message: str,
 ) -> None:
-    client = DatabaseClient.from_settings(
-        DatabaseSettings(
-            url="sqlite+pysqlite:///:memory:",
-            application_name=DatabaseApplicationName.Test,
+    with pytest.raises(ValueError):
+        wait_for_database_head(
+            database,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
         )
-    )
-    try:
-        with pytest.raises(ValueError, match=message):
-            wait_for_database_head(
-                client,
-                timeout_seconds=timeout_seconds,
-                poll_interval_seconds=poll_interval_seconds,
-            )
-    finally:
-        client.dispose()

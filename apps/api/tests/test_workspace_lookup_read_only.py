@@ -1,31 +1,20 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
-
-from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from database.repositories.identity import WorkspaceRepository
 from fastapi.testclient import TestClient
-from identity.auth import AuthService
+from tests.workspaces import administrator_credential
 
 
 def test_authenticated_missing_workspace_requests_return_404_without_creating_rows(
-    isolated_services: ApiServices,
-    client_stack: ExitStack,
+    api_runtime: tuple[ApiServices, TestClient],
 ) -> None:
-    auth = AuthService(isolated_services.context)
-    bootstrap = auth.bootstrap_administrator(
-        request_id="bootstrap:workspace-lookup-read-only",
-    )
-    auth.mark_admin_token_published(
-        request_id="bootstrap:workspace-lookup-read-only",
-        recovery=False,
-    )
-    headers = {"Authorization": f"Bearer {bootstrap.token}"}
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    services, client = api_runtime
+    token, _ = administrator_credential(services.context, "workspace-lookup")
+    headers = {"Authorization": f"Bearer {token}"}
 
-    with isolated_services.database.session() as session:
-        before = [workspace.id for workspace in WorkspaceRepository(session).list()]
+    with services.database.session() as session:
+        assert WorkspaceRepository(session).by_name("missing-workspace") is None
 
     workspace_response = client.get(
         "/api/v1/workspaces/missing-workspace",
@@ -41,5 +30,5 @@ def test_authenticated_missing_workspace_requests_return_404_without_creating_ro
     assert workspace_response.json()["detail"] == "workspace not found: missing-workspace"
     assert resource_response.status_code == 404
     assert resource_response.json()["detail"] == "workspace not found: missing-workspace"
-    with isolated_services.database.session() as session:
-        assert [workspace.id for workspace in WorkspaceRepository(session).list()] == before
+    with services.database.session() as session:
+        assert WorkspaceRepository(session).by_name("missing-workspace") is None

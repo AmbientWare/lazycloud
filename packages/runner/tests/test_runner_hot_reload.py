@@ -8,6 +8,8 @@ from runner.serve import EndpointServeRunner
 from shared.env import HOT_RELOAD_DIR_ENV
 from shared.http.endpoints import EndpointForwardRequest
 
+pytestmark = pytest.mark.usefixtures("isolated_imports")
+
 
 def test_endpoint_runner_reload_evicts_mounted_user_code(
     tmp_path: Path,

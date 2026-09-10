@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import stat
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from lazycloud.cli.main import start as client_start
 from lazycloud.config import (
     CONFIG_DIRECTORY_MODE,
-    CONFIG_FILE_MODE,
     DEFAULT_PROFILE,
     PACKAGED_DEFAULT_ENDPOINT,
     ClientProfile,
@@ -22,13 +20,6 @@ from lazycloud.config import (
     set_profile,
     settings,
 )
-
-
-@pytest.fixture(autouse=True)
-def reset_config_settings_cache() -> Iterator[None]:
-    reset_settings_cache()
-    yield
-    reset_settings_cache()
 
 
 def test_sdk_profile_lifecycle_uses_sdk_config_owner(
@@ -104,15 +95,15 @@ def test_sdk_profile_file_stays_owner_only_across_creation_and_update(
     set_profile(ClientProfile(name="company", endpoint="https://api.example", token="stored"))
     path = settings().config_path
 
-    assert stat.S_IMODE(path.parent.stat().st_mode) == CONFIG_DIRECTORY_MODE
-    assert stat.S_IMODE(path.stat().st_mode) == CONFIG_FILE_MODE
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
     # A file left readable by other users is repaired by the next write rather
     # than carried forward.
     path.chmod(0o644)
     set_profile(ClientProfile(name="other", endpoint="https://other.example", token="stored"))
 
-    assert stat.S_IMODE(path.stat().st_mode) == CONFIG_FILE_MODE
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_sdk_profile_write_refuses_a_symlink_or_non_regular_config_path(

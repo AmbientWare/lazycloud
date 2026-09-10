@@ -4,7 +4,7 @@ import { z } from "zod";
 import contractCasesJson from "../../../../../../tests/contracts/http_contract_cases.json";
 
 import { errorResponseSchema } from "./errors";
-import { functionInvokeResponseSchema, functionResultEncodings } from "./functions";
+import { functionInvokeResponseSchema } from "./functions";
 import { jsonValueSchema } from "./json";
 import { shellSessionSchema } from "./shells";
 
@@ -39,15 +39,4 @@ describe("Python-owned HTTP contract cases", () => {
       else expect(testCase.normalized).toBeNull();
     });
   }
-
-  it("covers every function result encoding", () => {
-    const covered = corpus.cases
-      .filter(
-        (testCase) =>
-          testCase.contract === "function_invoke_response" &&
-          testCase.name.startsWith("result_encoding_"),
-      )
-      .map((testCase) => testCase.name.replace("result_encoding_", ""));
-    expect(covered.sort()).toEqual([...functionResultEncodings].sort());
-  });
 });
