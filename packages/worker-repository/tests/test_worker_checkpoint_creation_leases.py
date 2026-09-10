@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from control.service import ControlPlaneService
 from database.context import ServiceContext
-from tests.domain_fixtures import owned_workspace
 from tests.real_redis import RealRedisActors
+from tests.workspaces import owned_workspace
 from worker.checkpoints import (
     CheckpointStateOperation,
     CheckpointStatePayload,

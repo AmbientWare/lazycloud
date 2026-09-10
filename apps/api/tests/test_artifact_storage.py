@@ -22,7 +22,7 @@ from shared.tasks import Task
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import select
 from storage.artifact_metering import meter_artifact
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 
 
 def test_artifact_retention_and_access_survive_task_deletion_without_crossing_workspaces(
@@ -101,10 +101,10 @@ def test_artifact_retention_and_access_survive_task_deletion_without_crossing_wo
 
 
 def test_short_lived_artifact_deletion_settles_storage_once(
-    isolated_services: ApiServices,
+    unpriced_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    services = isolated_services
+    services = unpriced_services
     with services.context.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
         task_id = str(uuid4())

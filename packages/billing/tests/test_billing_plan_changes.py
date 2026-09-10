@@ -32,7 +32,7 @@ from shared.payments import (
 )
 from shared.timestamps import utc_now
 from sqlalchemy import select
-from tests.domain_fixtures import carded_account, unbilled_account
+from tests.workspaces import carded_account, unbilled_account
 
 from billing import BillingAccountService, BillingPlanChangeService
 

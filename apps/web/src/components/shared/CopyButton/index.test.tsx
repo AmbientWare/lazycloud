@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { Toaster, toast } from "sonner";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -8,10 +8,6 @@ beforeEach(() => vi.useFakeTimers());
 
 afterEach(() => {
   toast.dismiss();
-  cleanup();
-  vi.clearAllTimers();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
 });
 
 it("reports a denied copy and allows a successful retry", async () => {

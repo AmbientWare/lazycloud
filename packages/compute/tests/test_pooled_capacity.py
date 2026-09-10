@@ -96,8 +96,8 @@ from shared.errors import ConflictError, InvalidInputError, NotFoundError, Upstr
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.supplier_costs import SupplierCostTerms
-from tests.domain_fixtures import workspace_owner_user_id
 from tests.real_redis import RealRedisActors
+from tests.workspaces import workspace_owner_user_id
 
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 

@@ -7,11 +7,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread
 from typing import cast
 
 import pytest
 from networking.internal_http import InternalHttpClient
+from tests.http_server import running_http_server
 from worker.image_archive_transfer import (
     ImageArchiveIntegrityError,
     ImageArchiveTransferError,
@@ -57,14 +57,8 @@ def _serve_archives(state: _ArchiveServerState) -> Iterator[str]:
             _ = format, args
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), ArchiveHandler)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with running_http_server(server):
         yield f"http://127.0.0.1:{server.server_port}/archive"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
 
 
 def test_image_archive_transfers_retry_transient_responses_and_preserve_signed_headers(

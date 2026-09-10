@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PanelErrorBoundary } from ".";
 
@@ -11,11 +11,6 @@ function Bomb({ armed }: { armed: boolean }) {
 describe("PanelErrorBoundary", () => {
   beforeEach(() => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    cleanup();
-    vi.restoreAllMocks();
   });
 
   it("contains a throwing child to its own fallback while siblings keep rendering", () => {

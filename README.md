@@ -45,10 +45,10 @@ docker compose -f compose.test.yaml up -d
 docker compose -f compose.test.yaml ps
 ```
 
-Pytest uses this PostgreSQL and Redis stack automatically. Database fixtures
-clone an isolated database on demand and delete it after the test. Each worker
-migrates its template once; service tests also reuse an immutable pricing seed.
-Tests keep real commits, independent connections, and PostgreSQL constraints.
+Pytest uses this PostgreSQL and Redis stack automatically. The suite migrates
+and seeds its database templates once. Tests acquire a transaction or an
+isolated database clone through fixtures, and those fixtures own cleanup.
+Concurrency tests keep real commits, independent connections, and PostgreSQL constraints.
 The disposable PostgreSQL files live in memory and vanish when its container stops.
 Migration tests receive an empty database. Redis keys use a unique test prefix.
 Tests that need neither service create no database or Redis client.
@@ -69,7 +69,7 @@ uv run --group dev basedpyright packages/scheduler
 uv run --group dev pytest -x -q packages/scheduler/tests
 ```
 
-Tests run in one process locally and in CI. To run the same selection as CI,
+Python tests run in one process locally and in CI. To run the same selection as CI,
 including uncommitted changes:
 
 ```bash
@@ -77,15 +77,20 @@ uv run --group dev python .github/scripts/validate_changed_scope.py --base origi
 uv run --group dev python .github/scripts/validate_changed_scope.py --base origin/main
 ```
 
-CI runs one test job alongside type checks and uploads its test timings.
-Templates build the schema, default account and workspace, and billing history once.
-Database-only owner tests use `service_context`, which shares a seeded database
-and rolls back each test through SQLAlchemy savepoints. Tests requiring independent
-connections, real commit visibility, or migrations use isolated database clones.
-API listing tests share one running app and use a separate workspace per test;
-their database and Redis namespace are removed when the module finishes.
-Local runs print the slowest setup, execution, and teardown phases. Add
-`--junitxml=test-results/python.xml` to retain a local report.
+CI runs one Python test job alongside type checks and uploads its test timings.
+Use the fixture contracts in [tests/AGENTS.md](tests/AGENTS.md) when adding or
+changing tests. Owner tests use `service_context` for rollback isolation or
+`committed_service_context` for independent connections. API request tests can
+share `api_runtime` with a separate `api_workspace` per case. Configuration,
+global-state, and lifespan tests use `isolated_services`.
+Both local runs and CI print total setup, call, and teardown times, fixture
+creation counts, and the slowest individual phases. App startup inside a test
+is included in its call time. Add `--junitxml=test-results/python.xml` to retain
+a local report. For detailed profiling, run
+`uv run --group dev python -m cProfile -o /tmp/tests.prof -m pytest -x -q <owner>`;
+profiling adds overhead, so use ordinary runs for wall-clock comparisons.
+Web tests use Vitest with shared mock, timer, and DOM cleanup under
+`apps/web/src/test/`. Keep browser-only checks in the named Playwright scenarios.
 Stop the test-only stack with `docker compose -f compose.test.yaml down -v`.
 
 Run `uv lock --check` only when dependency or workspace metadata changes.

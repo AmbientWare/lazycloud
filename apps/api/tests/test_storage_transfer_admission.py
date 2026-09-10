@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from apps.api.tests.runtime import isolated_services
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_preferences import BillingPreferencesRepository
 from database.repositories.execution import TaskRepository
@@ -18,8 +19,7 @@ from shared.http.billing_preferences import BillingPreferences
 from shared.identity import TokenKind
 from shared.tasks import Task
 from shared.timestamps import utc_now
-from tests.domain_fixtures import unfunded_billing_account
-from tests.service_fixtures import isolated_services
+from tests.workspaces import unfunded_billing_account
 
 __all__ = ["isolated_services"]
 

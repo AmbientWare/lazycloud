@@ -12,7 +12,7 @@ from tests.metric_helpers import install_metric_reader
 from tests.real_redis import RealRedisActors
 
 TEST_ENVIRONMENT_FILE = Path(__file__).parent / "tests" / "env.test"
-pytest_plugins = ["tests.database_fixtures", "tests.domain_fixtures"]
+pytest_plugins = ["tests.database_fixtures", "tests.timings"]
 
 # Cleared from the environment before the suite declares its own configuration.
 # `LAZYCLOUD_TEST_` is exempt: those name the real Redis and PostgreSQL services
@@ -63,6 +63,9 @@ def metric_reader() -> None:
     install_metric_reader()
 
 
+_TEST_ENVIRONMENT = _test_environment()
+
+
 def _configure_environment(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
     # Clear first, then declare. A positive list cannot express "unset", and it
     # silently grows stale as settings classes are added; clearing the prefixes
@@ -76,7 +79,7 @@ def _configure_environment(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
     monkeypatch.setenv("LAZYCLOUD_HOME", str(home))
     # Endpoints resolve nowhere on purpose: a unit test that reaches a real
     # object store should fail loudly rather than depend on one running.
-    for name, value in _test_environment().items():
+    for name, value in _TEST_ENVIRONMENT.items():
         monkeypatch.setenv(name, value)
     lazycloud.config.reset_settings_cache()
 

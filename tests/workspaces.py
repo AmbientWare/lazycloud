@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from datetime import datetime, timedelta
-from pathlib import Path
 from uuid import uuid4
 
-import pytest
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.billing import BillingAccountRepository
@@ -16,6 +14,8 @@ from database.repositories.identity import (
     WorkspaceMemberRepository,
     WorkspaceRepository,
 )
+from identity.auth import TokenIssuer
+from identity.users import UserService
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_credits import CreditGrant, CreditKind
@@ -25,20 +25,19 @@ from shared.billing_rate_card import (
     TRIAL_VALIDITY_DAYS,
 )
 from shared.identity import (
+    AuthTokenRecord,
+    PlatformRole,
+    TokenKind,
     WorkspaceRecord,
     WorkspaceStorageConfig,
 )
 from shared.timestamps import utc_now
-from sqlalchemy import Engine
-from sqlalchemy.engine import URL
-from sqlalchemy.orm import sessionmaker
 
-from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
-from tests.database_fixtures import temporary_database
+from database import DatabaseClient
 
 
 def _fixture_account(database: DatabaseClient, display_name: str) -> str:
-    """A Free signup with its local trial; provider identifiers are fixture-owned."""
+    """Create a Free account with trial credit and local provider identifiers."""
 
     with database.session() as session:
         user_id = UserRepository(session).create(display_name=display_name).id
@@ -86,12 +85,7 @@ def owned_workspace(
     labels: dict[str, str] | None = None,
     metadata: Mapping[str, JsonValue] | None = None,
 ) -> WorkspaceRecord:
-    """A workspace with the owner row production writes in the same transaction.
-
-    Tests that only need a workspace to exist go through here rather than writing the
-    row alone: everything a workspace resolves through its account—compute, domains,
-    credentials—needs that row, and a workspace without one exists nowhere else.
-    """
+    """Create or update a workspace with an owner account for billing and credentials."""
     owner_user_id = _existing_owner(control, name) or _fixture_account(
         control.context.database,
         f"{name}-owner-{uuid4().hex[:8]}",
@@ -115,12 +109,7 @@ def _existing_owner(control: ControlPlaneService, name: str) -> str | None:
 
 
 def unbilled_account(context: ServiceContext) -> tuple[str, str]:
-    """A workspace and its owner, with nothing billing has ever written.
-
-    The opposite of what `_fixture_account` leaves, and the state the billing
-    tests need: what provisioning does on first reaching an account cannot be
-    observed against one a fixture has already stood a row up for.
-    """
+    """Create a workspace and owner without billing records to exercise first provisioning."""
 
     with context.database.session() as session:
         user_id = UserRepository(session).create(display_name="unprovisioned").id
@@ -155,18 +144,7 @@ def unfunded_billing_account(
 
 
 def carded_account(context: ServiceContext) -> tuple[str, str]:
-    """An unprovisioned workspace and owner whose account already holds a card.
-
-    What a plan's own terms can only be observed against. An account with no card
-    is given what the platform will spend to find out whether it can bill anybody,
-    whatever plan it is on — so a test that put an account on Team and read back
-    the plan's allowance would be reading the cardless figure and calling it a
-    plan.
-
-    The row is written before provisioning rather than after, because
-    provisioning is what buys the first grant and a card attached afterwards
-    would be a cycle already funded at the wrong figure.
-    """
+    """Attach a card before provisioning so the first grant uses the selected plan's terms."""
 
     user_id, workspace_id = unbilled_account(context)
     with context.database.session() as session:
@@ -178,12 +156,7 @@ def carded_account(context: ServiceContext) -> tuple[str, str]:
 
 
 def workspace_owner_user_id(context: ServiceContext, workspace_id: str) -> str:
-    """The account that owns a workspace, created on first ask.
-
-    Production writes the owner row with the workspace, so anything resolving compute
-    or domains through the account finds one. Tests that build a workspace through a
-    lower-level path need the same row before they can join a machine to it.
-    """
+    """Return the owner, creating one for workspaces inserted directly through repositories."""
     with context.database.session() as session:
         existing = WorkspaceMemberRepository(session).owner(workspace_id)
     if existing is not None:
@@ -197,56 +170,22 @@ def workspace_owner_user_id(context: ServiceContext, workspace_id: str) -> str:
     return user_id
 
 
-@pytest.fixture(scope="session")
-def workspace_template_url(
-    postgres_admin: Engine, migrated_template_url: URL, tmp_path_factory: pytest.TempPathFactory
-) -> Iterator[URL]:
-    with temporary_database(postgres_admin, template=migrated_template_url) as url:
-        database = DatabaseClient.from_settings(
-            DatabaseSettings(
-                url=url.render_as_string(hide_password=False),
-                application_name=DatabaseApplicationName.Test,
-            )
+def administrator_credential(
+    context: ServiceContext,
+    name: str = "administrator",
+) -> tuple[str, AuthTokenRecord]:
+    """Issue an administrator's account token without adding workspace memberships."""
+    user = UserService(context).create(
+        display_name=f"admin-{uuid4().hex[:12]}",
+        role=PlatformRole.Administrator,
+    )
+    issuer = TokenIssuer(context)
+    with context.database.session() as session:
+        raw_token, record = issuer.issue_for_user(
+            session,
+            name,
+            user_id=user.id,
+            kind=TokenKind.Admin,
         )
-        try:
-            context = ServiceContext.create(
-                database, root=tmp_path_factory.mktemp("domain"), create_schema=False
-            )
-            owned_workspace(ControlPlaneService(context), "default")
-        finally:
-            database.dispose()
-        yield url
-
-
-@pytest.fixture(scope="session")
-def domain_database(postgres_admin: Engine, seeded_template_url: URL) -> Iterator[DatabaseClient]:
-    with temporary_database(postgres_admin, template=seeded_template_url) as url:
-        database = DatabaseClient.from_settings(
-            DatabaseSettings(
-                url=url.render_as_string(hide_password=False),
-                application_name=DatabaseApplicationName.Test,
-            )
-        )
-        try:
-            yield database
-        finally:
-            database.dispose()
-
-
-@pytest.fixture
-def service_context(domain_database: DatabaseClient, tmp_path: Path) -> Iterator[ServiceContext]:
-    # Only single-connection owner tests use this fixture. A commit releases a
-    # savepoint; tests of cross-connection visibility keep their real commits.
-    with domain_database.engine.connect() as connection, connection.begin() as transaction:
-        database = DatabaseClient(
-            settings=domain_database.settings,
-            engine=domain_database.engine,
-            sessions=sessionmaker(
-                bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint"
-            ),
-        )
-        try:
-            yield ServiceContext.create(database, root=tmp_path, create_schema=False)
-        finally:
-            assert transaction.is_active, "owner test ended its outer isolation transaction"
-            transaction.rollback()
+    issuer.committed()
+    return raw_token, record

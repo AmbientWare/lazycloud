@@ -177,6 +177,7 @@ def _validate(args: argparse.Namespace) -> None:
         Path("compose.test.yaml"),
         Path(".github/scripts/validate_changed_scope.py"),
         Path(".github/workflows/ci.yml"),
+        Path("apps/api/tests/runtime.py"),
     }
     if any(
         path in global_paths

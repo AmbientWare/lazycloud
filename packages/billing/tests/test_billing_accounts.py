@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from api.server.services import ApiServices
 from billing.costs import BillingStandingService
 from billing.periods import carry_plan_into_cycle
 from control.service import ControlPlaneService
@@ -20,6 +19,7 @@ from database.repositories.identity import (
 )
 from database.repositories.orchestration import ContainerRepository
 from database.tables.billing_credits import BillingCreditLotTable
+from observability.events import EventService
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_credits import CreditKind
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
@@ -45,7 +45,7 @@ from shared.payments import (
 )
 from shared.timestamps import utc_now
 from sqlalchemy import select
-from tests.domain_fixtures import (
+from tests.workspaces import (
     carded_account,
     owned_workspace,
     unbilled_account,
@@ -202,11 +202,11 @@ class _Provider:
         raise AssertionError("subscribing must not list invoices")
 
 
-def _plan_changes(services: ApiServices, provider: _Provider) -> BillingPlanChangeService:
+def _plan_changes(services: ServiceContext, provider: _Provider) -> BillingPlanChangeService:
     return BillingPlanChangeService(
-        database=services.context.database,
+        database=services.database,
         payments=lambda: provider,
-        events=services.events,
+        events=EventService(services),
     )
 
 
@@ -338,7 +338,7 @@ def test_trial_is_once_per_account_and_free_renewal_does_not_replenish_it(
 
 
 def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """An upgrade changes what the account holds; it never buys a second of anything.
 
@@ -354,15 +354,15 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
     """
 
     provider = _Provider()
-    user_id, workspace_id = carded_account(isolated_services.context)
+    user_id, workspace_id = carded_account(service_context)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         BillingAccountService(session).billing_account_for(
             provider, user_id=user_id, workspace_id=workspace_id
         )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         free = BillingAllowanceRepository(session).current_period(
             user_id=user_id, at=CYCLE_STARTED_AT
         )
@@ -377,13 +377,13 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
         )
         session.commit()
 
-    upgraded = _plan_changes(isolated_services, provider).change_plan(
+    upgraded = _plan_changes(service_context, provider).change_plan(
         user_id=user_id,
         target=BillingPlanId.Team,
         target_terms_version=published_plan(BillingPlanId.Team).terms_version,
     )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
         allowance = BillingAllowanceRepository(session).current_period(
             user_id=user_id, at=CYCLE_STARTED_AT
@@ -399,7 +399,7 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
     assert allowance.spent_nanos == 2_000_000_000
     assert provider.subscriptions == [BillingPlanId.Free]
     assert provider.plan_changes == [BillingPlanId.Team]
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert (
             BillingCreditRepository(session).subscription_issued(
                 user_id=user_id, period_ended_at=CYCLE_ENDED_AT
@@ -407,7 +407,7 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
             == TEAM_PLAN_INCLUDED_NANOS
         )
 
-    again = _plan_changes(isolated_services, provider).change_plan(
+    again = _plan_changes(service_context, provider).change_plan(
         user_id=user_id,
         target=BillingPlanId.Team,
         target_terms_version=published_plan(BillingPlanId.Team).terms_version,
@@ -416,7 +416,7 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
     assert again.provider_subscription_id == "sub_1"
     assert provider.subscriptions == [BillingPlanId.Free]
     assert provider.plan_changes == [BillingPlanId.Team]
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert (
             BillingCreditRepository(session).subscription_issued(
                 user_id=user_id, period_ended_at=CYCLE_ENDED_AT
@@ -426,22 +426,22 @@ def test_upgrading_swaps_the_plan_price_and_resizes_one_grant(
 
 
 def test_paid_plan_credit_waits_for_invoice_payment_and_recovers_the_existing_intent(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     provider = _Provider(invoice_paid=False)
-    user_id, workspace_id = carded_account(isolated_services.context)
-    with isolated_services.context.database.session() as session:
+    user_id, workspace_id = carded_account(service_context)
+    with service_context.database.session() as session:
         BillingAccountService(session).billing_account_for(
             provider, user_id=user_id, workspace_id=workspace_id
         )
-    changes = _plan_changes(isolated_services, provider)
+    changes = _plan_changes(service_context, provider)
     with pytest.raises(UpstreamUnavailableError, match="matching paid invoice"):
         changes.change_plan(
             user_id=user_id,
             target=BillingPlanId.Team,
             target_terms_version=published_plan(BillingPlanId.Team).terms_version,
         )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
         assert account is not None and account.plan is BillingPlanId.Free
         assert (
@@ -453,7 +453,7 @@ def test_paid_plan_credit_waits_for_invoice_payment_and_recovers_the_existing_in
     provider.invoice_paid = True
     recovered = changes.settle_open(now=utc_now() + timedelta(hours=1))
     assert recovered.applied_count == 1
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         assert (
             BillingCreditRepository(session).subscription_issued(
                 user_id=user_id, period_ended_at=CYCLE_ENDED_AT
@@ -464,7 +464,7 @@ def test_paid_plan_credit_waits_for_invoice_payment_and_recovers_the_existing_in
 
 
 def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """The grant an upgrade replaces is this cycle's, never the last one's.
 
@@ -481,9 +481,9 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
     """
 
     provider = _Provider()
-    user_id, workspace_id = carded_account(isolated_services.context)
+    user_id, workspace_id = carded_account(service_context)
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         BillingAccountService(session).billing_account_for(
             provider, user_id=user_id, workspace_id=workspace_id
         )
@@ -492,13 +492,13 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
     provider.cycle_started_at = CYCLE_ENDED_AT
     provider.cycle_ended_at = CYCLE_ENDED_AT + (CYCLE_ENDED_AT - CYCLE_STARTED_AT)
 
-    _plan_changes(isolated_services, provider).change_plan(
+    _plan_changes(service_context, provider).change_plan(
         user_id=user_id,
         target=BillingPlanId.Team,
         target_terms_version=published_plan(BillingPlanId.Team).terms_version,
     )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         account = BillingAccountRepository(session).get_by_user(user_id)
         closing = BillingAllowanceRepository(session).current_period(
             user_id=user_id, at=CYCLE_STARTED_AT
@@ -508,7 +508,7 @@ def test_an_upgrade_after_the_cycle_rolled_leaves_the_grant_funding_that_invoice
         )
 
     assert account is not None
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         credits = BillingCreditRepository(session)
         assert (
             credits.subscription_issued(user_id=user_id, period_ended_at=CYCLE_ENDED_AT)
@@ -575,7 +575,7 @@ def test_an_account_with_no_subscription_cannot_start_work(
 
 
 def test_the_container_limit_counts_every_workspace_the_account_owns(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """The ceiling is a term of a plan, so it is the payer's, not a workspace's.
 
@@ -590,24 +590,24 @@ def test_the_container_limit_counts_every_workspace_the_account_owns(
     """
 
     first_workspace_id = owned_workspace(
-        isolated_services.control_plane_service, f"first-{uuid4()}"
+        ControlPlaneService(service_context), f"first-{uuid4()}"
     ).id
-    user_id = workspace_owner_user_id(isolated_services.context, first_workspace_id)
-    with isolated_services.context.database.session() as session:
+    user_id = workspace_owner_user_id(service_context, first_workspace_id)
+    with service_context.database.session() as session:
         second_workspace_id = WorkspaceRepository(session).create(name=f"second-{uuid4()}").id
         WorkspaceMemberRepository(session).ensure_owner(
             workspace_id=second_workspace_id, user_id=user_id
         )
 
     admission = DatabaseBillingAdmission()
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         admission.admit_container_start(
             session, workspace_id=first_workspace_id, gpu=(), gpu_count=0
         )
 
     # Split across both workspaces, and one of them is only queued: a container
     # waiting for a worker has already been promised the capacity it asked for.
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         for index in range(NO_CARD_MAX_CPU_CONTAINERS):
             ContainerRepository(session).upsert(
                 ContainerRecord(
@@ -621,7 +621,7 @@ def test_the_container_limit_counts_every_workspace_the_account_owns(
             )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         for workspace_id in (first_workspace_id, second_workspace_id):
             with pytest.raises(CapacityLimitReachedError):
                 admission.admit_container_start(

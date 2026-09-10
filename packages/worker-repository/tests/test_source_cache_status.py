@@ -9,7 +9,7 @@ from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from shared.errors import NotFoundError
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 from worker_repository.source_cache_status import SourceCacheCleanupStatusService
 
 

@@ -4,7 +4,7 @@ from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from shared.identity import WorkspaceStatus
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 
 
 def test_workspace_directory_projects_active_deleting_and_deleted_lifecycles(

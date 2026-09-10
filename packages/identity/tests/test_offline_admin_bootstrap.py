@@ -6,7 +6,7 @@ from pathlib import Path
 from secrets import token_urlsafe
 
 import pytest
-from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.identity import TokenRepository, WorkspaceAuditRepository
 from identity.auth import AuthError, AuthService
 from identity.credential_files import CredentialFileError, CredentialFilePublication
@@ -32,9 +32,9 @@ def test_credential_publication_refuses_a_symlink_output(tmp_path: Path) -> None
 
 
 def test_service_credentials_cannot_consume_or_bypass_admin_claim(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    auth = AuthService(isolated_services.context)
+    auth = AuthService(service_context)
 
     auth.create_token("legacy-internal", kind=TokenKind.Worker)
 
@@ -44,10 +44,10 @@ def test_service_credentials_cannot_consume_or_bypass_admin_claim(
 
 
 def test_bootstrap_retry_publishes_the_exact_committed_token_once(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     tmp_path: Path,
 ) -> None:
-    auth = AuthService(isolated_services.context)
+    auth = AuthService(service_context)
     publication = CredentialFilePublication(
         tmp_path / "admin-token",
         "bootstrap:test-publication",
@@ -75,12 +75,12 @@ def test_bootstrap_retry_publishes_the_exact_committed_token_once(
     assert publication.read_published() == created.token
     assert stat.S_IMODE(publication.resolved_output.stat().st_mode) == 0o600
     assert publication.read_staged() is None
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         tokens = TokenRepository(session).list_across_workspaces()
         # The audit belongs to the workspace bootstrap created, not to the credential:
         # an administrator credential names a person and carries no workspace.
         audits = WorkspaceAuditRepository(session).page(
-            workspace_id=isolated_services.context.workspace(session, "default").id,
+            workspace_id=service_context.workspace(session, "default").id,
             limit=20,
         )
     assert [token.id for token in tokens if token.kind is TokenKind.Admin] == [created.record.id]
@@ -92,9 +92,9 @@ def test_bootstrap_retry_publishes_the_exact_committed_token_once(
 
 
 def test_configured_bootstrap_token_is_stable_and_only_its_hash_is_stored(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    auth = AuthService(isolated_services.context)
+    auth = AuthService(service_context)
     configured = _configured_token()
 
     created = auth.bootstrap_administrator(
@@ -110,7 +110,7 @@ def test_configured_bootstrap_token_is_stable_and_only_its_hash_is_stored(
     assert replay.replayed
     assert replay.record.id == created.record.id
     assert auth.authenticate(configured).id == created.record.id
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         stored = TokenRepository(session).get_across_workspaces(created.record.id)
     assert stored is not None
     assert configured not in stored.token_hash
@@ -118,9 +118,9 @@ def test_configured_bootstrap_token_is_stable_and_only_its_hash_is_stored(
 
 
 def test_configured_bootstrap_token_mismatch_fails_closed(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    auth = AuthService(isolated_services.context)
+    auth = AuthService(service_context)
     configured = _configured_token()
     created = auth.bootstrap_administrator(
         request_id="bootstrap:configured-mismatch",
@@ -137,9 +137,9 @@ def test_configured_bootstrap_token_mismatch_fails_closed(
 
 
 def test_configured_bootstrap_token_requires_canonical_token(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    auth = AuthService(isolated_services.context)
+    auth = AuthService(service_context)
 
     with pytest.raises(AuthError, match="configured administrator credential is invalid"):
         auth.bootstrap_administrator(
@@ -151,10 +151,10 @@ def test_configured_bootstrap_token_requires_canonical_token(
 
 
 def test_recovery_request_replay_is_idempotent_and_audited_once(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
     tmp_path: Path,
 ) -> None:
-    auth = AuthService(isolated_services.context)
+    auth = AuthService(service_context)
     auth.bootstrap_administrator(request_id="bootstrap:test-recovery-owner")
     publication = CredentialFilePublication(
         tmp_path / "recovery-token",
@@ -179,9 +179,9 @@ def test_recovery_request_replay_is_idempotent_and_audited_once(
 
     assert replay.replayed
     assert replay.record.id == created.record.id
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         audits = WorkspaceAuditRepository(session).page(
-            workspace_id=isolated_services.context.workspace(session, "default").id,
+            workspace_id=service_context.workspace(session, "default").id,
             limit=20,
         )
     recovered = [
@@ -194,9 +194,9 @@ def test_recovery_request_replay_is_idempotent_and_audited_once(
 
 
 def test_different_bootstrap_request_cannot_replay_committed_claim(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
-    auth = AuthService(isolated_services.context)
+    auth = AuthService(service_context)
     auth.bootstrap_administrator(request_id="bootstrap:test-first-request")
 
     with pytest.raises(AuthError, match="already complete"):

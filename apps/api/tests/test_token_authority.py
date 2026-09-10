@@ -11,7 +11,7 @@ from identity.users import UserService
 from shared.http.errors import ErrorResponse
 from shared.http.system import TokenCreateResponse, TokenListResponse
 from shared.identity import PlatformRole, TokenKind, TokenStatus
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential
 
 
 def test_a_minted_token_names_the_account_rather_than_a_workspace(
@@ -24,7 +24,9 @@ def test_a_minted_token_names_the_account_rather_than_a_workspace(
     carries an account and no workspace. A workspace on the row would pin it to one,
     and nothing here lets the caller ask for that.
     """
-    admin_token, admin_record = administrator_credential(isolated_services, "token-authority")
+    admin_token, admin_record = administrator_credential(
+        isolated_services.context, "token-authority"
+    )
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
     response = client.post(
@@ -49,7 +51,7 @@ def test_one_account_cannot_see_or_revoke_another_account_s_tokens(
     The credential reaches every workspace its account belongs to, so reaching one
     from another account would hand over that whole account rather than one workspace.
     """
-    owner_token, _owner = administrator_credential(isolated_services, "token-owner")
+    owner_token, _owner = administrator_credential(isolated_services.context, "token-owner")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     created = TokenCreateResponse.model_validate_json(
         client.post(
@@ -98,7 +100,7 @@ def test_the_account_token_list_pages_through_a_server_cursor(
     minted in the same instant share a timestamp — which is why the cursor carries
     the identifier tie-break the ordering does.
     """
-    owner_token, _owner = administrator_credential(isolated_services, "token-pager")
+    owner_token, _owner = administrator_credential(isolated_services.context, "token-pager")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     minted = {
         TokenCreateResponse.model_validate_json(
@@ -135,7 +137,9 @@ def test_token_cannot_revoke_its_own_record(
 ) -> None:
     """A credential cannot end itself, so a mistake cannot lock the caller out."""
     method, suffix, detail = "POST", "/revoke", "cannot revoke the authenticating token"
-    _admin_token, admin_record = administrator_credential(isolated_services, "self-mutation")
+    _admin_token, admin_record = administrator_credential(
+        isolated_services.context, "self-mutation"
+    )
     own_token, own_record = AuthService(isolated_services.context).create_account_token(
         admin_record.user_id,
         "self-mutation-token",
@@ -167,7 +171,7 @@ def test_only_an_administrator_may_mint_a_token_for_another_account(
     credential, so it has to stay an administrator's decision and has to produce a
     token naming the target rather than the administrator who ran it.
     """
-    admin_token, admin_record = administrator_credential(isolated_services, "minting-admin")
+    admin_token, admin_record = administrator_credential(isolated_services.context, "minting-admin")
     target = UserService(isolated_services.context).create(display_name="automation")
     auth = AuthService(isolated_services.context)
     member_token, _member_record = auth.create_account_token(
@@ -219,7 +223,9 @@ def test_a_member_cannot_promote_themselves_to_administrator(
     assert refused.status_code == 403
     assert users.get(member.id).role is PlatformRole.Member
 
-    admin_token, _admin_record = administrator_credential(isolated_services, "promoting-admin")
+    admin_token, _admin_record = administrator_credential(
+        isolated_services.context, "promoting-admin"
+    )
     granted = client.put(
         f"/api/v1/users/{member.id}/role",
         headers=_auth(admin_token),

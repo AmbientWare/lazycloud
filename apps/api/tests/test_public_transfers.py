@@ -20,7 +20,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
-from tests.domain_fixtures import unfunded_billing_account
+from tests.workspaces import unfunded_billing_account
 
 from database import AsyncDatabaseClient, DatabaseApplicationName, DatabaseClient, DatabaseSettings
 

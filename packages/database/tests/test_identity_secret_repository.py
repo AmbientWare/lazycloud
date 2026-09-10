@@ -12,7 +12,7 @@ from database.tables.identity import WorkspaceTable
 from shared.errors import ConflictError, NotFoundError
 from sqlalchemy import delete, inspect
 from sqlalchemy.engine import URL
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 
 from database import (
     DatabaseApplicationName,

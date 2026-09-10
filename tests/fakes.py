@@ -16,7 +16,7 @@ from shared.http.gateway import (
     ResolveDeploymentTargetRequest,
     ResolveDeploymentTargetResponse,
 )
-from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
+from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings, S3PresignedUpload
 
 
 def http_api_error(detail: str, *, status_code: int = 400) -> HttpApiError:
@@ -265,3 +265,20 @@ class FakeObjectClient:
 
     def delete(self, key: str, *, bucket: str | None = None) -> None:
         self.objects.pop((bucket or "default", key), None)
+
+
+@dataclass(slots=True)
+class FakeWorkspaceBuckets:
+    """Record bucket creation and accept workspace bucket configuration locally."""
+
+    settings: S3ObjectStoreSettings = field(default_factory=S3ObjectStoreSettings)
+    created: list[str] = field(default_factory=list)
+
+    def create_bucket(self, bucket: str | None = None) -> None:
+        self.created.append(bucket or self.settings.bucket)
+
+    def validate_bucket_access(self, bucket: str | None = None) -> None:
+        del bucket
+
+    def configure_workspace_bucket(self, bucket: str, *, public_origin: str) -> None:
+        del bucket, public_origin

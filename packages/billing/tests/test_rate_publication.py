@@ -5,7 +5,6 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from api.server.services import ApiServices
 from billing.rate_publication import publish_metered_rate_history
 from database.context import ServiceContext
 from database.repositories.billing_rates import (
@@ -14,6 +13,7 @@ from database.repositories.billing_rates import (
     RatePublication,
 )
 from database.tables.billing_ledger import BillingLedgerSegmentTable
+from observability.usage import UsageService
 from shared.billing_quotes import ContainerShape, LedgerComponent
 from shared.billing_rate_card import (
     PUBLISHED_METERED_RATE_HISTORY,
@@ -34,7 +34,7 @@ from sqlalchemy import select
 
 @pytest.mark.parametrize("existing_installation", [False, True])
 def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
-    isolated_services: ApiServices, existing_installation: bool
+    service_context: ServiceContext, existing_installation: bool
 ) -> None:
     old = PUBLISHED_METERED_RATE_HISTORY[0]
     assert old.platform_rate is not None
@@ -43,8 +43,8 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
         for card in PUBLISHED_METERED_RATE_HISTORY
         if card.platform_rate is not None and card.platform_rate.nanos_per_egress_gib > 0
     )
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         if existing_installation:
             PlatformRateRepository(session).publish(
                 pricing_version=old.pricing_version,
@@ -72,8 +72,8 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
             ).isoformat(),
         },
     )
-    isolated_services.usage.append(before)
-    with isolated_services.context.database.session() as session:
+    UsageService(service_context).append(before)
+    with service_context.database.session() as session:
         publish_metered_rate_history(session)
 
     after = before.model_copy(
@@ -87,8 +87,8 @@ def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
             },
         }
     )
-    isolated_services.usage.append(after)
-    with isolated_services.context.database.session() as session:
+    UsageService(service_context).append(after)
+    with service_context.database.session() as session:
         old_segment = session.scalar(
             select(BillingLedgerSegmentTable).where(
                 BillingLedgerSegmentTable.usage_record_id == before.id

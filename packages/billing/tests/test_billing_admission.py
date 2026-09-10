@@ -24,7 +24,7 @@ from shared.gpu import GPU_ANY, SUPPORTED_GPU_TYPES
 from shared.http.volumes import GetOrCreateVolumeRequest
 from shared.timestamps import utc_now
 from sqlalchemy import func, select
-from tests.domain_fixtures import (
+from tests.workspaces import (
     unbilled_account,
     unfunded_billing_account,
     workspace_owner_user_id,

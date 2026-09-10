@@ -35,8 +35,7 @@ from shared.usage import (
     UsageRecord,
     UsageUnit,
 )
-from tests.domain_fixtures import owned_workspace, workspace_owner_user_id
-from tests.service_fixtures import administrator_credential
+from tests.workspaces import administrator_credential, owned_workspace, workspace_owner_user_id
 
 
 def _seed_container(services: ApiServices) -> ContainerRecord:
@@ -67,7 +66,7 @@ def test_container_metrics_timeseries_empty_and_missing(
 ) -> None:
     container = _seed_container(isolated_services)
 
-    raw_token, _ = administrator_credential(isolated_services, "metrics-reader")
+    raw_token, _ = administrator_credential(isolated_services.context, "metrics-reader")
     client = client_stack.enter_context(TestClient(create_app(isolated_services)))
     headers = {"Authorization": f"Bearer {raw_token}"}
 
@@ -220,7 +219,7 @@ _HELD_MEMORY_MIB = 4_096
 
 
 def test_account_activity_reads_held_resources_from_the_priced_ledger(
-    isolated_services: ApiServices,
+    unpriced_services: ApiServices,
     client_stack: ExitStack,
 ) -> None:
     """A resource band is the capacity a placement held, at the level it held it.
@@ -241,10 +240,10 @@ def test_account_activity_reads_held_resources_from_the_priced_ledger(
     # once those seconds have passed.
     started_at = utc_now() - _HELD_WINDOW_AGO
     ended_at = started_at + timedelta(seconds=_HELD_SECONDS)
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(unpriced_services.context)
     held = control.get_workspace("default")
-    owner_user_id = workspace_owner_user_id(isolated_services.context, held.id)
-    app_id = isolated_services.apps.create("held_app", workspace=held.name).id
+    owner_user_id = workspace_owner_user_id(unpriced_services.context, held.id)
+    app_id = unpriced_services.apps.create("held_app", workspace=held.name).id
 
     shape = ContainerShape(
         billing_owner=UsageBillingOwner.PlatformFleet,
@@ -254,7 +253,7 @@ def test_account_activity_reads_held_resources_from_the_priced_ledger(
         gpu_count=0,
     )
     container_id = str(uuid4())
-    with isolated_services.context.database.session() as session:
+    with unpriced_services.context.database.session() as session:
         ContainerRepository(session).upsert(
             ContainerRecord(
                 id=container_id,
@@ -282,7 +281,7 @@ def test_account_activity_reads_held_resources_from_the_priced_ledger(
             nanos_per_gpu_card_second=Decimal(1),
         )
 
-    isolated_services.usage.append(
+    unpriced_services.usage.append(
         UsageRecord(
             id=str(uuid4()),
             workspace_id=held.id,
@@ -304,9 +303,9 @@ def test_account_activity_reads_held_resources_from_the_priced_ledger(
         )
     )
 
-    client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+    client = client_stack.enter_context(TestClient(create_app(unpriced_services)))
     headers = {
-        "Authorization": f"Bearer {_account_token(isolated_services, owner_user_id, 'held')}"
+        "Authorization": f"Bearer {_account_token(unpriced_services, owner_user_id, 'held')}"
     }
     # One interval exactly as wide as the metered span, opened where it opened,
     # so the level the band draws is the level the placement held for all of it.

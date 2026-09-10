@@ -11,7 +11,7 @@ from execution.secrets.crypto import (
     WorkspaceSecretCipher,
 )
 from shared.identity import WorkspaceRecord
-from tests.domain_fixtures import owned_workspace
+from tests.workspaces import owned_workspace
 
 
 def test_secrets_encrypt_before_persistence_and_read_plaintext(

@@ -24,8 +24,8 @@ from shared.scheduling import (
     SchedulerContainerAddressMap,
     SchedulerContainerState,
 )
-from tests.domain_fixtures import owned_workspace
 from tests.redis_fakes import FakeRedis
+from tests.workspaces import owned_workspace
 
 CONTAINER_ID = "00000000-0000-4000-8000-000000000101"
 

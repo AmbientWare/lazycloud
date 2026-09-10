@@ -6,7 +6,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from api.server.services import ApiServices
+from database.context import ServiceContext
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_ledger import (
     BillingLedgerRepository,
@@ -17,6 +17,8 @@ from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import ContainerRepository
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.observability import UsageRecordTable
+from observability.events import EventService
+from observability.usage import UsageService
 from observability.usage_pricing import REPRICE_REFUSED_ACTION, UNPRICED_SPAN_ACTION
 from shared.billing_quotes import ContainerShape, LedgerBasis, LedgerComponent
 from shared.billing_rate_card import FREE_PLAN_INCLUDED_NANOS, PUBLISHED_METERED_RATE_HISTORY
@@ -33,7 +35,7 @@ from shared.usage import (
     UsageUnit,
 )
 from sqlalchemy import select
-from tests.domain_fixtures import unfunded_billing_account
+from tests.workspaces import unfunded_billing_account
 
 # Rates only ever take effect in the future, so the usage they price is later
 # still. The offsets are the smallest that keep both facts true for a run.
@@ -46,9 +48,9 @@ _CPU_MILLICORES = 2_000
 _MEMORY_MIB = 4_096
 
 
-def _shaped_container(services: ApiServices, *, shape: ContainerShape) -> tuple[str, str]:
-    with services.context.database.session() as session:
-        workspace_id = services.context.default_workspace_id(session)
+def _shaped_container(services: ServiceContext, *, shape: ContainerShape) -> tuple[str, str]:
+    with services.database.session() as session:
+        workspace_id = services.default_workspace_id(session)
         container = ContainerRepository(session).upsert(
             ContainerRecord(
                 id=str(uuid4()),
@@ -103,8 +105,8 @@ _WORKER_CLAIMED_LABELS = {
 }
 
 
-def _segments(services: ApiServices, usage_record_id: str) -> list[BillingLedgerSegmentTable]:
-    with services.context.database.session() as session:
+def _segments(services: ServiceContext, usage_record_id: str) -> list[BillingLedgerSegmentTable]:
+    with services.database.session() as session:
         return list(
             session.scalars(
                 select(BillingLedgerSegmentTable)
@@ -128,7 +130,7 @@ def _cost_of(segments: Sequence[BillingLedgerSegmentTable], component: LedgerCom
 
 
 def test_compute_usage_crossing_a_rate_change_prices_as_tiling_segments(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     now = max(
         utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
@@ -140,8 +142,8 @@ def test_compute_usage_crossing_a_rate_change_prices_as_tiling_segments(
         memory_mib=_MEMORY_MIB,
         gpu_count=0,
     )
-    workspace_id, container_id = _shaped_container(isolated_services, shape=shape)
-    with isolated_services.context.database.session() as session:
+    workspace_id, container_id = _shaped_container(service_context, shape=shape)
+    with service_context.database.session() as session:
         rates = ComputeRateRepository(session)
         for effective_at, version, per_core_second in (
             (now + _RATE_ONE_AT, "test.a", Decimal(10)),
@@ -170,9 +172,9 @@ def test_compute_usage_crossing_a_rate_change_prices_as_tiling_segments(
         labels=_WORKER_CLAIMED_LABELS,
     )
 
-    saved = isolated_services.usage.append(record)
+    saved = UsageService(service_context).append(record)
 
-    segments = _segments(isolated_services, saved.id)
+    segments = _segments(service_context, saved.id)
     cpu = [segment for segment in segments if segment.component == LedgerComponent.Cpu.value]
     assert [segment.pricing_version for segment in cpu] == ["test.a", "test.b"]
     # Each half costs the quote covering it times the capacity that half held:
@@ -197,7 +199,7 @@ def test_compute_usage_crossing_a_rate_change_prices_as_tiling_segments(
 
 
 def test_a_window_bills_the_greater_of_the_capacity_held_and_the_capacity_used(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """A reservation is a floor, not a cap, and the two records reach it apart.
 
@@ -212,7 +214,7 @@ def test_a_window_bills_the_greater_of_the_capacity_held_and_the_capacity_used(
         utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
     ) + timedelta(days=1)
     workspace_id, container_id = _shaped_container(
-        isolated_services,
+        service_context,
         shape=ContainerShape(
             billing_owner=UsageBillingOwner.PlatformFleet,
             gpu_type="",
@@ -221,7 +223,7 @@ def test_a_window_bills_the_greater_of_the_capacity_held_and_the_capacity_used(
             gpu_count=0,
         ),
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         ComputeRateRepository(session).publish(
             billing_owner=UsageBillingOwner.PlatformFleet,
             gpu_type="",
@@ -241,7 +243,7 @@ def test_a_window_bills_the_greater_of_the_capacity_held_and_the_capacity_used(
     ):
         started_at = now + offset
         ended_at = started_at + _WINDOW
-        duration = isolated_services.usage.append(
+        duration = UsageService(service_context).append(
             _usage(
                 workspace_id=workspace_id,
                 resource_id=container_id,
@@ -253,7 +255,7 @@ def test_a_window_bills_the_greater_of_the_capacity_held_and_the_capacity_used(
                 labels=_WORKER_CLAIMED_LABELS,
             )
         )
-        used = isolated_services.usage.append(
+        used = UsageService(service_context).append(
             _usage(
                 workspace_id=workspace_id,
                 resource_id=container_id,
@@ -265,8 +267,8 @@ def test_a_window_bills_the_greater_of_the_capacity_held_and_the_capacity_used(
             )
         )
 
-        held = _segments(isolated_services, duration.id)
-        burnt = _segments(isolated_services, used.id)
+        held = _segments(service_context, duration.id)
+        burnt = _segments(service_context, used.id)
         assert _cost_of(held, LedgerComponent.Cpu) == reserved_cost
         assert _cost_of(held, LedgerComponent.Cpu) + _cost_of(burnt, LedgerComponent.Cpu) == (
             expected
@@ -277,7 +279,7 @@ def test_a_window_bills_the_greater_of_the_capacity_held_and_the_capacity_used(
 
 
 def test_a_window_with_no_measured_record_bills_the_capacity_it_held(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """Losing the measurement costs the burst above the floor, never the floor.
 
@@ -291,7 +293,7 @@ def test_a_window_with_no_measured_record_bills_the_capacity_it_held(
         utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
     ) + timedelta(days=1)
     workspace_id, container_id = _shaped_container(
-        isolated_services,
+        service_context,
         shape=ContainerShape(
             billing_owner=UsageBillingOwner.PlatformFleet,
             gpu_type="h100",
@@ -300,7 +302,7 @@ def test_a_window_with_no_measured_record_bills_the_capacity_it_held(
             gpu_count=2,
         ),
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         ComputeRateRepository(session).publish(
             billing_owner=UsageBillingOwner.PlatformFleet,
             gpu_type="h100",
@@ -313,7 +315,7 @@ def test_a_window_with_no_measured_record_bills_the_capacity_it_held(
         )
     started_at = now + _WINDOW_AT
 
-    saved = isolated_services.usage.append(
+    saved = UsageService(service_context).append(
         _usage(
             workspace_id=workspace_id,
             resource_id=container_id,
@@ -326,7 +328,7 @@ def test_a_window_with_no_measured_record_bills_the_capacity_it_held(
         )
     )
 
-    segments = _segments(isolated_services, saved.id)
+    segments = _segments(service_context, saved.id)
     assert {segment.basis for segment in segments} == {LedgerBasis.Reserved.value}
     assert {
         component: (_quantity_of(segments, component), _cost_of(segments, component))
@@ -345,13 +347,13 @@ def test_a_window_with_no_measured_record_bills_the_capacity_it_held(
 
 
 def test_egress_is_metered_and_priced_at_an_explicit_zero(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     now = max(
         utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
     ) + timedelta(days=1)
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         PlatformRateRepository(session).publish(
             pricing_version="test.a",
             effective_at=now + _RATE_ONE_AT,
@@ -369,9 +371,9 @@ def test_egress_is_metered_and_priced_at_an_explicit_zero(
         ended_at=started_at + _WINDOW,
     )
 
-    saved = isolated_services.usage.append(record)
+    saved = UsageService(service_context).append(record)
 
-    segments = _segments(isolated_services, saved.id)
+    segments = _segments(service_context, saved.id)
     assert len(segments) == 1
     assert segments[0].rate_nanos_per_unit == Decimal(0)
     assert segments[0].cost_nanos == 0
@@ -381,13 +383,13 @@ def test_egress_is_metered_and_priced_at_an_explicit_zero(
 
 
 def test_unclassified_interface_traffic_does_not_become_an_egress_charge(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     now = max(
         utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
     ) + timedelta(days=1)
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         PlatformRateRepository(session).publish(
             pricing_version="test.a",
             effective_at=now + _RATE_ONE_AT,
@@ -404,13 +406,13 @@ def test_unclassified_interface_traffic_does_not_become_an_egress_charge(
         started_at=started_at,
         ended_at=started_at + _WINDOW,
     )
-    saved = isolated_services.usage.append(record)
+    saved = UsageService(service_context).append(record)
     assert saved.quantity == 4_096
-    assert _segments(isolated_services, saved.id) == []
+    assert _segments(service_context, saved.id) == []
 
 
 def test_a_re_recorded_quantity_keeps_the_frozen_cost_and_is_reported(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """The one path that could silently reprice what a customer was shown.
 
@@ -423,8 +425,8 @@ def test_a_re_recorded_quantity_keeps_the_frozen_cost_and_is_reported(
     now = max(
         utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
     ) + timedelta(days=1)
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
         owner_user_id = WorkspaceMemberRepository(session).owner_user_id(workspace_id)
         PlatformRateRepository(session).publish(
             pricing_version="test.a",
@@ -452,24 +454,22 @@ def test_a_re_recorded_quantity_keeps_the_frozen_cost_and_is_reported(
         ended_at=started_at + _WINDOW,
     )
 
-    isolated_services.usage.append(record)
-    frozen = [
-        (segment.id, segment.cost_nanos) for segment in _segments(isolated_services, record.id)
-    ]
-    isolated_services.usage.append(record.model_copy(update={"quantity": 9_999}))
+    UsageService(service_context).append(record)
+    frozen = [(segment.id, segment.cost_nanos) for segment in _segments(service_context, record.id)]
+    UsageService(service_context).append(record.model_copy(update={"quantity": 9_999}))
 
     assert [
-        (segment.id, segment.cost_nanos) for segment in _segments(isolated_services, record.id)
+        (segment.id, segment.cost_nanos) for segment in _segments(service_context, record.id)
     ] == frozen
     assert sum(cost for _, cost in frozen) == 4_096
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         spent = BillingAllowanceRepository(session).current_period(
             user_id=owner_user_id,
             at=started_at,
         )
     assert spent is not None
     assert spent.spent_nanos == 4_096
-    reported = isolated_services.events.list(
+    reported = EventService(service_context).list(
         workspace_id=None,
         actions=(REPRICE_REFUSED_ACTION,),
     )
@@ -481,7 +481,7 @@ def test_a_re_recorded_quantity_keeps_the_frozen_cost_and_is_reported(
 
 
 def test_usage_no_published_rate_covers_is_recorded_without_cost_and_reported(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     now = max(
         utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
@@ -494,7 +494,7 @@ def test_usage_no_published_rate_covers_is_recorded_without_cost_and_reported(
         gpu_count=0,
         rate_class="unpublished",
     )
-    workspace_id, container_id = _shaped_container(isolated_services, shape=shape)
+    workspace_id, container_id = _shaped_container(service_context, shape=shape)
     started_at = now + _WINDOW_AT
     record = _usage(
         workspace_id=workspace_id,
@@ -507,12 +507,12 @@ def test_usage_no_published_rate_covers_is_recorded_without_cost_and_reported(
         labels=_WORKER_CLAIMED_LABELS,
     )
 
-    saved = isolated_services.usage.append(record)
+    saved = UsageService(service_context).append(record)
 
-    assert _segments(isolated_services, saved.id) == []
-    with isolated_services.context.database.session() as session:
+    assert _segments(service_context, saved.id) == []
+    with service_context.database.session() as session:
         assert session.get(UsageRecordTable, saved.id) is not None
-    reported = isolated_services.events.list(
+    reported = EventService(service_context).list(
         workspace_id=None,
         actions=(UNPRICED_SPAN_ACTION,),
     )
@@ -523,7 +523,7 @@ def test_usage_no_published_rate_covers_is_recorded_without_cost_and_reported(
 
 
 def test_a_rate_may_cover_unpriced_instants_but_not_ones_the_ledger_froze(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """A rate reaches back over usage nothing priced, and no further.
 
@@ -544,11 +544,11 @@ def test_a_rate_may_cover_unpriced_instants_but_not_ones_the_ledger_froze(
         memory_mib=_MEMORY_MIB,
         gpu_count=0,
     )
-    workspace_id, container_id = _shaped_container(isolated_services, shape=shape)
+    workspace_id, container_id = _shaped_container(service_context, shape=shape)
     started_at = now - timedelta(minutes=10)
     ended_at = started_at + _WINDOW
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         ComputeRateRepository(session).publish(
             billing_owner=UsageBillingOwner.PlatformFleet,
             gpu_type="",
@@ -560,7 +560,7 @@ def test_a_rate_may_cover_unpriced_instants_but_not_ones_the_ledger_froze(
             nanos_per_gpu_card_second=Decimal(0),
         )
 
-    saved = isolated_services.usage.append(
+    saved = UsageService(service_context).append(
         _usage(
             workspace_id=workspace_id,
             resource_id=container_id,
@@ -573,14 +573,14 @@ def test_a_rate_may_cover_unpriced_instants_but_not_ones_the_ledger_froze(
         )
     )
 
-    segments = _segments(isolated_services, saved.id)
+    segments = _segments(service_context, saved.id)
     assert {segment.pricing_version for segment in segments} == {"test.backfill"}
     assert sum(segment.cost_nanos for segment in segments) > 0
 
     # Now the ledger holds a frozen edge, and a rate opening at or before it is
     # refused — that usage has been priced and shown.
     with (
-        isolated_services.context.database.session() as session,
+        service_context.database.session() as session,
         pytest.raises(InvalidInputError),
     ):
         ComputeRateRepository(session).publish(
@@ -596,7 +596,7 @@ def test_a_rate_may_cover_unpriced_instants_but_not_ones_the_ledger_froze(
 
 
 def test_usage_metered_before_any_rate_can_be_priced_once_a_rate_exists(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """The one gap ingest cannot close, and it closes exactly once.
 
@@ -616,12 +616,12 @@ def test_usage_metered_before_any_rate_can_be_priced_once_a_rate_exists(
         gpu_count=0,
         rate_class="unpublished",
     )
-    workspace_id, container_id = _shaped_container(isolated_services, shape=shape)
+    workspace_id, container_id = _shaped_container(service_context, shape=shape)
     started_at = now - timedelta(minutes=20)
     ended_at = started_at + _WINDOW
 
     # Metered with no rate in existence: real seconds, no money.
-    saved = isolated_services.usage.append(
+    saved = UsageService(service_context).append(
         _usage(
             workspace_id=workspace_id,
             resource_id=container_id,
@@ -633,9 +633,9 @@ def test_usage_metered_before_any_rate_can_be_priced_once_a_rate_exists(
             labels=_WORKER_CLAIMED_LABELS,
         )
     )
-    assert _segments(isolated_services, saved.id) == []
+    assert _segments(service_context, saved.id) == []
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         ComputeRateRepository(session).publish(
             billing_owner=UsageBillingOwner.PlatformFleet,
             gpu_type="",
@@ -649,31 +649,31 @@ def test_usage_metered_before_any_rate_can_be_priced_once_a_rate_exists(
         )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         priced, skipped = BillingLedgerRepository(session).price_unpriced_between(
             started_at=started_at - timedelta(hours=1),
             ended_at=now + timedelta(hours=1),
         )
         session.commit()
     assert (priced, skipped) == (1, 0)
-    first = _segments(isolated_services, saved.id)
+    first = _segments(service_context, saved.id)
     assert sum(segment.cost_nanos for segment in first) > 0
 
     # Second run finds it already priced and leaves it exactly as it stands.
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         again = BillingLedgerRepository(session).price_unpriced_between(
             started_at=started_at - timedelta(hours=1),
             ended_at=now + timedelta(hours=1),
         )
         session.commit()
     assert again == (0, 0)
-    assert [(s.id, s.cost_nanos) for s in _segments(isolated_services, saved.id)] == [
+    assert [(s.id, s.cost_nanos) for s in _segments(service_context, saved.id)] == [
         (s.id, s.cost_nanos) for s in first
     ]
 
 
 def test_cost_priced_in_the_renewal_gap_lands_on_the_period_that_opens_over_it(
-    isolated_services: ApiServices,
+    service_context: ServiceContext,
 ) -> None:
     """A delayed renewal must recover spend already recorded in its new period."""
 
@@ -681,11 +681,11 @@ def test_cost_priced_in_the_renewal_gap_lands_on_the_period_that_opens_over_it(
         utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY)
     ) + timedelta(days=1)
     owner_user_id, workspace_id = unfunded_billing_account(
-        isolated_services.context,
+        service_context,
         period_started_at=now - timedelta(days=30),
         period_ended_at=now,
     )
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         PlatformRateRepository(session).publish(
             pricing_version="test.a",
             effective_at=now + _RATE_ONE_AT,
@@ -693,7 +693,7 @@ def test_cost_priced_in_the_renewal_gap_lands_on_the_period_that_opens_over_it(
             nanos_per_volume_byte_second=Decimal(0),
         )
     started_at = now + _WINDOW_AT
-    isolated_services.usage.append(
+    UsageService(service_context).append(
         _usage(
             workspace_id=workspace_id,
             resource_id=str(uuid4()),
@@ -705,7 +705,7 @@ def test_cost_priced_in_the_renewal_gap_lands_on_the_period_that_opens_over_it(
         )
     )
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         # Nothing to count it against while the cycle is between deliveries.
         assert (
             BillingAllowanceRepository(session).current_period(user_id=owner_user_id, at=started_at)
@@ -719,7 +719,7 @@ def test_cost_priced_in_the_renewal_gap_lands_on_the_period_that_opens_over_it(
         )
         session.commit()
 
-    with isolated_services.context.database.session() as session:
+    with service_context.database.session() as session:
         opened = BillingAllowanceRepository(session).current_period(
             user_id=owner_user_id, at=started_at
         )

@@ -15,7 +15,7 @@ from shared.usage import (
     UsageRecord,
     UsageUnit,
 )
-from tests.domain_fixtures import unfunded_billing_account
+from tests.workspaces import unfunded_billing_account
 
 
 def test_monthly_budget_counts_recorded_usage_across_rollover_and_saved_edits(
