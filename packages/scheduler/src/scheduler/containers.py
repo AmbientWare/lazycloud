@@ -57,6 +57,7 @@ from scheduler.state import (
     ContainerRequestCancelledError,
     ContainerRequestClaimNotOwnedError,
     SchedulerContainerRequestClaim,
+    WorkerRequestCancellation,
     WorkerReservedCapacity,
 )
 from scheduler.tools import (
@@ -196,7 +197,9 @@ class SchedulerContainerWorkerRepository(Protocol):
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord: ...
 
-    def cancel_worker_request(self, worker_id: str, container_id: str) -> bool: ...
+    def cancel_worker_request(
+        self, worker_id: str, container_id: str
+    ) -> WorkerRequestCancellation: ...
 
 
 class SchedulerContainerPlacement(Protocol):
@@ -425,11 +428,13 @@ class SchedulerContainerRequestService:
         }
         pending_request_removed = False
         if state.worker_id and not terminal:
-            request_removed = self.workers.cancel_worker_request(
+            cancellation = self.workers.cancel_worker_request(
                 state.worker_id,
                 container_id,
             )
-            pending_request_removed = request_removed and state.started_at is None
+            pending_request_removed = (
+                cancellation.removed and not cancellation.delivered and state.started_at is None
+            )
             if pending_request_removed:
                 self.containers.delete_container_state(container_id)
         self._release_capacity_reservation(container_id)

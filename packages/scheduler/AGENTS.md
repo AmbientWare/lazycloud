@@ -78,18 +78,17 @@ answered it with "all of them". The pod autoscaler dropped running records the
 scheduler had lost, and functions and endpoints classified nothing at all.
 
 A `running` row with no scheduler state has started, so nothing is coming back
-for it. A `pending` row has two legitimate reasons to still be pending, and both
-are read rather than guessed at. A request still queued for it is the
-dispatcher's, which bounds its own retrying and fails the request itself; that
-is read directly, so no clock has to allow for it. Otherwise a worker holds it
-and is starting it, and `CONTAINER_START_DEADLINE_SECONDS` bounds that and only
-that.
+for it. A pending request in the global backlog belongs to the dispatcher,
+which bounds capacity acquisition. Once assigned, the worker must acknowledge
+delivery within `CONTAINER_DELIVERY_DEADLINE_SECONDS`. Its queued and in-flight
+payloads retain the dispatch timestamp until acknowledgement. A healthy
+keepalive does not extend that deadline. An acknowledged start has
+`CONTAINER_START_DEADLINE_SECONDS` from assignment to finish preparation.
 
-Not the Redis TTL, which was the recovery before this and is the wrong owner
-twice over: the durable row stayed wrong until a cache key lapsed, and the key
-is re-armed by whoever holds the container, so a worker wedged part-way through
-a start refreshes it for as long as it stays up. The deadline is wall-clock on
-the durable row, which is created first and outlives every cache entry about it.
+Deadlines use recorded timestamps rather than Redis expiry. Worker heartbeats
+cannot extend them. If assignment state is gone, the durable creation time
+bounds recovery. Cancellation distinguishes queued requests from deliveries:
+only a request proven never delivered may skip the worker stop event.
 
 Reclaiming stops the container with `StopContainerReason.Scheduler`, the same
 settlement every platform-owned stop takes, so an invocation the container had

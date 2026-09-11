@@ -13,9 +13,10 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Protocol
 
+import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubConfigUpdateValue, StubKind, StubRecord
-from coordination.redis_client import RedisClient
+from coordination.redis_client import AsyncRedisClient, RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.repositories.orchestration import AutoscalerStateRepository, ContainerRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
@@ -23,6 +24,7 @@ from execution.functions.service import FunctionControlService
 from observability.stream_state import RedisEventStreamRepository
 from pydantic import JsonValue
 from scheduler.autoscaling import (
+    CONTAINER_DELIVERY_DEADLINE_SECONDS,
     CONTAINER_START_DEADLINE_SECONDS,
     AutoscalingDriver,
     FunctionAutoscaler,
@@ -187,9 +189,13 @@ def test_function_autoscaler_records_what_it_decided(
     assert [event.action for event in history.events] == ["function.autoscaler.scale_decision"]
 
 
-def test_function_autoscaler_reclaims_a_container_that_never_started(
+@pytest.mark.parametrize("delivery", ["missing", "queued", "inflight"])
+@pytest.mark.anyio
+async def test_function_autoscaler_reclaims_a_container_that_never_started(
     isolated_services: ApiServices,
     real_redis_actors: _RealRedisActors,
+    async_redis: AsyncRedisClient,
+    delivery: str,
 ) -> None:
     """A pending record nothing will start must stop holding the ceiling.
 
@@ -229,6 +235,29 @@ def test_function_autoscaler_reclaims_a_container_that_never_started(
         stub,
         created_at=current_time - timedelta(seconds=CONTAINER_START_DEADLINE_SECONDS + 1),
     )
+    workers = RedisSchedulerWorkerRepository(redis)
+    assigned_at = current_time - timedelta(seconds=CONTAINER_DELIVERY_DEADLINE_SECONDS + 1)
+    if delivery != "missing":
+        stranded.runtime_worker_id = "worker-stranded"
+        with services.context.database.session() as session:
+            ContainerRepository(session).upsert(stranded)
+        await workers.enqueue_worker_request(
+            async_redis,
+            stranded.runtime_worker_id,
+            SchedulerWorkerRequest(
+                container_id=stranded.id,
+                workspace_id=stub.workspace_id,
+                stub_id=stub.id,
+                timestamp=assigned_at,
+            ),
+        )
+        if delivery == "inflight":
+            assert (
+                await workers.wait_for_next_container_request(
+                    async_redis, stranded.runtime_worker_id, timeout_seconds=0.01
+                )
+                is not None
+            )
     # Present, pending, and going nowhere — the state a half-alive worker
     # re-arms indefinitely, so no expiry is coming to settle this row.
     RedisSchedulerContainerRepository(redis).set_container_state(
@@ -236,7 +265,9 @@ def test_function_autoscaler_reclaims_a_container_that_never_started(
             container_id=stranded.id,
             stub_id=stub.id,
             workspace_id=stub.workspace_id,
+            worker_id=stranded.runtime_worker_id,
             status=SchedulerContainerStatus.Pending,
+            scheduled_at=assigned_at,
         )
     )
 
@@ -247,10 +278,61 @@ def test_function_autoscaler_reclaims_a_container_that_never_started(
     ] == [stranded.id]
     assert services.containers.get(stranded.id).status is ContainerStatus.Stopped
     assert services.containers.get(starting[0].id).status is ContainerStatus.Pending
+    assert not workers.has_recoverable_container_request(
+        stranded.id, worker_id=stranded.runtime_worker_id
+    )
+    assert workers.is_container_cancelled(stranded.id)
     # The slot the stranded row held is the one the backlog gets.
     assert result.current_containers == 1
     assert result.desired_containers == 2
     assert result.actions[-1].action == "start"
+
+
+def test_function_recovery_preserves_capacity_waits_and_acknowledged_preparation(
+    isolated_services: ApiServices,
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    services = replace(
+        isolated_services,
+        containers=replace(isolated_services.containers, scheduler=_Scheduler()),
+    )
+    stub = _create_function_stub(services, max_containers=2)
+    _enqueue_invocations(services, stub, count=2)
+    now = utc_now()
+    old = now - timedelta(seconds=CONTAINER_START_DEADLINE_SECONDS + 1)
+    preparing = _pending_containers(services, stub)[0]
+    preparing.created_at = old
+    preparing.runtime_worker_id = "worker-preparing"
+    with services.context.database.session() as session:
+        ContainerRepository(session).upsert(preparing)
+    RedisSchedulerContainerRepository(redis).set_container_state(
+        SchedulerContainerState(
+            container_id=preparing.id,
+            stub_id=stub.id,
+            workspace_id=stub.workspace_id,
+            worker_id=preparing.runtime_worker_id,
+            status=SchedulerContainerStatus.Pending,
+            scheduled_at=now - timedelta(seconds=CONTAINER_DELIVERY_DEADLINE_SECONDS + 1),
+        )
+    )
+    waiting = _record_pending_container(services, stub, created_at=old)
+    RedisSchedulerWorkerRepository(redis).enqueue_container_request(
+        SchedulerWorkerRequest(
+            container_id=waiting.id,
+            workspace_id=stub.workspace_id,
+            stub_id=stub.id,
+            timestamp=old,
+        ),
+        ready_at=now,
+    )
+
+    result = _function_autoscaler(services, redis).reconcile(now=now)[0]
+
+    assert result.actions == []
+    assert result.current_containers == 2
+    assert services.containers.get(preparing.id).status is ContainerStatus.Pending
+    assert services.containers.get(waiting.id).status is ContainerStatus.Pending
 
 
 def test_function_startup_breaker_fails_queued_tasks_with_the_startup_error(
