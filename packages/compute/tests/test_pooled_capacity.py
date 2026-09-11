@@ -1821,7 +1821,7 @@ def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_ow
     assert released.status == "released"
 
 
-def test_named_retirement_keeps_its_intent_across_provider_failure_and_stale_observation(
+def test_named_retirement_ignores_absent_machines_and_preserves_retry_intent(
     service_context: ServiceContext,
 ) -> None:
     class UnavailableRetirement(_PooledProvider):
@@ -1855,6 +1855,17 @@ def test_named_retirement_keeps_its_intent_across_provider_failure_and_stale_obs
         instances = ComputeProviderInstanceRepository(session)
         record = instances.list_for_pool(pool.id)[0]
         instances.upsert(record.model_copy(update={"machine_id": machine_id}))
+        absent_id = str(uuid4())
+        instances.upsert(
+            record.model_copy(
+                update={
+                    "id": absent_id,
+                    "instance_id": "i-fffffffffffffffff",
+                    "machine_id": None,
+                    "metadata": {"missing_since": datetime.now(UTC).isoformat()},
+                }
+            )
+        )
 
     for _attempt in range(2):
         with pytest.raises(RuntimeError, match="provider unavailable"):
@@ -1870,6 +1881,10 @@ def test_named_retirement_keeps_its_intent_across_provider_failure_and_stale_obs
         assert retired is not None
         assert retired.status == "terminating"
         assert retired.metadata["terminating_reason"] == "idle_pool_scale_down"
+        with service_context.database.session() as session:
+            absent = ComputeProviderInstanceRepository(session).records.get(absent_id)
+        assert absent is not None
+        assert absent.status == "active"
 
 
 def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
