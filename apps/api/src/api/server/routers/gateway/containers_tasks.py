@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from gateway.service import GatewayControlService
 from shared.errors import NotFoundError
+from shared.http.functions import FunctionRetireRequest, FunctionRetireResponse
 from shared.http.gateway import (
     AttachToContainerRequest,
     AttachToContainerResponse,
@@ -27,11 +28,24 @@ from shared.http.gateway_tasks import (
 from api.server.async_io import ApiAsyncIo
 from api.server.auth import read_workspace, write_workspace
 from api.server.dependencies import current_services
-from api.server.service_dependencies import gateway_service
-from api.server.services import ApiServices
+from api.server.service_dependencies import function_service, gateway_service
+from api.server.services import ApiServices, FunctionApiService
 from api.server.sse import sse_event
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
+
+
+@router.post(
+    "/functions/retire",
+    response_model=FunctionRetireResponse,
+    operation_id="retireIdleFunctionContainer",
+)
+def retire_function_container(
+    request: FunctionRetireRequest,
+    workspace_id: write_workspace,
+    service: FunctionApiService = Depends(function_service),
+) -> FunctionRetireResponse:
+    return service.function_retire(request, workspace_id=workspace_id)
 
 
 @router.post("/containers/checkpoint", response_model=CheckpointContainerResponse)

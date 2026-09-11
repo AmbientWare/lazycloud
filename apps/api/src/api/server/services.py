@@ -195,6 +195,8 @@ from shared.http.functions import (
     FunctionInvokeResponse,
     FunctionMonitorRequest,
     FunctionMonitorResponse,
+    FunctionRetireRequest,
+    FunctionRetireResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -328,6 +330,13 @@ class FunctionApiService(Protocol):
     ) -> int: ...
 
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse: ...
+
+    def function_retire(
+        self,
+        request: FunctionRetireRequest,
+        *,
+        workspace_id: str,
+    ) -> FunctionRetireResponse: ...
 
     def function_set_result(self, request: FunctionSetResultBody) -> FunctionSetResultResponse: ...
 

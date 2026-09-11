@@ -29,6 +29,7 @@ from shared.http.functions import (
     FunctionClaimRequest,
     FunctionInvokeBody,
     FunctionInvokeResponse,
+    FunctionRetireRequest,
     FunctionSetResultBody,
 )
 from shared.http.gateway_tasks import AppendTaskLogRequest, EndTaskRequest
@@ -227,6 +228,13 @@ class _FunctionRunnerServiceChannel:
             response = self.function_service.function_claim(
                 FunctionClaimRequest.model_validate(payload)
             )
+            return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
+        if path == "/gateway/functions/retire":
+            retirement = FunctionRetireRequest.model_validate(payload)
+            workspace_id = self.function_service.control_plane.get_stub(
+                retirement.stub_id
+            ).workspace_id
+            response = self.function_service.function_retire(retirement, workspace_id=workspace_id)
             return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
         if path == "/api/v1/functions/set-result":
             response = self.function_service.function_set_result(

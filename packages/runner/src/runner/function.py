@@ -47,6 +47,8 @@ from shared.http.functions import (
     FunctionClaimedTask,
     FunctionClaimRequest,
     FunctionClaimResponse,
+    FunctionRetireRequest,
+    FunctionRetireResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -152,6 +154,7 @@ class FunctionRunner:
     container_id: str = field(default="", init=False)
     container_hostname: str = field(default="", init=False)
     _container_streams: tuple[TextIO, TextIO] | None = field(default=None, init=False)
+    _retired: threading.Event = field(default_factory=threading.Event, init=False)
 
     def __post_init__(self) -> None:
         self.container_id = self.config.container_id
@@ -223,9 +226,11 @@ class FunctionRunner:
 
         idle_since = time.monotonic()
         while shutdown is None or not shutdown.is_set():
+            if self._retired.is_set():
+                return 0
             task = self.claim()
             if task is None:
-                if self.keep_warm_expired(idle_since):
+                if self.keep_warm_expired(idle_since) and self.retire_if_idle():
                     return 0
                 time.sleep(self.config.poll_interval_seconds)
                 continue
@@ -237,6 +242,20 @@ class FunctionRunner:
         if self.config.keep_warm_seconds < 0:
             return False
         return time.monotonic() - idle_since >= self.config.keep_warm_seconds
+
+    def retire_if_idle(self) -> bool:
+        response = FunctionRetireResponse.model_validate(
+            self.control.post(
+                "/gateway/functions/retire",
+                FunctionRetireRequest(
+                    stub_id=self.config.stub_id,
+                    container_id=self.container_id,
+                ).model_dump(mode="json"),
+            )
+        )
+        if response.retired:
+            self._retired.set()
+        return response.retired
 
     def claim(self) -> ClaimedTask | None:
         try:

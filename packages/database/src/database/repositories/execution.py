@@ -875,6 +875,13 @@ def _is_uuid_text(value: str) -> bool:
 class TaskAttemptRepository:
     session: Session
 
+    def latest_finished_at_for_container(self, container_id: str) -> datetime | None:
+        return self.session.scalar(
+            select(func.max(TaskAttemptTable.finished_at)).where(
+                TaskAttemptTable.container_id == container_id
+            )
+        )
+
     @property
     def records(self) -> WorkspaceTableRepository[TaskAttempt]:
         return WorkspaceTableRepository(

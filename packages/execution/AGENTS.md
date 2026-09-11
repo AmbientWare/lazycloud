@@ -54,6 +54,13 @@ container being stopped takes back what it just gave up and then goes away
 holding it. Where a settlement path can write both in one transaction it does;
 the stop cannot, so it orders them.
 
+An idle function closes work admission before its runner exits. Retirement holds
+the stub capacity lock and the container claim fence while checking runnable and
+in-flight work. The drain record uses a zero serving floor, so it reserves no
+replacement until another invocation needs one. The container remains physically
+allocated and billable until the worker observes its exit. Task attempts retain
+the last completion time even after retries release or move a task's claim.
+
 Who ended the container decides whether its work is charged for the attempt. The
 platform stopping one, whether scaling down, draining, or cancelling a neighbour,
 costs the invocation nothing: it is claimed again with its budget intact, and the
