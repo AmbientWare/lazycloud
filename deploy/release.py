@@ -31,6 +31,7 @@ class Service(BaseModel):
 
 
 class Compose(BaseModel):
+    name: str
     services: dict[str, Service]
 
 
@@ -127,7 +128,15 @@ def main() -> None:
     try:
         activated = False
         for cycle in range(120):
-            ids = output("docker", "compose", "ps", "--all", "--quiet").splitlines()
+            ids = output(
+                "docker",
+                "ps",
+                "--all",
+                "--quiet",
+                "--no-trunc",
+                "--filter",
+                f"label=com.docker.compose.project={compose.name}",
+            ).splitlines()
             containers = inspect_containers(ids)
             pending: set[str] = set(services)
             ready_counts: dict[str, int] = {}
