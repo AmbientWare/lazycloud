@@ -1,7 +1,7 @@
-from enum import StrEnum
+from shared.enums import StringEnum
 
 
-class ComputeReconciliationKind(StrEnum):
+class ComputeReconciliationKind(StringEnum):
     Provider = "provider"
     Drain = "drain"
 
