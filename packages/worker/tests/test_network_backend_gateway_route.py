@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from foundation.process import ProcessResult
 from worker.network_backend import (
     AgentBridgeNetworkBackend,
@@ -104,3 +105,32 @@ def test_gateway_on_the_uplink_adds_no_second_interface() -> None:
         AgentBridgeNetworkConfig(enable_ipv6=False), gateway_address="1.2.3.4"
     )
     assert capabilities.gateway_interface == ""
+
+
+def test_network_cleanup_retains_ip_when_owned_interface_cannot_be_removed() -> None:
+    released: list[str] = []
+
+    class Allocator(_Allocator):
+        def release_container_ip(self, container_id: str) -> None:
+            released.append(container_id)
+
+    def cleanup_commands(args: list[str]) -> ProcessResult:
+        failed = args[:3] == ["ip", "link", "delete"]
+        return ProcessResult(
+            args=args,
+            exit_code=1 if failed else 0,
+            stdout="",
+            stderr="RTNETLINK answers: Operation not permitted" if failed else "",
+        )
+
+    backend = AgentBridgeNetworkBackend(
+        ip_allocator=Allocator(),
+        config=AgentBridgeNetworkConfig(enable_ipv6=False),
+        system=CommandNetworkSystem(run_command=cleanup_commands),
+        assigned_ips={"container-1": "192.168.0.2"},
+    )
+    with pytest.raises(ExceptionGroup, match="network cleanup failed"):
+        backend.teardown_network("container-1")
+
+    assert backend.container_ip("container-1") == "192.168.0.2"
+    assert not released

@@ -12,7 +12,6 @@ from shared.http.collections import (
 )
 from typing_extensions import Self
 
-from lazycloud.clients.simplequeue.control import SimpleQueueControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
 from lazycloud.values import decode_value, encode_value
 
@@ -94,7 +93,9 @@ class Queue:
         self.control_client.delete(self.name)
 
 
-def _default_queue_client(config: ControlClientConfig) -> SimpleQueueControlClient:
+def _default_queue_client(config: ControlClientConfig) -> QueueClient:
+    from lazycloud.clients.simplequeue.control import SimpleQueueControlClient
+
     return SimpleQueueControlClient.from_endpoint(
         config.endpoint,
         token=config.token,

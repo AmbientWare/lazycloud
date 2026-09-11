@@ -4,10 +4,9 @@ import fnmatch
 import hashlib
 import os
 import posixpath
-import threading
 import zipfile
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import SpooledTemporaryFile
 from types import TracebackType
@@ -111,30 +110,10 @@ class SourcePackageSyncResult:
 
 
 @dataclass(slots=True)
-class SourcePackageSyncCache:
-    _lock: threading.Lock = field(default_factory=threading.Lock)
-    _objects: dict[tuple[str, str], SourcePackageSyncResult] = field(default_factory=dict)
-
-    def get(self, root: Path, digest: str) -> SourcePackageSyncResult | None:
-        key = (str(root), digest)
-        with self._lock:
-            return self._objects.get(key)
-
-    def put(self, root: Path, result: SourcePackageSyncResult) -> None:
-        key = (str(root), result.sha256)
-        with self._lock:
-            self._objects[key] = result
-
-
-_default_cache = SourcePackageSyncCache()
-
-
-@dataclass(slots=True)
 class SourcePackageSyncer:
     object_client: SourcePackageUploadClient
     root_dir: str | Path = "."
     archive_prefix: tuple[str, ...] = ()
-    cache: SourcePackageSyncCache = field(default_factory=lambda: _default_cache)
     terminal: SourceSyncTerminal | None = None
 
     def sync(
@@ -142,7 +121,6 @@ class SourcePackageSyncer:
         *,
         ignore_patterns: Sequence[str] | None = None,
         include_patterns: Sequence[str] | None = None,
-        cache_object_id: bool = True,
     ) -> SourcePackageSyncResult:
         root = Path(self.root_dir).expanduser().resolve()
         if not root.exists():
@@ -161,10 +139,6 @@ class SourcePackageSyncer:
         plural = "s" if len(archive.files) != 1 else ""
         description = f"{len(archive.files)} file{plural}, {humanize_bytes(archive.size)}"
         with self._step("Source", description) as step:
-            cached = self.cache.get(root, archive.sha256) if cache_object_id else None
-            if cached is not None:
-                step.done(f"{description} · cached")
-                return cached
             object_name = f"{SOURCE_PACKAGE_PREFIX}/{archive.sha256}.zip"
             uploaded = _upload_source_package(
                 self.object_client,
@@ -183,8 +157,6 @@ class SourcePackageSyncer:
                 files=archive.files,
             )
             step.done(description)
-        if cache_object_id:
-            self.cache.put(root, result)
         return result
 
     def _step(self, name: str, summary: str) -> SourceSyncStep:
@@ -428,7 +400,6 @@ __all__ = [
     "SOURCE_PACKAGE_CONTENT_TYPE",
     "SOURCE_PACKAGE_PREFIX",
     "SourcePackageArchive",
-    "SourcePackageSyncCache",
     "SourcePackageSyncError",
     "SourcePackageSyncResult",
     "SourcePackageSyncer",

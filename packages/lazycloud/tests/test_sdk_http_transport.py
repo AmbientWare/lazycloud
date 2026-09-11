@@ -13,9 +13,11 @@ import pytest
 from lazycloud.cli.main import build_public_cli
 from lazycloud.http_transport import request_raw
 from lazycloud.session import Client
+from lazycloud.session.deployment import DeploymentClient
 from lazycloud.session.uploads import stream_object_bytes
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.client_version import RECOMMENDED_CLIENT_VERSION_HEADER, observe_client_versions
+from shared.deployment_records import DeploymentSpec
 from shared.http.errors import HttpApiError, HttpResponseDecodeError
 from shared.http_transport import HttpChannel
 from tests.http_server import running_http_server
@@ -240,8 +242,7 @@ def test_object_upload_maps_http_failures_and_rejects_invalid_success() -> None:
     with _http_server() as endpoint:
         with pytest.raises(HttpApiError, match="workspace is deleting") as conflict:
             stream_object_bytes(
-                endpoint=endpoint,
-                token="test-token",
+                channel=HttpChannel(endpoint=endpoint, token="test-token"),
                 workspace="tenant-a",
                 data=data,
                 name="denied",
@@ -255,8 +256,7 @@ def test_object_upload_maps_http_failures_and_rejects_invalid_success() -> None:
             )
         with pytest.raises(HttpResponseDecodeError, match="invalid JSON"):
             stream_object_bytes(
-                endpoint=endpoint,
-                token="test-token",
+                channel=HttpChannel(endpoint=endpoint, token="test-token"),
                 workspace="tenant-a",
                 data=data,
                 name="invalid-response",
@@ -270,3 +270,67 @@ def test_object_upload_maps_http_failures_and_rejects_invalid_success() -> None:
             )
 
     assert conflict.value.status_code == 409
+
+
+def test_preparation_checks_source_existence_in_each_workspace(tmp_path: Path) -> None:
+    (tmp_path / "main.py").write_text("def hello(): return 'hello'\n")
+    stored: dict[tuple[str, str], str] = {}
+    uploads: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            parsed = urllib.parse.urlsplit(self.path)
+            query = urllib.parse.parse_qs(parsed.query)
+            workspace = query["workspace"][0]
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            assert self.headers["Authorization"] == "Bearer test-token"
+            response: dict[str, object]
+            if parsed.path == "/gateway/objects/stream":
+                digest = hashlib.sha256(body).hexdigest()
+                assert query["hash"] == [digest]
+                object_id = f"{workspace}-object-{len(uploads)}"
+                stored[workspace, digest] = object_id
+                uploads.append(workspace)
+                response = {"object_id": object_id}
+            else:
+                payload = json.loads(body)
+                if parsed.path == "/api/v1/images/verify-build":
+                    response = {"image_id": "image-cached", "valid": True, "exists": True}
+                elif parsed.path == "/gateway/objects/head":
+                    object_id = stored.get((workspace, payload["hash"]), "")
+                    response = {"exists": bool(object_id), "object_id": object_id}
+                elif parsed.path == "/gateway/stubs/get-or-create":
+                    assert payload["object_id"] in {
+                        value for (owner, _), value in stored.items() if owner == workspace
+                    }
+                    response = {"stub_id": "stub-prepared"}
+                else:
+                    raise AssertionError(parsed.path)
+            encoded = json.dumps(response).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    with running_http_server(server):
+        for index, workspace in enumerate(("tenant-a", "tenant-a", "tenant-b", "tenant-a")):
+            if index == 3:
+                stored.clear()
+            deployment = DeploymentClient(
+                endpoint=f"http://127.0.0.1:{server.server_port}",
+                token="test-token",
+                workspace=workspace,
+                sync_source=True,
+                source_root=tmp_path,
+            )
+            response = deployment.prepare(DeploymentSpec(name="hello"))
+            assert response.stub_id == "stub-prepared"
+    assert uploads == ["tenant-a", "tenant-b", "tenant-a"]

@@ -290,7 +290,7 @@ async def _followed_changes(
             if item is None:
                 yield None
                 continue
-            yield _workspace_change_record(item[1])
+            yield workspace_change_record(item[1])
             emitted += 1
             if max_events > 0 and emitted >= max_events:
                 return
@@ -298,7 +298,7 @@ async def _followed_changes(
         await subscription.close()
 
 
-def _workspace_change_record(entry: RedisStreamEntry) -> WorkspaceChangeRecord:
+def workspace_change_record(entry: RedisStreamEntry) -> WorkspaceChangeRecord:
     raw_entry_id, raw_fields = entry
     entry_id = validate_workspace_change_cursor(redis_text(raw_entry_id))
     fields = {redis_text(key): value for key, value in raw_fields.items()}
@@ -322,5 +322,6 @@ __all__ = [
     "WorkspaceChangeRepository",
     "WorkspaceChangeService",
     "validate_workspace_change_cursor",
+    "workspace_change_record",
     "workspace_change_stream_name",
 ]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -30,6 +31,7 @@ class Service(BaseModel):
 
 
 class Compose(BaseModel):
+    name: str
     services: dict[str, Service]
 
 
@@ -60,6 +62,21 @@ def run(*args: str) -> None:
 
 def output(*args: str) -> str:
     return subprocess.check_output(list(args), text=True).strip()
+
+
+def inspect_containers(ids: list[str]) -> list[Container]:
+    if not ids:
+        return []
+    result = subprocess.run(["docker", "inspect", *ids], capture_output=True, text=True)
+    if result.returncode:
+        missing = {f"error: no such object: {identifier}" for identifier in ids}
+        errors = result.stderr.strip().splitlines()
+        if not errors or any(error.lower() not in missing for error in errors):
+            raise RuntimeError(result.stderr or "Docker container inspection failed")
+        # Compose can replace a listed container before inspection. Its absence
+        # leaves the service pending until the next snapshot sees the replacement.
+        print(result.stderr, file=sys.stderr, end="")
+    return TypeAdapter(list[Container]).validate_json(result.stdout)
 
 
 def main() -> None:
@@ -106,17 +123,21 @@ def main() -> None:
         target=ReleaseTarget(version="local", source_revision=revision, worker_image=worker_image),
     )
     Path(".env.release").write_text(f"WORKER_RUNTIME_IMAGE={worker_image}\n")
-    process = subprocess.Popen(["docker", "compose", "up", "-d", "--force-recreate"])
+    process = subprocess.Popen(["docker", "compose", "up", "-d"])
 
     try:
         activated = False
         for cycle in range(120):
-            ids = output("docker", "compose", "ps", "--all", "--quiet").splitlines()
-            containers = (
-                TypeAdapter(list[Container]).validate_json(output("docker", "inspect", *ids))
-                if ids
-                else []
-            )
+            ids = output(
+                "docker",
+                "ps",
+                "--all",
+                "--quiet",
+                "--no-trunc",
+                "--filter",
+                f"label=com.docker.compose.project={compose.name}",
+            ).splitlines()
+            containers = inspect_containers(ids)
             pending: set[str] = set(services)
             ready_counts: dict[str, int] = {}
             observations: list[dict[str, str | int]] = []

@@ -6,6 +6,7 @@ import pytest
 from api.server.services import ApiServices
 from database.repositories.execution import TaskRepository
 from execution.functions.service import FunctionControlService
+from observability.stream_state import AsyncTaskChangeReader
 from shared.function_payloads import FunctionJsonInvocation, FunctionJsonResult
 from shared.http.functions import FunctionInvokeResponse
 from shared.http.task_progress import TaskPendingReason
@@ -19,7 +20,9 @@ async def test_invocation_stream_updates_pending_reason_and_clears_on_completion
 ) -> None:
     task = async_services.tasks.create("pending-stream", invocation=FunctionJsonInvocation())
     functions = FunctionControlService(
-        async_services, async_database=async_services.require_async_io().database
+        async_services,
+        async_database=async_services.require_async_io().database,
+        task_changes=AsyncTaskChangeReader(async_services.require_async_io().realtime),
     )
     stream = functions.function_invoke_stream(FunctionInvokeResponse(task_id=task.id))
     try:
@@ -43,9 +46,36 @@ async def test_invocation_stream_updates_pending_reason_and_clears_on_completion
                 function_result=FunctionJsonResult(value=7),
                 exit_code=0,
             )
-            completed = await anext(stream)
+            async with asyncio.timeout(0.5):
+                completed = await anext(stream)
             assert completed.status == TaskStatus.Complete.value
             assert completed.pending_progress is None
             assert (await anext(stream)).done
     finally:
         await stream.aclose()
+    assert async_services.require_async_io().realtime.status().sources == 0
+
+
+@pytest.mark.anyio
+async def test_completed_invocation_drains_all_log_pages(async_services: ApiServices) -> None:
+    task = async_services.tasks.create("completed-stream", invocation=FunctionJsonInvocation())
+    messages = [f"line {index}" for index in range(1_001)]
+    async_services.tasks.append_logs(task.id, "stdout", messages)
+    async_services.tasks.transition(
+        task, TaskStatus.Complete, function_result=FunctionJsonResult(value=7), exit_code=0
+    )
+    functions = FunctionControlService(
+        async_services,
+        async_database=async_services.require_async_io().database,
+        task_changes=AsyncTaskChangeReader(async_services.require_async_io().realtime),
+    )
+    async with asyncio.timeout(5):
+        responses = [
+            response
+            async for response in functions.function_invoke_stream(
+                FunctionInvokeResponse(task_id=task.id)
+            )
+        ]
+    assert [response.output.rstrip("\n") for response in responses if response.output] == messages
+    assert responses[-1].done
+    assert async_services.require_async_io().realtime.status().sources == 0

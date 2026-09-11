@@ -9,7 +9,6 @@ from shared.http.shells import (
     ShellConnectPlanResponse,
 )
 
-from lazycloud.clients.shell.control import ShellControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
 from lazycloud.terminal_shell import InteractiveShell
 
@@ -90,7 +89,9 @@ class Shell:
         )
 
 
-def _default_shell_client(config: ControlClientConfig) -> ShellControlClient:
+def _default_shell_client(config: ControlClientConfig) -> ShellClient:
+    from lazycloud.clients.shell.control import ShellControlClient
+
     return ShellControlClient.from_endpoint(
         config.endpoint,
         token=config.token,

@@ -16,7 +16,6 @@ from shared.http.collections import (
 from shared.http.errors import HttpApiError
 from typing_extensions import Self
 
-from lazycloud.clients.map.control import MapControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
 from lazycloud.values import decode_value, encode_value
 
@@ -141,7 +140,9 @@ class Map(MutableMapping[str, Any]):
         self.control_client.delete_map(self.name)
 
 
-def _default_map_client(config: ControlClientConfig) -> MapControlClient:
+def _default_map_client(config: ControlClientConfig) -> MapClient:
+    from lazycloud.clients.map.control import MapControlClient
+
     return MapControlClient.from_endpoint(
         config.endpoint,
         token=config.token,

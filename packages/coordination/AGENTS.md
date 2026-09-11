@@ -30,8 +30,9 @@ subscription, and a reconnect path of its own. A short block interval buys the
 same latency for free. Consumer groups were rejected because they hand an entry
 to one consumer, which starves the subscribers held by every other replica.
 
-The cost to know about is that a stream joins the read only when the current
-block returns, so a new subscriber's first live entry can lag by one block
-interval. A Redis outage keeps the cursors and resumes from them; only a stream
+Registering a new stream interrupts the current blocked read so its first live
+entry does not wait for that read's timeout. Cursors advance only for delivered
+pages, so interrupting a read leaves its entries available to the next one.
+A Redis outage keeps the cursors and resumes from them; only a stream
 trimmed past a cursor loses entries, and that surfaces to the client as an
 expired cursor.

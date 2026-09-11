@@ -1084,7 +1084,7 @@ class LogRepository:
         *,
         workspace_id: str,
         limit: int,
-        cursor: LogPageCursor,
+        cursor: LogPageCursor | None = None,
     ) -> LogPage:
         """Read matching logs after a durable follow cursor."""
         return self._page(
@@ -1092,6 +1092,7 @@ class LogRepository:
             workspace_id=workspace_id,
             limit=limit,
             after=cursor,
+            descending=False,
         )
 
     def _page(
@@ -1102,6 +1103,7 @@ class LogRepository:
         limit: int,
         before: LogPageCursor | None = None,
         after: LogPageCursor | None = None,
+        descending: bool = True,
     ) -> LogPage:
         if not workspace_id:
             raise ValueError("log queries require workspace_id")
@@ -1170,7 +1172,6 @@ class LogRepository:
                     and_(LogTable.created_at == after.created_at, LogTable.id > after.id),
                 )
             )
-        descending = after is None
         ordering = (
             (LogTable.created_at.desc(), LogTable.id.desc())
             if descending

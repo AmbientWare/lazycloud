@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -18,6 +20,7 @@ from coordination.stream_tail import RedisStreamTailBroker, RedisStreamTailSubsc
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.errors import ExpiredCursorError, InvalidInputError
 from shared.http.observability import LogRecord
+from shared.http.workspace_changes import WorkspaceChangeTopic
 from shared.logs import ContainerLogEntryKind
 from shared.realtime.contracts import (
     CloudEventRecord,
@@ -37,9 +40,68 @@ from shared.realtime.streams import (
 )
 from shared.serialization import to_json_value
 
+from observability.workspace_changes import workspace_change_record, workspace_change_stream_name
+
 DEFAULT_REDIS_EVENT_STREAM_READ_LIMIT = 10_000
 REALTIME_STREAM_TTL_SECONDS = 7 * 24 * 60 * 60
 REALTIME_STREAM_MAX_ENTRIES = 50_000
+
+
+@dataclass(slots=True)
+class AsyncTaskChangeReader:
+    tail: RedisStreamTailBroker
+    planner: EventStreamPlanner = field(default_factory=EventStreamPlanner)
+
+    @asynccontextmanager
+    async def follow(
+        self,
+        *,
+        workspace_id: str,
+        stub_id: str,
+        task_id: str,
+        reconcile_seconds: float = 1.0,
+    ) -> AsyncIterator[AsyncIterator[None]]:
+        changes = workspace_change_stream_name(workspace_id)
+        logs = (
+            self.planner.stub_task_stream_name(workspace_id, stub_id)
+            if stub_id
+            else self.planner.workspace_log_stream_name(workspace_id)
+        )
+        subscription = await self.tail.subscribe(
+            (changes, logs), after={changes: None, logs: None}, label="function-invocations"
+        )
+        async with (
+            subscription,
+            aclosing(self._updates(subscription, changes, task_id, reconcile_seconds)) as updates,
+        ):
+            yield updates
+
+    async def _updates(
+        self,
+        subscription: RedisStreamTailSubscription,
+        changes: str,
+        task_id: str,
+        reconcile_seconds: float,
+    ) -> AsyncGenerator[None]:
+        deadline = time.monotonic() + reconcile_seconds
+        async with aclosing(subscription.items(heartbeat_seconds=reconcile_seconds)) as items:
+            async for item in items:
+                relevant = item is None
+                if item is not None:
+                    stream, entry = item
+                    if stream == changes:
+                        event = workspace_change_record(entry).event
+                        relevant = (
+                            event.topic is WorkspaceChangeTopic.Tasks
+                            and event.resource_id == task_id
+                        )
+                    else:
+                        record = _record_from_entry(stream, entry)
+                        relevant = record is not None and record.headers.get("task_id") == task_id
+                if relevant or time.monotonic() >= deadline:
+                    deadline = time.monotonic() + reconcile_seconds
+                    yield None
+
 
 _CONTAINER_LOG_SCRIPT_RESULT_ADAPTER = TypeAdapter(tuple[int, int, int])
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])

@@ -53,8 +53,6 @@ from shared.http.functions import (
 from shared.http.gateway_tasks import (
     EndTaskRequest,
     EndTaskResponse,
-    StartTaskRequest,
-    StartTaskResponse,
 )
 from shared.http_transport import HttpChannel
 from shared.lifecycle import (
@@ -275,7 +273,6 @@ class FunctionRunner:
     def _run_claimed_task(self, task: ClaimedTask) -> None:
         started = time.perf_counter()
         try:
-            self.start_task(task)
             self.run_task_hooks(task, LifecycleHookName.Running, TaskStatus.Running)
             result = self.execute_with_log_capture(task)
             self.set_result(task, _serialize_function_result(result, task.invocation))
@@ -327,17 +324,6 @@ class FunctionRunner:
                 stdout.close()
                 stderr.close()
                 logs.close()
-
-    def start_task(self, task: ClaimedTask) -> None:
-        StartTaskResponse.model_validate(
-            self.control.post(
-                "/gateway/tasks/start",
-                StartTaskRequest(
-                    task_id=task.task_id,
-                    container_id=self.container_id,
-                ).model_dump(mode="json"),
-            )
-        )
 
     def set_result(self, task: ClaimedTask, result: FunctionResultPayload) -> None:
         FunctionSetResultResponse.model_validate(

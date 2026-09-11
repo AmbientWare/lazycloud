@@ -9,6 +9,7 @@ import re
 import runpy
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn, TypeAlias, TypeGuard
 
@@ -18,6 +19,13 @@ CATALOG_FILE = "catalog.json"
 SUPPORTED_PYTHON_VERSIONS = ("3.10", "3.11", "3.12")
 JsonScalar: TypeAlias = bool | int | float | str | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
+
+
+@dataclass(frozen=True, slots=True)
+class DistributionRecord:
+    name: str
+    version: str
+    requirements: tuple[str, ...]
 
 
 def main() -> None:
@@ -98,12 +106,13 @@ def main() -> None:
     pending = [
         Requirement(raw_requirement)
         for distribution in managed_records.values()
-        for raw_requirement in distribution.requires or []
+        for raw_requirement in distribution.requirements
     ]
     checked: set[tuple[str, str, str]] = set()
+    expanded: set[str] = set()
     resolved_distributions: dict[str, str] = {}
-    user_records: dict[str, importlib.metadata.Distribution | None] = {}
-    locked_records: dict[str, importlib.metadata.Distribution] | None = None
+    user_records: dict[str, DistributionRecord | None] = {}
+    locked_records: dict[str, DistributionRecord] | None = None
     while pending:
         requirement = pending.pop()
         if requirement.marker is not None and not requirement.marker.evaluate({"extra": ""}):
@@ -132,7 +141,9 @@ def main() -> None:
         resolved_distributions[name] = selected.version
         if requirement.specifier and selected.version not in requirement.specifier:
             _fail(f"{source} dependency {name}=={selected.version} does not satisfy {requirement}")
-        pending.extend(Requirement(raw) for raw in selected.requires or [])
+        if name not in expanded:
+            expanded.add(name)
+            pending.extend(Requirement(raw) for raw in selected.requirements)
 
     os.environ[ARTIFACT_DIGEST_ENV] = digest
     sys.path.append(str(dependency_path))
@@ -173,33 +184,50 @@ def _json_digest_without_key(payload: Mapping[str, JsonValue], key: str) -> str:
 
 def _installed_distribution_records(
     path: Sequence[str] | None = None,
-) -> dict[str, importlib.metadata.Distribution]:
+) -> dict[str, DistributionRecord]:
     distributions = (
         importlib.metadata.distributions(path=list(path))
         if path is not None
         else importlib.metadata.distributions()
     )
-    installed: dict[str, importlib.metadata.Distribution] = {}
+    installed: dict[str, DistributionRecord] = {}
     for distribution in distributions:
-        name = distribution.metadata["Name"]
-        if name:
-            installed.setdefault(_canonical_name(name), distribution)
+        record = _distribution_record(distribution)
+        if record is not None:
+            installed.setdefault(record.name, record)
     return installed
 
 
-def _installed_distribution_record(name: str) -> importlib.metadata.Distribution | None:
+def _installed_distribution_record(name: str) -> DistributionRecord | None:
     try:
         distribution = importlib.metadata.distribution(name)
     except importlib.metadata.PackageNotFoundError:
         return None
-    installed_name = distribution.metadata["Name"]
-    if not installed_name or _canonical_name(installed_name) != name:
+    record = _distribution_record(distribution)
+    if record is None or record.name != name:
         return None
-    return distribution
+    return record
+
+
+def _distribution_record(
+    distribution: importlib.metadata.Distribution,
+) -> DistributionRecord | None:
+    metadata = distribution.metadata
+    name = metadata["Name"]
+    if not name:
+        return None
+    requirements = metadata.get_all("Requires-Dist")
+    if requirements is None:
+        requirements = distribution.requires or []
+    return DistributionRecord(
+        name=_canonical_name(name),
+        version=metadata["Version"],
+        requirements=tuple(requirements),
+    )
 
 
 def _distribution_versions(
-    records: Mapping[str, importlib.metadata.Distribution],
+    records: Mapping[str, DistributionRecord],
 ) -> dict[str, str]:
     return {name: distribution.version for name, distribution in records.items()}
 

@@ -445,14 +445,21 @@ def build_worker_process_services(
             gateway_endpoint=_gateway_runtime_network_endpoint(config),
         ),
         cleanup_actions=(
-            [
-                WorkerCleanupAction(
-                    name="image-runtime",
-                    action=image_runtime_process.stop,
-                )
-            ]
-            if image_runtime_process is not None
-            else []
+            (
+                [WorkerCleanupAction(name="prepared-networks", action=network_backend.close)]
+                if network_backend is not None
+                else []
+            )
+            + (
+                [
+                    WorkerCleanupAction(
+                        name="image-runtime",
+                        action=image_runtime_process.stop,
+                    )
+                ]
+                if image_runtime_process is not None
+                else []
+            )
         ),
         container_service_dependencies=container_service_dependencies,
         finalization_dependencies=finalization_dependencies,
