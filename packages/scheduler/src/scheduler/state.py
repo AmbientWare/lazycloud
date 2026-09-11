@@ -2468,10 +2468,21 @@ class RedisSchedulerContainerRepository:
         container_id: str,
         *,
         ttl_seconds: int = DEFAULT_CONTAINER_STATE_TTL_SECONDS,
+        only_if_pending: bool = False,
     ) -> SchedulerContainerState | None:
         def write() -> tuple[SchedulerContainerState | None, str | None]:
-            self._fence_container_request(container_id)
             state = self.get_container_state(container_id)
+            if (
+                only_if_pending
+                and state is not None
+                and state.status
+                not in {
+                    SchedulerContainerStatus.Pending,
+                    SchedulerContainerStatus.Stopping,
+                }
+            ):
+                return state, None
+            self._fence_container_request(container_id)
             if state is None:
                 return None, None
             if state.status in {

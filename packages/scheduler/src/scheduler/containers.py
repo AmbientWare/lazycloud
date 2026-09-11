@@ -114,6 +114,8 @@ class SchedulerContainerStateRepository(Protocol):
     def cancel_container_request(
         self,
         container_id: str,
+        *,
+        only_if_pending: bool = False,
     ) -> SchedulerContainerState | None: ...
 
     def delete_container_state(self, container_id: str) -> bool: ...
@@ -417,8 +419,27 @@ class SchedulerContainerRequestService:
                 extra={"container_id": container_id},
             )
 
-    def cancel(self, container_id: str) -> SchedulerContainerCancellationResult:
-        state = self.containers.cancel_container_request(container_id)
+    def cancel(
+        self, container_id: str, *, only_if_pending: bool = False
+    ) -> SchedulerContainerCancellationResult:
+        state = self.containers.cancel_container_request(
+            container_id, only_if_pending=only_if_pending
+        )
+        if (
+            only_if_pending
+            and state is not None
+            and state.status
+            not in {
+                SchedulerContainerStatus.Pending,
+                SchedulerContainerStatus.Stopping,
+            }
+        ):
+            return SchedulerContainerCancellationResult(
+                container_id=container_id,
+                cancelled=False,
+                state_found=True,
+                worker_id=state.worker_id,
+            )
         if state is None:
             self._release_capacity_reservation(container_id)
             return SchedulerContainerCancellationResult(container_id=container_id)

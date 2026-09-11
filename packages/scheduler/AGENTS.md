@@ -89,6 +89,9 @@ Deadlines use recorded timestamps rather than Redis expiry. Worker heartbeats
 cannot extend them. If assignment state is gone, the durable creation time
 bounds recovery. Cancellation distinguishes queued requests from deliveries:
 only a request proven never delivered may skip the worker stop event.
+Pending recovery checks status under the same container lock as the Running
+transition. If startup won, cancellation writes no fence and recovery keeps the
+container in the capacity count.
 
 Reclaiming stops the container with `StopContainerReason.Scheduler`, the same
 settlement every platform-owned stop takes, so an invocation the container had

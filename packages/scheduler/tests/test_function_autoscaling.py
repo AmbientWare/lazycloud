@@ -288,6 +288,46 @@ async def test_function_autoscaler_reclaims_a_container_that_never_started(
     assert result.actions[-1].action == "start"
 
 
+def test_pending_recovery_preserves_a_worker_that_started_before_sql_caught_up(
+    isolated_services: ApiServices,
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    services = replace(
+        isolated_services,
+        containers=replace(
+            isolated_services.containers,
+            scheduler=_Scheduler(),
+            scheduler_cancellation=_scheduler_request_service(isolated_services, redis),
+        ),
+    )
+    stub = _create_function_stub(services, max_containers=1)
+    _enqueue_invocations(services, stub, count=1)
+    container = _pending_containers(services, stub)[0]
+    states = RedisSchedulerContainerRepository(redis)
+    states.set_container_state(
+        SchedulerContainerState(
+            container_id=container.id,
+            stub_id=stub.id,
+            workspace_id=stub.workspace_id,
+            worker_id="worker-started",
+            status=SchedulerContainerStatus.Running,
+        )
+    )
+
+    result = services.containers.stop(container.id, only_if_pending=True)
+
+    assert result.status is ContainerStatus.Pending
+    assert not states.is_container_cancelled(container.id)
+    state = states.get_container_state(container.id)
+    assert state is not None and state.status is SchedulerContainerStatus.Running
+    assert [
+        task.status
+        for task in services.tasks.list(workspace_id=stub.workspace_id)
+        if task.stub_id == stub.id
+    ] == [TaskStatus.Pending]
+
+
 def test_function_recovery_preserves_capacity_waits_and_acknowledged_preparation(
     isolated_services: ApiServices,
     real_redis_actors: _RealRedisActors,

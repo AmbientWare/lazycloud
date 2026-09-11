@@ -424,7 +424,8 @@ class AutoscalingDriver:
             self.container_states,
             now=current_time,
         )
-        actions = self._recover(stale)
+        actions, still_live = self._recover(stale)
+        holding.extend(still_live)
         with self.services.context.database.session() as session:
             rollouts = ContainerRolloutRepository(session)
             draining_ids = rollouts.draining_ids([container.id for container in holding])
@@ -508,7 +509,9 @@ class AutoscalingDriver:
         self._record(stub, result, plan)
         return result
 
-    def _recover(self, stale: list[StaleContainer]) -> list[AutoscaleAction]:
+    def _recover(
+        self, stale: list[StaleContainer]
+    ) -> tuple[list[AutoscaleAction], list[ContainerRecord]]:
         """Give back the ceiling slots that records nothing backs are holding.
 
         Stopped rather than deleted, and stopped through the one settlement path
@@ -523,11 +526,16 @@ class AutoscalingDriver:
         """
 
         actions: list[AutoscaleAction] = []
+        still_live: list[ContainerRecord] = []
         for container in stale:
             stopped = self.services.containers.stop(
                 container.record.id,
                 reason=StopContainerReason.Scheduler,
+                only_if_pending=container.record.status is ContainerStatus.Pending,
             )
+            if stopped.status in {ContainerStatus.Pending, ContainerStatus.Running}:
+                still_live.append(stopped)
+                continue
             actions.append(
                 AutoscaleAction(
                     container_id=stopped.id,
@@ -535,7 +543,7 @@ class AutoscalingDriver:
                     reason=container.reason,
                 )
             )
-        return actions
+        return actions, still_live
 
     def _start(self, stub: AutoscalingStub, count: int) -> list[AutoscaleAction]:
         """Ask for containers one at a time until the workload stops giving them.
