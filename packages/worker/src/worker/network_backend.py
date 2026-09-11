@@ -510,9 +510,11 @@ class AgentBridgeNetworkBackend:
             self._probe_gateway_egress(gateway_public_http_url)
         try:
             self._prepared_networks.initialize()
+            if self.egress_counters is not None:
+                self.egress_counters.initialize()
         except Exception as preparation_error:
             try:
-                self._prepared_networks.close()
+                self.close()
             except Exception as cleanup_error:
                 raise ExceptionGroup(
                     "network initialization and cleanup failed", [preparation_error, cleanup_error]
@@ -521,7 +523,11 @@ class AgentBridgeNetworkBackend:
         return self.capabilities
 
     def close(self) -> None:
-        self._prepared_networks.close()
+        try:
+            self._prepared_networks.close()
+        finally:
+            if self.egress_counters is not None:
+                self.egress_counters.close()
 
     def _probe_gateway_egress(self, gateway_public_http_url: str) -> None:
         parsed = urlsplit(gateway_public_http_url)

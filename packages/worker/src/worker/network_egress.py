@@ -6,8 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from hashlib import sha256
 from ipaddress import ip_network
-from threading import RLock
-from time import monotonic
+from threading import Event, RLock, Thread
+from uuid import uuid4
 
 from foundation.process import ProcessResult, run_process
 from pydantic import Field
@@ -15,8 +15,10 @@ from shared.contracts import ContractModel
 from shared.http.worker_network import WorkerEgressPolicy
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
+from shared.worker_events import WorkerEventRecord
 
 from worker.execution import container_veth_names
+from worker.supervision import WorkerEventSink
 
 # These ranges cannot represent customer internet destinations. Routing to the
 # gateway's tunnel is excluded separately by matching the actual internet uplink.
@@ -46,6 +48,61 @@ _INTERNAL = (
 )
 _COUNTER_COMMENT = "lazycloud-internet-ip-bytes"
 LOGGER = logging.getLogger(__name__)
+_POLICY_REFRESH_SECONDS = 30
+_POLICY_MAX_AGE_SECONDS = 60
+
+
+@dataclass(slots=True)
+class _EgressPolicyCache:
+    load: Callable[[], WorkerEgressPolicy]
+    record_failure: Callable[[Exception], None]
+    _policy: WorkerEgressPolicy | None = None
+    _lock: RLock = field(default_factory=RLock, repr=False)
+    _stop: Event = field(default_factory=Event, repr=False)
+    _thread: Thread | None = field(default=None, init=False, repr=False)
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._refresh()
+        self._thread = Thread(target=self._run, name="egress-route-evidence", daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+
+    def current(self) -> WorkerEgressPolicy:
+        with self._lock:
+            policy = self._policy
+        if policy is None:
+            raise RuntimeError("worker egress route evidence has not been initialized")
+        self._validate_age(policy)
+        return policy
+
+    @staticmethod
+    def _validate_age(policy: WorkerEgressPolicy) -> None:
+        age = (utc_now() - policy.verified_at).total_seconds()
+        if age < -5 or age >= _POLICY_MAX_AGE_SECONDS:
+            raise RuntimeError("worker egress route evidence is not current")
+
+    def _refresh(self) -> None:
+        policy = self.load()
+        self._validate_age(policy)
+        with self._lock:
+            self._policy = policy
+
+    def _run(self) -> None:
+        while not self._stop.wait(_POLICY_REFRESH_SECONDS):
+            try:
+                self._refresh()
+            except Exception as refresh_error:
+                try:
+                    self.record_failure(refresh_error)
+                except Exception:
+                    LOGGER.exception("worker egress route evidence failure could not be recorded")
+                    raise refresh_error from None
 
 
 class NetworkEgressCounterSample(ContractModel):
@@ -56,19 +113,44 @@ class NetworkEgressCounterSample(ContractModel):
 @dataclass(slots=True)
 class WorkerNetworkEgressCounters:
     load_policy: Callable[[], WorkerEgressPolicy]
+    worker_id: str
+    event_sink: WorkerEventSink
     run_command: Callable[[list[str]], ProcessResult] = run_process
     ipv4_binary: str = "iptables"
     ipv6_binary: str = "ip6tables"
-    _policy: WorkerEgressPolicy | None = None
-    _verified_monotonic: float = 0
+    _policy_cache: _EgressPolicyCache = field(init=False, repr=False)
     _continuity: int = 0
     _interfaces: dict[str, tuple[str, str]] = field(default_factory=dict)
     _destinations: dict[str, tuple[str, ...]] = field(default_factory=dict)
     _lock: RLock = field(default_factory=RLock, repr=False)
 
+    def __post_init__(self) -> None:
+        self._policy_cache = _EgressPolicyCache(self.load_policy, self._record_refresh_failure)
+
+    def _record_refresh_failure(self, error: Exception) -> None:
+        self.event_sink.append(
+            WorkerEventRecord(
+                id=str(uuid4()),
+                worker_id=self.worker_id,
+                event_type="worker.network.route_evidence_failed",
+                resource_id=self.worker_id,
+                payload={
+                    "level": "error",
+                    "message": "worker egress route evidence refresh failed",
+                    "error_type": type(error).__name__,
+                },
+            )
+        )
+
+    def initialize(self) -> None:
+        self._policy_cache.start()
+
+    def close(self) -> None:
+        self._policy_cache.close()
+
     def ensure(self, container_id: str, *, ipv4_interface: str, ipv6_interface: str) -> None:
         with self._lock:
-            policy = self._refresh_policy()
+            policy = self._policy_cache.current()
             self._interfaces[container_id] = (ipv4_interface, ipv6_interface)
             if policy.billing_owner is not UsageBillingOwner.PlatformFleet:
                 return
@@ -102,7 +184,7 @@ class WorkerNetworkEgressCounters:
                 raise
 
     def _sample(self, container_id: str) -> NetworkEgressCounterSample:
-        policy = self._refresh_policy()
+        policy = self._policy_cache.current()
         if policy.billing_owner is not UsageBillingOwner.PlatformFleet:
             return NetworkEgressCounterSample(
                 total_bytes=0, policy_digest=policy.billing_owner.value
@@ -147,16 +229,6 @@ class WorkerNetworkEgressCounters:
             self._interfaces.pop(container_id, None)
             self._destinations.pop(container_id + ":4", None)
             self._destinations.pop(container_id + ":6", None)
-
-    def _refresh_policy(self) -> WorkerEgressPolicy:
-        if self._policy is None or monotonic() - self._verified_monotonic >= 60:
-            policy = self.load_policy()
-            age = (utc_now() - policy.verified_at).total_seconds()
-            if age < -5 or age > 60:
-                raise RuntimeError("worker egress route evidence is not current")
-            self._policy = policy
-            self._verified_monotonic = monotonic()
-        return self._policy
 
     def _replace_exclusions(
         self, container_id: str, version: int, binary: str, policy: WorkerEgressPolicy

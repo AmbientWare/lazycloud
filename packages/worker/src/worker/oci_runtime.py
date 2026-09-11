@@ -764,9 +764,11 @@ def _prepare_oci_mount_destination(
             raise RuntimeError(msg)
         destination.mkdir(parents=True, exist_ok=True)
         return
-    if destination.exists() and destination.is_dir():
-        msg = f"OCI mount destination is not a file: {raw_destination}"
-        raise RuntimeError(msg)
+    if destination.exists():
+        if destination.is_dir():
+            msg = f"OCI mount destination is not a file: {raw_destination}"
+            raise RuntimeError(msg)
+        return
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.touch(exist_ok=True)
 
