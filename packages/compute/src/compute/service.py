@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -55,6 +56,10 @@ from shared.compute_policy import (
     ComputeUnitVisibility,
     MachinePool,
     UnitName,
+)
+from shared.compute_reconciliation import (
+    COMPUTE_RECONCILIATION_BATCH_SIZE,
+    ComputeReconciliationKind,
 )
 from shared.container_requests import OciRuntimeName, schedulable_capacity
 from shared.contracts import ContractModel
@@ -2554,15 +2559,14 @@ class ComputeService:
         current_time = _utc(now)
         self._required_capacity_owner_mutations()
         self.reconcile_platform_warm_capacity(now=current_time)
-        with self.context.database.session() as session:
-            pools = ComputeUnitRepository(session).list_internal_across_workspaces()
-        # Every step from here is a silent no-op when it declines, and the whole
-        # path is what stands between a configured floor and a machine that
-        # exists. An empty pass says so rather than looking like a pass that had
-        # nothing to do.
-        LOGGER.info("pooled capacity reconciliation covering %d internal pool(s)", len(pools))
+        pools = self.claim_reconciliation_batch(
+            ComputeReconciliationKind.Provider, now=current_time
+        )
+        LOGGER.info("pooled capacity reconciliation selected %d internal pool(s)", len(pools))
         reconciled: list[ComputeUnitRecord] = []
         for pool in pools:
+            started = time.monotonic()
+            LOGGER.info("reconciling pooled capacity for %s", pool.id)
             try:
                 current = self.reconcile_unit_capacity(pool.id, now=current_time)
             except ConflictError as conflict:
@@ -2572,6 +2576,12 @@ class ComputeService:
                 # that was never taken.
                 LOGGER.info("pooled capacity for %s was not reconciled: %s", pool.name, conflict)
                 continue
+            finally:
+                LOGGER.info(
+                    "pooled capacity reconciliation for %s took %.3fs",
+                    pool.id,
+                    time.monotonic() - started,
+                )
             if current is not None:
                 reconciled.append(current)
                 LOGGER.info(
@@ -2587,6 +2597,14 @@ class ComputeService:
                     ),
                 )
         return reconciled
+
+    def claim_reconciliation_batch(
+        self, kind: ComputeReconciliationKind, *, now: datetime
+    ) -> list[ComputeUnitRecord]:
+        with self.context.database.session() as session:
+            return ComputeUnitRepository(session).claim_reconciliation_batch(
+                kind, now=now, limit=COMPUTE_RECONCILIATION_BATCH_SIZE
+            )
 
     def reconcile_platform_warm_capacity(self, *, now: datetime) -> None:
         if self.provider_resolver is None:
