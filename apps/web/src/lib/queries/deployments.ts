@@ -10,6 +10,7 @@ import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 export type DeploymentListOptions = {
   appId?: string;
   name?: string;
+  kind?: string;
   limit?: number;
 };
 
@@ -22,6 +23,7 @@ export function deploymentsInfiniteQueryOptions(
       limit: options.limit ?? 100,
       appId: options.appId ?? null,
       name: options.name ?? null,
+      kind: options.kind ?? null,
     }),
     initialPageParam: "",
     queryFn: ({ pageParam }) => {
@@ -58,5 +60,6 @@ function deploymentListParams(options: DeploymentListOptions, cursor: string): U
   if (cursor) params.set("cursor", cursor);
   if (options.appId) params.set("app_id", options.appId);
   if (options.name) params.set("name", options.name);
+  if (options.kind) params.set("kind", options.kind);
   return params;
 }
