@@ -27,12 +27,14 @@ export function Playground({
   workspaceName,
   appId,
   workloadName,
+  workloadKind,
   deploymentId,
 }: {
   workspaceId: string;
   workspaceName: string;
   appId: string;
   workloadName: string;
+  workloadKind: string;
   deploymentId: string;
 }) {
   const manifest = useQuery(deploymentManifestQueryOptions(workspaceId, deploymentId));
@@ -55,6 +57,7 @@ export function Playground({
       workspaceName={workspaceName}
       appId={appId}
       workloadName={workloadName}
+      workloadKind={workloadKind}
     />
   );
 }
@@ -65,12 +68,14 @@ function PlaygroundForm({
   workspaceName,
   appId,
   workloadName,
+  workloadKind,
 }: {
   manifest: DeploymentManifest;
   workspaceId: string;
   workspaceName: string;
   appId: string;
   workloadName: string;
+  workloadKind: string;
 }) {
   const fields = useMemo(() => playgroundFields(manifest), [manifest]);
   const seeded = useMemo(() => JSON.stringify(exampleBody(manifest), null, 2), [manifest]);
@@ -155,6 +160,7 @@ function PlaygroundForm({
           workspaceName={workspaceName}
           appId={appId}
           workloadName={workloadName}
+          workloadKind={workloadKind}
         />
       </div>
     </div>
@@ -212,6 +218,7 @@ function InvokeOutcome({
   workspaceName,
   appId,
   workloadName,
+  workloadKind,
 }: {
   result: InvokeResult | undefined;
   error: Error | null;
@@ -219,6 +226,7 @@ function InvokeOutcome({
   workspaceName: string;
   appId: string;
   workloadName: string;
+  workloadKind: string;
 }) {
   if (error) {
     return <div className="text-xs text-destructive">{error.message}</div>;
@@ -240,6 +248,7 @@ function InvokeOutcome({
         workspaceName={workspaceName}
         appId={appId}
         workloadName={workloadName}
+        workloadKind={workloadKind}
       />
     );
   }
@@ -270,6 +279,7 @@ function TaskInvokeOutcome({
   workspaceName,
   appId,
   workloadName,
+  workloadKind,
 }: {
   taskId: string;
   meta: ReactNode;
@@ -277,6 +287,7 @@ function TaskInvokeOutcome({
   workspaceName: string;
   appId: string;
   workloadName: string;
+  workloadKind: string;
 }) {
   const task = useQuery(taskQueryOptions(workspaceId, taskId));
 
@@ -288,8 +299,14 @@ function TaskInvokeOutcome({
           <StatusChip status={task.data.status} live={task.data.status === "running"} />
         ) : null}
         <Link
-          to="/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId"
-          params={{ workspace: workspaceName, appId, name: workloadName, taskId }}
+          to="/w/$workspace/apps/$appId/workloads/$kind/$name/tasks/$taskId"
+          params={{
+            workspace: workspaceName,
+            appId,
+            kind: workloadKind,
+            name: workloadName,
+            taskId,
+          }}
           className="ml-auto flex items-center gap-1 text-xs font-medium text-brand hover:underline"
         >
           Open task

@@ -54,7 +54,7 @@ export const workspaceQueryKeys = {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "deployments"] as const,
     list: (
       workspaceId: string,
-      options: { limit: number; appId: string | null; name: string | null },
+      options: { limit: number; appId: string | null; name: string | null; kind: string | null },
     ) => [...workspaceRoot(workspaceId), "deployments", "list", options] as const,
   },
   workloads: {

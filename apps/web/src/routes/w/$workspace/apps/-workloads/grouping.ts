@@ -1,7 +1,7 @@
 import type { Deployment } from "@/lib/api/schemas";
 
 /**
- * A deployed workload: every deployment version of one target name within an
+ * A deployed workload: every deployment version of one kind and name within an
  * app, folded into a single record. Unversioned invokes always route to the
  * newest version (older versions stay invokable at their versioned URLs while
  * active), so the newest version carries the canonical stub used for invoke
@@ -29,20 +29,21 @@ export function groupDeploymentsByWorkload(
   deployments: Deployment[] | undefined,
   appId: string,
 ): WorkloadGroup[] {
-  const byName = new Map<string, Deployment[]>();
+  const byWorkload = new Map<string, Deployment[]>();
   for (const deployment of deployments ?? []) {
     if (deployment.app_id !== appId) continue;
-    const versions = byName.get(deployment.name);
+    const key = JSON.stringify([deployment.kind, deployment.name]);
+    const versions = byWorkload.get(key);
     if (versions) versions.push(deployment);
-    else byName.set(deployment.name, [deployment]);
+    else byWorkload.set(key, [deployment]);
   }
 
   const groups: WorkloadGroup[] = [];
-  for (const [name, versions] of byName) {
+  for (const versions of byWorkload.values()) {
     versions.sort((a, b) => b.version - a.version);
     const latest = versions[0];
     groups.push({
-      name,
+      name: latest.name,
       kind: latest.kind,
       active: latest.active,
       deployments: versions,
@@ -60,7 +61,10 @@ export function groupDeploymentsByWorkload(
 export function findWorkloadGroup(
   deployments: Deployment[] | undefined,
   appId: string,
+  kind: string,
   name: string,
 ): WorkloadGroup | undefined {
-  return groupDeploymentsByWorkload(deployments, appId).find((group) => group.name === name);
+  return groupDeploymentsByWorkload(deployments, appId).find(
+    (group) => group.kind === kind && group.name === name,
+  );
 }

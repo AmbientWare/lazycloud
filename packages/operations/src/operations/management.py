@@ -678,6 +678,7 @@ class ManagementService:
         active: bool | None = None,
         app_id: str | None = None,
         name: str | None = None,
+        kind: DeploymentKind | None = None,
         limit: int = 100,
         cursor: str | None = None,
     ) -> CursorPage[Deployment]:
@@ -687,6 +688,7 @@ class ManagementService:
                 workspace=workspace,
                 app_id=app_id,
                 name=name,
+                kinds={kind} if kind is not None else None,
                 active=active,
             )
         ]
@@ -715,6 +717,7 @@ class ManagementService:
         *,
         app_id: str | None = None,
         name: str | None = None,
+        kind: DeploymentKind | None = None,
         limit: int = 100,
     ) -> CursorPage[Deployment]:
         grouped: dict[tuple[str, str], Deployment] = {}
@@ -722,6 +725,7 @@ class ManagementService:
             workspace=workspace,
             app_id=app_id,
             name=name,
+            kinds={kind} if kind is not None else None,
             active=True,
         ):
             deployment = resource.deployment

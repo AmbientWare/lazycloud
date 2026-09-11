@@ -75,20 +75,6 @@ describe("groupDeploymentsByWorkload", () => {
     expect(groups.map((group) => group.name)).toEqual(["new-fn", "old-fn"]);
   });
 
-  it("marks workloads with a stopped newest version inactive", () => {
-    const groups = groupDeploymentsByWorkload(
-      [
-        deployment({ id: "d1", version: 1 }),
-        deployment({ id: "d2", version: 2, kind: "endpoint" }),
-      ],
-      "app-1",
-    );
-    const group = groups[0];
-    expect(group.active).toBe(false);
-    expect(group.kind).toBe("endpoint");
-    expect(currentDeployment(group).id).toBe("d2");
-  });
-
   it("routes to the newest version even when an older version is still active", () => {
     const groups = groupDeploymentsByWorkload(
       [deployment({ id: "d1", version: 1, active: true }), deployment({ id: "d2", version: 2 })],
@@ -98,9 +84,26 @@ describe("groupDeploymentsByWorkload", () => {
     expect(currentDeployment(groups[0]).id).toBe("d2");
   });
 
-  it("finds a group by workload name", () => {
-    const rows = [deployment({ id: "d1" })];
-    expect(findWorkloadGroup(rows, "app-1", "square")?.latest.id).toBe("d1");
-    expect(findWorkloadGroup(rows, "app-1", "missing")).toBeUndefined();
+  it("isolates same-name workloads by kind for selection, versions, and actions", () => {
+    const rows = [
+      deployment({ id: "f7", version: 7, stub_id: "function-7", active: true }),
+      deployment({ id: "e1", kind: "endpoint", stub_id: "endpoint-1" }),
+      deployment({ id: "f6", version: 6, stub_id: "function-6" }),
+      deployment({ id: "e2", kind: "endpoint", version: 2, stub_id: "endpoint-2" }),
+      deployment({ id: "other-app", app_id: "app-2", version: 8 }),
+    ];
+
+    expect(groupDeploymentsByWorkload(rows, "app-1")).toHaveLength(2);
+    const fn = findWorkloadGroup(rows, "app-1", "function", "square");
+    const endpoint = findWorkloadGroup(rows, "app-1", "endpoint", "square");
+    expect(fn?.latest.id).toBe("f7");
+    expect(fn?.active).toBe(true);
+    expect(fn?.deployments.map((item) => item.id)).toEqual(["f7", "f6"]);
+    expect(fn?.stubIds).toEqual(["function-7", "function-6"]);
+    expect(endpoint?.latest.id).toBe("e2");
+    expect(endpoint?.active).toBe(false);
+    expect(endpoint?.deployments.map((item) => item.id)).toEqual(["e2", "e1"]);
+    expect(endpoint?.stubIds).toEqual(["endpoint-2", "endpoint-1"]);
+    expect(findWorkloadGroup(rows, "app-1", "pod", "square")).toBeUndefined();
   });
 });

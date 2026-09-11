@@ -31,8 +31,13 @@ export function ContainerLineage({
       ) : null}
       {record.app && record.workload ? (
         <Link
-          to="/w/$workspace/apps/$appId/workloads/$name"
-          params={{ workspace: workspaceName, appId: record.app.id, name: record.workload.name }}
+          to="/w/$workspace/apps/$appId/workloads/$kind/$name"
+          params={{
+            workspace: workspaceName,
+            appId: record.app.id,
+            kind: record.workload.kind,
+            name: record.workload.name,
+          }}
           className="inline-flex items-center gap-1.5 text-brand hover:underline"
         >
           <StubKindIcon kind={record.workload.kind} className="size-3.5" />

@@ -89,10 +89,11 @@ export function TaskTable({
                       <span className="flex min-w-0 items-center gap-2">
                         <StubKindIcon kind={kind ?? "function"} className="size-3 shrink-0" />
                         <Link
-                          to="/w/$workspace/apps/$appId/workloads/$name"
+                          to="/w/$workspace/apps/$appId/workloads/$kind/$name"
                           params={{
                             workspace: workspace.name,
                             appId: task.app_id ?? "",
+                            kind: task.workload.kind,
                             name: task.workload.name,
                           }}
                           disabled={!task.app_id}

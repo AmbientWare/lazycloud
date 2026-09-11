@@ -132,9 +132,9 @@ export function AppWorkloadsSection({
                 ).length;
                 return (
                   <Link
-                    key={group.name}
-                    to="/w/$workspace/apps/$appId/workloads/$name"
-                    params={{ workspace: workspaceName, appId, name: group.name }}
+                    key={JSON.stringify([group.kind, group.name])}
+                    to="/w/$workspace/apps/$appId/workloads/$kind/$name"
+                    params={{ workspace: workspaceName, appId, kind: group.kind, name: group.name }}
                     className="interactive-row group grid min-w-0 gap-x-2 gap-y-2 px-3 py-3 xl:grid-cols-[minmax(8rem,1fr)_4.5rem_6rem_5.75rem_6.25rem_1rem] xl:items-center"
                   >
                     <span className="flex min-w-0 items-center gap-2.5">

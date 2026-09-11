@@ -24,10 +24,11 @@ export function ResourceWorkloadLinks({
       {visible.map((workload) => (
         <Link
           key={`${workload.app_id}:${workload.kind}:${workload.name}`}
-          to="/w/$workspace/apps/$appId/workloads/$name"
+          to="/w/$workspace/apps/$appId/workloads/$kind/$name"
           params={{
             workspace: workspaceName,
             appId: workload.app_id,
+            kind: workload.kind,
             name: workload.name,
           }}
           className="interactive-link inline-flex min-w-0 items-center gap-1 text-foreground"

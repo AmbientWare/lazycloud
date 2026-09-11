@@ -36,7 +36,7 @@ import { VersionHistory } from "./-workloads/VersionHistory";
 import { WorkloadConfiguration } from "./-workloads/WorkloadConfiguration";
 import { WorkloadOperation } from "./-workloads/WorkloadOperation";
 
-export const Route = createFileRoute("/w/$workspace/apps/$appId_/workloads/$name")({
+export const Route = createFileRoute("/w/$workspace/apps/$appId_/workloads/$kind/$name")({
   component: WorkloadDetailRoute,
   errorComponent: RouteErrorFallback,
 });
@@ -53,17 +53,17 @@ function WorkloadDetailRoute() {
 }
 
 function WorkloadDetailPage() {
-  const { appId, name } = Route.useParams();
+  const { appId, kind, name } = Route.useParams();
   const { workspace } = useWorkspace();
   const [podInstanceStatus, setPodInstanceStatus] = useState<PodInstanceStatusFilter>("active");
   const app = useQuery(appQueryOptions(workspace.id, appId));
   const deployments = useInfiniteQuery(
-    deploymentsInfiniteQueryOptions(workspace.id, { appId, name }),
+    deploymentsInfiniteQueryOptions(workspace.id, { appId, kind, name }),
   );
   const stubs = useQuery(deployedStubsQueryOptions(workspace.id, appId));
 
   const deploymentList = selectDeploymentList(deployments.data, deployments.hasNextPage);
-  const group = findWorkloadGroup(deploymentList.items, appId, name);
+  const group = findWorkloadGroup(deploymentList.items, appId, kind, name);
   const selectedDeployment = group ? currentDeployment(group) : undefined;
   const containerStubIds =
     group?.kind === "pod" && selectedDeployment?.stub_id
@@ -144,7 +144,7 @@ function WorkloadDetailPage() {
       }
     >
       <Tabs
-        key={`${appId}:${group.name}`}
+        key={JSON.stringify([appId, group.kind, group.name])}
         defaultValue={defaultInspectorTab(group, showsInvoke)}
         className="panel flex flex-col overflow-hidden rounded-md max-lg:shrink-0 lg:min-h-0 lg:flex-1"
       >
@@ -167,6 +167,7 @@ function WorkloadDetailPage() {
                 workspaceName={workspace.name}
                 appId={appId}
                 workloadName={group.name}
+                workloadKind={group.kind}
                 deploymentId={current.id}
               />
             </PanelErrorBoundary>
@@ -233,6 +234,7 @@ function WorkloadDetailPage() {
             workspaceName={workspace.name}
             appId={appId}
             workloadName={group.name}
+            workloadKind={group.kind}
             stubIds={group.stubIds}
           />
         </Panel>
@@ -274,12 +276,14 @@ function WorkloadRuns({
   workspaceName,
   appId,
   workloadName,
+  workloadKind,
   stubIds,
 }: {
   workspaceId: string;
   workspaceName: string;
   appId: string;
   workloadName: string;
+  workloadKind: string;
   stubIds: string[];
 }) {
   const tasks = useQuery(tasksQueryOptions(workspaceId, { limit: 50, appId, stubIds }));
@@ -292,8 +296,8 @@ function WorkloadRuns({
       showApp={false}
       showWorkload={false}
       taskLink={(taskId) => ({
-        to: "/w/$workspace/apps/$appId/workloads/$name/tasks/$taskId",
-        params: { workspace: workspaceName, appId, name: workloadName, taskId },
+        to: "/w/$workspace/apps/$appId/workloads/$kind/$name/tasks/$taskId",
+        params: { workspace: workspaceName, appId, kind: workloadKind, name: workloadName, taskId },
       })}
       emptyMessage="No tasks yet"
       compact

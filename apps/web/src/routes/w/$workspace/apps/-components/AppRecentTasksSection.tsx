@@ -79,8 +79,13 @@ function RecentRunsList({
                 <>
                   <StubKindIcon kind={task.workload.kind} className="size-3" />
                   <Link
-                    to="/w/$workspace/apps/$appId/workloads/$name"
-                    params={{ workspace: workspaceName, appId, name: task.workload.name }}
+                    to="/w/$workspace/apps/$appId/workloads/$kind/$name"
+                    params={{
+                      workspace: workspaceName,
+                      appId,
+                      kind: task.workload.kind,
+                      name: task.workload.name,
+                    }}
                     className="interactive-link min-w-0 truncate"
                   >
                     {task.workload.name}
