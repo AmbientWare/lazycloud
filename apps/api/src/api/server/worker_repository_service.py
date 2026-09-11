@@ -922,6 +922,9 @@ class WorkerRepositoryService:
                 "priority": unit.priority,
             }
         )
+        initializing_worker.admitted_release_generation = (
+            DeploymentReleaseService().worker_registration_generation(initializing_worker)
+        )
         try:
             if request.ttl_seconds > 0:
                 worker = self.workers.add_worker(
@@ -1124,7 +1127,12 @@ class WorkerRepositoryService:
             raise _scheduler_domain_error(exc) from exc
 
     def _worker_release_admitted(self, worker: SchedulerWorkerRecord) -> bool:
-        return bool(DeploymentReleaseService().admitted_workers([worker]))
+        releases = DeploymentReleaseService()
+        if worker.admitted_release_generation == 0:
+            generation = releases.worker_registration_generation(worker)
+            if generation:
+                worker = self.workers.admit_worker_release(worker, generation=generation)
+        return bool(releases.admitted_workers([worker]))
 
     def disable_worker(self, request: DisableWorkerRequest) -> WorkerRecordResponse:
         try:

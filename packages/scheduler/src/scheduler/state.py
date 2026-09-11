@@ -1179,6 +1179,29 @@ class RedisSchedulerWorkerRepository:
 
         return self._with_worker_lock(worker.worker_id, write)
 
+    def admit_worker_release(
+        self, worker: SchedulerWorkerRecord, *, generation: int
+    ) -> SchedulerWorkerRecord:
+        def write() -> SchedulerWorkerRecord:
+            current = self.get_worker(worker.worker_id)
+            if current is None:
+                raise WorkerStateNotFoundError(worker.worker_id)
+            if (
+                current.resource_version != worker.resource_version
+                or current.created_at != worker.created_at
+                or current.runtime_image != worker.runtime_image
+                or current.agent_binary_sha256 != worker.agent_binary_sha256
+            ):
+                return current
+            updated = current.model_copy(update={"admitted_release_generation": generation})
+            self.redis.hash_set(
+                self.keys.worker_state(worker.worker_id),
+                mapping=redis_serialization.dump_model_hash(updated),
+            )
+            return updated
+
+        return self._with_worker_lock(worker.worker_id, write)
+
     def release_worker_rollout_slot(
         self,
         capacity_owner_id: str,
