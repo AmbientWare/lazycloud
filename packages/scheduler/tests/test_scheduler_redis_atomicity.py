@@ -54,6 +54,7 @@ def _available_worker(worker_id: str, *, now: datetime) -> SchedulerWorkerRecord
         worker_id=worker_id,
         pool=MachinePool("default"),
         status=SchedulerWorkerStatus.Available,
+        request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
         free_cpu_millicores=10_000,
         free_memory_mib=10_000,
         total_cpu_millicores=10_000,
@@ -310,6 +311,39 @@ def test_pending_recovery_and_running_transition_have_one_winner(
     )
     repeated = repository.cancel_container_request("starting", only_if_pending=True)
     assert repeated is not None and repeated.status is start_status
+
+
+@pytest.mark.anyio
+async def test_dispatch_requires_a_live_request_poll_even_when_keepalive_continues(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
+) -> None:
+    redis = real_redis_actors.client()
+    repository = RedisSchedulerWorkerRepository(redis)
+    now = datetime.now(UTC)
+    expired_at = now - timedelta(seconds=1)
+    worker = _available_worker("worker-intake", now=now).model_copy(
+        update={"request_poll_expires_at": expired_at}
+    )
+    repository.add_worker(worker, now=now)
+    kept_alive = repository.set_keep_alive(worker.worker_id)
+    assert kept_alive.request_intake_status(at=now) is SchedulerWorkerStatus.Unavailable
+    request = _request("intake-request", now=now)
+    repository.enqueue_container_request(request, ready_at=now)
+    claim = repository.claim_ready_container_requests(now=now, limit=1)[0]
+
+    with pytest.raises(SchedulerRepositoryError, match="polling lease expired"):
+        repository.dispatch_claimed_container_request(
+            worker.worker_id, claim, now=expired_at - timedelta(seconds=1)
+        )
+    assert repository.has_recoverable_container_request(request.container_id)
+    fresh = await repository.record_worker_request_poll(async_redis, worker.worker_id)
+    assert fresh.request_intake_status(at=now) is SchedulerWorkerStatus.Available
+    repository.dispatch_claimed_container_request(worker.worker_id, claim, now=now)
+    delivered = await repository.wait_for_next_container_request(
+        async_redis, worker.worker_id, timeout_seconds=0.01
+    )
+    assert delivered is not None and delivered.container_id == request.container_id
 
 
 @pytest.mark.anyio

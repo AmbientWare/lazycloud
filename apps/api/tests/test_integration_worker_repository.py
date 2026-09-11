@@ -1171,7 +1171,14 @@ async def test_worker_repository_stream_blocks_until_scheduler_assignment(
         return await anext(stream)
 
     waiting = asyncio.create_task(next_response())
-    await asyncio.sleep(0)
+    for _ in range(100):
+        worker = workers.get_worker(worker_id)
+        assert worker is not None
+        print(f"worker intake={worker.request_poll_expires_at} stream_done={waiting.done()}")
+        if worker.request_poll_expires_at is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert worker.request_poll_expires_at is not None
     assert not waiting.done()
     await asyncio.to_thread(
         _dispatch_worker_request,
@@ -1442,14 +1449,20 @@ def test_worker_repository_rotates_worker_session_on_reregistration(
                 pool=MachinePool("pool"),
                 capacity_owner_id=capacity_owner_id,
                 status=SchedulerWorkerStatus.Available,
+                created_at=utc_now() + timedelta(days=365),
             ),
             cache_generation_id=_test_cache_generation_id("worker-1"),
             cache_storage_id="node:worker-1",
         ).model_dump(mode="json")
         headers = {"Authorization": f"Bearer {bootstrap}"}
 
+        registered_after = utc_now()
         first = client.post("/worker-repository/add-worker", json=payload, headers=headers)
         second = client.post("/worker-repository/add-worker", json=payload, headers=headers)
+        stored = isolated_services.worker_repository_service.workers.get_worker("worker-1")
+        assert stored is not None
+        assert registered_after <= stored.created_at <= utc_now()
+        assert stored.request_poll_expires_at is None
         first_token = WorkerRecordResponse.model_validate_json(first.content).worker_session_token
         second_token = WorkerRecordResponse.model_validate_json(second.content).worker_session_token
 
@@ -2581,6 +2594,16 @@ def _register_worker_session(
         headers=headers,
     )
     assert activated.status_code == 200
+    polled = client.post(
+        "/worker-repository/get-next-container-request",
+        json={
+            "worker_id": worker.worker_id,
+            "cache_generation_id": registration.cache_session.generation_id,
+            "cache_session_fence": registration.cache_session.session_fence,
+        },
+        headers=headers,
+    )
+    assert polled.status_code == 200
     return headers
 
 
