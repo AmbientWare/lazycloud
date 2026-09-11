@@ -108,6 +108,27 @@ class CapacityAcquisitionStatus(StringEnum):
     Unsupported = "unsupported"
 
 
+class CapacityOperationStatus(StringEnum):
+    Intent = "intent"
+    ExistingPending = "existing_pending"
+    Requested = "requested"
+    AtLimit = "at_limit"
+    TemporarilyUnavailable = "temporarily_unavailable"
+    Rejected = "rejected"
+    Unsupported = "unsupported"
+    Releasing = "releasing"
+    Released = "released"
+    Fulfilled = "fulfilled"
+
+    @property
+    def terminal(self) -> bool:
+        return self in {
+            CapacityOperationStatus.Released,
+            CapacityOperationStatus.Fulfilled,
+            CapacityOperationStatus.Unsupported,
+        }
+
+
 class CapacityAcquisitionShape(ContractModel):
     cpu_millicores: int = Field(gt=0)
     memory_mib: int = Field(gt=0)
@@ -132,6 +153,7 @@ class CapacityAcquisitionRequest(ContractModel):
     reservation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     operation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     shape: CapacityAcquisitionShape
+    demand_container_id: str | None = None
     # Warm pool sizing has no workload; demand keeps its own billing market.
     workload_preemptible: bool | None = None
 
@@ -140,6 +162,10 @@ class CapacityReleaseRequest(ContractModel):
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     reservation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     operation_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
+
+
+class CapacityFulfillmentRequest(CapacityReleaseRequest):
+    machine_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
 
 
 class CapacityAcquisitionResult(ContractModel):

@@ -89,8 +89,7 @@ def test_idle_retirement_fences_claims_without_releasing_physical_capacity(
         command=[],
         workspace_id=stub.workspace_id,
         stub_id=stub.id,
-        status=ContainerStatus.Running,
-        started_at=utc_now() - timedelta(seconds=30),
+        status=ContainerStatus.Pending,
     )
     with isolated_services.context.database.session() as session:
         ContainerRepository(session).records.upsert(
@@ -100,11 +99,12 @@ def test_idle_retirement_fences_claims_without_releasing_physical_capacity(
             status=container.status.value,
         )
     assign_runtime(isolated_services.containers, isolated_services.scheduler_workers, container.id)
-    machine_id = str(uuid4())
     with isolated_services.context.database.session() as session:
         assigned = ContainerRepository(session).get_across_workspaces(container.id)
         assert assigned is not None
-        assigned.runtime_machine_id = machine_id
+        machine_id = assigned.runtime_machine_id
+        assigned.status = ContainerStatus.Running
+        assigned.started_at = utc_now() - timedelta(seconds=30)
         ContainerRepository(session).records.upsert(
             assigned,
             workspace_id=stub.workspace_id,

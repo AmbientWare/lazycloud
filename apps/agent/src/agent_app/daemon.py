@@ -15,16 +15,19 @@ import time
 import traceback
 import urllib.error
 from collections.abc import Callable
+from concurrent.futures import CancelledError, Future
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from threading import Event
 from types import TracebackType
 from typing import Protocol
 from urllib.parse import urlparse
 
 from agent.capacity_shutdown import DEFAULT_INTERRUPTION_GRACE_SECONDS, CapacityShutdown
+from agent.image_preparation import WorkerImagePreparation
 from agent.operations import (
     AGENT_AUTHORITY_REVOKED_FILE,
     AGENT_MANAGED_LABEL,
@@ -111,7 +114,11 @@ from shared.http.provider_nodes import (
     ProviderNodeCapacity,
     ProviderNodeEnrollmentRequest,
 )
-from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
+from shared.http.releases import (
+    AGENT_RELEASE_GENERATION_HEADER,
+    AgentReleaseRequest,
+    AgentReleaseResponse,
+)
 from shared.http_transport import HttpChannel
 from shared.provider_config import ProviderKind
 from shared.routing import BackendRouteTransport
@@ -390,9 +397,20 @@ class HttpAgentGatewayClient:
         )
 
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse:
-        return StreamAgentResponse.model_validate(
-            self.channel.post("/gateway/agents/stream", _payload(request))
+        result = self.channel.request_response(
+            "POST",
+            "/gateway/agents/stream",
+            payload=_payload(request),
+            headers={AGENT_RELEASE_GENERATION_HEADER: str(request.generation)},
         )
+        generation = result.headers.get(AGENT_RELEASE_GENERATION_HEADER)
+        if generation is None:
+            raise AgentStreamRetryableError("agent stream has no release generation")
+        try:
+            response = StreamAgentResponse.model_validate(result.payload)
+            return response.model_copy(update={"generation": int(generation)})
+        except ValueError as exc:
+            raise AgentStreamRetryableError("agent stream release generation is invalid") from exc
 
     def agent_release(self, request: AgentReleaseRequest) -> AgentReleaseResponse:
         return AgentReleaseResponse.model_validate(
@@ -541,7 +559,7 @@ class AgentProcessLock:
 
 
 class CommandRunner(Protocol):
-    def run(self, args: list[str]) -> CommandResult: ...
+    def run(self, args: list[str], *, stop: Event | None = None) -> CommandResult: ...
 
 
 class CommandResult(ContractModel):
@@ -553,14 +571,31 @@ class CommandResult(ContractModel):
 
 @dataclass(slots=True)
 class SubprocessCommandRunner:
-    def run(self, args: list[str]) -> CommandResult:
-        result = subprocess.run(args, text=True, capture_output=True, check=False)
-        return CommandResult(
-            args=args,
-            returncode=result.returncode,
-            stdout=result.stdout,
-            stderr=result.stderr,
-        )
+    def run(self, args: list[str], *, stop: Event | None = None) -> CommandResult:
+        deadline = time.monotonic() + 300
+        with subprocess.Popen(
+            args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        ) as process:
+            try:
+                while True:
+                    if stop is not None and stop.is_set():
+                        raise CancelledError("worker image preparation stopped")
+                    if time.monotonic() >= deadline:
+                        raise subprocess.TimeoutExpired(args, 300)
+                    try:
+                        stdout, stderr = process.communicate(timeout=0.2)
+                        return CommandResult(
+                            args=args,
+                            returncode=process.returncode,
+                            stdout=stdout,
+                            stderr=stderr,
+                        )
+                    except subprocess.TimeoutExpired:
+                        continue
+            except BaseException:
+                process.kill()
+                process.communicate()
+                raise
 
 
 def _slot_removal_is_settled(detail: str) -> bool:
@@ -587,31 +622,40 @@ class DockerAgentWorkerController:
     host_aliases: list[str] = field(default_factory=list)
     platform: str = ""
     telemetry: AgentTelemetryBuffer | None = None
-    _prepared_images: set[str] = field(default_factory=set)
+    _images: WorkerImagePreparation = field(init=False)
 
-    def prepare_worker_image(self) -> None:
+    def __post_init__(self) -> None:
+        self._images = WorkerImagePreparation(self._prepare_worker_image)
+
+    def close(self) -> None:
+        self._images.close()
+
+    def prepare_worker_image(self) -> Future[None] | None:
         if self.worker_image_override:
-            self._ensure_worker_image(self.worker_image_override)
+            return self._images.start(self.worker_image_override)
+        return None
 
     def prepared_worker_images(self) -> list[str]:
-        return sorted(self._prepared_images)
+        return self._images.prepared()
 
-    def _ensure_worker_image(self, image: str) -> None:
-        if image in self._prepared_images:
-            return
-        inspected = self.runner.run([self.docker_binary, "image", "inspect", image])
+    def _prepare_worker_image(self, image: str, stop: Event) -> None:
+        try:
+            self._pull_worker_image(image, stop)
+        except subprocess.TimeoutExpired as exc:
+            raise WorkerImagePullError(f"worker image preparation timed out: {image}") from exc
+
+    def _pull_worker_image(self, image: str, stop: Event) -> None:
+        inspected = self.runner.run([self.docker_binary, "image", "inspect", image], stop=stop)
         if inspected.returncode == 0:
-            self._prepared_images.add(image)
             return
         failures: list[str] = []
         for attempt in range(3):
-            pulled = self.runner.run([self.docker_binary, "pull", image])
+            pulled = self.runner.run([self.docker_binary, "pull", image], stop=stop)
             if pulled.returncode == 0:
-                self._prepared_images.add(image)
                 return
             failures.append((pulled.stderr or pulled.stdout).strip()[-1000:])
-            if attempt < 2:
-                time.sleep(2**attempt + random.uniform(0, 0.5))
+            if attempt < 2 and stop.wait(2**attempt + random.uniform(0, 0.5)):
+                raise CancelledError("worker image preparation stopped")
         detail = failures[-1] if failures else "docker returned no diagnostic"
         raise WorkerImagePullError(f"pull worker image {image} failed: {detail}")
 
@@ -637,6 +681,7 @@ class DockerAgentWorkerController:
     ) -> list[AgentWorkerReconcileAction]:
         active_by_id = {slot.worker_id: slot for slot in self.active_slots()}
         applied: list[AgentWorkerReconcileAction] = []
+        prepared: set[str] = set()
         for action in plan.actions:
             if action.action not in {
                 WorkerSlotAction.Prepare,
@@ -649,8 +694,15 @@ class DockerAgentWorkerController:
             image = action.slot.worker_image or self.worker_image_override
             if not image:
                 raise ValueError(f"worker image is required for slot {action.worker_id}")
-            self._ensure_worker_image(image)
+            if self._images.ensure(image):
+                prepared.add(action.worker_id)
         for action in plan.actions:
+            if (
+                action.action
+                in {WorkerSlotAction.Prepare, WorkerSlotAction.Start, WorkerSlotAction.Restart}
+                and action.worker_id not in prepared
+            ):
+                continue
             if action.action is WorkerSlotAction.Prepare:
                 applied.append(action)
                 continue
@@ -705,7 +757,8 @@ class DockerAgentWorkerController:
         if not image:
             msg = f"worker image is required for slot {slot.worker_id}"
             raise ValueError(msg)
-        self._ensure_worker_image(image)
+        if image not in self._images.prepared():
+            raise RuntimeError(f"worker image is not prepared for slot {slot.worker_id}")
         worker_bootstrap = (
             bootstrap.model_copy(
                 update={"gateway_runtime_http_url": self.worker_runtime_http_url_override}
@@ -1009,7 +1062,6 @@ class AgentDaemonService:
                         )
                     if (
                         isinstance(exc, WorkerImagePullError)
-                        and not runtime_ready
                         and not self.worker_controller.active_slots()
                     ):
                         self._report_bootstrap_failure(
@@ -1053,6 +1105,7 @@ class AgentDaemonService:
                     route_proxy.close()
                 if private_network_runtime is not None:
                     private_network_runtime.close()
+                self.worker_controller.close()
 
     def resolve_identity(self) -> AgentState:
         revoked = self.state_store.authority_revoked()
@@ -1120,6 +1173,7 @@ class AgentDaemonService:
         stream = self.client.stream_agent(
             StreamAgentRequest(
                 agent_token=state.agent_token,
+                generation=state.release_generation,
                 binary_sha256=updater.binary_sha256(),
                 active_worker_images={
                     slot.worker_id: slot.worker_image for slot in active_slots if slot.worker_image
@@ -1904,6 +1958,8 @@ def _agent_state_from_stream_response(
     state: AgentState,
     response: StreamAgentResponse,
 ) -> AgentState:
+    if response.generation < state.release_generation:
+        raise AgentStreamRetryableError("agent worker instruction is stale")
     if (
         not response.credential_id
         or response.credential_id != state.credential_id
@@ -1912,6 +1968,7 @@ def _agent_state_from_stream_response(
         raise RuntimeError("gateway returned the wrong agent stream session")
     return state.model_copy(
         update={
+            "release_generation": response.generation,
             "capacity_state": (
                 state.capacity_state
                 if state.capacity_notice_at is not None

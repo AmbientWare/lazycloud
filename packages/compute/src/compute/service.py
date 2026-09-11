@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -32,6 +33,8 @@ from shared.capacity import (
     CapacityAcquisitionShape,
     CapacityAcquisitionStatus,
     CapacityFailureCode,
+    CapacityFulfillmentRequest,
+    CapacityOperationStatus,
     CapacityOwnerKind,
     CapacityOwnerSource,
     CapacityPoolSizingSnapshot,
@@ -61,7 +64,8 @@ from shared.compute_reconciliation import (
     COMPUTE_RECONCILIATION_BATCH_SIZE,
     ComputeReconciliationKind,
 )
-from shared.container_requests import OciRuntimeName, schedulable_capacity
+from shared.container_requests import OciRuntimeName
+from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
 from shared.contracts import ContractModel
 from shared.errors import (
     CapacityLimitReachedError,
@@ -86,7 +90,7 @@ from compute.capacity_errors import (
     CapacityReservationLockContendedError,
 )
 from compute.context import ComputeContext
-from compute.fleet_policy import FleetCapacityPolicy
+from compute.fleet_policy import FleetCapacityPolicy, WarmCapacityUnit, plan_warm_capacity
 from compute.offers import (
     ComputeOffer,
     OfferRequest,
@@ -97,7 +101,6 @@ from compute.offers import (
     record_purchase_terms,
 )
 from compute.provider_machines import (
-    _LAUNCH_STATE_INTENT,
     ProviderMachineReconciler,
     ProviderUnitBootstrapFactory,
     _metadata_time,
@@ -127,7 +130,6 @@ from compute.purchase_policy import assess_fleet_purchase
 from compute.reclaim import ComputeReclaimPolicy
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
 from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
-from compute.warm_capacity import warm_capacity_target
 
 LOGGER = logging.getLogger(__name__)
 
@@ -135,8 +137,8 @@ _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 _UNCONFIRMED_OPERATION_STATUSES = frozenset(
     {
-        _LAUNCH_STATE_INTENT,
-        CapacityAcquisitionStatus.TemporarilyUnavailable.value,
+        CapacityOperationStatus.Intent,
+        CapacityOperationStatus.TemporarilyUnavailable,
     }
 )
 """Owning operations the provider has not acknowledged, so the unit is unbought.
@@ -158,6 +160,7 @@ class _PooledCapacityBaseline:
     min_machines: int
     min_free_cpu_millicores: int
     min_free_memory_mib: int
+    warm_eligible_owners: frozenset[str] = frozenset()
 
 
 _BOOTSTRAP_PHASE_TRANSITIONS: dict[MachineBootstrapPhase, frozenset[MachineBootstrapPhase]] = {
@@ -399,7 +402,7 @@ class ComputeService:
                 for item in ComputeCapacityOperationRepository(session).list_open_for_owner(
                     request.capacity_owner_id
                 )
-                if item.status == _LAUNCH_STATE_INTENT and item.owns_capacity
+                if item.status is CapacityOperationStatus.Intent and item.owns_capacity
             ]
             direct_units = (
                 len(
@@ -465,6 +468,41 @@ class ComputeService:
             reason=f"capacity owner kind {unit.capacity_owner_kind.value!r} is unsupported",
         )
 
+    def fulfill_acquired_capacity(self, request: CapacityFulfillmentRequest) -> None:
+        with self.context.database.session() as session:
+            repository = ComputeCapacityOperationRepository(session)
+            operation = repository.get(
+                request.capacity_owner_id, request.operation_id, for_update=True
+            )
+            if operation is None or operation.reservation_id != request.reservation_id:
+                raise ConflictError("capacity fulfillment does not own this operation")
+            if operation.status is CapacityOperationStatus.Fulfilled:
+                if operation.target_machine_id != request.machine_id:
+                    raise ConflictError("capacity operation already fulfilled by another machine")
+                return
+            if operation.status.terminal or operation.status is CapacityOperationStatus.Releasing:
+                raise ConflictError("capacity operation cannot be fulfilled after release")
+            machine = ComputeProviderInstanceRepository(session).get_by_machine(request.machine_id)
+            if machine is None or machine.pool_id != operation.pool_id:
+                raise ConflictError("capacity fulfillment machine belongs to another pool")
+            enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+                operation.workspace_id, request.machine_id
+            )
+            if enrollment is None or enrollment.capacity_owner_id != operation.capacity_owner_id:
+                raise ConflictError("capacity fulfillment requires an enrolled machine")
+            repository.upsert(
+                operation.model_copy(
+                    update={
+                        "status": CapacityOperationStatus.Fulfilled,
+                        "target_machine_id": request.machine_id,
+                        "provider_instance_id": machine.id,
+                        "owns_capacity": False,
+                        "fulfilled_at": utc_now(),
+                        "updated_at": utc_now(),
+                    }
+                )
+            )
+
     def release_acquired_capacity(
         self,
         request: CapacityReleaseRequest,
@@ -485,7 +523,7 @@ class ComputeService:
                 desired_unit=max(operation.desired_unit if operation is not None else 1, 1),
                 reason="capacity operation is not owned by this reservation",
             )
-        if operation.status == "released":
+        if operation.status.terminal:
             return _operation_result(operation, CapacityAcquisitionStatus.ExistingPending)
         if not operation.owns_capacity:
             with self.context.database.session() as session:
@@ -497,7 +535,12 @@ class ComputeService:
                 )
                 if current is not None:
                     operation = repository.upsert(
-                        current.model_copy(update={"status": "released", "updated_at": utc_now()})
+                        current.model_copy(
+                            update={
+                                "status": CapacityOperationStatus.Released,
+                                "updated_at": utc_now(),
+                            }
+                        )
                     )
             return _operation_result(operation, CapacityAcquisitionStatus.Requested)
         if unit.capacity_owner_kind is CapacityOwnerKind.PooledProvider:
@@ -629,7 +672,7 @@ class ComputeService:
             )
             if operation is not None:
                 _validate_capacity_operation(operation, request, desired_unit=desired_unit)
-                if operation.status == "released":
+                if operation.status.terminal:
                     return _operation_result(
                         operation,
                         CapacityAcquisitionStatus.Unsupported,
@@ -646,7 +689,7 @@ class ComputeService:
                     operations.upsert(
                         operation.model_copy(
                             update={
-                                "status": CapacityAcquisitionStatus.Rejected.value,
+                                "status": CapacityOperationStatus.Rejected,
                                 "last_error": reason,
                                 "failure_code": CapacityFailureCode.ProviderLaunchFailed,
                                 "updated_at": utc_now(),
@@ -694,7 +737,7 @@ class ComputeService:
                             locked_pool,
                             request,
                             desired_unit=desired_unit,
-                            status=CapacityAcquisitionStatus.AtLimit.value,
+                            status=CapacityOperationStatus.AtLimit,
                             previous_desired_unit=current_units,
                         )
                     )
@@ -705,7 +748,7 @@ class ComputeService:
                             locked_pool,
                             request,
                             desired_unit=desired_unit,
-                            status=CapacityAcquisitionStatus.ExistingPending.value,
+                            status=CapacityOperationStatus.ExistingPending,
                             previous_desired_unit=current_units,
                         )
                     )
@@ -716,7 +759,7 @@ class ComputeService:
                             locked_pool,
                             request,
                             desired_unit=desired_unit,
-                            status=CapacityAcquisitionStatus.TemporarilyUnavailable.value,
+                            status=CapacityOperationStatus.TemporarilyUnavailable,
                             previous_desired_unit=current_units,
                             last_error="desired unit skips authoritative pooled capacity",
                         )
@@ -752,7 +795,7 @@ class ComputeService:
                         locked_pool,
                         request,
                         desired_unit=desired_unit,
-                        status=_LAUNCH_STATE_INTENT,
+                        status=CapacityOperationStatus.Intent,
                         previous_desired_unit=current_units,
                         owns_capacity=True,
                     )
@@ -772,7 +815,7 @@ class ComputeService:
                     operation = repository.upsert(
                         current.model_copy(
                             update={
-                                "status": CapacityAcquisitionStatus.Requested.value,
+                                "status": CapacityOperationStatus.Requested,
                                 "last_error": "",
                                 "failure_count": 0,
                                 "updated_at": utc_now(),
@@ -815,7 +858,7 @@ class ComputeService:
             operation = repository.upsert(
                 current.model_copy(
                     update={
-                        "status": CapacityAcquisitionStatus.Requested.value,
+                        "status": CapacityOperationStatus.Requested,
                         "last_error": "",
                         "failure_count": 0,
                         "updated_at": utc_now(),
@@ -867,7 +910,7 @@ class ComputeService:
                     CapacityAcquisitionStatus.Unsupported,
                     reason="capacity operation disappeared during release",
                 )
-            if current.status == "released":
+            if current.status.terminal:
                 return _operation_result(current, CapacityAcquisitionStatus.Requested)
             if current.release_desired_unit is None:
                 target = max(locked_pool.min_machines, locked_pool.desired_machines - 1)
@@ -886,7 +929,7 @@ class ComputeService:
                 current = operations.upsert(
                     current.model_copy(
                         update={
-                            "status": "releasing",
+                            "status": CapacityOperationStatus.Releasing,
                             "release_desired_unit": target,
                             "updated_at": utc_now(),
                         }
@@ -932,7 +975,12 @@ class ComputeService:
                 raise RuntimeError("pooled capacity operation disappeared after release")
             current = operations.upsert(
                 locked.model_copy(
-                    update={"status": "released", "last_error": "", "updated_at": utc_now()}
+                    update={
+                        "status": CapacityOperationStatus.Released,
+                        "owns_capacity": False,
+                        "last_error": "",
+                        "updated_at": utc_now(),
+                    }
                 )
             )
         return _operation_result(current, CapacityAcquisitionStatus.Requested)
@@ -956,7 +1004,7 @@ class ComputeService:
                 operation = repository.upsert(
                     operation.model_copy(
                         update={
-                            "status": CapacityAcquisitionStatus.TemporarilyUnavailable.value,
+                            "status": CapacityOperationStatus.TemporarilyUnavailable,
                             "last_error": reason,
                             "failure_code": failure_code,
                             # The count is what the sizer's exponential backoff is
@@ -1231,7 +1279,7 @@ class ComputeService:
                     )
                     termination_errors.append(f"{record.provider}/{record.id}: {detail}")
                 if not termination_errors:
-                    compute_pool_repository.records.delete(
+                    compute_pool_repository.delete(
                         compute_pool.id,
                         workspace_id=workspace_id,
                     )
@@ -1251,7 +1299,7 @@ class ComputeService:
                     deleted_machine_ids.append(machine.id)
                 unit = ComputeUnitRepository(session).get_by_capacity_owner_id(capacity_owner_id)
                 if unit is not None:
-                    ComputeUnitRepository(session).records.delete(
+                    ComputeUnitRepository(session).delete(
                         unit.id,
                         workspace_id=workspace_id,
                     )
@@ -1716,7 +1764,9 @@ class ComputeService:
         root_volume_gib: int,
         idle_timeout_seconds: int,
         baseline: _PooledCapacityBaseline | None,
+        now: datetime | None = None,
     ) -> ComputeUnitRecord:
+        current_time = now or utc_now()
         if provider.policy is None or provider.pooled is None:
             raise ManagedComputeLaunchError(
                 "pooled compute provider policy is unavailable",
@@ -1761,6 +1811,101 @@ class ComputeService:
                 raise CapacityReservationConflictError(
                     f"compute pool {current.name!r} is finishing provider resource retirement"
                 )
+            if current is not None and self._failed_market_retry_ready(current, now=current_time):
+                records = ComputeProviderInstanceRepository(session).list_for_pool(current.id)
+                if not ComputeCapacityOperationRepository(session).list_open_for_owner(
+                    current.capacity_owner_id
+                ) and not any(
+                    _reservation_open(record.status)
+                    or (
+                        (record.instance_id is not None or _provider_storage_volume_ids(record))
+                        and _metadata_time(
+                            _provider_instance_metadata(record), "provider_storage_destroyed_at"
+                        )
+                        is None
+                    )
+                    for record in records
+                ):
+                    current = repository.upsert(
+                        current.model_copy(
+                            update={
+                                "phase": (
+                                    current.phase
+                                    if current.phase is ComputeUnitPhase.Deleted
+                                    else ComputeUnitPhase.Provisioning
+                                ),
+                                "status": (
+                                    current.status
+                                    if current.phase is ComputeUnitPhase.Deleted
+                                    else ComputeUnitPhase.Provisioning.value
+                                ),
+                                "provider_state": current.provider_state.model_copy(
+                                    update={
+                                        "degraded_reason": None,
+                                        "degraded_at": None,
+                                        "launch_attempt_baseline": max(
+                                            (record.launch_attempt for record in records), default=0
+                                        ),
+                                    }
+                                ),
+                            }
+                        )
+                    )
+                else:
+                    raise ConflictError("failed market capacity has not finished cleanup")
+            handoff_from = current.warm_handoff_from if current is not None else ()
+            if baseline is not None and unit_platform_fleet:
+                market_units = repository.list_platform_internal(
+                    preemptible=requirements.preemptible, gpu=False
+                )
+                fleet_units = repository.list_platform_internal(gpu=False)
+                committed = repository.platform_capacity_usage(gpu=False)
+                plan = plan_warm_capacity(
+                    tuple(
+                        WarmCapacityUnit(
+                            unit_id=item.id,
+                            desired=item.desired_machines,
+                            committed=committed
+                            - repository.platform_capacity_usage(
+                                gpu=False, excluding_unit_id=item.id
+                            ),
+                            ready=self._warm_unit_ready_count(item),
+                            floor=item.min_machines,
+                            eligible=item.id in baseline.warm_eligible_owners,
+                            handoff_from=item.warm_handoff_from,
+                        )
+                        for item in market_units
+                    ),
+                    target_unit_id=unit_id,
+                    minimum=baseline.min_machines,
+                    fleet_baseline=(
+                        self.fleet_policy.warm_cpu_preemptible_min
+                        + self.fleet_policy.warm_cpu_non_preemptible_min
+                    ),
+                    fleet_limit=self.fleet_policy.max_cpu_instances,
+                    fleet_committed=committed,
+                    maintenance_busy=any(
+                        item.replacement_machine_id
+                        or (item.id != unit_id and item.warm_handoff_from)
+                        for item in fleet_units
+                    )
+                    or self._worker_update_in_progress(session, fleet_units),
+                )
+                if plan.target_machines == 0:
+                    raise CapacityLimitReachedError("fleet commitments leave no baseline headroom")
+                for item in market_units:
+                    if item.id == unit_id:
+                        continue
+                    repository.upsert(_with_warm_floor(item, plan.floors[item.id]))
+                baseline = _PooledCapacityBaseline(
+                    initial_machines=plan.floors[unit_id],
+                    min_machines=plan.floors[unit_id],
+                    min_free_cpu_millicores=0,
+                    min_free_memory_mib=0,
+                    warm_eligible_owners=baseline.warm_eligible_owners,
+                )
+                desired_machines = plan.target_machines
+                handoff_from = plan.handoff_from
             remaining = self._available_fleet_machines(
                 repository,
                 platform_fleet=unit_platform_fleet,
@@ -1892,6 +2037,7 @@ class ComputeService:
                 replacement_template_version=(
                     current.replacement_template_version if current else ""
                 ),
+                warm_handoff_from=handoff_from,
                 scaling_enabled=True,
                 # True by construction rather than by preference: this unit is
                 # built from workspace policy because the workspace needed general
@@ -2129,7 +2275,8 @@ class ComputeService:
                     operations.upsert(
                         operation.model_copy(
                             update={
-                                "status": "released",
+                                "status": CapacityOperationStatus.Released,
+                                "owns_capacity": False,
                                 "release_desired_unit": 0,
                                 "last_error": "",
                                 "failure_count": 0,
@@ -2319,6 +2466,8 @@ class ComputeService:
             )
             if unit.workspace_id != workspace_id:
                 raise NotFoundError(f"compute unit not found: {capacity_owner_id}")
+            if unit.phase is ComputeUnitPhase.Degraded or unit.provider_state.degraded_reason:
+                raise ConflictError("degraded capacity cannot start a replacement")
             if unit.replacement_machine_id:
                 if (
                     unit.replacement_machine_id == machine_id
@@ -2328,6 +2477,7 @@ class ComputeService:
                 raise ConflictError(
                     f"compute pool {unit.name!r} already has a replacement in progress"
                 )
+            self._require_maintenance_available(session, unit, machine_id="")
             provider_machine = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
             if provider_machine is None or provider_machine.pool_id != unit.id:
                 raise NotFoundError(f"provider machine not found in compute unit: {machine_id}")
@@ -2368,6 +2518,59 @@ class ComputeService:
                     }
                 )
             )
+
+    @contextmanager
+    def worker_maintenance_admission(
+        self, workspace_id: str, capacity_owner_id: str, machine_id: str
+    ) -> Iterator[None]:
+        with self.context.database.session() as session:
+            repository = ComputeUnitRepository(session)
+            unit = repository.get_by_capacity_owner_id(capacity_owner_id)
+            if unit is None or unit.workspace_id != workspace_id:
+                raise NotFoundError(f"compute unit not found: {capacity_owner_id}")
+            if unit.platform_fleet:
+                repository.lock_platform_capacity()
+            else:
+                repository.lock_capacity_workspace(workspace_id)
+            unit = repository.get(unit.id, for_update=True)
+            if unit is None or unit.workspace_id != workspace_id:
+                raise NotFoundError(f"compute unit not found: {capacity_owner_id}")
+            if unit.platform_fleet:
+                self._require_maintenance_available(session, unit, machine_id=machine_id)
+            yield
+
+    def _require_maintenance_available(
+        self, session: DatabaseSession, unit: ComputeUnitRecord, *, machine_id: str
+    ) -> None:
+        candidates = (
+            ComputeUnitRepository(session).list_platform_internal(gpu=_pool_gpu_capacity(unit))
+            if unit.platform_fleet
+            else [unit]
+        )
+        if any(item.replacement_machine_id or item.warm_handoff_from for item in candidates):
+            raise ConflictError("capacity maintenance is already in progress")
+        if self._worker_update_in_progress(session, candidates, excluding_machine_id=machine_id):
+            raise ConflictError("a worker update is already in progress")
+
+    def _worker_update_in_progress(
+        self,
+        session: DatabaseSession,
+        candidates: Sequence[ComputeUnitRecord],
+        *,
+        excluding_machine_id: str = "",
+    ) -> bool:
+        if self.scheduler_hooks is None:
+            raise UpstreamUnavailableError("capacity maintenance requires scheduler worker state")
+        for candidate in candidates:
+            for record in ComputeProviderInstanceRepository(session).list_for_pool(candidate.id):
+                if (
+                    record.machine_id is not None
+                    and record.machine_id != excluding_machine_id
+                    and _reservation_open(record.status)
+                    and self.scheduler_hooks.machine_has_worker_update(record.machine_id)
+                ):
+                    return True
+        return False
 
     def clear_internal_unit_replacement(
         self,
@@ -2704,26 +2907,20 @@ class ComputeService:
         with self.context.database.session() as session:
             repository = ComputeUnitRepository(session)
             units = repository.list_platform_internal(preemptible=preemptible, gpu=False)
-            arrivals = repository.recent_platform_cpu_arrivals(
-                now - timedelta(hours=1), preemptible=preemptible
-            )
-            machines = [
-                machine
-                for unit in units
-                for machine in ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
-            ]
         for unit in units:
             self._release_unclaimed_failed_capacity(unit, now=now)
-        lower_times = [
-            to_utc(datetime.fromisoformat(value))
-            for unit in units
-            if isinstance(value := unit.config.get("warm_lower_since"), str)
-        ]
+        with self.context.database.session() as session:
+            units = ComputeUnitRepository(session).list_platform_internal(
+                preemptible=preemptible, gpu=False
+            )
         unavailable_owners = {
             unit.capacity_owner_id
             for unit in units
-            if unit.phase is ComputeUnitPhase.Degraded
-            or unit.provider_state.degraded_reason is not None
+            if (
+                unit.phase is ComputeUnitPhase.Degraded
+                or unit.provider_state.degraded_reason is not None
+            )
+            and not self._failed_market_retry_ready(unit, now=now)
         }
         request = OfferRequest(nodes=1, preemptible=preemptible)
         candidates = sorted(
@@ -2732,21 +2929,29 @@ class ComputeService:
                 for provider, offer in offers
                 if offer.preemptible is preemptible and filter_offers([offer], request)
             ),
-            key=lambda item: offer_selection_key(item[1], request),
+            key=lambda item: (
+                not any(
+                    unit.capacity_owner_id == self.pooled_offer_owner_id(*item)
+                    and unit.warm_handoff_from
+                    for unit in units
+                ),
+                not any(
+                    unit.capacity_owner_id == self.pooled_offer_owner_id(*item)
+                    and unit.min_machines > 0
+                    and unit.capacity_owner_id not in unavailable_owners
+                    for unit in units
+                ),
+                offer_selection_key(item[1], request),
+            ),
+        )
+        eligible_owners = frozenset(
+            self.pooled_offer_owner_id(provider, offer)
+            for provider, offer in candidates
+            if self.pooled_offer_owner_id(provider, offer) not in unavailable_owners
         )
         for provider, offer in candidates:
             policy = provider.policy
             assert policy is not None
-            target = warm_capacity_target(
-                self.fleet_policy,
-                offer,
-                arrivals,
-                machines,
-                preemptible=preemptible,
-                current=max((unit.min_machines for unit in units), default=0),
-                lower_since=max(lower_times) if lower_times else None,
-                now=now,
-            )
             unit_id = self.pooled_offer_owner_id(provider, offer)
             if unit_id in unavailable_owners:
                 continue
@@ -2756,58 +2961,45 @@ class ComputeService:
                         provider=provider,
                         offer=offer,
                         requirements=ComputeResourceRequirements(preemptible=preemptible),
-                        desired_machines=target.machines,
+                        desired_machines=minimum,
                         root_volume_gib=policy.root_volume_gib,
                         idle_timeout_seconds=policy.idle_timeout_seconds,
                         baseline=_PooledCapacityBaseline(
-                            initial_machines=target.machines,
-                            min_machines=target.machines,
-                            min_free_cpu_millicores=(
-                                target.machines * schedulable_capacity(offer.cpu_millicores)
-                            ),
-                            min_free_memory_mib=(
-                                target.machines * schedulable_capacity(offer.memory_mb)
-                            ),
+                            initial_machines=minimum,
+                            min_machines=minimum,
+                            min_free_cpu_millicores=0,
+                            min_free_memory_mib=0,
+                            warm_eligible_owners=eligible_owners,
                         ),
+                        now=now,
                     )
-                    with self.context.database.session() as session:
-                        repository = ComputeUnitRepository(session)
-                        latest = repository.get(unit.id, for_update=True)
-                        if latest is None:
-                            raise LookupError("platform warm unit disappeared")
-                        repository.upsert(
-                            latest.model_copy(
-                                update={
-                                    "config": {
-                                        **latest.config,
-                                        "warm_lower_since": (
-                                            target.lower_since.isoformat()
-                                            if target.lower_since
-                                            else None
-                                        ),
-                                    },
-                                }
-                            )
-                        )
-                handing_over = any(
-                    previous.id != unit.id and previous.min_machines > 0 for previous in units
-                )
-                if not handing_over or self._warm_unit_ready(unit):
-                    self._clear_platform_warm_floors(preemptible=preemptible, keep_unit_id=unit.id)
                 return
             except (CapacityReservationLockContendedError, CapacityReservationLeaseLostError):
                 raise
             except Exception:
                 with self.context.database.session() as session:
                     prepared = ComputeUnitRepository(session).get(unit_id)
-                if prepared is not None and prepared.min_machines >= target.machines:
+                if prepared is not None and prepared.min_machines >= minimum:
                     raise
                 LOGGER.exception("platform warm capacity preparation failed for %s", offer.id)
         raise UpstreamUnavailableError(
             f"no approved capacity can supply the warm target for preemptible={preemptible}"
         )
 
-    def _warm_unit_ready(self, unit: ComputeUnitRecord) -> bool:
+    @staticmethod
+    def _failed_market_retry_ready(unit: ComputeUnitRecord, *, now: datetime) -> bool:
+        return (
+            unit.provider_state.degraded_reason is not None
+            and unit.provider_state.degraded_at is not None
+            and not unit.desired_machines
+            and not unit.observed_machines
+            and unit.phase in {ComputeUnitPhase.Degraded, ComputeUnitPhase.Deleted}
+            and now
+            >= to_utc(unit.provider_state.degraded_at)
+            + timedelta(seconds=unit.registration_timeout_seconds)
+        )
+
+    def _warm_unit_ready_count(self, unit: ComputeUnitRecord) -> int:
         if self.scheduler_hooks is None:
             raise UpstreamUnavailableError("warm capacity requires scheduler worker state")
         with self.context.database.session() as session:
@@ -2822,14 +3014,10 @@ class ComputeService:
                 for record in records
                 if record.machine_id is not None and record.status == ReservationStatus.Active.value
             )
-        return serving >= unit.min_machines
+        return serving
 
     def _release_unclaimed_failed_capacity(self, unit: ComputeUnitRecord, *, now: datetime) -> None:
-        if (
-            unit.phase is not ComputeUnitPhase.Degraded
-            or unit.desired_machines == 0
-            or unit.observed_machines > 0
-        ):
+        if unit.phase is not ComputeUnitPhase.Degraded or unit.desired_machines == 0:
             return
         mutations = self._required_capacity_owner_mutations()
         with (
@@ -2846,7 +3034,6 @@ class ComputeService:
                     current is None
                     or current.phase is not ComputeUnitPhase.Degraded
                     or current.desired_machines == 0
-                    or current.observed_machines > 0
                     or ComputeCapacityOperationRepository(session).list_open_for_owner(
                         unit.capacity_owner_id
                     )
@@ -2899,7 +3086,62 @@ class ComputeService:
             raise NotFoundError(f"compute unit not found: {unit_id}")
         _require_internal_pooled_unit(unit, unit_ref=unit_id)
         with mutations.mutation_lock(unit.capacity_owner_id):
-            return self._reconcile_pooled_pool(unit.id, dispatch_fence=mutations, now=_utc(now))
+            current_time = _utc(now)
+            observed = self._reconcile_pooled_pool(
+                unit.id, dispatch_fence=mutations, now=current_time
+            )
+            if observed is not None and observed.phase not in ENDED_UNIT_PHASES:
+                self._reconcile_capacity_operations(observed, mutations=mutations, now=current_time)
+                with self.context.database.session() as session:
+                    return ComputeUnitRepository(session).get(unit.id)
+            return observed
+
+    def _reconcile_capacity_operations(
+        self, unit: ComputeUnitRecord, *, mutations: CapacityOwnerMutationLease, now: datetime
+    ) -> None:
+        with self.context.database.session() as session:
+            operations = ComputeCapacityOperationRepository(session).list_for_owner(
+                unit.capacity_owner_id
+            )
+        for operation in operations:
+            if operation.status.terminal or not operation.owns_capacity:
+                continue
+            if now < to_utc(operation.created_at) + timedelta(
+                seconds=unit.registration_timeout_seconds
+            ):
+                continue
+            with mutations.dispatch_lock(unit.capacity_owner_id):
+                if mutations.has_open_reservations(unit.capacity_owner_id):
+                    continue
+                with self.context.database.session() as session:
+                    containers = ContainerRepository(session)
+                    if operation.demand_container_id is not None:
+                        demand = containers.get_across_workspaces(operation.demand_container_id)
+                        if demand is not None and demand.status in LIVE_CONTAINER_STATUSES:
+                            continue
+                        if containers.list_across_workspaces(
+                            statuses=(ContainerStatus.Pending.value,)
+                        ) or self._machines_holding_active_work(session, pool_id=unit.id):
+                            # Another request may share an acquisition whose lease was lost.
+                            continue
+                    elif containers.list_across_workspaces(
+                        statuses=tuple(status.value for status in LIVE_CONTAINER_STATUSES)
+                    ):
+                        # Historical acquisitions cannot be attributed safely.
+                        continue
+                LOGGER.info(
+                    "compensating expired capacity operation %s in pool %s: "
+                    "no live durable workload or reservation",
+                    operation.operation_id,
+                    unit.id,
+                )
+                self.release_acquired_capacity(
+                    CapacityReleaseRequest(
+                        capacity_owner_id=unit.capacity_owner_id,
+                        reservation_id=operation.reservation_id,
+                        operation_id=operation.operation_id,
+                    )
+                )
 
     def _reconcile_pooled_pool(
         self,
@@ -2957,7 +3199,6 @@ class ComputeService:
                     pooled.release_machine(
                         self._provider_unit_request(current, offer), record.instance_id
                     )
-            current = self._relaunch_degraded_pool_after_interval(current, now=now)
             request = self._provider_unit_request(current, offer)
             if request.desired_machines == 0:
                 with dispatch_fence.dispatch_lock(current.capacity_owner_id):
@@ -3003,18 +3244,13 @@ class ComputeService:
                         record_purchase_terms(current, offer)
                     )
             request = self._provider_unit_request(current, offer)
-            snapshot = (
-                # A durably degraded pool stopped relaunching: observe and prove
-                # terminations without restoring provider capacity until an
-                # explicit capacity mutation clears the degraded reason.
-                pooled.describe_unit(request)
-                if degraded
-                else self._ensure_reconciled_pool(
-                    current,
-                    pooled=pooled,
-                    request=request,
-                    dispatch_fence=dispatch_fence,
-                )
+            if degraded:
+                request = request.model_copy(update={"purchases_enabled": False})
+            snapshot = self._ensure_reconciled_pool(
+                current,
+                pooled=pooled,
+                request=request,
+                dispatch_fence=dispatch_fence,
             )
             return self.provider_machines._apply_pooled_snapshot(
                 current,
@@ -3045,10 +3281,6 @@ class ComputeService:
         now: datetime,
     ) -> ComputeUnitRecord:
         if not _retirable_platform_pool(pool, provider, offer, now=now):
-            return pool
-        if pool.provider_state.degraded_reason is not None:
-            # Reconciliation clears retryable failures after their cooldown.
-            # Retiring earlier would strand that retry state outside its owner.
             return pool
         if (
             snapshot.phase not in {ProviderCapacityPhase.Ready, ProviderCapacityPhase.Deleted}
@@ -3696,67 +3928,6 @@ class ComputeService:
         )
         return cleared
 
-    def _relaunch_degraded_pool_after_interval(
-        self,
-        pool: ComputeUnitRecord,
-        *,
-        now: datetime,
-    ) -> ComputeUnitRecord:
-        """Give a pool that exhausted its launch attempts another series.
-
-        The attempt baseline moves to the highest ordinal seen, as the explicit
-        clear does, so the next failure counts from here rather than degrading
-        the pool again on its first miss. A pool degraded before the stamp
-        existed relaunches at once: it has already waited longer than any
-        interval.
-        """
-        state = pool.provider_state
-        if state.degraded_reason not in {
-            "bootstrap_launch_attempts_exhausted",
-            "provider_acquisition_rejected",
-        }:
-            return pool
-        degraded_at = state.degraded_at
-        interval = timedelta(seconds=self.reclaim.degraded_relaunch_interval_seconds)
-        if degraded_at is not None and now - to_utc(degraded_at) < interval:
-            return pool
-        with self.context.database.session() as session:
-            repository = ComputeUnitRepository(session)
-            highest = ComputeProviderInstanceRepository(session).highest_launch_attempt(
-                pool.id, default=state.launch_attempt_baseline
-            )
-            cleared = repository.apply_provider_state(
-                pool.id,
-                generation=pool.generation,
-                observed_machines=pool.observed_machines,
-                phase=ComputeUnitPhase.Ready,
-                provider_state=state.model_copy(
-                    update={
-                        "degraded_reason": None,
-                        "degraded_at": None,
-                        "launch_attempt_baseline": highest,
-                    }
-                ),
-            )
-        if cleared is None:
-            return pool
-        LOGGER.warning(
-            "relaunching degraded pooled capacity after the relaunch interval",
-            extra={
-                "pool": pool.name,
-                "capacity_owner_id": pool.capacity_owner_id,
-                "degraded_at": degraded_at.isoformat() if degraded_at is not None else None,
-                "launch_attempt_baseline": highest,
-            },
-        )
-        self._publish_change(
-            workspace_id=cleared.workspace_id,
-            topic=WorkspaceChangeTopic.ComputeUnits,
-            change=WorkspaceChangeType.Updated,
-            resource_id=cleared.id,
-        )
-        return cleared
-
     def _mark_pooled_capacity_degraded(
         self,
         pool: ComputeUnitRecord,
@@ -3804,7 +3975,13 @@ class ComputeService:
         provider = self.provider_resolver.resolve(pool.workspace_id, pool.provider_ref)
         if provider.policy is None:
             raise UpstreamUnavailableError("compute provider policy is unavailable")
-        request = request.model_copy(update={"purchases_enabled": provider.policy.can_purchase})
+        request = request.model_copy(
+            update={
+                "purchases_enabled": (
+                    provider.policy.can_purchase and pool.provider_state.degraded_reason is None
+                )
+            }
+        )
         if pool.provider_state.degraded_reason is None:
             return request
         with self.context.database.session() as session:
@@ -3902,7 +4079,7 @@ def _new_capacity_operation(
     request: CapacityAcquisitionRequest,
     *,
     desired_unit: int,
-    status: str,
+    status: CapacityOperationStatus,
     previous_desired_unit: int,
     target_machine_id: str | None = None,
     owns_capacity: bool = False,
@@ -3916,6 +4093,7 @@ def _new_capacity_operation(
         capacity_owner_id=request.capacity_owner_id,
         reservation_id=request.reservation_id,
         operation_id=request.operation_id,
+        demand_container_id=request.demand_container_id,
         desired_unit=desired_unit,
         status=status,
         target_machine_id=target_machine_id,
@@ -3936,6 +4114,10 @@ def _validate_capacity_operation(
 ) -> None:
     if (
         operation.reservation_id != request.reservation_id
+        or (
+            operation.demand_container_id is not None
+            and operation.demand_container_id != request.demand_container_id
+        )
         or operation.desired_unit != desired_unit
         or operation.shape != _json_object(request.shape)
     ):
@@ -3946,21 +4128,23 @@ def _validate_capacity_operation_plan(
     operation: ComputeCapacityOperationRecord,
     request: CapacityAcquisitionRequest,
 ) -> None:
-    if operation.reservation_id != request.reservation_id or operation.shape != _json_object(
-        request.shape
+    if (
+        operation.reservation_id != request.reservation_id
+        or (
+            operation.demand_container_id is not None
+            and operation.demand_container_id != request.demand_container_id
+        )
+        or operation.shape != _json_object(request.shape)
     ):
         raise ConflictError(f"capacity operation request is immutable: {request.operation_id}")
 
 
-def _stored_capacity_status(status: str) -> CapacityAcquisitionStatus:
-    if status in {"intent", "releasing"}:
+def _stored_capacity_status(status: CapacityOperationStatus) -> CapacityAcquisitionStatus:
+    if status in {CapacityOperationStatus.Intent, CapacityOperationStatus.Releasing}:
         return CapacityAcquisitionStatus.ExistingPending
-    if status == "released":
+    if status.terminal:
         return CapacityAcquisitionStatus.Unsupported
-    try:
-        return CapacityAcquisitionStatus(status)
-    except ValueError:
-        return CapacityAcquisitionStatus.TemporarilyUnavailable
+    return CapacityAcquisitionStatus(status.value)
 
 
 def _capacity_result(
@@ -4026,10 +4210,14 @@ def _json_object(model: ContractModel) -> dict[str, JsonValue]:
 
 
 def _without_warm_floor(unit: ComputeUnitRecord) -> ComputeUnitRecord:
+    return _with_warm_floor(unit, 0).model_copy(update={"warm_handoff_from": ()})
+
+
+def _with_warm_floor(unit: ComputeUnitRecord, minimum: int) -> ComputeUnitRecord:
     return unit.model_copy(
         update={
-            "initial_machines": 0,
-            "min_machines": 0,
+            "initial_machines": minimum,
+            "min_machines": minimum,
             "min_free_cpu_millicores": 0,
             "min_free_memory_mib": 0,
             "min_free_gpu_count": 0,

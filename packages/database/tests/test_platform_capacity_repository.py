@@ -1,21 +1,21 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
 from threading import Barrier
 from uuid import uuid4
 
-from database.repositories.billing_ledger import ContainerBillingShapeRepository
+import pytest
 from database.repositories.compute import (
     AwsAccountConnectionRepository,
+    ComputeCapacityOperationRecord,
+    ComputeCapacityOperationRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
 from database.repositories.identity import UserRepository, WorkspaceRepository
 from database.repositories.orchestration import MachineRepository
-from database.tables.compute import ComputeUnitTable
+from database.tables.compute import ComputeCapacityOperationTable, ComputeUnitTable
 from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
-from shared.billing_quotes import ContainerShape
-from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
+from shared.capacity import CapacityOperationStatus, CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_fleet import Machine
 from shared.compute_policy import (
     ComputeCapacityMode,
@@ -25,12 +25,51 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.compute_reconciliation import ComputeReconciliationKind
-from shared.placement import placement_rate_class
 from shared.timestamps import utc_now
-from shared.usage import UsageBillingOwner
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from database import DatabaseClient
+
+
+def test_terminal_capacity_handoff_rejects_a_stale_writer(database: DatabaseClient) -> None:
+    with database.session() as session:
+        workspace = WorkspaceRepository(session).create(name="handoff-fencing")
+        unit = ComputeUnitRepository(session).upsert(_platform_unit(workspace.id, "aws"))
+        operation_id = str(uuid4())
+        operation = ComputeCapacityOperationRepository(session).upsert(
+            ComputeCapacityOperationRecord(
+                id=operation_id,
+                workspace_id=workspace.id,
+                pool_id=unit.id,
+                capacity_owner_id=unit.id,
+                reservation_id=str(uuid4()),
+                operation_id=operation_id,
+                desired_unit=1,
+                status=CapacityOperationStatus.Fulfilled,
+                target_machine_id=str(uuid4()),
+                fulfilled_at=utc_now(),
+                demand_container_id=str(uuid4()),
+                owns_capacity=False,
+            )
+        )
+    with database.session() as session:
+        with (
+            pytest.raises(IntegrityError, match="terminal capacity ownership"),
+            session.begin_nested(),
+        ):
+            session.execute(
+                update(ComputeCapacityOperationTable)
+                .where(
+                    ComputeCapacityOperationTable.id == operation_id,
+                )
+                .values(status="released")
+            )
+        persisted = ComputeCapacityOperationRepository(session).get(unit.id, operation_id)
+        assert persisted is not None and persisted.status is CapacityOperationStatus.Fulfilled
+        assert persisted.fulfilled_at == operation.fulfilled_at
+        assert persisted.demand_container_id == operation.demand_container_id
+        assert not persisted.owns_capacity
 
 
 def _platform_unit(workspace_id: str, provider: str) -> ComputeUnitRecord:
@@ -222,43 +261,3 @@ def test_fleet_capacity_lock_serializes_purchases_across_workspaces(
         assert sorted(executor.map(purchase, units)) == [False, True]
     with database.session() as session:
         assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 1
-
-
-def test_warm_demand_uses_requested_market_and_excludes_pinned_and_customer_work(
-    database: DatabaseClient,
-) -> None:
-    with database.session() as session:
-        workspace = WorkspaceRepository(session).create(name="arrivals")
-        shapes = ContainerBillingShapeRepository(session)
-        for index, (owner, pinned, preemptible, gpu_count) in enumerate(
-            (
-                (UsageBillingOwner.PlatformFleet, False, True, 0),
-                (UsageBillingOwner.PlatformFleet, False, False, 0),
-                (UsageBillingOwner.PlatformFleet, True, True, 0),
-                (UsageBillingOwner.ConnectedCloud, False, True, 0),
-                (UsageBillingOwner.PlatformFleet, False, True, 1),
-            ),
-            start=1,
-        ):
-            shapes.record(
-                container_id=str(uuid4()),
-                workspace_id=workspace.id,
-                shape=ContainerShape(
-                    owner,
-                    "a100" if gpu_count else "",
-                    index * 1000,
-                    index * 1024,
-                    gpu_count,
-                    placement_rate_class(pinned=pinned, preemptible=preemptible),
-                ),
-            )
-        repository = ComputeUnitRepository(session)
-        since = utc_now() - timedelta(minutes=1)
-        assert [
-            arrival.cpu_millicores
-            for arrival in repository.recent_platform_cpu_arrivals(since, preemptible=True)
-        ] == [1000]
-        assert [
-            arrival.cpu_millicores
-            for arrival in repository.recent_platform_cpu_arrivals(since, preemptible=False)
-        ] == [2000]

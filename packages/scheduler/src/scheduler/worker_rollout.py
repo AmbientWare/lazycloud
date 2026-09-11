@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from math import ceil
 from typing import Protocol
 
 from database.repositories.apps import StubRepository
@@ -12,12 +13,49 @@ from database.repositories.orchestration import ContainerRepository
 from shared.container_requests import StopContainerReason
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord
 from shared.deployments import StubKind
-from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
+from shared.scheduling import (
+    SchedulerContainerState,
+    SchedulerContainerStatus,
+    SchedulerWorkerRecord,
+    SchedulerWorkerStatus,
+)
 from shared.timestamps import utc_now
+from shared.usage import UsageBillingOwner
 
 from database import DatabaseClient
 
 WORKER_UPDATE_DRAIN_GRACE = timedelta(seconds=60)
+
+
+def worker_rollout_allowance(
+    worker: SchedulerWorkerRecord,
+    fleet: list[SchedulerWorkerRecord],
+    *,
+    now: datetime,
+) -> int:
+    platform = worker.billing_owner is UsageBillingOwner.PlatformFleet
+    serving = [
+        candidate
+        for candidate in fleet
+        if (
+            candidate.billing_owner is UsageBillingOwner.PlatformFleet
+            and bool(candidate.total_gpu_count) == bool(worker.total_gpu_count)
+            if platform
+            else candidate.capacity_owner_id == worker.capacity_owner_id
+        )
+    ]
+    limit = 1 if platform else max(1, ceil(len(serving) * 0.1))
+    if worker.status is SchedulerWorkerStatus.Draining:
+        return limit
+    if worker.status is not SchedulerWorkerStatus.Available:
+        return 0
+    available_after = sum(
+        candidate.worker_id != worker.worker_id
+        and candidate.request_intake_status(at=now) is SchedulerWorkerStatus.Available
+        for candidate in serving
+    )
+    required = max(int(platform), len(serving) - limit)
+    return limit if available_after >= required else 0
 
 
 class WorkerRolloutContainers(Protocol):

@@ -1,9 +1,10 @@
-"""CLI progress: one live step at a time, backed by the shared output streams."""
+"""CLI progress backed by the shared output streams."""
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Protocol, runtime_checkable
 
 from rich.console import Group, RenderableType
@@ -29,6 +30,9 @@ class CliTerminal(Terminal):
     _pending: str = field(default="", init=False)
     _remote_pending: str = field(default="", init=False)
     _remote_stream: str = field(default="stdout", init=False)
+    _steps: list[LiveStep] = field(default_factory=list, init=False, repr=False)
+    _live: Live | None = field(default=None, init=False, repr=False)
+    _progress_lock: RLock = field(default_factory=RLock, init=False, repr=False)
 
     def write(self, message: str) -> None:
         if not self.enabled or not message:
@@ -91,9 +95,44 @@ class CliTerminal(Terminal):
         output.error_console.print(theme.styled(message, theme.SUCCESS + theme.EMPHASIS))
 
     def step(self, name: str, summary: str = "") -> TerminalStep:
-        self.flush_remote_output()
-        self._flush_pending()
-        return LiveStep(name=name, terminal=self, summary=summary)
+        with self._progress_lock:
+            self.flush_remote_output()
+            self._flush_pending()
+            return LiveStep(name=name, terminal=self, owner=self, summary=summary)
+
+    def _start_step(self, step: LiveStep) -> None:
+        with self._progress_lock:
+            self._steps.append(step)
+            if self._live is None and self.enabled and _interactive():
+                self._live = Live(
+                    get_renderable=self._render_steps,
+                    console=output.error_console,
+                    refresh_per_second=12,
+                    transient=True,
+                    redirect_stdout=False,
+                    redirect_stderr=False,
+                )
+                self._live.start(refresh=True)
+            self._refresh_steps()
+
+    def _stop_step(self, step: LiveStep) -> None:
+        with self._progress_lock:
+            self._steps = [active for active in self._steps if active is not step]
+            if self._steps:
+                self._refresh_steps()
+            elif self._live is not None:
+                self._live.stop()
+                self._live = None
+            self.flush_remote_output()
+
+    def _refresh_steps(self) -> None:
+        if self._live is not None:
+            self._live.refresh()
+
+    def _render_steps(self) -> RenderableType:
+        # Live renders on its own thread, which stop() joins under _progress_lock.
+        # Snapshot membership without acquiring that lock.
+        return Group(*(step._render_live() for step in tuple(self._steps)))
 
     def _flush_pending(self) -> None:
         if self._pending:
@@ -126,26 +165,16 @@ class LiveStep(TerminalStep):
     _recent: deque[str] = field(
         default_factory=lambda: deque(maxlen=FAILURE_TAIL_LINES), init=False
     )
-    _live: Live | None = field(default=None, init=False)
+    owner: CliTerminal = field(kw_only=True, repr=False)
     _spinner: Spinner = field(default_factory=lambda: Spinner("dots", style=theme.RUNNING))
 
     def __post_init__(self) -> None:
-        if not self.terminal.enabled:
-            return
-        if _interactive():
-            self._live = Live(
-                get_renderable=self._render_live,
-                console=output.error_console,
-                refresh_per_second=12,
-                transient=True,
-                redirect_stdout=False,
-                redirect_stderr=False,
-            )
-            self._live.start(refresh=True)
+        self.owner._start_step(self)
 
     def update(self, summary: str) -> None:
-        self.summary = summary
-        self._refresh()
+        with self.owner._progress_lock:
+            self.summary = summary
+            self.owner._refresh_steps()
 
     def progress(self, completed: int, total: int) -> None:
         if total > 0:
@@ -157,37 +186,30 @@ class LiveStep(TerminalStep):
         text = line.rstrip()
         if not self.terminal.enabled or not text:
             return
-        self._recent.append(text)
-        if self._live is None or debug_errors_enabled():
-            output.error_console.print(Text(f"{_LOG_INDENT}{text}", style=theme.MUTED))
-        else:
-            self._refresh()
+        with self.owner._progress_lock:
+            self._recent.append(text)
+            if self.owner._live is None or debug_errors_enabled():
+                output.error_console.print(Text(f"{_LOG_INDENT}{text}", style=theme.MUTED))
+            else:
+                self.owner._refresh_steps()
 
     def done(self, summary: str = "") -> None:
-        self.finished = True
-        self.summary = summary or self.summary
-        self._stop()
-        self._print_final("✓", theme.SUCCESS)
+        with self.owner._progress_lock:
+            self.finished = True
+            self.summary = summary or self.summary
+            self.owner._stop_step(self)
+            self._print_final("✓", theme.SUCCESS)
 
     def fail(self, summary: str = "") -> None:
-        self.finished = True
-        self.summary = summary or self.summary
-        show_tail = self._live is not None and not debug_errors_enabled()
-        self._stop()
-        if self.terminal.enabled and show_tail:
-            for text in self._recent:
-                output.error_console.print(Text(f"{_LOG_INDENT}{text}", style=theme.MUTED))
-        self._print_final("✗", theme.ERROR)
-
-    def _refresh(self) -> None:
-        if self._live is not None:
-            self._live.refresh()
-
-    def _stop(self) -> None:
-        if self._live is not None:
-            self._live.stop()
-            self._live = None
-        self.terminal.flush_remote_output()
+        with self.owner._progress_lock:
+            self.finished = True
+            self.summary = summary or self.summary
+            show_tail = self.owner._live is not None and not debug_errors_enabled()
+            self.owner._stop_step(self)
+            if self.terminal.enabled and show_tail:
+                for text in self._recent:
+                    output.error_console.print(Text(f"{_LOG_INDENT}{text}", style=theme.MUTED))
+            self._print_final("✗", theme.ERROR)
 
     def _print_final(self, glyph: str, style: Style) -> None:
         if not self.terminal.enabled:

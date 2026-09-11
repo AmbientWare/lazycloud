@@ -5,6 +5,8 @@ from pydantic import Field
 from shared.http.base import HttpModel
 from shared.releases import AgentArtifact
 
+AGENT_RELEASE_GENERATION_HEADER = "X-LazyCloud-Release-Generation"
+
 
 class AgentReleaseRequest(HttpModel):
     agent_token: str = Field(min_length=1, repr=False)
@@ -18,4 +20,4 @@ class AgentReleaseResponse(HttpModel):
     update_agent: bool = False
 
 
-__all__ = ["AgentReleaseRequest", "AgentReleaseResponse"]
+__all__ = ["AGENT_RELEASE_GENERATION_HEADER", "AgentReleaseRequest", "AgentReleaseResponse"]

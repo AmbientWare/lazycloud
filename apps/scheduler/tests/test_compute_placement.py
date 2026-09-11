@@ -18,6 +18,7 @@ from scheduler.state import SchedulerWorkerRequest
 from shared.capacity import (
     CapacityAcquisitionRequest,
     CapacityAcquisitionResult,
+    CapacityFulfillmentRequest,
     CapacityOwnerKind,
     CapacityOwnerSource,
     CapacityPoolSizingSnapshot,
@@ -132,6 +133,9 @@ class _RecordingCapacity:
 @dataclass(slots=True)
 class _RequestedComputeCapacity:
     plans: list[CapacityAcquisitionRequest] = field(default_factory=list)
+
+    def fulfill_acquired_capacity(self, request: CapacityFulfillmentRequest) -> None:
+        raise AssertionError(f"unexpected capacity fulfillment for {request.operation_id}")
 
     def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot:
         raise AssertionError(f"unexpected sizing snapshot read for {capacity_owner_id}")

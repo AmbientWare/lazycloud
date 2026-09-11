@@ -8,7 +8,6 @@ from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial
-from math import ceil
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -122,7 +121,7 @@ from scheduler.state import (
     RedisWorkerPoolStateRepository,
     SchedulerRepositoryError,
 )
-from scheduler.worker_rollout import WorkerWorkloadRolloutService
+from scheduler.worker_rollout import WorkerWorkloadRolloutService, worker_rollout_allowance
 from scheduler.workers import (
     SchedulerWorkerAdminRepository,
     SchedulerWorkerAdminService,
@@ -210,6 +209,7 @@ from shared.logs import LogEntry
 from shared.objects import ObjectRecord
 from shared.realtime.contracts import EventRecordType
 from shared.realtime.streams import LogStreamQuery
+from shared.releases import ActiveRelease
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
     SchedulerContainerStatus,
@@ -2304,6 +2304,16 @@ class GatewayControlService:
             state.capacity_owner_id, workspace_id=state.workspace_id
         )
         worker_id = agent_machine_worker_id(state.machine_id)
+        worker = self.scheduler_worker_lookup.get_worker(worker_id)
+        slots = self.compute_states.list_agent_worker_slot_states(
+            state.workspace_id, state.capacity_owner_id, state.machine_id
+        )
+        authorized_update = worker is None or any(
+            slot.worker_id == worker_id
+            and slot.metadata.get("release_rollout_generation") == release.generation
+            and worker.status is SchedulerWorkerStatus.Draining
+            for slot in slots
+        )
         return AgentReleaseResponse(
             generation=release.generation,
             agent=release.target.agent,
@@ -2311,11 +2321,27 @@ class GatewayControlService:
                 unit.provider == "agent"
                 and release.target.agent is not None
                 and request.binary_sha256 != release.target.agent.sha256
+                and authorized_update
                 and not self._worker_has_started_containers(worker_id)
             ),
         )
 
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse:
+        release = DeploymentReleaseService().active()
+        if release is None:
+            return StreamAgentResponse(
+                ok=False,
+                err_msg="platform release is not active yet",
+                retryable=True,
+                generation=request.generation,
+            )
+        if request.generation > release.generation:
+            return StreamAgentResponse(
+                ok=False,
+                err_msg="agent has observed a newer deployment generation",
+                retryable=True,
+                generation=release.generation,
+            )
         try:
             provided = self._agent_state_for_token(request.agent_token)
             current = (
@@ -2342,11 +2368,15 @@ class GatewayControlService:
             snapshot = plan_agent_stream_snapshot(provided, current, routes, slots)
             current_state = snapshot.current.state
             if not snapshot.current.accepted or current_state is None:
-                return StreamAgentResponse(ok=False, err_msg=snapshot.current.err_msg)
+                return StreamAgentResponse(
+                    ok=False, err_msg=snapshot.current.err_msg, generation=release.generation
+                )
             try:
                 self._require_verified_private_network_identity(current_state)
             except ValueError as exc:
-                return StreamAgentResponse(ok=False, err_msg=str(exc), retryable=True)
+                return StreamAgentResponse(
+                    ok=False, err_msg=str(exc), retryable=True, generation=release.generation
+                )
             heartbeat = plan_agent_heartbeat_touch(current_state)
             if heartbeat.should_save and heartbeat.state is not None:
                 response_state = self._persist_agent_state(heartbeat.state)
@@ -2362,6 +2392,7 @@ class GatewayControlService:
             )
             agent_slots = self._agent_slots_for_machine(
                 response_state,
+                release=release,
                 billing_owner=billing_owner_for_unit(bootstrap_unit),
                 active_worker_images=request.active_worker_images,
                 prepared_worker_images=request.prepared_worker_images,
@@ -2376,9 +2407,10 @@ class GatewayControlService:
                 executor=response_state.executor,
             )
         except (KeyError, ValueError) as exc:
-            return StreamAgentResponse(ok=False, err_msg=str(exc))
+            return StreamAgentResponse(ok=False, err_msg=str(exc), generation=release.generation)
         return StreamAgentResponse(
             ok=True,
+            generation=release.generation,
             credential_id=response_state.credential_id,
             credential_generation=response_state.credential_generation,
             capacity_state=response_state.capacity_state,
@@ -2474,6 +2506,7 @@ class GatewayControlService:
         self,
         agent_state: ComputeAgentTokenState,
         *,
+        release: ActiveRelease,
         billing_owner: UsageBillingOwner,
         active_worker_images: Mapping[str, str],
         prepared_worker_images: Sequence[str],
@@ -2488,9 +2521,6 @@ class GatewayControlService:
         worker_id = agent_machine_worker_id(agent_state.machine_id)
         existing = next((slot for slot in slots if slot.worker_id == worker_id), None)
 
-        release = DeploymentReleaseService().active()
-        if release is None:
-            return slots
         target_image = release.target.worker_image
         agent_current = (
             release.target.agent is None or agent_binary_sha256 == release.target.agent.sha256
@@ -2508,7 +2538,7 @@ class GatewayControlService:
         if (
             worker is not None
             and active_image == target_image
-            and worker.status is SchedulerWorkerStatus.Available
+            and worker.request_intake_status(at=utc_now()) is SchedulerWorkerStatus.Available
         ):
             self.scheduler_worker_lookup.release_worker_rollout_slot(
                 worker.capacity_owner_id,
@@ -2626,25 +2656,17 @@ class GatewayControlService:
             with (
                 self.capacity_reservations.mutation_lock(worker.capacity_owner_id),
                 self.capacity_reservations.dispatch_lock(worker.capacity_owner_id),
+                self.services.compute.worker_maintenance_admission(
+                    worker.workspace_id, worker.capacity_owner_id, worker.machine_id
+                ),
             ):
                 current = self.scheduler_worker_lookup.get_worker(worker.worker_id)
                 if current is None or current.capacity_owner_id != worker.capacity_owner_id:
                     return worker, False
-                fleet = [
-                    item
-                    for item in self.scheduler_worker_lookup.list_workers()
-                    if item.capacity_owner_id == worker.capacity_owner_id
-                    and item.status
-                    in {SchedulerWorkerStatus.Available, SchedulerWorkerStatus.Draining}
-                ]
-                max_unavailable = max(1, ceil(len(fleet) * 0.1))
-                if current.status is SchedulerWorkerStatus.Available:
-                    available = sum(
-                        item.status is SchedulerWorkerStatus.Available for item in fleet
-                    )
-                    if available - 1 < len(fleet) - max_unavailable:
-                        return current, False
-                elif current.status is not SchedulerWorkerStatus.Draining:
+                max_unavailable = worker_rollout_allowance(
+                    current, self.scheduler_worker_lookup.list_workers(), now=current_time
+                )
+                if not max_unavailable:
                     return current, False
                 claimed = self.scheduler_worker_lookup.claim_worker_rollout_slot(
                     current.capacity_owner_id,
@@ -2700,6 +2722,15 @@ class GatewayControlService:
                 )
             ):
                 return True
+        with self.services.context.database.session() as session:
+            assigned = ContainerRepository(session).list_live_runtime_assignments(worker_id)
+            for container in assigned:
+                if container.status is ContainerStatus.Running:
+                    return True
+                if not self.scheduler_worker_lookup.has_recoverable_container_request(
+                    container.id, worker_id=worker_id
+                ):
+                    return True
         return False
 
     def _agent_machine_worker(

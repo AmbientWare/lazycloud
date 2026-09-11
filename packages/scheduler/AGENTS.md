@@ -7,6 +7,20 @@ repositories.
 Durable history belongs to explicit database owners. Endpoint, pod, gateway,
 worker, and process composition belongs to apps.
 
+PostgreSQL owns the scheduling request, its capacity retry generation, and the
+worker assignment. Redis publishes and leases that work. Dispatch records unmet
+demand; the capacity loop performs provider calls. Recovery republishes only
+unassigned requests, preserving their original timestamp and executable payload.
+
+An uncertain queue commit retains its PostgreSQL assignment. Clearing it requires
+the assignment token and proof that delivery did not occur. The same transaction
+may clear provisional billing placement only before usage or ledger facts exist.
+Missing Redis state never authorizes a second worker to execute the container.
+Stop confirmed orphans through the container service, which notifies their
+assigned worker and releases invocation claims under the scheduler retry policy.
+Pending assignments retain delivery and startup deadlines even when their
+worker is healthy and their Redis state survives.
+
 Everything here is concurrent by nature. Leases, assignment, retries, and
 terminal cancellation have to hold when two schedulers race, when a worker dies
 mid-task, and when a lease expires under work that is still running. Prefer a

@@ -62,6 +62,7 @@ from shared.http.gateway import AgentCapacityInterruptionRequest
 from shared.identity import TokenKind, WorkspaceStatus
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
+from shared.usage import UsageBillingOwner
 from tests.real_redis import RealRedisActors
 from tests.releases import select_worker_release
 from tests.workspaces import administrator_credential, owned_workspace, workspace_owner_user_id
@@ -293,6 +294,7 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
             workspace_id=workspace_id,
             machine_id=joined.machine_id,
             status=SchedulerWorkerStatus.Available,
+            billing_owner=UsageBillingOwner.SelfHosted,
         )
     )
     current_image = {worker_id: "registry.test/worker@sha256:old"}

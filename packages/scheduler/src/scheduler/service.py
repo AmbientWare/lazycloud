@@ -25,6 +25,7 @@ from identity.auth import AuthService
 from identity.device_auth import DeviceAuthorizationService
 from observability.usage import WorkerEventService
 from pydantic import Field, JsonValue
+from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.cron import CronJobRecord, CronJobRun, next_cron_run
@@ -33,7 +34,7 @@ from shared.events import EventLevel
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody, FunctionInvokeResponse
 from shared.http.workspace_changes import WorkspaceChangeType
-from shared.scheduling import SchedulerWorkerRequest, WorkerRemovalResult
+from shared.scheduling import SchedulerWorkerRequest, SchedulerWorkerStatus, WorkerRemovalResult
 from shared.tasks import Task
 from shared.timestamps import utc_now
 from shared.worker_events import (
@@ -46,6 +47,8 @@ from scheduler.agent_pool import (
     SchedulerAgentPoolService,
 )
 from scheduler.autoscaling import (
+    CONTAINER_DELIVERY_DEADLINE_SECONDS,
+    CONTAINER_START_DEADLINE_SECONDS,
     AutoscaleResult,
     AutoscalingDriver,
     AutoscalingPlacementSnapshot,
@@ -744,9 +747,12 @@ class Scheduler:
 
         if not include_containers:
             return SchedulerRunResult()
+        current_time = now or utc_now()
+        self.container_scheduler.recover_scheduling_requests(
+            now=current_time, limit=container_limit
+        )
         if self.workloads.image_builds is not None:
             self.workloads.image_builds.drain(limit=container_limit)
-        current_time = now or utc_now()
         function_driver = self.workloads.function_autoscaler
         endpoint_driver = self.workloads.endpoints
         pod_driver = self.workloads.pods
@@ -882,6 +888,7 @@ class Scheduler:
                 billing_enforcement_stopped_count=billing_enforcement.stopped_count,
                 billing_enforcement_failure_count=billing_enforcement.failed_count,
             )
+        self.container_scheduler.acquire_capacity(now=now, limit=container_limit)
         return SchedulerRunResult(
             cron_job_runs=cron_job_runs,
             app_lifecycle_reconciliations=self._best_effort_reconcile_app_lifecycle(
@@ -1378,14 +1385,35 @@ class Scheduler:
             return []
         self.last_orphaned_container_reconcile_at = current_time
 
+        failed: list[str] = []
+        expired = request_service.assignments.expired_assignments(
+            before=current_time - timedelta(seconds=CONTAINER_DELIVERY_DEADLINE_SECONDS),
+            limit=500,
+        )
+        for container, assigned_at in expired:
+            recoverable = request_service.workers.has_recoverable_container_request(
+                container.id, worker_id=container.runtime_worker_id
+            )
+            if (
+                not recoverable
+                and (current_time - assigned_at).total_seconds() < CONTAINER_START_DEADLINE_SECONDS
+            ):
+                continue
+            stopped = self.runtime_services.containers.stop(
+                container.id,
+                reason=StopContainerReason.Scheduler,
+                only_if_pending=True,
+            )
+            if stopped.status is ContainerStatus.Stopped:
+                failed.append(container.id)
+
         confirmations = self.states.orphaned_container_confirmations
         if confirmations is None:
-            return []
+            return failed
         active = self.runtime_services.containers.list(
             statuses=(ContainerStatus.Pending, ContainerStatus.Running),
         )
 
-        failed: list[str] = []
         for container in active:
             state = request_service.containers.get_container_state(container.id)
             recoverable_request = request_service.workers.has_recoverable_container_request(
@@ -1395,6 +1423,15 @@ class Scheduler:
             if state is not None or recoverable_request:
                 confirmations.forget(container.id)
                 continue
+            if container.runtime_worker_id:
+                worker = request_service.workers.get_worker(container.runtime_worker_id)
+                if (
+                    worker is not None
+                    and worker.request_intake_status(at=current_time)
+                    is SchedulerWorkerStatus.Available
+                ):
+                    confirmations.forget(container.id)
+                    continue
             observed_at = confirmations.first_observed_at(
                 container.id,
                 now=current_time,
@@ -1414,15 +1451,21 @@ class Scheduler:
                 stub_id=container.stub_id or "container",
                 container_id=container.id,
             )
-            request_service.containers.delete_container_state(container.id)
-            orphaned_container_networks = self.states.orphaned_container_networks
-            if orphaned_container_networks is not None:
-                orphaned_container_networks.remove_container_ips(container.id)
-            request_service.failure_handler.mark_scheduling_failed(
-                request,
-                ORPHANED_CONTAINER_FAILURE_REASON,
-                now=current_time,
-            )
+            if container.runtime_worker_id or container.status is ContainerStatus.Running:
+                self.runtime_services.containers.stop(
+                    container.id, reason=StopContainerReason.Scheduler
+                )
+            else:
+                if not request_service.failure_handler.mark_scheduling_failed(
+                    request,
+                    ORPHANED_CONTAINER_FAILURE_REASON,
+                    now=current_time,
+                ):
+                    continue
+                request_service.containers.delete_container_state(container.id)
+                orphaned_container_networks = self.states.orphaned_container_networks
+                if orphaned_container_networks is not None:
+                    orphaned_container_networks.remove_container_ips(container.id)
             failed.append(container.id)
         return failed
 

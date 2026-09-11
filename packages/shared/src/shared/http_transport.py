@@ -26,6 +26,12 @@ from shared.http.errors import (
 _JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
+@dataclass(frozen=True, slots=True)
+class HttpResponse:
+    payload: JsonValue
+    headers: Mapping[str, str]
+
+
 def build_http_ssl_context() -> ssl.SSLContext:
     context = ssl.create_default_context()
     context.load_verify_locations(cafile=certifi.where())
@@ -76,10 +82,23 @@ class HttpChannel:
         payload: Mapping[str, JsonValue] | None = None,
         timeout_seconds: float | None = None,
     ) -> JsonValue:
+        return self.request_response(
+            method, path, payload=payload, timeout_seconds=timeout_seconds
+        ).payload
+
+    def request_response(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: Mapping[str, JsonValue] | None = None,
+        headers: Mapping[str, str] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> HttpResponse:
         data = _encode_payload(payload)
-        headers = _request_headers(
+        request_headers = _request_headers(
             self.token,
-            {"Content-Type": "application/json"},
+            {"Content-Type": "application/json", **(headers or {})},
         )
         url = self._request_url(path)
         try:
@@ -87,11 +106,11 @@ class HttpChannel:
                 method.upper(),
                 url,
                 content=data,
-                headers=headers,
+                headers=request_headers,
                 timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
             ) as response:
                 _check_response(response)
-                return _decode_response(response)
+                return HttpResponse(_decode_response(response), response.headers)
         except httpx.RequestError as exc:
             raise HttpTransportError(method, url, str(exc)) from exc
 

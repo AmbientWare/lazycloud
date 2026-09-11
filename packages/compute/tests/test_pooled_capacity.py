@@ -16,7 +16,7 @@ from compute.capacity_errors import (
     CapacityReservationConflictError,
     CapacityReservationLeaseLostError,
 )
-from compute.fleet_policy import FleetCapacityPolicy
+from compute.fleet_policy import FleetCapacityPolicy, WarmCapacityUnit, plan_warm_capacity
 from compute.offers import ComputeOffer
 from compute.policy import WorkspaceComputePolicyService
 from compute.providers import (
@@ -60,7 +60,14 @@ from database.repositories.source_cache import SourceCacheCleanupRepository
 from provider_aws import AwsManagedPoolBinaries, Boto3AwsManagedPoolClientProvider
 from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
 from provider_clients.workspace_compute import WorkspaceComputeProviderResolver
-from scheduler.capacity_reservations import RedisCapacityReservationRepository
+from scheduler.capacity_reservations import (
+    CapacityRequestShape,
+    CapacityReservationService,
+    CapacityReservationStatus,
+    ComputeUnitCapacityController,
+    RedisCapacityReservationRepository,
+)
+from scheduler.state import RedisSchedulerWorkerRepository
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -73,6 +80,7 @@ from shared.capacity import (
     CapacityAcquisitionRequest,
     CapacityAcquisitionShape,
     CapacityAcquisitionStatus,
+    CapacityOperationStatus,
     CapacityReleaseRequest,
 )
 from shared.compute_enrollment import (
@@ -98,6 +106,7 @@ from shared.compute_policy import (
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.network_egress import NetworkEgressRouteEvidence
+from shared.scheduling import SchedulerWorkerRequest
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.supplier_costs import SupplierCostTerms
 from tests.real_redis import RealRedisActors
@@ -377,6 +386,10 @@ class _SchedulerHooks:
             return MachineWorkerAvailability.Unknown
         return MachineWorkerAvailability.Unavailable
 
+    def machine_has_worker_update(self, machine_id: str) -> bool:
+        del machine_id
+        return False
+
     def agent_intake_observing_since(self) -> datetime | None:
         return self.intake_observing_since
 
@@ -424,6 +437,7 @@ def test_internal_pool_scale_enforces_fleet_capacity_across_providers(
         provider_resolver=resolver,
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
+        fleet_policy=FleetCapacityPolicy(max_cpu_instances=max(initial_desired, 4)),
     )
     pool = compute.prepare_pooled_capacity(
         workspace="default",
@@ -766,6 +780,8 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
         "hetzner:cheap": 1,
         "hetzner:regular": 0,
     }
+    regular = next(unit for unit in units if unit.provider_ref == "hetzner:regular")
+    compute.scale_internal_unit(workspace_id, regular.id, 0, before_mutation=_allow_scale)
 
     cheap = next(unit for unit in units if unit.provider_ref == "hetzner:cheap")
     compute.reconcile_unit_capacity(cheap.id, now=now + timedelta(seconds=2))
@@ -1489,7 +1505,7 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
                 reservation_id=str(uuid4()),
                 operation_id=str(uuid4()),
                 desired_unit=1,
-                status="requested",
+                status=CapacityOperationStatus.Requested,
                 owns_capacity=True,
             )
         )
@@ -1710,6 +1726,109 @@ def test_platform_growth_checks_workload_rates_and_new_quotes_without_blocking_d
         pool.workspace_id, pool.capacity_owner_id, 0, before_mutation=_allow_scale
     )
     assert provider.desired == 0
+
+
+def test_registered_reservation_transfers_purchase_ownership_durably(
+    committed_service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    context = committed_service_context
+    _seed_connection(context)
+    provider = _PooledProvider()
+    redis = real_redis_actors.client()
+    reservations = RedisCapacityReservationRepository(redis)
+    workers = RedisSchedulerWorkerRepository(redis)
+    hooks = _SchedulerHooks()
+    compute = ComputeService(
+        context,
+        provider_resolver=_Resolver(provider, context),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=reservations,
+        scheduler_hooks=hooks,
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        root_volume_gib=200,
+    )
+    now = datetime.now(UTC)
+    request = SchedulerWorkerRequest(
+        container_id=str(uuid4()),
+        workspace_id=pool.workspace_id,
+        stub_id=str(uuid4()),
+        cpu_millicores=1_000,
+        memory_mib=256,
+        timestamp=now,
+    )
+    with reservations.mutation_lock(pool.capacity_owner_id):
+        decision = reservations.reserve(
+            capacity_owner_id=pool.capacity_owner_id,
+            pool=pool.pool,
+            owner_kind=pool.capacity_owner_kind,
+            request=request,
+            shape=CapacityRequestShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
+            registration_timeout=timedelta(minutes=10),
+            now=now,
+        )
+    acquisition = CapacityAcquisitionRequest(
+        capacity_owner_id=pool.capacity_owner_id,
+        reservation_id=decision.reservation.id,
+        operation_id=decision.reservation.operation_id,
+        shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
+    )
+    assert compute.ensure_capacity(acquisition).owns_capacity
+    machine_id = str(uuid4())
+    _seed_serving_machine(
+        context,
+        pool,
+        hooks,
+        machine_id=machine_id,
+        instance_id="i-00000000000000000",
+        now=now,
+    )
+    with reservations.mutation_lock(pool.capacity_owner_id):
+        reservations.update(
+            decision.reservation.model_copy(
+                update={
+                    "status": CapacityReservationStatus.Registered,
+                    "acquisition_created": True,
+                    "target_machine_id": machine_id,
+                    "target_worker_id": agent_machine_worker_id(machine_id),
+                }
+            ),
+            expected_resource_version=decision.reservation.resource_version,
+            now=now,
+        )
+        reservations.release_allocation(
+            request.container_id, expected_reservation_id=decision.reservation.id
+        )
+    controller = ComputeUnitCapacityController(pool.workspace_id, pool, compute, workers)
+    service = CapacityReservationService(reservations, lambda: (controller,))
+    service.reconcile([], now=now)
+    service.reconcile([], now=now)
+    with context.database.session() as session:
+        repository = ComputeCapacityOperationRepository(session)
+        operation = repository.get(pool.capacity_owner_id, acquisition.operation_id)
+        assert operation is not None
+        assert operation.status is CapacityOperationStatus.Fulfilled
+        assert operation.target_machine_id == machine_id
+        assert operation.fulfilled_at is not None
+        assert not operation.owns_capacity
+        assert repository.list_open_for_owner(pool.capacity_owner_id) == []
+        with pytest.raises(ConflictError, match="cannot be reopened"):
+            repository.upsert(
+                operation.model_copy(update={"status": CapacityOperationStatus.Requested})
+            )
+    compute.release_acquired_capacity(
+        CapacityReleaseRequest(
+            capacity_owner_id=pool.capacity_owner_id,
+            reservation_id=acquisition.reservation_id,
+            operation_id=acquisition.operation_id,
+        )
+    )
+    assert provider.desired == 1
 
 
 @pytest.mark.parametrize("replacement", [False, True])
@@ -2571,16 +2690,13 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
     assert still_degraded.provider_state.degraded_reason == "bootstrap_launch_attempts_exhausted"
     assert provider.desired == 0
     assert len(provider.ensure_calls) == ensure_calls_before_exhaustion
-    # After the relaunch interval the pool buys machines again on its own, and
-    # the next failure counts from this point rather than degrading it at once.
     compute.reconcile_pooled_capacity(now=moment + timedelta(seconds=601))
     with service_context.database.session() as session:
         relaunching = ComputeUnitRepository(session).get(pool.id)
     assert relaunching is not None
-    assert relaunching.provider_state.degraded_reason is None
-    assert relaunching.provider_state.launch_attempt_baseline == 2
-    assert relaunching.provider_state.degraded_at is None
-    assert len(provider.ensure_calls) > ensure_calls_before_exhaustion
+    assert relaunching.provider_state.degraded_reason == "bootstrap_launch_attempts_exhausted"
+    assert relaunching.provider_state.degraded_at == degraded.provider_state.degraded_at
+    assert provider.desired == 0
 
     scaled = compute.scale_internal_unit(
         pool.workspace_id,
@@ -3046,6 +3162,124 @@ def test_empty_pool_retirement_preserves_customer_owned_pools(
     assert stored.created_at == pool.created_at
     assert stored.capacity_owner_id == pool.capacity_owner_id
     assert (pool.id in {unit.id for unit in compute.list_units()}) is not retired
+
+
+def test_failed_empty_market_retires_and_only_new_demand_reopens_it(
+    service_context: ServiceContext,
+) -> None:
+    _seed_connection(service_context, platform_fleet=True)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    requirements = ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024)
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=requirements,
+        region="us-east-1",
+        desired_machines=0,
+        root_volume_gib=200,
+    )
+    failed_at = datetime.now(UTC) - timedelta(seconds=pool.registration_timeout_seconds + 1)
+    with service_context.database.session() as session:
+        ComputeUnitRepository(session).upsert(
+            pool.model_copy(
+                update={
+                    "phase": ComputeUnitPhase.Degraded,
+                    "provider_state": pool.provider_state.model_copy(
+                        update={
+                            "degraded_reason": "provider_acquisition_rejected",
+                            "degraded_at": failed_at,
+                        }
+                    ),
+                }
+            )
+        )
+    now = pool.created_at + timedelta(seconds=pool.idle_drain_timeout_seconds + 1)
+    retired = compute.reconcile_unit_capacity(pool.id, now=now)
+    assert retired is not None and retired.phase is ComputeUnitPhase.Deleted
+    assert retired.provider_state.degraded_at == failed_at
+    assert compute.reconcile_unit_capacity(pool.id, now=now + timedelta(hours=1)) is None
+    assert provider.desired == 0
+    revived = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=requirements,
+        region="us-east-1",
+        desired_machines=1,
+        root_volume_gib=200,
+    )
+    assert revived.generation == retired.generation + 1
+    assert revived.provider_state.degraded_reason is None
+    assert revived.desired_machines == 1
+
+
+def test_warm_handoff_keeps_one_surge_until_retiring_assets_are_gone() -> None:
+    old_id, target_id = str(uuid4()), str(uuid4())
+    old = WarmCapacityUnit(old_id, desired=2, committed=2, ready=2, floor=2, eligible=False)
+    first = plan_warm_capacity(
+        (old,),
+        target_unit_id=target_id,
+        minimum=2,
+        fleet_baseline=2,
+        fleet_limit=4,
+        fleet_committed=2,
+        maintenance_busy=False,
+    )
+    assert first.target_machines == 1
+    assert first.floors == {old_id: 2, target_id: 1}
+    assert first.handoff_from == (old_id,)
+    new = WarmCapacityUnit(
+        target_id,
+        desired=1,
+        committed=1,
+        ready=1,
+        floor=1,
+        eligible=True,
+        handoff_from=first.handoff_from,
+    )
+    while_retiring = plan_warm_capacity(
+        (old, new),
+        target_unit_id=target_id,
+        minimum=2,
+        fleet_baseline=2,
+        fleet_limit=4,
+        fleet_committed=3,
+        maintenance_busy=False,
+    )
+    assert while_retiring.target_machines == 1
+    assert while_retiring.floors == {old_id: 1, target_id: 1}
+    settled_old = WarmCapacityUnit(
+        old_id,
+        desired=1,
+        committed=1,
+        ready=1,
+        floor=1,
+        eligible=False,
+    )
+    next_machine = plan_warm_capacity(
+        (settled_old, new),
+        target_unit_id=target_id,
+        minimum=2,
+        fleet_baseline=2,
+        fleet_limit=4,
+        fleet_committed=2,
+        maintenance_busy=False,
+    )
+    assert next_machine.target_machines == 2
+    assert next_machine.floors == {old_id: 1, target_id: 2}
+    while_updating = plan_warm_capacity(
+        (old,),
+        target_unit_id=target_id,
+        minimum=2,
+        fleet_baseline=2,
+        fleet_limit=4,
+        fleet_committed=2,
+        maintenance_busy=True,
+    )
+    assert while_updating.target_machines == 0
 
 
 def test_retirement_cannot_revive_until_provider_deletion_finishes(

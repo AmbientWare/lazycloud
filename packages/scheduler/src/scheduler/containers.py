@@ -16,7 +16,9 @@ from coordination.wake_signal import WakeSignalPublisher
 from pydantic import JsonValue
 from shared.billing_quotes import ContainerShape
 from shared.container_requests import capacity_memory_mib
+from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
+from shared.errors import ConflictError
 from shared.http.task_progress import TaskPendingProgress, TaskPendingReason
 from shared.placement import PlacementRateClass, placement_rate_class
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
@@ -56,7 +58,9 @@ from scheduler.state import (
     ConcurrencyReservationStatus,
     ContainerRequestCancelledError,
     ContainerRequestClaimNotOwnedError,
+    ContainerRequestDispatchRejectedError,
     SchedulerContainerRequestClaim,
+    SchedulerRepositoryError,
     WorkerRequestCancellation,
     WorkerReservedCapacity,
 )
@@ -94,6 +98,8 @@ class SchedulerContainerDispatchResult(ContractModel):
 
 
 class SchedulerContainerStateRepository(Protocol):
+    def dispatch_lock(self, container_id: str) -> AbstractContextManager[None]: ...
+
     def record_pending_progress(
         self, container_id: str, reason: TaskPendingReason, *, now: datetime
     ) -> bool: ...
@@ -219,10 +225,40 @@ class SchedulerContainerFailureHandler(Protocol):
         reason: str,
         *,
         now: datetime | None = None,
-    ) -> None: ...
+    ) -> bool: ...
 
 
 class SchedulerContainerAssignmentRecorder(Protocol):
+    def expired_assignments(
+        self, *, before: datetime, limit: int
+    ) -> list[tuple[ContainerRecord, datetime]]: ...
+
+    def record_scheduling_request(
+        self, request: SchedulerWorkerRequest, *, now: datetime
+    ) -> bool: ...
+
+    def recoverable_scheduling_requests(
+        self, *, now: datetime, limit: int
+    ) -> list[SchedulerWorkerRequest]: ...
+
+    def scheduling_request_reconciled(self, container_id: str, *, retry_at: datetime) -> None: ...
+
+    def request_capacity(
+        self, request: SchedulerWorkerRequest, *, now: datetime
+    ) -> SchedulerWorkerRequest: ...
+
+    def capacity_requests_due(
+        self, *, now: datetime, limit: int
+    ) -> list[SchedulerWorkerRequest]: ...
+
+    def capacity_request_due(
+        self, container_id: str, *, now: datetime
+    ) -> SchedulerWorkerRequest | None: ...
+
+    def record_capacity_attempt(
+        self, request: SchedulerWorkerRequest, *, retry_at: datetime
+    ) -> None: ...
+
     def publish_pending_progress(self, container_id: str) -> None: ...
 
     def assign_runtime(
@@ -232,6 +268,9 @@ class SchedulerContainerAssignmentRecorder(Protocol):
         workspace_id: str,
         runtime_worker_id: str,
         runtime_machine_id: str,
+        assignment_token: str,
+        assigned_at: datetime,
+        backfill: bool,
         compute_worker_id: str | None = None,
         compute_machine_id: str | None = None,
         shape: ContainerShape | None = None,
@@ -242,7 +281,8 @@ class SchedulerContainerAssignmentRecorder(Protocol):
         *,
         container_id: str,
         runtime_worker_id: str,
-    ) -> None: ...
+        assignment_token: str,
+    ) -> bool: ...
 
 
 class SchedulerContainerLifecycleEvents(Protocol):
@@ -266,6 +306,8 @@ class SchedulerWorkspaceOwners(Protocol):
 
 
 class SchedulerCapacityReservations(Protocol):
+    def mutation_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
+
     def dispatch_lock(
         self,
         capacity_owner_id: str,
@@ -370,37 +412,45 @@ class SchedulerContainerRequestService:
                 reason="container request was cancelled",
             )
         try:
-            quota_error = self._reserve_quota(request, current_time)
+            quota_reserved, quota_error = self._reserve_quota(request, current_time)
             if quota_error:
                 return SchedulerContainerSubmitResult(
                     status=SchedulerContainerSubmitStatus.Error,
                     container_id=request.container_id,
                     reason=quota_error,
                 )
-            quota_reserved = _request_uses_quota(request)
+            awaiting_dispatch = self.assignments.record_scheduling_request(
+                request, now=current_time
+            )
+        except Exception as exc:
+            if quota_reserved:
+                self.containers.release_concurrency_reservation(
+                    request.workspace_id,
+                    request.container_id,
+                    now=current_time,
+                )
+            return SchedulerContainerSubmitResult(
+                status=SchedulerContainerSubmitStatus.Error,
+                container_id=request.container_id,
+                reason=str(exc),
+            )
+        if not awaiting_dispatch:
+            return SchedulerContainerSubmitResult(
+                status=SchedulerContainerSubmitStatus.Queued,
+                container_id=request.container_id,
+                reason="container scheduling request was already accepted",
+            )
+        try:
             self.containers.initialize_container_state(
-                _container_state(request, scheduled_at=current_time)
+                container_state_for_request(request, scheduled_at=current_time)
             )
             self.workers.enqueue_container_request(request, ready_at=current_time)
             self._record_usage(request, UsageMetric.SchedulerContainerScheduled)
         except Exception as exc:
-            release_error = ""
-            if quota_reserved:
-                try:
-                    self.containers.release_concurrency_reservation(
-                        request.workspace_id,
-                        request.container_id,
-                        now=current_time,
-                    )
-                except Exception as release_exc:  # pragma: no cover - defensive rollback path
-                    release_error = (
-                        f"; failed to release concurrency reservation: "
-                        f"{type(release_exc).__name__}: {release_exc}"
-                    )
-            return SchedulerContainerSubmitResult(
-                status=SchedulerContainerSubmitStatus.Error,
-                container_id=request.container_id,
-                reason=f"{exc}{release_error}",
+            LOGGER.warning(
+                "durable scheduling request awaits queue publication: %s",
+                request.container_id,
+                exc_info=exc,
             )
         self._signal_dispatch(request.container_id)
         return SchedulerContainerSubmitResult(
@@ -524,15 +574,9 @@ class SchedulerContainerRequestService:
                     )
                 )
             except Exception as exc:
-                reason = self._fail_request(request, str(exc), current_time)
+                failure = self._fail_request(request, str(exc), current_time)
                 self._acknowledge(claim)
-                placement_failures.append(
-                    SchedulerContainerDispatchResult(
-                        status=SchedulerContainerDispatchStatus.Failed,
-                        container_id=request.container_id,
-                        reason=reason,
-                    )
-                )
+                placement_failures.append(failure)
         claims = placed_claims
         cancelled = [
             claim
@@ -642,11 +686,11 @@ class SchedulerContainerRequestService:
                     results.append(recovered)
                     continue
             if outcome.decision is SchedulingDecision.ProvisionWorker:
-                results.append(self._acquire_capacity(claim, current_time))
+                results.append(self._request_capacity(claim, current_time))
                 continue
             retry = self._plan_requeue(request, outcome, current_time)
             if retry.action is SchedulerRequeueAction.Fail:
-                failure_reason = self._fail_request(
+                failure = self._fail_request(
                     request,
                     _placement_failure_detail(
                         retry.reason.value,
@@ -658,14 +702,7 @@ class SchedulerContainerRequestService:
                     current_time,
                 )
                 self._acknowledge(claim)
-                results.append(
-                    SchedulerContainerDispatchResult(
-                        status=SchedulerContainerDispatchStatus.Failed,
-                        container_id=request.container_id,
-                        worker_id=outcome.worker_id or "",
-                        reason=failure_reason,
-                    )
-                )
+                results.append(failure)
                 continue
             self._requeue(
                 claim,
@@ -693,6 +730,34 @@ class SchedulerContainerRequestService:
                 current_time,
             )
         return results
+
+    def recover_scheduling_requests(self, *, now: datetime, limit: int) -> int:
+        recovered = 0
+        for request in self.assignments.recoverable_scheduling_requests(now=now, limit=limit):
+            try:
+                with self.containers.dispatch_lock(request.container_id):
+                    if not self.assignments.record_scheduling_request(request, now=now):
+                        continue
+                    state = self.containers.get_container_state(request.container_id)
+                    if state is not None and state.worker_id:
+                        self.containers.set_container_state(
+                            container_state_for_request(request, scheduled_at=now)
+                        )
+                    if not self.workers.has_recoverable_container_request(request.container_id):
+                        _, quota_error = self._reserve_quota(request, now)
+                        if not quota_error:
+                            self.containers.set_container_state(
+                                container_state_for_request(request, scheduled_at=now)
+                            )
+                            if self.workers.enqueue_container_request(request, ready_at=now):
+                                recovered += 1
+            except SchedulerRepositoryError:
+                continue
+            self.assignments.scheduling_request_reconciled(
+                request.container_id,
+                retry_at=now + timedelta(seconds=5),
+            )
+        return recovered
 
     def _dispatch_backfill(
         self,
@@ -809,27 +874,88 @@ class SchedulerContainerRequestService:
             results.append(self._dispatch(claim, worker, now=now))
         return remaining, results
 
-    def _acquire_capacity(
+    def _request_capacity(
         self,
         claim: SchedulerContainerRequestClaim,
         current_time: datetime,
     ) -> SchedulerContainerDispatchResult:
-        if self.capacity_reservations is None:
-            raise RuntimeError("scheduler capacity reservation service was not injected")
         request = claim.request
-        if request.capacity_retry_at is not None and current_time < request.capacity_retry_at:
-            self._requeue(
-                claim,
-                current_time,
-                retry_count=request.retry_count,
-                capacity_retry_at=request.capacity_retry_at,
-            )
+        try:
+            demand = self.assignments.request_capacity(request, now=current_time)
+        except ConflictError as exc:
+            self._acknowledge(claim)
             return SchedulerContainerDispatchResult(
                 status=SchedulerContainerDispatchStatus.Waiting,
                 container_id=request.container_id,
-                reason="waiting for capacity acquisition retry",
+                reason=str(exc),
             )
-        acquisition_failed = False
+        retry = self._plan_requeue(
+            request.model_copy(update={"retry_count": demand.retry_count}),
+            SchedulingOutcome(
+                request_id=request.container_id,
+                decision=SchedulingDecision.WaitForWorker,
+                requeue_delay_seconds=self.requeue_delay_seconds,
+            ),
+            current_time,
+        )
+        if retry.action is SchedulerRequeueAction.Fail:
+            failure = self._fail_request(request, retry.reason.value, current_time)
+            self._acknowledge(claim)
+            return failure
+        self._requeue(
+            claim,
+            current_time,
+            retry_count=demand.retry_count,
+            capacity_retry_at=demand.capacity_retry_at,
+        )
+        return SchedulerContainerDispatchResult(
+            status=SchedulerContainerDispatchStatus.Waiting,
+            container_id=request.container_id,
+            reason="capacity demand recorded; ready workers remain eligible",
+        )
+
+    def acquire_capacity(self, *, now: datetime | None = None, limit: int = 100) -> int:
+        capacity = self.capacity_reservations
+        if capacity is None:
+            return 0
+        current_time = now or utc_now()
+        acquired = 0
+        for candidate in self.assignments.capacity_requests_due(now=current_time, limit=limit):
+            try:
+                with capacity.mutation_lock(f"demand:{candidate.container_id}"):
+                    request = self.assignments.capacity_request_due(
+                        candidate.container_id, now=current_time
+                    )
+                    if request is None:
+                        continue
+                    result = self._acquire_capacity_request(request, current_time)
+                    retry_at = (now or utc_now()) + timedelta(
+                        seconds=max(result.retry_delay_seconds, self.requeue_delay_seconds)
+                    )
+                    rejected = result.status in {
+                        CapacityAcquisitionStatus.Rejected,
+                        CapacityAcquisitionStatus.Unsupported,
+                        CapacityAcquisitionStatus.AtLimit,
+                    }
+                    self.assignments.record_capacity_attempt(
+                        request.model_copy(
+                            update={
+                                "retry_count": request.retry_count + int(rejected),
+                                "capacity_retry_at": retry_at,
+                            }
+                        ),
+                        retry_at=retry_at,
+                    )
+                    acquired += 1
+            except CapacityReservationConflictError:
+                continue
+        return acquired
+
+    def _acquire_capacity_request(
+        self, request: SchedulerWorkerRequest, current_time: datetime
+    ) -> CapacityAcquisitionResult:
+        if self.capacity_reservations is None:
+            raise RuntimeError("scheduler capacity reservation service was not injected")
         try:
             result = self.capacity_reservations.acquire(
                 request,
@@ -837,7 +963,6 @@ class SchedulerContainerRequestService:
                 now=current_time,
             )
         except CapacityReservationConflictError as exc:
-            acquisition_failed = True
             result = CapacityAcquisitionResult(
                 status=CapacityAcquisitionStatus.ExistingPending,
                 reservation_id=request.container_id,
@@ -846,11 +971,6 @@ class SchedulerContainerRequestService:
                 reason=f"capacity-owner mutation is in progress: {exc}",
             )
         except Exception as exc:
-            acquisition_failed = True
-            # The reason reaches the caller as a task error, and a type name
-            # alone cannot be acted on: it names neither the capacity owner nor
-            # what the acquisition rejected. Keep the caller's contract and put
-            # the exception where it can be read.
             LOGGER.exception(
                 "capacity acquisition failed for container %s in pool %s",
                 request.container_id,
@@ -861,43 +981,14 @@ class SchedulerContainerRequestService:
                 reservation_id=request.container_id,
                 operation_id=request.container_id,
                 retry_delay_seconds=DEFAULT_PROVISIONING_HANDOFF.total_seconds(),
-                reason=f"capacity acquisition failed: {type(exc).__name__}: {exc}",
+                reason=f"capacity acquisition failed: {type(exc).__name__}",
             )
         waiting = result.status in {
             CapacityAcquisitionStatus.ExistingPending,
             CapacityAcquisitionStatus.Requested,
         }
-        synthetic_outcome = SchedulingOutcome(
-            request_id=request.container_id,
-            decision=(
-                SchedulingDecision.WaitForWorker if waiting else SchedulingDecision.ProvisionWorker
-            ),
-            reason=result.reason,
-            requeue_delay_seconds=max(
-                result.retry_delay_seconds,
-                self.requeue_delay_seconds,
-            ),
-        )
-        retry = self._plan_requeue(request, synthetic_outcome, current_time)
-        if retry.action is SchedulerRequeueAction.Fail:
-            reason = self._fail_request(request, result.reason or retry.reason.value, current_time)
-            self._acknowledge(claim)
-            return SchedulerContainerDispatchResult(
-                status=SchedulerContainerDispatchStatus.Failed,
-                container_id=request.container_id,
-                reason=reason,
-            )
-        self._requeue(
-            claim,
-            current_time,
-            retry_count=(request.retry_count if waiting else retry.next_retry_count),
-            capacity_retry_at=current_time
-            + timedelta(seconds=max(retry.delay_seconds, result.retry_delay_seconds)),
-        )
         reason = (
-            TaskPendingReason.Queued
-            if acquisition_failed
-            else TaskPendingReason.ProvisioningCompute
+            TaskPendingReason.ProvisioningCompute
             if waiting
             else TaskPendingReason.CapacityLimit
             if result.status is CapacityAcquisitionStatus.AtLimit
@@ -906,11 +997,7 @@ class SchedulerContainerRequestService:
             else TaskPendingReason.Queued
         )
         self._record_pending_progress(request.container_id, reason, current_time)
-        return SchedulerContainerDispatchResult(
-            status=SchedulerContainerDispatchStatus.Waiting,
-            container_id=request.container_id,
-            reason=result.reason or result.status.value,
-        )
+        return result
 
     def _record_pending_progress(
         self, container_id: str, reason: TaskPendingReason, now: datetime
@@ -918,9 +1005,9 @@ class SchedulerContainerRequestService:
         if self.containers.record_pending_progress(container_id, reason, now=now):
             self.assignments.publish_pending_progress(container_id)
 
-    def _reserve_quota(self, request: SchedulerWorkerRequest, now: datetime) -> str:
+    def _reserve_quota(self, request: SchedulerWorkerRequest, now: datetime) -> tuple[bool, str]:
         if not _request_uses_quota(request):
-            return ""
+            return False, ""
         gpu_count = gpu_count_for_capacity(request.gpu, request.gpu_count)
         workspace_gpu_quota = (
             request.workspace_gpu_quota
@@ -943,9 +1030,9 @@ class SchedulerContainerRequestService:
         )
         status = decision.status
         if status is ConcurrencyReservationStatus.Ok:
-            return ""
+            return decision.changed, ""
         reason = decision.reason or "workspace concurrency quota unavailable"
-        return f"{status.value}: {reason}"
+        return False, f"{status.value}: {reason}"
 
     def _plan_requeue(
         self,
@@ -1070,6 +1157,26 @@ class SchedulerContainerRequestService:
         *,
         now: datetime,
     ) -> SchedulerContainerDispatchResult:
+        result: SchedulerContainerDispatchResult | None = None
+        try:
+            with self.containers.dispatch_lock(claim.request.container_id):
+                result = self._dispatch_owned_claim(claim, worker, now=now)
+        except SchedulerRepositoryError as exc:
+            if result is None:
+                return self._requeue_capacity_owner_dispatch(
+                    claim, worker_id=worker.worker_id, now=now, reason=str(exc)
+                )
+        if result is None:
+            raise RuntimeError("container dispatch returned no outcome")
+        return result
+
+    def _dispatch_owned_claim(
+        self,
+        claim: SchedulerContainerRequestClaim,
+        worker: SchedulerWorkerRecord,
+        *,
+        now: datetime,
+    ) -> SchedulerContainerDispatchResult:
         if worker.request_intake_status(at=now) is not SchedulerWorkerStatus.Available:
             return self._requeue_capacity_owner_dispatch(
                 claim,
@@ -1096,27 +1203,25 @@ class SchedulerContainerRequestService:
             if self.capacity_reservations is not None
             else None
         )
-        assigned_state = _container_state(request, worker_id=worker_id)
+        assigned_state = container_state_for_request(request, worker_id=worker_id)
         assigned_state.pending_progress = TaskPendingProgress.for_reason(
             TaskPendingReason.StartingContainer, since=now, observed_at=now
         )
-        if reserved_capacity is not None:
-            assigned_state = assigned_state.model_copy(
-                update={
-                    "cpu_millicores": reserved_capacity.cpu_millicores,
-                    "memory_mib": reserved_capacity.memory_mib,
-                    "gpu_count": reserved_capacity.gpu_count,
-                }
-            )
+        assigned_state = assigned_state.model_copy(
+            update={
+                "gpu_type": worker.gpu_type if reserved_capacity.gpu_count > 0 else "",
+                "gpu_count": reserved_capacity.gpu_count,
+            }
+        )
         try:
-            recorded_state = self.containers.set_container_state(assigned_state)
-            if recorded_state.status is SchedulerContainerStatus.Stopping:
-                raise RuntimeError(f"container request {request.container_id} was cancelled")
             self.assignments.assign_runtime(
                 container_id=request.container_id,
                 workspace_id=request.workspace_id,
                 runtime_worker_id=worker.worker_id,
                 runtime_machine_id=worker.machine_id,
+                assignment_token=claim.token,
+                assigned_at=now,
+                backfill=request.backfill,
                 compute_worker_id=(worker.worker_id if worker.private_worker else None),
                 compute_machine_id=(worker.machine_id if worker.private_worker else None),
                 # What was reserved, not what the request asked for: the
@@ -1133,6 +1238,37 @@ class SchedulerContainerRequestService:
                     gpu_count=reserved_capacity.gpu_count,
                 ),
             )
+        except ConflictError as exc:
+            self._acknowledge(claim)
+            return SchedulerContainerDispatchResult(
+                status=SchedulerContainerDispatchStatus.Waiting,
+                container_id=request.container_id,
+                reason=str(exc),
+            )
+        except Exception as exc:
+            self._requeue(claim, now, retry_count=request.retry_count)
+            return SchedulerContainerDispatchResult(
+                status=SchedulerContainerDispatchStatus.Error,
+                container_id=request.container_id,
+                reason=f"durable assignment could not be confirmed: {type(exc).__name__}",
+            )
+        try:
+            recorded_state = self.containers.set_container_state(assigned_state)
+        except Exception as exc:
+            cleared = self._rollback_undelivered_assignment(claim, worker_id=worker_id)
+            if cleared:
+                self._requeue(claim, now, retry_count=request.retry_count)
+            return SchedulerContainerDispatchResult(
+                status=SchedulerContainerDispatchStatus.Error,
+                container_id=request.container_id,
+                worker_id=worker_id,
+                reason=f"dispatch state publication failed before delivery: {type(exc).__name__}",
+            )
+        try:
+            if recorded_state.status is SchedulerContainerStatus.Stopping:
+                raise ContainerRequestCancelledError(
+                    f"container request {request.container_id} was cancelled"
+                )
             self.workers.dispatch_claimed_container_request(
                 worker_id,
                 claim,
@@ -1141,12 +1277,9 @@ class SchedulerContainerRequestService:
                 now=now,
             )
         except ContainerRequestCancelledError as exc:
-            self.assignments.clear_runtime_assignment(
-                container_id=request.container_id,
-                runtime_worker_id=worker_id,
-            )
-            self.containers.delete_container_state(request.container_id)
-            self._release_capacity_reservation(request.container_id, now=now)
+            if self._rollback_undelivered_assignment(claim, worker_id=worker_id):
+                self.containers.delete_container_state(request.container_id)
+                self._release_capacity_reservation(request.container_id, now=now)
             return SchedulerContainerDispatchResult(
                 status=SchedulerContainerDispatchStatus.Cancelled,
                 container_id=request.container_id,
@@ -1154,31 +1287,32 @@ class SchedulerContainerRequestService:
                 reason=str(exc),
             )
         except ContainerRequestClaimNotOwnedError as exc:
-            self.assignments.clear_runtime_assignment(
-                container_id=request.container_id,
-                runtime_worker_id=worker_id,
-            )
+            self._rollback_undelivered_assignment(claim, worker_id=worker_id)
             return SchedulerContainerDispatchResult(
                 status=SchedulerContainerDispatchStatus.Waiting,
                 container_id=request.container_id,
                 reason=str(exc),
             )
-        except Exception as exc:
-            try:
-                self.assignments.clear_runtime_assignment(
-                    container_id=request.container_id,
-                    runtime_worker_id=worker_id,
-                )
-            except Exception as cleanup_exc:
-                exc = RuntimeError(f"{exc}; failed to clear runtime assignment: {cleanup_exc}")
-            if not self.containers.is_container_cancelled(request.container_id):
-                self.containers.set_container_state(_container_state(request))
-            self._requeue(claim, now)
+        except ContainerRequestDispatchRejectedError as exc:
+            if self._rollback_undelivered_assignment(claim, worker_id=worker_id):
+                self._requeue(claim, now, retry_count=request.retry_count)
             return SchedulerContainerDispatchResult(
                 status=SchedulerContainerDispatchStatus.Error,
                 container_id=request.container_id,
                 worker_id=worker_id,
                 reason=str(exc),
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "dispatch delivery is uncertain; retaining durable assignment",
+                exc_info=exc,
+                extra={"container_id": request.container_id, "worker_id": worker_id},
+            )
+            return SchedulerContainerDispatchResult(
+                status=SchedulerContainerDispatchStatus.Error,
+                container_id=request.container_id,
+                worker_id=worker_id,
+                reason="dispatch delivery is uncertain; assigned worker retains ownership",
             )
         self._record_dispatch_lifecycle(request, claimed_at=now)
         return SchedulerContainerDispatchResult(
@@ -1187,6 +1321,26 @@ class SchedulerContainerRequestService:
             worker_id=worker_id,
             reason="container request dispatched to worker",
         )
+
+    def _rollback_undelivered_assignment(
+        self, claim: SchedulerContainerRequestClaim, *, worker_id: str
+    ) -> bool:
+        request = claim.request
+        try:
+            cleared = self.assignments.clear_runtime_assignment(
+                container_id=request.container_id,
+                runtime_worker_id=worker_id,
+                assignment_token=claim.token,
+            )
+            if cleared and not self.containers.is_container_cancelled(request.container_id):
+                self.containers.set_container_state(container_state_for_request(request))
+            return cleared
+        except Exception:
+            LOGGER.exception(
+                "undelivered assignment rollback needs reconciliation",
+                extra={"container_id": request.container_id, "worker_id": worker_id},
+            )
+            return False
 
     def _record_dispatch_lifecycle(
         self,
@@ -1233,19 +1387,29 @@ class SchedulerContainerRequestService:
         request: SchedulerWorkerRequest,
         reason: str,
         now: datetime,
-    ) -> str:
+    ) -> SchedulerContainerDispatchResult:
+        try:
+            failed = self.failure_handler.mark_scheduling_failed(request, reason, now=now)
+        except Exception as exc:
+            return SchedulerContainerDispatchResult(
+                status=SchedulerContainerDispatchStatus.Error,
+                container_id=request.container_id,
+                reason=f"{reason}; failed to persist scheduling outcome: {type(exc).__name__}",
+            )
+        if not failed:
+            return SchedulerContainerDispatchResult(
+                status=SchedulerContainerDispatchStatus.Waiting,
+                container_id=request.container_id,
+                reason="container is no longer awaiting scheduling",
+            )
         self.containers.set_container_state(
-            _container_state(
+            container_state_for_request(
                 request,
                 status=SchedulerContainerStatus.Failed,
                 scheduled_at=now,
                 failure_reason=reason,
             )
         )
-        try:
-            self.failure_handler.mark_scheduling_failed(request, reason, now=now)
-        except Exception as exc:  # pragma: no cover - defensive callback boundary
-            return f"{reason}; failed to sync runtime state: {type(exc).__name__}"
         if _request_uses_quota(request):
             try:
                 self.containers.release_concurrency_reservation(
@@ -1258,7 +1422,11 @@ class SchedulerContainerRequestService:
                     f"{reason}; failed to release concurrency reservation: {type(exc).__name__}"
                 )
         self._release_capacity_reservation(request.container_id, now=now)
-        return reason
+        return SchedulerContainerDispatchResult(
+            status=SchedulerContainerDispatchStatus.Failed,
+            container_id=request.container_id,
+            reason=reason,
+        )
 
     def _release_capacity_reservation(
         self,
@@ -1332,7 +1500,7 @@ def _request_rate_class(request: SchedulerWorkerRequest) -> PlacementRateClass:
     )
 
 
-def _container_state(
+def container_state_for_request(
     request: SchedulerWorkerRequest,
     *,
     worker_id: str = "",
@@ -1343,6 +1511,7 @@ def _container_state(
     is_image_build = request.payload.get("kind") == "image-build"
     return SchedulerContainerState(
         container_id=request.container_id,
+        backfill=request.backfill,
         preemptible=request.preemptible,
         stub_id=request.stub_id,
         workspace_id=request.workspace_id,

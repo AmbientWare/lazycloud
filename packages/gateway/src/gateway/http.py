@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from compute.agent_control import AgentBootstrapConfig
 from pydantic import Field, JsonValue, field_validator
+from pydantic.json_schema import SkipJsonSchema
 from shared.bytes_transport import decode_bytes, encode_bytes
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import (
@@ -180,6 +181,7 @@ class AgentWorkerSlot(HttpModel):
 
 class StreamAgentRequest(HttpModel):
     agent_token: str
+    generation: SkipJsonSchema[int] = Field(default=0, ge=0, exclude=True)
     binary_sha256: str = Field(default="", pattern=r"^([0-9a-f]{64})?$")
     active_worker_images: dict[str, str] = Field(default_factory=dict)
     prepared_worker_images: list[str] = Field(default_factory=list)
@@ -187,6 +189,7 @@ class StreamAgentRequest(HttpModel):
 
 class StreamAgentResponse(HttpModel):
     ok: bool = True
+    generation: SkipJsonSchema[int] = Field(default=0, ge=0, exclude=True)
     err_msg: str = ""
     retryable: bool = False
     credential_id: str = ""
