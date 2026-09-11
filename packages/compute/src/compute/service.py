@@ -2895,7 +2895,14 @@ class ComputeService:
         warm_owner = str(uuid5(NAMESPACE_URL, "lazycloud:platform-warm-capacity"))
         try:
             with self._required_capacity_owner_mutations().mutation_lock(warm_owner):
-                self._reconcile_platform_warm_markets(now=now)
+                started = time.monotonic()
+                try:
+                    self._reconcile_platform_warm_markets(now=now)
+                finally:
+                    LOGGER.info(
+                        "platform warm capacity reconciliation took %.3fs",
+                        time.monotonic() - started,
+                    )
         except CapacityReservationLockContendedError:
             LOGGER.debug("platform warm reconciliation deferred: capacity lease is held")
 
@@ -2980,37 +2987,62 @@ class ComputeService:
             )
             and not self._failed_market_retry_ready(unit, now=now)
         }
-        request = OfferRequest(nodes=1, preemptible=preemptible)
-        candidates = sorted(
+        units_by_identity = {
             (
-                (provider, offer)
-                for provider, offer in offers
-                if offer.preemptible is preemptible and filter_offers([offer], request)
-            ),
+                unit.workspace_id,
+                unit.provider_ref,
+                unit.region,
+                unit.capability_key,
+                unit.root_volume_gib,
+            ): unit
+            for unit in units
+        }
+        handoff_owners = {unit.capacity_owner_id for unit in units if unit.warm_handoff_from}
+        warm_owners = {
+            unit.capacity_owner_id
+            for unit in units
+            if unit.min_machines > 0 and unit.capacity_owner_id not in unavailable_owners
+        }
+        request = OfferRequest(nodes=1, preemptible=preemptible)
+        candidates: list[tuple[ResolvedComputeProvider, ComputeOffer, str]] = []
+        for provider, offer in offers:
+            if offer.preemptible is not preemptible or not filter_offers([offer], request):
+                continue
+            policy = provider.policy
+            assert policy is not None
+            current = units_by_identity.get(
+                (
+                    policy.workspace_id,
+                    provider.ref,
+                    offer.region,
+                    offer.capability_key,
+                    policy.root_volume_gib,
+                )
+            )
+            if current is not None:
+                owner_id = current.capacity_owner_id
+            else:
+                owner_id, _ = internal_unit_identity(
+                    workspace_id=policy.workspace_id,
+                    provider_ref=provider.ref,
+                    region=offer.region,
+                    capability_key=offer.capability_key,
+                    root_volume_gib=policy.root_volume_gib,
+                )
+            candidates.append((provider, offer, owner_id))
+        candidates.sort(
             key=lambda item: (
-                not any(
-                    unit.capacity_owner_id == self.pooled_offer_owner_id(*item)
-                    and unit.warm_handoff_from
-                    for unit in units
-                ),
-                not any(
-                    unit.capacity_owner_id == self.pooled_offer_owner_id(*item)
-                    and unit.min_machines > 0
-                    and unit.capacity_owner_id not in unavailable_owners
-                    for unit in units
-                ),
+                item[2] not in handoff_owners,
+                item[2] not in warm_owners,
                 offer_selection_key(item[1], request),
             ),
         )
         eligible_owners = frozenset(
-            self.pooled_offer_owner_id(provider, offer)
-            for provider, offer in candidates
-            if self.pooled_offer_owner_id(provider, offer) not in unavailable_owners
+            owner_id for _, _, owner_id in candidates if owner_id not in unavailable_owners
         )
-        for provider, offer in candidates:
+        for provider, offer, unit_id in candidates:
             policy = provider.policy
             assert policy is not None
-            unit_id = self.pooled_offer_owner_id(provider, offer)
             if unit_id in unavailable_owners:
                 continue
             try:
