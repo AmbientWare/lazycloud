@@ -726,7 +726,11 @@ def _client_network_backend(
             worker_id=config.worker_id,
         ),
         config=bridge,
-        egress_counters=WorkerNetworkEgressCounters(load_policy=client.egress_policy),
+        egress_counters=WorkerNetworkEgressCounters(
+            load_policy=client.egress_policy,
+            worker_id=config.worker_id,
+            event_sink=RemoteWorkerEventSink(client),
+        ),
     )
 
 
