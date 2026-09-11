@@ -5,6 +5,7 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { StatusChip } from "@/components/shared/StatusChip";
+import { TaskPendingNotice } from "@/components/shared/TaskPendingNotice";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import {
   Table,
@@ -126,6 +127,7 @@ export function TaskTable({
                 ) : null}
                 <TableCell>
                   <StatusChip status={task.status} live={task.status === "running"} />
+                  <TaskPendingNotice task={task} compact />
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
                   <LiveRelativeTime value={task.created_at} />

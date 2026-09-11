@@ -934,6 +934,24 @@ class TaskAttemptRepository:
         row = self.session.scalars(statement).first()
         return TaskAttempt.model_validate(row.payload) if row is not None else None
 
+    def latest_for_tasks(self, task_ids: Sequence[str]) -> dict[str, TaskAttempt]:
+        if not task_ids:
+            return {}
+        statement = (
+            select(TaskAttemptTable)
+            .where(TaskAttemptTable.task_id.in_(task_ids))
+            .distinct(TaskAttemptTable.task_id)
+            .order_by(
+                TaskAttemptTable.task_id,
+                TaskAttemptTable.attempt_number.desc(),
+                TaskAttemptTable.created_at.desc(),
+            )
+        )
+        return {
+            str(row.task_id): TaskAttempt.model_validate(row.payload)
+            for row in self.session.scalars(statement)
+        }
+
 
 @dataclass(slots=True)
 class TaskDependencyRepository:

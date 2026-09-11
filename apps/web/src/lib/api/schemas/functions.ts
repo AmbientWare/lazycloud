@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { jsonValueSchema } from "./json";
+import { taskPendingProgressSchema } from "./task-progress";
 
 export const functionResultEncodings = ["json", "cloudpickle"] as const;
 export type FunctionResultEncoding = (typeof functionResultEncodings)[number];
@@ -38,6 +39,7 @@ export const functionInvokeResponseSchema = z
     output: z.string().default(""),
     stream: z.enum(["stdout", "stderr", "system"]).default("system"),
     status: z.string().default(""),
+    pending_progress: taskPendingProgressSchema.nullable().default(null),
     done: z.boolean().default(false),
     exit_code: z.number().int().default(0),
     result: functionResultSchema.nullable().default(null),

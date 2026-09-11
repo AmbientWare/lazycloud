@@ -9,6 +9,7 @@ import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { ShellButton } from "@/components/shared/ShellDialog";
 import { DrawerHeader, DrawerHeaderSkeleton } from "@/components/shared/DrawerHeader";
 import { StatusChip } from "@/components/shared/StatusChip";
+import { TaskPendingNotice } from "@/components/shared/TaskPendingNotice";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -242,6 +243,7 @@ function TaskDrawerBody({
           <p className="mt-1.5 text-xs text-destructive">{cancelError ?? rerunError}</p>
         ) : null}
       </DrawerHeader>
+      <TaskPendingNotice task={record} />
 
       {refreshError ? (
         <ApiErrorNotice

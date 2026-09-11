@@ -63,6 +63,8 @@ export function workspaceInvalidationTargets(
       ]);
     case "containers":
       return compactTargets([
+        { queryKey: workspaceQueryKeys.tasks.lists(workspaceId) },
+        { queryKey: workspaceQueryKeys.tasks.details(workspaceId) },
         { queryKey: workspaceQueryKeys.containers.lists(workspaceId) },
         containerId
           ? { queryKey: workspaceQueryKeys.containers.detail(workspaceId, containerId) }

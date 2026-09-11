@@ -402,6 +402,9 @@ class SequencedTaskClient(_UnsupportedTaskHandleOperations):
     def __post_init__(self) -> None:
         self.calls: dict[str, int] = {task_id: 0 for task_id in self.tasks}
 
+    def get(self, task_id: str) -> TaskDetailResponse:
+        return TaskDetailResponse.model_validate(self.get_result_task(task_id))
+
     def get_result_task(self, task_id: str) -> shared.tasks.Task:
         sequence = self.tasks[task_id]
         index = min(self.calls[task_id], len(sequence) - 1)
@@ -413,6 +416,9 @@ class SequencedTaskClient(_UnsupportedTaskHandleOperations):
 class TransientReadTaskClient(_UnsupportedTaskHandleOperations):
     sequence: list[shared.tasks.Task | BaseException]
     calls: int = 0
+
+    def get(self, task_id: str) -> TaskDetailResponse:
+        return TaskDetailResponse.model_validate(self.get_result_task(task_id))
 
     def get_result_task(self, task_id: str) -> shared.tasks.Task:
         _ = task_id

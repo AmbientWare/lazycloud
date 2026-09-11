@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator, Callable, Iterable, Sequence
+from collections.abc import AsyncGenerator, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -57,6 +57,7 @@ from shared.http.functions import (
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
+from shared.http.task_progress import TaskPendingProgress
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.placement import ProductRegion
 from shared.tasks import Task, TaskDependency, TaskStatus, is_terminal_task_status
@@ -974,7 +975,7 @@ class FunctionControlService:
         headless: bool = False,
         poll_interval_seconds: float = 0.25,
         keepalive_interval_seconds: float = 5.0,
-    ) -> AsyncIterator[FunctionInvokeResponse]:
+    ) -> AsyncGenerator[FunctionInvokeResponse, None]:
         yield initial
         if initial.done or initial.exit_code != 0 or not initial.task_id or headless:
             return
@@ -982,6 +983,8 @@ class FunctionControlService:
         log_cursor: LogPageCursor | None = None
         sleep_seconds = max(poll_interval_seconds, 0.05)
         last_status = ""
+        last_progress: TaskPendingProgress | None = None
+        last_progress_read = 0.0
         last_keepalive = time.monotonic()
         while True:
             try:
@@ -1009,12 +1012,22 @@ class FunctionControlService:
                     output=_stream_log_output(entry.message),
                     stream=entry.stream,
                 )
-            if task.status.value != last_status:
+            progress = last_progress
+            progress_due = time.monotonic() - last_progress_read >= 1.0
+            if progress_due or task.status.value != last_status:
+                progress_by_task = await asyncio.to_thread(
+                    self.services.tasks.progress.read, [task]
+                )
+                progress = progress_by_task[task.id]
+                last_progress_read = time.monotonic()
+            if task.status.value != last_status or progress != last_progress:
                 last_status = task.status.value
+                last_progress = progress
                 last_keepalive = time.monotonic()
                 yield FunctionInvokeResponse.from_result(
                     task_id=initial.task_id,
                     status=last_status,
+                    pending_progress=progress,
                 )
             if is_terminal_task_status(task.status):
                 yield FunctionInvokeResponse.from_result(
@@ -1035,7 +1048,9 @@ class FunctionControlService:
                 return
             if time.monotonic() - last_keepalive >= max(keepalive_interval_seconds, sleep_seconds):
                 last_keepalive = time.monotonic()
-                yield FunctionInvokeResponse.from_result(task_id=initial.task_id)
+                yield FunctionInvokeResponse.from_result(
+                    task_id=initial.task_id, status=last_status, pending_progress=last_progress
+                )
             await asyncio.sleep(sleep_seconds)
 
     def _async_database(self) -> AsyncDatabaseClient:

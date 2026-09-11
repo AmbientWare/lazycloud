@@ -7,7 +7,7 @@ import urllib.request
 from collections.abc import Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.message import Message
 from pathlib import Path
 from typing import Any, TypeVar
@@ -57,7 +57,7 @@ from shared.paths import HOME_ENV
 from shared.tasks import TaskPolicy
 from tests.fakes import FakeDeploymentClient
 
-from lazycloud import App, output
+from lazycloud import App, TaskPendingProgress, TaskPendingReason, output, progress
 
 T = TypeVar("T")
 
@@ -480,6 +480,16 @@ def test_function_remote_output_policy_preserves_results_and_stdout(
     monkeypatch.setattr(sys.stderr, "isatty", lambda: stderr_tty)
     monkeypatch.setenv(CONTAINER_ID_ENV, "cloud-container" if cloud else "")
     monkeypatch.delenv(IMPORTING_USER_CODE_ENV, raising=False)
+    observed_at = datetime.now(UTC)
+    pending = TaskPendingProgress.for_reason(
+        TaskPendingReason.ProvisioningCompute,
+        since=observed_at - timedelta(seconds=10),
+        observed_at=observed_at,
+    )
+    updates: list[tuple[str, TaskPendingProgress | None]] = []
+
+    def observe(task_id: str, value: TaskPendingProgress | None) -> None:
+        updates.append((task_id, value))
 
     class StreamingFunctionClient(FakeFunctionClient):
         def invoke(
@@ -497,6 +507,12 @@ def test_function_remote_output_policy_preserves_results_and_stdout(
             del parent_task_id, root_task_id, dependencies
             self.invocations.append((stub_id, args, detached))
             yield FunctionInvokeResponse.from_result(task_id="task-1")
+            yield FunctionInvokeResponse.from_result(
+                task_id="task-1", status="pending", pending_progress=pending
+            )
+            yield FunctionInvokeResponse.from_result(
+                task_id="task-1", status="pending", pending_progress=pending
+            )
             yield FunctionInvokeResponse.from_result(task_id="task-1", status="running")
             yield FunctionInvokeResponse.from_result(task_id="task-1")
             yield FunctionInvokeResponse.from_result(
@@ -528,14 +544,16 @@ def test_function_remote_output_policy_preserves_results_and_stdout(
         client=client,
     )
 
-    with output(enabled=override) if override is not None else nullcontext():
+    with progress(observe), output(enabled=override) if override is not None else nullcontext():
         assert streamer.remote() == {"ok": True}
+    assert updates == [("task-1", pending), ("task-1", None)]
     captured = capsys.readouterr()
     assert captured.out == ""
     if visible:
         assert captured.err.count("hello\n") == 1
         assert captured.err.count("careful\n") == 1
         assert "running" in captured.err
+        assert captured.err.count(pending.message) == 1
     else:
         assert captured.err == ""
 

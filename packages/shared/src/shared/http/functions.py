@@ -13,6 +13,7 @@ from shared.function_payloads import (
     validate_function_dependency_bindings,
 )
 from shared.http.base import HttpModel
+from shared.http.task_progress import TaskPendingProgress
 from shared.tasks import TaskStatus
 
 FUNCTION_CALL_REF_MARKER = "__function_call_ref__"
@@ -41,6 +42,7 @@ class FunctionInvokeResponse(HttpModel):
     output: str = ""
     stream: Literal["stdout", "stderr", "system"] = "system"
     status: str = ""
+    pending_progress: TaskPendingProgress | None = None
     done: bool = False
     exit_code: int = 0
     result: FunctionResultPayload | None = None
@@ -54,6 +56,7 @@ class FunctionInvokeResponse(HttpModel):
         output: str = "",
         stream: Literal["stdout", "stderr", "system"] = "system",
         status: str = "",
+        pending_progress: TaskPendingProgress | None = None,
         done: bool = False,
         exit_code: int = 0,
     ) -> FunctionInvokeResponse:
@@ -62,6 +65,7 @@ class FunctionInvokeResponse(HttpModel):
             output=output,
             stream=stream,
             status=status,
+            pending_progress=pending_progress,
             done=done,
             exit_code=exit_code,
             result=result,
