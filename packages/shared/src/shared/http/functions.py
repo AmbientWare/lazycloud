@@ -114,6 +114,15 @@ class FunctionClaimResponse(HttpModel):
     task: FunctionClaimedTask | None = None
 
 
+class FunctionRetireRequest(HttpModel):
+    stub_id: str
+    container_id: str
+
+
+class FunctionRetireResponse(HttpModel):
+    retired: bool
+
+
 class FunctionSetResultBody(HttpModel):
     task_id: str
     container_id: str
@@ -172,6 +181,8 @@ __all__ = [
     "FunctionInvokeResponse",
     "FunctionMonitorRequest",
     "FunctionMonitorResponse",
+    "FunctionRetireRequest",
+    "FunctionRetireResponse",
     "FunctionSetResultBody",
     "FunctionSetResultResponse",
 ]
