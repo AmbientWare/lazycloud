@@ -181,7 +181,7 @@ class WorkerPoolDrainService:
             return WorkerPoolDrainResult(
                 capacity_owner_id=controller.capacity_owner_id,
                 pool=controller.pool,
-                reason="capacity-owner mutation lock already held",
+                reason=str(conflict),
                 lock_acquired=False,
                 error=str(conflict),
             )

@@ -8,7 +8,7 @@ from shared.releases import ActiveRelease, AgentArtifact, ReleaseTarget
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 
 
-def test_activation_and_rollback_gate_workers_by_artifact_and_replica(tmp_path: Path) -> None:
+def test_activation_preserves_serving_and_fences_upgrade_authority(tmp_path: Path) -> None:
     path = tmp_path / "active.json"
     url = "https://releases.example.com/new/manifest.json"
     service = DeploymentReleaseService(ReleaseSettings(manifest_url=url, active_file=path))
@@ -64,9 +64,13 @@ def test_activation_and_rollback_gate_workers_by_artifact_and_replica(tmp_path: 
     )
     old_url = "https://releases.example.com/old/manifest.json"
     old_replica = DeploymentReleaseService(ReleaseSettings(manifest_url=old_url, active_file=path))
-    assert old_replica.admitted_workers([worker]) == []
-    assert old_replica.admitted_workers([previous]) == []
+    assert old_replica.admitted_workers([worker]) == [worker]
+    assert old_replica.admitted_workers([previous]) == [previous]
+    assert not old_replica.controls(release)
+    assert service.controls(release)
     rollback = release.model_copy(update={"generation": 3, "manifest_url": old_url})
     path.write_text(rollback.model_dump_json())
-    assert service.admitted_workers([worker]) == []
+    assert service.admitted_workers([worker]) == [worker]
     assert old_replica.admitted_workers([worker]) == [worker]
+    assert old_replica.controls(rollback)
+    assert not service.controls(rollback)

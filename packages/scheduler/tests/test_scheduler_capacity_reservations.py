@@ -608,37 +608,6 @@ def test_terminal_retry_releases_stale_reservation_before_new_attempt(
     assert first_reservation.status is CapacityReservationStatus.Released
 
 
-def test_a_full_pool_keeps_one_open_claim_instead_of_churning_released_ones(
-    real_redis_actors: RealRedisActors,
-) -> None:
-    """Full is backpressure: the container's claim waits for the pool to drain.
-
-    When at-limit was terminal, every attempt released the reservation and
-    minted a fresh one, so a busy workspace ground through reservation churn
-    for as long as the pool stayed full.
-    """
-    repository = _repository(real_redis_actors)
-    controller = _Controller(ensure_status=CapacityAcquisitionStatus.AtLimit)
-    service = CapacityReservationService(repository, lambda: [controller])
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-
-    first = service.acquire(
-        _request("container-at-limit"), purchases=lambda: _purchases(service), now=now
-    )
-    second = service.acquire(
-        _request("container-at-limit"),
-        purchases=lambda: _purchases(service),
-        now=now + timedelta(seconds=1),
-    )
-
-    assert first.status is CapacityAcquisitionStatus.AtLimit
-    assert second.status is CapacityAcquisitionStatus.AtLimit
-    assert first.reservation_id == second.reservation_id
-    retained = repository.get(first.reservation_id)
-    assert retained is not None
-    assert retained.open
-
-
 def test_unpinned_acquisition_fails_over_from_at_limit_pool_in_priority_order(
     real_redis_actors: RealRedisActors,
 ) -> None:

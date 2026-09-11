@@ -112,6 +112,10 @@ def test_agent_worker_pool_disables_stale_machine_worker(
         pool=MachinePool("gpu"),
         machine_id="machine-one",
         status=SchedulerWorkerStatus.Available,
+        runtime_image="worker:verified",
+        agent_binary_sha256="a" * 64,
+        admitted_release_generation=4,
+        request_poll_expires_at=now + timedelta(seconds=30),
         total_cpu_millicores=4000,
         total_memory_mib=8192,
         free_cpu_millicores=4000,
@@ -137,6 +141,16 @@ def test_agent_worker_pool_disables_stale_machine_worker(
 
     assert disabled.action is AgentPoolWorkerAction.Disabled
     assert unavailable_worker.status is SchedulerWorkerStatus.Unavailable
+    recovered = controller.ensure_machine_worker(
+        machine.model_copy(update={"last_heartbeat_at": now}), now=now
+    )
+    assert recovered.action is AgentPoolWorkerAction.Ensured
+    current = workers.get_worker(worker.worker_id)
+    assert current is not None and current.status is SchedulerWorkerStatus.Pending
+    assert current.runtime_image == worker.runtime_image
+    assert current.agent_binary_sha256 == worker.agent_binary_sha256
+    assert current.admitted_release_generation == 4
+    assert current.request_poll_expires_at is None
 
 
 def test_agent_worker_pool_does_not_readd_a_cordoned_machine_worker(

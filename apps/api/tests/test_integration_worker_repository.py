@@ -20,6 +20,8 @@ from compute.agent_control import agent_machine_worker_id
 from compute.state import (
     RedisComputeStateRepository,
 )
+from control.release_settings import ReleaseSettings
+from control.releases import DeploymentReleaseService
 from control.service import ControlPlaneService, StubKind
 from coordination.event_bus import (
     EventBusEvent,
@@ -31,8 +33,10 @@ from database.context import ServiceContext
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.compute import (
     PRIMARY_WIREGUARD_GATEWAY_ID,
+    ComputeMachineEnrollmentRepository,
     ComputeUnitRepository,
     WireGuardGatewayRepository,
+    WireGuardPeerRepository,
 )
 from database.repositories.execution import TaskRepository
 from database.repositories.images import (
@@ -44,12 +48,15 @@ from database.repositories.images import (
 from database.repositories.orchestration import (
     ContainerRepository,
 )
+from database.repositories.worker_releases import WorkerReleaseRepository
+from database.tables.orchestration import WorkerTable
 from database.types import DatabaseSession
 from fastapi.testclient import TestClient
 from foundation.network import worker_network_prefix
 from gateway.http import (
     JoinAgentRequest,
     RegisterAgentPrivateNetworkRequest,
+    StreamAgentRequest,
     UpdateAgentRouteStatusRequest,
 )
 from gateway.service import GatewayControlService
@@ -74,6 +81,7 @@ from shared.cache_records import CacheEntry
 from shared.compute_enrollment import (
     ComputePreflightCheck,
     PreflightSeverity,
+    PrivateNetworkEnrollmentPhase,
     WireGuardGateway,
 )
 from shared.compute_policy import (
@@ -84,6 +92,7 @@ from shared.container_requests import ContainerShutdownTarget, StopContainerReas
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.http.errors import ErrorResponse
+from shared.http.releases import AgentReleaseRequest
 from shared.http.worker_usage import WorkerUsageWindowResponse
 from shared.identity import AuthScope, TokenKind, WorkspaceStorageConfig
 from shared.image_building.authoring import ImageSpec
@@ -108,6 +117,7 @@ from shared.usage import (
 from storage.image_archive import ImageArchiveSettings
 from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
 from tests.real_redis import RealRedisActors
+from tests.releases import select_worker_release
 from tests.scheduler_composition import scheduler_request_service_for_redis
 from tests.workspaces import owned_workspace, workspace_owner_user_id
 from worker.checkpoints import (
@@ -2479,6 +2489,191 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
     assert stored.owner_user_id == workspace_owner_user_id(isolated_services.context, workspace_id)
     assert stored.priority == joined_unit.priority
     assert stored.region is None
+
+
+def test_worker_admission_survives_activation_and_registration_after_redis_loss(
+    isolated_services: ApiServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gateway = isolated_services.gateway_service
+    service = isolated_services.worker_repository_service
+    workspace_id, machine_id, agent_token = _join_gateway_agent(
+        isolated_services,
+        gateway,
+        pool=MachinePool("release-reconnect"),
+        machine_fingerprint="release-reconnect",
+    )
+    with isolated_services.context.database.session() as session:
+        enrollments = ComputeMachineEnrollmentRepository(session)
+        enrollment = enrollments.by_machine(workspace_id, machine_id)
+        assert enrollment is not None
+        peers = WireGuardPeerRepository(session)
+        peer = peers.by_enrollment(enrollment.id)
+        assert peer is not None
+        peers.save(peer.model_copy(update={"last_handshake_at": utc_now()}))
+        enrollments.save(
+            enrollment.model_copy(
+                update={
+                    "network_phase": PrivateNetworkEnrollmentPhase.Connected,
+                    "network_verified_at": utc_now(),
+                }
+            )
+        )
+    release = DeploymentReleaseService().state()
+    stream = gateway.stream_agent(StreamAgentRequest(agent_token=agent_token))
+    assert stream.ok and len(stream.slots) == 1
+    slot = stream.slots[0]
+    request = AddWorkerRequest(
+        worker=WorkerExecutionRecord(
+            worker_id=slot.worker_id,
+            machine_id=machine_id,
+            capacity_owner_id=slot.capacity_owner_id,
+            pool=slot.pool,
+            runtime_image=release.target.worker_image,
+        ),
+        cache_generation_id=str(uuid4()),
+        cache_storage_id=f"machine:{machine_id}",
+    )
+    headers = {"Authorization": f"Bearer {slot.worker_token}"}
+    with TestClient(create_app(isolated_services)) as client:
+        first = client.post(
+            "/worker-repository/add-worker", json=request.model_dump(mode="json"), headers=headers
+        )
+        assert first.status_code == 200
+        registration = WorkerRecordResponse.model_validate_json(first.content)
+        registered_worker = service.workers.get_worker(slot.worker_id)
+        assert registered_worker is not None
+        assert registered_worker.admitted_release_generation == release.generation
+        assert registration.cache_session is not None
+        activated = client.post(
+            "/worker-repository/toggle-worker-available",
+            headers=headers,
+            json=WorkerCacheSessionRequest(
+                worker_id=slot.worker_id,
+                cache_generation_id=registration.cache_session.generation_id,
+                cache_session_fence=registration.cache_session.session_fence,
+            ).model_dump(mode="json"),
+        )
+        assert activated.status_code == 200
+        with isolated_services.context.database.session() as session:
+            durable = session.get(WorkerTable, slot.worker_id)
+            assert durable is not None
+            durable.admitted_release_generation = 0
+            durable.admitted_runtime_image = ""
+            durable.admitted_agent_sha256 = ""
+        observed = gateway.stream_agent(
+            StreamAgentRequest(
+                agent_token=agent_token,
+                active_worker_images={slot.worker_id: release.target.worker_image},
+            )
+        )
+        assert observed.ok
+        monkeypatch.setenv(
+            "LAZYCLOUD_RELEASE_MANIFEST_URL", "https://releases.example.test/new/manifest.json"
+        )
+        during_sync = gateway.stream_agent(StreamAgentRequest(agent_token=agent_token))
+        assert during_sync.ok and during_sync.slots == observed.slots
+        assert during_sync.bootstrap is None
+        assert not gateway.agent_release(
+            AgentReleaseRequest(agent_token=agent_token, binary_sha256="")
+        ).update_agent
+        current = service.workers.get_worker(slot.worker_id)
+        assert current is not None and service._worker_release_admitted(current)
+        following = select_worker_release("worker:following").model_copy(
+            update={"manifest_url": ReleaseSettings().manifest_url}
+        )
+        ReleaseSettings().active_file.write_text(following.model_dump_json())
+        assert service._worker_release_admitted(current)
+        service.workers.remove_worker(slot.worker_id)
+        recovered = client.post(
+            "/worker-repository/add-worker", json=request.model_dump(mode="json"), headers=headers
+        )
+        assert recovered.status_code == 200
+        worker = service.workers.get_worker(slot.worker_id)
+        assert worker is not None
+        assert worker.admitted_release_generation == release.generation
+        assert worker.status is SchedulerWorkerStatus.Pending
+        assert worker.request_poll_expires_at is None
+        rollout = gateway.stream_agent(
+            StreamAgentRequest(
+                agent_token=agent_token,
+                active_worker_images={slot.worker_id: release.target.worker_image},
+                prepared_worker_images=[following.target.worker_image],
+            )
+        )
+        assert rollout.ok
+        during_update = client.post(
+            "/worker-repository/add-worker", json=request.model_dump(mode="json"), headers=headers
+        )
+        assert during_update.status_code == 200
+        old_session = WorkerRecordResponse.model_validate_json(during_update.content).cache_session
+        assert old_session is not None
+        old_activation = client.post(
+            "/worker-repository/toggle-worker-available",
+            headers=headers,
+            json=WorkerCacheSessionRequest(
+                worker_id=slot.worker_id,
+                cache_generation_id=old_session.generation_id,
+                cache_session_fence=old_session.session_fence,
+            ).model_dump(mode="json"),
+        )
+        assert old_activation.status_code == 200
+        draining = service.workers.get_worker(slot.worker_id)
+        assert draining is not None and draining.status is SchedulerWorkerStatus.Draining
+        assert draining.request_poll_expires_at is None
+        current_request = request.model_copy(
+            update={
+                "worker": request.worker.model_copy(
+                    update={"runtime_image": following.target.worker_image}
+                )
+            }
+        )
+        ready = client.post(
+            "/worker-repository/add-worker",
+            json=current_request.model_dump(mode="json"),
+            headers=headers,
+        )
+        assert ready.status_code == 200
+        new_session = WorkerRecordResponse.model_validate_json(ready.content).cache_session
+        assert new_session is not None
+        intake = WorkerCacheSessionRequest(
+            worker_id=slot.worker_id,
+            cache_generation_id=new_session.generation_id,
+            cache_session_fence=new_session.session_fence,
+        ).model_dump(mode="json")
+        assert (
+            client.post(
+                "/worker-repository/toggle-worker-available", json=intake, headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                "/worker-repository/get-next-container-request", json=intake, headers=headers
+            ).status_code
+            == 200
+        )
+        returned = gateway.stream_agent(
+            StreamAgentRequest(
+                agent_token=agent_token,
+                active_worker_images={slot.worker_id: following.target.worker_image},
+            )
+        )
+        assert returned.ok
+        with isolated_services.context.database.session() as session:
+            assert (
+                WorkerReleaseRepository(session).update_generation(slot.worker_id, machine_id) == 0
+            )
+        changed = request.model_copy(
+            update={
+                "worker": request.worker.model_copy(update={"runtime_image": "worker:unverified"})
+            }
+        )
+        refused = client.post(
+            "/worker-repository/add-worker", json=changed.model_dump(mode="json"), headers=headers
+        )
+        assert refused.status_code == 200
+        unverified = service.workers.get_worker(slot.worker_id)
+        assert unverified is not None and unverified.admitted_release_generation == 0
 
 
 def _join_gateway_agent(

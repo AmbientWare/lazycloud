@@ -91,3 +91,4 @@ def test_platform_rollout_preserves_request_intake_across_pools() -> None:
     stale = other.model_copy(update={"request_poll_expires_at": now - timedelta(seconds=1)})
     assert worker_rollout_allowance(current, [current, stale], now=now) == 0
     assert worker_rollout_allowance(current, [current], now=now) == 0
+    assert worker_rollout_allowance(stale, [stale], now=now) == 1

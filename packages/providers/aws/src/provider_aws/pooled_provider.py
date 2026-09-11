@@ -401,7 +401,7 @@ def _snapshot(
             ),
             availability_zone=details[instance.instance_id].availability_zone,
             storage_volume_ids=details[instance.instance_id].storage_volume_ids,
-            booted_template_version=instance.booted_template_version,
+            booted_template_version=instance.booted_host_revision,
         )
         for instance in snapshot.instances
     ]
@@ -413,11 +413,7 @@ def _snapshot(
         observed_machines=len(instances),
         last_capacity_failure_at=snapshot.last_capacity_failure_at,
         instances=instances,
-        current_template_version=(
-            ""
-            if snapshot.resource_ids.launch_template_latest_version is None
-            else str(snapshot.resource_ids.launch_template_latest_version)
-        ),
+        current_template_version=snapshot.current_host_revision,
         provider_state=ComputeUnitProviderState(
             resource_id=snapshot.resource_ids.autoscaling_group_name or "",
             attributes=snapshot.resource_ids.model_dump(mode="json"),

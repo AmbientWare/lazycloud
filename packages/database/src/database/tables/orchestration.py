@@ -113,6 +113,8 @@ class WorkerTable(IdPayloadTable, DatabaseBase):
         Index("ix_workers_workspace_created", "workspace_id", "created_at"),
         Index("ix_workers_pool_status", "pool", "status"),
         Index("ix_workers_machine", "machine_id"),
+        CheckConstraint("admitted_release_generation >= 0", name="ck_workers_release_generation"),
+        CheckConstraint("update_generation >= 0", name="ck_workers_update_generation"),
     )
 
     workspace_id: Mapped[str | None] = mapped_column(
@@ -128,6 +130,13 @@ class WorkerTable(IdPayloadTable, DatabaseBase):
     pool: Mapped[str] = mapped_column(String(240), nullable=False, default="default")
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    admitted_release_generation: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    admitted_runtime_image: Mapped[str] = mapped_column(String(1024), server_default="")
+    admitted_agent_sha256: Mapped[str] = mapped_column(String(64), server_default="")
+    update_generation: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    update_runtime_image: Mapped[str] = mapped_column(String(1024), server_default="")
+    update_agent_sha256: Mapped[str] = mapped_column(String(64), server_default="")
+    update_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ContainerTable(IdPayloadTable, DatabaseBase):
