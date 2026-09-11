@@ -36,7 +36,7 @@ export function ShellButton({
           size={size}
           className={className}
           disabled={!running}
-          title={running ? "Open a shell into this container" : "Container is not running"}
+          title={running ? "Open container shell" : "Container is not running"}
         >
           <TerminalSquare className="size-3.5" />
           Shell
@@ -65,13 +65,13 @@ function ShellDialog({ containerId }: { containerId: string }) {
         <DrawerHeader className="flex min-h-14 items-center gap-3">
           <TerminalSquare className="size-4 shrink-0 text-brand" aria-hidden="true" />
           <Dialog.Title className="text-base font-semibold text-foreground">Shell</Dialog.Title>
-          <Dialog.Description className="sr-only">Interactive terminal session</Dialog.Description>
+          <Dialog.Description className="sr-only">Container shell</Dialog.Description>
         </DrawerHeader>
 
         <div className="flex min-h-0 flex-1 flex-col bg-background p-3 sm:p-4">
           {session.isPending ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-              Starting shell server…
+              Connecting…
             </div>
           ) : session.isError ? (
             <div

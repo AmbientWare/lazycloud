@@ -180,7 +180,7 @@ function JoinProgress({
 
       <section aria-labelledby="readiness-title" className="border-t border-border pt-4">
         <h3 id="readiness-title" className="text-sm font-medium">
-          Readiness
+          Connection status
         </h3>
         <div className="mt-3 grid gap-0 border border-border">
           <ProgressRow state="complete" label="Install command generated" />
@@ -192,9 +192,9 @@ function JoinProgress({
             state={ready ? "complete" : blocked ? "blocked" : machine ? "active" : "pending"}
             label={
               ready
-                ? "Host checks passed and capacity is schedulable"
+                ? "Machine is ready to run workloads"
                 : blocked
-                  ? "Host checks require attention"
+                  ? "Host checks failed"
                   : machine?.readiness_message || "Waiting for host checks"
             }
             last
@@ -211,7 +211,7 @@ function JoinProgress({
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
             <div className="min-w-0 flex-1">
               <h3 id="remediation-title" className="text-sm font-medium">
-                Fix host prerequisites
+                Resolve failed checks
               </h3>
               {failedChecks.map((check) => (
                 <div key={check.name} className="mt-3 text-xs">

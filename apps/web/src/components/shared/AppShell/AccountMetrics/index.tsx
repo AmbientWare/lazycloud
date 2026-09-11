@@ -42,7 +42,7 @@ export function AccountMetricsDrawer({ onClose }: { onClose: () => void }) {
           <SheetTitle className="min-w-0 truncate">Account metrics</SheetTitle>
         </DrawerHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
-          <PanelErrorBoundary title="Readings could not be displayed">
+          <PanelErrorBoundary title="Could not display account metrics">
             <ReadingStrip />
           </PanelErrorBoundary>
           <PanelErrorBoundary title="Account activity could not be displayed">
@@ -78,11 +78,11 @@ function ReadingStrip() {
 
   return (
     <section
-      aria-label="Account readings"
+      aria-label="Account metrics"
       className="panel grid shrink-0 grid-cols-2 overflow-hidden rounded-md sm:grid-cols-4"
     >
       <Reading
-        label="Live containers"
+        label="Containers"
         className="border-b border-r border-border sm:border-b-0"
         query={held}
         value={held.data ? held.data.running + held.data.pending : undefined}
@@ -174,7 +174,7 @@ function ReadingCell({
             className="mt-1 truncate text-[11px] text-muted-foreground"
             title={query.error?.message}
           >
-            {query.error?.message ?? "The reading could not be taken"}
+            {query.error?.message ?? "Could not load this metric"}
           </p>
         </>
       ) : (
@@ -260,7 +260,7 @@ function ConcurrencyReading({
           ) : null}
         </div>
       ))}
-      <p className="mt-1 truncate text-[11px] text-muted-foreground">Ceilings on your plan</p>
+      <p className="mt-1 truncate text-[11px] text-muted-foreground">Plan limits</p>
     </ReadingCell>
   );
 }

@@ -66,7 +66,7 @@ function ApplicationPreview() {
 
 function QueuePreview() {
   return (
-    <ProductFrame title="Build queue" detail="release-checks · live">
+    <ProductFrame title="Build queue" detail="release-checks">
       <LiveQueuePreview />
     </ProductFrame>
   );
@@ -74,7 +74,7 @@ function QueuePreview() {
 
 function SandboxPreview() {
   return (
-    <ProductFrame title="Agent workspace" detail="coding-agent · live">
+    <ProductFrame title="Agent workspace" detail="coding-agent">
       <LiveSandboxPreview />
     </ProductFrame>
   );
@@ -83,7 +83,7 @@ function SandboxPreview() {
 /* The homepage compute section's proof panel. */
 export function ComputePlacementPreview() {
   return (
-    <ProductFrame title="Placement map" detail="workspace capacity · live">
+    <ProductFrame title="Compute" detail="Example workloads">
       <LiveComputePreview />
     </ProductFrame>
   );

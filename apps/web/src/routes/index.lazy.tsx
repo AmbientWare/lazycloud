@@ -142,21 +142,21 @@ const platformStories: PlatformStory[] = [
   {
     key: "graphs",
     label: "Jobs and pipelines",
-    title: "Move heavy work off your laptop.",
+    title: "Run jobs with task dependencies.",
     body: "Run tests, evals, data processing, and GPU jobs as tasks with dependencies, logs, and saved results.",
     visual: "jobs",
   },
   {
     key: "background",
     label: "Queues and schedules",
-    title: "Keep background work off the request path.",
+    title: "Queue work or schedule a run.",
     body: "Queue a function or run it on a schedule. Each run has retries, cancellation, and live logs.",
     visual: "background",
   },
   {
     key: "sandboxes",
     label: "Agent sandboxes",
-    title: "Give coding agents a machine they can safely use.",
+    title: "Run coding agents in isolated sandboxes.",
     body: "Start an isolated sandbox with files, processes, ports, Docker, snapshots, and an explicit network policy.",
     visual: "sandbox",
   },
@@ -179,7 +179,7 @@ const parityModes = [
     Plate: GpuPlate,
     title: "Run remotely",
     call: "embed.remote(rows)",
-    body: "Borrow remote CPU or GPU capacity before you deploy.",
+    body: "Run on a remote CPU or GPU before deploying.",
   },
   {
     key: "production",
@@ -251,7 +251,7 @@ function MarketingHome() {
           >
             <div className="marketing-rise">
               <h1 className="max-w-[620px] text-balance font-serif text-[clamp(42px,8vw,88px)] leading-[0.96] font-normal tracking-[-0.005em] lg:text-[clamp(52px,6.4vw,88px)] [&_em]:text-brand [&_em]:italic">
-                Deploy as fast as you <em>develop.</em>
+                Deploy your <em>Python code.</em>
               </h1>
               <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
                 One decorator turns a Python function into a deployed API, job, queue, or GPU
@@ -339,7 +339,7 @@ function MarketingHome() {
         <section className="border-t border-input bg-muted py-18 sm:py-22 lg:py-28">
           <div className={shell}>
             <div className="flex flex-col items-start gap-0 sm:flex-row sm:items-end sm:justify-between sm:gap-10">
-              <SectionHeading title="What will you build?" />
+              <SectionHeading title="Example projects" />
               {EXAMPLES_URL ? (
                 <div className="-mt-6 mb-10 sm:mt-0 sm:mb-14">
                   <a
@@ -397,7 +397,7 @@ function MarketingHome() {
         <FinalCta
           title={
             <>
-              Keep building. <em>Don&apos;t stop for infrastructure.</em>
+              Deploy your <em>first workload.</em>
             </>
           }
           body="Test locally, use remote compute, and deploy APIs or workers without repackaging the workload."
@@ -545,7 +545,7 @@ function PlatformStoryRail() {
           <SectionHeading
             title={
               <>
-                The whole platform, <em>available from code.</em>
+                Define your workloads <em>in Python.</em>
               </>
             }
             body="Define APIs, jobs, queues, schedules, and sandboxes in Python. Use the typed SDK or JSON output from the CLI."

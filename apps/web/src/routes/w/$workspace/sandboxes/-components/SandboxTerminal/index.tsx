@@ -30,7 +30,7 @@ export function SandboxTerminal({
     return (
       <div className="flex h-64 items-center justify-center gap-2 text-sm text-muted-foreground">
         <Loader2 className="size-4 animate-spin" />
-        Starting shell server…
+        Connecting…
       </div>
     );
   }

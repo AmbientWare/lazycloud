@@ -26,7 +26,7 @@ export const marketingUseCases = [
   },
   {
     id: "sandboxed-coding-agent",
-    title: "Run a coding agent safely",
+    title: "Run a coding agent in a sandbox",
     cardSummary: "Test code inside an isolated sandbox.",
     imageSrc: "/use-cases/sandboxed-coding-agent-dark.webp",
   },
