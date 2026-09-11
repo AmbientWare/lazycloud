@@ -11,7 +11,7 @@ from typing import Protocol, runtime_checkable
 from compute.provider_machines import provider_unit_operational_capacity
 from compute.providers import ProviderUnitSnapshot, next_billing_renewal
 from compute.service import ComputeService
-from compute.state import ComputeUnitState, RedisComputeStateRepository
+from compute.state import ComputeUnitState
 from pydantic import Field
 from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.container_requests import schedulable_capacity
@@ -750,12 +750,12 @@ class ManagedComputeWorkerPoolDrainController:
 
 def managed_compute_drain_controllers(
     compute: ComputeService,
-    compute_states: RedisComputeStateRepository,
+    compute_states: Sequence[ComputeUnitState],
     workers: WorkerPoolDrainWorkerRepository,
     containers: WorkerPoolDrainContainerRepository,
 ) -> list[ManagedComputeWorkerPoolDrainController]:
     controllers: list[ManagedComputeWorkerPoolDrainController] = []
-    for state in compute_states.list_all_pool_states():
+    for state in compute_states:
         if not _managed_compute_pool_state(state):
             continue
         controllers.append(

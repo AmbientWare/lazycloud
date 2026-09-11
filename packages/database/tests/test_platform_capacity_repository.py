@@ -12,6 +12,7 @@ from database.repositories.compute import (
 )
 from database.repositories.identity import UserRepository, WorkspaceRepository
 from database.repositories.orchestration import MachineRepository
+from database.tables.compute import ComputeUnitTable
 from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
 from shared.billing_quotes import ContainerShape
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
@@ -23,9 +24,11 @@ from shared.compute_policy import (
     MachinePool,
     UnitName,
 )
+from shared.compute_reconciliation import ComputeReconciliationKind
 from shared.placement import placement_rate_class
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
+from sqlalchemy import select
 
 from database import DatabaseClient
 
@@ -50,6 +53,48 @@ def _platform_unit(workspace_id: str, provider: str) -> ComputeUnitRecord:
         capability_key=unit_id,
         max_machines=100,
     )
+
+
+def test_capacity_batches_share_work_and_keep_empty_pool_audits_progressing(
+    database: DatabaseClient,
+) -> None:
+    with database.session() as session:
+        workspace = WorkspaceRepository(session).create(name="reconciliation")
+        repository = ComputeUnitRepository(session)
+        active = {
+            repository.upsert(
+                _platform_unit(workspace.id, "aws").model_copy(update={"desired_machines": 1})
+            ).id
+            for _ in range(4)
+        }
+        inactive = {repository.upsert(_platform_unit(workspace.id, "aws")).id for _ in range(2)}
+        updated_at = {
+            unit.id: unit.updated_at for unit in session.scalars(select(ComputeUnitTable))
+        }
+    claimed = Barrier(2)
+    now = utc_now()
+
+    def select_batch() -> set[str]:
+        with database.session() as session:
+            batch = ComputeUnitRepository(session).claim_reconciliation_batch(
+                ComputeReconciliationKind.Provider, now=now, limit=3
+            )
+            claimed.wait(timeout=5)
+            return {unit.id for unit in batch}
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(select_batch)
+        second = executor.submit(select_batch)
+        batches = [first.result(), second.result()]
+    assert batches[0].isdisjoint(batches[1])
+    assert batches[0] | batches[1] == active | inactive
+    for batch in batches:
+        assert len(batch & active) == 2
+        assert len(batch & inactive) == 1
+    with database.session() as session:
+        assert {
+            unit.id: unit.updated_at for unit in session.scalars(select(ComputeUnitTable))
+        } == updated_at
 
 
 def test_fleet_capacity_counts_commitments_and_retiring_nodes_once(
