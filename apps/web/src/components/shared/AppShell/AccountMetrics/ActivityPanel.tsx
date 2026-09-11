@@ -169,7 +169,6 @@ function ActivityReading({
     return (
       <PanelEmpty
         message={emptyWindowMessage(measure, accountActivityRanges[range].label)}
-        detail="Deploy a workload or run a task, and its share of the account shows up here."
         className="h-full min-h-40 py-8"
       />
     );
@@ -454,8 +453,7 @@ function ActivityBreakdown({ activity, labels }: { activity: AccountActivity; la
       </div>
       {activity.series.some((series) => series.kind === "other") ? (
         <p className="px-3 py-2.5 text-[11px] leading-5 text-muted-foreground">
-          Only the busiest apps are named. Everything else is summed into Other apps, so the shares
-          still add up to the window.
+          Other apps combines apps with less activity.
         </p>
       ) : null}
     </div>

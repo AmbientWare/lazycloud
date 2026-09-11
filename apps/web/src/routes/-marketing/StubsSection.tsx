@@ -68,10 +68,10 @@ function StubsStory({ active }: { active: boolean }) {
         <SectionHeading
           title={
             <>
-              Generate a typed client <em>for any deployment.</em>
+              Generate a typed client <em>for your app.</em>
             </>
           }
-          body="Create a pinned Python package for any app. It gives agents the same typed methods and return values as your editor."
+          body="Generate a Python package with typed methods and return values for your deployed endpoints."
         />
       </div>
 
@@ -95,7 +95,7 @@ function StubsStory({ active }: { active: boolean }) {
                     lazycloud deploy review_app.py:app
                   </span>
                   <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
-                    <StatusDot /> 2 resources live
+                    <StatusDot /> 2 workloads deployed
                   </strong>
                 </div>
               }

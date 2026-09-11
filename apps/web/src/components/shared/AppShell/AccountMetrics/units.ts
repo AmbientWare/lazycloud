@@ -13,7 +13,7 @@ export const MEASURE_GROUPS: readonly {
   measures: readonly AccountActivityMeasure[];
 }[] = [
   { label: "Started", measures: ["containers", "tasks"] },
-  { label: "Held", measures: ["cpu", "memory", "gpu"] },
+  { label: "Allocated", measures: ["cpu", "memory", "gpu"] },
 ];
 
 export const measureLabels = {
@@ -68,21 +68,14 @@ export function formatReading(value: number, unit: AccountActivityUnit): string 
   return unit === "starts" ? quantity : `${quantity} ${unitAxisLabels[unit]}`;
 }
 
-/**
- * What the window came to, said the way the measure is read.
- *
- * A count totals the window; a level is the level held across it, so the two
- * cannot share a sentence without one of them claiming to be the other. Split
- * into the figure and the words around it, because only the figure is a figure
- * — a whole sentence set in the data face reads as output rather than as prose.
- */
+/** Starts are totals; resource allocations are averages over the selected range. */
 export function windowSummary(
   total: number,
   unit: AccountActivityUnit,
 ): { reading: string; caption: string } {
   return unit === "starts"
-    ? { reading: formatQuantity(total, unit), caption: "started in this window" }
-    : { reading: formatReading(total, unit), caption: "held on average" };
+    ? { reading: formatQuantity(total, unit), caption: "total starts" }
+    : { reading: formatReading(total, unit), caption: "average allocation" };
 }
 
 /** What a window nothing was measured in says, in the measure's own words. */
@@ -101,7 +94,9 @@ export function emptyWindowMessage(measure: AccountActivityMeasure, rangeLabel: 
  * than a panel that failed to load.
  */
 export function flatWindowNote(measure: AccountActivityMeasure): string {
-  return countsEvents(measure) ? "Nothing started in this window" : "Nothing held in this window";
+  return countsEvents(measure)
+    ? "No starts in this period"
+    : "No resources allocated in this period";
 }
 
 /** Whether the measure counts things that happened, rather than capacity held. */
