@@ -57,6 +57,7 @@ from scheduler.state import (
     ContainerRequestCancelledError,
     ContainerRequestClaimNotOwnedError,
     SchedulerContainerRequestClaim,
+    WorkerRequestCancellation,
     WorkerReservedCapacity,
 )
 from scheduler.tools import (
@@ -113,6 +114,8 @@ class SchedulerContainerStateRepository(Protocol):
     def cancel_container_request(
         self,
         container_id: str,
+        *,
+        only_if_pending: bool = False,
     ) -> SchedulerContainerState | None: ...
 
     def delete_container_state(self, container_id: str) -> bool: ...
@@ -196,7 +199,9 @@ class SchedulerContainerWorkerRepository(Protocol):
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord: ...
 
-    def cancel_worker_request(self, worker_id: str, container_id: str) -> bool: ...
+    def cancel_worker_request(
+        self, worker_id: str, container_id: str
+    ) -> WorkerRequestCancellation: ...
 
 
 class SchedulerContainerPlacement(Protocol):
@@ -414,8 +419,27 @@ class SchedulerContainerRequestService:
                 extra={"container_id": container_id},
             )
 
-    def cancel(self, container_id: str) -> SchedulerContainerCancellationResult:
-        state = self.containers.cancel_container_request(container_id)
+    def cancel(
+        self, container_id: str, *, only_if_pending: bool = False
+    ) -> SchedulerContainerCancellationResult:
+        state = self.containers.cancel_container_request(
+            container_id, only_if_pending=only_if_pending
+        )
+        if (
+            only_if_pending
+            and state is not None
+            and state.status
+            not in {
+                SchedulerContainerStatus.Pending,
+                SchedulerContainerStatus.Stopping,
+            }
+        ):
+            return SchedulerContainerCancellationResult(
+                container_id=container_id,
+                cancelled=False,
+                state_found=True,
+                worker_id=state.worker_id,
+            )
         if state is None:
             self._release_capacity_reservation(container_id)
             return SchedulerContainerCancellationResult(container_id=container_id)
@@ -425,11 +449,13 @@ class SchedulerContainerRequestService:
         }
         pending_request_removed = False
         if state.worker_id and not terminal:
-            request_removed = self.workers.cancel_worker_request(
+            cancellation = self.workers.cancel_worker_request(
                 state.worker_id,
                 container_id,
             )
-            pending_request_removed = request_removed and state.started_at is None
+            pending_request_removed = (
+                cancellation.removed and not cancellation.delivered and state.started_at is None
+            )
             if pending_request_removed:
                 self.containers.delete_container_state(container_id)
         self._release_capacity_reservation(container_id)

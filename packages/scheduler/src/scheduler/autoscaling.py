@@ -37,7 +37,11 @@ from shared.contracts import ContractModel
 from shared.errors import DomainError, InvalidInputError
 from shared.http.endpoints import StartEndpointServeRequest, StartEndpointServeResponse
 from shared.http.pods import CreatePodRequest, CreatePodResponse
-from shared.scheduling import SchedulerContainerStatus
+from shared.scheduling import (
+    SchedulerContainerState,
+    SchedulerContainerStatus,
+    SchedulerWorkerRequest,
+)
 from shared.timestamps import utc_now
 from shared.worker_events import (
     ENDPOINT_SCALE_DECISION_ACTION,
@@ -64,25 +68,11 @@ type AutoscalingConfig = AutoscalingStubConfig | StubConfig
 AUTOSCALER_LOCK_TTL_SECONDS = 10
 AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD = 3
 AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS = 300
+CONTAINER_DELIVERY_DEADLINE_SECONDS = 60
 CONTAINER_START_DEADLINE_SECONDS = 600
-"""How long an unheld `pending` container may sit before it stops being capacity.
+"""Image preparation has a longer deadline than acknowledging a delivered request.
 
-Bounded from both ends. Below it, a start still in progress must not be reaped:
-the reclaim frees the ceiling, the next tick starts a replacement, and if the
-deadline is shorter than the real start that replacement is reaped at the same
-age — a workload that never runs at all, where the symptom was one that ran
-late. Above it, nothing is gained: a stranded container is already recovered at
-about sixteen minutes, when its scheduler state lapses and its worker's orphan
-path fails it, so a deadline past that would only re-describe what already
-happens and would still leave the recovery owned by a cache expiry.
-
-Six hundred is the platform's own figure for how long a pending container may
-legitimately show no progress — the window a worker re-arms that container's
-scheduler state for while it is still pulling — and it lands a clear six minutes
-inside the sixteen. It is a bound on a start already in somebody's hands, not on
-the wait for capacity: a request still queued for placement is read directly
-below, so the clock never has to allow for the fifteen minutes the dispatcher
-may spend retrying one.
+Both begin at assignment. The global backlog owns the separate wait for capacity.
 """
 FUNCTION_AUTOSCALER_SOURCE = "function.autoscaler"
 ENDPOINT_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS = 600
@@ -98,6 +88,8 @@ class PodControl(Protocol):
 
 
 class SchedulerContainerStateReader(Protocol):
+    def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
+
     def container_statuses(
         self,
         container_ids: Sequence[str],
@@ -105,6 +97,10 @@ class SchedulerContainerStateReader(Protocol):
 
 
 class ContainerRequestReader(Protocol):
+    def get_worker_request(
+        self, worker_id: str, container_id: str
+    ) -> SchedulerWorkerRequest | None: ...
+
     def has_recoverable_container_request(
         self,
         container_id: str,
@@ -425,9 +421,11 @@ class AutoscalingDriver:
             containers,
             scheduler_statuses,
             self.container_requests,
+            self.container_states,
             now=current_time,
         )
-        actions = self._recover(stale)
+        actions, still_live = self._recover(stale)
+        holding.extend(still_live)
         with self.services.context.database.session() as session:
             rollouts = ContainerRolloutRepository(session)
             draining_ids = rollouts.draining_ids([container.id for container in holding])
@@ -511,7 +509,9 @@ class AutoscalingDriver:
         self._record(stub, result, plan)
         return result
 
-    def _recover(self, stale: list[StaleContainer]) -> list[AutoscaleAction]:
+    def _recover(
+        self, stale: list[StaleContainer]
+    ) -> tuple[list[AutoscaleAction], list[ContainerRecord]]:
         """Give back the ceiling slots that records nothing backs are holding.
 
         Stopped rather than deleted, and stopped through the one settlement path
@@ -526,11 +526,16 @@ class AutoscalingDriver:
         """
 
         actions: list[AutoscaleAction] = []
+        still_live: list[ContainerRecord] = []
         for container in stale:
             stopped = self.services.containers.stop(
                 container.record.id,
                 reason=StopContainerReason.Scheduler,
+                only_if_pending=container.record.status is ContainerStatus.Pending,
             )
+            if stopped.status in {ContainerStatus.Pending, ContainerStatus.Running}:
+                still_live.append(stopped)
+                continue
             actions.append(
                 AutoscaleAction(
                     container_id=stopped.id,
@@ -538,7 +543,7 @@ class AutoscalingDriver:
                     reason=container.reason,
                 )
             )
-        return actions
+        return actions, still_live
 
     def _start(self, stub: AutoscalingStub, count: int) -> list[AutoscaleAction]:
         """Ask for containers one at a time until the workload stops giving them.
@@ -1363,6 +1368,7 @@ def _partition_backed_containers(
     containers: list[ContainerRecord],
     scheduler_statuses: Mapping[str, SchedulerContainerStatus],
     requests: ContainerRequestReader,
+    states: SchedulerContainerStateReader,
     *,
     now: datetime,
 ) -> tuple[list[ContainerRecord], list[StaleContainer]]:
@@ -1382,6 +1388,7 @@ def _partition_backed_containers(
             container,
             scheduler_statuses.get(container.id),
             requests,
+            states,
             now=now,
         )
         if reason:
@@ -1395,6 +1402,7 @@ def _stale_reason(
     container: ContainerRecord,
     scheduler_status: SchedulerContainerStatus | None,
     requests: ContainerRequestReader,
+    states: SchedulerContainerStateReader,
     *,
     now: datetime,
 ) -> str:
@@ -1409,12 +1417,9 @@ def _stale_reason(
     A `running` row is the case pods already covered: it has started, so no
     scheduler state at all means the worker that was running it is gone.
 
-    A `pending` row is the one that stranded functions and endpoints, and it has
-    two legitimate reasons to still be pending. Either a request for it is
-    queued, in which case the dispatcher owns it and bounds its own retrying —
-    read here rather than guessed at, so the deadline below never has to cover
-    a wait for capacity. Or a worker has taken it and is starting it, which is
-    what the deadline covers and the only thing it covers.
+    The global backlog owns capacity waits. A worker delivery has a shorter
+    deadline until acknowledged; container startup gets its full deadline after
+    assignment, including when capacity acquisition took longer than startup.
     """
 
     if scheduler_status is not None and scheduler_status not in {
@@ -1427,12 +1432,19 @@ def _stale_reason(
     if scheduler_status is SchedulerContainerStatus.Running:
         # Started, and only the durable row has yet to catch up.
         return ""
-    if requests.has_recoverable_container_request(
-        container.id,
-        worker_id=container.runtime_worker_id,
-    ):
+    if requests.has_recoverable_container_request(container.id):
         return ""
-    if (now - container.created_at).total_seconds() < CONTAINER_START_DEADLINE_SECONDS:
+    if container.runtime_worker_id:
+        delivery = requests.get_worker_request(container.runtime_worker_id, container.id)
+        if delivery is not None:
+            if (now - delivery.timestamp).total_seconds() < CONTAINER_DELIVERY_DEADLINE_SECONDS:
+                return ""
+            return "worker did not acknowledge the container within the delivery deadline"
+    state = states.get_container_state(container.id)
+    startup_at = (
+        state.scheduled_at if state is not None and state.worker_id else container.created_at
+    )
+    if (now - startup_at).total_seconds() < CONTAINER_START_DEADLINE_SECONDS:
         return ""
     return "container never started within the start deadline"
 

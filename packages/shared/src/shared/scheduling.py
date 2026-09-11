@@ -392,6 +392,7 @@ class SchedulerContainerSubmitResult(ContractModel):
 
 class SchedulerContainerCancellationResult(ContractModel):
     container_id: str
+    cancelled: bool = True
     state_found: bool = False
     worker_id: str = ""
     pending_request_removed: bool = False

@@ -85,7 +85,9 @@ class ContainerScheduler(Protocol):
 
 
 class SchedulerContainerCancellation(Protocol):
-    def cancel(self, container_id: str) -> SchedulerContainerCancellationResult: ...
+    def cancel(
+        self, container_id: str, *, only_if_pending: bool = False
+    ) -> SchedulerContainerCancellationResult: ...
 
 
 class ContainerEventBus(Protocol):
@@ -718,6 +720,7 @@ class ContainerService:
         container_id: str,
         *,
         reason: StopContainerReason | None = None,
+        only_if_pending: bool = False,
     ) -> ContainerRecord:
         """Stop a container, recording why if the caller said.
 
@@ -731,13 +734,17 @@ class ContainerService:
         """
 
         record = self.get(container_id)
+        if only_if_pending and record.status is not ContainerStatus.Pending:
+            return record
         settlement_reason = StopContainerReason.User if reason is None else reason
         if record.status in TERMINAL_CONTAINER_STATUSES:
             # Already over. Announcing would write a fresh cause across the one
             # that actually ended it, and rewriting the row would cost a session
             # to change nothing.
             return record
-        cancellation = self._cancel_scheduler_request(record.id)
+        cancellation = self._cancel_scheduler_request(record.id, only_if_pending=only_if_pending)
+        if not cancellation.cancelled:
+            return self.get(container_id)
         if cancellation.worker_stop_required:
             self._send_stop_event(
                 record.id,
@@ -901,8 +908,10 @@ class ContainerService:
     def _cancel_scheduler_request(
         self,
         container_id: str,
+        *,
+        only_if_pending: bool = False,
     ) -> SchedulerContainerCancellationResult:
-        return self.scheduler_cancellation.cancel(container_id)
+        return self.scheduler_cancellation.cancel(container_id, only_if_pending=only_if_pending)
 
     def _send_stop_event(
         self,
