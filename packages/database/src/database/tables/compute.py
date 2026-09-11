@@ -24,6 +24,8 @@ from database.tables.base import DatabaseBase, IdPayloadTable, json_type, uuid_t
 
 class ComputeUnitTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "compute_units"
+    provider_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    drain_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("workspace_id", "name", name="uq_compute_units_workspace_name"),
         UniqueConstraint("capacity_owner_id", name="uq_compute_units_capacity_owner_id"),
