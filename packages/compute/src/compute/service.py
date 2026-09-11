@@ -81,6 +81,7 @@ from shared.usage import UsageBillingOwner
 from compute.agent_control import machine_serves_workloads
 from compute.aws_connections import AwsAccountPoolDrain
 from compute.capacity_errors import (
+    CapacityReservationConflictError,
     CapacityReservationLeaseLostError,
     CapacityReservationLockContendedError,
 )
@@ -101,6 +102,7 @@ from compute.provider_machines import (
     ProviderUnitBootstrapFactory,
     _metadata_time,
     _provider_instance_metadata,
+    _provider_storage_volume_ids,
     _provider_zero_capacity_converged,
     _require_internal_pooled_unit,
     _reservation_open,
@@ -115,6 +117,7 @@ from compute.providers import (
     DirectMachineProvider,
     DirectMachineProviderRegistry,
     PooledCapacityProvider,
+    ProviderCapacityPhase,
     ProviderUnitRequest,
     ProviderUnitSnapshot,
     ResolvedComputeProvider,
@@ -608,6 +611,13 @@ class ComputeService:
                     request,
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
                     reason="capacity owner disappeared during acquisition",
+                    desired_unit=desired_unit,
+                )
+            if locked_pool.phase in ENDED_UNIT_PHASES:
+                return _capacity_result(
+                    request,
+                    CapacityAcquisitionStatus.TemporarilyUnavailable,
+                    reason="capacity owner must finish retirement before it can be prepared again",
                     desired_unit=desired_unit,
                 )
             intent_pool = locked_pool
@@ -1737,6 +1747,10 @@ class ComputeService:
                 root_volume_gib=root_volume_gib,
                 for_update=True,
             )
+            if current is not None and current.phase is ComputeUnitPhase.Deleting:
+                raise CapacityReservationConflictError(
+                    f"compute pool {current.name!r} is finishing provider resource retirement"
+                )
             remaining = self._available_fleet_machines(
                 repository,
                 platform_fleet=unit_platform_fleet,
@@ -1887,13 +1901,13 @@ class ComputeService:
                 idle_drain_timeout_seconds=idle_timeout_seconds,
                 root_volume_gib=root_volume_gib,
                 observed_machines=current.observed_machines if current is not None else 0,
-                generation=current.generation if current is not None else 1,
-                # A row left behind by a delete is a name and a shape, not a
-                # decision. Preparing capacity against it is asking for machines
-                # again, so it starts provisioning rather than inheriting the
-                # phase that ended it: carrying `deleted` forward produced a pool
-                # wanting one machine that the reconciler skips on every pass,
-                # because a deleted pool is exactly what it declines to build.
+                generation=(
+                    current.generation + int(current.phase is ComputeUnitPhase.Deleted)
+                    if current is not None
+                    else 1
+                ),
+                # Only completed retirement can reactivate. The new generation
+                # fences provider observations from the previous resource lifetime.
                 phase=(
                     current.phase
                     if current is not None and current.phase not in ENDED_UNIT_PHASES
@@ -2046,6 +2060,8 @@ class ComputeService:
                 workspace_id=workspace_id,
                 unit_ref=capacity_owner_id,
             )
+            if unit.phase in ENDED_UNIT_PHASES:
+                raise ConflictError("retired compute capacity must be prepared before scaling")
             before_mutation(unit)
             if desired_machines == 0 and self._machines_holding_active_work(
                 session, pool_id=unit.id
@@ -2897,9 +2913,6 @@ class ComputeService:
                 raise UpstreamUnavailableError(
                     f"compute pool {current.name!r} provider is not pooled"
                 )
-            if provider.policy is not None and not provider.policy.can_purchase:
-                with dispatch_fence.dispatch_lock(current.capacity_owner_id):
-                    pooled.ensure_unit(self._provider_unit_request(current, offer))
             if current.phase is ComputeUnitPhase.Deleting:
                 with dispatch_fence.dispatch_lock(current.capacity_owner_id):
                     snapshot = pooled.delete_unit(self._provider_unit_request(current, offer))
@@ -2910,6 +2923,13 @@ class ComputeService:
                     provider=pooled,
                     now=now,
                 )
+            if (
+                provider.policy is not None
+                and not provider.policy.can_purchase
+                and (current.desired_machines or current.observed_machines)
+            ):
+                with dispatch_fence.dispatch_lock(current.capacity_owner_id):
+                    pooled.ensure_unit(self._provider_unit_request(current, offer))
             current = self._reclaim_pooled_bootstrap_failures(
                 current,
                 pooled=pooled,
@@ -2942,13 +2962,21 @@ class ComputeService:
                             desired_machines=0,
                             max_machines=request.max_machines,
                         )
-                return self.provider_machines._apply_pooled_snapshot(
-                    current,
-                    offer,
-                    snapshot,
-                    provider=pooled,
-                    now=now,
-                )
+                    current = self.provider_machines._apply_pooled_snapshot(
+                        current,
+                        offer,
+                        snapshot,
+                        provider=pooled,
+                        now=now,
+                    )
+                    return self._retire_obsolete_empty_pool(
+                        current,
+                        provider=provider,
+                        offer=offer,
+                        snapshot=snapshot,
+                        mutations=dispatch_fence,
+                        now=now,
+                    )
             offer = self._available_unit_offer(provider, current)
             rejection = self.pooled_offer_rejection(
                 provider, offer, preemptible=current.worker_preemptible, now=now
@@ -2995,6 +3023,84 @@ class ComputeService:
                 current,
                 preserve_deleting=True,
             )
+
+    def _retire_obsolete_empty_pool(
+        self,
+        pool: ComputeUnitRecord,
+        *,
+        provider: ResolvedComputeProvider,
+        offer: ComputeOffer,
+        snapshot: ProviderUnitSnapshot,
+        mutations: CapacityOwnerMutationLease,
+        now: datetime,
+    ) -> ComputeUnitRecord:
+        if not _obsolete_platform_pool(pool, provider, offer):
+            return pool
+        if (
+            snapshot.phase not in {ProviderCapacityPhase.Ready, ProviderCapacityPhase.Deleted}
+            or snapshot.desired_machines
+            or snapshot.observed_machines
+            or snapshot.instances
+            or mutations.has_open_reservations(pool.capacity_owner_id)
+        ):
+            return pool
+        with self.context.database.session() as session:
+            units = ComputeUnitRepository(session)
+            units.lock_platform_capacity()
+            current = units.get(pool.id, for_update=True)
+            if current is None:
+                raise ConflictError("compute pool disappeared during retirement")
+            if (
+                current.generation != pool.generation
+                or current.phase in ENDED_UNIT_PHASES
+                or not _obsolete_platform_pool(current, provider, offer)
+                or current.desired_machines
+                or current.observed_machines
+                or current.min_machines
+                or current.min_free_cpu_millicores
+                or current.min_free_memory_mib
+                or current.min_free_gpu_count
+                or current.replacement_machine_id
+                or current.replacement_template_version
+                or ComputeCapacityOperationRepository(session).list_open_for_owner(
+                    current.capacity_owner_id
+                )
+                or self._machines_holding_active_work(session, pool_id=current.id)
+            ):
+                return current
+            records = ComputeProviderInstanceRepository(session).list_for_pool(current.id)
+            if any(
+                _reservation_open(record.status)
+                or (
+                    (record.instance_id is not None or _provider_storage_volume_ids(record))
+                    and _metadata_time(
+                        _provider_instance_metadata(record), "provider_storage_destroyed_at"
+                    )
+                    is None
+                )
+                for record in records
+            ):
+                return current
+            retiring = units.upsert(
+                current.model_copy(
+                    update={
+                        "generation": current.generation + 1,
+                        "phase": ComputeUnitPhase.Deleting,
+                        "status": ComputeUnitPhase.Deleting.value,
+                    }
+                )
+            )
+        pooled = provider.pooled
+        if pooled is None:
+            raise UpstreamUnavailableError("obsolete compute pool provider is not pooled")
+        LOGGER.info("retiring obsolete empty platform pool %s", retiring.id)
+        return self.provider_machines._apply_pooled_snapshot(
+            retiring,
+            offer,
+            pooled.delete_unit(self._provider_unit_request(retiring, offer)),
+            provider=pooled,
+            now=now,
+        )
 
     @staticmethod
     def _ensure_reconciled_pool(
@@ -3728,6 +3834,23 @@ class ComputeService:
                     reason="provider instance storage destroyed",
                     now=now,
                 )
+
+
+def _obsolete_platform_pool(
+    pool: ComputeUnitRecord, provider: ResolvedComputeProvider, offer: ComputeOffer
+) -> bool:
+    policy = provider.policy
+    return (
+        pool.visibility is ComputeUnitVisibility.Internal
+        and pool.platform_fleet
+        and policy is not None
+        and policy.platform_fleet
+        and (
+            not policy.can_purchase
+            or not policy.accepts(offer)
+            or pool.root_volume_gib != policy.root_volume_gib
+        )
+    )
 
 
 def _shape_matches_pool(shape: CapacityAcquisitionShape, pool: ComputeUnitRecord) -> bool:
