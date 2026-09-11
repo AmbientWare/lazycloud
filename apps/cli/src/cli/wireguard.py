@@ -39,6 +39,7 @@ def bootstrap_aws(
     secret_id: str = typer.Option(..., help="Secrets Manager key document name or ARN."),
     region: str = typer.Option(..., help="AWS region holding the key document."),
     platform_peers: int = typer.Option(2, min=1, max=32),
+    gateways: int = typer.Option(2, min=1, max=32),
 ) -> None:
     source: object = Session(region_name=region)
     if not is_boto3_client_factory(source):
@@ -61,7 +62,9 @@ def bootstrap_aws(
             existing = _JSON_OBJECT.validate_json(secret_string)
         except ValidationError as exc:
             raise RuntimeError("WireGuard key document must be a JSON object") from exc
-    values = ensure_wireguard_key_document(existing, platform_peers=platform_peers)
+    values = ensure_wireguard_key_document(
+        existing, platform_peers=platform_peers, gateways=gateways
+    )
     if values != existing:
         client.put_secret_value(
             SecretId=secret_id,

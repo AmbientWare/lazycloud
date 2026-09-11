@@ -466,23 +466,27 @@ services:
       - /var/lib/lazycloud/wireguard
       - --platform-peers
       - "1"
+      - --gateways
+      - "2"
     volumes:
       - wireguard-keys:/var/lib/lazycloud/wireguard
 
-  tunnel-gateway:
+  tunnel-gateway: &wireguard-gateway
     image: tunnel-gateway:local
     restart: unless-stopped
+    stop_grace_period: 150s
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane
       target: tunnel-gateway
       args: *lazycloud-build-args
-    environment:
+    environment: &wireguard-gateway-env
       <<: [*process-env, *database-env, *redis-env]
+      LAZYCLOUD_WIREGUARD_GATEWAY_INDEX: "0"
       LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE: /var/lib/lazycloud/wireguard/server/private-key
       LAZYCLOUD_WIREGUARD_PLATFORM_KEY_DIRECTORY: /var/lib/lazycloud/wireguard
       LAZYCLOUD_WIREGUARD_PLATFORM_PEER_COUNT: "1"
-      LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT:-tunnel-gateway:51820}"
+      LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_0_ENDPOINT:-tunnel-gateway:51820}"
       LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_HOST: control-plane
       LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_PORT: "9000"
     cap_add:
@@ -505,6 +509,16 @@ services:
       timeout: 2s
       retries: 30
       start_period: 2s
+
+  tunnel-gateway-1:
+    <<: *wireguard-gateway
+    environment:
+      <<: *wireguard-gateway-env
+      LAZYCLOUD_WIREGUARD_GATEWAY_INDEX: "1"
+      LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE: /var/lib/lazycloud/wireguard/gateway-1/private-key
+      LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_1_ENDPOINT:-tunnel-gateway-1:51820}"
+    ports:
+      - "${LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_1_PORT:-51821}:51820/udp"
 
   control-plane:
     image: api:local
@@ -549,6 +563,8 @@ services:
         ]
     deploy:
       replicas: 1
+    sysctls:
+      net.ipv4.conf.all.src_valid_mark: "1"
     ulimits:
       nofile:
         soft: 1048576
@@ -587,11 +603,11 @@ services:
     network_mode: "service:control-plane"
     command: ["lazycloud-wireguard-platform"]
     environment:
-      <<: *process-env
+      <<: [*process-env, *database-env, *redis-env]
       LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE: /var/lib/lazycloud/wireguard/platform-0/private-key
-      LAZYCLOUD_WIREGUARD_SERVER_PUBLIC_KEY_FILE: /var/lib/lazycloud/wireguard/server/public-key
-      LAZYCLOUD_WIREGUARD_GATEWAY_ENDPOINT: "tunnel-gateway:51820"
       LAZYCLOUD_WIREGUARD_PLATFORM_INDEX: "0"
+      LAZYCLOUD_DATABASE_POOL_SIZE: "1"
+      LAZYCLOUD_DATABASE_MAX_OVERFLOW: "0"
     cap_add:
       - NET_ADMIN
     devices:
@@ -600,9 +616,15 @@ services:
       control-plane:
         condition: service_healthy
       tunnel-gateway:
-        condition: service_healthy
+        condition: service_started
+      tunnel-gateway-1:
+        condition: service_started
     volumes:
-      - wireguard-keys:/var/lib/lazycloud/wireguard:ro
+      - type: volume
+        source: wireguard-keys
+        target: /var/lib/lazycloud/wireguard/platform-0
+        volume:
+          subpath: platform-0
     healthcheck:
       test: ["CMD", "test", "-f", "/tmp/lazycloud-wireguard-platform.ready"]
       interval: 2s

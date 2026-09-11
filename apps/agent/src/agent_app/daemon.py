@@ -75,14 +75,12 @@ from gateway.http import (
     JoinAgentResponse,
     LeaveAgentRequest,
     LeaveAgentResponse,
-    RegisterAgentPrivateNetworkRequest,
-    RegisterAgentPrivateNetworkResponse,
     StreamAgentRequest,
     StreamAgentResponse,
     UpdateAgentRouteStatusRequest,
     UpdateAgentRouteStatusResponse,
 )
-from networking.wireguard import WireGuardClientRuntime, WireGuardPeerConfiguration
+from networking.wireguard_client import WireGuardClientRuntime
 from provider_aws import (
     AwsEc2SpotInterruptionMonitor,
     AwsSpotInterruptionMonitorError,
@@ -105,6 +103,11 @@ from shared.http.errors import HttpApiError, HttpTransportError
 from shared.http.gateway import (
     AgentCapacityInterruptionRequest,
     AgentCapacityInterruptionResponse,
+)
+from shared.http.private_network import (
+    PrivateNetworkTopologyRequest,
+    RegisterPrivateNetworkRequest,
+    WireGuardPeerConfiguration,
 )
 from shared.http.provider_nodes import (
     ProviderNodeBootstrapFailureRequest,
@@ -147,6 +150,7 @@ JOIN_RETRY_BASE_SECONDS = 2.0
 JOIN_RETRY_MAX_SECONDS = 30.0
 PRIVATE_NETWORK_CONNECT_ATTEMPTS = 30
 PRIVATE_NETWORK_POLL_SECONDS = 2.0
+PRIVATE_NETWORK_TOPOLOGY_SECONDS = 10.0
 AGENT_STATE_FILE = "agent-state.json"
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
 WORKER_EXIT_LOG_LINES = 200
@@ -327,8 +331,13 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
 
     def register_agent_private_network(
         self,
-        request: RegisterAgentPrivateNetworkRequest,
-    ) -> RegisterAgentPrivateNetworkResponse: ...
+        request: RegisterPrivateNetworkRequest,
+    ) -> WireGuardPeerConfiguration: ...
+
+    def private_network_topology(
+        self,
+        request: PrivateNetworkTopologyRequest,
+    ) -> WireGuardPeerConfiguration: ...
 
     def stream_agent_telemetry(
         self,
@@ -434,10 +443,18 @@ class HttpAgentGatewayClient:
 
     def register_agent_private_network(
         self,
-        request: RegisterAgentPrivateNetworkRequest,
-    ) -> RegisterAgentPrivateNetworkResponse:
-        return RegisterAgentPrivateNetworkResponse.model_validate(
-            self.channel.post("/gateway/agents/private-network", _payload(request))
+        request: RegisterPrivateNetworkRequest,
+    ) -> WireGuardPeerConfiguration:
+        return WireGuardPeerConfiguration.model_validate(
+            self.channel.post("/gateway/agents/private-network/register", _payload(request))
+        )
+
+    def private_network_topology(
+        self,
+        request: PrivateNetworkTopologyRequest,
+    ) -> WireGuardPeerConfiguration:
+        return WireGuardPeerConfiguration.model_validate(
+            self.channel.post("/gateway/agents/private-network/topology", _payload(request))
         )
 
     def stream_agent_telemetry(
@@ -1002,6 +1019,7 @@ class AgentDaemonService:
         private_network_runtime: AgentPrivateNetworkRuntime | None = None
         private_network_address = ""
         private_network_configuration: WireGuardPeerConfiguration | None = None
+        next_private_network_refresh = 0.0
         iterations = 0
         last_result = AgentDaemonRunResult(
             workspace_id=state.workspace_id,
@@ -1010,6 +1028,23 @@ class AgentDaemonService:
         )
         route_proxy: AgentRouteProxyService | None = None
         runtime_ready = False
+
+        def close_runtime() -> None:
+            try:
+                self._capacity_shutdown.close()
+                if self._capacity_shutdown.deadline is not None:
+                    self._capacity_shutdown.stop()
+            finally:
+                try:
+                    if route_proxy is not None:
+                        route_proxy.close()
+                finally:
+                    try:
+                        if private_network_runtime is not None:
+                            private_network_runtime.close()
+                    finally:
+                        self.worker_controller.close()
+
         try:
             try:
                 (
@@ -1050,6 +1085,24 @@ class AgentDaemonService:
                         private_network_runtime is not None
                         and private_network_configuration is not None
                     ):
+                        if time.monotonic() >= next_private_network_refresh:
+                            next_private_network_refresh = (
+                                time.monotonic() + PRIVATE_NETWORK_TOPOLOGY_SECONDS
+                            )
+                            configuration = self.client.private_network_topology(
+                                PrivateNetworkTopologyRequest(agent_token=state.agent_token)
+                            )
+                            if (
+                                configuration.peer_id != private_network_configuration.peer_id
+                                or configuration.address != private_network_configuration.address
+                                or configuration.generation
+                                != private_network_configuration.generation
+                            ):
+                                raise AgentAuthorityRevokedError(
+                                    "agent WireGuard identity is no longer current"
+                                )
+                            private_network_runtime.configure(configuration)
+                            private_network_configuration = configuration
                         private_network_runtime.reconcile_connection(private_network_configuration)
                     notice = self._poll_capacity_interruption()
                     if notice is not None:
@@ -1058,6 +1111,7 @@ class AgentDaemonService:
                         state,
                         current_iterations=next_iteration,
                         route_proxy=route_proxy,
+                        before_agent_update=close_runtime,
                         private_network_started=private_network_runtime is not None,
                         private_network_address=private_network_address,
                     )
@@ -1107,16 +1161,7 @@ class AgentDaemonService:
             self.state_store.mark_authority_revoked(state)
             return last_result.model_copy(update={"authority_revoked": True})
         finally:
-            self._capacity_shutdown.close()
-            try:
-                if self._capacity_shutdown.deadline is not None:
-                    self._capacity_shutdown.stop()
-            finally:
-                if route_proxy is not None:
-                    route_proxy.close()
-                if private_network_runtime is not None:
-                    private_network_runtime.close()
-                self.worker_controller.close()
+            close_runtime()
 
     def resolve_identity(self) -> AgentState:
         revoked = self.state_store.authority_revoked()
@@ -1165,6 +1210,7 @@ class AgentDaemonService:
         *,
         current_iterations: int = 1,
         route_proxy: AgentRouteProxyService,
+        before_agent_update: Callable[[], None],
         private_network_started: bool = False,
         private_network_address: str = "",
     ) -> AgentDaemonRunResult:
@@ -1238,7 +1284,7 @@ class AgentDaemonService:
         state = state.model_copy(update={"release_generation": release.generation})
         self.state_store.save(state)
         if release.update_agent and release.agent is not None:
-            updater.install(release.agent)
+            updater.install(release.agent, before_exec=before_agent_update)
         return AgentDaemonRunResult(
             workspace_id=state.workspace_id,
             pool=state.pool,
@@ -1622,33 +1668,39 @@ class AgentDaemonService:
             Path(self.options.state_dir) / "wireguard",
         )
         try:
-            binding = self.client.register_agent_private_network(
-                RegisterAgentPrivateNetworkRequest(
+            configuration = self.client.register_agent_private_network(
+                RegisterPrivateNetworkRequest(
                     agent_token=state.agent_token,
                     public_key=runtime.public_key(),
                 )
             )
-            configuration = WireGuardPeerConfiguration.model_validate(
-                binding.model_dump(mode="python")
-            )
             runtime.configure(configuration)
             for attempt in range(1, PRIVATE_NETWORK_CONNECT_ATTEMPTS + 1):
-                handshake = runtime.latest_handshake_at(binding.server_public_key)
+                handshakes = {
+                    gateway.index: runtime.latest_handshake_at(gateway.public_key)
+                    for gateway in configuration.gateways
+                }
+                healthy = runtime.reconcile_connection(configuration)
                 LOGGER.info(
-                    "private-network poll attempt=%s wireguard_handshake=%s peer_id=%s",
+                    "private-network poll attempt=%s gateways=%s healthy=%s peer_id=%s",
                     attempt,
-                    handshake.isoformat() if handshake is not None else "pending",
-                    binding.peer_id,
+                    {
+                        index: handshake.isoformat() if handshake is not None else "pending"
+                        for index, handshake in handshakes.items()
+                    },
+                    healthy,
+                    configuration.peer_id,
                 )
-                if handshake is not None:
+                if healthy and any(handshake is not None for handshake in handshakes.values()):
                     return (
                         runtime,
-                        _private_network_host(binding.address),
+                        _private_network_host(configuration.address),
                         configuration,
                     )
                 time.sleep(PRIVATE_NETWORK_POLL_SECONDS)
             raise RuntimeError(
-                f"WireGuard did not handshake with {binding.endpoint}; verify outbound UDP"
+                "WireGuard has no reachable gateway after initial connection polls; "
+                "verify outbound UDP and gateway readiness"
             )
         except Exception:
             runtime.close()
@@ -2085,6 +2137,8 @@ def _recoverable_stream_error(exc: Exception) -> bool:
 
 
 def agent_authority_was_revoked(exc: Exception) -> bool:
+    if isinstance(exc, AgentAuthorityRevokedError):
+        return True
     if not isinstance(exc, HttpApiError) or not 400 <= exc.status_code < 500:
         return False
     detail = (exc.detail or str(exc)).strip().lower()

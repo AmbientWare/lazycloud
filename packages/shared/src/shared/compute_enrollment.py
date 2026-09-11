@@ -111,6 +111,7 @@ class WireGuardPeerStatus(StringEnum):
 
 class WireGuardGateway(ContractModel):
     id: str
+    index: int = Field(default=0, ge=0, le=31)
     public_key: str = Field(min_length=44, max_length=44)
     endpoint: str = Field(min_length=3, max_length=512)
     updated_at: datetime

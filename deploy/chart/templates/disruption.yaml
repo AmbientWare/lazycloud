@@ -57,4 +57,4 @@ spec:
   maxUnavailable: 1
   selector:
     matchLabels:
-      app: tunnel-gateway
+      app.kubernetes.io/component: tunnel-gateway

@@ -163,13 +163,13 @@ connection later.
 
 ```sh
 uv run --frozen --group workspace python -m deploy.release
-docker compose ps control-plane wireguard-platform tunnel-gateway
+docker compose ps control-plane wireguard-platform tunnel-gateway tunnel-gateway-1
 ```
 
 `wireguard-platform` shares the control plane's network namespace. Recreate it
 with the control plane so it does not remain attached to a replaced namespace.
-The separate `tunnel-gateway` service keeps its network namespace and continues
-serving enrolled agents.
+The separate gateway services keep their network namespaces and continue serving
+enrolled agents.
 
 Workers send runtime callbacks to `100.96.0.1:9000`, the private gateway address.
 The gateway forwards them to `control-plane:9000`, whose Kubernetes Service
@@ -195,9 +195,10 @@ preserving their service arguments and enrollment state. Cordon each worker and
 finish its active work before restarting its host agent, then verify private
 connectivity before uncordoning it.
 
-The stack is usable when all three services are healthy. The platform sidecar's
-readiness proves it can reach the active gateway's health listener through
-WireGuard.
+The stack is usable when the API, platform sidecar and both gateways are healthy.
+The sidecar proves at least one encrypted gateway path. Each gateway requires a
+platform handshake before becoming ready, so the sidecar starts after gateway
+process creation without depending on their readiness.
 
 ### Shared fleet and one customer machine
 
@@ -253,16 +254,26 @@ derived on start, and its volumes hold only caches.
 
 ### WireGuard endpoint and keys
 
-Compose publishes gateway UDP port 51820. Its bundled agent uses the in-network
-default `tunnel-gateway:51820`. Set
-`LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT=<host>:51820` when agents reach the host by
-another address. The host may be a DNS name from any provider, but it must reach
-the gateway over UDP. A Cloudflare HTTP tunnel cannot carry WireGuard traffic.
+Compose runs two gateways and publishes host UDP ports 51820 and 51821. Its
+bundled agent reaches `tunnel-gateway:51820` and `tunnel-gateway-1:51820`. For
+agents outside Compose, set `LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_0_ENDPOINT` and
+`LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_1_ENDPOINT` to the corresponding reachable
+`<host>:<port>` addresses. A Cloudflare HTTP tunnel cannot carry WireGuard traffic.
 
-`wireguard-key-bootstrap` creates one gateway keypair and one platform keypair
-in the `wireguard-keys` named volume. The volume keeps those identities stable
-across container recreation. Agents keep their own private keys in their state
-directories; Postgres stores only their public keys and assigned addresses.
+`wireguard-key-bootstrap` creates two gateway keypairs and one platform keypair
+in the `wireguard-keys` named volume. Existing gateway zero keys stay in `server/`;
+gateway one uses `gateway-1/`. The volume keeps those identities stable across
+container recreation. Agents keep private keys in their own state directories.
+Postgres owns gateway identities, endpoints, public peer keys and assigned addresses.
+Redis owns gateway leases and expiring peer path presence. Platform traffic
+selects only gateways with presence for the destination's current generation.
+
+The platform sidecar reads both gateways from PostgreSQL. The `control-plane`
+service creates its shared network namespace with `src_valid_mark=1`; Docker
+does not allow the sidecar to set network sysctls on another container's namespace.
+The sidecar mounts only the writable `platform-0` subdirectory of the key volume
+so its route journal survives a process restart without exposing gateway keys.
+Each gateway has 150 seconds to stop, including its bounded connection drain.
 
 Deleting the key volume changes the gateway and platform identities. During a
 complete local reset, delete it together with Postgres and the agent state so

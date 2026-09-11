@@ -5,9 +5,10 @@ import os
 from pathlib import Path
 
 from networking.wireguard_keys import (
-    SERVER_PRIVATE_KEY,
-    SERVER_PUBLIC_KEY,
     ensure_wireguard_key_document,
+    gateway_key_directory_name,
+    gateway_private_key_name,
+    gateway_public_key_name,
     platform_private_key,
     platform_public_key,
 )
@@ -33,19 +34,22 @@ def _write_key(path: Path, value: str, *, mode: int) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def bootstrap_local(directory: Path, *, platform_peers: int) -> None:
+def bootstrap_local(directory: Path, *, platform_peers: int, gateways: int = 2) -> None:
     existing: dict[str, str] = {}
-    paths = {
-        SERVER_PRIVATE_KEY: directory / "server" / "private-key",
-        SERVER_PUBLIC_KEY: directory / "server" / "public-key",
-    }
+    paths: dict[str, Path] = {}
+    for index in range(gateways):
+        gateway_directory = directory / gateway_key_directory_name(index)
+        paths[gateway_private_key_name(index)] = gateway_directory / "private-key"
+        paths[gateway_public_key_name(index)] = gateway_directory / "public-key"
     for index in range(platform_peers):
         paths[platform_private_key(index)] = directory / f"platform-{index}" / "private-key"
         paths[platform_public_key(index)] = directory / f"platform-{index}" / "public-key"
     for name, path in paths.items():
         if path.exists():
             existing[name] = path.read_text(encoding="utf-8").strip()
-    values = ensure_wireguard_key_document(existing, platform_peers=platform_peers)
+    values = ensure_wireguard_key_document(
+        existing, platform_peers=platform_peers, gateways=gateways
+    )
     for name, path in paths.items():
         _write_key(path, values[name], mode=0o600 if name.endswith("PRIVATE_KEY") else 0o644)
     print(f"WireGuard keys ready in {directory}")
@@ -55,10 +59,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Initialize local durable WireGuard keys.")
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--platform-peers", type=int, default=2)
+    parser.add_argument("--gateways", type=int, default=2)
     args = parser.parse_args()
     if args.platform_peers < 1 or args.platform_peers > 32:
         parser.error("--platform-peers must be between 1 and 32")
-    bootstrap_local(args.directory, platform_peers=args.platform_peers)
+    if not 1 <= args.gateways <= 32:
+        parser.error("--gateways must be between 1 and 32")
+    bootstrap_local(args.directory, platform_peers=args.platform_peers, gateways=args.gateways)
 
 
 if __name__ == "__main__":

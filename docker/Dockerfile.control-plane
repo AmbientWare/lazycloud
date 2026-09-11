@@ -193,7 +193,7 @@ CMD ["lazycloud-scheduler", "--container-limit", "100"]
 
 FROM python-runtime AS tunnel-gateway
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends iproute2 iptables iputils-ping procps wireguard-tools \
+    && apt-get install -y --no-install-recommends conntrack iproute2 iptables iputils-ping procps wireguard-tools \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=tunnel-gateway-install /app/.venv /app/.venv
 VOLUME ["/var/lib/lazycloud"]
