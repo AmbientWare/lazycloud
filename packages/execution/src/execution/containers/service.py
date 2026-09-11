@@ -743,26 +743,37 @@ class ContainerService:
             # that actually ended it, and rewriting the row would cost a session
             # to change nothing.
             return record
-        cancellation = self._cancel_scheduler_request(record.id, only_if_pending=only_if_pending)
-        if not cancellation.cancelled:
-            return self.get(container_id)
-        if cancellation.worker_stop_required:
-            self._send_stop_event(
-                record.id,
-                worker_id=cancellation.worker_id,
-                reason=settlement_reason,
-            )
         with self.context.database.session() as session:
             containers = ContainerRepository(session)
-            current = containers.get_across_workspaces(container_id)
+            current = containers.lock_across_workspaces(container_id)
             if current is None:
                 raise NotFoundError(f"container not found: {container_id}")
+            if only_if_pending and current.status is not ContainerStatus.Pending:
+                return current
             if current.status in TERMINAL_CONTAINER_STATUSES:
                 # The worker's report landed while this was deciding, and it
                 # says what actually happened: a full-payload write from the
                 # read above would put a stale exit code back over it.
                 updated = current
             else:
+                cancellation = self._cancel_scheduler_request(
+                    current.id, only_if_pending=only_if_pending
+                )
+                if not cancellation.cancelled:
+                    return current
+                stop_worker_id = (
+                    cancellation.worker_id
+                    if cancellation.worker_stop_required
+                    else current.runtime_worker_id
+                    if not cancellation.state_found
+                    else ""
+                )
+                if stop_worker_id:
+                    self._send_stop_event(
+                        current.id,
+                        worker_id=stop_worker_id,
+                        reason=settlement_reason,
+                    )
                 current.status = ContainerStatus.Stopped
                 current.finished_at = utc_now()
                 # Written here rather than left to the worker's exit report. A

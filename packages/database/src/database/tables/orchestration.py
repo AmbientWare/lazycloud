@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from pydantic import JsonValue
 from sqlalchemy import (
+    DDL,
     BigInteger,
     CheckConstraint,
     DateTime,
@@ -11,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -21,6 +24,7 @@ from database.tables.base import (
     IdPayloadTable,
     NamedWorkspacePayloadTable,
     TimestampMixin,
+    json_type,
     uuid_type,
 )
 
@@ -129,8 +133,27 @@ class WorkerTable(IdPayloadTable, DatabaseBase):
 class ContainerTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "containers"
     workload_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduling_request: Mapped[dict[str, JsonValue] | None] = mapped_column(json_type)
+    scheduling_reconcile_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduling_assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduling_assignment_token: Mapped[str | None] = mapped_column(String(240))
+    capacity_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_containers_workspace_created", "workspace_id", "created_at"),
+        Index(
+            "ix_containers_capacity_due",
+            "capacity_retry_at",
+            "id",
+            postgresql_where=text("capacity_retry_at IS NOT NULL AND status = 'pending'"),
+            sqlite_where=text("capacity_retry_at IS NOT NULL AND status = 'pending'"),
+        ),
+        Index(
+            "ix_containers_scheduling_due",
+            "scheduling_reconcile_at",
+            "id",
+            postgresql_where=text("scheduling_request IS NOT NULL AND status = 'pending'"),
+            sqlite_where=text("scheduling_request IS NOT NULL AND status = 'pending'"),
+        ),
         # Concurrency is counted on the path that starts every container, so the
         # cost of asking has to be bounded by the answer rather than by how much
         # the workspace has ever run. Partial, so the index holds only what is
@@ -254,6 +277,43 @@ Index(
     ContainerTable.id,
     postgresql_where=ContainerTable.storage_released_at.is_(None),
     sqlite_where=ContainerTable.storage_released_at.is_(None),
+)
+
+
+event.listen(
+    ContainerTable.__table__,
+    "after_create",
+    DDL("""
+CREATE OR REPLACE FUNCTION enforce_container_assignment_ownership()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF (OLD.status IN ('exited', 'failed', 'stopped') AND NEW.status IN ('pending', 'running'))
+        OR (OLD.status = 'running' AND NEW.status = 'pending') THEN
+        RAISE EXCEPTION 'container status cannot be reopened'
+            USING ERRCODE = '23514';
+    END IF;
+    IF COALESCE(OLD.payload->>'runtime_worker_id', '') <> '' AND (
+        COALESCE(NEW.payload->>'runtime_worker_id', '')
+            <> COALESCE(OLD.payload->>'runtime_worker_id', '')
+        OR COALESCE(NEW.payload->>'runtime_machine_id', '')
+            <> COALESCE(OLD.payload->>'runtime_machine_id', '')
+    ) AND NOT (
+        OLD.status = 'pending' AND NEW.status = 'pending'
+        AND COALESCE(NEW.payload->>'runtime_worker_id', '') = ''
+        AND COALESCE(NEW.payload->>'runtime_machine_id', '') = ''
+        AND OLD.scheduling_assignment_token IS NOT NULL
+        AND NEW.scheduling_assignment_token IS NULL
+    ) THEN
+        RAISE EXCEPTION 'container assignment cannot change without its ownership token'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER container_assignment_ownership_fence
+BEFORE UPDATE ON containers
+FOR EACH ROW EXECUTE FUNCTION enforce_container_assignment_ownership();
+""").execute_if(dialect="postgresql"),
 )
 
 

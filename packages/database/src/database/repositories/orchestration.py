@@ -534,6 +534,24 @@ class ContainerRepository:
         """System lookup for scheduler/worker/reconciler container control."""
         return self.records.get_across_workspaces(container_id)
 
+    def lock_across_workspaces(self, container_id: str) -> ContainerRecord | None:
+        row = self.session.scalar(
+            select(ContainerTable).where(ContainerTable.id == container_id).with_for_update()
+        )
+        return ContainerRecord.model_validate(row.payload) if row is not None else None
+
+    def list_live_runtime_assignments(self, worker_id: str) -> list[ContainerRecord]:
+        rows = self.session.scalars(
+            select(ContainerTable)
+            .where(
+                ContainerTable.payload["runtime_worker_id"].as_string() == worker_id,
+                ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+            )
+            .order_by(ContainerTable.id)
+            .with_for_update()
+        )
+        return [ContainerRecord.model_validate(row.payload) for row in rows]
+
     def list(
         self,
         *,

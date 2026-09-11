@@ -9,7 +9,7 @@ from enum import StrEnum
 from secrets import token_urlsafe
 from threading import Event, Thread, local
 from typing import Protocol
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from compute.capacity_errors import (
     CapacityReservationConflictError,
@@ -28,7 +28,11 @@ from shared.capacity import CapacityAcquisitionRequest as ComputeCapacityRequest
 from shared.capacity import CapacityAcquisitionResult as ComputeCapacityResult
 from shared.capacity import CapacityAcquisitionShape as ComputeCapacityShape
 from shared.capacity import CapacityAcquisitionStatus as ComputeCapacityStatus
-from shared.capacity import CapacityOwnerKind, CapacityPoolSizingSnapshot
+from shared.capacity import (
+    CapacityFulfillmentRequest,
+    CapacityOwnerKind,
+    CapacityPoolSizingSnapshot,
+)
 from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequest
 from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.container_requests import OciRuntimeName, capacity_memory_mib
@@ -211,6 +215,7 @@ class CapacityReservationAllocation(ContractModel):
 
 class CapacityProvisioningReservation(ContractModel):
     id: str
+    demand_container_id: str | None = None
     resource_version: int = Field(default=0, ge=0)
     capacity_owner_id: str
     pool: MachinePool
@@ -326,6 +331,8 @@ class CapacityAcquisitionController(Protocol):
         now: datetime,
     ) -> CapacityAcquisitionResult: ...
 
+    def fulfill(self, reservation: CapacityProvisioningReservation) -> None: ...
+
     def release(
         self,
         reservation: CapacityProvisioningReservation,
@@ -344,6 +351,8 @@ class CapacityWorkerRepository(Protocol):
 
 
 class ComputeCapacityService(Protocol):
+    def fulfill_acquired_capacity(self, request: CapacityFulfillmentRequest) -> None: ...
+
     def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot: ...
 
     def ensure_capacity(
@@ -586,11 +595,22 @@ class ComputeUnitCapacityController:
                 capacity_owner_id=reservation.capacity_owner_id,
                 reservation_id=reservation.id,
                 operation_id=reservation.operation_id,
+                demand_container_id=reservation.demand_container_id,
                 shape=_compute_capacity_shape(reservation.acquisition_shape),
                 workload_preemptible=reservation.workload_preemptible,
             )
         )
         return _compute_acquisition_result(reservation, result)
+
+    def fulfill(self, reservation: CapacityProvisioningReservation) -> None:
+        self.compute.fulfill_acquired_capacity(
+            CapacityFulfillmentRequest(
+                capacity_owner_id=reservation.capacity_owner_id,
+                reservation_id=reservation.id,
+                operation_id=reservation.operation_id,
+                machine_id=reservation.target_machine_id,
+            )
+        )
 
     def plan_release(
         self,
@@ -872,9 +892,15 @@ class RedisCapacityReservationRepository:
         reservation = self.compatible_open_reservation(capacity_owner_id, request)
         created = reservation is None
         if reservation is None:
-            reservation_id = str(uuid4())
+            reservation_id = _demand_operation_id(capacity_owner_id, request)
+            previous = self.get(reservation_id)
+            if previous is not None and not previous.open:
+                raise CapacityReservationStateTransitionError(
+                    "terminal capacity demand cannot be reopened"
+                )
             reservation = CapacityProvisioningReservation(
                 id=reservation_id,
+                demand_container_id=request.container_id,
                 capacity_owner_id=capacity_owner_id,
                 pool=pool,
                 owner_kind=owner_kind,
@@ -1074,6 +1100,8 @@ class RedisCapacityReservationRepository:
         removed: list[str] = []
         for reservation in self.list_all():
             if reservation.status is not CapacityReservationStatus.Released:
+                continue
+            if reservation.acquisition_created:
                 continue
             if reservation.updated_at > before:
                 continue
@@ -1322,6 +1350,24 @@ class CapacityReservationService:
         now: datetime,
     ) -> CapacityAcquisitionResult:
         with self.reservations.mutation_lock(controller.capacity_owner_id):
+            previous = self.reservations.get(
+                _demand_operation_id(controller.capacity_owner_id, request)
+            )
+            if previous is not None and not previous.open:
+                return CapacityAcquisitionResult(
+                    status=(
+                        CapacityAcquisitionStatus.TemporarilyUnavailable
+                        if previous.acquisition_created
+                        else CapacityAcquisitionStatus.Unsupported
+                        if previous.terminal_reason is CapacityTerminalReason.AcquisitionUnsupported
+                        else CapacityAcquisitionStatus.Rejected
+                    ),
+                    capacity_owner_id=previous.capacity_owner_id,
+                    reservation_id=previous.id,
+                    operation_id=previous.operation_id,
+                    owns_capacity=previous.acquisition_created,
+                    reason="capacity demand attempt has already ended",
+                )
             allocation = self.reservations.allocation_for_request(request.container_id)
             if allocation is not None:
                 existing = self.reservations.get(allocation.reservation_id)
@@ -1411,7 +1457,7 @@ class CapacityReservationService:
         *,
         now: datetime | None = None,
     ) -> CapacityReservationDispatchAllocation | None:
-        """Bind a pending reservation to its registered worker before dispatch."""
+        """Consume demand independently of which purchase supplied the worker."""
 
         allocation = self.reservations.allocation_for_request(container_id)
         if allocation is None:
@@ -1423,9 +1469,10 @@ class CapacityReservationService:
             )
         allocations = self.reservations.allocations_for(reservation.id)
         if not reservation_matches_worker(reservation, worker, allocations=allocations, now=now):
-            raise CapacityReservationConflictError(
-                f"worker {worker.worker_id} does not own capacity reservation {reservation.id}"
-            )
+            # Placement has already checked the request's constraints. Keep the
+            # purchase unbound and consume only this allocation at queue commit;
+            # the capacity reconciler settles any resulting unused purchase.
+            return self.reservations.dispatch_allocation(container_id)
         if (
             reservation.status is not CapacityReservationStatus.Registered
             or reservation.target_worker_id != worker.worker_id
@@ -1515,12 +1562,20 @@ class CapacityReservationService:
         reconciled: list[CapacityProvisioningReservation] = []
         for snapshot in self.reservations.list_all():
             controller = controllers.get(snapshot.capacity_owner_id)
-            if snapshot.status is CapacityReservationStatus.Released:
-                continue
             try:
                 with self.reservations.mutation_lock(snapshot.capacity_owner_id):
                     reservation = self.reservations.get(snapshot.id)
                     if reservation is None:
+                        continue
+                    if reservation.status is CapacityReservationStatus.Released:
+                        if (
+                            reservation.terminal_reason
+                            is CapacityTerminalReason.ReleasedAfterRegistration
+                            and reservation.acquisition_created
+                        ):
+                            reconciled.append(
+                                self._fulfill_reservation(reservation, now=current_time)
+                            )
                         continue
                     allocations = self._prune_inactive_allocations(
                         self.reservations.allocations_for(reservation.id)
@@ -1703,7 +1758,10 @@ class CapacityReservationService:
         now: datetime,
     ) -> CapacityProvisioningReservation:
         if reservation.status is CapacityReservationStatus.Registered:
-            return self.reservations.release_terminal(reservation.id, now=now) or reservation
+            fulfilled = self._fulfill_reservation(reservation, now=now)
+            if fulfilled.acquisition_created:
+                return fulfilled
+            return self.reservations.release_terminal(fulfilled.id, now=now) or fulfilled
         worker = None
         if reservation.status is not CapacityReservationStatus.Failed:
             worker = _registered_worker_for_reservation(
@@ -1726,7 +1784,10 @@ class CapacityReservationService:
                 expected_resource_version=reservation.resource_version,
                 now=now,
             )
-            return self.reservations.release_terminal(registered.id, now=now) or registered
+            fulfilled = self._fulfill_reservation(registered, now=now)
+            if fulfilled.acquisition_created:
+                return fulfilled
+            return self.reservations.release_terminal(fulfilled.id, now=now) or fulfilled
         if reservation.acquisition_created:
             controller = self._controller_for_owner(reservation.capacity_owner_id)
             if controller is None:
@@ -1756,6 +1817,21 @@ class CapacityReservationService:
                 now=now,
             )
         return self.reservations.release_terminal(reservation.id, now=now) or reservation
+
+    def _fulfill_reservation(
+        self, reservation: CapacityProvisioningReservation, *, now: datetime
+    ) -> CapacityProvisioningReservation:
+        if not reservation.acquisition_created:
+            return reservation
+        controller = self._controller_for_owner(reservation.capacity_owner_id)
+        if controller is None:
+            return reservation
+        controller.fulfill(reservation)
+        return self.reservations.update(
+            reservation.model_copy(update={"acquisition_created": False}),
+            expected_resource_version=reservation.resource_version,
+            now=now,
+        )
 
     def _release_failed_reservation(
         self,
@@ -2025,6 +2101,15 @@ def _unsupported_result(
 
 def _owner_key(capacity_owner_id: str) -> str:
     return capacity_owner_key_segment(capacity_owner_id)
+
+
+def _demand_operation_id(capacity_owner_id: str, request: SchedulerWorkerRequest) -> str:
+    return str(
+        uuid5(
+            NAMESPACE_URL,
+            f"capacity-demand:{capacity_owner_id}:{request.container_id}:{request.retry_count}",
+        )
+    )
 
 
 def _release_reason(status: CapacityReservationStatus) -> CapacityTerminalReason:

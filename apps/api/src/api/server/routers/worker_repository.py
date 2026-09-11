@@ -766,8 +766,7 @@ def publish_container_lifecycle(
     service: WorkerRepo,
     principal: WorkerPrincipal,
 ) -> PublishContainerLifecycleResponse:
-    _ = principal
-    return service.publish_container_lifecycle(request)
+    return service.publish_container_lifecycle(request, principal=principal)
 
 
 @router.post(

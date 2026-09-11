@@ -16,6 +16,8 @@ from control.service import ControlPlaneService
 from coordination.redis_client import AsyncRedisClient, RedisClient, redis_text
 from database.records.apps import StubRecord
 from database.repositories.apps import DeploymentRepository
+from database.repositories.billing_ledger import ContainerBillingShapeRepository
+from database.repositories.container_scheduling import ContainerSchedulingRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.functions.service import FunctionControlService
@@ -193,10 +195,46 @@ class _RecordingLifecycleEvents:
 
 
 class _RuntimeAssignmentRecorder:
+    def expired_assignments(
+        self, *, before: datetime, limit: int
+    ) -> list[tuple[ContainerRecord, datetime]]:
+        return []
+
+    def record_scheduling_request(self, request: SchedulerWorkerRequest, *, now: datetime) -> bool:
+        self.requests.append(request)
+        return True
+
+    def recoverable_scheduling_requests(
+        self, *, now: datetime, limit: int
+    ) -> list[SchedulerWorkerRequest]:
+        return []
+
+    def scheduling_request_reconciled(self, container_id: str, *, retry_at: datetime) -> None:
+        raise AssertionError("queue recovery requires durable owner acceptance")
+
+    def request_capacity(
+        self, request: SchedulerWorkerRequest, *, now: datetime
+    ) -> SchedulerWorkerRequest:
+        raise AssertionError("capacity execution requires durable owner acceptance")
+
+    def capacity_requests_due(self, *, now: datetime, limit: int) -> list[SchedulerWorkerRequest]:
+        return []
+
+    def capacity_request_due(
+        self, container_id: str, *, now: datetime
+    ) -> SchedulerWorkerRequest | None:
+        raise AssertionError("capacity execution requires durable owner acceptance")
+
+    def record_capacity_attempt(
+        self, request: SchedulerWorkerRequest, *, retry_at: datetime
+    ) -> None:
+        raise AssertionError("capacity execution requires durable owner acceptance")
+
     def publish_pending_progress(self, container_id: str) -> None:
         _ = container_id
 
     def __init__(self) -> None:
+        self.requests: list[SchedulerWorkerRequest] = []
         self.assignments: list[tuple[str, str, str, str, str | None, str | None]] = []
         self.shapes: list[ContainerShape | None] = []
         self.cleared: list[tuple[str, str]] = []
@@ -208,6 +246,9 @@ class _RuntimeAssignmentRecorder:
         workspace_id: str,
         runtime_worker_id: str,
         runtime_machine_id: str,
+        assignment_token: str,
+        assigned_at: datetime,
+        backfill: bool,
         compute_worker_id: str | None = None,
         compute_machine_id: str | None = None,
         shape: ContainerShape | None = None,
@@ -229,8 +270,10 @@ class _RuntimeAssignmentRecorder:
         *,
         container_id: str,
         runtime_worker_id: str,
-    ) -> None:
+        assignment_token: str,
+    ) -> bool:
         self.cleared.append((container_id, runtime_worker_id))
+        return True
 
 
 class _IdentityPlacement:
@@ -248,8 +291,9 @@ class _DiscardFailureHandler:
         reason: str,
         *,
         now: datetime | None = None,
-    ) -> None:
+    ) -> bool:
         del request, reason, now
+        return True
 
 
 def _request_service(
@@ -1616,14 +1660,30 @@ async def test_scheduler_container_request_service_queues_selects_and_dispatches
     assert lifecycle["duration_ms"] == 0
 
 
-def test_scheduler_dispatch_clears_runtime_assignment_when_queueing_fails(
+def test_scheduler_dispatch_preserves_durable_assignment_when_commit_response_is_lost(
     monkeypatch: pytest.MonkeyPatch,
     real_redis_actors: RealRedisActors,
+    isolated_services: ApiServices,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
     containers = RedisSchedulerContainerRepository(redis)
-    assignments = _RuntimeAssignmentRecorder()
+    assignments = ContainerSchedulingPersistenceService(
+        isolated_services.context,
+        isolated_services.events,
+        isolated_services.workspace_changes,
+    )
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        container = ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="dispatch-response-loss",
+                workspace_id=workspace_id,
+                image="",
+                command=[],
+            )
+        )
     service = _request_service(
         workers,
         containers,
@@ -1648,32 +1708,153 @@ def test_scheduler_dispatch_clears_runtime_assignment_when_queueing_fails(
         )
     )
     request = SchedulerWorkerRequest(
-        workspace_id="ws-1",
+        workspace_id=workspace_id,
         stub_id="stub-1",
-        container_id="container-1",
+        container_id=container.id,
         cpu_millicores=100,
         memory_mib=128,
         timestamp=now,
     )
     assert service.submit(request, ready_at=now).accepted
 
-    def fail_queue(*_args: object, **_kwargs: object) -> object:
-        raise RuntimeError("worker queue unavailable")
+    commit = RedisSchedulerWorkerRepository._commit_claimed_worker_request
+
+    def lose_commit_response(
+        repository: RedisSchedulerWorkerRepository,
+        worker_id: str,
+        claim: SchedulerContainerRequestClaim,
+        queued_request: SchedulerWorkerRequest,
+        *,
+        current_worker: SchedulerWorkerRecord,
+        updated_worker: SchedulerWorkerRecord,
+        capacity_allocation: CapacityReservationDispatchAllocation | None,
+    ) -> None:
+        commit(
+            repository,
+            worker_id,
+            claim,
+            queued_request,
+            current_worker=current_worker,
+            updated_worker=updated_worker,
+            capacity_allocation=capacity_allocation,
+        )
+        raise ConnectionError("dispatch response was lost")
 
     monkeypatch.setattr(
         RedisSchedulerWorkerRepository,
-        "dispatch_claimed_container_request",
-        fail_queue,
+        "_commit_claimed_worker_request",
+        lose_commit_response,
     )
 
     [result] = service.dispatch_ready(now=now, limit=1)
 
     assert result.status is SchedulerContainerDispatchStatus.Error
-    assert assignments.assignments == [("container-1", "ws-1", "worker-1", "machine-1", None, None)]
-    assert assignments.cleared == [("container-1", "worker-1")]
-    pending = containers.get_container_state("container-1")
+    with isolated_services.context.database.session() as session:
+        assigned = ContainerRepository(session).get_across_workspaces(container.id)
+    assert assigned is not None and assigned.runtime_worker_id == "worker-1"
+    assert service.dispatch_ready(now=now + timedelta(seconds=6), limit=1) == []
+    assert workers.has_recoverable_container_request(container.id, worker_id="worker-1")
+    with pytest.raises(ConflictError, match="already been assigned"):
+        assignments.assign_runtime(
+            container_id=container.id,
+            workspace_id=workspace_id,
+            runtime_worker_id="worker-2",
+            runtime_machine_id="machine-2",
+            assignment_token="replacement-claim",
+            assigned_at=now,
+            backfill=False,
+        )
+    pending = containers.get_container_state(container.id)
     assert pending is not None
     assert pending.status is SchedulerContainerStatus.Pending
+    assert pending.worker_id == "worker-1"
+
+    reconciled = workers.reconcile_worker_capacity("worker-1")
+    assert reconciled.free_cpu_millicores == 900
+    assert reconciled.free_memory_mib == 1024 - capacity_memory_mib(128)
+
+
+def test_durable_request_recovers_queue_publication_and_capacity_after_redis_loss(
+    isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = isolated_services.scheduler_container_requests
+    now = datetime.now(UTC)
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        container = ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="durable-scheduling-request",
+                workspace_id=workspace_id,
+                image="",
+                command=[],
+            )
+        )
+    request = SchedulerWorkerRequest(
+        workspace_id=workspace_id,
+        stub_id="container",
+        container_id=container.id,
+        pool_selector="default",
+        cpu_millicores=1000,
+        memory_mib=256,
+        timestamp=now,
+        payload={"image_id": "immutable-image"},
+        workspace_cpu_quota_millicores=1000,
+    )
+
+    def unavailable_queue(
+        repository: RedisSchedulerWorkerRepository,
+        queued: SchedulerWorkerRequest,
+        *,
+        ready_at: datetime | None = None,
+    ) -> bool:
+        raise ConnectionError("queue publication unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            RedisSchedulerWorkerRepository, "enqueue_container_request", unavailable_queue
+        )
+        assert service.submit(request, ready_at=now).accepted
+
+    assert not service.workers.has_recoverable_container_request(container.id)
+    assert service.recover_scheduling_requests(now=now, limit=1) == 1
+    assert service.workers.has_recoverable_container_request(container.id)
+    demand = service.assignments.request_capacity(request, now=now)
+    retry_at = now + timedelta(seconds=30)
+    service.assignments.record_capacity_attempt(
+        demand.model_copy(update={"retry_count": 2}),
+        retry_at=retry_at,
+    )
+    assert service.assignments.capacity_requests_due(now=now, limit=1) == []
+    [due] = service.assignments.capacity_requests_due(now=retry_at, limit=1)
+    assert due.retry_count == 2 and due.payload == {}
+    [recovered] = service.assignments.recoverable_scheduling_requests(now=retry_at, limit=1)
+    assert recovered.payload == request.payload and recovered.retry_count == 2
+    service.assignments.assign_runtime(
+        container_id=container.id,
+        workspace_id=workspace_id,
+        runtime_worker_id="worker-1",
+        runtime_machine_id="machine-1",
+        assignment_token="recovered-claim",
+        assigned_at=now,
+        backfill=True,
+    )
+    with isolated_services.context.database.session() as session:
+        assigned_request = ContainerSchedulingRepository(session).request_for(container.id)
+        assert assigned_request is not None and assigned_request.backfill
+    service.assignments.record_capacity_attempt(due, retry_at=retry_at)
+    assert service.assignments.capacity_requests_due(now=retry_at, limit=1) == []
+    assert service.assignments.recoverable_scheduling_requests(now=retry_at, limit=1) == []
+    assert service.submit(request, ready_at=now).accepted
+
+    assert not service.submit(
+        request.model_copy(update={"payload": {"image_id": "conflicting-image"}}), ready_at=now
+    ).accepted
+    reserved = isolated_services.scheduler_containers.get_concurrency_reservation(
+        workspace_id, container.id
+    )
+    assert reserved is not None and reserved.cpu_millicores == request.cpu_millicores
 
 
 @pytest.mark.anyio
@@ -3298,23 +3479,17 @@ class _FailureHandler:
         reason: str,
         *,
         now: datetime | None = None,
-    ) -> None:
+    ) -> bool:
         _ = now
         self.calls.append((request.container_id, reason))
+        return True
 
 
 def test_orphan_sweep_settles_the_claims_a_pooled_container_was_holding(
     isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
 ) -> None:
-    """A pooled container reaped as orphaned must give back what it claimed.
-
-    A function container is started for its stub and never carries a task id, so
-    every settlement path keyed on `container.task_id` is blind to it. The sweep
-    marks the record `Failed` either way; if the claim is not settled with it the
-    task keeps naming a dead container, which no claim query can see and no retry
-    reaches, and its caller waits forever.
-    """
+    """Stopping an orphaned pooled container releases its invocation claims."""
 
     redis = real_redis_actors.client()
     worker_repo = RedisSchedulerWorkerRepository(redis)
@@ -3371,9 +3546,178 @@ def test_orphan_sweep_settles_the_claims_a_pooled_container_was_holding(
     confirmed = scheduler.reconcile_orphaned_containers(now=now + timedelta(seconds=61))
 
     assert confirmed == [pooled.id]
-    assert isolated_services.containers.get(pooled.id).status is ContainerStatus.Failed
+    assert isolated_services.containers.get(pooled.id).status is ContainerStatus.Stopped
     settled = isolated_services.tasks.get(claimed.id)
     assert settled.container_id != pooled.id or is_terminal_task_status(settled.status), (
         f"task {settled.id} is {settled.status.value} still naming the reaped container: "
         "no claim query can see it and no retry reaches it, so its caller waits forever"
     )
+
+
+def test_assignment_deadline_recovers_pending_work_despite_live_worker_and_hot_state(
+    isolated_services: ApiServices,
+) -> None:
+    service = isolated_services.scheduler_container_requests
+    now = datetime.now(UTC)
+    worker_id = str(uuid4())
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        container = ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="expired-assignment",
+                workspace_id=workspace_id,
+                image="",
+                command=[],
+            )
+        )
+    service.assignments.assign_runtime(
+        container_id=container.id,
+        workspace_id=workspace_id,
+        runtime_worker_id=worker_id,
+        runtime_machine_id="machine-1",
+        assignment_token=str(uuid4()),
+        assigned_at=now,
+        backfill=False,
+    )
+    isolated_services.scheduler_workers.add_worker(
+        SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
+            capacity_owner_id=str(uuid4()),
+            worker_id=worker_id,
+            machine_id="machine-1",
+            pool=MachinePool("default"),
+            status=SchedulerWorkerStatus.Available,
+            request_poll_expires_at=now + timedelta(hours=1),
+            total_cpu_millicores=1000,
+            total_memory_mib=1024,
+            free_cpu_millicores=900,
+            free_memory_mib=896,
+        )
+    )
+    service.containers.set_container_state(
+        SchedulerContainerState(
+            container_id=container.id,
+            workspace_id=workspace_id,
+            stub_id="container",
+            worker_id=worker_id,
+            status=SchedulerContainerStatus.Pending,
+            scheduled_at=now,
+        )
+    )
+    scheduler = Scheduler(
+        services=isolated_services,
+        workloads=SchedulerWorkloadControls(containers=service),
+        orphaned_container_reconcile_interval_seconds=0,
+    )
+
+    assert scheduler.reconcile_orphaned_containers(now=now + timedelta(seconds=61)) == []
+    assert scheduler.reconcile_orphaned_containers(now=now + timedelta(seconds=601)) == [
+        container.id
+    ]
+    stopped = isolated_services.containers.get(container.id)
+    assert stopped.status is ContainerStatus.Stopped
+    assert stopped.termination_reason is StopContainerReason.Scheduler
+
+
+@pytest.mark.parametrize("failure", ["state_publication", "expired_claim"])
+def test_undelivered_assignment_recovers_after_rollback_loses_redis(
+    failure: str,
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = real_redis_actors.client()
+    workers = RedisSchedulerWorkerRepository(redis)
+    containers = RedisSchedulerContainerRepository(redis)
+    assignments = ContainerSchedulingPersistenceService(
+        isolated_services.context,
+        isolated_services.events,
+        isolated_services.workspace_changes,
+    )
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        container = ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="rollback-recovery",
+                workspace_id=workspace_id,
+                image="",
+                command=[],
+            )
+        )
+    service = _request_service(
+        workers,
+        containers,
+        assignments=assignments,
+        capacity_reservations=_capacity_reservations(redis),
+        requeue_delay_seconds=0,
+    )
+    now = datetime.now(UTC)
+    workers.add_worker(
+        SchedulerWorkerRecord(
+            runtime_image="container-worker:local",
+            capacity_owner_id=str(uuid4()),
+            worker_id="worker-1",
+            machine_id="machine-1",
+            pool=MachinePool("default"),
+            status=SchedulerWorkerStatus.Available,
+            request_poll_expires_at=now + timedelta(minutes=5),
+            total_cpu_millicores=1000,
+            free_cpu_millicores=1000,
+            total_memory_mib=1024,
+            free_memory_mib=1024,
+        )
+    )
+    request = SchedulerWorkerRequest(
+        container_id=container.id,
+        workspace_id=workspace_id,
+        stub_id="container",
+        cpu_millicores=100,
+        memory_mib=128,
+        timestamp=now,
+    )
+    assert service.submit(request, ready_at=now).accepted
+    with containers.dispatch_lock(container.id):
+        [contended] = service.dispatch_ready(now=now, limit=1)
+        assert contended.status is SchedulerContainerDispatchStatus.Waiting
+        assert isolated_services.containers.get(container.id).runtime_worker_id == ""
+
+    publish = RedisSchedulerContainerRepository.set_container_state
+
+    def lose_redis(
+        repository: RedisSchedulerContainerRepository,
+        state: SchedulerContainerState,
+        *,
+        ttl_seconds: int = 300,
+    ) -> SchedulerContainerState:
+        if not state.worker_id:
+            raise ConnectionError("rollback publication unavailable")
+        recorded = publish(repository, state, ttl_seconds=ttl_seconds)
+        if failure == "state_publication":
+            raise ConnectionError("assigned state response unavailable before queue commit")
+        redis.hash_delete(workers.keys.container_request_claim_owners(), container.id)
+        return recorded
+
+    with monkeypatch.context() as patch:
+        patch.setattr(RedisSchedulerContainerRepository, "set_container_state", lose_redis)
+        [rejected] = service.dispatch_ready(now=now, limit=1)
+    assert rejected.status in {
+        SchedulerContainerDispatchStatus.Error,
+        SchedulerContainerDispatchStatus.Waiting,
+    }
+    assert isolated_services.containers.get(container.id).runtime_worker_id == ""
+    stale = containers.get_container_state(container.id)
+    assert stale is not None and stale.worker_id == "worker-1"
+    with isolated_services.context.database.session() as session:
+        assert ContainerBillingShapeRepository(session).shape_for(container.id) is None
+
+    service.recover_scheduling_requests(now=now + timedelta(seconds=1), limit=1)
+    repaired = containers.get_container_state(container.id)
+    assert repaired is not None and repaired.worker_id == ""
+    [dispatched] = service.dispatch_ready(now=now + timedelta(seconds=61), limit=1)
+    assert dispatched.status is SchedulerContainerDispatchStatus.Dispatched
+    assert workers.has_recoverable_container_request(container.id, worker_id="worker-1")
+    with isolated_services.context.database.session() as session:
+        durable = ContainerSchedulingRepository(session).request_for(container.id)
+        assert durable is not None and not durable.backfill

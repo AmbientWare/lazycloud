@@ -42,10 +42,19 @@ failed machines autonomously, so observed physical counts may briefly exceed
 the platform's admitted commitments. Customer-owned capacity stays outside these
 totals and serializes changes through its capacity workspace.
 
-Warm reconciliation chooses approved offers across platform providers, separately
-for preemptible and non-preemptible capacity. A zero minimum disables that
-market's spare-capacity floor. Changing a floor leaves active work to normal
-draining. A customer's AWS baseline cannot own a platform warm floor.
+Warm reconciliation holds a baseline of usable workers, including workers serving
+requests, separately for preemptible and non-preemptible capacity. Healthy pools
+keep their baseline. A market handoff transfers it one worker at a time and counts
+retiring assets until absence is proven. Handoffs, provider replacement and worker
+updates share the platform maintenance admission lock. A zero minimum disables
+that market's baseline. Changing a floor leaves active work to normal draining.
+A customer's AWS baseline cannot own a platform warm floor.
+
+PostgreSQL columns own handoff sources, acquisition demand identities and
+fulfillment timestamps. Repository mappings hydrate them independently of JSON
+projections, so a projection rewrite cannot erase capacity ownership.
+The database rejects changes to a terminal operation's outcome, named machine,
+or released ownership, including writes from another application version.
 
 Supplier quotes are immutable component estimates recorded when a node is first
 observed. A unit records its prepared offer; reconciling its existing nodes must
@@ -137,6 +146,10 @@ demand and provider storage destruction, and preserves the unit and machine
 history. Preparing a candidate and reserving its capacity share the same mutation
 lease. A later purchase revives the same identity with a new generation.
 Customer-owned pools do not expire through this policy.
+
+Retired pools retain failure history. Elapsed cooldown alone cannot restore their
+desired capacity. A new selected demand or baseline may retry a failed market
+only after its previous operations and provider assets have settled.
 
 Storage destruction evidence carries the time the provider confirmed absence,
 not the reconciliation pass start time. A cache generation may register while

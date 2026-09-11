@@ -314,14 +314,7 @@ def _below_minimum_headroom(
 ) -> bool:
     if pool.platform_fleet:
         workers = headroom.available_workers + headroom.unclaimed_pending_workers
-        # The platform reserve is measured in machines. Host-reported capacity
-        # accounts for memory the OS cannot offer to workloads.
-        return (
-            workers < pool.min_machines
-            or headroom.cpu_millicores * workers < headroom.total_cpu_millicores * pool.min_machines
-            or headroom.memory_mib * workers < headroom.total_memory_mib * pool.min_machines
-            or headroom.gpu_count < pool.min_free_gpu_count
-        )
+        return workers < pool.min_machines
     return (
         headroom.cpu_millicores < pool.min_free_cpu_millicores
         or headroom.memory_mib < pool.min_free_memory_mib

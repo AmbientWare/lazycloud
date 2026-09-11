@@ -7,6 +7,7 @@ from scheduler.state import RedisSchedulerWorkerRepository
 from shared.compute_policy import MachinePool
 from shared.releases import ActiveRelease
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
+from shared.timestamps import utc_now
 
 
 def select_worker_release(image: str) -> ActiveRelease:
@@ -44,4 +45,7 @@ def assign_runtime(
         workspace_id=container.workspace_id,
         runtime_worker_id=worker.worker_id,
         runtime_machine_id="test-worker",
+        assignment_token=str(uuid4()),
+        assigned_at=utc_now(),
+        backfill=False,
     )
