@@ -297,7 +297,7 @@ def _drain_service(
     return WorkerPoolDrainService(
         lambda: managed_compute_drain_controllers(
             compute,  # pyright: ignore[reportArgumentType]
-            compute_states,
+            compute_states.list_all_pool_states(),
             workers,
             RedisSchedulerContainerRepository(redis),
         ),

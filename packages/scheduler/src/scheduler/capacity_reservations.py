@@ -710,6 +710,9 @@ class RedisCapacityReservationRepository:
         self.redis = redis
         self.keys = keys or CapacityReservationKeys(redis)
 
+    def has_open_reservations(self, capacity_owner_id: str) -> bool:
+        return any(reservation.open for reservation in self.list_for_owner(capacity_owner_id))
+
     @contextmanager
     def mutation_lock(
         self,
@@ -1257,20 +1260,21 @@ class CapacityReservationService:
                 ):
                     result = existing_result
                 else:
-                    candidate.prepare()
-                    controller = self._controller_for_owner(candidate.capacity_owner_id)
-                    if controller is None or not controller.accepts(request):
-                        continue
-                    if existing_result is not None:
-                        self._release_failed_failover_allocation(
-                            existing_result, request, now=current_time
+                    with self.reservations.mutation_lock(candidate.capacity_owner_id):
+                        candidate.prepare()
+                        controller = self._controller_for_owner(candidate.capacity_owner_id)
+                        if controller is None or not controller.accepts(request):
+                            continue
+                        if existing_result is not None:
+                            self._release_failed_failover_allocation(
+                                existing_result, request, now=current_time
+                            )
+                            existing_result = None
+                        result = self._acquire_from_controller(
+                            request,
+                            controller,
+                            now=current_time,
                         )
-                        existing_result = None
-                    result = self._acquire_from_controller(
-                        request,
-                        controller,
-                        now=current_time,
-                    )
             except CapacityReservationConflictError as exc:
                 # Another scheduler holds this unit's mutation lease. Trying the
                 # next unit is worth doing, but the contention has to survive the
@@ -1688,9 +1692,7 @@ class CapacityReservationService:
                 continue
 
     def has_open_reservations(self, capacity_owner_id: str) -> bool:
-        return any(
-            reservation.open for reservation in self.reservations.list_for_owner(capacity_owner_id)
-        )
+        return self.reservations.has_open_reservations(capacity_owner_id)
 
     def _release_unallocated_reservation(
         self,

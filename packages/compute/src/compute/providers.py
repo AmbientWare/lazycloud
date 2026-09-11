@@ -272,6 +272,8 @@ class CapacityOwnerMutationLease(Protocol):
 
     def dispatch_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
 
+    def has_open_reservations(self, capacity_owner_id: str) -> bool: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedComputeProvider:

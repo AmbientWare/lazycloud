@@ -54,13 +54,27 @@ from shared.compute_policy import (
     MachinePool,
     WorkspaceComputePolicy,
 )
+from shared.compute_reconciliation import ComputeReconciliationKind
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.placement import placement_rate_class
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 from shared.timestamps import to_utc, utc_now
-from sqlalchemy import Select, String, and_, case, cast, delete, func, or_, select, text
+from sqlalchemy import (
+    Select,
+    String,
+    and_,
+    case,
+    cast,
+    delete,
+    exists,
+    func,
+    or_,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
@@ -587,6 +601,58 @@ class ComputeUnitRepository:
     def list_internal_across_workspaces(self) -> list[ComputeUnitRecord]:
         """System listing over every workspace's internal placement pools."""
         return self._list_internal(workspace_id=None)
+
+    def claim_reconciliation_batch(
+        self,
+        kind: ComputeReconciliationKind,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> list[ComputeUnitRecord]:
+        if limit < 1:
+            return []
+        attempted_at = (
+            ComputeUnitTable.provider_reconcile_attempt_at
+            if kind is ComputeReconciliationKind.Provider
+            else ComputeUnitTable.drain_reconcile_attempt_at
+        )
+        active = or_(
+            ComputeUnitTable.desired_machines > 0,
+            ComputeUnitTable.observed_machines > 0,
+            ComputeUnitTable.phase == ComputeUnitPhase.Deleting.value,
+            exists().where(
+                ComputeProviderInstanceTable.pool_id == ComputeUnitTable.id,
+                ComputeProviderInstanceTable.status.not_in(("deleted", "failed")),
+            ),
+        )
+        base = (
+            select(ComputeUnitTable)
+            .where(ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value)
+            .order_by(attempted_at.asc().nulls_first(), ComputeUnitTable.id)
+            .with_for_update(skip_locked=True)
+        )
+        # Reserve an audit slot for empty pools so stale provider resources are
+        # eventually found even when active capacity always needs attention.
+        rows = list(self.session.scalars(base.where(active).limit(max(limit - 1, 1))))
+        if len(rows) < limit:
+            rows.extend(self.session.scalars(base.where(~active).limit(limit - len(rows))))
+        if rows:
+            stamp = update(ComputeUnitTable).where(
+                ComputeUnitTable.id.in_([row.id for row in rows])
+            )
+            # Attempt bookkeeping must not reorder units for capacity selection.
+            stamp = (
+                stamp.values(
+                    provider_reconcile_attempt_at=now, updated_at=ComputeUnitTable.updated_at
+                )
+                if kind is ComputeReconciliationKind.Provider
+                else stamp.values(
+                    drain_reconcile_attempt_at=now, updated_at=ComputeUnitTable.updated_at
+                )
+            )
+            self.session.execute(stamp)
+        self.session.flush()
+        return [_compute_unit_record(row) for row in rows]
 
     def list_platform_internal(
         self, *, preemptible: bool | None = None, gpu: bool | None = None

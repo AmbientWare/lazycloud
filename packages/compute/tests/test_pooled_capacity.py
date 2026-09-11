@@ -12,7 +12,10 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import pytest
 from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
-from compute.capacity_errors import CapacityReservationLeaseLostError
+from compute.capacity_errors import (
+    CapacityReservationConflictError,
+    CapacityReservationLeaseLostError,
+)
 from compute.fleet_policy import FleetCapacityPolicy
 from compute.offers import ComputeOffer
 from compute.policy import WorkspaceComputePolicyService
@@ -271,6 +274,11 @@ class _MutationLeases:
     held: set[str] = field(default_factory=set)
     dispatch_acquired: list[str] = field(default_factory=list)
     dispatch_held: set[str] = field(default_factory=set)
+    reserved_owners: set[str] = field(default_factory=set)
+
+    def has_open_reservations(self, capacity_owner_id: str) -> bool:
+        assert capacity_owner_id in self.held and capacity_owner_id in self.dispatch_held
+        return capacity_owner_id in self.reserved_owners
 
     @contextmanager
     def mutation_lock(self, capacity_owner_id: str) -> Iterator[None]:
@@ -302,6 +310,8 @@ class _Resolver(ComputeProviderResolver):
     provider: _PooledProvider
     context: ServiceContext
     purchases_enabled: bool = True
+    allowed_offers: tuple[ProviderOfferEligibility, ...] | None = None
+    root_volume_gib: int = 200
 
     def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
         return ()
@@ -331,9 +341,12 @@ class _Resolver(ComputeProviderResolver):
                 workspace_id=workspace_id,
                 pool=connection.pool,
                 platform_fleet=connection.platform_fleet,
+                root_volume_gib=self.root_volume_gib,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
-                allowed_offers=(
+                allowed_offers=self.allowed_offers
+                if self.allowed_offers is not None
+                else (
                     ProviderOfferEligibility(
                         region=self.provider.offer.region,
                         instance_type=self.provider.offer.instance_type,
@@ -2122,6 +2135,7 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
     compute.reconcile_pooled_capacity(now=started_at)
     machine_id = "33333333-3333-4333-8333-333333333333"
     generation_id = "44444444-4444-4444-8444-444444444444"
+    cache_created_at = datetime.now(UTC)
     with service_context.database.session() as session:
         MachineRepository(session).upsert(
             Machine(
@@ -2143,7 +2157,7 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
             worker_id=f"worker-{machine_id}",
             storage_id=f"machine:{machine_id}",
             workspace_id=pool.workspace_id,
-            now=started_at,
+            now=cache_created_at,
         )
     scaling = compute.scale_internal_unit(
         pool.workspace_id,
@@ -2166,13 +2180,16 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
     assert updating_pool.phase is ComputeUnitPhase.Updating
 
     provider.lingering_storage.clear()
-    compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=122))
+    compute.reconcile_unit_capacity(pool.id, now=started_at)
     with service_context.database.session() as session:
         [destroyed] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         retired_generation = SourceCacheCleanupRepository(session).get_generation(generation_id)
         ready_pool = ComputeUnitRepository(session).get(pool.id)
     assert destroyed.status == "deleted"
     assert "provider_storage_destroyed_at" in destroyed.metadata
+    observed_at = destroyed.metadata["provider_storage_destroyed_at"]
+    assert isinstance(observed_at, str)
+    assert datetime.fromisoformat(observed_at) >= cache_created_at
     assert retired_generation is not None
     assert retired_generation.state is WorkerCacheGenerationState.Retired
     assert ready_pool is not None
@@ -2952,6 +2969,150 @@ def test_capacity_asked_for_again_revives_a_deleted_pool(
 
     assert revived.phase is not ComputeUnitPhase.Deleted
     assert revived.min_machines == 1
+    assert revived.generation == unit.generation + 1
+
+
+@pytest.mark.parametrize(
+    ("policy_change", "platform_fleet", "retired"),
+    [
+        ("disabled", True, True),
+        ("removed_offer", True, True),
+        ("root_disk", True, True),
+        ("unchanged", True, False),
+        ("disabled", False, False),
+    ],
+)
+def test_empty_pool_retirement_follows_explicit_platform_policy(
+    service_context: ServiceContext, policy_change: str, platform_fleet: bool, retired: bool
+) -> None:
+    _seed_connection(service_context, platform_fleet=platform_fleet)
+    provider = (
+        _EmptyAccountProvider()
+        if policy_change == "disabled" and platform_fleet
+        else _PooledProvider()
+    )
+    resolver = _Resolver(provider, service_context)
+    compute = ComputeService(
+        service_context,
+        provider_resolver=resolver,
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        root_volume_gib=200,
+    )
+    if policy_change == "disabled":
+        resolver.purchases_enabled = False
+    elif policy_change == "removed_offer":
+        resolver.allowed_offers = ()
+    elif policy_change == "root_disk":
+        resolver.root_volume_gib = 300
+    provider.catalog_failure = RuntimeError("temporary quote outage")
+
+    compute.reconcile_unit_capacity(pool.id)
+
+    with service_context.database.session() as session:
+        stored = ComputeUnitRepository(session).get(pool.id)
+    assert stored is not None
+    assert (stored.phase is ComputeUnitPhase.Deleted) is retired
+    assert stored.created_at == pool.created_at
+    assert stored.capacity_owner_id == pool.capacity_owner_id
+
+
+def test_retirement_cannot_revive_until_provider_deletion_finishes(
+    service_context: ServiceContext,
+) -> None:
+    _seed_connection(service_context, platform_fleet=True)
+    provider = _PooledProvider()
+    resolver = _Resolver(provider, service_context)
+    leases = _MutationLeases()
+    compute = ComputeService(
+        service_context,
+        provider_resolver=resolver,
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=leases,
+    )
+
+    def prepare() -> ComputeUnitRecord:
+        return compute.prepare_pooled_capacity(
+            workspace="default",
+            requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+            region="us-east-1",
+            desired_machines=0,
+            root_volume_gib=200,
+        )
+
+    pool = prepare()
+    resolver.purchases_enabled = False
+    leases.reserved_owners.add(pool.capacity_owner_id)
+    protected = compute.reconcile_unit_capacity(pool.id)
+    assert protected is not None and protected.phase is ComputeUnitPhase.Ready
+    leases.reserved_owners.clear()
+    provider.delete_failure = RuntimeError("provider deletion is unavailable")
+    compute.reconcile_unit_capacity(pool.id)
+    with service_context.database.session() as session:
+        retiring = ComputeUnitRepository(session).get(pool.id)
+    assert retiring is not None and retiring.phase is ComputeUnitPhase.Deleting
+
+    resolver.purchases_enabled = True
+    with pytest.raises(CapacityReservationConflictError, match="finishing provider resource"):
+        prepare()
+    provider.delete_failure = None
+    deleted = compute.reconcile_unit_capacity(pool.id)
+    assert deleted is not None and deleted.phase is ComputeUnitPhase.Deleted
+    revived = prepare()
+    assert revived.id == pool.id
+    assert revived.phase is ComputeUnitPhase.Provisioning
+    assert revived.generation == retiring.generation + 1
+
+
+def test_obsolete_pool_retains_history_until_provider_storage_is_destroyed(
+    service_context: ServiceContext,
+) -> None:
+    _seed_connection(service_context, platform_fleet=True)
+    provider = _PooledProvider()
+    resolver = _Resolver(provider, service_context)
+    compute = ComputeService(
+        service_context,
+        provider_resolver=resolver,
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=1,
+        root_volume_gib=200,
+    )
+    compute.reconcile_unit_capacity(pool.id)
+    with service_context.database.session() as session:
+        instance = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)[0]
+    assert instance.instance_id is not None
+    provider.lingering_storage.add(instance.instance_id)
+    compute.scale_internal_unit(
+        pool.workspace_id, pool.capacity_owner_id, 0, before_mutation=lambda _unit: None
+    )
+    resolver.purchases_enabled = False
+
+    protected = compute.reconcile_unit_capacity(pool.id)
+    assert protected is not None and protected.phase is ComputeUnitPhase.Updating
+    with service_context.database.session() as session:
+        records = ComputeProviderInstanceRepository(session)
+        waiting = records.list_for_pool(pool.id)[0]
+        records.upsert(waiting.model_copy(update={"status": "failed"}))
+    provider.lingering_storage.clear()
+    retired = compute.reconcile_unit_capacity(pool.id)
+    assert retired is not None and retired.phase is ComputeUnitPhase.Deleted
+    with service_context.database.session() as session:
+        records = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+        assert len(records) == 1 and records[0].id == instance.id
+        assert records[0].status == "deleted"
+        assert records[0].metadata["provider_storage_destroyed_at"]
 
 
 def test_an_unbuilt_pool_is_not_deleted_by_the_account_it_has_not_been_built_in(

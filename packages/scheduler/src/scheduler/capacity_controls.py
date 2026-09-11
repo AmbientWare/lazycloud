@@ -5,6 +5,8 @@ from typing import Protocol
 
 from compute.state import RedisComputeStateRepository
 from shared.capacity import CapacityOwnerKind
+from shared.compute_reconciliation import ComputeReconciliationKind
+from shared.timestamps import utc_now
 
 from scheduler.agent_pool import (
     AgentPoolConfig,
@@ -80,11 +82,23 @@ class SchedulerCapacityControllerProvider:
         return controllers
 
     def worker_pool_drain_controllers(self) -> list[WorkerPoolDrainController]:
+        selected = self.services.compute.claim_reconciliation_batch(
+            ComputeReconciliationKind.Drain, now=utc_now()
+        )
         controllers: list[WorkerPoolDrainController] = []
         controllers.extend(
             managed_compute_drain_controllers(
                 self.services.compute,
-                self.compute_states,
+                [
+                    state
+                    for unit in selected
+                    if (
+                        state := self.compute_states.get_unit_state(
+                            unit.workspace_id, unit.capacity_owner_id
+                        )
+                    )
+                    is not None
+                ],
                 self.workers,
                 self.containers,
             )

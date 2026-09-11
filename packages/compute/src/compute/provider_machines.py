@@ -293,7 +293,7 @@ class ProviderMachineReconciler:
         offer: ComputeOffer,
         snapshot: ProviderUnitSnapshot,
         now: datetime,
-        destroyed_record_ids: set[str],
+        destruction_observations: Mapping[str, datetime],
     ) -> set[str]:
         repository = ComputeProviderInstanceRepository(session)
         missing_machine_ids: set[str] = set()
@@ -472,14 +472,12 @@ class ProviderMachineReconciler:
             if missing_since is None:
                 existing_metadata["missing_since"] = now.isoformat()
                 missing_since = now
-            elif not _reservation_open(existing.status):
-                # A settled row with its absence already recorded has nothing
-                # left to say. Writing it anyway moves `updated_at`, and the
-                # pool's scale-down cooldown reads the newest write across
-                # closed rows as the moment capacity was last released: rows
-                # closed two days ago were re-dated every pass, so the cooldown
-                # was re-armed exactly as fast as it expired and the idle drain
-                # was never reached.
+            elif (
+                not _reservation_open(existing.status)
+                and _metadata_time(existing_metadata, "provider_storage_destroyed_at") is not None
+            ):
+                # A terminal status alone does not prove storage destruction.
+                # Fully settled rows must keep their original release timestamp.
                 continue
             if (
                 (now - missing_since).total_seconds() < 120
@@ -490,7 +488,8 @@ class ProviderMachineReconciler:
                     existing.model_copy(update={"metadata": existing_metadata, "updated_at": now})
                 )
                 continue
-            if existing.id not in destroyed_record_ids:
+            destroyed_at = destruction_observations.get(existing.id)
+            if destroyed_at is None:
                 repository.upsert(
                     existing.model_copy(update={"metadata": existing_metadata, "updated_at": now})
                 )
@@ -500,7 +499,7 @@ class ProviderMachineReconciler:
                 and not self.source_cache_lifecycle.record_machine_storage_destroyed_in_session(
                     session,
                     existing.machine_id,
-                    observed_at=now,
+                    observed_at=destroyed_at,
                 )
             ):
                 repository.upsert(
@@ -514,7 +513,7 @@ class ProviderMachineReconciler:
                         "metadata": {
                             **existing_metadata,
                             "terminated_reason": "provider_instance_missing",
-                            "provider_storage_destroyed_at": now.isoformat(),
+                            "provider_storage_destroyed_at": destroyed_at.isoformat(),
                         },
                         "updated_at": now,
                     }
@@ -585,13 +584,14 @@ class ProviderMachineReconciler:
                 terminal_statuses=(ReservationStatus.Deleted.value, ReservationStatus.Failed.value),
                 observed_instance_ids=observed_instance_ids,
             )
-        destroyed_record_ids: set[str] = set()
+        destruction_observations: dict[str, datetime] = {}
         for instance in prior_instances:
             if instance.instance_id is not None and instance.instance_id in observed_instance_ids:
                 continue
             metadata = _provider_instance_metadata(instance)
-            if _metadata_time(metadata, "provider_storage_destroyed_at") is not None:
-                destroyed_record_ids.add(instance.id)
+            destroyed_at = _metadata_time(metadata, "provider_storage_destroyed_at")
+            if destroyed_at is not None:
+                destruction_observations[instance.id] = destroyed_at
                 continue
             missing_since = _metadata_time(
                 metadata,
@@ -610,18 +610,20 @@ class ProviderMachineReconciler:
             storage_volume_ids = _provider_storage_volume_ids(instance)
             if instance.instance_id is None:
                 if authoritative_zero and not storage_volume_ids:
-                    destroyed_record_ids.add(instance.id)
+                    destruction_observations[instance.id] = utc_now()
                 continue
             if provider.machine_storage_destroyed(
                 provider_request,
                 instance.instance_id,
                 storage_volume_ids,
             ):
-                destroyed_record_ids.add(instance.id)
+                # The pass clock can predate a cache generation registered while
+                # the provider call runs. Destruction evidence dates that observation.
+                destruction_observations[instance.id] = utc_now()
         unproved = {
             item.id
             for item in prior_instances
-            if _reservation_open(item.status) and item.id not in destroyed_record_ids
+            if _reservation_open(item.status) and item.id not in destruction_observations
         }
         if unproved:
             if snapshot.phase is ProviderCapacityPhase.Deleted:
@@ -654,7 +656,7 @@ class ProviderMachineReconciler:
                 offer=offer,
                 snapshot=snapshot,
                 now=current_time,
-                destroyed_record_ids=destroyed_record_ids,
+                destruction_observations=destruction_observations,
             )
         for machine_id in missing_machine_ids:
             self.retire_provider_pool_machine(
