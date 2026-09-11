@@ -22,15 +22,26 @@ Check the install:
 lazycloud --help
 ```
 
-Upgrade later with the CLI itself. It upgrades through whichever installer
-put it there (`uv tool`, `pipx`, `uv`, or `pip`):
+Upgrade the installation you are running:
 
 ```bash
 lazycloud update
 ```
 
-`lazycloud update --check` reports the installed and latest versions without
-changing anything.
+For a uv project, run:
+
+```bash
+uv run lazycloud update
+```
+
+This updates `uv.lock` and the project's environment together, preserving the
+dependency constraints in `pyproject.toml`. If a version pin prevents an upgrade,
+the command reports it. Change the pin before retrying.
+
+Global tools update through `uv tool` or `pipx`. Other environments use their
+installer's pip command. The output identifies the installation and its environment
+path. `lazycloud update --check` reports the installed and latest versions without
+changing anything; use `uv run lazycloud update --check` to check a uv project.
 
 API responses tell the CLI which client version the server recommends. If yours
 is older, the CLI prints a `lazycloud update` hint once per command. The hint goes
