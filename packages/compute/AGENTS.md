@@ -124,16 +124,19 @@ worker boundary, whether admission, credential vending, or network mutation,
 compares the same pair, because a placement rule enforced in one of four places is
 enforced nowhere.
 
-A unit is deleted because someone deleted it. The provider cannot supply that
-fact: an account with no autoscaling group in it is what a torn-down unit and one
-that has never been built both look like, and the provider is asked about the
-account. So a snapshot reporting nothing moves a unit to `Deleted` only when the
-unit was already `Deleting` or `Deleted`, and otherwise means the unit is still
-`Provisioning`. Every real teardown passes through `Deleting` first, so the gate
-costs those paths nothing.
+Deletion requires durable intent. Missing provider resources move a unit to
+`Deleted` only when it was already `Deleting` or `Deleted`; an unbuilt unit stays
+`Provisioning`. Preparing capacity can revive a fully `Deleted` unit with a new
+generation. A `Deleting` unit cannot reactivate while provider teardown is in flight.
 
-The asymmetry is the point. `reconcile_pooled_capacity` declines to build a
-deleted unit, and `_prepare_pooled_capacity` is the only thing that revives one,
-so a wrong `Deleted` ends the unit: the warm floor revives the row, the next
-snapshot buries it, and the account holds a floor it can never fill while every
-task dies naming a pool. A wrong `Provisioning` costs one pass. Prefer it.
+Empty platform units retire when their configured purchase policy, approved
+region/type/market, or canonical root disk no longer permits that binding.
+Retirement holds the reservation mutation and dispatch leases, checks durable
+demand and provider storage destruction, and preserves the unit and machine
+history. Preparing a candidate and reserving its capacity share the same mutation
+lease. Valid idle pools and customer-owned pools do not expire through this policy.
+
+Storage destruction evidence carries the time the provider confirmed absence,
+not the reconciliation pass start time. A cache generation may register while
+that provider call runs; generation ownership and evidence chronology must both
+hold before its storage can be retired.

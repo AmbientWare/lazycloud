@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from threading import Barrier
+from threading import Barrier, Event
 from time import sleep
 
 import pytest
@@ -1518,6 +1518,42 @@ def test_capacity_owner_mutation_lock_renews_during_slow_owner_operation(
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         assert pool.submit(_enters_lease, contender).result() is True
+
+
+def test_capacity_preparation_and_reservation_share_the_retirement_fence(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    repository = _repository(real_redis_actors)
+    contender = _repository(real_redis_actors)
+    prepared = Event()
+    continue_preparation = Event()
+    controller = _Controller()
+    service = CapacityReservationService(repository, lambda: (controller,))
+
+    def prepare() -> None:
+        prepared.set()
+        assert continue_preparation.wait(timeout=5)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        acquisition = executor.submit(
+            service.acquire,
+            _request("prepared-capacity"),
+            purchases=lambda: (ComputeCapacityPurchase(OWNER_ID, prepare),),
+        )
+        try:
+            assert prepared.wait(timeout=5)
+            assert not contender.has_open_reservations(OWNER_ID)
+            with (
+                pytest.raises(CapacityReservationLockContendedError),
+                contender.mutation_lock(OWNER_ID),
+            ):
+                pytest.fail("retirement acquired a unit while demand was preparing it")
+        finally:
+            continue_preparation.set()
+        result = acquisition.result(timeout=5)
+
+    assert result.status is CapacityAcquisitionStatus.Requested
+    assert repository.has_open_reservations(OWNER_ID)
 
 
 def test_capacity_owner_mutation_lock_re_enters_for_the_holder(
