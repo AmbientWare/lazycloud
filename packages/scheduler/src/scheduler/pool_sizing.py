@@ -75,14 +75,18 @@ def capacity_pool_operational_health(
     *,
     state: CapacityPoolSizingSnapshot | None = None,
 ) -> CapacityPoolOperationalHealth:
+    current_time = utc_now()
     owner_workers = [worker for worker in workers if worker.capacity_owner_id == capacity_owner_id]
     if state is not None and state.consecutive_failures > 0:
         return CapacityPoolOperationalHealth.Degraded
-    if any(worker.status is SchedulerWorkerStatus.Available for worker in owner_workers):
+    if any(
+        worker.request_intake_status(at=current_time) is SchedulerWorkerStatus.Available
+        for worker in owner_workers
+    ):
         return CapacityPoolOperationalHealth.Healthy
     if any(
-        worker.status is SchedulerWorkerStatus.Pending
-        or worker.resuming_after_worker_update(at=utc_now())
+        worker.request_intake_status(at=current_time) is SchedulerWorkerStatus.Pending
+        or worker.resuming_after_worker_update(at=current_time)
         for worker in owner_workers
     ):
         return CapacityPoolOperationalHealth.Degraded
@@ -130,10 +134,10 @@ def effective_pool_headroom(
     for worker in workers:
         if not _worker_matches_pool_policy(pool, worker):
             continue
-        if worker.status is SchedulerWorkerStatus.Available:
+        if worker.request_intake_status(at=current_time) is SchedulerWorkerStatus.Available:
             available.append(worker)
         elif (
-            worker.status is SchedulerWorkerStatus.Pending
+            worker.request_intake_status(at=current_time) is SchedulerWorkerStatus.Pending
             or worker.resuming_after_worker_update(at=current_time)
         ) and worker.worker_id not in claimed_pending_workers:
             pending.append(worker)
