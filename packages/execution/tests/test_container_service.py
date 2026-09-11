@@ -71,13 +71,17 @@ class _Cancellation:
         self.result = result
         self.container_ids: list[str] = []
 
-    def cancel(self, container_id: str) -> SchedulerContainerCancellationResult:
+    def cancel(
+        self, container_id: str, *, only_if_pending: bool = False
+    ) -> SchedulerContainerCancellationResult:
         self.container_ids.append(container_id)
         return self.result.model_copy(update={"container_id": container_id})
 
 
 class _FailingCancellation:
-    def cancel(self, container_id: str) -> SchedulerContainerCancellationResult:
+    def cancel(
+        self, container_id: str, *, only_if_pending: bool = False
+    ) -> SchedulerContainerCancellationResult:
         del container_id
         raise RuntimeError("scheduler cancellation failed")
 

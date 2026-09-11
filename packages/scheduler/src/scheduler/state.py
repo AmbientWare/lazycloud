@@ -339,11 +339,10 @@ return redis.call("ZADD", KEYS[4], ARGV[3], ARGV[1])
 """
 
 CANCEL_WORKER_REQUEST_SCRIPT = """
-local payload = redis.call("HGET", KEYS[2], ARGV[1])
 local removed = redis.call("LREM", KEYS[1], 0, ARGV[1])
-removed = removed + redis.call("LREM", KEYS[3], 0, ARGV[1])
+local delivered = redis.call("LREM", KEYS[3], 0, ARGV[1])
 redis.call("HDEL", KEYS[2], ARGV[1])
-return {removed, payload or ""}
+return {removed + delivered, delivered}
 """
 
 DRAIN_WORKER_REQUESTS_SCRIPT = """
@@ -611,6 +610,12 @@ class WorkerReservedCapacity:
     cpu_millicores: int = 0
     memory_mib: int = 0
     gpu_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerRequestCancellation:
+    removed: bool
+    delivered: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1934,8 +1939,16 @@ class RedisSchedulerWorkerRepository:
             scheduled_at.timestamp(),
         )
 
-    def cancel_worker_request(self, worker_id: str, container_id: str) -> bool:
-        def write() -> bool:
+    def get_worker_request(
+        self, worker_id: str, container_id: str
+    ) -> SchedulerWorkerRequest | None:
+        raw = self.redis.hash_get(self.keys.worker_request_payloads(worker_id), container_id)
+        if raw is None:
+            return None
+        return SchedulerWorkerRequest.model_validate_json(redis_serialization.redis_text(raw))
+
+    def cancel_worker_request(self, worker_id: str, container_id: str) -> WorkerRequestCancellation:
+        def write() -> WorkerRequestCancellation:
             queue_key = self.keys.worker_requests(worker_id)
             payloads_key = self.keys.worker_request_payloads(worker_id)
             inflight_key = self.keys.worker_inflight_requests(worker_id)
@@ -1951,7 +1964,7 @@ class RedisSchedulerWorkerRepository:
             )
             removed = bool(result and int(result[0]) > 0)
             if not removed:
-                return False
+                return WorkerRequestCancellation(removed=False, delivered=False)
             worker = self.get_worker(worker_id)
             if worker is not None:
                 reconciled = self._reconciled_worker_capacity(worker)
@@ -1959,7 +1972,7 @@ class RedisSchedulerWorkerRepository:
                     self.keys.worker_state(worker_id),
                     mapping=redis_serialization.dump_model_hash(reconciled),
                 )
-            return True
+            return WorkerRequestCancellation(removed=True, delivered=int(result[1]) > 0)
 
         return self._with_worker_lock(worker_id, write)
 
@@ -2455,10 +2468,21 @@ class RedisSchedulerContainerRepository:
         container_id: str,
         *,
         ttl_seconds: int = DEFAULT_CONTAINER_STATE_TTL_SECONDS,
+        only_if_pending: bool = False,
     ) -> SchedulerContainerState | None:
         def write() -> tuple[SchedulerContainerState | None, str | None]:
-            self._fence_container_request(container_id)
             state = self.get_container_state(container_id)
+            if (
+                only_if_pending
+                and state is not None
+                and state.status
+                not in {
+                    SchedulerContainerStatus.Pending,
+                    SchedulerContainerStatus.Stopping,
+                }
+            ):
+                return state, None
+            self._fence_container_request(container_id)
             if state is None:
                 return None, None
             if state.status in {

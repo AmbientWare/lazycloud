@@ -17,9 +17,11 @@ from scheduler.state import (
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
+    WorkerRequestCancellation,
 )
 from shared.compute_policy import MachinePool
 from shared.placement import ProductRegion
+from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 
@@ -240,7 +242,7 @@ async def test_real_redis_dispatch_and_cancellation_have_one_terminal_winner(
     await repositories[0].enqueue_worker_request(async_redis, "worker-1", cancellable)
     start = asyncio.Event()
 
-    async def cancel() -> bool:
+    async def cancel() -> WorkerRequestCancellation:
         await start.wait()
         return await asyncio.to_thread(
             repositories[0].cancel_worker_request,
@@ -262,12 +264,52 @@ async def test_real_redis_dispatch_and_cancellation_have_one_terminal_winner(
     cancel_won, delivered = await asyncio.gather(cancelled, dequeued)
     # The cancellation reaches the request on whichever of the worker's two lists
     # it is on, so a request already handed out is still cancellable.
-    assert cancel_won
+    assert cancel_won.removed
+    assert delivered is None or cancel_won.delivered
     assert delivered is None or delivered.container_id == cancellable.container_id
     assert not repositories[0].has_recoverable_container_request(
         cancellable.container_id,
         worker_id="worker-1",
     )
+
+
+def test_pending_recovery_and_running_transition_have_one_winner(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    repository = RedisSchedulerContainerRepository(real_redis_actors.client())
+    repository.set_container_state(
+        SchedulerContainerState(
+            container_id="starting",
+            stub_id="stub-1",
+            workspace_id="workspace-1",
+            status=SchedulerContainerStatus.Pending,
+        )
+    )
+    barrier = Barrier(2)
+
+    def start() -> SchedulerContainerStatus:
+        barrier.wait()
+        return repository.update_container_status(
+            "starting", SchedulerContainerStatus.Running
+        ).next_status
+
+    def recover() -> SchedulerContainerState | None:
+        barrier.wait()
+        return repository.cancel_container_request("starting", only_if_pending=True)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        started = executor.submit(start)
+        recovered = executor.submit(recover)
+        start_status = started.result()
+        recovered_state = recovered.result()
+
+    assert recovered_state is not None
+    assert recovered_state.status is start_status
+    assert repository.is_container_cancelled("starting") is (
+        start_status is SchedulerContainerStatus.Stopping
+    )
+    repeated = repository.cancel_container_request("starting", only_if_pending=True)
+    assert repeated is not None and repeated.status is start_status
 
 
 @pytest.mark.anyio

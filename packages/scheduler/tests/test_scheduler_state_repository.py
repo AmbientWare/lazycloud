@@ -2110,11 +2110,11 @@ def test_workspace_cleanup_discovers_ephemeral_container_after_state_deletion(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("started", [False, True])
+@pytest.mark.parametrize("delivery", ["queued", "inflight", "running"])
 async def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
     real_redis_actors: RealRedisActors,
     async_redis: AsyncRedisClient,
-    started: bool,
+    delivery: str,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -2153,21 +2153,25 @@ async def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
     dispatched = service.dispatch_ready(now=now, limit=1)
     assert dispatched[0].status is SchedulerContainerDispatchStatus.Dispatched
 
-    if started:
+    delivered = delivery != "queued"
+    if delivered:
         assert (
             await workers.wait_for_next_container_request(
                 async_redis, "worker-1", timeout_seconds=0.01
             )
             is not None
         )
-        containers.update_container_status(request.container_id, SchedulerContainerStatus.Running)
+        if delivery == "running":
+            containers.update_container_status(
+                request.container_id, SchedulerContainerStatus.Running
+            )
 
     result = service.cancel(request.container_id)
 
-    assert result.pending_request_removed is not started
-    assert result.worker_stop_required is started
+    assert result.pending_request_removed is not delivered
+    assert result.worker_stop_required is delivered
     state = containers.get_container_state(request.container_id)
-    if started:
+    if delivered:
         assert state is not None and state.status is SchedulerContainerStatus.Stopping
         assert state.worker_id == "worker-1"
     else:
@@ -2180,15 +2184,15 @@ async def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
     state_key = containers.keys.container_state(request.container_id)
     assert (
         bool(redis.set_contains(containers.keys.container_stub_index("stub-1"), state_key))
-        is started
+        is delivered
     )
     assert (
         bool(redis.set_contains(containers.keys.container_workspace_index("ws-1"), state_key))
-        is started
+        is delivered
     )
     assert (
         bool(redis.set_contains(containers.keys.container_worker_index("worker-1"), state_key))
-        is started
+        is delivered
     )
 
 
