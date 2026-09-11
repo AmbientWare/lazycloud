@@ -712,11 +712,12 @@ class ApiServices(ApiServiceCore):
             )
         )
         container_repository = RedisSchedulerContainerRepository(redis)
+        worker_repository = RedisSchedulerWorkerRepository(redis)
         tasks = TaskService(
             context,
             events,
             log_streams=stream_events,
-            progress=TaskProgressService(context, container_repository),
+            progress=TaskProgressService(context, container_repository, worker_repository),
             workspace_changes=workspace_changes,
             async_database=async_database,
             async_workspace_changes=async_workspace_changes,
@@ -810,7 +811,6 @@ class ApiServices(ApiServiceCore):
             owned_runtime_resources.append(resolved_volume_filesystem)
         else:
             resolved_volume_filesystem = volume_filesystem
-        worker_repository = RedisSchedulerWorkerRepository(redis)
         pool_state_repository = RedisWorkerPoolStateRepository(redis)
         capacity_reservation_repository = RedisCapacityReservationRepository(redis)
         usage = UsageService(

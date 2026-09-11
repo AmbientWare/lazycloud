@@ -13,7 +13,11 @@ from shared.http.task_progress import (
     TaskPendingProgress,
     TaskPendingReason,
 )
-from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
+from shared.scheduling import (
+    SchedulerContainerState,
+    SchedulerContainerStatus,
+    SchedulerWorkerRequest,
+)
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
 
@@ -24,10 +28,17 @@ class TaskCapacityReader(Protocol):
     def list_by_stub(self, stub_id: str) -> list[SchedulerContainerState]: ...
 
 
+class TaskWorkerDeliveryReader(Protocol):
+    def get_worker_request(
+        self, worker_id: str, container_id: str
+    ) -> SchedulerWorkerRequest | None: ...
+
+
 @dataclass(slots=True)
 class TaskProgressService:
     context: ExecutionContext
     capacity: TaskCapacityReader
+    deliveries: TaskWorkerDeliveryReader
 
     def read(self, tasks: Sequence[Task]) -> dict[str, TaskPendingProgress | None]:
         now = utc_now()
@@ -70,11 +81,24 @@ class TaskProgressService:
                 for state in self.capacity.list_by_stub(stub_id)
                 if state.workspace_id == workspace_id and state.stub_id == stub_id
             )
+        deliveries = {
+            state.container_id: delivery.timestamp
+            for state in states.values()
+            if state.status is SchedulerContainerStatus.Pending
+            and state.worker_id
+            and (
+                delivery := self.deliveries.get_worker_request(state.worker_id, state.container_id)
+            )
+            is not None
+            and delivery.workspace_id == state.workspace_id
+            and delivery.stub_id == state.stub_id
+        }
         return {
             task.id: task_pending_progress(
                 task,
                 containers=containers.get((task.workspace_id or "", task.stub_id or ""), ()),
                 states=states,
+                deliveries=deliveries,
                 now=now,
                 since=pending_since.get(task.id, task.claimable_at or task.created_at),
             )
@@ -87,6 +111,7 @@ def task_pending_progress(
     *,
     containers: Sequence[ContainerRecord],
     states: dict[str, SchedulerContainerState],
+    deliveries: dict[str, datetime],
     now: datetime,
     since: datetime,
 ) -> TaskPendingProgress | None:
@@ -119,6 +144,17 @@ def task_pending_progress(
             container.status is not ContainerStatus.Pending
             or state.status is not SchedulerContainerStatus.Pending
         ):
+            continue
+        if state.worker_id:
+            delivery_at = deliveries.get(container.id)
+            progress = TaskPendingProgress.for_reason(
+                TaskPendingReason.StartingContainer,
+                since=delivery_at or state.scheduled_at,
+                observed_at=now,
+            )
+            if delivery_at is not None:
+                progress.message = "Waiting for the worker to accept this function."
+            candidates.append(progress)
             continue
         progress = state.pending_progress
         if (
