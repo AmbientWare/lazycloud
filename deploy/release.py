@@ -123,7 +123,7 @@ def main() -> None:
         target=ReleaseTarget(version="local", source_revision=revision, worker_image=worker_image),
     )
     Path(".env.release").write_text(f"WORKER_RUNTIME_IMAGE={worker_image}\n")
-    process = subprocess.Popen(["docker", "compose", "up", "-d", "--force-recreate"])
+    process = subprocess.Popen(["docker", "compose", "up", "-d"])
 
     try:
         activated = False
