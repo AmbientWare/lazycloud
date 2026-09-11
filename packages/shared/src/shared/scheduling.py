@@ -253,6 +253,14 @@ class WorkerExecutionRecord(ContractModel):
 class SchedulerWorkerRecord(WorkerExecutionRecord):
     region: ProductRegion | None = None
     availability_zone: AvailabilityZone = ""
+    worker_update_expires_at: datetime | None = None
+
+    def resuming_after_worker_update(self, *, at: datetime) -> bool:
+        return (
+            self.status is SchedulerWorkerStatus.Draining
+            and self.worker_update_expires_at is not None
+            and self.worker_update_expires_at > at
+        )
 
 
 class WorkerContainerState(ContractModel):

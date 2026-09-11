@@ -71,6 +71,21 @@ def _worker(
     )
 
 
+def test_worker_update_capacity_expires_without_becoming_placeable() -> None:
+    worker = _worker("updating", SchedulerWorkerStatus.Draining).model_copy(
+        update={"worker_update_expires_at": NOW + timedelta(seconds=60)}
+    )
+    headroom = effective_pool_headroom(_pool(), [worker], now=NOW)
+    assert headroom.available_workers == 0
+    assert headroom.unclaimed_pending_workers == 1
+    assert headroom.cpu_millicores == worker.free_cpu_millicores
+
+    expired = effective_pool_headroom(_pool(), [worker], now=NOW + timedelta(seconds=60))
+    assert expired.available_workers == 0
+    assert expired.unclaimed_pending_workers == 0
+    assert expired.cpu_millicores == 0
+
+
 def test_effective_headroom_counts_available_and_unclaimed_pending_then_allocations() -> None:
     class Reservation:
         capacity_owner_id = OWNER_ID

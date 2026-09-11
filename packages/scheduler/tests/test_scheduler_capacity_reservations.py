@@ -673,6 +673,38 @@ def test_rejected_first_response_retains_provider_reported_ownership_until_clean
     assert not reservation.acquisition_created
 
 
+def test_capacity_reservation_reuses_machine_during_prepared_worker_update(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    now = datetime.now(UTC)
+    workers = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    updating = workers.add_worker(
+        _worker(OWNER_ID, created_at=now - timedelta(hours=1)).model_copy(
+            update={
+                "status": SchedulerWorkerStatus.Draining,
+                "worker_update_expires_at": now + timedelta(seconds=60),
+            }
+        )
+    )
+    unit = _managed_pool()
+    controller = ComputeUnitCapacityController(
+        unit.workspace_id, unit, _UnusedComputeCapacity(unit), workers
+    )
+    reservation = CapacityProvisioningReservation(
+        id="worker-update-demand",
+        capacity_owner_id=OWNER_ID,
+        pool=DEFAULT_POOL,
+        owner_kind=CapacityOwnerKind.PooledProvider,
+        acquisition_shape=_shape(),
+        operation_id="worker-update-demand",
+        registration_deadline_at=now + timedelta(minutes=5),
+    )
+    result = controller.ensure_capacity(reservation, owner_reservations=(), now=now)
+    assert result.status is CapacityAcquisitionStatus.ExistingPending
+    assert result.target_machine_id == updating.machine_id
+    assert not result.owns_capacity
+
+
 def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() -> None:
     compute = ComputeUnitCapacityController(
         "workspace-1",

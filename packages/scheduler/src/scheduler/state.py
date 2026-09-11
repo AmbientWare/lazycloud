@@ -1157,6 +1157,28 @@ class RedisSchedulerWorkerRepository:
             )
         )
 
+    def renew_worker_update(
+        self, worker: SchedulerWorkerRecord, *, expires_at: datetime
+    ) -> SchedulerWorkerRecord:
+        def write() -> SchedulerWorkerRecord:
+            current = self.get_worker(worker.worker_id)
+            if current is None:
+                raise WorkerStateNotFoundError(worker.worker_id)
+            if (
+                current.resource_version != worker.resource_version
+                or current.status is not SchedulerWorkerStatus.Draining
+                or current.machine_id != worker.machine_id
+            ):
+                return current
+            updated = current.model_copy(update={"worker_update_expires_at": expires_at})
+            self.redis.hash_set(
+                self.keys.worker_state(worker.worker_id),
+                mapping=redis_serialization.dump_model_hash(updated),
+            )
+            return updated
+
+        return self._with_worker_lock(worker.worker_id, write)
+
     def release_worker_rollout_slot(
         self,
         capacity_owner_id: str,
@@ -1277,6 +1299,11 @@ class RedisSchedulerWorkerRepository:
             if result_code == -2:
                 raise SchedulerRepositoryError(
                     f"worker {operation.worker_id} interruption session fence is stale"
+                )
+            if result_code == 1:
+                self.redis.hash_set(
+                    self.keys.worker_state(operation.worker_id),
+                    mapping={"worker_update_expires_at": redis_serialization.dumps_field(None)},
                 )
             updated = self.get_worker(operation.worker_id)
             if updated is None:
@@ -4005,6 +4032,7 @@ def _worker_with_status(
             "status": status,
             "unavailable_reason": unavailable_reason,
             "unavailable_detail": unavailable_detail,
+            "worker_update_expires_at": None,
             "resource_version": worker.resource_version + 1,
             "updated_at": now or utc_now(),
         }

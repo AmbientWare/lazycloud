@@ -13,7 +13,7 @@ from compute.capacity_errors import CapacityReservationLockContendedError
 from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
 from coordination.redis_client import RedisClient
-from database.repositories.compute import ComputeMachineEnrollmentRepository, ComputeUnitRepository
+from database.repositories.compute import ComputeMachineEnrollmentRepository
 from database.repositories.orchestration import ContainerRepository, WorkerRepository
 from gateway.http import JoinAgentRequest
 from gateway.service import GatewayControlService
@@ -702,42 +702,57 @@ def test_join_credentials_are_refused_for_provider_provisioned_units(
         )
 
 
-@pytest.mark.parametrize("surge", [False, True])
-def test_rollout_settlement_defers_contended_maintenance(
+def test_worker_update_waits_for_prepared_image_then_drains_same_machine(
     isolated_services: ApiServices,
-    monkeypatch: pytest.MonkeyPatch,
-    surge: bool,
 ) -> None:
     workspace_id = _default_workspace_id(isolated_services)
+    _own_default_workspace(isolated_services)
     unit = isolated_services.compute.create_unit(
-        UnitName("rollout-settlement"), workspace=workspace_id, provider="agent"
+        UnitName("worker-image-update"), workspace=workspace_id, provider="agent"
     )
-    with isolated_services.context.database.session() as session:
-        repository = ComputeUnitRepository(session)
-        repository.set_worker_rollout_surge(
-            unit.id, expected_generation=unit.generation, enabled=surge
-        )
-    guard = _RecordingCapacityReservationGuard(open_reservations=False)
-    gateway = _gateway(isolated_services, guard, key_prefix="rollout-settlement")
-
-    def contended(
-        self: _RecordingCapacityReservationGuard, capacity_owner_id: str
-    ) -> AbstractContextManager[None]:
-        del self, capacity_owner_id
-        if not surge:
-            raise RuntimeError("a settled rollout must not contend with capacity mutations")
-        raise CapacityReservationLockContendedError("another reconciler owns capacity")
-
-    monkeypatch.setattr(_RecordingCapacityReservationGuard, "mutation_lock", contended)
-    gateway._settle_worker_rollout_capacity(
+    gateway = isolated_services.gateway_service
+    select_worker_release("worker:target")
+    join = gateway.unit_state_coordinator.create_unit_join_token(
+        unit, workspace_id=workspace_id, owner_token_id="gateway-test-owner"
+    )
+    enrolled = gateway.join_agent(_join_request(join.token))
+    state = gateway._agent_state_for_token(enrolled.agent_token)
+    assert state is not None
+    worker_id = agent_machine_worker_id(enrolled.machine_id)
+    workers = RedisSchedulerWorkerRepository(gateway.compute_state.redis)
+    workers.add_worker(
         SchedulerWorkerRecord(
-            worker_id="rollout-worker", capacity_owner_id=unit.capacity_owner_id, pool=unit.pool
-        ),
-        target_image="worker:target",
+            worker_id=worker_id,
+            machine_id=enrolled.machine_id,
+            capacity_owner_id=unit.capacity_owner_id,
+            pool=unit.pool,
+            status=SchedulerWorkerStatus.Available,
+        )
     )
-    with isolated_services.context.database.session() as session:
-        current = ComputeUnitRepository(session).get(unit.id)
-    assert current is not None and current.worker_rollout_surge is surge
+    [preparing] = gateway._agent_slots_for_machine(
+        state,
+        billing_owner=billing_owner_for_unit(unit),
+        active_worker_images={worker_id: "worker:current"},
+        prepared_worker_images=[],
+        agent_binary_sha256="",
+    )
+    assert preparing.status is AgentWorkerSlotStatus.Active
+    current = workers.get_worker(worker_id)
+    assert current is not None and current.status is SchedulerWorkerStatus.Available
+
+    [restarting] = gateway._agent_slots_for_machine(
+        state,
+        billing_owner=billing_owner_for_unit(unit),
+        active_worker_images={worker_id: "worker:current"},
+        prepared_worker_images=["worker:target"],
+        agent_binary_sha256="",
+    )
+    assert restarting.status is AgentWorkerSlotStatus.Pending
+    assert restarting.worker_id == worker_id
+    assert restarting.machine_id == enrolled.machine_id
+    current = workers.get_worker(worker_id)
+    assert current is not None and current.status is SchedulerWorkerStatus.Draining
+    assert current.worker_update_expires_at is not None
 
 
 @pytest.mark.parametrize(
@@ -790,7 +805,7 @@ def test_rollout_contention_preserves_worker_without_restart_authorization(
         state,
         billing_owner=billing_owner_for_unit(unit),
         active_worker_images={worker_id: "worker:current"},
-        rollout_fleet_size=1,
+        prepared_worker_images=["worker:target"],
         agent_binary_sha256="",
     )
     assert len(slots) == 1 and slots[0].status is slot_status

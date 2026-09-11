@@ -10,7 +10,6 @@ from typing import Protocol, runtime_checkable
 
 from agent.binary import AgentBinarySettings
 from agent.service import AgentService
-from anyio import from_thread
 from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
@@ -1278,7 +1277,6 @@ def _compose_api_services(
         scheduler_pool_states=scheduler_pool_states,
         container_clients=container_clients,
         async_http=async_http,
-        endpoint_dispatcher=async_dispatcher,
     )
     image = image_service or ImageControlService(
         core,
@@ -1493,13 +1491,7 @@ def _gateway_control_service(
     scheduler_pool_states: RedisWorkerPoolStateRepository,
     container_clients: SchedulerContainerClientFactory,
     async_http: AsyncBackendHttpClient | None,
-    endpoint_dispatcher: AsyncEndpointInstanceDispatcher | None,
 ) -> GatewayControlService:
-    def endpoint_rollout_readiness(stub_id: str, container_ids: list[str]) -> set[str]:
-        if endpoint_dispatcher is None:
-            raise RuntimeError("endpoint rollout readiness requires asynchronous API I/O")
-        return from_thread.run(endpoint_dispatcher.ready_container_ids, stub_id, container_ids)
-
     compute_states = RedisComputeStateRepository(core.redis())
     route_dialer = BackendRouteDialer(
         config=core.backend_route_settings.to_dialer_config(),
@@ -1522,7 +1514,6 @@ def _gateway_control_service(
         route_prewarmer=RoutePrewarmService(route_dialer, core.events),
         container_stopper=SchedulerContainerServiceStopper(container_clients),
         container_client_factory=container_clients,
-        endpoint_rollout_readiness=endpoint_rollout_readiness,
         route_authenticator=core.backend_route_settings.to_authenticator(),
         gateway_endpoint=GatewayEndpointConfig(http_url=core.gateway_settings.public_http_url),
         agent_artifact_version=core.agent_binary_settings.binary_version,

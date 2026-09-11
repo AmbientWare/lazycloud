@@ -80,7 +80,11 @@ def capacity_pool_operational_health(
         return CapacityPoolOperationalHealth.Degraded
     if any(worker.status is SchedulerWorkerStatus.Available for worker in owner_workers):
         return CapacityPoolOperationalHealth.Healthy
-    if any(worker.status is SchedulerWorkerStatus.Pending for worker in owner_workers):
+    if any(
+        worker.status is SchedulerWorkerStatus.Pending
+        or worker.resuming_after_worker_update(at=utc_now())
+        for worker in owner_workers
+    ):
         return CapacityPoolOperationalHealth.Degraded
     return CapacityPoolOperationalHealth.Unavailable
 
@@ -111,7 +115,9 @@ def effective_pool_headroom(
     *,
     reservations: Iterable[WorkerPoolSizingReservation] = (),
     allocations: Iterable[WorkerPoolSizingAllocation] = (),
+    now: datetime | None = None,
 ) -> WorkerPoolEffectiveHeadroom:
+    current_time = now or utc_now()
     claimed_pending_workers = {
         reservation.target_worker_id
         for reservation in reservations
@@ -128,8 +134,8 @@ def effective_pool_headroom(
             available.append(worker)
         elif (
             worker.status is SchedulerWorkerStatus.Pending
-            and worker.worker_id not in claimed_pending_workers
-        ):
+            or worker.resuming_after_worker_update(at=current_time)
+        ) and worker.worker_id not in claimed_pending_workers:
             pending.append(worker)
     active_allocations = list(allocations)
     return WorkerPoolEffectiveHeadroom(

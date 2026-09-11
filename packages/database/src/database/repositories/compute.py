@@ -384,9 +384,7 @@ def _locked_claimed_row[RowT: IdPayloadTable, RecordT: _ClaimedRecord](
 
 
 def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
-    return ComputeUnitRecord.model_validate(
-        {**row.payload, "worker_rollout_surge": row.worker_rollout_surge}
-    )
+    return ComputeUnitRecord.model_validate(row.payload)
 
 
 @dataclass(slots=True)
@@ -447,11 +445,7 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
-            )
-        )
+        statement = statement.options(load_only(ComputeUnitTable.payload, raiseload=True))
         row = self.session.scalars(statement).one_or_none()
         return _compute_unit_record(row) if row is not None else None
 
@@ -473,11 +467,7 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
-            )
-        )
+        statement = statement.options(load_only(ComputeUnitTable.payload, raiseload=True))
         row = self.session.scalars(statement).one_or_none()
         return _compute_unit_record(row) if row is not None else None
 
@@ -515,11 +505,7 @@ class ComputeUnitRepository:
         statement = select(ComputeUnitTable).where(ComputeUnitTable.id == pool_id)
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
-            )
-        )
+        statement = statement.options(load_only(ComputeUnitTable.payload, raiseload=True))
         row = self.session.scalars(statement).first()
         return _compute_unit_record(row) if row is not None else None
 
@@ -550,11 +536,7 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
-            )
-        )
+        statement = statement.options(load_only(ComputeUnitTable.payload, raiseload=True))
         row = self.session.scalars(statement).first()
         return _compute_unit_record(row) if row is not None else None
 
@@ -566,11 +548,7 @@ class ComputeUnitRepository:
         """Every unit feeding one scheduling group, best candidate first."""
         statement = (
             select(ComputeUnitTable)
-            .options(
-                load_only(
-                    ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
-                )
-            )
+            .options(load_only(ComputeUnitTable.payload, raiseload=True))
             .where(
                 ComputeUnitTable.workspace_id == workspace_id,
                 ComputeUnitTable.pool == pool,
@@ -582,11 +560,7 @@ class ComputeUnitRepository:
     def list_for_workspace(self, workspace_id: str) -> list[ComputeUnitRecord]:
         statement = (
             select(ComputeUnitTable)
-            .options(
-                load_only(
-                    ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
-                )
-            )
+            .options(load_only(ComputeUnitTable.payload, raiseload=True))
             .where(ComputeUnitTable.workspace_id == workspace_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
@@ -604,11 +578,7 @@ class ComputeUnitRepository:
             statement = statement.where(
                 ComputeUnitTable.capacity_owner_kind == capacity_owner_kind.value
             )
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
-            )
-        )
+        statement = statement.options(load_only(ComputeUnitTable.payload, raiseload=True))
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_internal(self, *, workspace_id: str) -> list[ComputeUnitRecord]:
@@ -634,9 +604,7 @@ class ComputeUnitRepository:
                 else ComputeUnitTable.worker_gpu_count == 0
             )
         statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id).options(
-            load_only(
-                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
-            )
+            load_only(ComputeUnitTable.payload, raiseload=True)
         )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
@@ -647,21 +615,13 @@ class ComputeUnitRepository:
         if workspace_id is not None:
             statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
         statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id)
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
-            )
-        )
+        statement = statement.options(load_only(ComputeUnitTable.payload, raiseload=True))
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_for_provider_connection(self, connection_id: str) -> list[ComputeUnitRecord]:
         statement = (
             select(ComputeUnitTable)
-            .options(
-                load_only(
-                    ComputeUnitTable.payload, ComputeUnitTable.worker_rollout_surge, raiseload=True
-                )
-            )
+            .options(load_only(ComputeUnitTable.payload, raiseload=True))
             .where(ComputeUnitTable.provider_connection_id == connection_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
@@ -707,13 +667,8 @@ class ComputeUnitRepository:
         )
         surge = case(
             (
-                or_(
-                    ComputeUnitTable.worker_rollout_surge.is_(True),
-                    func.coalesce(
-                        ComputeUnitTable.payload["replacement_machine_id"].as_string(), ""
-                    )
-                    != "",
-                ),
+                func.coalesce(ComputeUnitTable.payload["replacement_machine_id"].as_string(), "")
+                != "",
                 1,
             ),
             else_=0,
@@ -783,7 +738,6 @@ class ComputeUnitRepository:
         provider_state: ComputeUnitProviderState,
         replacement_machine_id: str | None = None,
         replacement_template_version: str | None = None,
-        worker_rollout_surge: bool | None = None,
     ) -> ComputeUnitRecord | None:
         current = self.get(pool_id, for_update=True)
         if current is None or current.generation != expected_generation:
@@ -807,32 +761,9 @@ class ComputeUnitRepository:
                     if replacement_template_version is None
                     else replacement_template_version
                 ),
-                "worker_rollout_surge": (
-                    current.worker_rollout_surge
-                    if worker_rollout_surge is None
-                    else worker_rollout_surge
-                ),
             }
         )
         return self.upsert(updated)
-
-    def set_worker_rollout_surge(
-        self,
-        pool_id: str,
-        *,
-        expected_generation: int,
-        enabled: bool,
-    ) -> ComputeUnitRecord | None:
-        current = self.get(pool_id, for_update=True)
-        if current is None or current.generation != expected_generation:
-            return None
-        if current.worker_rollout_surge == enabled:
-            return current
-        return self.upsert(
-            current.model_copy(
-                update={"worker_rollout_surge": enabled, "generation": current.generation + 1}
-            )
-        )
 
     def apply_provider_state(
         self,
@@ -860,10 +791,6 @@ class ComputeUnitRepository:
         row = self.session.scalars(
             select(ComputeUnitTable).where(ComputeUnitTable.id == record.id).with_for_update()
         ).one()
-        row.worker_rollout_surge = record.worker_rollout_surge
-        row.payload = {
-            key: value for key, value in row.payload.items() if key != "worker_rollout_surge"
-        }
         row.provider_ref = record.provider_ref
         row.capacity_owner_id = record.capacity_owner_id
         row.capacity_owner_kind = record.capacity_owner_kind.value
