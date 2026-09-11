@@ -572,7 +572,7 @@ class SchedulerContainerRequestService:
         requests = [claim.request for claim in claims]
         claims_by_request_id = {claim.request.container_id: claim for claim in claims}
         schedulable_workers = DeploymentReleaseService().admitted_workers(
-            _schedulable_workers(self.workers)
+            _schedulable_workers(self.workers, now=current_time)
         )
         workers_by_id = {worker.worker_id: worker for worker in schedulable_workers}
         reserved_by_worker = (
@@ -594,6 +594,7 @@ class SchedulerContainerRequestService:
                 [
                     _worker_capacity(
                         worker,
+                        now=current_time,
                         reserved_capacity=reserved_by_worker.get(worker.worker_id),
                     )
                     for worker in schedulable_workers
@@ -652,6 +653,7 @@ class SchedulerContainerRequestService:
                         request,
                         schedulable_workers,
                         owner_user_id=owners_by_workspace_id[request.workspace_id],
+                        now=current_time,
                     ),
                     current_time,
                 )
@@ -727,7 +729,7 @@ class SchedulerContainerRequestService:
             return None
         request = _scheduling_request(claim.request, owner_user_id=owner_user_id)
         for worker in workers:
-            if not gpu_request_matches_worker(request, _worker_capacity(worker)):
+            if not gpu_request_matches_worker(request, _worker_capacity(worker, now=now)):
                 continue
             try:
                 recovering = self.backfill_preemption.recover(
@@ -761,13 +763,18 @@ class SchedulerContainerRequestService:
     ) -> tuple[list[SchedulerContainerRequestClaim], list[SchedulerContainerDispatchResult]]:
         if self.capacity_reservations is None:
             return claims, []
-        workers = {worker.worker_id: worker for worker in _schedulable_workers(self.workers)}
+        workers = {
+            worker.worker_id: worker for worker in _schedulable_workers(self.workers, now=now)
+        }
         remaining: list[SchedulerContainerRequestClaim] = []
         results: list[SchedulerContainerDispatchResult] = []
         for claim in claims:
             worker_id = self.capacity_reservations.registered_worker_id(claim.request.container_id)
             worker = workers.get(worker_id)
-            if worker is None or worker.status is not SchedulerWorkerStatus.Available:
+            if (
+                worker is None
+                or worker.request_intake_status(at=now) is not SchedulerWorkerStatus.Available
+            ):
                 remaining.append(claim)
                 continue
             # This path never consults can_fit, so the tenancy rule is restated rather
@@ -995,7 +1002,8 @@ class SchedulerContainerRequestService:
                 current_worker = self.workers.get_worker(worker.worker_id)
                 if (
                     current_worker is None
-                    or current_worker.status is not SchedulerWorkerStatus.Available
+                    or current_worker.request_intake_status(at=now)
+                    is not SchedulerWorkerStatus.Available
                     or current_worker.capacity_owner_id != capacity_owner_id
                 ):
                     dispatch_result = self._requeue_capacity_owner_dispatch(
@@ -1062,6 +1070,13 @@ class SchedulerContainerRequestService:
         *,
         now: datetime,
     ) -> SchedulerContainerDispatchResult:
+        if worker.request_intake_status(at=now) is not SchedulerWorkerStatus.Available:
+            return self._requeue_capacity_owner_dispatch(
+                claim,
+                worker_id=worker.worker_id,
+                now=now,
+                reason="worker is not polling for requests",
+            )
         if not DeploymentReleaseService().admitted_workers([worker]):
             return self._requeue_capacity_owner_dispatch(
                 claim,
@@ -1256,7 +1271,7 @@ class SchedulerContainerRequestService:
         try:
             self.capacity_reservations.release_request(
                 container_id,
-                workers=tuple(_schedulable_workers(self.workers)),
+                workers=tuple(_schedulable_workers(self.workers, now=now or utc_now())),
                 now=now,
             )
         except Exception:
@@ -1384,6 +1399,7 @@ def _placement_failure_detail(
     workers: list[SchedulerWorkerRecord],
     *,
     owner_user_id: str,
+    now: datetime,
 ) -> str:
     """Explain an unplaceable request instead of reporting a bare retry reason.
 
@@ -1401,7 +1417,7 @@ def _placement_failure_detail(
     rejections = [
         f"{worker.worker_id[:8]} in {worker.pool!r}: {detail}"
         for worker in workers[:3]
-        if (detail := _worker_capacity(worker).fit_rejection(scheduling))
+        if (detail := _worker_capacity(worker, now=now).fit_rejection(scheduling))
     ]
     if not rejections:
         return f"{reason} (pool selector {selector})"
@@ -1411,6 +1427,7 @@ def _placement_failure_detail(
 def _worker_capacity(
     worker: SchedulerWorkerRecord,
     *,
+    now: datetime,
     reserved_capacity: WorkerReservedCapacity | None = None,
 ) -> WorkerCapacity:
     reserved = reserved_capacity or WorkerReservedCapacity()
@@ -1433,17 +1450,20 @@ def _worker_capacity(
         total_cpu=worker.total_cpu_millicores / 1000,
         total_memory_mib=worker.total_memory_mib,
         total_gpu=worker.total_gpu_count,
-        pending=worker.status is SchedulerWorkerStatus.Pending,
+        pending=worker.request_intake_status(at=now) is SchedulerWorkerStatus.Pending,
     )
 
 
 def _schedulable_workers(
     repository: SchedulerContainerWorkerRepository,
+    *,
+    now: datetime,
 ) -> list[SchedulerWorkerRecord]:
     return [
         worker
         for worker in repository.list_workers()
-        if worker.status in {SchedulerWorkerStatus.Available, SchedulerWorkerStatus.Pending}
+        if worker.request_intake_status(at=now)
+        in {SchedulerWorkerStatus.Available, SchedulerWorkerStatus.Pending}
     ]
 
 

@@ -626,91 +626,91 @@ class WorkerRepositoryService:
         *,
         principal: WorkerRepositoryPrincipal | None = None,
     ) -> AsyncIterator[GetNextContainerRequestResponse]:
-        while True:
-            worker = await self._validate_worker_stream_async(
+        worker = await self._validate_worker_stream_async(
+            io,
+            request.worker_id,
+            principal=principal,
+        )
+        if not self._worker_release_admitted(worker):
+            return
+        try:
+            await self._require_source_cache_available_async(
                 io,
-                request.worker_id,
+                request,
                 principal=principal,
             )
-            if not self._worker_release_admitted(worker):
-                return
-            try:
-                await self._require_source_cache_available_async(
-                    io,
-                    request,
-                    principal=principal,
-                )
-            except WorkerSourceCacheUnavailableError:
-                # A cache generation that is still initializing is an expected
-                # transient, not a server fault. Raising here escapes as an
-                # unhandled ASGI error because the streaming response has already
-                # started, so it can never be mapped and instead buries real
-                # failures under repeated tracebacks. Ending the stream lets the
-                # worker poll again once its generation is available.
-                return
-            container_request = await self.workers.wait_for_next_container_request(
+        except WorkerSourceCacheUnavailableError:
+            # A cache generation that is still initializing is an expected
+            # transient, not a server fault. Raising here escapes as an
+            # unhandled ASGI error because the streaming response has already
+            # started, so it can never be mapped and instead buries real
+            # failures under repeated tracebacks. Ending the stream lets the
+            # worker poll again once its generation is available.
+            return
+        worker = await self.workers.record_worker_request_poll(io.redis, request.worker_id)
+        container_request = await self.workers.wait_for_next_container_request(
+            io.redis,
+            request.worker_id,
+            timeout_seconds=WORKER_REQUEST_BLOCK_SECONDS,
+        )
+        if container_request is None:
+            yield GetNextContainerRequestResponse()
+            return
+        if not self._worker_release_admitted(worker):
+            await self.workers.return_worker_request(
+                io.redis, request.worker_id, container_request, ready_at=utc_now()
+            )
+            return
+        try:
+            await self._require_source_cache_available_async(
+                io,
+                request,
+                principal=principal,
+            )
+        except Exception:
+            await self.workers.enqueue_worker_request(
                 io.redis,
                 request.worker_id,
-                timeout_seconds=WORKER_REQUEST_BLOCK_SECONDS,
+                container_request,
             )
-            if container_request is None:
-                yield GetNextContainerRequestResponse()
-                continue
-            if not self._worker_release_admitted(worker):
-                await self.workers.return_worker_request(
-                    io.redis, request.worker_id, container_request, ready_at=utc_now()
-                )
-                return
-            try:
-                await self._require_source_cache_available_async(
-                    io,
-                    request,
-                    principal=principal,
-                )
-            except Exception:
-                await self.workers.enqueue_worker_request(
-                    io.redis,
-                    request.worker_id,
-                    container_request,
-                )
-                raise
-            try:
-                require_admissible_worker_request(
-                    worker,
-                    container_request,
-                    principal=principal,
-                    # Only the private-worker branch reads it, so the shared fleet
-                    # does not pay a membership query per dispatched container.
-                    request_owner_user_id=(
-                        await self._workspace_owner_user_id_async(
-                            io,
-                            container_request.workspace_id,
-                        )
-                        if principal is not None and principal.is_private_worker
-                        else ""
-                    ),
-                )
-            except WorkerRequestNotAdmissibleError as exc:
-                await self._return_request_to_scheduler(
-                    io,
-                    container_request,
-                    worker_id=request.worker_id,
-                    reason=str(exc),
-                )
-                # Ending the stream rather than raising, for the reason recorded above:
-                # the response has already started, so a raise escapes unmapped.
-                return
-            await self._record_worker_queue_lifecycle(
+            raise
+        try:
+            require_admissible_worker_request(
+                worker,
+                container_request,
+                principal=principal,
+                # Only the private-worker branch reads it, so the shared fleet
+                # does not pay a membership query per dispatched container.
+                request_owner_user_id=(
+                    await self._workspace_owner_user_id_async(
+                        io,
+                        container_request.workspace_id,
+                    )
+                    if principal is not None and principal.is_private_worker
+                    else ""
+                ),
+            )
+        except WorkerRequestNotAdmissibleError as exc:
+            await self._return_request_to_scheduler(
                 io,
                 container_request,
                 worker_id=request.worker_id,
+                reason=str(exc),
             )
-            yield GetNextContainerRequestResponse(container_request=container_request)
-            # One request per stream. It is in flight until the worker
-            # acknowledges it, and the take returns an unacknowledged request
-            # ahead of the queue, so continuing here would hand the same one back
-            # in a loop instead of waiting for the worker to resolve it.
+            # Ending the stream rather than raising, for the reason recorded above:
+            # the response has already started, so a raise escapes unmapped.
             return
+        await self._record_worker_queue_lifecycle(
+            io,
+            container_request,
+            worker_id=request.worker_id,
+        )
+        yield GetNextContainerRequestResponse(container_request=container_request)
+        # One request per stream. It is in flight until the worker
+        # acknowledges it, and the take returns an unacknowledged request
+        # ahead of the queue, so continuing here would hand the same one back
+        # in a loop instead of waiting for the worker to resolve it.
+        return
 
     async def acknowledge_container_request(
         self,
@@ -876,6 +876,7 @@ class WorkerRepositoryService:
         ).model_copy(
             update={
                 "status": SchedulerWorkerStatus.Pending,
+                "created_at": utc_now(),
                 # The token decides which tenant a worker serves. Taking the
                 # registration's own value would let a worker name any workspace and
                 # be scheduled that workspace's work.

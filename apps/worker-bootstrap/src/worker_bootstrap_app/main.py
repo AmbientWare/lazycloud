@@ -11,13 +11,11 @@ from container_worker_app.settings import WorkerSettings
 from coordination.redis_client import RedisClient
 from identity.auth import AuthError, AuthService, IdentityDatabaseContext
 from identity.credential_files import CredentialFilePublication
-from scheduler.state import (
-    DEFAULT_PENDING_WORKER_STATE_TTL_SECONDS,
-    RedisSchedulerWorkerRepository,
-)
+from scheduler.state import RedisSchedulerWorkerRepository
 from shared.app_identity import WORKER_BOOTSTRAP_PROCESS_NAME
 from shared.compute_policy import MachinePool
 from shared.identity import AuthScope, TokenKind
+from shared.scheduling import DEFAULT_PENDING_WORKER_STATE_TTL_SECONDS
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 

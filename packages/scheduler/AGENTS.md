@@ -66,6 +66,14 @@ two that cannot be stale.
 
 ## A record the scheduler no longer backs
 
+Worker keepalive proves process liveness, not request intake. Only an
+authenticated request poll that passes release and source-cache validation
+renews `request_poll_expires_at`. Placement, reservation reuse and pool headroom
+read the same admission decision. Dispatch checks the sampled worker version
+and lease expiry against Redis time in the atomic queue commit. Registration
+has a bounded pending window; a worker that stops polling contributes no usable
+headroom. A leased in-place update has its own finite pending headroom.
+
 Capacity acquisition has a retry deadline separate from dispatch readiness.
 Pending requests keep checking usable workers every dispatch interval while
 `capacity_retry_at` prevents another purchase attempt before its cooldown ends.

@@ -1643,6 +1643,7 @@ def _worker(capacity_owner_id: str, *, created_at: datetime) -> SchedulerWorkerR
         capacity_owner_id=capacity_owner_id,
         machine_id="machine-1",
         status=SchedulerWorkerStatus.Available,
+        request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
         runtime_class="runsc",
         runtime_classes=["runsc"],
         free_cpu_millicores=4_000,

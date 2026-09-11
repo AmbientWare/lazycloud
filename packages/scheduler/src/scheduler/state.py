@@ -6,7 +6,7 @@ import time
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from hashlib import sha256
 from math import ceil
@@ -33,6 +33,8 @@ from shared.placement import ProductRegion
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
     DEFAULT_CONTAINER_STATE_TTL_SECONDS,
+    DEFAULT_PENDING_WORKER_STATE_TTL_SECONDS,
+    WORKER_REQUEST_POLL_LEASE_SECONDS,
     ContainerIpAssignment,
     ContainerStatusUpdatePlan,
     NetworkIpMutationAction,
@@ -68,7 +70,6 @@ from scheduler.preemption import (
 )
 
 DEFAULT_WORKER_STATE_TTL_SECONDS = 60
-DEFAULT_PENDING_WORKER_STATE_TTL_SECONDS = 900
 DEFAULT_CONTAINER_EXIT_CODE_TTL_SECONDS = 86_400
 DEFAULT_CONTAINER_CANCELLATION_TTL_SECONDS = 86_400
 DEFAULT_WORKER_LOCK_TTL_SECONDS = 10
@@ -193,6 +194,11 @@ return 1
 """
 
 DISPATCH_CLAIMED_WORKER_REQUEST_SCRIPT = """
+local clock = redis.call("TIME")
+local now = tonumber(clock[1]) + tonumber(clock[2]) / 1000000
+if tonumber(ARGV[8]) <= now then
+    return -6
+end
 if redis.call("EXISTS", KEYS[4]) == 1 then
     return -2
 end
@@ -237,7 +243,7 @@ if request.backfill == true then
     end
     redis.call("HSET", KEYS[14], "backfill", "true", "preemptible", "true")
 end
-redis.call("HSET", KEYS[1], unpack(ARGV, 8, #ARGV))
+redis.call("HSET", KEYS[1], unpack(ARGV, 9, #ARGV))
 redis.call("LREM", KEYS[2], 0, ARGV[1])
 redis.call("LREM", KEYS[12], 0, ARGV[1])
 redis.call("HSET", KEYS[3], ARGV[1], ARGV[3])
@@ -895,6 +901,46 @@ class RedisSchedulerWorkerRepository:
             return None
         return redis_serialization.load_model_hash(SchedulerWorkerRecord, raw)
 
+    async def record_worker_request_poll(
+        self, redis: AsyncRedisClient, worker_id: str, *, now: datetime | None = None
+    ) -> SchedulerWorkerRecord:
+        current_time = now or utc_now()
+        worker = await self.get_worker_async(redis, worker_id)
+        if worker is None:
+            raise WorkerStateNotFoundError(worker_id)
+        if worker.status is not SchedulerWorkerStatus.Available:
+            return worker
+        if (
+            worker.request_poll_expires_at is not None
+            and (worker.request_poll_expires_at - current_time).total_seconds()
+            > WORKER_REQUEST_POLL_LEASE_SECONDS / 2
+        ):
+            return worker
+        async with self._worker_lock_async(redis, worker_id):
+            worker = await self.get_worker_async(redis, worker_id)
+            if worker is None:
+                raise WorkerStateNotFoundError(worker_id)
+            if worker.status is not SchedulerWorkerStatus.Available:
+                return worker
+            if (
+                worker.request_poll_expires_at is not None
+                and (worker.request_poll_expires_at - current_time).total_seconds()
+                > WORKER_REQUEST_POLL_LEASE_SECONDS / 2
+            ):
+                return worker
+            updated = worker.model_copy(
+                update={
+                    "request_poll_expires_at": current_time
+                    + timedelta(seconds=WORKER_REQUEST_POLL_LEASE_SECONDS),
+                    "resource_version": worker.resource_version + 1,
+                }
+            )
+            await redis.hash_set(
+                self.keys.worker_state(worker_id),
+                mapping=redis_serialization.dump_model_hash(updated),
+            )
+            return updated
+
     def list_workers(self) -> list[SchedulerWorkerRecord]:
         state_keys = sorted(
             redis_serialization.redis_strings(self.redis.set_members(self.keys.worker_index()))
@@ -1443,7 +1489,10 @@ class RedisSchedulerWorkerRepository:
             worker = self.get_worker(worker_id)
             if worker is None:
                 raise WorkerStateNotFoundError(worker_id)
-            if worker.status is not SchedulerWorkerStatus.Available:
+            if (
+                worker.request_intake_status(at=now or utc_now())
+                is not SchedulerWorkerStatus.Available
+            ):
                 msg = f"worker {worker_id} is not available"
                 raise SchedulerRepositoryError(msg)
 
@@ -1494,7 +1543,10 @@ class RedisSchedulerWorkerRepository:
             worker = self.get_worker(worker_id)
             if worker is None:
                 raise WorkerStateNotFoundError(worker_id)
-            if worker.status is not SchedulerWorkerStatus.Available:
+            if (
+                worker.request_intake_status(at=now or utc_now())
+                is not SchedulerWorkerStatus.Available
+            ):
                 msg = f"worker {worker_id} is not available"
                 raise SchedulerRepositoryError(msg)
 
@@ -1596,6 +1648,9 @@ class RedisSchedulerWorkerRepository:
             "1" if capacity_allocation is not None else "0",
             capacity_allocation.reservation_id if capacity_allocation is not None else "",
             json.dumps(gpu_matches),
+            current_worker.request_poll_expires_at.timestamp()
+            if current_worker.request_poll_expires_at is not None
+            else 0,
             *worker_field_args,
         )
         if result == -2:
@@ -1612,6 +1667,8 @@ class RedisSchedulerWorkerRepository:
             )
         if result == -5:
             raise SchedulerRepositoryError("GPU demand or recovery prevents CPU backfill")
+        if result == -6:
+            raise SchedulerRepositoryError("worker request polling lease expired before dispatch")
         if result != 1:
             raise SchedulerRepositoryError(
                 f"scheduler request dispatch returned unexpected status {result}: {request_id}"

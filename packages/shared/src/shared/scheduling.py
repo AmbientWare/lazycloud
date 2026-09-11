@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol, runtime_checkable
 
 from pydantic import Field, JsonValue, field_validator
@@ -251,11 +251,16 @@ class WorkerExecutionRecord(ContractModel):
         )
 
 
+WORKER_REQUEST_POLL_LEASE_SECONDS = 60
+DEFAULT_PENDING_WORKER_STATE_TTL_SECONDS = 900
+
+
 class SchedulerWorkerRecord(WorkerExecutionRecord):
     region: ProductRegion | None = None
     availability_zone: AvailabilityZone = ""
     worker_update_expires_at: datetime | None = None
     admitted_release_generation: int = Field(default=0, ge=0)
+    request_poll_expires_at: datetime | None = None
 
     def resuming_after_worker_update(self, *, at: datetime) -> bool:
         return (
@@ -263,6 +268,26 @@ class SchedulerWorkerRecord(WorkerExecutionRecord):
             and self.worker_update_expires_at is not None
             and self.worker_update_expires_at > at
         )
+
+    def request_intake_status(self, *, at: datetime) -> SchedulerWorkerStatus:
+        if self.status is SchedulerWorkerStatus.Pending:
+            return (
+                SchedulerWorkerStatus.Pending
+                if at - self.created_at
+                < timedelta(seconds=DEFAULT_PENDING_WORKER_STATE_TTL_SECONDS)
+                else SchedulerWorkerStatus.Unavailable
+            )
+        if self.status is not SchedulerWorkerStatus.Available:
+            return self.status
+        if self.request_poll_expires_at is not None:
+            return (
+                SchedulerWorkerStatus.Available
+                if self.request_poll_expires_at > at
+                else SchedulerWorkerStatus.Unavailable
+            )
+        if at - self.created_at < timedelta(seconds=WORKER_REQUEST_POLL_LEASE_SECONDS):
+            return SchedulerWorkerStatus.Pending
+        return SchedulerWorkerStatus.Unavailable
 
 
 class WorkerContainerState(ContractModel):

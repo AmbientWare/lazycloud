@@ -1422,7 +1422,7 @@ class CapacityReservationService:
                 f"capacity reservation is unavailable during dispatch: {allocation.reservation_id}"
             )
         allocations = self.reservations.allocations_for(reservation.id)
-        if not reservation_matches_worker(reservation, worker, allocations=allocations):
+        if not reservation_matches_worker(reservation, worker, allocations=allocations, now=now):
             raise CapacityReservationConflictError(
                 f"worker {worker.worker_id} does not own capacity reservation {reservation.id}"
             )
@@ -1903,10 +1903,14 @@ def reservation_matches_worker(
     worker: SchedulerWorkerRecord,
     *,
     allocations: Iterable[CapacityReservationAllocation] = (),
+    now: datetime | None = None,
 ) -> bool:
     if worker.capacity_owner_id != reservation.capacity_owner_id:
         return False
-    if worker.status not in {SchedulerWorkerStatus.Pending, SchedulerWorkerStatus.Available}:
+    if worker.request_intake_status(at=now or utc_now()) not in {
+        SchedulerWorkerStatus.Pending,
+        SchedulerWorkerStatus.Available,
+    }:
         return False
     if reservation.target_worker_id and worker.worker_id != reservation.target_worker_id:
         return False
@@ -1952,15 +1956,17 @@ def _registered_worker_for_reservation(
     allocations: Iterable[CapacityReservationAllocation] = (),
 ) -> SchedulerWorkerRecord | None:
     reservation_allocations = tuple(allocations)
+    current_time = utc_now()
     candidates = [
         worker
         for worker in workers
-        if worker.status is SchedulerWorkerStatus.Available
+        if worker.request_intake_status(at=current_time) is SchedulerWorkerStatus.Available
         and worker_reservations.get(worker.worker_id, reservation.id) == reservation.id
         and reservation_matches_worker(
             reservation,
             worker,
             allocations=reservation_allocations,
+            now=current_time,
         )
         and (
             worker.worker_id == reservation.target_worker_id

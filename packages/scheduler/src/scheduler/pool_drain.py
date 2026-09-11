@@ -58,6 +58,8 @@ class WorkerPoolDrainWorker(Protocol):
     created_at: datetime
     updated_at: datetime
 
+    def request_intake_status(self, *, at: datetime) -> SchedulerWorkerStatus: ...
+
 
 class WorkerPoolDrainContainer(Protocol):
     container_id: str
@@ -597,7 +599,7 @@ class ManagedComputeWorkerPoolDrainController:
                 and (
                     replacement_machine_id not in interrupted
                     or any(
-                        worker.status is SchedulerWorkerStatus.Available
+                        worker.request_intake_status(at=now) is SchedulerWorkerStatus.Available
                         for worker in workers_by_machine.get(machine_id, [])
                     )
                 )
@@ -863,7 +865,10 @@ def _idle_machine_candidate(
     healthy_machines = [
         (machine_id, workers)
         for machine_id, workers in workers_by_machine.items()
-        if any(worker.status is SchedulerWorkerStatus.Available for worker in workers)
+        if any(
+            worker.request_intake_status(at=now) is SchedulerWorkerStatus.Available
+            for worker in workers
+        )
     ]
     healthy_machines.sort(
         key=lambda item: (

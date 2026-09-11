@@ -63,6 +63,7 @@ def _worker(
         capacity_owner_id=OWNER_ID,
         pool=MachinePool("cpu"),
         status=status,
+        request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
         runtime_classes=["runsc"],
         free_cpu_millicores=free_cpu,
         free_memory_mib=free_memory,
@@ -84,6 +85,22 @@ def test_worker_update_capacity_expires_without_becoming_placeable() -> None:
     assert expired.available_workers == 0
     assert expired.unclaimed_pending_workers == 0
     assert expired.cpu_millicores == 0
+
+
+def test_worker_intake_headroom_requires_a_fresh_poll_or_bounded_registration() -> None:
+    pending = _worker("registering", SchedulerWorkerStatus.Pending).model_copy(
+        update={"created_at": NOW - timedelta(minutes=16), "request_poll_expires_at": None}
+    )
+    expired = _worker("stalled", SchedulerWorkerStatus.Available).model_copy(
+        update={"request_poll_expires_at": NOW}
+    )
+    fresh = _worker("ready", SchedulerWorkerStatus.Available).model_copy(
+        update={"request_poll_expires_at": NOW + timedelta(seconds=60)}
+    )
+    headroom = effective_pool_headroom(_pool(), [pending, expired, fresh], now=NOW)
+    assert headroom.available_workers == 1
+    assert headroom.unclaimed_pending_workers == 0
+    assert headroom.cpu_millicores == fresh.free_cpu_millicores
 
 
 def test_effective_headroom_counts_available_and_unclaimed_pending_then_allocations() -> None:
