@@ -18,8 +18,10 @@ class DeploymentReleaseService:
             release = ActiveRelease.model_validate_json(self.settings.active_file.read_bytes())
         except FileNotFoundError:
             return None
-        # A rolling replica must never issue commands for another build's release.
-        return release if release.manifest_url == self.settings.manifest_url else None
+        return release
+
+    def controls(self, release: ActiveRelease) -> bool:
+        return release.manifest_url == self.settings.manifest_url
 
     def state(self) -> ActiveRelease:
         release = self.active()

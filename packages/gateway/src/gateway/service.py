@@ -87,6 +87,7 @@ from database.repositories.orchestration import (
     MachineRepository,
     WorkerRepository,
 )
+from database.repositories.worker_releases import WorkerReleaseRepository
 from database.types import DatabaseSession
 from execution.containers.service import ContainerService
 from execution.functions.service import FunctionControlService
@@ -2295,52 +2296,47 @@ class GatewayControlService:
         state = self._agent_state_for_token(request.agent_token)
         if state is None:
             raise AuthorizationDeniedError("agent credential is no longer current")
-        release = DeploymentReleaseService().active()
-        if release is None:
+        releases = DeploymentReleaseService()
+        release = releases.active()
+        if release is None or not releases.controls(release):
             return AgentReleaseResponse(generation=request.generation)
         if request.generation > release.generation:
             raise ConflictError("agent has observed a newer deployment generation")
-        unit = self.unit_state_coordinator.unit_by_capacity_owner(
-            state.capacity_owner_id, workspace_id=state.workspace_id
-        )
         worker_id = agent_machine_worker_id(state.machine_id)
         worker = self.scheduler_worker_lookup.get_worker(worker_id)
-        slots = self.compute_states.list_agent_worker_slot_states(
-            state.workspace_id, state.capacity_owner_id, state.machine_id
-        )
-        authorized_update = worker is None or any(
-            slot.worker_id == worker_id
-            and slot.metadata.get("release_rollout_generation") == release.generation
-            and worker.status is SchedulerWorkerStatus.Draining
-            for slot in slots
-        )
+        if (
+            worker is None
+            and release.target.agent is not None
+            and request.binary_sha256 != release.target.agent.sha256
+        ):
+            self._claim_agent_update(state, release)
+        with self.services.context.database.session() as session:
+            authorized_update = (
+                WorkerReleaseRepository(session).update_generation(worker_id, state.machine_id)
+                == release.generation
+            )
         return AgentReleaseResponse(
             generation=release.generation,
             agent=release.target.agent,
             update_agent=(
-                unit.provider == "agent"
-                and release.target.agent is not None
+                release.target.agent is not None
                 and request.binary_sha256 != release.target.agent.sha256
                 and authorized_update
+                and (worker is None or worker.status is SchedulerWorkerStatus.Draining)
+                and state.capacity_state is AgentCapacityState.Available
                 and not self._worker_has_started_containers(worker_id)
             ),
         )
 
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse:
-        release = DeploymentReleaseService().active()
+        releases = DeploymentReleaseService()
+        release = releases.active()
         if release is None:
             return StreamAgentResponse(
                 ok=False,
                 err_msg="platform release is not active yet",
                 retryable=True,
                 generation=request.generation,
-            )
-        if request.generation > release.generation:
-            return StreamAgentResponse(
-                ok=False,
-                err_msg="agent has observed a newer deployment generation",
-                retryable=True,
-                generation=release.generation,
             )
         try:
             provided = self._agent_state_for_token(request.agent_token)
@@ -2382,6 +2378,25 @@ class GatewayControlService:
                 response_state = self._persist_agent_state(heartbeat.state)
             else:
                 response_state = heartbeat.state or current_state
+            if request.generation > release.generation:
+                return StreamAgentResponse(
+                    ok=False,
+                    err_msg="agent has observed a newer deployment generation",
+                    retryable=True,
+                    generation=request.generation,
+                )
+            if not releases.controls(release):
+                return StreamAgentResponse(
+                    ok=bool(snapshot.slots),
+                    retryable=not snapshot.slots,
+                    err_msg="" if snapshot.slots else "worker release activation is pending",
+                    generation=release.generation,
+                    credential_id=response_state.credential_id,
+                    credential_generation=response_state.credential_generation,
+                    capacity_state=response_state.capacity_state,
+                    routes=[self._agent_route_view(route) for route in snapshot.routes],
+                    slots=[agent_worker_slot_view(slot) for slot in snapshot.slots],
+                )
             bootstrap_unit = self.unit_state_coordinator.unit_by_capacity_owner(
                 response_state.capacity_owner_id,
                 workspace_id=response_state.workspace_id,
@@ -2462,6 +2477,8 @@ class GatewayControlService:
                         }
                     )
                 )
+            if updated.capacity_state is not AgentCapacityState.Available:
+                WorkerReleaseRepository(session).cancel_machine_update(updated.machine_id)
         state = _agent_state_from_enrollment(updated)
         if state is None:
             raise ConflictError("agent enrollment is no longer active")
@@ -2529,15 +2546,20 @@ class GatewayControlService:
         active_image = active_worker_images.get(worker_id, "")
         image_revision = str(release.generation)
         claimed = False
-        continuing_rollout = (
-            existing is not None
-            and bool(existing.metadata.get("release_rollout_generation"))
-            and worker is not None
-            and worker.status is SchedulerWorkerStatus.Draining
-        )
+        with self.services.context.database.session() as session:
+            worker_releases = WorkerReleaseRepository(session)
+            if worker is not None and 0 < worker.admitted_release_generation <= release.generation:
+                worker_releases.admit(worker, generation=worker.admitted_release_generation)
+            if worker is not None and worker.agent_binary_sha256 == agent_binary_sha256:
+                worker_releases.complete_update(worker)
+            continuing_rollout = (
+                worker_releases.update_generation(worker_id, agent_state.machine_id)
+                == release.generation
+            )
         if (
             worker is not None
             and active_image == target_image
+            and agent_current
             and worker.request_intake_status(at=utc_now()) is SchedulerWorkerStatus.Available
         ):
             self.scheduler_worker_lookup.release_worker_rollout_slot(
@@ -2545,17 +2567,25 @@ class GatewayControlService:
                 worker.worker_id,
                 image_revision,
             )
-        if (
-            worker is not None
-            and active_image
-            and (active_image != target_image or not agent_current or continuing_rollout)
-        ):
+        needs_update = (
+            active_image != target_image
+            or not agent_current
+            or (
+                worker is not None
+                and bool(worker.runtime_image)
+                and (
+                    not release.admits(worker.runtime_image, worker.agent_binary_sha256)
+                    or worker.agent_binary_sha256 != agent_binary_sha256
+                )
+            )
+        )
+        if worker is not None and needs_update:
             if worker.status is SchedulerWorkerStatus.Draining:
                 slot_status = AgentWorkerSlotStatus.Draining
-            if target_image in prepared_worker_images:
+            if target_image in prepared_worker_images or not active_image:
                 worker, claimed = self._claim_worker_image_rollout(
                     worker,
-                    image_revision=image_revision,
+                    release=release,
                 )
             if claimed and worker.status is SchedulerWorkerStatus.Draining:
                 WorkerWorkloadRolloutService(
@@ -2576,7 +2606,15 @@ class GatewayControlService:
                     if worker.status is not SchedulerWorkerStatus.Draining:
                         slot_status = AgentWorkerSlotStatus.Active
 
-        if not agent_current:
+        if worker is None and not agent_current:
+            claimed = self._claim_agent_update(agent_state, release)
+        if continuing_rollout and needs_update and worker is None:
+            slot_status = (
+                AgentWorkerSlotStatus.Draining
+                if not agent_current or self._worker_has_started_containers(worker_id)
+                else AgentWorkerSlotStatus.Pending
+            )
+        if not agent_current and (claimed or continuing_rollout or not active_image):
             slot_status = AgentWorkerSlotStatus.Draining
 
         token_plan = self._agent_worker_token(
@@ -2647,18 +2685,19 @@ class GatewayControlService:
         self,
         worker: SchedulerWorkerRecord,
         *,
-        image_revision: str,
+        release: ActiveRelease,
     ) -> tuple[SchedulerWorkerRecord, bool]:
         if self.scheduler_maintenance is None:
             raise RuntimeError("scheduler worker maintenance is not configured")
         current_time = utc_now()
+        image_revision = str(release.generation)
         try:
             with (
                 self.capacity_reservations.mutation_lock(worker.capacity_owner_id),
                 self.capacity_reservations.dispatch_lock(worker.capacity_owner_id),
                 self.services.compute.worker_maintenance_admission(
                     worker.workspace_id, worker.capacity_owner_id, worker.machine_id
-                ),
+                ) as session,
             ):
                 current = self.scheduler_worker_lookup.get_worker(worker.worker_id)
                 if current is None or current.capacity_owner_id != worker.capacity_owner_id:
@@ -2668,6 +2707,9 @@ class GatewayControlService:
                 )
                 if not max_unavailable:
                     return current, False
+                WorkerReleaseRepository(session).begin_update(
+                    current.worker_id, current.machine_id, release
+                )
                 claimed = self.scheduler_worker_lookup.claim_worker_rollout_slot(
                     current.capacity_owner_id,
                     current.worker_id,
@@ -2675,8 +2717,10 @@ class GatewayControlService:
                     max_unavailable=max_unavailable,
                     now=current_time,
                 )
-                if not claimed or current.status is SchedulerWorkerStatus.Draining:
-                    return current, claimed
+                if not claimed:
+                    raise ConflictError("worker update allowance is already occupied")
+                if current.status is SchedulerWorkerStatus.Draining:
+                    return current, True
                 try:
                     drained = self.scheduler_maintenance.drain_worker(
                         WorkerPlannedDrainOperation(
@@ -2706,6 +2750,29 @@ class GatewayControlService:
         ):
             current = self.scheduler_worker_lookup.get_worker(worker.worker_id)
             return current or worker, False
+
+    def _claim_agent_update(self, state: ComputeAgentTokenState, release: ActiveRelease) -> bool:
+        worker_id = agent_machine_worker_id(state.machine_id)
+        try:
+            with (
+                self.capacity_reservations.mutation_lock(state.capacity_owner_id),
+                self.capacity_reservations.dispatch_lock(state.capacity_owner_id),
+                self.services.compute.worker_maintenance_admission(
+                    state.workspace_id, state.capacity_owner_id, state.machine_id
+                ) as session,
+            ):
+                if self.scheduler_worker_lookup.get_worker(worker_id) is not None:
+                    return False
+                if self._worker_has_started_containers(worker_id):
+                    return False
+                WorkerReleaseRepository(session).begin_update(worker_id, state.machine_id, release)
+                return True
+        except (
+            ConflictError,
+            CapacityReservationLockContendedError,
+            CapacityReservationLeaseLostError,
+        ):
+            return False
 
     def _worker_has_started_containers(self, worker_id: str) -> bool:
         for container in self.scheduler_container_lookup.list_by_worker(worker_id):

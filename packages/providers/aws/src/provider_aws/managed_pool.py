@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import re
+import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,6 +24,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     SecretStr,
     TypeAdapter,
     ValidationError,
@@ -177,6 +179,7 @@ class AwsManagedPoolInstance(AwsManagedPoolModel):
     # group reports none. Rolling the group forward leaves running instances on
     # the version they booted with, so this and the group's reference diverge.
     booted_template_version: str = ""
+    booted_host_revision: str = ""
 
 
 class AwsManagedPoolInstanceDetails(AwsManagedPoolModel):
@@ -191,6 +194,7 @@ class AwsManagedPoolSnapshot(AwsManagedPoolModel):
     max_nodes: int = Field(ge=0)
     instances: tuple[AwsManagedPoolInstance, ...] = ()
     last_capacity_failure_at: datetime | None = None
+    current_host_revision: str = ""
 
 
 class AwsManagedPoolProvisioningError(AwsProviderControlError):
@@ -592,6 +596,7 @@ class _LaunchTemplates(_Response):
 class _LaunchTemplateVersion(_Response):
     version: int = Field(alias="VersionNumber")
     description: str = Field(default="", alias="VersionDescription")
+    data: dict[str, JsonValue] = Field(alias="LaunchTemplateData")
 
 
 class _LaunchTemplateVersions(_Response):
@@ -733,6 +738,53 @@ class AwsManagedPoolProvisioner:
 
     def _snapshot(self, group: _Group, state: AwsManagedPoolResourceIds) -> AwsManagedPoolSnapshot:
         snapshot = _snapshot(group, state)
+        operation = "observe managed pool host configuration"
+        if state.launch_template_id is None or state.launch_template_latest_version is None:
+            raise invalid_response_error(operation, "current launch template is unavailable")
+        current = (state.launch_template_id, str(state.launch_template_latest_version))
+        templates: dict[str, set[str]] = {current[0]: {current[1]}}
+        instance_templates: dict[str, tuple[str, str]] = {}
+        for instance in group.instances:
+            template = instance.launch_template
+            if template is None:
+                raise invalid_response_error(operation, "instance launch template is unavailable")
+            templates.setdefault(template.id, set()).add(template.version)
+            instance_templates[instance.instance_id] = (template.id, template.version)
+        revisions: dict[tuple[str, str], str] = {}
+        for template_id, versions in templates.items():
+            described = _validate(
+                _LaunchTemplateVersions,
+                self._ec2(
+                    operation,
+                    self._clients.ec2.describe_launch_template_versions,
+                    LaunchTemplateId=template_id,
+                    Versions=sorted(versions),
+                ),
+                operation=operation,
+            ).values
+            if {str(item.version) for item in described} != versions:
+                raise invalid_response_error(
+                    operation, "launch template version evidence is incomplete"
+                )
+            for version in described:
+                revisions[(template_id, str(version.version))] = _host_configuration_revision(
+                    version.data
+                )
+        snapshot = snapshot.model_copy(
+            update={
+                "current_host_revision": revisions[current],
+                "instances": tuple(
+                    instance.model_copy(
+                        update={
+                            "booted_host_revision": revisions[
+                                instance_templates[instance.instance_id]
+                            ]
+                        }
+                    )
+                    for instance in snapshot.instances
+                ),
+            }
+        )
         if len(group.instances) >= group.desired:
             return snapshot
         try:
@@ -1483,6 +1535,53 @@ def aws_managed_pool_bootstrap_script(spec: AwsManagedPoolSpec) -> str:
 def _launch_template_fingerprint(data: _LaunchTemplateData) -> str:
     payload = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
     return f"managed-{hashlib.sha256(payload).hexdigest()[:48]}"
+
+
+def _host_configuration_revision(data: Mapping[str, JsonValue]) -> str:
+    operation = "observe managed pool host configuration"
+    user_data = data.get("UserData")
+    if not isinstance(user_data, str):
+        raise invalid_response_error(operation, "launch template bootstrap evidence is unavailable")
+    try:
+        script = base64.b64decode(user_data, validate=True).decode()
+        assignments: set[str] = set()
+        lines: list[str] = []
+        for line in script.splitlines(keepends=True):
+            name, separator, raw = line.rstrip("\n").partition("=")
+            if separator and name in {"AGENT_BINARY_URL", "AGENT_SHA256"}:
+                values = shlex.split(raw)
+                if name in assignments or len(values) != 1 or shlex.quote(values[0]) != raw:
+                    raise ValueError("agent bootstrap assignment is not canonical")
+                if name == "AGENT_BINARY_URL":
+                    validate_agent_binary_url(values[0])
+                elif not _DIGEST_PATTERN.fullmatch(values[0]):
+                    raise ValueError("agent bootstrap digest is invalid")
+                assignments.add(name)
+                line = f"{name}=\n"
+            lines.append(line)
+        if assignments != {"AGENT_BINARY_URL", "AGENT_SHA256"}:
+            raise ValueError("agent bootstrap assignments are missing")
+    except (ValueError, UnicodeError) as exc:
+        raise invalid_response_error(
+            operation, "launch template bootstrap evidence is invalid"
+        ) from exc
+    payload = json.dumps(
+        _canonical_host_configuration({**data, "UserData": "".join(lines)}),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return f"host-{hashlib.sha256(payload).hexdigest()}"
+
+
+def _canonical_host_configuration(value: JsonValue, *, field: str = "") -> JsonValue:
+    if isinstance(value, dict):
+        return {key: _canonical_host_configuration(item, field=key) for key, item in value.items()}
+    if isinstance(value, list):
+        values = [_canonical_host_configuration(item) for item in value]
+        if field in {"SecurityGroupIds", "TagSpecifications", "Tags", "BlockDeviceMappings"}:
+            values.sort(key=lambda item: json.dumps(item, sort_keys=True))
+        return values
+    return value
 
 
 def _validate_group_tags(group: _Group, spec: AwsManagedPoolSpec) -> None:

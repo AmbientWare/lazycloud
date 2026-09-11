@@ -23,6 +23,7 @@ from database.repositories.orchestration import (
     MachineRepository,
     WorkerRepository,
 )
+from database.repositories.worker_releases import WorkerReleaseRepository
 from database.types import DatabaseSession
 from foundation.ids import optional_uuid
 from observability.workspace_changes import WorkspaceChangePublisher
@@ -393,10 +394,26 @@ class ComputeService:
             unit = ComputeUnitRepository(session).get_by_capacity_owner_id(
                 request.capacity_owner_id
             )
-            operation = ComputeCapacityOperationRepository(session).get(
+            operations = ComputeCapacityOperationRepository(session)
+            operation = operations.get(
                 request.capacity_owner_id,
                 request.operation_id,
+                for_update=True,
             )
+            if operation is not None:
+                _validate_capacity_operation_plan(operation, request)
+                if (
+                    operation.status is CapacityOperationStatus.AtLimit
+                    and not operation.owns_capacity
+                ):
+                    operation = operations.upsert(
+                        operation.model_copy(
+                            update={
+                                "status": CapacityOperationStatus.Released,
+                                "updated_at": utc_now(),
+                            }
+                        )
+                    )
             launching = [
                 item
                 for item in ComputeCapacityOperationRepository(session).list_open_for_owner(
@@ -425,7 +442,6 @@ class ComputeService:
                 reason="capacity owner is not managed by compute",
             )
         if operation is not None:
-            _validate_capacity_operation_plan(operation, request)
             status = _stored_capacity_status(operation.status)
             if status is CapacityAcquisitionStatus.TemporarilyUnavailable:
                 status = CapacityAcquisitionStatus.Requested
@@ -735,16 +751,12 @@ class ComputeService:
                     and desired_unit > available
                     and desired_unit > current_units
                 ):
-                    operation = operations.upsert(
-                        _new_capacity_operation(
-                            locked_pool,
-                            request,
-                            desired_unit=desired_unit,
-                            status=CapacityOperationStatus.AtLimit,
-                            previous_desired_unit=current_units,
-                        )
+                    return _capacity_result(
+                        request,
+                        CapacityAcquisitionStatus.AtLimit,
+                        desired_unit=desired_unit,
+                        reason="fleet capacity limit reached",
                     )
-                    return _operation_result(operation, CapacityAcquisitionStatus.AtLimit)
                 if desired_unit <= current_units:
                     operation = operations.upsert(
                         _new_capacity_operation(
@@ -1814,6 +1826,14 @@ class ComputeService:
                 raise CapacityReservationConflictError(
                     f"compute pool {current.name!r} is finishing provider resource retirement"
                 )
+            if (
+                current is not None
+                and current.provider_state.degraded_reason is not None
+                and not self._failed_market_retry_ready(current, now=current_time)
+            ):
+                raise UpstreamUnavailableError(
+                    "capacity market is cooling down or still releasing failed capacity"
+                )
             if current is not None and self._failed_market_retry_ready(current, now=current_time):
                 records = ComputeProviderInstanceRepository(session).list_for_pool(current.id)
                 if not ComputeCapacityOperationRepository(session).list_open_for_owner(
@@ -1855,7 +1875,9 @@ class ComputeService:
                         )
                     )
                 else:
-                    raise ConflictError("failed market capacity has not finished cleanup")
+                    raise UpstreamUnavailableError(
+                        "failed market capacity has not finished cleanup"
+                    )
             handoff_from = current.warm_handoff_from if current is not None else ()
             if baseline is not None and unit_platform_fleet:
                 market_units = repository.list_platform_internal(
@@ -1915,6 +1937,12 @@ class ComputeService:
                 gpu=requirements.gpu_count > 0,
                 current=current,
             )
+            if remaining == 0 and (
+                current is None or not (current.desired_machines or current.observed_machines)
+            ):
+                raise CapacityLimitReachedError(
+                    "fleet capacity limit leaves no headroom for this capacity market"
+                )
             requested_machines = max(
                 desired_machines,
                 baseline.initial_machines if baseline is not None else 0,
@@ -2525,7 +2553,7 @@ class ComputeService:
     @contextmanager
     def worker_maintenance_admission(
         self, workspace_id: str, capacity_owner_id: str, machine_id: str
-    ) -> Iterator[None]:
+    ) -> Iterator[DatabaseSession]:
         with self.context.database.session() as session:
             repository = ComputeUnitRepository(session)
             unit = repository.get_by_capacity_owner_id(capacity_owner_id)
@@ -2540,7 +2568,17 @@ class ComputeService:
                 raise NotFoundError(f"compute unit not found: {capacity_owner_id}")
             if unit.platform_fleet:
                 self._require_maintenance_available(session, unit, machine_id=machine_id)
-            yield
+            enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+                workspace_id, machine_id, for_update=True
+            )
+            if (
+                enrollment is None
+                or enrollment.status is not ComputeMachineEnrollmentStatus.Active
+                or enrollment.capacity_owner_id != capacity_owner_id
+                or enrollment.capacity_state is not AgentCapacityState.Available
+            ):
+                raise ConflictError("machine lifecycle does not permit a worker update")
+            yield session
 
     def _require_maintenance_available(
         self, session: DatabaseSession, unit: ComputeUnitRecord, *, machine_id: str
@@ -2570,7 +2608,12 @@ class ComputeService:
                     record.machine_id is not None
                     and record.machine_id != excluding_machine_id
                     and _reservation_open(record.status)
-                    and self.scheduler_hooks.machine_has_worker_update(record.machine_id)
+                    and (
+                        WorkerReleaseRepository(session).machine_has_update(record.machine_id)
+                        or self.scheduler_hooks.machine_has_worker_update(
+                            candidate.capacity_owner_id, record.machine_id
+                        )
+                    )
                 ):
                     return True
         return False
@@ -2690,6 +2733,7 @@ class ComputeService:
                     }
                 )
             )
+            WorkerReleaseRepository(session).cancel_machine_update(machine_id)
         return True
 
     def release_internal_unit_machine(
@@ -2706,6 +2750,13 @@ class ComputeService:
             current = units.get(unit.id, for_update=True)
             if current is None:
                 raise NotFoundError("compute pool disappeared during machine retirement")
+            if WorkerReleaseRepository(session).machine_has_update(machine_id):
+                enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+                    workspace_id, machine_id, for_update=True
+                )
+                if enrollment is None or enrollment.capacity_state is AgentCapacityState.Available:
+                    raise ConflictError("worker update must finish before idle machine retirement")
+                WorkerReleaseRepository(session).cancel_machine_update(machine_id)
             instances = ComputeProviderInstanceRepository(session)
             records = instances.list_for_pool(unit.id, for_update=True)
             record = next((item for item in records if item.machine_id == machine_id), None)
@@ -2891,6 +2942,10 @@ class ComputeService:
                 )
             except CapacityReservationLeaseLostError:
                 raise
+            except (CapacityLimitReachedError, UpstreamUnavailableError) as exc:
+                LOGGER.warning(
+                    "platform warm capacity unavailable for preemptible=%s: %s", preemptible, exc
+                )
             except Exception:
                 LOGGER.exception(
                     "platform warm reconciliation failed for preemptible=%s", preemptible
@@ -2979,6 +3034,8 @@ class ComputeService:
                 return
             except (CapacityReservationLockContendedError, CapacityReservationLeaseLostError):
                 raise
+            except (CapacityLimitReachedError, UpstreamUnavailableError):
+                continue
             except Exception:
                 with self.context.database.session() as session:
                     prepared = ComputeUnitRepository(session).get(unit_id)
