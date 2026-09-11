@@ -460,9 +460,9 @@ def test_a_function_declares_its_own_schedule(
 @pytest.mark.parametrize(
     ("stdout_tty", "stderr_tty", "cloud", "override", "visible"),
     [
-        (True, True, False, None, False),
+        (True, True, False, None, True),
+        (False, False, False, None, True),
         (True, True, True, None, False),
-        (True, True, False, True, True),
         (True, True, False, False, False),
         (False, False, True, True, True),
     ],
@@ -563,6 +563,7 @@ def test_function_output_scope_is_nested_exception_safe_and_async_local(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.delenv(IMPORTING_USER_CODE_ENV, raising=False)
+    monkeypatch.delenv(CONTAINER_ID_ENV, raising=False)
 
     @App("test").function()
     def failing() -> None:
@@ -588,11 +589,11 @@ def test_function_output_scope_is_nested_exception_safe_and_async_local(
             failing.remote()
         assert capsys.readouterr().err == ""
 
-    # The failed inner context must not leave output enabled after the outer one exits.
     with pytest.raises(FunctionOperationError):
         failing.remote()
     captured = capsys.readouterr()
-    assert captured.out == captured.err == ""
+    assert captured.out == ""
+    assert captured.err.count("=> Task") == 1
 
 
 def test_function_remote_distinguishes_none_result_from_incomplete_responses() -> None:

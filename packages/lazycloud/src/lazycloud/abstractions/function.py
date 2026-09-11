@@ -210,7 +210,7 @@ class Function(Generic[P, R]):
     token: str | None = field(default=None, init=False, repr=False)
     timeout: float = field(default=10.0, init=False)
     terminal: Terminal | None = field(
-        default_factory=lambda: Terminal(default_enabled=False), init=False, repr=False
+        default_factory=lambda: Terminal(default_enabled=is_local()), init=False, repr=False
     )
 
     def __post_init__(self) -> None:

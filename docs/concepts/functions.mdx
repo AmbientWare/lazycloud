@@ -60,25 +60,23 @@ value; anything else is a string.
 
 ## Progress and logs
 
-Python `.remote()` calls are quiet by default, including in local terminals,
-notebooks, CI, and LazyCloud containers. Use `output()` to show image-build logs,
-source-upload progress, task status, and the function's stdout and stderr for a
-block. Build logs stay in your terminal history. `async_remote()` uses the same
-output settings.
+Python `.remote()` calls show image-build logs, source-upload progress, task
+status, and the function's stdout and stderr by default when run locally,
+including in notebooks and CI. Calls from LazyCloud containers stay quiet by
+default. `async_remote()` uses the same output settings.
 
 Progress and replayed remote logs go to stderr. Return values are not printed
 automatically, and your own `print()` calls still write to stdout.
 
-`output()` defaults to `enabled=True`. Use `enabled=False` to silence a block
-inside an enabled scope:
+Use `output(enabled=False)` to silence a block. `output()` enables output,
+including inside a LazyCloud container:
 
 ```python
 from lazycloud import output
 
-with output(enabled=True):
-    result = build_report.remote("2026-06")
-    with output(enabled=False):
-        result = build_report.remote("2026-07")
+result = build_report.remote("2026-06")
+with output(enabled=False):
+    result = build_report.remote("2026-07")
 
 print(result)
 ```
@@ -168,8 +166,9 @@ compute availability, container startup, busy containers, dependencies, and retr
 The explanation clears when execution starts or the call ends. If startup updates
 stop arriving, the dashboard shows that it is waiting for an update.
 
-SDK calls stay quiet by default. Use `lazycloud.output()` to enable terminal
-progress, or observe structured updates without printing:
+Local `.remote()` calls show pending explanations automatically. Calls from
+LazyCloud containers stay quiet unless enabled with `lazycloud.output()`.
+Observe structured updates independently of terminal output:
 
 ```python
 import lazycloud
