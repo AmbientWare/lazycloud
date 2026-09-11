@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -207,6 +207,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             machine_id=ready_machine_id,
             status=SchedulerWorkerStatus.Available,
+            request_poll_expires_at=now + timedelta(seconds=60),
         )
     )
     summary_response = client.get("/api/v1/compute/summary")
