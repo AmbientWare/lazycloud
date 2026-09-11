@@ -59,7 +59,6 @@ type request struct {
 	StorageImageRef string              `json:"storage_image_ref"`
 	OutputPath      string              `json:"output_path"`
 	Architecture    string              `json:"architecture"`
-	Preload         bool                `json:"preload"`
 	Credentials     registryCredentials `json:"credentials"`
 }
 
@@ -352,13 +351,7 @@ func (r *imageRuntime) mount(req request) (string, error) {
 		CachePath:            cachePath,
 		UseCheckpoints:       true,
 		RegistryCredProvider: r.credentials,
-	}
-	if req.Preload {
-		options.PrepareConcurrency = 8
-		if err := clip.PrepareArchiveContent(options); err != nil {
-			return "", err
-		}
-		options.PrepareConcurrency = 0
+		PrepareConcurrency:   8,
 	}
 	start, serverErrors, fuseServer, err := clip.MountArchive(options)
 	if err != nil {

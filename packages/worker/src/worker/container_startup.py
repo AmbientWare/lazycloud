@@ -99,7 +99,6 @@ class WorkerImageMountRequest(ContractModel):
     archive_path: str
     mount_point: str
     cache_path: str
-    preload: bool = False
     repair_incomplete: bool = False
 
 
@@ -270,7 +269,6 @@ class WorkerImageStartupLoader:
                 archive_path=paths.local_archive_path,
                 mount_point=paths.mount_point,
                 cache_path=str(Path(self.image_content_cache_root) / request.image_id),
-                preload=request.preload_image,
                 repair_incomplete=True,
             )
         )
@@ -316,7 +314,6 @@ class WorkerImageStartupLoader:
                 archive_path=paths.local_archive_path,
                 mount_point=paths.mount_point,
                 cache_path=str(Path(self.image_content_cache_root) / request.image_id),
-                preload=request.preload_image,
             )
         )
         if mount.repair_required:

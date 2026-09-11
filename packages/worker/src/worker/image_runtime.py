@@ -38,7 +38,6 @@ class ImageRuntimeClient:
         cache_path: Path,
         storage_image_ref: str,
         credentials: ImageRegistryCredentials,
-        preload: bool,
     ) -> Path:
         response = self._call(
             "mount",
@@ -48,7 +47,6 @@ class ImageRuntimeClient:
             mount_point=str(mount_point),
             cache_path=str(cache_path),
             storage_image_ref=storage_image_ref,
-            preload=preload,
             credentials=credentials.model_dump(mode="json", exclude={"expires_at"}),
         )
         if not response.ok:

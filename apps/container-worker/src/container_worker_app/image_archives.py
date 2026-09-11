@@ -168,7 +168,6 @@ class BrokeredClipImageMounter:
                 cache_path=Path(request.cache_path),
                 storage_image_ref=credentials.registry_ref,
                 credentials=credentials.registry_credentials,
-                preload=request.preload,
             )
         except Exception as exc:
             return self._failed(
@@ -190,11 +189,7 @@ class BrokeredClipImageMounter:
         return WorkerImageMountResult(
             status=WorkerImageMountStatus.Ready,
             mount_point=str(mounted),
-            reason=(
-                "image layers prepared and mounted"
-                if request.preload
-                else "image mounted for lazy layer reads"
-            ),
+            reason="image layers prepared and mounted",
         )
 
     def _register_credential_lease(
