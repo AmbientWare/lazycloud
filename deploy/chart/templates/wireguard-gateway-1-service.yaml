@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tunnel-gateway-1
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8080"
+    service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+    service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: deregistration_delay.timeout_seconds=150,deregistration_delay.connection_termination.enabled=false
+spec:
+  type: LoadBalancer
+  loadBalancerClass: eks.amazonaws.com/nlb
+  externalTrafficPolicy: Local
+  selector:
+    app: tunnel-gateway-1
+  ports:
+    - name: wireguard
+      port: 51820
+      targetPort: wireguard
+      protocol: UDP
