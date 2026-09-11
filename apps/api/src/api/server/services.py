@@ -59,6 +59,7 @@ from execution.secrets.crypto import WorkspaceSecretCipher
 from execution.secrets.service import SecretService
 from execution.shells.service import ShellControlService
 from execution.signals.redis import RedisSignalRepository, RedisSignalService
+from execution.task_progress import TaskProgressService
 from execution.task_rerun import TaskRerunService
 from execution.tasks import TaskService
 from execution.volumes.control import VolumeControlService
@@ -702,10 +703,12 @@ class ApiServices(ApiServiceCore):
                 max_length=workspace_change_stream_config.max_length,
             )
         )
+        container_repository = RedisSchedulerContainerRepository(redis)
         tasks = TaskService(
             context,
             events,
             log_streams=stream_events,
+            progress=TaskProgressService(context, container_repository),
             workspace_changes=workspace_changes,
             async_database=async_database,
             async_workspace_changes=async_workspace_changes,
@@ -800,7 +803,6 @@ class ApiServices(ApiServiceCore):
         else:
             resolved_volume_filesystem = volume_filesystem
         worker_repository = RedisSchedulerWorkerRepository(redis)
-        container_repository = RedisSchedulerContainerRepository(redis)
         pool_state_repository = RedisWorkerPoolStateRepository(redis)
         capacity_reservation_repository = RedisCapacityReservationRepository(redis)
         usage = UsageService(

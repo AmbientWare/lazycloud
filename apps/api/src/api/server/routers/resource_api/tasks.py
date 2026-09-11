@@ -59,6 +59,7 @@ def _task_view_response(view: TaskView) -> TaskResponse:
     return _task_payload(TaskResponse, view.task).model_copy(
         update={
             "app": view.app,
+            "pending_progress": view.pending_progress,
             "workload": view.workload,
             "deployment": view.deployment,
             "actions": view.actions,
@@ -70,6 +71,7 @@ def _task_detail_response(view: TaskDetailView) -> TaskDetailResponse:
     return _task_payload(TaskDetailResponse, view.task).model_copy(
         update={
             "app": view.app,
+            "pending_progress": view.pending_progress,
             "workload": view.workload,
             "deployment": view.deployment,
             "actions": view.actions,

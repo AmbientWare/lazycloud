@@ -311,6 +311,9 @@ class _FailureHandler:
 
 
 class _Assignments:
+    def publish_pending_progress(self, container_id: str) -> None:
+        _ = container_id
+
     def assign_runtime(
         self,
         *,

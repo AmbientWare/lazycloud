@@ -35,6 +35,7 @@ from execution.containers.runtime_state import RedisContainerRuntimeStateReposit
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
 from execution.secrets.crypto import WorkspaceSecretCipher
+from execution.task_progress import TaskProgressService
 from execution.tasks import TaskService
 from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from gateway.settings import GatewaySettings
@@ -210,10 +211,12 @@ class SchedulerAppServices:
             workspace_changes=workspace_changes,
         )
         scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
+        container_repository = RedisSchedulerContainerRepository(redis)
         tasks = TaskService(
             context,
             events,
             log_streams=stream_events,
+            progress=TaskProgressService(context, container_repository),
             workspace_changes=workspace_changes,
         )
         compute_policies = WorkspaceComputePolicyService(context)
@@ -260,7 +263,6 @@ class SchedulerAppServices:
             volume_deletion=volume_deletion,
             workload_image_registry_repository=storage.workload_image_registry_repository,
         )
-        container_repository = RedisSchedulerContainerRepository(redis)
         # See the API composition: the resolver exists only where connected AWS is
         # configured, and a half-configured deployment is rejected by settings.
         platform_capacity = PlatformCapacitySettings()

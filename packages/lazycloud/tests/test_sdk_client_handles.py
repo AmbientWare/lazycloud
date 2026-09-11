@@ -16,6 +16,7 @@ from shared.function_payloads import FunctionCloudpickleResult, FunctionJsonResu
 from shared.http.functions import (
     FunctionInvokeResponse,
 )
+from shared.http.tasks import TaskDetailResponse
 from shared.tasks import Task, TaskStatus
 
 
@@ -81,6 +82,9 @@ def test_function_handle_remote_json_decodes_deferred_task_result(
                 result=FunctionJsonResult(value=49).model_dump(mode="json"),
                 exit_code=0,
             )
+
+        def get(self, task_id: str) -> TaskDetailResponse:
+            return TaskDetailResponse.model_validate(self.get_result_task(task_id))
 
     monkeypatch.setattr("lazycloud.client_handles._json_request", fake_json_request)
     monkeypatch.setattr("lazycloud.client_handles.TaskClient", CompletedTaskClient)

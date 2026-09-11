@@ -112,6 +112,7 @@
         "done": false,
         "exit_code": 0,
         "output": "",
+        "pending_progress": null,
         "result": null,
         "status": "",
         "stream": "system",
@@ -131,6 +132,7 @@
         "done": false,
         "exit_code": 0,
         "output": "",
+        "pending_progress": null,
         "result": null,
         "status": "",
         "stream": "stderr",
@@ -228,6 +230,7 @@
         "done": true,
         "exit_code": 0,
         "output": "complete\n",
+        "pending_progress": null,
         "result": {
           "encoding": "json",
           "value": {
@@ -262,6 +265,7 @@
         "done": true,
         "exit_code": 0,
         "output": "complete\n",
+        "pending_progress": null,
         "result": {
           "encoding": "cloudpickle",
           "sha256": "2bee21166d3fcc8ca23b9e3a80c18dc6ab281d3e49b920d18bcf2771672a0a69",

@@ -11,6 +11,7 @@ from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
+from shared.http.task_progress import TaskPendingProgress
 from shared.placement import AvailabilityZone, ProductRegion
 from shared.routing import AgentBackendRoute
 from shared.timestamps import utc_now
@@ -281,6 +282,7 @@ class WorkerContainerState(ContractModel):
 
 
 class SchedulerContainerState(WorkerContainerState):
+    pending_progress: TaskPendingProgress | None = None
     backfill: bool = False
     preemptible: bool = False
     backfill_eviction_requested: bool = False

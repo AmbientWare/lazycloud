@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import uuid4
 
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.repositories.execution import TaskRepository
 from database.repositories.orchestration import ContainerRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
+from scheduler.state import RedisSchedulerContainerRepository
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import StubKind
-from shared.function_payloads import FunctionCloudpickleResult
+from shared.function_payloads import FunctionCloudpickleResult, FunctionJsonInvocation
 from shared.http.errors import ErrorResponse
+from shared.http.task_progress import TaskPendingReason
 from shared.http.tasks import TaskDetailResponse, TaskPageResponse
 from shared.identity import TokenKind, WorkspaceRecord
+from shared.scheduling import SchedulerContainerState
 from shared.tasks import Task, TaskStatus
+from shared.timestamps import utc_now
 
 
 def _headers(
@@ -143,3 +149,85 @@ def test_task_rows_name_their_resources_and_only_the_detail_read_carries_the_con
     assert detail_payload.container is not None
     assert detail_payload.container.id == task.container_id
     assert detail_payload.workload == row.workload
+
+
+def test_pending_call_reports_shared_capacity_and_discards_stale_or_foreign_observations(
+    api_runtime: tuple[ApiServices, TestClient],
+    api_workspace: WorkspaceRecord,
+) -> None:
+    services, client = api_runtime
+    linked = _deployed_task(services, api_workspace.id)
+    assert linked.container_id is not None and linked.stub_id is not None
+    now = utc_now()
+    with services.context.database.session() as session:
+        container = ContainerRepository(session).get(
+            linked.container_id, workspace_id=api_workspace.id
+        )
+        assert container is not None
+        ContainerRepository(session).upsert(
+            container.model_copy(update={"status": ContainerStatus.Pending})
+        )
+        task = TaskRepository(session).upsert(
+            linked.model_copy(
+                update={
+                    "container_id": None,
+                    "invocation": FunctionJsonInvocation(),
+                    "claimable_at": now - timedelta(seconds=10),
+                }
+            )
+        )
+    capacity = RedisSchedulerContainerRepository(services.redis_client)
+    state = SchedulerContainerState(
+        container_id=container.id,
+        workspace_id=api_workspace.id,
+        stub_id=linked.stub_id,
+    )
+    capacity.initialize_container_state(state)
+    assert capacity.record_pending_progress(
+        container.id, TaskPendingReason.ProvisioningCompute, now=now
+    )
+    headers = _headers(services, api_workspace.id, "pending-progress-reader", scopes=["read"])
+    response = client.get(f"/api/v1/tasks/{task.id}", headers=headers)
+    assert response.status_code == 200
+    detail = TaskDetailResponse.model_validate_json(response.content)
+    assert detail.container_id is None
+    assert detail.pending_progress is not None
+    assert detail.pending_progress.reason is TaskPendingReason.ProvisioningCompute
+    assert detail.pending_progress.pending_since == task.claimable_at
+    rows = TaskPageResponse.model_validate_json(
+        client.get("/api/v1/tasks", headers=headers).content
+    )
+    assert (
+        next(row for row in rows.data if row.id == task.id).pending_progress
+        == detail.pending_progress
+    )
+
+    observed = capacity.get_container_state(container.id)
+    assert observed is not None and observed.pending_progress is not None
+    capacity.set_container_state(observed.model_copy(update={"workspace_id": str(uuid4())}))
+    foreign = TaskDetailResponse.model_validate_json(
+        client.get(f"/api/v1/tasks/{task.id}", headers=headers).content
+    )
+    assert foreign.pending_progress is not None
+    assert foreign.pending_progress.reason is TaskPendingReason.Queued
+
+    capacity.set_container_state(
+        observed.model_copy(
+            update={
+                "pending_progress": observed.pending_progress.model_copy(
+                    update={"observed_at": now - timedelta(seconds=31)},
+                )
+            }
+        )
+    )
+    stale = TaskDetailResponse.model_validate_json(
+        client.get(f"/api/v1/tasks/{task.id}", headers=headers).content
+    )
+    assert stale.pending_progress is not None
+    assert stale.pending_progress.reason is TaskPendingReason.Queued
+
+    services.tasks.cancel(task.id)
+    cancelled = TaskDetailResponse.model_validate_json(
+        client.get(f"/api/v1/tasks/{task.id}", headers=headers).content
+    )
+    assert cancelled.pending_progress is None

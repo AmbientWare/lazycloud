@@ -24,6 +24,11 @@ from pydantic import Field, field_validator
 from shared.container_requests import StopContainerReason, capacity_memory_mib
 from shared.contracts import ContractModel
 from shared.gpu import gpu_preference_accepts
+from shared.http.task_progress import (
+    PENDING_PROGRESS_REFRESH_SECONDS,
+    TaskPendingProgress,
+    TaskPendingReason,
+)
 from shared.placement import ProductRegion
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
@@ -2299,6 +2304,39 @@ class RedisSchedulerContainerRepository:
         if not raw:
             return None
         return redis_serialization.load_model_hash(SchedulerContainerState, raw)
+
+    def record_pending_progress(
+        self, container_id: str, reason: TaskPendingReason, *, now: datetime
+    ) -> bool:
+        def write() -> bool:
+            state = self.get_container_state(container_id)
+            if (
+                state is None
+                or state.status is not SchedulerContainerStatus.Pending
+                or state.worker_id
+                or self.is_container_cancelled(container_id)
+            ):
+                return False
+            previous = state.pending_progress
+            same_reason = previous is not None and previous.reason is reason
+            if (
+                same_reason
+                and previous is not None
+                and (now - previous.observed_at).total_seconds() < PENDING_PROGRESS_REFRESH_SECONDS
+            ):
+                return False
+            progress = TaskPendingProgress.for_reason(
+                reason,
+                since=previous.since if same_reason and previous is not None else now,
+                observed_at=now,
+            )
+            self.redis.hash_set(
+                self.keys.container_state(container_id),
+                mapping={"pending_progress": progress.model_dump_json()},
+            )
+            return True
+
+        return self._with_container_lock(container_id, write)
 
     def container_statuses(
         self,

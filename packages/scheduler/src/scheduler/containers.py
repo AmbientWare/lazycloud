@@ -17,6 +17,7 @@ from pydantic import JsonValue
 from shared.billing_quotes import ContainerShape
 from shared.container_requests import capacity_memory_mib
 from shared.contracts import ContractModel
+from shared.http.task_progress import TaskPendingProgress, TaskPendingReason
 from shared.placement import PlacementRateClass, placement_rate_class
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
@@ -92,6 +93,10 @@ class SchedulerContainerDispatchResult(ContractModel):
 
 
 class SchedulerContainerStateRepository(Protocol):
+    def record_pending_progress(
+        self, container_id: str, reason: TaskPendingReason, *, now: datetime
+    ) -> bool: ...
+
     def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
 
     def initialize_container_state(
@@ -213,6 +218,8 @@ class SchedulerContainerFailureHandler(Protocol):
 
 
 class SchedulerContainerAssignmentRecorder(Protocol):
+    def publish_pending_progress(self, container_id: str) -> None: ...
+
     def assign_runtime(
         self,
         *,
@@ -650,6 +657,13 @@ class SchedulerContainerRequestService:
                     reason=retry.reason.value,
                 )
             )
+            self._record_pending_progress(
+                request.container_id,
+                TaskPendingReason.ProvisioningCompute
+                if outcome.decision is SchedulingDecision.WaitForWorker
+                else TaskPendingReason.Queued,
+                current_time,
+            )
         return results
 
     def _dispatch_backfill(
@@ -770,6 +784,7 @@ class SchedulerContainerRequestService:
         if self.capacity_reservations is None:
             raise RuntimeError("scheduler capacity reservation service was not injected")
         request = claim.request
+        acquisition_failed = False
         try:
             result = self.capacity_reservations.acquire(
                 request,
@@ -777,6 +792,7 @@ class SchedulerContainerRequestService:
                 now=current_time,
             )
         except CapacityReservationConflictError as exc:
+            acquisition_failed = True
             result = CapacityAcquisitionResult(
                 status=CapacityAcquisitionStatus.ExistingPending,
                 reservation_id=request.container_id,
@@ -785,6 +801,7 @@ class SchedulerContainerRequestService:
                 reason=f"capacity-owner mutation is in progress: {exc}",
             )
         except Exception as exc:
+            acquisition_failed = True
             # The reason reaches the caller as a task error, and a type name
             # alone cannot be acted on: it names neither the capacity owner nor
             # what the acquisition rejected. Keep the caller's contract and put
@@ -831,11 +848,29 @@ class SchedulerContainerRequestService:
             delay_seconds=max(retry.delay_seconds, result.retry_delay_seconds),
             retry_count=(request.retry_count if waiting else retry.next_retry_count),
         )
+        reason = (
+            TaskPendingReason.Queued
+            if acquisition_failed
+            else TaskPendingReason.ProvisioningCompute
+            if waiting
+            else TaskPendingReason.CapacityLimit
+            if result.status is CapacityAcquisitionStatus.AtLimit
+            else TaskPendingReason.CapacityUnavailable
+            if result.status is CapacityAcquisitionStatus.TemporarilyUnavailable
+            else TaskPendingReason.Queued
+        )
+        self._record_pending_progress(request.container_id, reason, current_time)
         return SchedulerContainerDispatchResult(
             status=SchedulerContainerDispatchStatus.Waiting,
             container_id=request.container_id,
             reason=result.reason or result.status.value,
         )
+
+    def _record_pending_progress(
+        self, container_id: str, reason: TaskPendingReason, now: datetime
+    ) -> None:
+        if self.containers.record_pending_progress(container_id, reason, now=now):
+            self.assignments.publish_pending_progress(container_id)
 
     def _reserve_quota(self, request: SchedulerWorkerRequest, now: datetime) -> str:
         if not _request_uses_quota(request):
@@ -1008,6 +1043,9 @@ class SchedulerContainerRequestService:
             else None
         )
         assigned_state = _container_state(request, worker_id=worker_id)
+        assigned_state.pending_progress = TaskPendingProgress.for_reason(
+            TaskPendingReason.StartingContainer, since=now, observed_at=now
+        )
         if reserved_capacity is not None:
             assigned_state = assigned_state.model_copy(
                 update={
