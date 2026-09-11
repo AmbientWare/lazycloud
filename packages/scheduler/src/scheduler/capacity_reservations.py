@@ -30,6 +30,7 @@ from shared.capacity import CapacityAcquisitionShape as ComputeCapacityShape
 from shared.capacity import CapacityAcquisitionStatus as ComputeCapacityStatus
 from shared.capacity import (
     CapacityFulfillmentRequest,
+    CapacityOperationStatus,
     CapacityOwnerKind,
     CapacityPoolSizingSnapshot,
 )
@@ -331,7 +332,7 @@ class CapacityAcquisitionController(Protocol):
         now: datetime,
     ) -> CapacityAcquisitionResult: ...
 
-    def fulfill(self, reservation: CapacityProvisioningReservation) -> None: ...
+    def fulfill(self, reservation: CapacityProvisioningReservation) -> CapacityOperationStatus: ...
 
     def release(
         self,
@@ -351,7 +352,9 @@ class CapacityWorkerRepository(Protocol):
 
 
 class ComputeCapacityService(Protocol):
-    def fulfill_acquired_capacity(self, request: CapacityFulfillmentRequest) -> None: ...
+    def fulfill_acquired_capacity(
+        self, request: CapacityFulfillmentRequest
+    ) -> CapacityOperationStatus: ...
 
     def pool_sizing_snapshot(self, capacity_owner_id: str) -> CapacityPoolSizingSnapshot: ...
 
@@ -602,8 +605,8 @@ class ComputeUnitCapacityController:
         )
         return _compute_acquisition_result(reservation, result)
 
-    def fulfill(self, reservation: CapacityProvisioningReservation) -> None:
-        self.compute.fulfill_acquired_capacity(
+    def fulfill(self, reservation: CapacityProvisioningReservation) -> CapacityOperationStatus:
+        return self.compute.fulfill_acquired_capacity(
             CapacityFulfillmentRequest(
                 capacity_owner_id=reservation.capacity_owner_id,
                 reservation_id=reservation.id,
@@ -1826,12 +1829,23 @@ class CapacityReservationService:
         controller = self._controller_for_owner(reservation.capacity_owner_id)
         if controller is None:
             return reservation
-        controller.fulfill(reservation)
-        return self.reservations.update(
-            reservation.model_copy(update={"acquisition_created": False}),
+        outcome = controller.fulfill(reservation)
+        if not outcome.terminal:
+            return reservation
+        settled = self.reservations.update(
+            reservation.model_copy(
+                update={"acquisition_created": False, "release_requested": False}
+            ),
             expected_resource_version=reservation.resource_version,
             now=now,
         )
+        if outcome is not CapacityOperationStatus.Fulfilled:
+            LOGGER.info(
+                "capacity reservation %s settled from durable operation status %s",
+                reservation.id,
+                outcome.value,
+            )
+        return settled
 
     def _release_failed_reservation(
         self,

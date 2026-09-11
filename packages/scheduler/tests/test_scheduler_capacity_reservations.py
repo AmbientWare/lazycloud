@@ -50,6 +50,7 @@ from shared.capacity import CapacityAcquisitionRequest as ComputeCapacityRequest
 from shared.capacity import CapacityAcquisitionResult as ComputeCapacityResult
 from shared.capacity import (
     CapacityFulfillmentRequest,
+    CapacityOperationStatus,
     CapacityOwnerKind,
     CapacityOwnerSource,
     CapacityPoolSizingSnapshot,
@@ -203,9 +204,10 @@ class _Controller:
         _ = owner_reservations, now
         return self._result(reservation, CapacityAcquisitionStatus.ExistingPending)
 
-    def fulfill(self, reservation: CapacityProvisioningReservation) -> None:
+    def fulfill(self, reservation: CapacityProvisioningReservation) -> CapacityOperationStatus:
         if not reservation.target_machine_id:
             raise ValueError("fulfillment requires a machine")
+        return CapacityOperationStatus.Fulfilled
 
     def release(
         self,
@@ -254,7 +256,9 @@ class _SizingSnapshots:
 
 @dataclass(slots=True)
 class _UnusedComputeCapacity(_SizingSnapshots):
-    def fulfill_acquired_capacity(self, request: CapacityFulfillmentRequest) -> None:
+    def fulfill_acquired_capacity(
+        self, request: CapacityFulfillmentRequest
+    ) -> CapacityOperationStatus:
         raise AssertionError(f"unexpected capacity fulfillment: {request.operation_id}")
 
     def ensure_capacity(
