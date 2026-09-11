@@ -17,6 +17,7 @@ from control.releases import DeploymentReleaseService
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
 from database.repositories.apps import StubRepository
 from database.repositories.execution import TaskRepository
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.images import ImageArchiveRepository, ImageBuildRepository
 from database.repositories.orchestration import (
     AutoscalingTargetRepository,
@@ -43,6 +44,7 @@ from shared.deployments import StubKind
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.events import EventLevel
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
+from shared.identity import WorkspaceStatus
 from shared.image_building.records import BuildStatus
 from shared.placement import ProductRegion
 from shared.scheduling import (
@@ -765,7 +767,7 @@ class ContainerService:
                     cancellation.worker_id
                     if cancellation.worker_stop_required
                     else current.runtime_worker_id
-                    if not cancellation.state_found
+                    if not cancellation.pending_request_removed
                     else ""
                 )
                 if stop_worker_id:
@@ -856,24 +858,35 @@ class ContainerService:
             raise NotFoundError(f"container not found: {container_id}")
         if record.status in TERMINAL_CONTAINER_STATUSES:
             return record
-        cancellation = self._cancel_scheduler_request(record.id)
-        if cancellation.worker_stop_required:
-            self._send_stop_event(
-                record.id,
-                worker_id=cancellation.worker_id,
-                reason=StopContainerReason.Admin,
-            )
-        # Deliberately does not settle what the container was holding, unlike
-        # every other stop. A deleting workspace accepts no task writes at all,
-        # and the claims do not outlive it either way: finalization deletes every
-        # row the workspace owns, the tasks among them.
-        record.status = ContainerStatus.Stopped
-        record.finished_at = utc_now()
         with self.context.database.session() as session:
-            return ContainerRepository(session).stop_for_workspace_deletion(
-                record,
-                now=record.finished_at,
+            workspace = WorkspaceRepository(session).lock_for_deletion(workspace_id)
+            if workspace.status is not WorkspaceStatus.Deleting:
+                raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
+            containers = ContainerRepository(session)
+            current = containers.lock_across_workspaces(container_id)
+            if current is None or current.workspace_id != workspace_id:
+                raise NotFoundError(f"container not found: {container_id}")
+            if current.status in TERMINAL_CONTAINER_STATUSES:
+                return current
+            cancellation = self._cancel_scheduler_request(current.id)
+            stop_worker_id = (
+                cancellation.worker_id
+                if cancellation.worker_stop_required
+                else current.runtime_worker_id
+                if not cancellation.pending_request_removed
+                else ""
             )
+            if stop_worker_id:
+                self._send_stop_event(
+                    current.id,
+                    worker_id=stop_worker_id,
+                    reason=StopContainerReason.Admin,
+                )
+            # Workspace deletion prevents new task writes and deletes all claims
+            # during finalization.
+            current.status = ContainerStatus.Stopped
+            current.finished_at = utc_now()
+            return containers.stop_for_workspace_deletion(current, now=current.finished_at)
 
     def delete(self, container_id: str) -> None:
         record = self.get(container_id)

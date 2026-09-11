@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
@@ -2418,7 +2419,10 @@ class RedisSchedulerContainerRepository:
                     if renew_token_lock(self.redis, key, token, ttl_seconds=ttl):
                         continue
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).exception(
+                        "container dispatch lease renewal failed",
+                        extra={"container_id": container_id},
+                    )
                 lost.set()
                 return
 
@@ -2436,6 +2440,10 @@ class RedisSchedulerContainerRepository:
             try:
                 released = release_token_lock(self.redis, key, token)
             except Exception:
+                logging.getLogger(__name__).exception(
+                    "container dispatch lease release failed",
+                    extra={"container_id": container_id},
+                )
                 lost.set()
             else:
                 if released is not TokenLockReleaseStatus.Released:

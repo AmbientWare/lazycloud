@@ -13,6 +13,7 @@ from api.server.services import ApiServices
 from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from control.service import ControlPlaneService
+from coordination.event_bus import EventBusEvent, EventBusEventType, event_id_for_event, event_key
 from coordination.redis_client import AsyncRedisClient, RedisClient, redis_text
 from database.records.apps import StubRecord
 from database.repositories.apps import DeploymentRepository
@@ -3554,8 +3555,13 @@ def test_orphan_sweep_settles_the_claims_a_pooled_container_was_holding(
     )
 
 
-def test_assignment_deadline_recovers_pending_work_despite_live_worker_and_hot_state(
+@pytest.mark.anyio
+@pytest.mark.parametrize("worker_removed", [False, True])
+async def test_assignment_deadline_stops_the_durable_worker_despite_lost_hot_assignment(
     isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
+    worker_removed: bool,
 ) -> None:
     service = isolated_services.scheduler_container_requests
     now = datetime.now(UTC)
@@ -3605,19 +3611,54 @@ def test_assignment_deadline_recovers_pending_work_despite_live_worker_and_hot_s
             scheduled_at=now,
         )
     )
+    if worker_removed:
+        request = SchedulerWorkerRequest(
+            container_id=container.id,
+            workspace_id=workspace_id,
+            stub_id="container",
+            timestamp=now,
+        )
+        workers = isolated_services.scheduler_workers
+        await workers.enqueue_worker_request(async_redis, worker_id, request)
+        assert (
+            await workers.wait_for_next_container_request(
+                async_redis, worker_id, timeout_seconds=0.01
+            )
+            == request
+        )
+        assert workers.remove_worker(worker_id, now=now).request_ids == [container.id]
+        state = service.containers.get_container_state(container.id)
+        assert state is not None and state.worker_id == ""
     scheduler = Scheduler(
         services=isolated_services,
         workloads=SchedulerWorkloadControls(containers=service),
         orphaned_container_reconcile_interval_seconds=0,
     )
 
-    assert scheduler.reconcile_orphaned_containers(now=now + timedelta(seconds=61)) == []
-    assert scheduler.reconcile_orphaned_containers(now=now + timedelta(seconds=601)) == [
-        container.id
-    ]
+    if worker_removed:
+        assert scheduler.reconcile_orphaned_containers(now=now + timedelta(seconds=61)) == [
+            container.id
+        ]
+    else:
+        assert scheduler.reconcile_orphaned_containers(now=now + timedelta(seconds=61)) == []
+        assert scheduler.reconcile_orphaned_containers(now=now + timedelta(seconds=601)) == [
+            container.id
+        ]
     stopped = isolated_services.containers.get(container.id)
     assert stopped.status is ContainerStatus.Stopped
     assert stopped.termination_reason is StopContainerReason.Scheduler
+    event = EventBusEvent(
+        type=EventBusEventType.StopContainer,
+        args={
+            "container_id": container.id,
+            "force": False,
+            "reason": StopContainerReason.Scheduler.value,
+            "worker_id": worker_id,
+        },
+        retries=3,
+    )
+    redis = real_redis_actors.client()
+    assert redis.exists(redis.key(event_key(event_id_for_event(event))))
 
 
 @pytest.mark.parametrize("failure", ["state_publication", "expired_claim"])

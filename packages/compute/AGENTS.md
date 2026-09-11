@@ -42,19 +42,18 @@ failed machines autonomously, so observed physical counts may briefly exceed
 the platform's admitted commitments. Customer-owned capacity stays outside these
 totals and serializes changes through its capacity workspace.
 
-Warm reconciliation holds a baseline of usable workers, including workers serving
-requests, separately for preemptible and non-preemptible capacity. Healthy pools
-keep their baseline. A market handoff transfers it one worker at a time and counts
-retiring assets until absence is proven. Handoffs, provider replacement and worker
-updates share the platform maintenance admission lock. A zero minimum disables
-that market's baseline. Changing a floor leaves active work to normal draining.
-A customer's AWS baseline cannot own a platform warm floor.
+Warm reconciliation maintains a baseline of usable workers in each purchase
+market. Workers serving requests count toward it. Healthy pools retain their
+baseline; market changes transfer it one worker at a time. Retiring assets count
+until the provider confirms their absence. Market changes, machine replacement
+and worker updates share the platform maintenance lock. A zero minimum disables
+that market's baseline. Floor changes preserve active work until it drains.
+Customer capacity cannot satisfy the platform baseline.
 
-PostgreSQL columns own handoff sources, acquisition demand identities and
-fulfillment timestamps. Repository mappings hydrate them independently of JSON
-projections, so a projection rewrite cannot erase capacity ownership.
-The database rejects changes to a terminal operation's outcome, named machine,
-or released ownership, including writes from another application version.
+PostgreSQL stores handoff sources, purchase demand IDs and fulfillment timestamps
+outside JSON projections, so older writers preserve them. The database rejects
+changes to a terminal operation's outcome or named machine, and rejects attempts
+to restore its released ownership.
 
 Supplier quotes are immutable component estimates recorded when a node is first
 observed. A unit records its prepared offer; reconciling its existing nodes must
@@ -147,9 +146,9 @@ history. Preparing a candidate and reserving its capacity share the same mutatio
 lease. A later purchase revives the same identity with a new generation.
 Customer-owned pools do not expire through this policy.
 
-Retired pools retain failure history. Elapsed cooldown alone cannot restore their
-desired capacity. A new selected demand or baseline may retry a failed market
-only after its previous operations and provider assets have settled.
+Retired pools retain failure history. A failed market becomes eligible again
+after its cooldown, once previous operations and provider cleanup finish.
+Only new demand or a baseline selection can restore its desired capacity.
 
 Storage destruction evidence carries the time the provider confirmed absence,
 not the reconciliation pass start time. A cache generation may register while

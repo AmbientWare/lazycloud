@@ -12,15 +12,14 @@ worker assignment. Redis publishes and leases that work. Dispatch records unmet
 demand; the capacity loop performs provider calls. Recovery republishes only
 unassigned requests, preserving their original timestamp and executable payload.
 
-A queue commit with an unknown result retains its durable assignment. Only an
-explicit rejection before delivery permits clearing it. Missing Redis state
-does not permit another worker to execute the same container. A confirmed
-orphan is stopped through the container owner so its assigned worker receives
-the stop and its invocation claims settle under the scheduler retry contract.
-Rollback must own the durable assignment token and prove no delivery occurred.
-The same transaction clears provisional billing placement only if no usage or
-ledger fact exists. Pending assignments have bounded delivery and startup
-deadlines even when their worker remains healthy and their Redis state survives.
+An uncertain queue commit retains its PostgreSQL assignment. Clearing it requires
+the assignment token and proof that delivery did not occur. The same transaction
+may clear provisional billing placement only before usage or ledger facts exist.
+Missing Redis state never authorizes a second worker to execute the container.
+Stop confirmed orphans through the container service, which notifies their
+assigned worker and releases invocation claims under the scheduler retry policy.
+Pending assignments retain delivery and startup deadlines even when their
+worker is healthy and their Redis state survives.
 
 Everything here is concurrent by nature. Leases, assignment, retries, and
 terminal cancellation have to hold when two schedulers race, when a worker dies

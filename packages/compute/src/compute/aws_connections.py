@@ -1032,7 +1032,7 @@ class AwsAccountConnectionService:
             if any(pool.phase is not ComputeUnitPhase.Deleted for pool in dependent):
                 raise ConflictError("AWS account connection still has active compute pools")
             for pool in dependent:
-                pools.records.delete(pool.id, workspace_id=pool.workspace_id)
+                pools.delete(pool.id, workspace_id=pool.workspace_id)
             deleted = connections.delete_claimed(claimed)
         if deleted:
             self._publish(claimed, WorkspaceChangeType.Deleted)

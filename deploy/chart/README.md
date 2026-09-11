@@ -57,16 +57,14 @@ overlap against Terraform's server ceiling. Scheduler readiness covers every loo
 The gateway standby remains Kubernetes-ready; the active-only TCP listener is
 for the load balancer, not pod readiness.
 
-Migration waves leave serving replicas running. Capacity handoff sources,
-acquisition demand identities and fulfillment timestamps have dedicated database
-columns. Their repository mappings preserve those fields when an overlapping
-replica rewrites the JSON projection. This permits the API and scheduler to roll
-without a release-wide shutdown. A successful migration alone does not prove
-compatibility between the two application versions.
+Database migrations run while previous replicas serve requests. Handoff sources,
+purchase demand IDs and fulfillment timestamps live in dedicated columns, which
+older JSON writers preserve. Check reads and writes from both application
+versions before rollout.
 
-The capacity operation transition fence also rejects stale terminal-state writes.
-A replica attempting to release an already fulfilled acquisition receives an error;
-it cannot remove that acquisition's machine ownership or reopen the purchase.
+The database rejects writes that reopen a terminal capacity operation or replace
+an owned container assignment. Older replicas may report these errors during
+rollout. A rejected write leaves the recorded ownership intact.
 
 The administrator credential is the one with a trap in it. `auth bootstrap`
 adopts a configured credential when it finds one and mints its own when it does

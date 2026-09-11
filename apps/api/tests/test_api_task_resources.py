@@ -111,7 +111,7 @@ def _deployed_task(services: ApiServices, workspace_id: str) -> Task:
         workspace_id=stub.workspace_id,
         app_id=deployment.app_id,
         stub_id=stub.id,
-        status=ContainerStatus.Running,
+        status=ContainerStatus.Pending,
     )
     with services.context.database.session() as session:
         ContainerRepository(session).upsert(container)
@@ -164,9 +164,6 @@ def test_pending_call_reports_shared_capacity_and_discards_stale_or_foreign_obse
             linked.container_id, workspace_id=api_workspace.id
         )
         assert container is not None
-        ContainerRepository(session).upsert(
-            container.model_copy(update={"status": ContainerStatus.Pending})
-        )
         task = TaskRepository(session).upsert(
             linked.model_copy(
                 update={
