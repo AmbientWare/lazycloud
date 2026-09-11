@@ -198,8 +198,7 @@ class Client:
         config = self._config()
         upload_timeout_seconds = object_upload_timeout_seconds(self.timeout_seconds)
         response = stream_object_bytes(
-            endpoint=config.endpoint,
-            token=config.token,
+            channel=self._http_channel(),
             workspace=config.workspace,
             data=data,
             name=name,
@@ -245,8 +244,7 @@ class Client:
         )
         config = self._config()
         response = stream_object_file(
-            endpoint=config.endpoint,
-            token=config.token,
+            channel=self._http_channel(),
             workspace=config.workspace,
             source=source,
             size=size,

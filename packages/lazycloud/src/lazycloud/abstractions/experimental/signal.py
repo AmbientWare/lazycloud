@@ -19,7 +19,6 @@ from shared.signals import (
 )
 from typing_extensions import Self
 
-from lazycloud.clients.signal.control import SignalControlClient
 from lazycloud.control import resolve_control_client_config
 from lazycloud.env import called_on_import
 
@@ -167,6 +166,8 @@ class Signal:
         if self.signal_service is not None:
             return self.signal_service
         if self.client is None:
+            from lazycloud.clients.signal.control import SignalControlClient
+
             config = resolve_control_client_config(
                 workspace=self.workspace_name,
                 endpoint=self.endpoint,

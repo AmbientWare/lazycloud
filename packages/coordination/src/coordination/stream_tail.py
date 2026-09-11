@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import TracebackType
 
@@ -10,6 +10,7 @@ from coordination.redis_client import (
     REDIS_UNAVAILABLE_ERRORS,
     AsyncRedisClient,
     RedisStreamEntry,
+    RedisStreamRead,
     redis_text,
 )
 
@@ -236,11 +237,7 @@ class RedisStreamTailBroker:
                     await self._wake.wait()
                     continue
                 try:
-                    pages = await self.redis.stream_read(
-                        offsets,
-                        count=self.page_count,
-                        block=self.block_milliseconds,
-                    )
+                    pages = await self._read_pages(offsets)
                 except REDIS_UNAVAILABLE_ERRORS as exc:
                     # Cursors are kept; the next successful read resumes from them.
                     self._degraded = True
@@ -285,6 +282,20 @@ class RedisStreamTailBroker:
                 self._sources.clear()
             raise
 
+    async def _read_pages(self, offsets: Mapping[str, str]) -> list[RedisStreamRead]:
+        read = asyncio.create_task(
+            self.redis.stream_read(offsets, count=self.page_count, block=self.block_milliseconds)
+        )
+        wake = asyncio.create_task(self._wake.wait())
+        try:
+            completed, _ = await asyncio.wait((read, wake), return_when=asyncio.FIRST_COMPLETED)
+            return await read if read in completed else []
+        finally:
+            for task in (read, wake):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(read, wake, return_exceptions=True)
+
 
 class RedisStreamTailSubscription:
     def __init__(
@@ -307,7 +318,7 @@ class RedisStreamTailSubscription:
         self,
         *,
         heartbeat_seconds: float,
-    ) -> AsyncIterator[RedisStreamTailItem | None]:
+    ) -> AsyncGenerator[RedisStreamTailItem | None]:
         """Entries in stream order; `None` after `heartbeat_seconds` without one.
 
         A queue that overflowed is discarded and the gap is read back from

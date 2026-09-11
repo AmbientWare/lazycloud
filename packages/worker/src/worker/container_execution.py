@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -259,7 +261,6 @@ class ContainerLifecyclePublisher(Protocol):
 
 class ContainerImageLoadResult(ContractModel):
     loaded: bool = True
-    short_circuit_exit_code: int | None = None
     reason: str = ""
 
 
@@ -486,47 +487,25 @@ class WorkerContainerExecutionService:
 
     def execute(self, context: ContainerExecutionContext) -> ContainerExecutionResult:
         result = ContainerExecutionResult()
-        if not self._phase(
-            result,
-            ContainerExecutionPhase.PublishWorkerAddress,
-            lambda: self.address_publisher.publish_worker_address(context.request),
-            request=context.request,
-        ):
-            self._finalize_startup_failure(result, context)
-            return result
-
-        if self.credential_hydrator is not None:
-            context_holder = {"context": context}
-            if not self._phase(
+        context_holder = {"context": context}
+        if not self._parallel_startup(
+            lambda: self._phase(
+                result,
+                ContainerExecutionPhase.PublishWorkerAddress,
+                lambda: self.address_publisher.publish_worker_address(context.request),
+                request=context.request,
+            ),
+            lambda: self._phase(
                 result,
                 ContainerExecutionPhase.HydrateCredentials,
                 lambda: self._hydrate_credentials(context_holder),
+                skip=self.credential_hydrator is None,
                 request=context.request,
-            ):
-                self._finalize_startup_failure(result, context)
-                return result
-            context = context_holder["context"]
-
-        if not self._phase(
-            result,
-            ContainerExecutionPhase.LoadImage,
-            lambda: self._set_image_result(context, result),
-            request=context.request,
+            ),
         ):
             self._finalize_startup_failure(result, context)
             return result
-        image_result = result.image_result or ContainerImageLoadResult(loaded=result.image_loaded)
-        if not result.image_loaded:
-            return result
-        if image_result.short_circuit_exit_code is not None:
-            self._finalize(
-                result,
-                context,
-                exit_code=image_result.short_circuit_exit_code,
-                stop_reason=StopContainerReason.Unknown,
-                oom_killed=False,
-            )
-            return result
+        context = context_holder["context"]
 
         ports = startup_container_ports(
             ContainerStartupPortRequest(
@@ -556,45 +535,22 @@ class WorkerContainerExecutionService:
         result.port_bindings = list(startup_bindings.bindings)
 
         network_result_holder: dict[str, ContainerNetworkSetupResult] = {}
-        if not self._phase(
-            result,
-            ContainerExecutionPhase.SetupNetwork,
-            lambda: self._set_network_result(context, result, network_result_holder),
-            skip=self.network_preparer is None,
-            request=context.request,
+        mount_result_holder: dict[str, ContainerMountSetupResult] = {}
+        if not self._parallel_startup(
+            lambda: self._prepare_image_and_rootfs(context, result),
+            lambda: self._prepare_storage(context, result, mount_result_holder),
+            lambda: self._phase(
+                result,
+                ContainerExecutionPhase.SetupNetwork,
+                lambda: self._set_network_result(context, result, network_result_holder),
+                skip=self.network_preparer is None,
+                request=context.request,
+            ),
         ):
             self._finalize_startup_failure(result, context)
             return result
         network_result = network_result_holder.get("network_result")
-        if not self._phase(
-            result,
-            ContainerExecutionPhase.SetupWorkspaceStorage,
-            lambda: self._ensure_workspace_storage(context),
-            skip=self.workspace_storage_mounter is None,
-            request=context.request,
-        ):
-            self._finalize_startup_failure(result, context)
-            return result
-
-        mount_result_holder: dict[str, ContainerMountSetupResult] = {}
-        if not self._phase(
-            result,
-            ContainerExecutionPhase.SetupMounts,
-            lambda: self._set_mount_result(context, result, mount_result_holder),
-            request=context.request,
-        ):
-            self._finalize_startup_failure(result, context)
-            return result
         mount_result = mount_result_holder["mount_result"]
-
-        if not self._phase(
-            result,
-            ContainerExecutionPhase.PrepareRootfs,
-            lambda: self._set_rootfs_result(context, result),
-            request=context.request,
-        ):
-            self._finalize_startup_failure(result, context)
-            return result
 
         gpu_result_holder: dict[str, ContainerGpuAssignmentResult] = {}
         if not self._phase(
@@ -756,6 +712,54 @@ class WorkerContainerExecutionService:
         )
         return result
 
+    @staticmethod
+    def _parallel_startup(*actions: Callable[[], bool]) -> bool:
+        # Cleanup must not race a branch that can still acquire a mount or network.
+        with ThreadPoolExecutor(
+            max_workers=len(actions), thread_name_prefix="container-startup"
+        ) as executor:
+            futures = [executor.submit(copy_context().run, action) for action in actions]
+            outcomes = [future.result() for future in futures]
+        return all(outcomes)
+
+    def _prepare_image_and_rootfs(
+        self, context: ContainerExecutionContext, result: ContainerExecutionResult
+    ) -> bool:
+        if not self._phase(
+            result,
+            ContainerExecutionPhase.LoadImage,
+            lambda: self._set_image_result(context, result),
+            request=context.request,
+        ):
+            return False
+        return self._phase(
+            result,
+            ContainerExecutionPhase.PrepareRootfs,
+            lambda: self._set_rootfs_result(context, result),
+            request=context.request,
+        )
+
+    def _prepare_storage(
+        self,
+        context: ContainerExecutionContext,
+        result: ContainerExecutionResult,
+        holder: dict[str, ContainerMountSetupResult],
+    ) -> bool:
+        if not self._phase(
+            result,
+            ContainerExecutionPhase.SetupWorkspaceStorage,
+            lambda: self._ensure_workspace_storage(context),
+            skip=self.workspace_storage_mounter is None,
+            request=context.request,
+        ):
+            return False
+        return self._phase(
+            result,
+            ContainerExecutionPhase.SetupMounts,
+            lambda: self._set_mount_result(context, result, holder),
+            request=context.request,
+        )
+
     def _set_image_result(
         self,
         context: ContainerExecutionContext,
@@ -764,8 +768,8 @@ class WorkerContainerExecutionService:
         loaded = self.image_loader.load_image(context.request)
         result.image_result = loaded
         result.image_loaded = loaded.loaded
-        if loaded.short_circuit_exit_code is not None:
-            result.exit_code = loaded.short_circuit_exit_code
+        if not loaded.loaded:
+            raise RuntimeError(loaded.reason or "container image was not loaded")
 
     def _hydrate_credentials(
         self,

@@ -21,13 +21,23 @@ from lazycloud.control import workspace_path
 
 
 class ImageControlChannel(Protocol):
-    def post(self, path: str, payload: Mapping[str, JsonValue] | None = None) -> JsonValue: ...
+    def post(
+        self,
+        path: str,
+        payload: Mapping[str, JsonValue] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> JsonValue: ...
 
     def stream_post(
-        self, path: str, payload: Mapping[str, JsonValue] | None = None
+        self,
+        path: str,
+        payload: Mapping[str, JsonValue] | None = None,
+        *,
+        timeout_seconds: float | None = None,
     ) -> Generator[JsonValue]: ...
 
-    def stream_get(self, path: str) -> Generator[str]: ...
+    def stream_get(self, path: str, *, timeout_seconds: float | None = None) -> Generator[str]: ...
 
 
 @dataclass
@@ -41,6 +51,7 @@ class ImageControlClient:
     the runner pins. Either way the caller states it rather than letting the server
     pick one.
     """
+    timeout_seconds: float | None = None
 
     @classmethod
     def from_endpoint(
@@ -65,7 +76,9 @@ class ImageControlClient:
     ) -> VerifyImageBuildResponse:
         return VerifyImageBuildResponse.model_validate(
             self.channel.post(
-                self._scoped("/api/v1/images/verify-build"), request.model_dump(mode="json")
+                self._scoped("/api/v1/images/verify-build"),
+                request.model_dump(mode="json"),
+                timeout_seconds=self.timeout_seconds,
             )
         )
 
@@ -78,7 +91,11 @@ class ImageControlClient:
             try:
                 if not build_id:
                     with closing(
-                        self.channel.stream_post(self._scoped("/api/v1/images/build"), payload)
+                        self.channel.stream_post(
+                            self._scoped("/api/v1/images/build"),
+                            payload,
+                            timeout_seconds=self.timeout_seconds,
+                        )
                     ) as submission:
                         for item in submission:
                             response = BuildImageResponse.model_validate(item)
@@ -96,7 +113,8 @@ class ImageControlClient:
                         )
                 with closing(
                     self.channel.stream_get(
-                        self._scoped(f"/api/v1/image-builds/{build_id}/events?after={cursor}")
+                        self._scoped(f"/api/v1/image-builds/{build_id}/events?after={cursor}"),
+                        timeout_seconds=self.timeout_seconds,
                     )
                 ) as events:
                     for line in events:

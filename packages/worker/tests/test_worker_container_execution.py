@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
+from threading import Event
 from time import sleep
 
 from foundation.process import (
@@ -757,27 +759,6 @@ def test_worker_container_execution_cleans_runtime_when_cancelled_after_start() 
     ]
 
 
-def test_worker_container_execution_service_handles_image_short_circuit() -> None:
-    log = CallLog()
-    repo = FinalizationRepository()
-    service = _service(
-        log,
-        repo=repo,
-        image_result=ContainerImageLoadResult(loaded=True, short_circuit_exit_code=0),
-    )
-
-    result = service.execute(ContainerExecutionContext(request=_request()))
-
-    assert result.ok
-    assert [phase.phase for phase in result.phases] == [
-        ContainerExecutionPhase.PublishWorkerAddress,
-        ContainerExecutionPhase.LoadImage,
-        ContainerExecutionPhase.Finalize,
-    ]
-    assert log.calls == ["address:ctr-1", "image:ctr-1"]
-    assert repo.exit_codes == [("ctr-1", 0, StopContainerReason.Unknown)]
-
-
 def test_worker_container_execution_service_handles_oom_before_finalization() -> None:
     log = CallLog()
     repo = FinalizationRepository()
@@ -915,7 +896,58 @@ def test_worker_container_execution_service_stops_on_mount_failure() -> None:
     assert result.failed_phase is ContainerExecutionPhase.SetupMounts
     assert result.finalization is not None
     assert result.finalization.ok
-    assert log.calls == ["address:ctr-1", "image:ctr-1", "ports:2", "mounts:ctr-1"]
+
+
+def test_startup_failure_joins_network_allocation_before_cleanup() -> None:
+    allocated: set[str] = set()
+    network_entered = Event()
+    mount_failed = Event()
+    finish_network = Event()
+
+    class SlowNetwork(NetworkPreparer):
+        def setup_network(
+            self,
+            context: ContainerExecutionContext,
+            *,
+            port_bindings: list[PortBinding],
+        ) -> ContainerNetworkSetupResult:
+            network_entered.set()
+            assert finish_network.wait(timeout=5)
+            allocated.add(context.request.container_id)
+            return super().setup_network(context, port_bindings=port_bindings)
+
+    class FailedMount(MountPreparer):
+        def setup_mounts(self, request: ContainerRequestContext) -> ContainerMountSetupResult:
+            assert network_entered.wait(timeout=5)
+            mount_failed.set()
+            raise RuntimeError("storage unavailable")
+
+    class NetworkCleanup(Cleanup):
+        def teardown_network(self, container_id: str) -> None:
+            allocated.remove(container_id)
+
+    log = CallLog()
+    repo = FinalizationRepository()
+    service = _service(
+        log,
+        repo=repo,
+        cleanup=NetworkCleanup(),
+        mount_preparer=FailedMount(log),
+        network_preparer=SlowNetwork(log),
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        execution = executor.submit(service.execute, ContainerExecutionContext(request=_request()))
+        try:
+            assert mount_failed.wait(timeout=5)
+            assert not repo.exit_codes
+        finally:
+            finish_network.set()
+        result = execution.result(timeout=5)
+
+    assert not result.ok
+    assert result.failed_phase is ContainerExecutionPhase.SetupMounts
+    assert result.finalization is not None and result.finalization.ok
+    assert not allocated
 
 
 def _service(

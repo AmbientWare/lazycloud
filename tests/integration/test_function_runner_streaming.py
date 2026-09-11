@@ -8,6 +8,7 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind, StubRecord
 from execution.functions.service import FunctionControlService
 from gateway.service import GatewayControlService
+from observability.stream_state import AsyncTaskChangeReader
 from pydantic import JsonValue, TypeAdapter
 from runner.function import (
     FunctionRunner,
@@ -30,7 +31,7 @@ from shared.http.functions import (
     FunctionInvokeResponse,
     FunctionSetResultBody,
 )
-from shared.http.gateway_tasks import AppendTaskLogRequest, EndTaskRequest, StartTaskRequest
+from shared.http.gateway_tasks import AppendTaskLogRequest, EndTaskRequest
 from shared.tasks import TaskStatus
 from tests.releases import assign_runtime
 
@@ -131,6 +132,7 @@ async def _invoke_and_run(
     function_service = FunctionControlService(
         runtime,
         async_database=runtime.require_async_io().database,
+        task_changes=AsyncTaskChangeReader(runtime.require_async_io().realtime),
     )
     gateway_service = runtime.gateway_service
     stub = _create_function_stub(runtime, handler_ref)
@@ -164,7 +166,7 @@ async def _invoke_and_run(
     streamed = [
         response
         async for response in function_service.function_invoke_stream(
-            initial, poll_interval_seconds=0.01, keepalive_interval_seconds=1.0
+            initial, keepalive_interval_seconds=1.0
         )
     ]
     assert streamed[0] == initial
@@ -209,12 +211,6 @@ class _FunctionRunnerServiceChannel:
     ) -> JsonValue:
         if payload is None:
             raise AssertionError(f"missing payload for path: {path}")
-        if path == "/gateway/tasks/start":
-            response = self.gateway_service.start_task(
-                StartTaskRequest.model_validate(payload),
-                workspace_id=self._task_workspace_id(payload),
-            )
-            return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
         if path == "/gateway/tasks/log":
             response = self.gateway_service.append_task_log(
                 AppendTaskLogRequest.model_validate(payload),

@@ -45,7 +45,6 @@ from shared.http.volumes import (
 from shared.mounts import MountAuthMode, infer_mount_auth_mode, normalize_mount_prefix
 from typing_extensions import Self
 
-from lazycloud.clients.volume.control import VolumeControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
 
 DEFAULT_VOLUME_MOUNT_ROOT = "/volumes"
@@ -510,7 +509,9 @@ class Volume:
         return f"{self.name}/{relative.as_posix()}"
 
 
-def _default_volume_client(config: ControlClientConfig) -> VolumeControlClient:
+def _default_volume_client(config: ControlClientConfig) -> VolumeClient:
+    from lazycloud.clients.volume.control import VolumeControlClient
+
     return VolumeControlClient.from_endpoint(
         config.endpoint,
         token=config.token,

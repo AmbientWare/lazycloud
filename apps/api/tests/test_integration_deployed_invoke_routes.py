@@ -54,10 +54,9 @@ class RecordingFunctionService:
         initial: FunctionInvokeResponse,
         *,
         headless: bool = False,
-        poll_interval_seconds: float = 0.25,
         keepalive_interval_seconds: float = 5.0,
     ) -> AsyncIterator[FunctionInvokeResponse]:
-        _ = headless, poll_interval_seconds, keepalive_interval_seconds
+        _ = headless, keepalive_interval_seconds
         yield initial
 
     def function_set_result(

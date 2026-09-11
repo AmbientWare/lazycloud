@@ -4,7 +4,7 @@ import json
 import os
 import ssl
 import weakref
-from collections.abc import Generator, Iterator, Mapping
+from collections.abc import Generator, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from types import TracebackType
 
@@ -98,7 +98,30 @@ class HttpChannel:
     def get(self, path: str) -> JsonValue:
         return self.request("GET", path)
 
-    def stream_get(self, path: str) -> Generator[str]:
+    def request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        data: bytes | Iterable[bytes],
+        headers: Mapping[str, str],
+        timeout_seconds: float | None = None,
+    ) -> bytes:
+        url = self._request_url(path)
+        try:
+            with self._client.stream(
+                method.upper(),
+                url,
+                content=data,
+                headers=_request_headers(self.token, headers),
+                timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
+            ) as response:
+                _check_response(response)
+                return response.read()
+        except httpx.RequestError as exc:
+            raise HttpTransportError(method, url, str(exc)) from exc
+
+    def stream_get(self, path: str, *, timeout_seconds: float | None = None) -> Generator[str]:
         headers = _request_headers(self.token)
         url = self._request_url(path)
         try:
@@ -106,7 +129,7 @@ class HttpChannel:
                 "GET",
                 url,
                 headers=headers,
-                timeout=self.timeout_seconds,
+                timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
             ) as response:
                 _check_response(response)
                 for raw_line in _response_lines(response):
@@ -127,6 +150,8 @@ class HttpChannel:
         self,
         path: str,
         payload: Mapping[str, JsonValue] | None = None,
+        *,
+        timeout_seconds: float | None = None,
     ) -> Generator[JsonValue]:
         data = _encode_payload(payload)
         headers = _request_headers(
@@ -143,7 +168,7 @@ class HttpChannel:
                 url,
                 content=data,
                 headers=headers,
-                timeout=self.timeout_seconds,
+                timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
             ) as response:
                 _check_response(response)
                 for raw_line in _response_lines(response):
