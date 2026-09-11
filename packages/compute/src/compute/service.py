@@ -468,7 +468,9 @@ class ComputeService:
             reason=f"capacity owner kind {unit.capacity_owner_kind.value!r} is unsupported",
         )
 
-    def fulfill_acquired_capacity(self, request: CapacityFulfillmentRequest) -> None:
+    def fulfill_acquired_capacity(
+        self, request: CapacityFulfillmentRequest
+    ) -> CapacityOperationStatus:
         with self.context.database.session() as session:
             repository = ComputeCapacityOperationRepository(session)
             operation = repository.get(
@@ -479,9 +481,9 @@ class ComputeService:
             if operation.status is CapacityOperationStatus.Fulfilled:
                 if operation.target_machine_id != request.machine_id:
                     raise ConflictError("capacity operation already fulfilled by another machine")
-                return
+                return operation.status
             if operation.status.terminal or operation.status is CapacityOperationStatus.Releasing:
-                raise ConflictError("capacity operation cannot be fulfilled after release")
+                return operation.status
             machine = ComputeProviderInstanceRepository(session).get_by_machine(request.machine_id)
             if machine is None or machine.pool_id != operation.pool_id:
                 raise ConflictError("capacity fulfillment machine belongs to another pool")
@@ -502,6 +504,7 @@ class ComputeService:
                     }
                 )
             )
+            return CapacityOperationStatus.Fulfilled
 
     def release_acquired_capacity(
         self,
