@@ -72,6 +72,7 @@ from lazycloud.clients.function.control import FunctionControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
 from lazycloud.control_clients import gateway_control_client
 from lazycloud.env import called_on_import, is_local
+from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
 from lazycloud.session.task import FunctionCall, TaskClient, TaskOperationError
@@ -581,6 +582,8 @@ class Function(Generic[P, R]):
         serialized = _serialize_invocation(args, kwargs)
         parent_task_id, root_task_id = _current_task_context()
         reported_task_id = ""
+        reported_status = ""
+        pending_reporter = PendingProgressReporter(terminal=self.terminal, step=step)
         try:
             for response in self.control_client.invoke(
                 self.stub_id,
@@ -594,8 +597,12 @@ class Function(Generic[P, R]):
                     reported_task_id = response.task_id
                     if step is not None:
                         step.update(f"{response.task_id[:8]} submitted")
-                if response.status and step is not None:
-                    step.update(f"{response.task_id[:8]} {response.status}")
+                if response.status and response.status != reported_status:
+                    reported_status = response.status
+                    if step is not None:
+                        step.update(f"{response.task_id[:8]} {response.status}")
+                if response.status or response.done:
+                    pending_reporter.update(response.task_id, response.pending_progress)
                 if response.output:
                     self._progress(
                         response.output,

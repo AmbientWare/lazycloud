@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { containerSchema } from "./compute";
 import { jsonValueSchema } from "./json";
+import { taskPendingProgressSchema } from "./task-progress";
 
 // Synced to packages/shared/src/shared/http/tasks.py (TaskResponse, TaskDetailResponse,
 // TaskPageResponse, TaskMetricsSummaryResponse, TaskTimeWindowBucketListResponse) and
@@ -42,6 +43,7 @@ export const taskSchema = z.object({
   id: z.string(),
   name: z.string(),
   status: z.string(),
+  pending_progress: taskPendingProgressSchema.nullish(),
   workspace_id: z.string().nullish(),
   app_id: z.string().nullish(),
   stub_id: z.string().nullish(),

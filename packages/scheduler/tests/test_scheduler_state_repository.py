@@ -91,6 +91,7 @@ from shared.deployment_records import Deployment, DeploymentSpec, Resources
 from shared.deployments import DeploymentKind, StubKind
 from shared.errors import ConflictError, NotFoundError
 from shared.http.functions import FunctionClaimRequest
+from shared.http.task_progress import TaskPendingReason
 from shared.image_building.authoring import ImageSpec
 from shared.realtime.contracts import (
     CloudEventRecord,
@@ -192,6 +193,9 @@ class _RecordingLifecycleEvents:
 
 
 class _RuntimeAssignmentRecorder:
+    def publish_pending_progress(self, container_id: str) -> None:
+        _ = container_id
+
     def __init__(self) -> None:
         self.assignments: list[tuple[str, str, str, str, str | None, str | None]] = []
         self.shapes: list[ContainerShape | None] = []
@@ -1955,6 +1959,9 @@ async def test_scheduler_container_cancellation_cannot_be_dispatched_or_requeued
     cancelled = service.dispatch_ready(now=now, limit=10)
 
     assert cancelled == []
+    assert not container_repo.record_pending_progress(
+        request.container_id, TaskPendingReason.ProvisioningCompute, now=now
+    )
     assert await _worker_delivery_empty(async_redis, worker_repo, "worker-1")
     assert redis.sorted_set_cardinality(worker_repo.keys.container_requests()) == 0
     assert redis.hash_length(worker_repo.keys.container_request_payloads()) == 0

@@ -70,6 +70,7 @@ from shared.http.observability import (
     LogQueryResponse,
     LogRecord,
 )
+from shared.http.task_progress import TaskPendingProgress
 from shared.http.tasks import (
     TaskActionCapabilitiesResponse,
     TaskAppReferenceResponse,
@@ -298,6 +299,7 @@ class TaskView(ContractModel):
     """
 
     task: Task
+    pending_progress: TaskPendingProgress | None = None
     app: TaskAppReferenceResponse | None = None
     workload: TaskWorkloadReferenceResponse | None = None
     deployment: TaskDeploymentReferenceResponse | None = None
@@ -1187,8 +1189,14 @@ class ManagementService:
                 limit=limit,
                 offset=offset,
             )
+        progress = self.services.tasks.progress.read([item.task for item in page.data])
         return CursorPage(
-            data=tuple(_task_view(item, can_write=can_write) for item in page.data),
+            data=tuple(
+                _task_view(item, can_write=can_write).model_copy(
+                    update={"pending_progress": progress[item.task.id]}
+                )
+                for item in page.data
+            ),
             next=page.next,
         )
 
@@ -1208,7 +1216,10 @@ class ManagementService:
         if related is None:
             msg = f"task not found in workspace: {task_id}"
             raise NotFoundError(msg)
-        return _task_detail_view(related, can_write=can_write)
+        progress = self.services.tasks.progress.read([related.task])
+        return _task_detail_view(related, can_write=can_write).model_copy(
+            update={"pending_progress": progress[related.task.id]}
+        )
 
     def workspace_task(self, workspace: str, task_id: str) -> Task:
         return self.task_detail(workspace, task_id).task

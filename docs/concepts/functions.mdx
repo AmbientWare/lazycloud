@@ -160,6 +160,37 @@ def transcribe(path: str) -> str: ...
 `min_containers` keeps that many containers up with nothing queued, which also
 makes the keep-warm window infinite for them.
 
+## Pending calls
+
+After a call has been pending for five seconds, the dashboard and CLI show the
+available explanation and elapsed wait. Messages distinguish compute startup,
+compute availability, container startup, busy containers, dependencies, and retries.
+The explanation clears when execution starts or the call ends. If startup updates
+stop arriving, the dashboard shows that it is waiting for an update.
+
+SDK calls stay quiet by default. Use `lazycloud.output()` to enable terminal
+progress, or observe structured updates without printing:
+
+```python
+import lazycloud
+
+
+def report_progress(task_id: str, pending: lazycloud.TaskPendingProgress | None) -> None:
+    if pending is not None:
+        print(task_id, pending.reason, pending.message)
+
+
+with lazycloud.progress(report_progress):
+    call = transcribe.spawn("recording.wav")
+    result = call.get()
+```
+
+The callback runs when the reason or phase start changes, including during
+`.remote()` and detached result polling. It receives `None` when pending progress
+clears. `call.task.pending_progress` reads the current explanation without waiting
+for a result. Progress includes `since` for the current phase, `pending_since` for
+the pending interval, and `observed_at` for the last observation.
+
 ## Secrets and environment
 
 `env` sets plain environment variables. `secrets` injects

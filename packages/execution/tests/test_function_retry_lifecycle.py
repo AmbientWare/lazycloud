@@ -76,6 +76,9 @@ def test_function_retry_reuses_a_warm_container_and_leaves_replacement_to_the_au
     )
 
     assert retry.status is TaskStatus.Retry
+    pending = isolated_services.tasks.progress.read([retry])[retry.id]
+    assert pending is not None
+    assert pending.pending_since == retry.next_retry_at
     assert retry.container_id is None
     assert len(scheduler.requests) == 1
     assert functions.schedule_due_retries(now=datetime.now(UTC)) == []

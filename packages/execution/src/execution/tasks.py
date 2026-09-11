@@ -44,6 +44,7 @@ from shared.timestamps import utc_now
 from database import AsyncDatabaseClient
 from execution.callbacks import TaskCallbackDispatcher, TaskCallbackService
 from execution.context import ExecutionContext
+from execution.task_progress import TaskProgressService
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +66,7 @@ class TaskService:
     context: ExecutionContext
     events: EventService
     log_streams: RedisEventStreamRepository
+    progress: TaskProgressService
     workspace_changes: WorkspaceChangePublisher | None = None
     callback_dispatcher: TaskCallbackDispatcher | None = None
     async_database: AsyncDatabaseClient | None = None

@@ -37,6 +37,12 @@ class ContainerSchedulingPersistenceService:
     workspace_changes: WorkspaceChangePublisher
     runtime_state: ContainerRuntimeStateRepository | None = None
 
+    def publish_pending_progress(self, container_id: str) -> None:
+        with self.context.database.session() as session:
+            container = ContainerRepository(session).get_across_workspaces(container_id)
+        if container is not None and container.status is ContainerStatus.Pending:
+            self._publish_container_change(container)
+
     def assign_runtime(
         self,
         *,

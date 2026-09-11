@@ -7,6 +7,7 @@ from pydantic import Field, JsonValue
 from shared.deployments import StubKind
 from shared.http.base import HttpModel
 from shared.http.compute import ContainerResponse
+from shared.http.task_progress import TaskPendingProgress
 from shared.tasks import TaskStatus
 
 
@@ -42,6 +43,7 @@ class TaskResponse(HttpModel):
     id: str
     name: str
     status: TaskStatus = TaskStatus.Pending
+    pending_progress: TaskPendingProgress | None = None
     workspace_id: str | None = None
     app_id: str | None = None
     stub_id: str | None = None

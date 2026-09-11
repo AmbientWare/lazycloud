@@ -31,6 +31,12 @@ from lazycloud.abstractions.sandbox import (
 )
 from lazycloud.abstractions.secret import Secret
 from lazycloud.abstractions.volume import CloudBucket, CloudBucketConfig, Volume
+from lazycloud.progress import (
+    PendingProgressCallback,
+    TaskPendingProgress,
+    TaskPendingReason,
+    progress,
+)
 from lazycloud.session import Client
 from lazycloud.session.deployment import Deployment
 from lazycloud.session.task import FunctionCall, Task
@@ -49,6 +55,7 @@ __all__ = [
     "Image",
     "LinuxArchitecture",
     "Map",
+    "PendingProgressCallback",
     "PythonVersion",
     "Queue",
     "QueueDepthAutoscaler",
@@ -71,6 +78,8 @@ __all__ = [
     "SandboxProcessStream",
     "Secret",
     "Task",
+    "TaskPendingProgress",
+    "TaskPendingReason",
     "TaskPolicy",
     "Volume",
     "current_root_task_id",
@@ -78,5 +87,6 @@ __all__ = [
     "env",
     "experimental",
     "output",
+    "progress",
     "schema",
 ]

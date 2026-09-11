@@ -4,6 +4,7 @@ import asyncio
 import concurrent.futures
 import time
 from collections.abc import Iterator, Mapping
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from typing import Any, Generic, Protocol, TypeVar, cast
 
@@ -39,6 +40,8 @@ from lazycloud.function_results import (
     decode_function_result,
 )
 from lazycloud.json_contracts import parse_json_value, validate_json_object
+from lazycloud.progress import PendingProgressReporter, TaskPendingProgress
+from lazycloud.terminal import Terminal
 
 R = TypeVar("R")
 
@@ -145,6 +148,10 @@ class Task:
     def view(self) -> TaskDetailResponse:
         return self.client.get(self.task_id)
 
+    @property
+    def pending_progress(self) -> TaskPendingProgress | None:
+        return self.view().pending_progress
+
     def result(
         self,
         *,
@@ -167,9 +174,11 @@ class Task:
     ) -> TaskResult:
         deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
         retry = TransientRetry(deadline=deadline)
+        pending_reporter = PendingProgressReporter(terminal=Terminal(default_enabled=False))
         while True:
             try:
-                task = self.get()
+                view = self.view()
+                task = shared.tasks.Task.model_validate(view, from_attributes=True)
             except TRANSIENT_TRANSPORT_ERRORS as exc:
                 if not is_transient_transport_error(exc):
                     raise
@@ -186,6 +195,7 @@ class Task:
                 continue
 
             retry.reset()
+            pending_reporter.update(self.task_id, view.pending_progress)
             if is_terminal_task_status(task.status):
                 return TaskResult(task)
             if deadline is not None and time.monotonic() >= deadline:
@@ -391,6 +401,7 @@ class TaskBatch:
         try:
             futures = {
                 executor.submit(
+                    copy_context().run,
                     handle.wait,
                     timeout_seconds=_batch_remaining_seconds(deadline, timeout_seconds),
                     poll_interval_seconds=poll_interval_seconds,
