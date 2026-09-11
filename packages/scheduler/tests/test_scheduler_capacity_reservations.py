@@ -1006,6 +1006,53 @@ def test_registered_gpu_reservation_recovers_cpu_backfill_before_dispatch(
     assert repository.allocation_for_request(request.container_id) is None
 
 
+def test_capacity_backoff_preserves_purchase_cooldown_but_admits_new_workers(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    workers = RedisSchedulerWorkerRepository(redis)
+    containers = RedisSchedulerContainerRepository(redis)
+
+    class UnavailablePlacement(_IdentityPlacement):
+        purchases = 0
+
+        def purchase_candidates(
+            self, request: SchedulerWorkerRequest
+        ) -> tuple[ComputeCapacityPurchase, ...]:
+            self.purchases += 1
+            raise UpstreamUnavailableError("provider capacity unavailable")
+
+    placement = UnavailablePlacement()
+    requests = SchedulerContainerRequestService(
+        workers=workers,
+        containers=containers,
+        placement=placement,
+        failure_handler=_FailureHandler(),
+        assignments=_Assignments(),
+        dispatch_wake=_Wake(),
+        lifecycle_events=_Events(),
+        capacity_reservations=CapacityReservationService(
+            RedisCapacityReservationRepository(redis), tuple
+        ),
+        workspace_owners=_UnownedWorkspaces(),
+    )
+    now = datetime.now(UTC)
+    request = _request("capacity-retry").model_copy(update={"timestamp": now})
+    assert requests.submit(request, ready_at=now).accepted
+    [initial] = requests.dispatch_ready(now=now)
+    [cooldown] = requests.dispatch_ready(now=now + timedelta(seconds=1))
+    assert initial.status is cooldown.status is SchedulerContainerDispatchStatus.Waiting
+    assert placement.purchases == 1
+
+    worker = _worker(OWNER_ID, created_at=now + timedelta(seconds=1))
+    workers.add_worker(worker, now=worker.created_at)
+    workers.toggle_worker_available(worker.worker_id, now=worker.created_at)
+    [dispatched] = requests.dispatch_ready(now=now + timedelta(seconds=2))
+    assert dispatched.status is SchedulerContainerDispatchStatus.Dispatched
+    assert dispatched.worker_id == worker.worker_id
+    assert placement.purchases == 1
+
+
 def test_provider_reconciliation_does_not_block_final_dispatch(
     real_redis_actors: RealRedisActors,
 ) -> None:

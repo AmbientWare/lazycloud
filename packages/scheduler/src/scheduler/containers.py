@@ -784,6 +784,18 @@ class SchedulerContainerRequestService:
         if self.capacity_reservations is None:
             raise RuntimeError("scheduler capacity reservation service was not injected")
         request = claim.request
+        if request.capacity_retry_at is not None and current_time < request.capacity_retry_at:
+            self._requeue(
+                claim,
+                current_time,
+                retry_count=request.retry_count,
+                capacity_retry_at=request.capacity_retry_at,
+            )
+            return SchedulerContainerDispatchResult(
+                status=SchedulerContainerDispatchStatus.Waiting,
+                container_id=request.container_id,
+                reason="waiting for capacity acquisition retry",
+            )
         acquisition_failed = False
         try:
             result = self.capacity_reservations.acquire(
@@ -845,8 +857,9 @@ class SchedulerContainerRequestService:
         self._requeue(
             claim,
             current_time,
-            delay_seconds=max(retry.delay_seconds, result.retry_delay_seconds),
             retry_count=(request.retry_count if waiting else retry.next_retry_count),
+            capacity_retry_at=current_time
+            + timedelta(seconds=max(retry.delay_seconds, result.retry_delay_seconds)),
         )
         reason = (
             TaskPendingReason.Queued
@@ -1234,6 +1247,7 @@ class SchedulerContainerRequestService:
         *,
         delay_seconds: float | None = None,
         retry_count: int | None = None,
+        capacity_retry_at: datetime | None = None,
     ) -> None:
         request = claim.request
         delay = self.requeue_delay_seconds if delay_seconds is None else delay_seconds
@@ -1243,6 +1257,7 @@ class SchedulerContainerRequestService:
             request.model_copy(
                 update={
                     "backfill": False,
+                    "capacity_retry_at": capacity_retry_at,
                     "retry_count": (
                         request.retry_count + 1 if retry_count is None else retry_count
                     ),

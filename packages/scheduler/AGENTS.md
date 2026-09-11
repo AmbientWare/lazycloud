@@ -66,6 +66,11 @@ two that cannot be stale.
 
 ## A record the scheduler no longer backs
 
+Capacity acquisition has a retry deadline separate from dispatch readiness.
+Pending requests keep checking usable workers every dispatch interval while
+`capacity_retry_at` prevents another purchase attempt before its cooldown ends.
+A worker returning during that cooldown can accept work immediately.
+
 Capacity is counted from the durable container rows, so a row that says
 `pending` or `running` while nothing is going to make it true is a ceiling slot
 held against a workload that cannot use it. At `max_containers = 1` that is not

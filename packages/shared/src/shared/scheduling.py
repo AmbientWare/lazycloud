@@ -116,6 +116,7 @@ class SchedulerWorkerRequest(WorkerExecutionRequest):
     backfill: bool = False
     region: ProductRegion | None = None
     availability_zone: AvailabilityZone = ""
+    capacity_retry_at: datetime | None = None
 
     def requeued(self, *, now: datetime | None = None) -> SchedulerWorkerRequest:
         return self.model_copy(
