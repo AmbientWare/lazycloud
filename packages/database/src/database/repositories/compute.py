@@ -627,7 +627,10 @@ class ComputeUnitRepository:
         )
         base = (
             select(ComputeUnitTable)
-            .where(ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value)
+            .where(
+                ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
+                ComputeUnitTable.phase != ComputeUnitPhase.Deleted.value,
+            )
             .order_by(attempted_at.asc().nulls_first(), ComputeUnitTable.id)
             .with_for_update(skip_locked=True)
         )
