@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from compute.agent_control import agent_machine_worker_id
+from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
 from compute.state import (
     ComputeAgentTokenState,
     ComputeJoinTokenState,
@@ -15,6 +15,34 @@ from scheduler.compute_hooks import SchedulerComputeHooks
 from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.state import RedisSchedulerWorkerRepository, SchedulerWorkerRecord
 from shared.compute_policy import MachinePool
+from shared.timestamps import utc_now
+
+
+def test_compute_observation_does_not_treat_missing_intake_or_drain_as_machine_failure(
+    real_redis_actors: _RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    workers = RedisSchedulerWorkerRepository(redis)
+    hooks = SchedulerComputeHooks(RedisComputeStateRepository(redis), workers)
+    machine_id = "intake-machine"
+    worker = SchedulerWorkerRecord(
+        worker_id=agent_machine_worker_id(machine_id),
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
+        machine_id=machine_id,
+        pool=MachinePool("default"),
+        status=SchedulerWorkerStatus.Available,
+        request_poll_expires_at=utc_now() - timedelta(seconds=1),
+    )
+    workers.add_worker(worker)
+    assert hooks.machine_worker_availability(machine_id) is MachineWorkerAvailability.Unknown
+    worker.request_poll_expires_at = utc_now() + timedelta(seconds=60)
+    workers.add_worker(worker)
+    assert hooks.machine_worker_availability(machine_id) is MachineWorkerAvailability.Available
+    worker.status = SchedulerWorkerStatus.Draining
+    workers.add_worker(worker)
+    assert hooks.machine_worker_availability(machine_id) is MachineWorkerAvailability.Unknown
+    hooks.disable_machine(machine_id, "worker failed")
+    assert hooks.machine_worker_availability(machine_id) is MachineWorkerAvailability.Unavailable
 
 
 class _RealRedisActors(Protocol):

@@ -10,6 +10,7 @@ from compute.state import ComputeUnitState, ComputeUnitStatus
 from coordination.process_presence import ProcessPresenceReader
 from shared.compute_policy import ComputeUnitPhase, ComputeUnitRecord
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus, WorkerUnavailableReason
+from shared.timestamps import utc_now
 
 
 class ComputeUnitStateRepository(Protocol):
@@ -80,8 +81,14 @@ class SchedulerComputeHooks:
         worker = self.workers.get_worker(agent_machine_worker_id(machine_id))
         if worker is None:
             return MachineWorkerAvailability.Unknown
+        if worker.status is SchedulerWorkerStatus.Draining:
+            return MachineWorkerAvailability.Unknown
         if worker.status is SchedulerWorkerStatus.Available:
-            return MachineWorkerAvailability.Available
+            return (
+                MachineWorkerAvailability.Available
+                if worker.request_intake_status(at=utc_now()) is SchedulerWorkerStatus.Available
+                else MachineWorkerAvailability.Unknown
+            )
         return MachineWorkerAvailability.Unavailable
 
     def agent_intake_observing_since(self) -> datetime | None:

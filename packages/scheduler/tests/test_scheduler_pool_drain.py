@@ -265,6 +265,7 @@ def _add_worker(
             capacity_owner_id=capacity_owner_id,
             machine_id=machine_id,
             status=SchedulerWorkerStatus.Available,
+            request_poll_expires_at=NOW + timedelta(hours=1),
             total_cpu_millicores=1000,
             total_memory_mib=1024,
             free_cpu_millicores=1000,
@@ -327,8 +328,10 @@ def test_worker_pool_drain_releases_the_idle_provider_machine(
     assert compute.released == [(PROVIDER_OWNER_ID, "machine-provider")]
 
 
-def test_worker_pool_drain_retires_burst_capacity_before_the_warm_machine(
+@pytest.mark.parametrize("warm_intake_expired", [False, True])
+def test_worker_pool_drain_retains_the_oldest_healthy_warm_machine(
     real_redis_actors: _RealRedisActors,
+    warm_intake_expired: bool,
 ) -> None:
     redis = real_redis_actors.client()
     compute_states = RedisComputeStateRepository(redis)
@@ -356,8 +359,18 @@ def test_worker_pool_drain_retires_burst_capacity_before_the_warm_machine(
         machine_id="machine-burst",
         capacity_owner_id=PROVIDER_OWNER_ID,
     )
+    if warm_intake_expired:
+        warm = workers.get_worker("worker-warm")
+        assert warm is not None
+        workers.add_worker(
+            warm.model_copy(update={"request_poll_expires_at": NOW}), now=warm.updated_at
+        )
 
     initial = _drain_service(redis, compute, compute_states, workers).reconcile(now=NOW)
+    if warm_intake_expired:
+        assert [item.action for item in initial] == [WorkerPoolDrainAction.TerminateProviderMachine]
+        assert compute.released == [(PROVIDER_OWNER_ID, "machine-warm")]
+        return
     result = _drain_service(redis, compute, compute_states, workers).reconcile(
         now=NOW + timedelta(minutes=2)
     )
