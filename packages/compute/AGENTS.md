@@ -129,12 +129,14 @@ Deletion requires durable intent. Missing provider resources move a unit to
 `Provisioning`. Preparing capacity can revive a fully `Deleted` unit with a new
 generation. A `Deleting` unit cannot reactivate while provider teardown is in flight.
 
-Empty platform units retire when their configured purchase policy, approved
-region/type/market, or canonical root disk no longer permits that binding.
+Empty internal platform units retire when they hold no capacity, warm floor,
+active work, reservations, or pending replacement.
+New units retain their idle-drain grace period unless their binding is obsolete.
 Retirement holds the reservation mutation and dispatch leases, checks durable
 demand and provider storage destruction, and preserves the unit and machine
 history. Preparing a candidate and reserving its capacity share the same mutation
-lease. Valid idle pools and customer-owned pools do not expire through this policy.
+lease. A later purchase revives the same identity with a new generation.
+Customer-owned pools do not expire through this policy.
 
 Storage destruction evidence carries the time the provider confirmed absence,
 not the reconciliation pass start time. A cache generation may register while

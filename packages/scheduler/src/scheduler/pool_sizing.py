@@ -31,6 +31,8 @@ class WorkerPoolSizingAction(StrEnum):
 class WorkerPoolEffectiveHeadroom(ContractModel):
     cpu_millicores: int = 0
     memory_mib: int = 0
+    total_cpu_millicores: int = 0
+    total_memory_mib: int = 0
     gpu_count: int = 0
     available_workers: int = 0
     unclaimed_pending_workers: int = 0
@@ -143,6 +145,8 @@ def effective_pool_headroom(
             pending.append(worker)
     active_allocations = list(allocations)
     return WorkerPoolEffectiveHeadroom(
+        total_cpu_millicores=sum(worker.total_cpu_millicores for worker in [*available, *pending]),
+        total_memory_mib=sum(worker.total_memory_mib for worker in [*available, *pending]),
         cpu_millicores=(
             sum(worker.free_cpu_millicores for worker in [*available, *pending])
             - sum(allocation.cpu_millicores for allocation in active_allocations)
@@ -308,6 +312,16 @@ def _below_minimum_headroom(
     pool: ComputeUnitRecord,
     headroom: WorkerPoolEffectiveHeadroom,
 ) -> bool:
+    if pool.platform_fleet:
+        workers = headroom.available_workers + headroom.unclaimed_pending_workers
+        # The platform reserve is measured in machines. Host-reported capacity
+        # accounts for memory the OS cannot offer to workloads.
+        return (
+            workers < pool.min_machines
+            or headroom.cpu_millicores * workers < headroom.total_cpu_millicores * pool.min_machines
+            or headroom.memory_mib * workers < headroom.total_memory_mib * pool.min_machines
+            or headroom.gpu_count < pool.min_free_gpu_count
+        )
     return (
         headroom.cpu_millicores < pool.min_free_cpu_millicores
         or headroom.memory_mib < pool.min_free_memory_mib

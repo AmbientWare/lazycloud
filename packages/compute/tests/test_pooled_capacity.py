@@ -839,8 +839,10 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
     assert {unit.id: unit.desired_machines for unit in units} == desired_before_disable
 
 
+@pytest.mark.parametrize("floor_transferred", [False, True])
 def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
     service_context: ServiceContext,
+    floor_transferred: bool,
 ) -> None:
     with service_context.database.session() as session:
         workspace_id = service_context.default_workspace_id(session)
@@ -888,10 +890,11 @@ def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
         platform_providers=lambda: tuple(providers),
     )
+    leases = _MutationLeases()
     compute = ComputeService(
         service_context,
         provider_resolver=resolver,
-        capacity_owner_mutations=_MutationLeases(),
+        capacity_owner_mutations=leases,
         pool_bootstrap_factory=_bootstrap,
         scheduler_hooks=_SchedulerHooks(),
         fleet_policy=FleetCapacityPolicy(max_cpu_instances=1, warm_cpu_preemptible_min=1),
@@ -907,6 +910,25 @@ def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
     assert failed.provider_state.degraded_reason == "provider_acquisition_rejected"
     assert failed.provider_state.last_capacity_failure_at == now
 
+    if floor_transferred:
+        with service_context.database.session() as session:
+            ComputeUnitRepository(session).upsert(
+                failed.model_copy(
+                    update={
+                        "min_machines": 0,
+                        "initial_machines": 0,
+                        "min_free_cpu_millicores": 0,
+                        "min_free_memory_mib": 0,
+                    }
+                )
+            )
+
+    leases.reserved_owners.add(cheap.capacity_owner_id)
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=2))
+    with service_context.database.session() as session:
+        protected = ComputeUnitRepository(session).get(cheap.id)
+    assert protected is not None and protected.desired_machines == 1
+    leases.reserved_owners.clear()
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=2))
     with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
@@ -2978,11 +3000,11 @@ def test_capacity_asked_for_again_revives_a_deleted_pool(
         ("disabled", True, True),
         ("removed_offer", True, True),
         ("root_disk", True, True),
-        ("unchanged", True, False),
+        ("unchanged", True, True),
         ("disabled", False, False),
     ],
 )
-def test_empty_pool_retirement_follows_explicit_platform_policy(
+def test_empty_pool_retirement_preserves_customer_owned_pools(
     service_context: ServiceContext, policy_change: str, platform_fleet: bool, retired: bool
 ) -> None:
     _seed_connection(service_context, platform_fleet=platform_fleet)
@@ -3013,7 +3035,9 @@ def test_empty_pool_retirement_follows_explicit_platform_policy(
         resolver.root_volume_gib = 300
     provider.catalog_failure = RuntimeError("temporary quote outage")
 
-    compute.reconcile_unit_capacity(pool.id)
+    compute.reconcile_unit_capacity(
+        pool.id, now=pool.created_at + timedelta(seconds=pool.idle_drain_timeout_seconds + 1)
+    )
 
     with service_context.database.session() as session:
         stored = ComputeUnitRepository(session).get(pool.id)
@@ -3021,6 +3045,7 @@ def test_empty_pool_retirement_follows_explicit_platform_policy(
     assert (stored.phase is ComputeUnitPhase.Deleted) is retired
     assert stored.created_at == pool.created_at
     assert stored.capacity_owner_id == pool.capacity_owner_id
+    assert (pool.id in {unit.id for unit in compute.list_units()}) is not retired
 
 
 def test_retirement_cannot_revive_until_provider_deletion_finishes(
