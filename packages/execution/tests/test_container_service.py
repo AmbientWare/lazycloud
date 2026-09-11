@@ -17,6 +17,7 @@ from coordination.event_bus import (
 )
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
+from database.repositories.observability import UsageRepository
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
@@ -25,7 +26,7 @@ from database.repositories.orchestration import (
 from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
-from execution.containers.service import PendingContainerReservation
+from execution.containers.service import ContainerService, PendingContainerReservation
 from scheduler.containers import (
     SchedulerContainerCancellationResult,
     SchedulerContainerSubmitResult,
@@ -35,15 +36,16 @@ from scheduler.state import SchedulerWorkerRequest
 from shared.billing_quotes import ContainerShape
 from shared.compute_fleet import Machine, Worker
 from shared.container_requests import StopContainerReason, WorkerStartupKind
-from shared.containers import ContainerRecord
+from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.tasks import TaskStatus
-from shared.usage import UsageBillingOwner
+from shared.usage import UsageBillingOwner, UsageMetric, UsageUnit
 from shared.workload_keys import (
     pod_container_connections_key,
     pod_keep_warm_lock_key,
     pod_total_connections_key,
 )
+from sqlalchemy.exc import IntegrityError
 from tests.real_redis import RealRedisActors
 from tests.workspaces import workspace_owner_user_id
 
@@ -166,6 +168,9 @@ def test_runtime_assignment_separates_operational_and_compute_ownership(
         isolated_services.workspace_changes,
     )
     persistence.assign_runtime(
+        assignment_token="assignment",
+        assigned_at=datetime.now().astimezone(),
+        backfill=False,
         container_id=container.id,
         workspace_id=workspace_id,
         runtime_worker_id="compose-worker",
@@ -177,7 +182,38 @@ def test_runtime_assignment_separates_operational_and_compute_ownership(
     assert managed.worker_id is None
     assert managed.machine_id is None
 
+    with pytest.raises(ConflictError, match="already been assigned"):
+        persistence.assign_runtime(
+            assignment_token="assignment",
+            assigned_at=datetime.now().astimezone(),
+            backfill=False,
+            container_id=container.id,
+            workspace_id=workspace_id,
+            runtime_worker_id=worker.id,
+            runtime_machine_id=machine.id,
+        )
+    persistence.clear_runtime_assignment(
+        assignment_token="assignment",
+        container_id=container.id,
+        runtime_worker_id="compose-worker",
+    )
+    with pytest.raises(ConflictError, match="assignment's account"):
+        persistence.assign_runtime(
+            assignment_token="assignment",
+            assigned_at=datetime.now().astimezone(),
+            backfill=False,
+            container_id=container.id,
+            workspace_id=workspace_id,
+            runtime_worker_id=foreign_worker.id,
+            runtime_machine_id=foreign_machine.id,
+            compute_worker_id=foreign_worker.id,
+            compute_machine_id=foreign_machine.id,
+        )
+
     persistence.assign_runtime(
+        assignment_token="assignment",
+        assigned_at=datetime.now().astimezone(),
+        backfill=False,
         container_id=container.id,
         workspace_id=workspace_id,
         runtime_worker_id=worker.id,
@@ -192,6 +228,9 @@ def test_runtime_assignment_separates_operational_and_compute_ownership(
     # The same account's other workspace places on the same machine: that is what
     # connecting the hardware bought, and it is the whole of the ownership rule.
     persistence.assign_runtime(
+        assignment_token="assignment",
+        assigned_at=datetime.now().astimezone(),
+        backfill=False,
         container_id=sibling_container.id,
         workspace_id=sibling_workspace.id,
         runtime_worker_id=worker.id,
@@ -203,25 +242,16 @@ def test_runtime_assignment_separates_operational_and_compute_ownership(
     assert sibling.worker_id == worker.id
     assert sibling.machine_id == machine.id
 
-    with pytest.raises(ConflictError, match="assignment's account"):
-        persistence.assign_runtime(
-            container_id=container.id,
-            workspace_id=workspace_id,
-            runtime_worker_id=foreign_worker.id,
-            runtime_machine_id=foreign_machine.id,
-            compute_worker_id=foreign_worker.id,
-            compute_machine_id=foreign_machine.id,
-        )
-
     persistence.clear_runtime_assignment(
+        assignment_token="assignment",
         container_id=container.id,
         runtime_worker_id=worker.id,
     )
     cleared = isolated_services.containers.get(container.id)
     assert cleared.runtime_worker_id == ""
     assert cleared.runtime_machine_id == ""
-    assert cleared.worker_id == worker.id
-    assert cleared.machine_id == machine.id
+    assert cleared.worker_id is None
+    assert cleared.machine_id is None
 
 
 def test_checkpoint_gpu_limit_rejects_before_scheduler_submission(
@@ -531,6 +561,9 @@ def test_placing_a_container_records_the_shape_it_will_be_priced_on(
     )
 
     persistence.assign_runtime(
+        assignment_token="assignment",
+        assigned_at=datetime.now().astimezone(),
+        backfill=False,
         container_id=container.id,
         workspace_id=workspace_id,
         runtime_worker_id="compose-worker",
@@ -542,23 +575,75 @@ def test_placing_a_container_records_the_shape_it_will_be_priced_on(
         recorded = ContainerBillingShapeRepository(session).shape_for(container.id)
     assert recorded == placed
 
+    with (
+        pytest.raises(IntegrityError, match="ownership token"),
+        isolated_services.context.database.session() as session,
+    ):
+        stale = ContainerRepository(session).get_across_workspaces(container.id)
+        assert stale is not None
+        ContainerRepository(session).upsert(
+            stale.model_copy(update={"runtime_worker_id": "unfenced-replacement"})
+        )
+
+    assert persistence.clear_runtime_assignment(
+        assignment_token="assignment",
+        container_id=container.id,
+        runtime_worker_id="compose-worker",
+    )
+    replacement = replace(
+        placed,
+        billing_owner=UsageBillingOwner.SelfHosted,
+        gpu_type="L4",
+        rate_class="non_preemptible",
+        cpu_millicores=8_000,
+    )
     persistence.assign_runtime(
+        assignment_token="replacement-assignment",
+        assigned_at=datetime.now().astimezone(),
+        backfill=False,
         container_id=container.id,
         workspace_id=workspace_id,
-        runtime_worker_id="replacement-worker",
-        runtime_machine_id="replacement-machine",
-        shape=replace(placed, rate_class="non_preemptible"),
+        runtime_worker_id="compose-worker",
+        runtime_machine_id="compose-machine",
+        shape=replacement,
     )
-    with pytest.raises(ConflictError, match="cannot be changed"):
-        persistence.assign_runtime(
-            container_id=container.id,
-            workspace_id=workspace_id,
-            runtime_worker_id="compose-worker",
-            runtime_machine_id="compose-machine",
-            shape=replace(placed, cpu_millicores=8_000),
-        )
+    assert not persistence.clear_runtime_assignment(
+        assignment_token="assignment",
+        container_id=container.id,
+        runtime_worker_id="compose-worker",
+    )
     with isolated_services.context.database.session() as session:
-        assert ContainerBillingShapeRepository(session).shape_for(container.id) == placed
+        assert ContainerBillingShapeRepository(session).shape_for(container.id) == replacement
+        UsageRepository(session).record(
+            workspace_id=workspace_id,
+            resource_type="container",
+            resource_id=container.id,
+            metric=UsageMetric.CpuUsedCoreSeconds,
+            quantity=1,
+            unit=UsageUnit.Seconds,
+        )
+    assert not persistence.clear_runtime_assignment(
+        assignment_token="replacement-assignment",
+        container_id=container.id,
+        runtime_worker_id="compose-worker",
+    )
+    with isolated_services.context.database.session() as session:
+        assert ContainerBillingShapeRepository(session).shape_for(container.id) == replacement
+        durable = ContainerRepository(session).get_across_workspaces(container.id)
+        assert durable is not None and durable.runtime_worker_id == "compose-worker"
+        ContainerRepository(session).upsert(
+            durable.model_copy(update={"status": ContainerStatus.Running})
+        )
+    assert not persistence.clear_runtime_assignment(
+        assignment_token="replacement-assignment",
+        container_id=container.id,
+        runtime_worker_id="compose-worker",
+    )
+    with (
+        pytest.raises(IntegrityError, match="cannot be reopened"),
+        isolated_services.context.database.session() as session,
+    ):
+        ContainerRepository(session).upsert(durable)
 
 
 def test_a_terminal_container_cannot_claim_a_task(
@@ -590,3 +675,35 @@ def test_a_terminal_container_cannot_claim_a_task(
         isolated_services.tasks.start(task.id, container_id=container.id)
 
     assert isolated_services.tasks.get(task.id).container_id is None
+
+
+def test_pending_only_stop_preserves_a_concurrent_durable_start(
+    isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        pending = ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="concurrent-start",
+                workspace_id=workspace_id,
+                image="",
+                command=[],
+            )
+        )
+        ContainerRepository(session).upsert(
+            pending.model_copy(update={"status": ContainerStatus.Running})
+        )
+
+    def stale_read(service: ContainerService, container_id: str) -> ContainerRecord:
+        return pending
+
+    monkeypatch.setattr(ContainerService, "get", stale_read)
+    result = isolated_services.containers.stop(
+        pending.id, only_if_pending=True, reason=StopContainerReason.Scheduler
+    )
+    assert result.status is ContainerStatus.Running
+    with isolated_services.context.database.session() as session:
+        durable = ContainerRepository(session).get_across_workspaces(pending.id)
+    assert durable is not None and durable.status is ContainerStatus.Running

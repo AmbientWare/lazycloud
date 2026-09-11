@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Annotated
 
 from pydantic import Field, JsonValue, model_validator
 
@@ -93,8 +94,8 @@ class ComputeUnitProviderState(ContractModel):
     """Durable reason the control plane stopped restoring pool capacity.
 
     Set when bootstrap relaunch attempts are exhausted; cleared by an explicit
-    capacity mutation (public scale or an account compute configuration update)
-    or, on its own, once the relaunch interval has passed since `degraded_at`.
+    capacity mutation or a new acquisition after the failed assets have settled
+    and the market cooldown has elapsed.
     """
     degraded_at: datetime | None = None
     """When the reason above was recorded, so a relaunch can be paced from it."""
@@ -168,6 +169,8 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     """
     replacement_template_version: str = Field(default="", max_length=160)
     """One temporary host preserving serving capacity during worker image updates."""
+    warm_handoff_from: tuple[Annotated[str, Field(pattern=_UUID_PATTERN)], ...] = ()
+    """Pools whose baseline this unit is taking over, until their assets settle."""
     generation: int = Field(default=1, ge=1)
     phase: ComputeUnitPhase = ComputeUnitPhase.Ready
     provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)

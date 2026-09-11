@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import JsonValue
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL
 from sqlalchemy import (
+    DDL,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -24,6 +26,9 @@ from database.tables.base import DatabaseBase, IdPayloadTable, json_type, uuid_t
 
 class ComputeUnitTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "compute_units"
+    warm_handoff_from: Mapped[list[str]] = mapped_column(
+        json_type, nullable=False, default=list, server_default=text("'[]'")
+    )
     provider_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     drain_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__: tuple[SchemaItem, ...] = (
@@ -177,6 +182,16 @@ class ComputeCapacityOperationTable(IdPayloadTable, DatabaseBase):
         UniqueConstraint("reservation_id", name="uq_compute_capacity_operations_reservation"),
         Index("ix_compute_capacity_operations_owner_status", "capacity_owner_id", "status"),
         CheckConstraint("desired_unit > 0", name="ck_compute_capacity_operations_desired_unit"),
+        CheckConstraint(
+            "status IN ('intent', 'existing_pending', 'requested', 'at_limit', "
+            "'temporarily_unavailable', 'rejected', 'unsupported', 'releasing', "
+            "'released', 'fulfilled')",
+            name="ck_compute_capacity_operations_status",
+        ),
+        CheckConstraint(
+            "status <> 'fulfilled' OR target_machine_id IS NOT NULL",
+            name="ck_compute_capacity_operations_fulfillment",
+        ),
     )
 
     workspace_id: Mapped[str] = mapped_column(
@@ -195,6 +210,36 @@ class ComputeCapacityOperationTable(IdPayloadTable, DatabaseBase):
     desired_unit: Mapped[int] = mapped_column(BigInteger, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     target_machine_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
+    demand_container_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+event.listen(
+    ComputeCapacityOperationTable.__table__,
+    "after_create",
+    DDL("""
+CREATE OR REPLACE FUNCTION enforce_compute_capacity_ownership()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.status IN ('released', 'fulfilled', 'unsupported') AND (
+        NEW.status IS DISTINCT FROM OLD.status
+        OR NEW.target_machine_id IS DISTINCT FROM OLD.target_machine_id
+        OR (
+            NOT COALESCE((OLD.payload->>'owns_capacity')::boolean, false)
+            AND COALESCE((NEW.payload->>'owns_capacity')::boolean, false)
+        )
+    ) THEN
+        RAISE EXCEPTION 'terminal capacity ownership cannot be reopened'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER compute_capacity_ownership_fence
+BEFORE UPDATE ON compute_capacity_operations
+FOR EACH ROW EXECUTE FUNCTION enforce_compute_capacity_ownership();
+""").execute_if(dialect="postgresql"),
+)
 
 
 class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):

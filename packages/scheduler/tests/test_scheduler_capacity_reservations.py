@@ -49,6 +49,7 @@ from shared.billing_quotes import ContainerShape
 from shared.capacity import CapacityAcquisitionRequest as ComputeCapacityRequest
 from shared.capacity import CapacityAcquisitionResult as ComputeCapacityResult
 from shared.capacity import (
+    CapacityFulfillmentRequest,
     CapacityOwnerKind,
     CapacityOwnerSource,
     CapacityPoolSizingSnapshot,
@@ -60,6 +61,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.container_requests import StopContainerReason
+from shared.containers import ContainerRecord
 from shared.errors import UpstreamUnavailableError
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
@@ -201,6 +203,10 @@ class _Controller:
         _ = owner_reservations, now
         return self._result(reservation, CapacityAcquisitionStatus.ExistingPending)
 
+    def fulfill(self, reservation: CapacityProvisioningReservation) -> None:
+        if not reservation.target_machine_id:
+            raise ValueError("fulfillment requires a machine")
+
     def release(
         self,
         reservation: CapacityProvisioningReservation,
@@ -248,6 +254,9 @@ class _SizingSnapshots:
 
 @dataclass(slots=True)
 class _UnusedComputeCapacity(_SizingSnapshots):
+    def fulfill_acquired_capacity(self, request: CapacityFulfillmentRequest) -> None:
+        raise AssertionError(f"unexpected capacity fulfillment: {request.operation_id}")
+
     def ensure_capacity(
         self,
         request: ComputeCapacityRequest,
@@ -306,11 +315,57 @@ class _FailureHandler:
         reason: str,
         *,
         now: datetime | None = None,
-    ) -> None:
+    ) -> bool:
         _ = request, reason, now
+        return True
 
 
 class _Assignments:
+    def __init__(self) -> None:
+        self.requests: dict[str, SchedulerWorkerRequest] = {}
+        self.capacity_due: dict[str, datetime] = {}
+
+    def record_scheduling_request(self, request: SchedulerWorkerRequest, *, now: datetime) -> bool:
+        self.requests.setdefault(request.container_id, request)
+        return True
+
+    def recoverable_scheduling_requests(
+        self, *, now: datetime, limit: int
+    ) -> list[SchedulerWorkerRequest]:
+        return []
+
+    def expired_assignments(
+        self, *, before: datetime, limit: int
+    ) -> list[tuple[ContainerRecord, datetime]]:
+        return []
+
+    def scheduling_request_reconciled(self, container_id: str, *, retry_at: datetime) -> None:
+        raise AssertionError("queue recovery requires durable owner acceptance")
+
+    def request_capacity(
+        self, request: SchedulerWorkerRequest, *, now: datetime
+    ) -> SchedulerWorkerRequest:
+        self.capacity_due.setdefault(request.container_id, now)
+        return self.requests[request.container_id]
+
+    def capacity_requests_due(self, *, now: datetime, limit: int) -> list[SchedulerWorkerRequest]:
+        return [self.requests[key] for key, due_at in self.capacity_due.items() if due_at <= now][
+            :limit
+        ]
+
+    def capacity_request_due(
+        self, container_id: str, *, now: datetime
+    ) -> SchedulerWorkerRequest | None:
+        return (
+            self.requests[container_id] if self.capacity_due.get(container_id, now) <= now else None
+        )
+
+    def record_capacity_attempt(
+        self, request: SchedulerWorkerRequest, *, retry_at: datetime
+    ) -> None:
+        self.requests[request.container_id] = request
+        self.capacity_due[request.container_id] = retry_at
+
     def publish_pending_progress(self, container_id: str) -> None:
         _ = container_id
 
@@ -321,6 +376,9 @@ class _Assignments:
         workspace_id: str,
         runtime_worker_id: str,
         runtime_machine_id: str,
+        assignment_token: str,
+        assigned_at: datetime,
+        backfill: bool,
         compute_worker_id: str | None = None,
         compute_machine_id: str | None = None,
         shape: ContainerShape | None = None,
@@ -339,8 +397,10 @@ class _Assignments:
         *,
         container_id: str,
         runtime_worker_id: str,
-    ) -> None:
+        assignment_token: str,
+    ) -> bool:
         _ = container_id, runtime_worker_id
+        return True
 
 
 class _Wake:
@@ -531,7 +591,7 @@ def test_terminal_retry_releases_stale_reservation_before_new_attempt(
         _request("container-terminal"), purchases=lambda: _purchases(service), now=now
     )
     second = service.acquire(
-        _request("container-terminal"),
+        _request("container-terminal").model_copy(update={"retry_count": 1}),
         purchases=lambda: _purchases(service),
         now=now + timedelta(seconds=1),
     )
@@ -770,6 +830,8 @@ def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
     [waiting] = requests.dispatch_ready(now=now, limit=1)
 
     assert waiting.status is SchedulerContainerDispatchStatus.Waiting
+    assert len(controller.ensure_calls) == 0
+    requests.acquire_capacity(now=now, limit=1)
     assert len(controller.ensure_calls) == 1
 
     worker = _worker(OWNER_ID, created_at=now + timedelta(milliseconds=500))
@@ -1006,6 +1068,49 @@ def test_registered_gpu_reservation_recovers_cpu_backfill_before_dispatch(
     assert repository.allocation_for_request(request.container_id) is None
 
 
+def test_pending_purchase_does_not_pin_dispatch_or_release_shared_demand(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    workers = RedisSchedulerWorkerRepository(redis)
+    containers = RedisSchedulerContainerRepository(redis)
+    reservations = RedisCapacityReservationRepository(redis)
+    controller = _Controller(OWNER_ID, owns_capacity=True)
+    capacity = CapacityReservationService(reservations, lambda: (controller,))
+    requests = SchedulerContainerRequestService(
+        workers=workers,
+        containers=containers,
+        placement=_IdentityPlacement(),
+        failure_handler=_FailureHandler(),
+        assignments=_Assignments(),
+        dispatch_wake=_Wake(),
+        lifecycle_events=_Events(),
+        capacity_reservations=capacity,
+        workspace_owners=_UnownedWorkspaces(),
+    )
+    now = datetime.now(UTC)
+    request = _request("ready-elsewhere").model_copy(update={"timestamp": now})
+    assert requests.submit(request, ready_at=now).accepted
+    acquired = capacity.acquire(request, purchases=lambda: _purchases(capacity), now=now)
+    shared = capacity.acquire(
+        _request("still-needs-purchase"), purchases=lambda: _purchases(capacity), now=now
+    )
+    assert acquired.reservation_id == shared.reservation_id
+    worker = _worker(OTHER_OWNER_ID, created_at=now)
+    workers.add_worker(worker, now=now)
+    workers.toggle_worker_available(worker.worker_id, now=now)
+
+    [dispatched] = requests.dispatch_ready(now=now)
+    assert dispatched.status is SchedulerContainerDispatchStatus.Dispatched
+    assert dispatched.worker_id == worker.worker_id
+    assert reservations.allocation_for_request(request.container_id) is None
+    assert [
+        item.container_id for item in reservations.allocations_for(acquired.reservation_id)
+    ] == ["still-needs-purchase"]
+    assert requests.dispatch_ready(now=now + timedelta(seconds=1)) == []
+    assert controller.release_calls == []
+
+
 def test_capacity_backoff_preserves_purchase_cooldown_but_admits_new_workers(
     real_redis_actors: RealRedisActors,
 ) -> None:
@@ -1040,6 +1145,7 @@ def test_capacity_backoff_preserves_purchase_cooldown_but_admits_new_workers(
     request = _request("capacity-retry").model_copy(update={"timestamp": now})
     assert requests.submit(request, ready_at=now).accepted
     [initial] = requests.dispatch_ready(now=now)
+    requests.acquire_capacity(now=now)
     [cooldown] = requests.dispatch_ready(now=now + timedelta(seconds=1))
     assert initial.status is cooldown.status is SchedulerContainerDispatchStatus.Waiting
     assert placement.purchases == 1

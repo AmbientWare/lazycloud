@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Event
 
+import pytest
 import yaml
 from agent.operations import (
     AgentBootstrap,
@@ -26,21 +28,25 @@ class _WorkerConfigurationDocument(ContractModel):
 class _Runner:
     calls: list[list[str]] = field(default_factory=list)
 
-    def run(self, args: list[str]) -> CommandResult:
+    def run(self, args: list[str], *, stop: Event | None = None) -> CommandResult:
+        del stop
         self.calls.append(args)
         return CommandResult(args=args, returncode=0)
 
 
 @dataclass(slots=True)
 class _RunningWorkerRunner(_Runner):
-    def run(self, args: list[str]) -> CommandResult:
+    def run(self, args: list[str], *, stop: Event | None = None) -> CommandResult:
+        del stop
         self.calls.append(args)
         if len(args) > 1 and args[1] == "inspect":
             return CommandResult(args=args, returncode=0, stdout="true")
         return CommandResult(args=args, returncode=0)
 
 
-def test_agent_atomically_writes_worker_yaml_before_starting_container(tmp_path: Path) -> None:
+def test_agent_atomically_writes_worker_yaml_before_starting_container(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     runner = _Runner()
     controller = DockerAgentWorkerController(
         state_dir=tmp_path,
@@ -48,6 +54,10 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(tmp_path:
         worker_network=AgentWorkerNetwork(name="lazycloud_default"),
         runner=runner,
     )
+    request.addfinalizer(controller.close)
+    preparation = controller.prepare_worker_image()
+    assert preparation is not None
+    preparation.result(timeout=5)
     slot = AgentWorkerSlot(
         worker_id="worker-one",
         worker_token="worker-secret",
@@ -134,7 +144,7 @@ def test_agent_gives_all_workers_one_bounded_graceful_shutdown_window(
 
 @dataclass(slots=True)
 class _ConcurrentRemovalRunner(_RunningWorkerRunner):
-    def run(self, args: list[str]) -> CommandResult:
+    def run(self, args: list[str], *, stop: Event | None = None) -> CommandResult:
         if len(args) > 1 and args[1] == "rm":
             self.calls.append(args)
             return CommandResult(
@@ -145,14 +155,20 @@ class _ConcurrentRemovalRunner(_RunningWorkerRunner):
                     "lazycloud-agent-worker-one is already in progress"
                 ),
             )
-        return _RunningWorkerRunner.run(self, args)
+        return _RunningWorkerRunner.run(self, args, stop=stop)
 
 
-def test_agent_stop_treats_concurrent_container_removal_as_settled(tmp_path: Path) -> None:
+def test_agent_stop_treats_concurrent_container_removal_as_settled(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     runner = _ConcurrentRemovalRunner()
     controller = DockerAgentWorkerController(
         state_dir=tmp_path, runner=runner, worker_image_override="container-worker:test"
     )
+    request.addfinalizer(controller.close)
+    preparation = controller.prepare_worker_image()
+    assert preparation is not None
+    preparation.result(timeout=5)
     slot = AgentWorkerSlot(
         worker_id="worker-one",
         worker_token="worker-secret",

@@ -108,8 +108,34 @@ class ContainerBillingShapeRepository:
         if row.workspace_id != workspace_id or self.shape_for(container_id) != shape:
             raise ConflictError("a container's recorded billing placement cannot be changed")
 
-    def shape_for(self, container_id: str) -> ContainerShape | None:
-        row = self.session.get(ContainerBillingShapeTable, container_id)
+    def discard_provisional(self, container_id: str) -> bool:
+        row = self.session.get(ContainerBillingShapeTable, container_id, with_for_update=True)
+        observed = self.session.scalar(
+            select(UsageRecordTable.id)
+            .where(
+                UsageRecordTable.resource_type == _CONTAINER_SUBJECT,
+                UsageRecordTable.resource_id == container_id,
+                UsageRecordTable.metric.in_([metric.value for metric in BILLED_METRICS]),
+            )
+            .limit(1)
+        )
+        priced = self.session.scalar(
+            select(BillingLedgerSegmentTable.id)
+            .where(
+                BillingLedgerSegmentTable.subject_type == _CONTAINER_SUBJECT,
+                BillingLedgerSegmentTable.subject_id == container_id,
+            )
+            .limit(1)
+        )
+        if observed is not None or priced is not None:
+            return False
+        if row is not None:
+            self.session.delete(row)
+            self.session.flush()
+        return True
+
+    def shape_for(self, container_id: str, *, for_update: bool = False) -> ContainerShape | None:
+        row = self.session.get(ContainerBillingShapeTable, container_id, with_for_update=for_update)
         if row is None:
             return None
         return ContainerShape(
@@ -348,7 +374,9 @@ class BillingLedgerRepository:
     def _shape(self, record: UsageRecord) -> ContainerShape | None:
         if record.resource_type != _CONTAINER_SUBJECT or not _is_uuid(record.resource_id):
             return None
-        return ContainerBillingShapeRepository(self.session).shape_for(record.resource_id)
+        return ContainerBillingShapeRepository(self.session).shape_for(
+            record.resource_id, for_update=True
+        )
 
     def _frozen_cost_nanos(self, usage_record_id: str) -> int:
         total = self.session.scalar(

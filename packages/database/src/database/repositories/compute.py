@@ -13,7 +13,6 @@ from database.repositories.common import (
 )
 from database.repositories.identity import WorkspaceRepository
 from database.tables.base import IdPayloadTable
-from database.tables.billing_ledger import ContainerBillingShapeTable
 from database.tables.compute import (
     AwsAccountConnectionTable,
     AwsAuthorizationCleanupTombstoneTable,
@@ -32,7 +31,12 @@ from shared.aws_connections import (
     AwsAccountConnection,
     AwsAuthorizationCleanupTombstone,
 )
-from shared.capacity import TERMINAL_REASON_MAX_LENGTH, CapacityFailureCode, CapacityOwnerKind
+from shared.capacity import (
+    TERMINAL_REASON_MAX_LENGTH,
+    CapacityFailureCode,
+    CapacityOperationStatus,
+    CapacityOwnerKind,
+)
 from shared.compute_enrollment import (
     AgentCapacityState,
     ComputeCredentialStatus,
@@ -58,7 +62,6 @@ from shared.compute_reconciliation import ComputeReconciliationKind
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
-from shared.placement import placement_rate_class
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import (
@@ -98,9 +101,11 @@ class ComputeCapacityOperationRecord(ContractModel):
     capacity_owner_id: str
     reservation_id: str
     operation_id: str
+    demand_container_id: str | None = None
     desired_unit: int = Field(ge=1)
-    status: str
+    status: CapacityOperationStatus
     target_machine_id: str | None = None
+    fulfilled_at: datetime | None = None
     provider_instance_id: str | None = None
     previous_desired_unit: int = Field(default=0, ge=0)
     release_desired_unit: int | None = Field(default=None, ge=0)
@@ -118,17 +123,10 @@ class ComputeCapacityOperationRecord(ContractModel):
 class ComputeCapacityOperationSizingRecord:
     operation_id: str
     desired_unit: int
-    status: str
+    status: CapacityOperationStatus
     owns_capacity: bool
     failure_count: int
     updated_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class PlatformCpuArrival:
-    created_at: datetime
-    cpu_millicores: int
-    reserved_memory_mib: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,19 +396,17 @@ def _locked_claimed_row[RowT: IdPayloadTable, RecordT: _ClaimedRecord](
 
 
 def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
-    return ComputeUnitRecord.model_validate(row.payload)
+    return ComputeUnitRecord.model_validate(
+        {
+            **row.payload,
+            "warm_handoff_from": row.warm_handoff_from,
+        }
+    )
 
 
 @dataclass(slots=True)
 class ComputeUnitRepository:
     session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ComputeUnitRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ComputeUnitTable, ComputeUnitRecord),
-        )
 
     def upsert(self, record: ComputeUnitRecord) -> ComputeUnitRecord:
         # The immutability comparison below is by identity, and it runs before the
@@ -419,25 +415,46 @@ class ComputeUnitRepository:
         # rather than `model_dump`: dumping serializes, and a drifted record would
         # raise the serializer warning here instead of where it was introduced.
         record = ComputeUnitRecord.model_validate(dict(record))
+        WorkspaceRepository(self.session).lock_active_owner(record.workspace_id)
         current = self.get(record.id, for_update=True)
         if current is not None:
             # The row owns its creation time; a caller rebuilding the record
             # from scratch must not be able to move it.
             record = record.model_copy(update={"created_at": current.created_at})
         if current is not None and (
-            current.capacity_owner_id != record.capacity_owner_id
+            current.workspace_id != record.workspace_id
+            or current.capacity_owner_id != record.capacity_owner_id
             or current.capacity_owner_kind is not record.capacity_owner_kind
             or current.capacity_owner_source is not record.capacity_owner_source
         ):
             raise ConflictError(f"compute pool capacity owner is immutable: {record.id}")
-        saved = self.records.upsert(
-            record,
-            workspace_id=record.workspace_id,
-            name=record.name,
-            status=record.status,
+        row = self.session.get(ComputeUnitTable, record.id)
+        if row is None:
+            row = ComputeUnitTable(id=record.id, created_at=record.created_at)
+            self.session.add(row)
+        row.workspace_id = record.workspace_id
+        row.name = record.name
+        row.status = record.status
+        row.selector = record.selector
+        row.source = record.source
+        row.expires_at = record.expires_at
+        row.updated_at = utc_now()
+        row.payload = _JSON_OBJECT_ADAPTER.validate_json(
+            record.model_dump_json(exclude={"warm_handoff_from"})
         )
-        self._write_columns(saved)
-        return saved
+        flag_modified(row, "payload")
+        row.warm_handoff_from = list(record.warm_handoff_from)
+        self._write_columns(row, record)
+        return record
+
+    def delete(self, pool_id: str, *, workspace_id: str) -> None:
+        self.session.execute(
+            delete(ComputeUnitTable).where(
+                ComputeUnitTable.id == pool_id,
+                ComputeUnitTable.workspace_id == workspace_id,
+            )
+        )
+        self.session.flush()
 
     def get_by_name(
         self,
@@ -459,7 +476,13 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(load_only(ComputeUnitTable.payload, raiseload=True))
+        statement = statement.options(
+            load_only(
+                ComputeUnitTable.payload,
+                ComputeUnitTable.warm_handoff_from,
+                raiseload=True,
+            )
+        )
         row = self.session.scalars(statement).one_or_none()
         return _compute_unit_record(row) if row is not None else None
 
@@ -481,7 +504,13 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(load_only(ComputeUnitTable.payload, raiseload=True))
+        statement = statement.options(
+            load_only(
+                ComputeUnitTable.payload,
+                ComputeUnitTable.warm_handoff_from,
+                raiseload=True,
+            )
+        )
         row = self.session.scalars(statement).one_or_none()
         return _compute_unit_record(row) if row is not None else None
 
@@ -519,7 +548,13 @@ class ComputeUnitRepository:
         statement = select(ComputeUnitTable).where(ComputeUnitTable.id == pool_id)
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(load_only(ComputeUnitTable.payload, raiseload=True))
+        statement = statement.options(
+            load_only(
+                ComputeUnitTable.payload,
+                ComputeUnitTable.warm_handoff_from,
+                raiseload=True,
+            )
+        )
         row = self.session.scalars(statement).first()
         return _compute_unit_record(row) if row is not None else None
 
@@ -550,7 +585,13 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(load_only(ComputeUnitTable.payload, raiseload=True))
+        statement = statement.options(
+            load_only(
+                ComputeUnitTable.payload,
+                ComputeUnitTable.warm_handoff_from,
+                raiseload=True,
+            )
+        )
         row = self.session.scalars(statement).first()
         return _compute_unit_record(row) if row is not None else None
 
@@ -562,7 +603,11 @@ class ComputeUnitRepository:
         """Every unit feeding one scheduling group, best candidate first."""
         statement = (
             select(ComputeUnitTable)
-            .options(load_only(ComputeUnitTable.payload, raiseload=True))
+            .options(
+                load_only(
+                    ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True
+                )
+            )
             .where(
                 ComputeUnitTable.workspace_id == workspace_id,
                 ComputeUnitTable.pool == pool,
@@ -574,7 +619,11 @@ class ComputeUnitRepository:
     def list_for_workspace(self, workspace_id: str) -> list[ComputeUnitRecord]:
         statement = (
             select(ComputeUnitTable)
-            .options(load_only(ComputeUnitTable.payload, raiseload=True))
+            .options(
+                load_only(
+                    ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True
+                )
+            )
             .where(ComputeUnitTable.workspace_id == workspace_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
@@ -592,7 +641,13 @@ class ComputeUnitRepository:
             statement = statement.where(
                 ComputeUnitTable.capacity_owner_kind == capacity_owner_kind.value
             )
-        statement = statement.options(load_only(ComputeUnitTable.payload, raiseload=True))
+        statement = statement.options(
+            load_only(
+                ComputeUnitTable.payload,
+                ComputeUnitTable.warm_handoff_from,
+                raiseload=True,
+            )
+        )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_internal(self, *, workspace_id: str) -> list[ComputeUnitRecord]:
@@ -673,7 +728,7 @@ class ComputeUnitRepository:
                 else ComputeUnitTable.worker_gpu_count == 0
             )
         statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id).options(
-            load_only(ComputeUnitTable.payload, raiseload=True)
+            load_only(ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True)
         )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
@@ -684,13 +739,23 @@ class ComputeUnitRepository:
         if workspace_id is not None:
             statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
         statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id)
-        statement = statement.options(load_only(ComputeUnitTable.payload, raiseload=True))
+        statement = statement.options(
+            load_only(
+                ComputeUnitTable.payload,
+                ComputeUnitTable.warm_handoff_from,
+                raiseload=True,
+            )
+        )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_for_provider_connection(self, connection_id: str) -> list[ComputeUnitRecord]:
         statement = (
             select(ComputeUnitTable)
-            .options(load_only(ComputeUnitTable.payload, raiseload=True))
+            .options(
+                load_only(
+                    ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True
+                )
+            )
             .where(ComputeUnitTable.provider_connection_id == connection_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
@@ -772,29 +837,6 @@ class ComputeUnitRepository:
             statement = statement.where(ComputeUnitTable.id != excluding_unit_id)
         return int(self.session.scalar(statement) or 0)
 
-    def recent_platform_cpu_arrivals(
-        self, since: datetime, *, preemptible: bool
-    ) -> list[PlatformCpuArrival]:
-        statement = (
-            select(ContainerBillingShapeTable)
-            .where(
-                ContainerBillingShapeTable.billing_owner == "platform_fleet",
-                ContainerBillingShapeTable.rate_class
-                == placement_rate_class(pinned=False, preemptible=preemptible),
-                ContainerBillingShapeTable.gpu_count == 0,
-                ContainerBillingShapeTable.created_at >= since,
-            )
-            .order_by(ContainerBillingShapeTable.created_at)
-        )
-        return [
-            PlatformCpuArrival(
-                created_at=row.created_at,
-                cpu_millicores=row.cpu_millicores,
-                reserved_memory_mib=row.memory_mib,
-            )
-            for row in self.session.scalars(statement)
-        ]
-
     def update_capacity(
         self,
         pool_id: str,
@@ -856,10 +898,7 @@ class ComputeUnitRepository:
         )
         return self.upsert(updated)
 
-    def _write_columns(self, record: ComputeUnitRecord) -> None:
-        row = self.session.scalars(
-            select(ComputeUnitTable).where(ComputeUnitTable.id == record.id).with_for_update()
-        ).one()
+    def _write_columns(self, row: ComputeUnitTable, record: ComputeUnitRecord) -> None:
         row.provider_ref = record.provider_ref
         row.capacity_owner_id = record.capacity_owner_id
         row.capacity_owner_kind = record.capacity_owner_kind.value
@@ -981,19 +1020,21 @@ class WorkspaceComputePolicyRepository:
         return saved
 
 
+def _capacity_operation_record(
+    row: ComputeCapacityOperationTable,
+) -> ComputeCapacityOperationRecord:
+    return ComputeCapacityOperationRecord.model_validate(
+        {
+            **row.payload,
+            "demand_container_id": row.demand_container_id,
+            "fulfilled_at": row.fulfilled_at,
+        }
+    )
+
+
 @dataclass(slots=True)
 class ComputeCapacityOperationRepository:
     session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ComputeCapacityOperationRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(
-                ComputeCapacityOperationTable,
-                ComputeCapacityOperationRecord,
-            ),
-        )
 
     def get(
         self,
@@ -1009,9 +1050,7 @@ class ComputeCapacityOperationRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).one_or_none()
-        return (
-            ComputeCapacityOperationRecord.model_validate(row.payload) if row is not None else None
-        )
+        return _capacity_operation_record(row) if row is not None else None
 
     def get_by_reservation(
         self,
@@ -1025,20 +1064,21 @@ class ComputeCapacityOperationRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).one_or_none()
-        return (
-            ComputeCapacityOperationRecord.model_validate(row.payload) if row is not None else None
-        )
+        return _capacity_operation_record(row) if row is not None else None
 
     def list_open_for_owner(self, capacity_owner_id: str) -> list[ComputeCapacityOperationRecord]:
         rows = self.session.scalars(
             select(ComputeCapacityOperationTable)
             .where(
                 ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id,
-                ComputeCapacityOperationTable.status.not_in(("released", "unsupported")),
+                ComputeCapacityOperationTable.status.not_in(
+                    tuple(status.value for status in CapacityOperationStatus if status.terminal)
+                ),
+                ComputeCapacityOperationTable.payload["owns_capacity"].as_boolean().is_(True),
             )
             .order_by(ComputeCapacityOperationTable.created_at, ComputeCapacityOperationTable.id)
         )
-        return [ComputeCapacityOperationRecord.model_validate(row.payload) for row in rows]
+        return [_capacity_operation_record(row) for row in rows]
 
     def list_open_sizing_for_owner(
         self,
@@ -1061,7 +1101,10 @@ class ComputeCapacityOperationRepository:
             )
             .where(
                 ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id,
-                ComputeCapacityOperationTable.status.not_in(("released", "unsupported")),
+                ComputeCapacityOperationTable.status.not_in(
+                    tuple(status.value for status in CapacityOperationStatus if status.terminal)
+                ),
+                ComputeCapacityOperationTable.payload["owns_capacity"].as_boolean().is_(True),
             )
             .order_by(
                 ComputeCapacityOperationTable.created_at,
@@ -1072,7 +1115,7 @@ class ComputeCapacityOperationRepository:
             ComputeCapacityOperationSizingRecord(
                 operation_id=operation_id,
                 desired_unit=desired_unit,
-                status=status,
+                status=CapacityOperationStatus(status),
                 owns_capacity=owns_capacity,
                 failure_count=failure_count,
                 updated_at=to_utc(_DATETIME_ADAPTER.validate_python(updated_at)),
@@ -1093,7 +1136,7 @@ class ComputeCapacityOperationRepository:
             .where(ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id)
             .order_by(ComputeCapacityOperationTable.created_at, ComputeCapacityOperationTable.id)
         )
-        return [ComputeCapacityOperationRecord.model_validate(row.payload) for row in rows]
+        return [_capacity_operation_record(row) for row in rows]
 
     def sizing_history_summary_for_owner(
         self,
@@ -1121,12 +1164,25 @@ class ComputeCapacityOperationRepository:
         )
 
     def upsert(self, record: ComputeCapacityOperationRecord) -> ComputeCapacityOperationRecord:
+        record = ComputeCapacityOperationRecord.model_validate(record.model_dump())
+        WorkspaceRepository(self.session).lock_active_owner(record.workspace_id)
         current = self.get(record.capacity_owner_id, record.operation_id, for_update=True)
+        if (
+            current is not None
+            and current.status.terminal
+            and (
+                current.status is not record.status
+                or current.target_machine_id != record.target_machine_id
+                or (not current.owns_capacity and record.owns_capacity)
+            )
+        ):
+            raise ConflictError("terminal capacity ownership cannot be reopened")
         if current is not None and (
             current.reservation_id != record.reservation_id
             or current.pool_id != record.pool_id
             or current.workspace_id != record.workspace_id
             or current.desired_unit != record.desired_unit
+            or current.demand_container_id != record.demand_container_id
             or current.shape != record.shape
         ):
             raise ConflictError(
@@ -1138,25 +1194,27 @@ class ComputeCapacityOperationRepository:
                 f"capacity reservation is already owned by another operation: "
                 f"{record.reservation_id}"
             )
-        saved = self.records.upsert(
-            record,
-            workspace_id=record.workspace_id,
-            status=record.status,
+        row = self.session.get(ComputeCapacityOperationTable, record.id)
+        if row is None:
+            row = ComputeCapacityOperationTable(id=record.id, created_at=record.created_at)
+            self.session.add(row)
+        row.workspace_id = record.workspace_id
+        row.pool_id = record.pool_id
+        row.capacity_owner_id = record.capacity_owner_id
+        row.reservation_id = record.reservation_id
+        row.operation_id = record.operation_id
+        row.desired_unit = record.desired_unit
+        row.status = record.status.value
+        row.target_machine_id = record.target_machine_id
+        row.demand_container_id = record.demand_container_id
+        row.fulfilled_at = record.fulfilled_at
+        row.payload = _JSON_OBJECT_ADAPTER.validate_json(
+            record.model_dump_json(exclude={"demand_container_id", "fulfilled_at"})
         )
-        row = self.session.scalars(
-            select(ComputeCapacityOperationTable)
-            .where(ComputeCapacityOperationTable.id == record.id)
-            .with_for_update()
-        ).one()
-        row.pool_id = saved.pool_id
-        row.capacity_owner_id = saved.capacity_owner_id
-        row.reservation_id = saved.reservation_id
-        row.operation_id = saved.operation_id
-        row.desired_unit = saved.desired_unit
-        row.status = saved.status
-        row.target_machine_id = saved.target_machine_id
+        flag_modified(row, "payload")
+        row.updated_at = utc_now()
         self.session.flush()
-        return saved
+        return record
 
 
 def _provider_instance_record(

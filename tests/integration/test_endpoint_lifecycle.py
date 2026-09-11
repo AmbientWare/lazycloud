@@ -676,11 +676,16 @@ def _record_dispatch_container(
                 workspace_id=stub.workspace_id,
                 app_id=stub.app_id,
                 stub_id=stub.id,
-                status=ContainerStatus.Running,
+                status=ContainerStatus.Pending,
             )
         )
     assign_runtime(services.containers, services.scheduler_workers, container_id)
-    return record
+    with services.context.database.session() as session:
+        assigned = ContainerRepository(session).get_across_workspaces(record.id)
+        assert assigned is not None
+        return ContainerRepository(session).upsert(
+            assigned.model_copy(update={"status": ContainerStatus.Running})
+        )
 
 
 def _set_endpoint_dispatch_limits(

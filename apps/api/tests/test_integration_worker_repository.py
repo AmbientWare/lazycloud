@@ -28,6 +28,7 @@ from coordination.event_bus import (
     event_id_for_event,
 )
 from database.context import ServiceContext
+from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.compute import (
     PRIMARY_WIREGUARD_GATEWAY_ID,
     ComputeUnitRepository,
@@ -68,6 +69,7 @@ from scheduler.state import (
     SchedulerWorkerRequest,
 )
 from shared.app_identity import FUNCTION_IMAGE
+from shared.billing_quotes import ContainerShape
 from shared.cache_records import CacheEntry
 from shared.compute_enrollment import (
     ComputePreflightCheck,
@@ -98,6 +100,7 @@ from shared.timestamps import utc_now
 from shared.usage import (
     METERING_WINDOW_ENDED_AT_METADATA_KEY,
     METERING_WINDOW_STARTED_AT_METADATA_KEY,
+    UsageBillingOwner,
     UsageMetric,
     UsageRecord,
     UsageUnit,
@@ -202,6 +205,13 @@ def test_worker_result_durably_finishes_a_build_and_is_idempotent(
     workspace_id = ControlPlaneService(isolated_services.context).get_workspace().id
     build = _pending_image_build(isolated_services, ImageSpec(commands=["python -V"]))
     container_id = build.id
+    reserved = isolated_services.containers.reserve_image_build_container(
+        container_id=container_id, workspace_id=workspace_id, image_id=build.image_id or ""
+    )
+    with isolated_services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            reserved.model_copy(update={"runtime_worker_id": "worker-1"})
+        )
     service.containers.set_container_state(
         SchedulerContainerState(
             container_id=container_id,
@@ -1846,6 +1856,7 @@ def test_worker_repository_lifecycle_failure_marks_container_and_task_failed(
                 "command": ["python", "-m", "runtime"],
                 "workspace_id": workspace_id,
                 "task_id": task.id,
+                "runtime_worker_id": "worker-1",
                 "status": ContainerStatus.Pending.value,
             },
             workspace_id=workspace_id,
@@ -1878,7 +1889,8 @@ def test_worker_repository_lifecycle_failure_marks_container_and_task_failed(
                 success=False,
                 attrs={"error": "image archive missing"},
             )
-        )
+        ),
+        principal=WorkerRepositoryPrincipal(worker_id="worker-1", workspace_id=workspace_id),
     )
 
     state = containers.get_container_state(container.id)
@@ -2050,6 +2062,7 @@ def test_worker_repository_late_exit_preserves_user_stopped_container(
                 "command": ["python", "-m", "runner.function"],
                 "workspace_id": workspace_id,
                 "task_id": task.id,
+                "runtime_worker_id": "worker-1",
                 "status": ContainerStatus.Running.value,
             },
             workspace_id=workspace_id,
@@ -2134,6 +2147,18 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
         )
     )
     container_id = "531a1b89-6f97-4080-80b3-13122218a55b"
+    with isolated_services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=container_id,
+                name="port-route-cleanup",
+                image="",
+                command=[],
+                workspace_id=workspace_id,
+                runtime_worker_id="compose-container-worker",
+                status=ContainerStatus.Running,
+            )
+        )
     containers.set_container_state(
         SchedulerContainerState(
             container_id=container_id,
@@ -2940,6 +2965,17 @@ def test_worker_container_routes_are_bound_to_the_container_the_worker_was_given
                     runtime_machine_id="machine-worker-assigned",
                 )
             )
+            ContainerBillingShapeRepository(session).record(
+                container_id=container_id,
+                workspace_id=workspace.id,
+                shape=ContainerShape(
+                    billing_owner=UsageBillingOwner.PlatformFleet,
+                    gpu_type="",
+                    gpu_count=0,
+                    cpu_millicores=1000,
+                    memory_mib=1280,
+                ),
+            )
 
         client = client_stack.enter_context(TestClient(create_app(isolated_services)))
         sessions = {
@@ -3008,10 +3044,13 @@ def test_worker_container_routes_are_bound_to_the_container_the_worker_was_given
 
         assert _record("worker-assigned") == 200
         assert _record("worker-stranger") == 403
-        # Nothing holds scheduler state for this container, so the worker it was
-        # placed on gets as far as finding none (404) and the stranger never does.
+        containers = isolated_services.worker_repository_service.containers
+        assigned = containers.get_container_state(container_id)
+        assert assigned is not None
+        containers.set_container_state(assigned.model_copy(update={"worker_id": "worker-stranger"}))
         assert _declare_failed("worker-stranger") == 403
-        assert _declare_failed("worker-assigned") == 404
+        containers.set_container_state(assigned)
+        assert _declare_failed("worker-assigned") == 200
 
 
 def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded(

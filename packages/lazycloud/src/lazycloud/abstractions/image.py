@@ -9,6 +9,7 @@ import zipfile
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import TracebackType
 from typing import Protocol, runtime_checkable
 
 from pydantic import JsonValue, TypeAdapter
@@ -440,62 +441,9 @@ class Image:
         terminal: Terminal | None = None,
         env: Mapping[str, str] | None = None,
     ) -> ImageBuildResult:
-        step = terminal.step("Image", "preparing") if terminal is not None else None
-        if self.explicit_image_id:
-            if step is not None:
-                step.done(f"{self.explicit_image_id} · pinned")
-            return ImageBuildResult(
-                success=True,
-                image_id=self.explicit_image_id,
-                python_version=self.spec().python_version,
-            )
-
-        verify_client = _image_verify_client(client)
-        if verify_client is not None:
-            exists, exists_result = self.exists(verify_client, env=env)
-            if exists:
-                result = ImageBuildResult(
-                    success=True,
-                    image_id=exists_result.image_id,
-                    python_version=exists_result.python_version,
-                    build_id=exists_result.build_id,
-                )
-                if step is not None:
-                    step.done(f"python {exists_result.python_version} · cached")
-                return result
-            if exists_result.error:
-                if step is not None:
-                    step.fail(exists_result.error)
-                return exists_result
-
-        responses: list[BuildImageResponse] = []
-        last_response: BuildImageResponse | None = None
-        for response in self._build_stream(client, env=env):
-            responses.append(response)
-            if step is not None:
-                _write_build_response(step, response)
-            if response.done:
-                last_response = response
-                break
-
-        if last_response is None:
-            if step is not None:
-                step.fail("the build stream ended before the build finished")
-            return ImageBuildResult(
-                success=False,
-                error="image build produced no terminal response",
-                responses=tuple(responses),
-            )
-
-        result = ImageBuildResult(
-            success=last_response.success,
-            image_id=last_response.image_id,
-            python_version=last_response.python_version,
-            build_id=last_response.build_id,
-            error=_response_error(last_response),
-            responses=tuple(responses),
-        )
-        return result
+        with ImageBuildOperation(self, client, terminal=terminal, env=env) as operation:
+            operation.verify()
+            return operation.finish()
 
     def spec(self) -> ImageSpec:
         return ImageSpec(
@@ -573,6 +521,88 @@ class Image:
 
     def _build_context_object(self) -> str:
         return self.context_object_id or ""
+
+
+@dataclass(slots=True)
+class ImageBuildOperation:
+    image: Image
+    client: ImageBuildClient
+    terminal: Terminal | None = None
+    env: Mapping[str, str] | None = field(default=None, repr=False)
+    _step: TerminalStep | None = field(default=None, init=False, repr=False)
+    _verified: bool = field(default=False, init=False)
+    _result: ImageBuildResult | None = field(default=None, init=False)
+
+    def __enter__(self) -> Self:
+        if self.terminal is not None:
+            self._step = self.terminal.step("Image", "preparing")
+            self._step.__enter__()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        if self._step is not None:
+            self._step.__exit__(exc_type, exc, traceback)
+
+    def verify(self) -> None:
+        if self.image.explicit_image_id:
+            self._result = ImageBuildResult(
+                success=True,
+                image_id=self.image.explicit_image_id,
+                python_version=self.image.spec().python_version,
+            )
+            if self._step is not None:
+                self._step.done(f"{self.image.explicit_image_id} · pinned")
+        else:
+            verify_client = _image_verify_client(self.client)
+            if verify_client is not None:
+                exists, result = self.image.exists(verify_client, env=self.env)
+                if exists or result.error:
+                    self._result = result
+                    if self._step is not None:
+                        if exists:
+                            self._step.done(f"python {result.python_version} · cached")
+                        else:
+                            self._step.fail(result.error)
+        self._verified = True
+
+    def finish(self) -> ImageBuildResult:
+        if not self._verified:
+            raise RuntimeError("image build requires completed verification")
+        if self._result is not None:
+            return self._result
+        responses: list[BuildImageResponse] = []
+        last_response: BuildImageResponse | None = None
+        for response in self.image._build_stream(self.client, env=self.env):
+            responses.append(response)
+            if self._step is not None:
+                _write_build_response(self._step, response)
+            if response.done:
+                last_response = response
+                break
+
+        if last_response is None:
+            if self._step is not None:
+                self._step.fail("the build stream ended before the build finished")
+            self._result = ImageBuildResult(
+                success=False,
+                error="image build produced no terminal response",
+                responses=tuple(responses),
+            )
+        else:
+            self._result = ImageBuildResult(
+                success=last_response.success,
+                image_id=last_response.image_id,
+                python_version=last_response.python_version,
+                build_id=last_response.build_id,
+                error=_response_error(last_response),
+                responses=tuple(responses),
+            )
+        return self._result
 
 
 def _image_verify_client(client: ImageBuildClient) -> ImageVerifyClient | None:

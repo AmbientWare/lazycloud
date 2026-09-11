@@ -5,7 +5,6 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
-from math import ceil
 from typing import Protocol, runtime_checkable
 
 from compute.provider_machines import provider_unit_operational_capacity
@@ -13,8 +12,7 @@ from compute.providers import ProviderUnitSnapshot, next_billing_renewal
 from compute.service import ComputeService
 from compute.state import ComputeUnitState
 from pydantic import Field
-from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
-from shared.container_requests import schedulable_capacity
+from shared.compute_policy import ComputeUnitPhase, ComputeUnitRecord, MachinePool, UnitName
 from shared.contracts import ContractModel
 from shared.env import truthy_env_value
 from shared.errors import ConflictError
@@ -247,6 +245,22 @@ class ManagedComputeWorkerPoolDrainController:
             )
         operational_desired, _maximum = provider_unit_operational_capacity(current_unit)
         if observation.snapshot.observed_machines > operational_desired:
+            machines_by_instance = self.compute.internal_unit_machine_by_instance(
+                self.state.workspace_id, self.capacity_owner_id
+            )
+            protected_machines = {
+                machines_by_instance[instance.provider_instance_id]
+                for instance in observation.snapshot.instances
+                if current_unit.replacement_machine_id
+                and instance.provider_instance_id in machines_by_instance
+                and instance.booted_template_version
+                in {
+                    observation.snapshot.current_template_version,
+                    current_unit.replacement_template_version,
+                }
+            }
+            if current_unit.replacement_machine_id:
+                protected_machines.add(current_unit.replacement_machine_id)
             workers_by_machine = _workers_by_machine(
                 self.workers.list_workers_for_capacity_owner(self.capacity_owner_id)
             )
@@ -257,7 +271,7 @@ class ManagedComputeWorkerPoolDrainController:
                 now=current_time,
                 idle_seconds=0,
                 retain_machines=operational_desired,
-                paid_machine_ids=set(),
+                paid_machine_ids=protected_machines,
                 reserve_idle_machines=0,
             )
             if candidate is not None:
@@ -305,8 +319,9 @@ class ManagedComputeWorkerPoolDrainController:
     ) -> WorkerPoolDrainResult:
         current_time = now
         sizing_state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
-        if sizing_state.pending_operation_id or sizing_state.desired_units > (
-            self.state.active_machines
+        if sizing_state.pending_operation_id or (
+            sizing_state.desired_units > self.state.active_machines
+            and current_unit.provider_state.degraded_reason is None
         ):
             return WorkerPoolDrainResult(
                 capacity_owner_id=self.capacity_owner_id,
@@ -374,6 +389,19 @@ class ManagedComputeWorkerPoolDrainController:
             is not None
             and renewal - current_time > timedelta(seconds=60)
         }
+        protected_machines = {
+            machines_by_instance[instance.provider_instance_id]
+            for instance in observation.snapshot.instances
+            if current_unit.replacement_machine_id
+            and instance.provider_instance_id in machines_by_instance
+            and instance.booted_template_version
+            in {
+                observation.snapshot.current_template_version,
+                current_unit.replacement_template_version,
+            }
+            and machines_by_instance[instance.provider_instance_id]
+            != current_unit.replacement_machine_id
+        }
         candidate = _idle_machine_candidate(
             workers_by_machine,
             self.workers,
@@ -381,24 +409,9 @@ class ManagedComputeWorkerPoolDrainController:
             now=current_time,
             idle_seconds=config.idle_seconds,
             retain_machines=config.min_workers,
-            paid_machine_ids=paid_machines,
+            paid_machine_ids=paid_machines | protected_machines,
             replacement_machine_id=current_unit.replacement_machine_id,
-            reserve_idle_machines=(
-                max(
-                    ceil(
-                        current_unit.min_free_cpu_millicores
-                        / schedulable_capacity(current_unit.worker_cpu_millicores)
-                    ),
-                    ceil(
-                        current_unit.min_free_memory_mib
-                        / schedulable_capacity(current_unit.worker_memory_mib)
-                    ),
-                )
-                if current_unit.platform_fleet
-                and current_unit.worker_cpu_millicores > 0
-                and current_unit.worker_memory_mib > 0
-                else 0
-            ),
+            reserve_idle_machines=0,
         )
         if candidate is None:
             return WorkerPoolDrainResult(
@@ -545,6 +558,12 @@ class ManagedComputeWorkerPoolDrainController:
                 reason="replacement is waiting on a capacity operation",
             )
         if not replacement_machine_id:
+            if unit.phase is ComputeUnitPhase.Degraded or unit.provider_state.degraded_reason:
+                return WorkerPoolDrainResult(
+                    capacity_owner_id=self.capacity_owner_id,
+                    pool=self.pool,
+                    reason="degraded capacity cannot start a replacement",
+                )
             return self._surge_for_replacement(
                 superseded[0],
                 current_version,
@@ -597,8 +616,7 @@ class ManagedComputeWorkerPoolDrainController:
                 and machine_id != replacement_machine_id
                 and machine_id not in interrupted
                 and (
-                    replacement_machine_id not in interrupted
-                    or any(
+                    any(
                         worker.request_intake_status(at=now) is SchedulerWorkerStatus.Available
                         for worker in workers_by_machine.get(machine_id, [])
                     )
@@ -872,6 +890,7 @@ def _idle_machine_candidate(
     ]
     healthy_machines.sort(
         key=lambda item: (
+            item[0] == replacement_machine_id,
             min(worker.created_at for worker in item[1]),
             item[0],
         )
@@ -898,7 +917,7 @@ def _idle_machine_candidate(
     return max(
         candidates,
         key=lambda item: (
-            item.machine_id != replacement_machine_id,
+            item.machine_id == replacement_machine_id,
             min(worker.created_at for worker in item.workers),
             item.machine_id,
         ),

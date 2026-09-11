@@ -15,6 +15,7 @@ from agent_app.daemon import (
     AgentDaemonOptions,
     AgentDaemonService,
     AgentStateStore,
+    AgentStreamRetryableError,
     DockerAgentWorkerController,
     ProviderInstanceIdentityMode,
     WorkerImagePullError,
@@ -277,6 +278,21 @@ def test_daemon_removes_stale_ready_marker_before_failed_stream(tmp_path: Path) 
     with pytest.raises(ConnectionResetError, match="gateway reset"):
         service.run()
 
+    assert not service.state_store.ready_path.exists()
+
+
+def test_stale_release_cannot_apply_worker_instructions(tmp_path: Path) -> None:
+    service = _service(tmp_path, _Gateway())
+    state = service.state_store.load(service.options.gateway_url)
+    assert state is not None
+    service.state_store.save(state.model_copy(update={"release_generation": 2}))
+
+    with pytest.raises(AgentStreamRetryableError, match="instruction is stale"):
+        service.run()
+
+    saved = service.state_store.load(service.options.gateway_url)
+    assert saved is not None and saved.release_generation == 2
+    assert not service.worker_controller.active_slots_path.exists()
     assert not service.state_store.ready_path.exists()
 
 

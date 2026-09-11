@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, Request, Response
 from gateway.http import (
     AgentTelemetryRequest,
     AgentTelemetryResponse,
@@ -29,7 +29,11 @@ from shared.http.provider_nodes import (
     ProviderNodeBootstrapPhaseRequest,
     ProviderNodeEnrollmentRequest,
 )
-from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
+from shared.http.releases import (
+    AGENT_RELEASE_GENERATION_HEADER,
+    AgentReleaseRequest,
+    AgentReleaseResponse,
+)
 
 from api.server.client_address import client_address
 from api.server.service_dependencies import gateway_service, provider_node_enrollment_service
@@ -155,9 +159,13 @@ def update_agent_route_status(
 @router.post("/agents/stream", response_model=StreamAgentResponse)
 def stream_agent(
     request: StreamAgentRequest,
+    response: Response,
+    generation: int = Header(default=0, alias=AGENT_RELEASE_GENERATION_HEADER, ge=0),
     service: GatewayControlService = Depends(gateway_service),
 ) -> StreamAgentResponse:
-    return service.stream_agent(request)
+    result = service.stream_agent(request.model_copy(update={"generation": generation}))
+    response.headers[AGENT_RELEASE_GENERATION_HEADER] = str(result.generation)
+    return result
 
 
 @router.post(

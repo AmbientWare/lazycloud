@@ -30,6 +30,8 @@ class SchedulerHookWorkerRepository(Protocol):
 
     def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None: ...
 
+    def has_worker_rollout_slot(self, capacity_owner_id: str, worker_id: str) -> bool: ...
+
     def disable_worker(
         self,
         worker_id: str,
@@ -95,6 +97,13 @@ class SchedulerComputeHooks:
         if self.agent_intake is None:
             return None
         return self.agent_intake.observing_since()
+
+    def machine_has_worker_update(self, machine_id: str) -> bool:
+        return any(
+            worker.status is SchedulerWorkerStatus.Draining
+            and self.workers.has_worker_rollout_slot(worker.capacity_owner_id, worker.worker_id)
+            for worker in self._workers_for_machine(machine_id)
+        )
 
     def _workers_for_machine(self, machine_id: str) -> list[SchedulerWorkerRecord]:
         workers = [

@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
+from database.repositories.container_scheduling import ContainerSchedulingRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import (
@@ -38,11 +39,59 @@ class ContainerSchedulingPersistenceService:
     workspace_changes: WorkspaceChangePublisher
     runtime_state: ContainerRuntimeStateRepository | None = None
 
+    def record_scheduling_request(self, request: SchedulerWorkerRequest, *, now: datetime) -> bool:
+        with self.context.database.session() as session:
+            return ContainerSchedulingRepository(session).submit(request, now=now)
+
+    def recoverable_scheduling_requests(
+        self, *, now: datetime, limit: int
+    ) -> list[SchedulerWorkerRequest]:
+        with self.context.database.session() as session:
+            return ContainerSchedulingRepository(session).recoverable(now=now, limit=limit)
+
+    def scheduling_request_reconciled(self, container_id: str, *, retry_at: datetime) -> None:
+        with self.context.database.session() as session:
+            ContainerSchedulingRepository(session).reconciled(container_id, retry_at=retry_at)
+
+    def request_capacity(
+        self, request: SchedulerWorkerRequest, *, now: datetime
+    ) -> SchedulerWorkerRequest:
+        with self.context.database.session() as session:
+            return ContainerSchedulingRepository(session).request_capacity(request, now=now)
+
+    def capacity_requests_due(self, *, now: datetime, limit: int) -> list[SchedulerWorkerRequest]:
+        with self.context.database.session() as session:
+            return ContainerSchedulingRepository(session).capacity_due(now=now, limit=limit)
+
+    def capacity_request_due(
+        self, container_id: str, *, now: datetime
+    ) -> SchedulerWorkerRequest | None:
+        with self.context.database.session() as session:
+            return ContainerSchedulingRepository(session).capacity_due_request(
+                container_id, now=now
+            )
+
+    def record_capacity_attempt(
+        self, request: SchedulerWorkerRequest, *, retry_at: datetime
+    ) -> None:
+        with self.context.database.session() as session:
+            ContainerSchedulingRepository(session).record_capacity_attempt(
+                request, retry_at=retry_at
+            )
+
     def publish_pending_progress(self, container_id: str) -> None:
         with self.context.database.session() as session:
             container = ContainerRepository(session).get_across_workspaces(container_id)
         if container is not None and container.status is ContainerStatus.Pending:
             self._publish_container_change(container)
+
+    def expired_assignments(
+        self, *, before: datetime, limit: int
+    ) -> list[tuple[ContainerRecord, datetime]]:
+        with self.context.database.session() as session:
+            return ContainerSchedulingRepository(session).expired_assignments(
+                before=before, limit=limit
+            )
 
     def assign_runtime(
         self,
@@ -51,27 +100,33 @@ class ContainerSchedulingPersistenceService:
         workspace_id: str,
         runtime_worker_id: str,
         runtime_machine_id: str,
+        assignment_token: str,
+        assigned_at: datetime,
+        backfill: bool,
         compute_worker_id: str | None = None,
         compute_machine_id: str | None = None,
         shape: ContainerShape | None = None,
     ) -> None:
         if not runtime_worker_id:
             raise InvalidInputError("runtime worker id is required")
+        if not assignment_token:
+            raise InvalidInputError("assignment token is required")
         if (compute_worker_id is None) != (compute_machine_id is None):
             raise InvalidInputError(
                 "compute worker and machine assignments must be provided together"
             )
 
-        changed = False
         with self.context.database.session() as session:
             containers = ContainerRepository(session)
-            container = containers.get_across_workspaces(container_id)
+            container = containers.lock_across_workspaces(container_id)
             if container is None:
                 raise NotFoundError(f"container not found: {container_id}")
             if container.workspace_id != workspace_id:
                 raise ConflictError(
                     f"container {container_id} does not belong to assignment workspace"
                 )
+            if container.status is not ContainerStatus.Pending or container.runtime_worker_id:
+                raise ConflictError("container has already been assigned or stopped")
 
             if compute_worker_id is not None and compute_machine_id is not None:
                 workers = WorkerRepository(session)
@@ -124,33 +179,45 @@ class ContainerSchedulingPersistenceService:
                     shape=shape,
                 )
 
-            if any(getattr(container, field) != value for field, value in update.items()):
-                container = containers.upsert(container.model_copy(update=update))
-                changed = True
+            container = container.model_copy(update=update)
+            ContainerSchedulingRepository(session).record_assignment(
+                container, now=assigned_at, token=assignment_token, backfill=backfill
+            )
 
-        if changed:
-            self._publish_container_change(container)
+        self._publish_container_change(container)
 
     def clear_runtime_assignment(
         self,
         *,
         container_id: str,
         runtime_worker_id: str,
-    ) -> None:
+        assignment_token: str,
+    ) -> bool:
         with self.context.database.session() as session:
             containers = ContainerRepository(session)
-            container = containers.get_across_workspaces(container_id)
-            if container is None or container.runtime_worker_id != runtime_worker_id:
-                return
-            container = containers.upsert(
-                container.model_copy(
-                    update={
-                        "runtime_worker_id": "",
-                        "runtime_machine_id": "",
-                    }
-                )
+            container = containers.lock_across_workspaces(container_id)
+            if (
+                container is None
+                or container.runtime_worker_id != runtime_worker_id
+                or container.status is not ContainerStatus.Pending
+            ):
+                return False
+            scheduling = ContainerSchedulingRepository(session)
+            if not scheduling.owns_assignment(container_id, token=assignment_token):
+                return False
+            if not ContainerBillingShapeRepository(session).discard_provisional(container_id):
+                return False
+            container = container.model_copy(
+                update={
+                    "runtime_worker_id": "",
+                    "runtime_machine_id": "",
+                    "worker_id": None,
+                    "machine_id": None,
+                }
             )
+            scheduling.record_assignment(container, now=None, token=None, backfill=False)
         self._publish_container_change(container)
+        return True
 
     def _release_runtime_state(self, container: ContainerRecord) -> None:
         """Best effort, for the same reason as the container service: a failed
@@ -201,13 +268,17 @@ class ContainerSchedulingPersistenceService:
         reason: str,
         *,
         now: datetime | None = None,
-    ) -> None:
+    ) -> bool:
         current_time = now or utc_now()
         task: Task | None = None
         with self.context.database.session() as session:
-            container = ContainerRepository(session).get_across_workspaces(request.container_id)
-            if container is None:
-                return
+            container = ContainerRepository(session).lock_across_workspaces(request.container_id)
+            if (
+                container is None
+                or container.status is not ContainerStatus.Pending
+                or container.runtime_worker_id
+            ):
+                return False
             container.status = ContainerStatus.Failed
             container.exit_code = 1
             container.finished_at = container.finished_at or current_time
@@ -231,18 +302,20 @@ class ContainerSchedulingPersistenceService:
                         workspace_id=container.workspace_id,
                     )
             self._release_pooled_claims(session, container)
-        self.events.emit(
-            "container.schedule.failed",
-            resource_type="container",
-            resource_id=request.container_id,
-            message=reason or f"failed to schedule container {request.container_id}",
-            level=EventLevel.Error,
-            data={"scheduler_failure": True},
-            workspace_id=request.workspace_id,
-        )
+            self.events.emit_in_session(
+                session,
+                "container.schedule.failed",
+                resource_type="container",
+                resource_id=request.container_id,
+                message=reason or f"failed to schedule container {request.container_id}",
+                level=EventLevel.Error,
+                data={"scheduler_failure": True},
+                workspace_id=request.workspace_id,
+            )
         self._publish_container_change(container)
         if task is not None:
             self._publish_task_change(task)
+        return True
 
     def _publish_container_change(self, container: ContainerRecord) -> None:
         if not container.workspace_id:

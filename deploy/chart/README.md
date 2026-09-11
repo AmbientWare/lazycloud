@@ -57,6 +57,15 @@ overlap against Terraform's server ceiling. Scheduler readiness covers every loo
 The gateway standby remains Kubernetes-ready; the active-only TCP listener is
 for the load balancer, not pod readiness.
 
+Database migrations run while previous replicas serve requests. Handoff sources,
+purchase demand IDs and fulfillment timestamps live in dedicated columns, which
+older JSON writers preserve. Check reads and writes from both application
+versions before rollout.
+
+The database rejects writes that reopen a terminal capacity operation or replace
+an owned container assignment. Older replicas may report these errors during
+rollout. A rejected write leaves the recorded ownership intact.
+
 The administrator credential is the one with a trap in it. `auth bootstrap`
 adopts a configured credential when it finds one and mints its own when it does
 not, recording a different bootstrap request id for each. Install without

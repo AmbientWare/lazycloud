@@ -177,7 +177,7 @@ def test_initial_floor_and_free_headroom_request_only_one_unit_per_reconcile() -
     assert beyond_provider_max.target_units == 3
 
 
-def test_platform_warm_reserve_uses_host_capacity_and_preserves_spare_machines() -> None:
+def test_platform_baseline_can_serve_work_without_buying_an_extra_machine() -> None:
     pool = _pool().model_copy(
         update={
             "platform_fleet": True,
@@ -218,8 +218,8 @@ def test_platform_warm_reserve_uses_host_capacity_and_preserves_spare_machines()
         state=_state(),
         now=NOW,
     )
-    assert busy.action is WorkerPoolSizingAction.ScaleUp
-    assert busy.target_units == 3
+    assert busy.action is WorkerPoolSizingAction.None_
+    assert busy.target_units == 2
 
 
 def test_pending_target_and_derived_cooldown_prevent_duplicate_scale_up() -> None:

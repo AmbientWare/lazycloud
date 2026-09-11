@@ -365,6 +365,8 @@ class ComputeSchedulerHooks(Protocol):
 
     def machine_worker_availability(self, machine_id: str) -> MachineWorkerAvailability: ...
 
+    def machine_has_worker_update(self, machine_id: str) -> bool: ...
+
     def agent_intake_observing_since(self) -> datetime | None:
         """Since when some process has been receiving agent heartbeats, if any.
 

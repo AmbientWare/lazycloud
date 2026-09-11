@@ -2,21 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
-from collections.abc import AsyncIterator, Callable, Iterable, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from hashlib import sha256
 from math import ceil
 from secrets import token_urlsafe
+from threading import Event, Thread
 
 from coordination.redis_client import AsyncRedisClient, RedisClient, RedisWireScalar
 from coordination.token_lock import (
     TokenLockReleaseStatus,
     release_token_lock,
     release_token_lock_async,
+    renew_token_lock,
     try_acquire_token_lock,
     try_acquire_token_lock_async,
 )
@@ -648,11 +651,15 @@ class SchedulerRepositoryError(RuntimeError):
     pass
 
 
-class ContainerRequestClaimNotOwnedError(SchedulerRepositoryError):
+class ContainerRequestDispatchRejectedError(SchedulerRepositoryError):
+    """The queue commit is proven not to have delivered executable work."""
+
+
+class ContainerRequestClaimNotOwnedError(ContainerRequestDispatchRejectedError):
     pass
 
 
-class ContainerRequestCancelledError(SchedulerRepositoryError):
+class ContainerRequestCancelledError(ContainerRequestDispatchRejectedError):
     pass
 
 
@@ -745,6 +752,9 @@ class SchedulerStateKeys:
 
     def container_lock(self, container_id: str) -> str:
         return self.redis.key(self.namespace, "containers", container_id, "lock")
+
+    def container_dispatch_lock(self, container_id: str) -> str:
+        return self.redis.key(self.namespace, "containers", container_id, "dispatch-lock")
 
     def container_stub_index(self, stub_id: str) -> str:
         return self.redis.key(self.namespace, "containers", "stub", stub_id, "index")
@@ -1179,6 +1189,12 @@ class RedisSchedulerWorkerRepository:
             now=now,
         )
 
+    def has_worker_rollout_slot(self, capacity_owner_id: str, worker_id: str) -> bool:
+        members = self.redis.sorted_set_range_by_score(
+            self.keys.worker_rollout_slots(capacity_owner_id), utc_now().timestamp(), "+inf"
+        )
+        return worker_id in redis_serialization.redis_strings(members)
+
     def claim_worker_rollout_slot(
         self,
         capacity_owner_id: str,
@@ -1494,7 +1510,7 @@ class RedisSchedulerWorkerRepository:
                 is not SchedulerWorkerStatus.Available
             ):
                 msg = f"worker {worker_id} is not available"
-                raise SchedulerRepositoryError(msg)
+                raise ContainerRequestDispatchRejectedError(msg)
 
             queued_request = request.model_copy(update={"timestamp": now or utc_now()})
             plan = plan_worker_capacity_change(
@@ -1504,7 +1520,7 @@ class RedisSchedulerWorkerRepository:
                 reserved_capacity=reserved_capacity,
             )
             if not plan.accepted:
-                raise SchedulerRepositoryError(plan.reason)
+                raise ContainerRequestDispatchRejectedError(plan.reason)
 
             state_key = self.keys.worker_state(worker_id)
             self.redis.hash_set(state_key, mapping=redis_serialization.dump_model_hash(plan.worker))
@@ -1542,13 +1558,13 @@ class RedisSchedulerWorkerRepository:
         def write() -> SchedulerWorkerRecord:
             worker = self.get_worker(worker_id)
             if worker is None:
-                raise WorkerStateNotFoundError(worker_id)
+                raise ContainerRequestDispatchRejectedError(f"worker is unavailable: {worker_id}")
             if (
                 worker.request_intake_status(at=now or utc_now())
                 is not SchedulerWorkerStatus.Available
             ):
                 msg = f"worker {worker_id} is not available"
-                raise SchedulerRepositoryError(msg)
+                raise ContainerRequestDispatchRejectedError(msg)
 
             queued_request = request.model_copy(update={"timestamp": now or utc_now()})
             plan = plan_worker_capacity_change(
@@ -1558,7 +1574,7 @@ class RedisSchedulerWorkerRepository:
                 reserved_capacity=reserved_capacity,
             )
             if not plan.accepted:
-                raise SchedulerRepositoryError(plan.reason)
+                raise ContainerRequestDispatchRejectedError(plan.reason)
             self._commit_claimed_worker_request(
                 worker_id,
                 claim,
@@ -1660,15 +1676,21 @@ class RedisSchedulerWorkerRepository:
                 f"scheduler request claim is no longer owned: {request_id}"
             )
         if result == -3:
-            raise SchedulerRepositoryError(f"worker {worker_id} changed during dispatch")
+            raise ContainerRequestDispatchRejectedError(
+                f"worker {worker_id} changed during dispatch"
+            )
         if result == -4:
-            raise SchedulerRepositoryError(
+            raise ContainerRequestDispatchRejectedError(
                 f"capacity reservation allocation changed during dispatch: {request_id}"
             )
         if result == -5:
-            raise SchedulerRepositoryError("GPU demand or recovery prevents CPU backfill")
+            raise ContainerRequestDispatchRejectedError(
+                "GPU demand or recovery prevents CPU backfill"
+            )
         if result == -6:
-            raise SchedulerRepositoryError("worker request polling lease expired before dispatch")
+            raise ContainerRequestDispatchRejectedError(
+                "worker request polling lease expired before dispatch"
+            )
         if result != 1:
             raise SchedulerRepositoryError(
                 f"scheduler request dispatch returned unexpected status {result}: {request_id}"
@@ -2319,6 +2341,7 @@ class RedisSchedulerWorkerRepository:
 
     def _worker_reserved_capacity(self, worker_id: str) -> WorkerReservedCapacity:
         reserved = WorkerReservedCapacity()
+        queued_ids: set[str] = set()
         payloads = self.redis.hash_get_all(self.keys.worker_request_payloads(worker_id))
         for raw_request_id in self.redis.list_range(
             self.keys.worker_requests(worker_id),
@@ -2332,6 +2355,9 @@ class RedisSchedulerWorkerRepository:
             request = SchedulerWorkerRequest.model_validate_json(
                 redis_serialization.redis_text(raw_request)
             )
+            if request.container_id in queued_ids:
+                continue
+            queued_ids.add(request.container_id)
             reserved.cpu_millicores += request.cpu_millicores
             reserved.memory_mib += capacity_memory_mib(request.memory_mib)
             reserved.gpu_count += gpu_count_for_capacity(request.gpu, request.gpu_count)
@@ -2345,6 +2371,8 @@ class RedisSchedulerWorkerRepository:
                 self.redis.set_remove(index_key, state_key)
                 continue
             state = redis_serialization.load_model_hash(SchedulerContainerState, raw)
+            if state.container_id in queued_ids:
+                continue
             if state.status not in {
                 SchedulerContainerStatus.Pending,
                 SchedulerContainerStatus.Running,
@@ -2374,6 +2402,54 @@ class RedisSchedulerContainerRepository:
     def __init__(self, redis: RedisClient, keys: SchedulerStateKeys | None = None) -> None:
         self.redis = redis
         self.keys = keys or SchedulerStateKeys(redis)
+
+    @contextmanager
+    def dispatch_lock(self, container_id: str) -> Iterator[None]:
+        key = self.keys.container_dispatch_lock(container_id)
+        token = token_urlsafe(24)
+        ttl = ceil(DEFAULT_CONTAINER_REQUEST_CLAIM_LEASE_SECONDS)
+        if not try_acquire_token_lock(self.redis, key, token, ttl_seconds=ttl):
+            raise SchedulerRepositoryError("container dispatch is already in progress")
+        stopped = Event()
+        lost = Event()
+
+        def renew() -> None:
+            while not stopped.wait(ttl / 3):
+                try:
+                    if renew_token_lock(self.redis, key, token, ttl_seconds=ttl):
+                        continue
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "container dispatch lease renewal failed",
+                        extra={"container_id": container_id},
+                    )
+                lost.set()
+                return
+
+        renewal = Thread(target=renew, name="container-dispatch-lease", daemon=True)
+        renewal.start()
+        failed = False
+        try:
+            yield
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            stopped.set()
+            renewal.join(timeout=1)
+            try:
+                released = release_token_lock(self.redis, key, token)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "container dispatch lease release failed",
+                    extra={"container_id": container_id},
+                )
+                lost.set()
+            else:
+                if released is not TokenLockReleaseStatus.Released:
+                    lost.set()
+            if lost.is_set() and not failed:
+                raise SchedulerRepositoryError("container dispatch lease was lost")
 
     def set_container_state(
         self,

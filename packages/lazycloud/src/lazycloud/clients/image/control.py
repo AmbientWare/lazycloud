@@ -52,6 +52,7 @@ class ImageControlClient:
     pick one.
     """
     timeout_seconds: float | None = None
+    """Build-stream deadline; verification uses the channel's ordinary request deadline."""
 
     @classmethod
     def from_endpoint(
@@ -78,7 +79,6 @@ class ImageControlClient:
             self.channel.post(
                 self._scoped("/api/v1/images/verify-build"),
                 request.model_dump(mode="json"),
-                timeout_seconds=self.timeout_seconds,
             )
         )
 

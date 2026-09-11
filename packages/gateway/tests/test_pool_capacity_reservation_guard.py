@@ -7,15 +7,21 @@ from datetime import datetime
 from uuid import uuid4
 
 import pytest
+from api.server.routers.gateway.agents import router as agent_router
+from api.server.service_dependencies import gateway_service
 from api.server.services import ApiServices
 from compute.agent_control import agent_machine_worker_id
 from compute.capacity_errors import CapacityReservationLockContendedError
 from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
+from control.release_settings import ReleaseSettings
+from control.releases import DeploymentReleaseService
 from coordination.redis_client import RedisClient
 from database.repositories.compute import ComputeMachineEnrollmentRepository
 from database.repositories.orchestration import ContainerRepository, WorkerRepository
-from gateway.http import JoinAgentRequest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from gateway.http import JoinAgentRequest, StreamAgentResponse
 from gateway.service import GatewayControlService
 from gateway.unit_state import billing_owner_for_unit
 from scheduler.fleet import WorkerPoolStateSnapshot
@@ -24,6 +30,7 @@ from scheduler.state import (
     RedisSchedulerWorkerRepository,
     RedisWorkerPoolStateRepository,
     WorkerPoolStateNotFoundError,
+    WorkerRequestDrain,
 )
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_enrollment import (
@@ -40,15 +47,19 @@ from shared.compute_policy import (
     MachinePool,
     UnitName,
 )
-from shared.containers import ContainerRecord
+from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, InvalidInputError
+from shared.http.releases import AGENT_RELEASE_GENERATION_HEADER, AgentReleaseRequest
+from shared.releases import AgentArtifact
 from shared.scheduling import (
     SchedulerContainerState,
     SchedulerContainerStatus,
     SchedulerWorkerRecord,
+    SchedulerWorkerRequest,
     SchedulerWorkerStatus,
 )
 from shared.usage import UsageBillingOwner
+from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 from tests.releases import select_worker_release
 from tests.workspaces import workspace_owner_user_id
@@ -750,6 +761,7 @@ def test_rollout_contention_preserves_worker_without_restart_authorization(
     monkeypatch.setattr(_RecordingCapacityReservationGuard, "mutation_lock", contended)
     slots = gateway._agent_slots_for_machine(
         state,
+        release=DeploymentReleaseService().state(),
         billing_owner=billing_owner_for_unit(unit),
         active_worker_images={worker_id: "worker:current"},
         prepared_worker_images=["worker:target"],
@@ -758,6 +770,102 @@ def test_rollout_contention_preserves_worker_without_restart_authorization(
     assert len(slots) == 1 and slots[0].status is slot_status
     current = workers.get_worker(worker_id)
     assert current is not None and current.status is worker_status
+
+
+def test_agent_release_generation_fences_commands_without_changing_stream_body(
+    isolated_services: ApiServices,
+) -> None:
+    workspace_id = _default_workspace_id(isolated_services)
+    _own_default_workspace(isolated_services)
+    unit = isolated_services.compute.create_unit(
+        UnitName("generation-fence"), workspace=workspace_id, provider="agent"
+    )
+    gateway = _gateway(
+        isolated_services,
+        _RecordingCapacityReservationGuard(open_reservations=False),
+        key_prefix="generation-fence",
+    )
+    select_worker_release("worker:target")
+    release = DeploymentReleaseService().state()
+    join = gateway.unit_state_coordinator.create_unit_join_token(
+        unit, workspace_id=workspace_id, owner_token_id="gateway-test-owner"
+    )
+    enrolled = gateway.join_agent(_join_request(join.token))
+    app = FastAPI()
+    app.include_router(agent_router)
+    app.dependency_overrides[gateway_service] = lambda: gateway
+    with TestClient(app) as client:
+        current = client.post("/gateway/agents/stream", json={"agent_token": enrolled.agent_token})
+        assert current.status_code == 200
+        assert current.headers[AGENT_RELEASE_GENERATION_HEADER] == str(release.generation)
+        assert "generation" not in current.json()
+        assert StreamAgentResponse.model_validate(current.json()).retryable
+        stale = client.post(
+            "/gateway/agents/stream",
+            json={"agent_token": enrolled.agent_token},
+            headers={AGENT_RELEASE_GENERATION_HEADER: str(release.generation + 1)},
+        )
+        result = StreamAgentResponse.model_validate(stale.json())
+        assert not result.ok and result.retryable and not result.slots
+
+
+def test_agent_update_preserves_durable_work_after_hot_worker_state_is_lost(
+    isolated_services: ApiServices, real_redis_actors: RealRedisActors
+) -> None:
+    workspace_id = _default_workspace_id(isolated_services)
+    _own_default_workspace(isolated_services)
+    unit = isolated_services.compute.create_unit(
+        UnitName("durable-agent-update"), workspace=workspace_id, provider="agent"
+    )
+    gateway = isolated_services.gateway_service
+    join = gateway.unit_state_coordinator.create_unit_join_token(
+        unit, workspace_id=workspace_id, owner_token_id="gateway-test-owner"
+    )
+    enrolled = gateway.join_agent(_join_request(join.token))
+    worker_id = agent_machine_worker_id(enrolled.machine_id)
+    workers = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    assert workers.get_worker(worker_id) is None
+    release = DeploymentReleaseService().state()
+    target = release.target.model_copy(
+        update={
+            "agent": AgentArtifact(
+                url="https://releases.example.test/agent", sha256="a" * 64, size_bytes=1
+            )
+        }
+    )
+    ReleaseSettings().active_file.write_text(
+        release.model_copy(update={"target": target}).model_dump_json()
+    )
+    instruction = AgentReleaseRequest(agent_token=enrolled.agent_token, binary_sha256="b" * 64)
+    assert gateway.agent_release(instruction).update_agent
+    container = ContainerRecord(
+        id=str(uuid4()),
+        name="owned-during-update",
+        image="",
+        command=[],
+        workspace_id=workspace_id,
+        runtime_worker_id=worker_id,
+        status=ContainerStatus.Pending,
+    )
+    with isolated_services.context.database.session() as session:
+        ContainerRepository(session).upsert(container)
+    assert not gateway.agent_release(instruction).update_agent
+    request = SchedulerWorkerRequest(
+        container_id=container.id,
+        workspace_id=workspace_id,
+        stub_id="owned-during-update",
+    )
+    workers.restore_worker_requests(
+        worker_id, WorkerRequestDrain(queued=[request.model_dump_json()])
+    )
+    assert gateway.agent_release(instruction).update_agent
+    with isolated_services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            container.model_copy(update={"status": ContainerStatus.Running})
+        )
+    assert not gateway.agent_release(instruction).update_agent
+    workers.drain_worker_requests(worker_id)
+    assert not gateway.agent_release(instruction).update_agent
 
 
 def test_a_connected_cloud_unit_bills_its_machines_differently_than_a_brought_one(

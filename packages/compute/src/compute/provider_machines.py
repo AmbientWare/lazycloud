@@ -83,8 +83,6 @@ from compute.providers import (
 from compute.reclaim import ComputeReclaimPolicy
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
 
-_LAUNCH_STATE_INTENT = "intent"
-
 
 def provider_billing_renewal(
     instance: ProviderUnitInstance,

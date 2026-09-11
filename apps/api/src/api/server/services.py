@@ -268,11 +268,13 @@ class ApiContainerSchedulingFailureHandler:
         reason: str,
         *,
         now: datetime | None = None,
-    ) -> None:
-        self.containers.mark_scheduling_failed(request, reason, now=now)
+    ) -> bool:
+        if not self.containers.mark_scheduling_failed(request, reason, now=now):
+            return False
         self.images.fail_container_build(
             request.container_id, reason, workspace_id=request.workspace_id
         )
+        return True
 
 
 @dataclass(frozen=True, slots=True)

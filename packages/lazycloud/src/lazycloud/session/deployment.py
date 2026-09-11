@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, nullcontext
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -42,6 +44,7 @@ from shared.image_building.authoring import ImageSpec
 from lazycloud.abstractions.image import (
     Image,
     ImageBuildClient,
+    ImageBuildOperation,
     ImageContextUploadResult,
 )
 from lazycloud.clients.gateway.control import GatewayControlClient
@@ -305,13 +308,25 @@ class DeploymentClient(ControlClientConfigMixin):
             if not selected_root.is_dir():
                 msg = f"deployment source root is not a directory: {selected_root}"
                 raise RuntimeError(msg)
-        prepared_spec = self._prepare_image(spec, image=image)
-        source_object_id = self._source_object_id(
-            prepared_spec,
-            sync_source=sync_source,
-            source_root=selected_root,
-            archive_prefix=archive_prefix,
-        )
+        image_operation = self._image_operation(spec, image=image)
+        with image_operation if image_operation is not None else nullcontext():
+            with ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="deployment-image-verification"
+            ) as executor:
+                verification = (
+                    executor.submit(copy_context().run, image_operation.verify)
+                    if image_operation is not None
+                    else None
+                )
+                source_object_id = self._source_object_id(
+                    spec,
+                    sync_source=sync_source,
+                    source_root=selected_root,
+                    archive_prefix=archive_prefix,
+                )
+                if verification is not None:
+                    verification.result()
+            prepared_spec = self._finish_image(spec, image_operation)
         with self._step("Runtime", prepared_spec.name) as step:
             response = self.control_client.get_or_create_stub(
                 _stub_request_from_spec(
@@ -561,25 +576,34 @@ class DeploymentClient(ControlClientConfigMixin):
             self._channel = control_http_channel(self._config())
         return self._channel
 
-    def _prepare_image(self, spec: DeploymentSpec, *, image: Image | None) -> DeploymentSpec:
+    def _image_operation(
+        self, spec: DeploymentSpec, *, image: Image | None
+    ) -> ImageBuildOperation | None:
         if self.client is not None and self.image_client is None:
-            return spec
+            return None
         source_image = image or _image_from_spec(spec.image)
         prepared_image = source_image
         if _needs_context_upload(prepared_image):
             prepared_image = prepared_image._sync_context(self._object_client())
 
-        result = prepared_image.build(self._image_client(), terminal=self.terminal)
+        return ImageBuildOperation(prepared_image, self._image_client(), terminal=self.terminal)
+
+    def _finish_image(
+        self, spec: DeploymentSpec, operation: ImageBuildOperation | None
+    ) -> DeploymentSpec:
+        if operation is None:
+            return spec
+        result = operation.finish()
         if not result.success:
             msg = result.error or "image build failed"
             if result.build_id:
                 msg = f"{msg} (build {result.build_id})"
             raise DeploymentOperationError(msg)
 
-        built_spec = prepared_image.spec().model_copy(
+        built_spec = operation.image.spec().model_copy(
             update={
-                "image_id": result.image_id or prepared_image.spec().image_id,
-                "python_version": result.python_version or prepared_image.spec().python_version,
+                "image_id": result.image_id or operation.image.spec().image_id,
+                "python_version": result.python_version or operation.image.spec().python_version,
             }
         )
         return spec.model_copy(update={"image": built_spec})

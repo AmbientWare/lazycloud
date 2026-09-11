@@ -55,6 +55,7 @@ from scheduler.state import (
     RedisWorkerNetworkIpRepository,
     SchedulerRepositoryError,
 )
+from scheduler.worker_inventory import WorkerCapacityRecovery
 from shared.app_identity import NAME
 from shared.cache_records import CacheEntry
 from shared.compute_policy import ComputeUnitRecord
@@ -1118,6 +1119,11 @@ class WorkerRepositoryService:
             generation_id=request.cache_generation_id,
             session_fence=request.cache_session_fence,
         )
+        if self.services is None:
+            raise UpstreamUnavailableError("worker admission requires durable assignments")
+        WorkerCapacityRecovery(self.services.context.database, self.containers).restore(
+            request.worker_id
+        )
         try:
             current = self.workers.get_worker(request.worker_id)
             if current is not None and current.status is SchedulerWorkerStatus.Available:
@@ -1336,6 +1342,9 @@ class WorkerRepositoryService:
             worker_id=principal.worker_id,
             operation="container status update",
         )
+        self._sync_runtime_container_status(
+            request.container_id, request.status, worker_id=principal.worker_id
+        )
         try:
             plan = self.containers.update_container_status(
                 request.container_id,
@@ -1344,7 +1353,6 @@ class WorkerRepositoryService:
             )
         except SchedulerRepositoryError as exc:
             raise _scheduler_domain_error(exc) from exc
-        self._sync_runtime_container_status(request.container_id, plan.next_status)
         state = self.containers.get_container_state(request.container_id)
         if state is None:
             raise NotFoundError(f"container state not found: {request.container_id}")
@@ -1396,6 +1404,20 @@ class WorkerRepositoryService:
             raise AuthorizationDeniedError(
                 "container state read names a container assigned to another worker"
             )
+        if state is not None:
+            container = self._authorize_worker_container(
+                request.container_id,
+                worker_id=principal.worker_id,
+                operation="container state read",
+            )
+            if container.status in TERMINAL_CONTAINER_STATUSES:
+                state = state.model_copy(
+                    update={
+                        "status": SchedulerContainerStatus.Failed
+                        if container.status is ContainerStatus.Failed
+                        else SchedulerContainerStatus.Complete
+                    }
+                )
         return GetContainerStateResponse(state=state)
 
     def list_container_cleanup(
@@ -2210,7 +2232,7 @@ class WorkerRepositoryService:
         worker_id: str,
         operation: str,
         workspace_id: str = "",
-    ) -> None:
+    ) -> ContainerRecord:
         """Refuse a container this worker was not given.
 
         A worker token authenticates a machine a customer joined and holds root
@@ -2223,11 +2245,8 @@ class WorkerRepositoryService:
         across workspaces on purpose, so the answer does not come from the same
         claim being checked.
 
-        Placement is read the way `_authorize_network_container` reads it —
-        scheduler state first, the durable row second — because those are the
-        same question asked of the same dispatch. `runtime_worker_id` is the
-        column that carries it: `worker_id` is set only for a private worker, so
-        keying on it would authorize nothing for the platform fleet.
+        The durable runtime assignment remains authoritative if hot state is
+        lost or stale. `worker_id` is populated only for private capacity.
         """
 
         if not worker_id:
@@ -2242,7 +2261,6 @@ class WorkerRepositoryService:
                 raise AuthorizationDeniedError(
                     f"{operation} names a workspace the container does not belong to"
                 )
-            return
         container = self._container_across_workspaces(container_id, operation=operation)
         if container is None:
             raise AuthorizationDeniedError(
@@ -2256,6 +2274,7 @@ class WorkerRepositoryService:
             raise AuthorizationDeniedError(
                 f"{operation} names a workspace the container does not belong to"
             )
+        return container
 
     def _container_across_workspaces(
         self,
@@ -2327,7 +2346,17 @@ class WorkerRepositoryService:
     def publish_container_lifecycle(
         self,
         request: PublishContainerLifecycleRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
     ) -> PublishContainerLifecycleResponse:
+        self._authorize_worker_container(
+            request.payload.container_id,
+            worker_id=principal.worker_id,
+            workspace_id=request.payload.workspace_id,
+            operation="container lifecycle report",
+        )
+        if request.payload.worker_id != principal.worker_id:
+            raise AuthorizationDeniedError("container lifecycle worker identity does not match")
         event_streams = self._event_streams()
         if event_streams is None:
             raise UpstreamUnavailableError("redis is required for container lifecycle events")
@@ -2647,6 +2676,8 @@ class WorkerRepositoryService:
         self,
         container_id: str,
         status: SchedulerContainerStatus,
+        *,
+        worker_id: str,
     ) -> None:
         if self.services is None:
             return
@@ -2656,15 +2687,27 @@ class WorkerRepositoryService:
         now = utc_now()
         updated_task: Task | None = None
         with self.services.context.database.session() as session:
-            container = ContainerRepository(session).get_across_workspaces(container_id)
+            container = ContainerRepository(session).lock_across_workspaces(container_id)
             if container is None:
                 return
+            if container.runtime_worker_id != worker_id:
+                raise AuthorizationDeniedError("container status assignment changed")
+            if (
+                container.status in TERMINAL_CONTAINER_STATUSES
+                and container_status not in TERMINAL_CONTAINER_STATUSES
+            ):
+                raise ConflictError("a terminal container cannot restart")
+            if (
+                container.status is ContainerStatus.Running
+                and container_status is ContainerStatus.Pending
+            ):
+                raise ConflictError("a running container cannot return to pending")
             previous_state = (
                 container.status,
                 container.started_at,
                 container.finished_at,
             )
-            if container.status is ContainerStatus.Stopped:
+            if container.status in TERMINAL_CONTAINER_STATUSES:
                 container.finished_at = container.finished_at or now
             else:
                 container.status = container_status
@@ -2717,9 +2760,11 @@ class WorkerRepositoryService:
         settle_required = False
         crashed_task_ids: list[str] = []
         with self.services.context.database.session() as session:
-            container = ContainerRepository(session).get_across_workspaces(container_id)
+            container = ContainerRepository(session).lock_across_workspaces(container_id)
             if container is None:
                 return
+            if container.runtime_worker_id != worker_id:
+                raise AuthorizationDeniedError("container exit assignment changed")
             if (
                 to_utc(exited_at) > now + _METERING_WINDOW_TOLERANCE
                 or to_utc(exited_at) < to_utc(container.created_at) - _METERING_WINDOW_TOLERANCE
@@ -2750,7 +2795,7 @@ class WorkerRepositoryService:
                 or container.termination_reason is StopContainerReason.Unknown
             ):
                 container.termination_reason = termination_reason
-            if container.status is ContainerStatus.Stopped:
+            if container.status in TERMINAL_CONTAINER_STATUSES:
                 container.exit_code = exit_code
                 container.started_at = container.started_at or now
                 container.finished_at = container.finished_at or now
@@ -2928,18 +2973,6 @@ class WorkerRepositoryService:
             return
         if not payload.container_id:
             return
-        try:
-            self.containers.set_exit_code(payload.container_id, 1)
-            plan = self.containers.update_container_status(
-                payload.container_id,
-                SchedulerContainerStatus.Failed,
-            )
-            state = self.containers.get_container_state(payload.container_id)
-            if plan.release_concurrency and state is not None and state.worker_id:
-                with suppress(SchedulerRepositoryError):
-                    self.workers.reconcile_worker_capacity(state.worker_id)
-        except SchedulerRepositoryError:
-            pass
         if self.services is None:
             return
 
@@ -2948,8 +2981,12 @@ class WorkerRepositoryService:
         changed_container: ContainerRecord | None = None
         changed_task: Task | None = None
         with self.services.context.database.session() as session:
-            container = ContainerRepository(session).get_across_workspaces(payload.container_id)
-            task_id = payload.task_id or (container.task_id if container is not None else "")
+            container = ContainerRepository(session).lock_across_workspaces(payload.container_id)
+            if container is None or container.status in TERMINAL_CONTAINER_STATUSES:
+                return
+            if container.runtime_worker_id != payload.worker_id:
+                raise AuthorizationDeniedError("container lifecycle assignment changed")
+            task_id = container.task_id
 
             if container is not None:
                 previous_state = (
@@ -2989,6 +3026,18 @@ class WorkerRepositoryService:
                         workspace_id=payload.workspace_id
                         or (container.workspace_id if container else None),
                     )
+        try:
+            self.containers.set_exit_code(payload.container_id, 1)
+            plan = self.containers.update_container_status(
+                payload.container_id,
+                SchedulerContainerStatus.Failed,
+            )
+            state = self.containers.get_container_state(payload.container_id)
+            if plan.release_concurrency and state is not None and state.worker_id:
+                with suppress(SchedulerRepositoryError):
+                    self.workers.reconcile_worker_capacity(state.worker_id)
+        except SchedulerRepositoryError:
+            pass
         publish_container = changed_container or container
         if changed_container is not None:
             self._publish_runtime_container_change(changed_container)
