@@ -87,7 +87,7 @@ def test_capacity_batches_share_work_and_keep_empty_pool_audits_progressing(
         second = executor.submit(select_batch)
         batches = [first.result(), second.result()]
     assert batches[0].isdisjoint(batches[1])
-    assert set.union(*batches) == active | inactive
+    assert batches[0] | batches[1] == active | inactive
     for batch in batches:
         assert len(batch & active) == 2
         assert len(batch & inactive) == 1
