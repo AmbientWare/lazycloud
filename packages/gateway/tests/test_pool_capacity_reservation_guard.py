@@ -13,7 +13,7 @@ from compute.capacity_errors import CapacityReservationLockContendedError
 from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
 from coordination.redis_client import RedisClient
-from database.repositories.compute import ComputeMachineEnrollmentRepository, ComputeUnitRepository
+from database.repositories.compute import ComputeMachineEnrollmentRepository
 from database.repositories.orchestration import ContainerRepository, WorkerRepository
 from gateway.http import JoinAgentRequest
 from gateway.service import GatewayControlService
@@ -702,44 +702,6 @@ def test_join_credentials_are_refused_for_provider_provisioned_units(
         )
 
 
-@pytest.mark.parametrize("surge", [False, True])
-def test_rollout_settlement_defers_contended_maintenance(
-    isolated_services: ApiServices,
-    monkeypatch: pytest.MonkeyPatch,
-    surge: bool,
-) -> None:
-    workspace_id = _default_workspace_id(isolated_services)
-    unit = isolated_services.compute.create_unit(
-        UnitName("rollout-settlement"), workspace=workspace_id, provider="agent"
-    )
-    with isolated_services.context.database.session() as session:
-        repository = ComputeUnitRepository(session)
-        repository.set_worker_rollout_surge(
-            unit.id, expected_generation=unit.generation, enabled=surge
-        )
-    guard = _RecordingCapacityReservationGuard(open_reservations=False)
-    gateway = _gateway(isolated_services, guard, key_prefix="rollout-settlement")
-
-    def contended(
-        self: _RecordingCapacityReservationGuard, capacity_owner_id: str
-    ) -> AbstractContextManager[None]:
-        del self, capacity_owner_id
-        if not surge:
-            raise RuntimeError("a settled rollout must not contend with capacity mutations")
-        raise CapacityReservationLockContendedError("another reconciler owns capacity")
-
-    monkeypatch.setattr(_RecordingCapacityReservationGuard, "mutation_lock", contended)
-    gateway._settle_worker_rollout_capacity(
-        SchedulerWorkerRecord(
-            worker_id="rollout-worker", capacity_owner_id=unit.capacity_owner_id, pool=unit.pool
-        ),
-        target_image="worker:target",
-    )
-    with isolated_services.context.database.session() as session:
-        current = ComputeUnitRepository(session).get(unit.id)
-    assert current is not None and current.worker_rollout_surge is surge
-
-
 @pytest.mark.parametrize(
     "worker_status,slot_status",
     [
@@ -790,7 +752,7 @@ def test_rollout_contention_preserves_worker_without_restart_authorization(
         state,
         billing_owner=billing_owner_for_unit(unit),
         active_worker_images={worker_id: "worker:current"},
-        rollout_fleet_size=1,
+        prepared_worker_images=["worker:target"],
         agent_binary_sha256="",
     )
     assert len(slots) == 1 and slots[0].status is slot_status

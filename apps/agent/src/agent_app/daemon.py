@@ -593,6 +593,9 @@ class DockerAgentWorkerController:
         if self.worker_image_override:
             self._ensure_worker_image(self.worker_image_override)
 
+    def prepared_worker_images(self) -> list[str]:
+        return sorted(self._prepared_images)
+
     def _ensure_worker_image(self, image: str) -> None:
         if image in self._prepared_images:
             return
@@ -959,8 +962,11 @@ class AgentDaemonService:
             try:
                 self.worker_controller.prepare_worker_image()
             except WorkerImagePullError:
-                self._report_bootstrap_failure(MachineBootstrapFailureReason.WorkerImagePullFailed)
-                raise
+                if not self.worker_controller.active_slots():
+                    self._report_bootstrap_failure(
+                        MachineBootstrapFailureReason.WorkerImagePullFailed
+                    )
+                    raise
             last_result = last_result.model_copy(
                 update={
                     "private_network_started": private_network_runtime is not None,
@@ -1001,7 +1007,11 @@ class AgentDaemonService:
                                 "authority_revoked": True,
                             }
                         )
-                    if isinstance(exc, WorkerImagePullError) and not runtime_ready:
+                    if (
+                        isinstance(exc, WorkerImagePullError)
+                        and not runtime_ready
+                        and not self.worker_controller.active_slots()
+                    ):
                         self._report_bootstrap_failure(
                             MachineBootstrapFailureReason.WorkerImagePullFailed
                         )
@@ -1114,6 +1124,7 @@ class AgentDaemonService:
                 active_worker_images={
                     slot.worker_id: slot.worker_image for slot in active_slots if slot.worker_image
                 },
+                prepared_worker_images=self.worker_controller.prepared_worker_images(),
             )
         )
         if not stream.ok:
@@ -1988,7 +1999,7 @@ def _recoverable_stream_error(exc: Exception) -> bool:
     # has to be named explicitly or every TLS reset reads as a fatal error.
     if isinstance(exc, HttpTransportError):
         return True
-    if isinstance(exc, AgentStreamRetryableError):
+    if isinstance(exc, AgentStreamRetryableError | WorkerImagePullError):
         return True
     return isinstance(
         exc,

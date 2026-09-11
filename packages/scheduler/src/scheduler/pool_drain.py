@@ -337,7 +337,7 @@ class ManagedComputeWorkerPoolDrainController:
                 reason="worker-pool scale-down cooldown is active",
             )
         if self.state.active_machines <= config.min_workers or (
-            (current_unit.replacement_machine_id or current_unit.worker_rollout_surge)
+            current_unit.replacement_machine_id
             and current_unit.desired_machines <= config.min_workers
         ):
             return WorkerPoolDrainResult(
@@ -408,7 +408,7 @@ class ManagedComputeWorkerPoolDrainController:
             )
         if (
             current_unit.desired_machines == 1
-            and (current_unit.replacement_machine_id or current_unit.worker_rollout_surge)
+            and current_unit.replacement_machine_id
             and config.min_workers == 0
             and current_unit.min_free_cpu_millicores == 0
             and current_unit.min_free_memory_mib == 0

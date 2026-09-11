@@ -33,6 +33,7 @@ from database.repositories.orchestration import (
 from database.types import DatabaseSession
 from execution.containers.preemption import PreemptedContainerControl
 from execution.containers.runtime_state import ContainerRuntimeStateRepository
+from execution.task_claims import TaskClaimReleaseService
 from execution.tasks import TaskService
 from foundation.network import worker_network_prefix
 from gateway.unit_state import billing_owner_for_unit
@@ -922,6 +923,9 @@ class WorkerRepositoryService:
                 "priority": unit.priority,
             }
         )
+        initializing_worker.admitted_release_generation = (
+            DeploymentReleaseService().worker_registration_generation(initializing_worker)
+        )
         try:
             if request.ttl_seconds > 0:
                 worker = self.workers.add_worker(
@@ -1124,7 +1128,12 @@ class WorkerRepositoryService:
             raise _scheduler_domain_error(exc) from exc
 
     def _worker_release_admitted(self, worker: SchedulerWorkerRecord) -> bool:
-        return bool(DeploymentReleaseService().admitted_workers([worker]))
+        releases = DeploymentReleaseService()
+        if worker.admitted_release_generation == 0:
+            generation = releases.worker_registration_generation(worker)
+            if generation:
+                worker = self.workers.admit_worker_release(worker, generation=generation)
+        return bool(releases.admitted_workers([worker]))
 
     def disable_worker(self, request: DisableWorkerRequest) -> WorkerRecordResponse:
         try:
@@ -2846,7 +2855,7 @@ class WorkerRepositoryService:
         that it ran somewhere else.
         """
 
-        TaskRepository(session).release_claims_for_container(
+        TaskClaimReleaseService(session).release_container(
             container.id,
             except_task_id=container.task_id,
         )

@@ -20,6 +20,10 @@ from shared.scheduling import (
 
 
 class SchedulerWorkerAdminRepository(Protocol):
+    def renew_worker_update(
+        self, worker: SchedulerWorkerRecord, *, expires_at: datetime
+    ) -> SchedulerWorkerRecord: ...
+
     def list_workers(self) -> list[SchedulerWorkerRecord]: ...
 
     def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None: ...

@@ -89,6 +89,10 @@ class ContainerRolloutRepository:
             self.session.flush()
         return True
 
+    def admission_closed_at(self, container_id: str) -> datetime | None:
+        row = self.session.get(ContainerRolloutDrainTable, container_id)
+        return row.admission_closed_at if row is not None else None
+
     def draining_ids(self, container_ids: Sequence[str]) -> set[str]:
         if not container_ids:
             return set()

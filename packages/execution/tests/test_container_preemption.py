@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from database.repositories.orchestration import ContainerRepository
+from database.repositories.execution import TaskRepository
+from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
 from execution.containers.preemption import PreemptedContainerService
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
@@ -78,6 +79,28 @@ def test_function_preemption_uses_explicit_retry_policy(
     assert duplicate.status is TaskStatus.Retry
     assert not duplicate.changed
     assert not duplicate.retry_scheduled
+
+
+def test_platform_stop_reactivates_retired_function_demand(
+    isolated_services: ApiServices,
+) -> None:
+    task, container = _running_task(
+        isolated_services, kind=StubKind.Function, name="released-function-demand"
+    )
+    with isolated_services.context.database.session() as session:
+        TaskRepository(session).mark_claimable(task.id, at=utc_now())
+        targets = AutoscalingTargetRepository(session)
+        for claim in targets.claim_due(limit=10, lease_seconds=30):
+            targets.complete(claim, next_reconcile_at=None)
+
+    isolated_services.containers.stop(container.id, reason=StopContainerReason.Preempted)
+
+    with isolated_services.context.database.session() as session:
+        claims = AutoscalingTargetRepository(session).claim_due(limit=10, lease_seconds=30)
+        assert [claim.stub_id for claim in claims] == [task.stub_id]
+        released = TaskRepository(session).get(task.id, workspace_id=container.workspace_id)
+        assert released is not None and released.status is TaskStatus.Pending
+        assert released.container_id is None and released.claimable_at is not None
 
 
 def test_unsettled_preemption_recovers_once_after_a_crash(

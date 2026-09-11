@@ -1277,7 +1277,6 @@ class ComputeService:
                         update={
                             "desired_machines": 0,
                             "min_machines": 0,
-                            "worker_rollout_surge": False,
                             "replacement_machine_id": "",
                             "replacement_template_version": "",
                             "generation": current.generation + 1,
@@ -1864,7 +1863,6 @@ class ComputeService:
                 replacement_template_version=(
                     current.replacement_template_version if current else ""
                 ),
-                worker_rollout_surge=current.worker_rollout_surge if current else False,
                 scaling_enabled=True,
                 # True by construction rather than by preference: this unit is
                 # built from workspace policy because the workspace needed general
@@ -2093,7 +2091,6 @@ class ComputeService:
                     update={
                         "replacement_machine_id": "",
                         "replacement_template_version": "",
-                        "worker_rollout_surge": False,
                     }
                 )
                 operations = ComputeCapacityOperationRepository(session)
@@ -2123,7 +2120,6 @@ class ComputeService:
                     provider_state=unit.provider_state,
                     replacement_machine_id=unit.replacement_machine_id,
                     replacement_template_version=unit.replacement_template_version,
-                    worker_rollout_surge=unit.worker_rollout_surge,
                 )
                 if intent is None:
                     raise ConflictError(f"compute pool {unit!r} capacity intent was superseded")
@@ -2328,11 +2324,7 @@ class ComputeService:
                 gpu=_pool_gpu_capacity(unit),
                 current=unit,
             )
-            if (
-                not unit.worker_rollout_surge
-                and available is not None
-                and unit.desired_machines + 1 > available
-            ):
+            if available is not None and unit.desired_machines + 1 > available:
                 raise CapacityLimitReachedError("fleet capacity limit prevents a replacement node")
             return units.upsert(
                 unit.model_copy(
@@ -2345,34 +2337,6 @@ class ComputeService:
                     }
                 )
             )
-
-    def begin_worker_rollout_capacity(self, capacity_owner_id: str) -> ComputeUnitRecord | None:
-        with self.context.database.session() as session:
-            units = ComputeUnitRepository(session)
-            initial = units.get_by_capacity_owner_id(capacity_owner_id)
-            if initial is None or initial.visibility is not ComputeUnitVisibility.Internal:
-                return initial
-            if initial.platform_fleet:
-                units.lock_platform_capacity()
-            unit = units.get_by_capacity_owner_id(capacity_owner_id, for_update=True)
-            if unit is None or unit.provider == "agent" or unit.worker_rollout_surge:
-                return unit
-            available = self._available_fleet_machines(
-                units,
-                platform_fleet=unit.platform_fleet,
-                gpu=_pool_gpu_capacity(unit),
-                current=unit,
-            )
-            if (
-                not unit.replacement_machine_id
-                and available is not None
-                and unit.desired_machines + 1 > available
-            ):
-                return None
-            updated = units.set_worker_rollout_surge(
-                unit.id, expected_generation=unit.generation, enabled=True
-            )
-        return updated
 
     def clear_internal_unit_replacement(
         self,
@@ -3292,7 +3256,6 @@ class ComputeService:
                                         "status": ComputeUnitPhase.Deleting.value,
                                         "replacement_machine_id": "",
                                         "replacement_template_version": "",
-                                        "worker_rollout_surge": False,
                                     }
                                 )
                             )

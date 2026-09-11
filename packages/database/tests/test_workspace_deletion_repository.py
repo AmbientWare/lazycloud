@@ -446,7 +446,7 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container(
         # Settled twice, as two independent recovery paths would.
         for _ in range(2):
             with database.session() as session:
-                TaskRepository(session).release_claim(task_id)
+                TaskRepository(session).release_claim(task_id, container_id=container_ids[0])
 
         start = Barrier(contenders - 1)
 
@@ -467,6 +467,10 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container(
 
         assert reclaimed == [task_id], "a released task went to none or several containers"
         with database.session() as session:
+            assert (
+                TaskRepository(session).release_claim(task_id, container_id=container_ids[0])
+                is None
+            )
             settled = TaskRepository(session).get_across_workspaces(task_id)
         assert settled is not None
         assert settled.container_id in container_ids[1:]
@@ -533,7 +537,7 @@ def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release(
 
     try:
         with database.session() as session:
-            assert TaskRepository(session).release_claim(task_id) is None
+            assert TaskRepository(session).release_claim(task_id, container_id=container_id) is None
         with database.session() as session:
             tasks = TaskRepository(session)
             settled = tasks.get_across_workspaces(task_id)
