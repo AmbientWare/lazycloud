@@ -1092,8 +1092,18 @@ class ComputeService:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
             records = ComputeUnitRepository(session).list_for_workspace(workspace_id)
-        records.sort(key=lambda item: item.name)
-        return records
+        return sorted(
+            (
+                item
+                for item in records
+                if not (
+                    item.platform_fleet
+                    and item.visibility is ComputeUnitVisibility.Internal
+                    and item.phase is ComputeUnitPhase.Deleted
+                )
+            ),
+            key=lambda item: item.name,
+        )
 
     def list_units_across_workspaces(
         self, *, capacity_owner_kind: CapacityOwnerKind | None = None
@@ -2703,7 +2713,7 @@ class ComputeService:
                 for machine in ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
             ]
         for unit in units:
-            self._release_failed_warm_capacity(unit, now=now)
+            self._release_unclaimed_failed_capacity(unit, now=now)
         lower_times = [
             to_utc(datetime.fromisoformat(value))
             for unit in units
@@ -2814,11 +2824,10 @@ class ComputeService:
             )
         return serving >= unit.min_machines
 
-    def _release_failed_warm_capacity(self, unit: ComputeUnitRecord, *, now: datetime) -> None:
+    def _release_unclaimed_failed_capacity(self, unit: ComputeUnitRecord, *, now: datetime) -> None:
         if (
             unit.phase is not ComputeUnitPhase.Degraded
-            or unit.min_machines == 0
-            or unit.desired_machines > unit.min_machines
+            or unit.desired_machines == 0
             or unit.observed_machines > 0
         ):
             return
@@ -2827,6 +2836,8 @@ class ComputeService:
             mutations.mutation_lock(unit.capacity_owner_id),
             mutations.dispatch_lock(unit.capacity_owner_id),
         ):
+            if mutations.has_open_reservations(unit.capacity_owner_id):
+                return
             with self.context.database.session() as session:
                 repository = ComputeUnitRepository(session)
                 repository.lock_platform_capacity()
@@ -2834,8 +2845,7 @@ class ComputeService:
                 if (
                     current is None
                     or current.phase is not ComputeUnitPhase.Degraded
-                    or current.min_machines == 0
-                    or current.desired_machines > current.min_machines
+                    or current.desired_machines == 0
                     or current.observed_machines > 0
                     or ComputeCapacityOperationRepository(session).list_open_for_owner(
                         unit.capacity_owner_id
@@ -2969,7 +2979,7 @@ class ComputeService:
                         provider=pooled,
                         now=now,
                     )
-                    return self._retire_obsolete_empty_pool(
+                    return self._retire_empty_platform_pool(
                         current,
                         provider=provider,
                         offer=offer,
@@ -3024,7 +3034,7 @@ class ComputeService:
                 preserve_deleting=True,
             )
 
-    def _retire_obsolete_empty_pool(
+    def _retire_empty_platform_pool(
         self,
         pool: ComputeUnitRecord,
         *,
@@ -3034,7 +3044,11 @@ class ComputeService:
         mutations: CapacityOwnerMutationLease,
         now: datetime,
     ) -> ComputeUnitRecord:
-        if not _obsolete_platform_pool(pool, provider, offer):
+        if not _retirable_platform_pool(pool, provider, offer, now=now):
+            return pool
+        if pool.provider_state.degraded_reason is not None:
+            # Reconciliation clears retryable failures after their cooldown.
+            # Retiring earlier would strand that retry state outside its owner.
             return pool
         if (
             snapshot.phase not in {ProviderCapacityPhase.Ready, ProviderCapacityPhase.Deleted}
@@ -3053,7 +3067,7 @@ class ComputeService:
             if (
                 current.generation != pool.generation
                 or current.phase in ENDED_UNIT_PHASES
-                or not _obsolete_platform_pool(current, provider, offer)
+                or not _retirable_platform_pool(current, provider, offer, now=now)
                 or current.desired_machines
                 or current.observed_machines
                 or current.min_machines
@@ -3092,8 +3106,8 @@ class ComputeService:
             )
         pooled = provider.pooled
         if pooled is None:
-            raise UpstreamUnavailableError("obsolete compute pool provider is not pooled")
-        LOGGER.info("retiring obsolete empty platform pool %s", retiring.id)
+            raise UpstreamUnavailableError("compute pool provider is not pooled")
+        LOGGER.info("retiring empty platform pool %s", retiring.id)
         return self.provider_machines._apply_pooled_snapshot(
             retiring,
             offer,
@@ -3836,8 +3850,12 @@ class ComputeService:
                 )
 
 
-def _obsolete_platform_pool(
-    pool: ComputeUnitRecord, provider: ResolvedComputeProvider, offer: ComputeOffer
+def _retirable_platform_pool(
+    pool: ComputeUnitRecord,
+    provider: ResolvedComputeProvider,
+    offer: ComputeOffer,
+    *,
+    now: datetime,
 ) -> bool:
     policy = provider.policy
     return (
@@ -3849,6 +3867,7 @@ def _obsolete_platform_pool(
             not policy.can_purchase
             or not policy.accepts(offer)
             or pool.root_volume_gib != policy.root_volume_gib
+            or now >= to_utc(pool.created_at) + timedelta(seconds=pool.idle_drain_timeout_seconds)
         )
     )
 

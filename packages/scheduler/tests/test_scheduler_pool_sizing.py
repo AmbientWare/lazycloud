@@ -177,6 +177,51 @@ def test_initial_floor_and_free_headroom_request_only_one_unit_per_reconcile() -
     assert beyond_provider_max.target_units == 3
 
 
+def test_platform_warm_reserve_uses_host_capacity_and_preserves_spare_machines() -> None:
+    pool = _pool().model_copy(
+        update={
+            "platform_fleet": True,
+            "min_machines": 2,
+            "worker_cpu_millicores": 8_000,
+            "worker_memory_mib": 32_768,
+            "min_free_cpu_millicores": 14_544,
+            "min_free_memory_mib": 59_578,
+        }
+    )
+    workers = [
+        _worker(identity, SchedulerWorkerStatus.Available).model_copy(
+            update={
+                "total_cpu_millicores": 7_272,
+                "free_cpu_millicores": 7_272,
+                "total_memory_mib": 28_687,
+                "free_memory_mib": 28_687,
+            }
+        )
+        for identity in ("first", "second")
+    ]
+    idle = plan_worker_pool_sizing(
+        pool,
+        headroom=effective_pool_headroom(pool, workers, now=NOW),
+        registered_units=2,
+        authoritative_units=2,
+        state=_state(),
+        now=NOW,
+    )
+    assert idle.action is WorkerPoolSizingAction.None_
+
+    workers[0] = workers[0].model_copy(update={"free_memory_mib": 28_431})
+    busy = plan_worker_pool_sizing(
+        pool,
+        headroom=effective_pool_headroom(pool, workers, now=NOW),
+        registered_units=2,
+        authoritative_units=2,
+        state=_state(),
+        now=NOW,
+    )
+    assert busy.action is WorkerPoolSizingAction.ScaleUp
+    assert busy.target_units == 3
+
+
 def test_pending_target_and_derived_cooldown_prevent_duplicate_scale_up() -> None:
     headroom = effective_pool_headroom(_pool(), [])
     waiting_registration = plan_worker_pool_sizing(
