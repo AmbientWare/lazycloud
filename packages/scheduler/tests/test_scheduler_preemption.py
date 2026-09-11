@@ -23,7 +23,11 @@ from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
 )
-from scheduler.worker_rollout import WorkerWorkloadDrainService
+from scheduler.worker_rollout import (
+    WORKER_UPDATE_DRAIN_GRACE,
+    WorkerWorkloadDrainService,
+    WorkerWorkloadRolloutService,
+)
 from shared.compute_enrollment import AgentCapacityState
 from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
@@ -50,9 +54,11 @@ NOW = datetime(2026, 1, 1, tzinfo=UTC)
 class _Stopper:
     calls: list[tuple[str, StopContainerReason]] = field(default_factory=list)
 
-    def stop(self, container_id: str, *, reason: StopContainerReason) -> object:
+    def stop(self, container_id: str, *, reason: StopContainerReason) -> ContainerRecord:
         self.calls.append((container_id, reason))
-        return object()
+        return ContainerRecord(
+            id=container_id, name="stopped", image="image", command=[], workspace_id="workspace-1"
+        )
 
 
 @dataclass(slots=True)
@@ -193,6 +199,86 @@ def test_preemption_rejects_stale_worker_session_fence(
     persisted = workers.get_worker("worker-1")
     assert persisted is not None
     assert persisted.status is SchedulerWorkerStatus.Pending
+
+
+def test_worker_update_preempts_only_eligible_inflight_work_after_grace(
+    real_redis_actors: RealRedisActors,
+    migrated_database_url: URL,
+) -> None:
+    database = DatabaseClient.from_settings(
+        DatabaseSettings(
+            url=migrated_database_url.render_as_string(hide_password=False),
+            application_name=DatabaseApplicationName.Test,
+        )
+    )
+    containers = RedisSchedulerContainerRepository(real_redis_actors.client())
+    workers = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    stopper = _Stopper()
+    try:
+        workloads: list[ContainerRecord] = []
+        with database.session() as session:
+            workspace = WorkspaceRepository(session).create(name="worker-update")
+            for preemptible in (False, True):
+                stub = StubRepository(session).upsert(
+                    StubRecord(
+                        id=str(uuid4()),
+                        workspace_id=workspace.id,
+                        name=f"function-{preemptible}",
+                        kind=StubKind.Function,
+                    )
+                )
+                container = ContainerRecord(
+                    id=str(uuid4()),
+                    name=stub.name,
+                    image="image",
+                    command=[],
+                    workspace_id=workspace.id,
+                    stub_id=stub.id,
+                    worker_id="worker-1",
+                    status=ContainerStatus.Running,
+                )
+                ContainerRepository(session).records.upsert(
+                    container,
+                    workspace_id=workspace.id,
+                    name=container.name,
+                    status=container.status.value,
+                )
+                containers.set_container_state(
+                    _container(container.id, SchedulerContainerStatus.Running).model_copy(
+                        update={
+                            "workspace_id": workspace.id,
+                            "stub_id": stub.id,
+                            "preemptible": preemptible,
+                        }
+                    )
+                )
+                TaskRepository(session).upsert(
+                    Task(
+                        id=str(uuid4()),
+                        name=stub.name,
+                        workspace_id=workspace.id,
+                        stub_id=stub.id,
+                        claimable_at=NOW,
+                    )
+                )
+                assert TaskRepository(session).claim_for_stub(
+                    stub.id, container_id=container.id, limit=1
+                )
+                workloads.append(container)
+        service = WorkerWorkloadRolloutService(database, containers, stopper, workers)
+        service.reconcile("worker-1", now=NOW)
+        service.reconcile("worker-1", now=NOW + WORKER_UPDATE_DRAIN_GRACE - timedelta(seconds=1))
+        assert stopper.calls == []
+        with database.session() as session:
+            rollouts = ContainerRolloutRepository(session)
+            for container in workloads:
+                assert container.stub_id is not None
+                assert not rollouts.accepting_work(container.id, stub_id=container.stub_id)
+                assert rollouts.serving_floor(container.stub_id) == 0
+        service.reconcile("worker-1", now=NOW + WORKER_UPDATE_DRAIN_GRACE)
+        assert stopper.calls == [(workloads[1].id, StopContainerReason.Preempted)]
+    finally:
+        database.dispose()
 
 
 def test_interruption_drains_workload_admission_until_provider_deadline(

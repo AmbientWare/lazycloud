@@ -116,6 +116,7 @@ class SchedulerWorkerRequest(WorkerExecutionRequest):
     backfill: bool = False
     region: ProductRegion | None = None
     availability_zone: AvailabilityZone = ""
+    capacity_retry_at: datetime | None = None
 
     def requeued(self, *, now: datetime | None = None) -> SchedulerWorkerRequest:
         return self.model_copy(
@@ -253,6 +254,15 @@ class WorkerExecutionRecord(ContractModel):
 class SchedulerWorkerRecord(WorkerExecutionRecord):
     region: ProductRegion | None = None
     availability_zone: AvailabilityZone = ""
+    worker_update_expires_at: datetime | None = None
+    admitted_release_generation: int = Field(default=0, ge=0)
+
+    def resuming_after_worker_update(self, *, at: datetime) -> bool:
+        return (
+            self.status is SchedulerWorkerStatus.Draining
+            and self.worker_update_expires_at is not None
+            and self.worker_update_expires_at > at
+        )
 
 
 class WorkerContainerState(ContractModel):

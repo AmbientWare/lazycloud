@@ -5,7 +5,7 @@ from control.release_settings import ReleaseSettings
 from control.releases import DeploymentReleaseService
 from shared.compute_policy import MachinePool
 from shared.releases import ActiveRelease, AgentArtifact, ReleaseTarget
-from shared.scheduling import SchedulerWorkerRecord
+from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 
 
 def test_activation_and_rollback_gate_workers_by_artifact_and_replica(tmp_path: Path) -> None:
@@ -40,9 +40,32 @@ def test_activation_and_rollback_gate_workers_by_artifact_and_replica(tmp_path: 
         == []
     )
     assert service.admitted_workers([worker.model_copy(update={"runtime_image": "older"})]) == []
+    previous = worker.model_copy(
+        update={
+            "status": SchedulerWorkerStatus.Available,
+            "runtime_image": "older",
+            "admitted_release_generation": 1,
+        }
+    )
+    assert service.worker_registration_generation(previous) == 0
+    assert service.worker_registration_generation(worker) == release.generation
+    assert service.admitted_workers([previous]) == [previous]
+    assert (
+        service.admitted_workers(
+            [previous.model_copy(update={"status": SchedulerWorkerStatus.Draining})]
+        )
+        == []
+    )
+    assert (
+        service.admitted_workers(
+            [previous.model_copy(update={"status": SchedulerWorkerStatus.Unavailable})]
+        )
+        == []
+    )
     old_url = "https://releases.example.com/old/manifest.json"
     old_replica = DeploymentReleaseService(ReleaseSettings(manifest_url=old_url, active_file=path))
     assert old_replica.admitted_workers([worker]) == []
+    assert old_replica.admitted_workers([previous]) == []
     rollback = release.model_copy(update={"generation": 3, "manifest_url": old_url})
     path.write_text(rollback.model_dump_json())
     assert service.admitted_workers([worker]) == []

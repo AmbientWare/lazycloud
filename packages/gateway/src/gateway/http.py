@@ -182,6 +182,7 @@ class StreamAgentRequest(HttpModel):
     agent_token: str
     binary_sha256: str = Field(default="", pattern=r"^([0-9a-f]{64})?$")
     active_worker_images: dict[str, str] = Field(default_factory=dict)
+    prepared_worker_images: list[str] = Field(default_factory=list)
 
 
 class StreamAgentResponse(HttpModel):

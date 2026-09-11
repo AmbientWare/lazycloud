@@ -323,22 +323,16 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
     held = gateway.stream_agent(
         StreamAgentRequest(agent_token=joined.agent_token, active_worker_images=current_image)
     )
-    assert held.slots[0].status is AgentWorkerSlotStatus.Draining
-
-    scheduler_workers.add_worker(
-        SchedulerWorkerRecord(
-            worker_id=str(uuid4()),
-            pool=pool,
-            capacity_owner_id=unit.capacity_owner_id,
-            workspace_id=workspace_id,
-            machine_id=str(uuid4()),
-            status=SchedulerWorkerStatus.Available,
-        )
-    )
-    pool_states.refresh()
+    assert held.slots[0].status is AgentWorkerSlotStatus.Active
+    preparing = scheduler_workers.get_worker(worker_id)
+    assert preparing is not None and preparing.status is SchedulerWorkerStatus.Available
 
     draining = gateway.stream_agent(
-        StreamAgentRequest(agent_token=joined.agent_token, active_worker_images=current_image)
+        StreamAgentRequest(
+            agent_token=joined.agent_token,
+            active_worker_images=current_image,
+            prepared_worker_images=["registry.test/worker@sha256:new"],
+        )
     )
 
     assert draining.slots[0].worker_image == "registry.test/worker@sha256:new"
@@ -352,9 +346,15 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
         SchedulerContainerStatus.Complete,
     )
     switch = gateway.stream_agent(
-        StreamAgentRequest(agent_token=joined.agent_token, active_worker_images=current_image)
+        StreamAgentRequest(
+            agent_token=joined.agent_token,
+            active_worker_images=current_image,
+            prepared_worker_images=["registry.test/worker@sha256:new"],
+        )
     )
     assert switch.slots[0].status is AgentWorkerSlotStatus.Pending
+    assert switch.slots[0].worker_id == worker_id
+    assert switch.slots[0].machine_id == joined.machine_id
 
 
 def test_private_network_registration_requires_a_fresh_handshake(

@@ -455,6 +455,7 @@ class ComputeUnitCapacityController:
             workers,
             reservations=reservations,
             allocations=allocations,
+            now=now,
         )
         registered_units = headroom.available_workers + headroom.unclaimed_pending_workers
         state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
@@ -553,7 +554,33 @@ class ComputeUnitCapacityController:
         owner_reservations: tuple[CapacityProvisioningReservation, ...],
         now: datetime,
     ) -> CapacityAcquisitionResult:
-        _ = owner_reservations, now
+        reserved_machines = {
+            item.target_machine_id
+            for item in owner_reservations
+            if item.id != reservation.id and item.open and item.target_machine_id
+        }
+        for worker in self.workers.list_workers():
+            if (
+                worker.capacity_owner_id == self.capacity_owner_id
+                and worker.resuming_after_worker_update(at=now)
+                and worker.machine_id
+                and worker.machine_id not in reserved_machines
+                and (
+                    not reservation.target_machine_id
+                    or worker.machine_id == reservation.target_machine_id
+                )
+                and reservation.acquisition_shape.worker_capabilities_match(worker)
+                and worker.total_cpu_millicores >= reservation.acquisition_shape.cpu_millicores
+                and worker.total_memory_mib >= reservation.acquisition_shape.memory_mib
+            ):
+                return CapacityAcquisitionResult(
+                    status=CapacityAcquisitionStatus.ExistingPending,
+                    capacity_owner_id=reservation.capacity_owner_id,
+                    reservation_id=reservation.id,
+                    operation_id=reservation.operation_id,
+                    target_machine_id=worker.machine_id,
+                    reason="existing machine is restarting its prepared worker image",
+                )
         result = self.compute.ensure_capacity(
             ComputeCapacityRequest(
                 capacity_owner_id=reservation.capacity_owner_id,

@@ -69,7 +69,6 @@ def test_fleet_capacity_counts_commitments_and_retiring_nodes_once(
                     "desired_machines": 2,
                     "observed_machines": 2,
                     "replacement_machine_id": old_machine_id,
-                    "worker_rollout_surge": True,
                     "worker_preemptible": True,
                 }
             )
