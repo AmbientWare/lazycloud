@@ -2517,6 +2517,7 @@ class ComputeService:
                 live = sum(
                     _reservation_open(item.status)
                     and item.status != ReservationStatus.Terminating.value
+                    and "missing_since" not in item.metadata
                     for item in records
                 )
                 operational, _maximum = provider_unit_operational_capacity(current)
@@ -2938,7 +2939,7 @@ class ComputeService:
                     current.id, status=ReservationStatus.Terminating.value
                 )
             for record in retiring:
-                if record.instance_id is None:
+                if record.instance_id is None or "missing_since" in record.metadata:
                     continue
                 with dispatch_fence.dispatch_lock(current.capacity_owner_id):
                     pooled.release_machine(
