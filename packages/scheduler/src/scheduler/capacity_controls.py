@@ -82,20 +82,22 @@ class SchedulerCapacityControllerProvider:
         return controllers
 
     def worker_pool_drain_controllers(self) -> list[WorkerPoolDrainController]:
-        selected = {
-            unit.id
-            for unit in self.services.compute.claim_reconciliation_batch(
-                ComputeReconciliationKind.Drain, now=utc_now()
-            )
-        }
+        selected = self.services.compute.claim_reconciliation_batch(
+            ComputeReconciliationKind.Drain, now=utc_now()
+        )
         controllers: list[WorkerPoolDrainController] = []
         controllers.extend(
             managed_compute_drain_controllers(
                 self.services.compute,
                 [
                     state
-                    for state in self.compute_states.list_all_pool_states()
-                    if state.capacity_owner_id in selected
+                    for unit in selected
+                    if (
+                        state := self.compute_states.get_unit_state(
+                            unit.workspace_id, unit.capacity_owner_id
+                        )
+                    )
+                    is not None
                 ],
                 self.workers,
                 self.containers,
