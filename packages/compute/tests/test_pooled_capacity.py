@@ -1728,9 +1728,11 @@ def test_platform_growth_checks_workload_rates_and_new_quotes_without_blocking_d
     assert provider.desired == 0
 
 
-def test_registered_reservation_transfers_purchase_ownership_durably(
+@pytest.mark.parametrize("release_first", [False, True])
+def test_registered_reservation_settles_against_durable_purchase_outcome(
     committed_service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
+    release_first: bool,
 ) -> None:
     context = committed_service_context
     _seed_connection(context)
@@ -1804,17 +1806,35 @@ def test_registered_reservation_transfers_purchase_ownership_durably(
         reservations.release_allocation(
             request.container_id, expected_reservation_id=decision.reservation.id
         )
+        if release_first:
+            reservations.release_terminal(decision.reservation.id, now=now)
+            compute.release_acquired_capacity(
+                CapacityReleaseRequest(
+                    capacity_owner_id=pool.capacity_owner_id,
+                    reservation_id=acquisition.reservation_id,
+                    operation_id=acquisition.operation_id,
+                )
+            )
     controller = ComputeUnitCapacityController(pool.workspace_id, pool, compute, workers)
     service = CapacityReservationService(reservations, lambda: (controller,))
     service.reconcile([], now=now)
     service.reconcile([], now=now)
+    settled = reservations.get(decision.reservation.id)
+    assert settled is not None
+    assert settled.status is CapacityReservationStatus.Released
+    assert not settled.acquisition_created
     with context.database.session() as session:
         repository = ComputeCapacityOperationRepository(session)
         operation = repository.get(pool.capacity_owner_id, acquisition.operation_id)
         assert operation is not None
-        assert operation.status is CapacityOperationStatus.Fulfilled
-        assert operation.target_machine_id == machine_id
-        assert operation.fulfilled_at is not None
+        if release_first:
+            assert operation.status is CapacityOperationStatus.Released
+            assert operation.target_machine_id is None
+            assert operation.fulfilled_at is None
+        else:
+            assert operation.status is CapacityOperationStatus.Fulfilled
+            assert operation.target_machine_id == machine_id
+            assert operation.fulfilled_at is not None
         assert not operation.owns_capacity
         assert repository.list_open_for_owner(pool.capacity_owner_id) == []
         with pytest.raises(ConflictError, match="cannot be reopened"):
@@ -1828,7 +1848,7 @@ def test_registered_reservation_transfers_purchase_ownership_durably(
             operation_id=acquisition.operation_id,
         )
     )
-    assert provider.desired == 1
+    assert provider.desired == (0 if release_first else 1)
 
 
 @pytest.mark.parametrize("replacement", [False, True])
