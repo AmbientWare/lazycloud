@@ -277,7 +277,7 @@ class TaskRepository:
             claimed.append(self.upsert(task))
         return claimed
 
-    def release_claim(self, task_id: str) -> Task | None:
+    def release_claim(self, task_id: str, *, container_id: str | None) -> Task | None:
         """Give a claimed task back, so some container can take it again.
 
         The inverse of `claim_for_stub`, and the reason a container may be
@@ -286,9 +286,9 @@ class TaskRepository:
         which is what lets the row go straight back to being claimable rather
         than waiting on its dependencies a second time.
 
-        Returns `None` when the task has already finished. A container stopping
-        after its task completed must not drag a terminal task back to pending —
-        that would run somebody's function twice and deliver the second answer.
+        Returns `None` when the task finished or its claim moved. The expected
+        container is checked under the row lock so a delayed exit cannot clear
+        a replacement container's claim.
         """
 
         row = self.session.scalars(
@@ -297,7 +297,7 @@ class TaskRepository:
         if row is None:
             return None
         task = Task.model_validate(row.payload)
-        if is_terminal_task_status(task.status):
+        if is_terminal_task_status(task.status) or task.container_id != container_id:
             return None
         task.container_id = None
         task.status = TaskStatus.Pending

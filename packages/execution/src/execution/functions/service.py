@@ -755,7 +755,9 @@ class FunctionControlService:
             # `retry` holding the failed attempt's container it would be visible
             # to no claim and picked up by nothing.
             with self.services.context.database.session() as session:
-                released = TaskClaimReleaseService(session).release(task.id)
+                released = TaskClaimReleaseService(session).release(
+                    task.id, container_id=task.container_id
+                )
             if released is None:
                 continue
             try:

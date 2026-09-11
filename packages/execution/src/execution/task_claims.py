@@ -15,8 +15,8 @@ from shared.tasks import Task
 class TaskClaimReleaseService:
     session: DatabaseSession
 
-    def release(self, task_id: str) -> Task | None:
-        task = TaskRepository(self.session).release_claim(task_id)
+    def release(self, task_id: str, *, container_id: str | None) -> Task | None:
+        task = TaskRepository(self.session).release_claim(task_id, container_id=container_id)
         if task is None or task.claimable_at is None or not task.stub_id:
             return task
         if not task.workspace_id:
@@ -39,7 +39,7 @@ class TaskClaimReleaseService:
         for held in TaskRepository(self.session).list_inflight_for_container(container_id):
             if held.id == except_task_id:
                 continue
-            task = self.release(held.id)
+            task = self.release(held.id, container_id=container_id)
             if task is not None:
                 released.append(task)
         return released

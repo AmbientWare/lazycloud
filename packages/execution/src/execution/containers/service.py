@@ -712,7 +712,7 @@ class ContainerService:
             return
         for task_id in task_ids:
             with self.context.database.session() as session:
-                TaskClaimReleaseService(session).release(task_id)
+                TaskClaimReleaseService(session).release(task_id, container_id=record.id)
 
     def stop(
         self,
