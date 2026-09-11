@@ -93,8 +93,7 @@ def test_capacity_batches_share_work_and_keep_empty_pool_audits_progressing(
         assert len(batch & inactive) == 1
     with database.session() as session:
         assert {
-            unit.id: unit.updated_at
-            for unit in session.scalars(select(ComputeUnitTable))
+            unit.id: unit.updated_at for unit in session.scalars(select(ComputeUnitTable))
         } == updated_at
 
 
