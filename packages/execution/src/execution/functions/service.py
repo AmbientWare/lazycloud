@@ -9,9 +9,11 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from control.service import ControlPlaneService, StubKind, StubRecord
+from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.execution import (
     LogPage,
     LogPageCursor,
+    TaskAttemptRepository,
     TaskDependencyRepository,
     TaskRepository,
 )
@@ -55,6 +57,8 @@ from shared.http.functions import (
     FunctionInvokeResponse,
     FunctionMonitorRequest,
     FunctionMonitorResponse,
+    FunctionRetireRequest,
+    FunctionRetireResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -1144,6 +1148,43 @@ class FunctionControlService:
                 dependencies=task.dependency_bindings,
             )
         )
+
+    def function_retire(
+        self,
+        request: FunctionRetireRequest,
+        *,
+        workspace_id: str,
+    ) -> FunctionRetireResponse:
+        stub = self.control_plane.get_stub(request.stub_id, workspace=workspace_id)
+        keep_warm = stub.config.runtime.keep_warm
+        now = utc_now()
+        with self.services.context.database.session() as session:
+            containers = ContainerRepository(session)
+            # Enqueue may reserve replacement capacity only after admission closes.
+            containers.lock_stub_capacity(stub.id)
+            drains = ContainerRolloutRepository(session)
+            container = containers.get_across_workspaces(request.container_id)
+            if (
+                container is None
+                or container.workspace_id != workspace_id
+                or container.stub_id != stub.id
+            ):
+                raise NotFoundError("function container not found")
+            if not drains.accepting_work(request.container_id, stub_id=stub.id):
+                return FunctionRetireResponse(retired=True)
+            if keep_warm < 0:
+                return FunctionRetireResponse(retired=False)
+            tasks = TaskRepository(session)
+            if tasks.containers_with_inflight_work([container.id]):
+                return FunctionRetireResponse(retired=False)
+            if tasks.count_unclaimed_by_stub([stub.id]).get(stub.id, 0):
+                return FunctionRetireResponse(retired=False)
+            finished = TaskAttemptRepository(session).latest_finished_at_for_container(container.id)
+            idle_since = finished or container.started_at or container.created_at
+            if (now - idle_since).total_seconds() < keep_warm:
+                return FunctionRetireResponse(retired=False)
+            drains.prepare(container, serving_floor=0, now=now)
+            return FunctionRetireResponse(retired=drains.close_admission(container.id, now=now))
 
     def function_set_result(
         self,

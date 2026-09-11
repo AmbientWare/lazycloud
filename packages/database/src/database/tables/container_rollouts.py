@@ -11,7 +11,7 @@ from database.tables.base import DatabaseBase, uuid_type
 class ContainerRolloutDrainTable(DatabaseBase):
     __tablename__ = "container_rollout_drains"
     __table_args__ = (
-        CheckConstraint("serving_floor > 0", name="ck_container_rollout_drains_serving_floor"),
+        CheckConstraint("serving_floor >= 0", name="ck_container_rollout_drains_serving_floor"),
         Index("ix_container_rollout_drains_stub", "stub_id"),
     )
 

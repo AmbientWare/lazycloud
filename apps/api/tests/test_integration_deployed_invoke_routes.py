@@ -31,6 +31,8 @@ from shared.http.functions import (
     FunctionInvokeResponse,
     FunctionMonitorRequest,
     FunctionMonitorResponse,
+    FunctionRetireRequest,
+    FunctionRetireResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -94,6 +96,14 @@ class RecordingFunctionService:
 
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse:
         raise AssertionError(f"unexpected function_claim call: {request}")
+
+    def function_retire(
+        self,
+        request: FunctionRetireRequest,
+        *,
+        workspace_id: str,
+    ) -> FunctionRetireResponse:
+        raise AssertionError(f"unexpected function_retire call: {request}, {workspace_id}")
 
 
 class RecordingEndpointService:
