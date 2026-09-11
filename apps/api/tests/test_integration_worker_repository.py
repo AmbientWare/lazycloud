@@ -1178,7 +1178,8 @@ async def test_worker_repository_stream_blocks_until_scheduler_assignment(
         if worker.request_poll_expires_at is not None:
             break
         await asyncio.sleep(0.01)
-    assert worker.request_poll_expires_at is not None
+    worker = workers.get_worker(worker_id)
+    assert worker is not None and worker.request_poll_expires_at is not None
     assert not waiting.done()
     await asyncio.to_thread(
         _dispatch_worker_request,
