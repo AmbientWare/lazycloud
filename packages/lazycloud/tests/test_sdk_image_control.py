@@ -16,11 +16,21 @@ class _ReconnectingImageChannel:
     submission_closed = False
     stream_count = 0
 
-    def post(self, path: str, payload: Mapping[str, JsonValue] | None = None) -> JsonValue:
+    def post(
+        self,
+        path: str,
+        payload: Mapping[str, JsonValue] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> JsonValue:
         raise AssertionError("unexpected non-streaming request")
 
     def stream_post(
-        self, path: str, payload: Mapping[str, JsonValue] | None = None
+        self,
+        path: str,
+        payload: Mapping[str, JsonValue] | None = None,
+        *,
+        timeout_seconds: float | None = None,
     ) -> Generator[JsonValue]:
         try:
             yield BuildImageResponse(build_id="build-1").model_dump(mode="json")
@@ -28,7 +38,7 @@ class _ReconnectingImageChannel:
         finally:
             self.submission_closed = True
 
-    def stream_get(self, path: str) -> Generator[str]:
+    def stream_get(self, path: str, *, timeout_seconds: float | None = None) -> Generator[str]:
         assert self.submission_closed
         self.stream_count += 1
         yield BuildImageEvent(

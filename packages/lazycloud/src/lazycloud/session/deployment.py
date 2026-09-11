@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -35,6 +35,7 @@ from shared.http.gateway import (
     SecretVar,
     StubVolume,
 )
+from shared.http.objects import HeadObjectRequest, HeadObjectResponse, PutObjectResponse
 from shared.http_transport import HttpChannel
 from shared.image_building.authoring import ImageSpec
 
@@ -43,11 +44,11 @@ from lazycloud.abstractions.image import (
     ImageBuildClient,
     ImageContextUploadResult,
 )
+from lazycloud.clients.gateway.control import GatewayControlClient
 from lazycloud.clients.image.control import ImageControlClient
 from lazycloud.control import ControlClientConfig, ControlClientConfigMixin, workspace_path
 from lazycloud.control_clients import (
     control_http_channel,
-    gateway_control_client,
     resource_control_client,
 )
 from lazycloud.function_results import FunctionResultDecodeError, decode_function_result
@@ -220,11 +221,14 @@ class DeploymentClient(ControlClientConfigMixin):
     source_ignore_patterns: tuple[str, ...] = ()
     source_include_patterns: tuple[str, ...] = ()
     terminal: Terminal | None = None
+    _channel: HttpChannel | None = field(default=None, init=False, repr=False)
 
     @property
     def control_client(self) -> DeploymentControlClient:
         if self.client is None:
-            self.client = gateway_control_client(self._config())
+            self.client = GatewayControlClient(
+                channel=self._http_channel(), workspace=self._config().workspace
+            )
         return self.client
 
     @property
@@ -553,7 +557,9 @@ class DeploymentClient(ControlClientConfigMixin):
         )
 
     def _http_channel(self) -> HttpChannel:
-        return control_http_channel(self._config())
+        if self._channel is None:
+            self._channel = control_http_channel(self._config())
+        return self._channel
 
     def _prepare_image(self, spec: DeploymentSpec, *, image: Image | None) -> DeploymentSpec:
         if self.client is not None and self.image_client is None:
@@ -587,7 +593,12 @@ class DeploymentClient(ControlClientConfigMixin):
 
     def _image_client(self) -> ImageBuildClient:
         if self.image_client is None:
-            self.image_client = _default_image_client(self._config())
+            config = self._config()
+            self.image_client = ImageControlClient(
+                channel=self._http_channel(),
+                workspace=config.workspace,
+                timeout_seconds=max(config.timeout_seconds, DEFAULT_IMAGE_BUILD_TIMEOUT_SECONDS),
+            )
         return self.image_client
 
     def _source_object_id(
@@ -622,22 +633,16 @@ class DeploymentClient(ControlClientConfigMixin):
 
     def _object_client(self) -> ObjectUploadClient:
         if self.object_client is None:
-            self.object_client = _DefaultObjectUploadClient(self._config())
+            self.object_client = _DefaultObjectUploadClient(
+                self._config(), channel=self._http_channel()
+            )
         return self.object_client
-
-
-def _default_image_client(config: ControlClientConfig) -> ImageControlClient:
-    return ImageControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        workspace=config.workspace,
-        timeout_seconds=max(config.timeout_seconds, DEFAULT_IMAGE_BUILD_TIMEOUT_SECONDS),
-    )
 
 
 @dataclass(frozen=True, slots=True)
 class _DefaultObjectUploadClient:
     config: ControlClientConfig
+    channel: HttpChannel
 
     def upload_bytes(
         self,
@@ -649,30 +654,22 @@ class _DefaultObjectUploadClient:
         content_type: str = "application/octet-stream",
         metadata: dict[str, str] | None = None,
         progress: ProgressCallback | None = None,
-    ) -> ImageContextUploadResult | Mapping[str, JsonValue]:
+    ) -> PutObjectResponse:
         object_hash = hashlib.sha256(data).hexdigest()
-        channel = HttpChannel(
-            endpoint=self.config.endpoint,
-            token=self.config.token,
-            timeout_seconds=self.config.timeout_seconds,
-        )
         upload_timeout_seconds = object_upload_timeout_seconds(self.config.timeout_seconds)
         if not overwrite:
-            response = channel.post(
-                workspace_path("/gateway/objects/head", self.config.workspace),
-                {"hash": object_hash, "bucket": bucket},
+            response = HeadObjectResponse.model_validate(
+                self.channel.post(
+                    workspace_path("/gateway/objects/head", self.config.workspace),
+                    HeadObjectRequest(hash=object_hash, bucket=bucket).model_dump(mode="json"),
+                )
             )
-            if (
-                isinstance(response, Mapping)
-                and response.get("exists", False)
-                and response.get("object_id")
-            ):
+            if response.exists:
                 if progress is not None:
                     progress(len(data))
-                return {"object_id": str(response["object_id"])}
+                return PutObjectResponse(object_id=response.object_id)
         uploaded = stream_object_bytes(
-            endpoint=self.config.endpoint,
-            token=self.config.token,
+            channel=self.channel,
             workspace=self.config.workspace,
             timeout_seconds=upload_timeout_seconds,
             data=data,
@@ -684,7 +681,7 @@ class _DefaultObjectUploadClient:
             metadata=metadata,
             progress=progress,
         )
-        return {"object_id": uploaded.object_id}
+        return uploaded
 
 
 def _stub_request_from_spec(
