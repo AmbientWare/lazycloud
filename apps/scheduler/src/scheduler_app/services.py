@@ -212,11 +212,12 @@ class SchedulerAppServices:
         )
         scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
         container_repository = RedisSchedulerContainerRepository(redis)
+        worker_repository = RedisSchedulerWorkerRepository(redis)
         tasks = TaskService(
             context,
             events,
             log_streams=stream_events,
-            progress=TaskProgressService(context, container_repository),
+            progress=TaskProgressService(context, container_repository, worker_repository),
             workspace_changes=workspace_changes,
         )
         compute_policies = WorkspaceComputePolicyService(context)
@@ -246,7 +247,6 @@ class SchedulerAppServices:
         billing_payments = BillingPaymentMaintenance(
             context.database, stripe_settings.provider_factory()
         )
-        worker_repository = RedisSchedulerWorkerRepository(redis)
         volume_deletion = VolumeDeletionService(
             context,
             volume_filesystem,
