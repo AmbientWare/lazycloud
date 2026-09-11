@@ -90,6 +90,7 @@ from execution.mounts import (
     container_resource_mounts_require_workspace_storage,
 )
 from execution.services import ExecutionServices, SchedulerSubmissionResult
+from execution.task_claims import TaskClaimReleaseService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -754,7 +755,7 @@ class FunctionControlService:
             # `retry` holding the failed attempt's container it would be visible
             # to no claim and picked up by nothing.
             with self.services.context.database.session() as session:
-                released = TaskRepository(session).release_claim(task.id)
+                released = TaskClaimReleaseService(session).release(task.id)
             if released is None:
                 continue
             try:

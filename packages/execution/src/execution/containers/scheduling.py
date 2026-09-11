@@ -26,6 +26,7 @@ from shared.timestamps import utc_now
 
 from execution.containers.runtime_state import ContainerRuntimeStateRepository
 from execution.context import ExecutionContext
+from execution.task_claims import TaskClaimReleaseService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -189,7 +190,7 @@ class ContainerSchedulingPersistenceService:
         caller's.
         """
 
-        TaskRepository(session).release_claims_for_container(
+        TaskClaimReleaseService(session).release_container(
             container.id,
             except_task_id=container.task_id,
         )

@@ -368,33 +368,6 @@ class TaskRepository:
         )
         return {str(value) for value in rows if value}
 
-    def release_claims_for_container(
-        self,
-        container_id: str,
-        *,
-        except_task_id: str | None = None,
-    ) -> list[Task]:
-        """Give back everything this container was holding.
-
-        What every path that ends a container has to do, so it lives here rather
-        than in each of them: an uncommanded exit, a scheduling failure and a
-        stop all leave the same rows naming a container that is gone, and a
-        claim nobody gives back is a caller waiting forever.
-
-        `except_task_id` is the task the container was created for, where it had
-        one — that task is settled by the caller against the container's own
-        terminal state, and releasing it here would undo that.
-        """
-
-        released: list[Task] = []
-        for held in self.list_inflight_for_container(container_id):
-            if except_task_id is not None and held.id == except_task_id:
-                continue
-            task = self.release_claim(held.id)
-            if task is not None:
-                released.append(task)
-        return released
-
     def list_inflight_for_container(self, container_id: str) -> list[Task]:
         """Work this container has claimed and not finished.
 

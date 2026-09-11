@@ -64,6 +64,7 @@ from execution.containers.planning import (
 )
 from execution.containers.runtime_state import ContainerRuntimeStateRepository
 from execution.context import ExecutionContext
+from execution.task_claims import TaskClaimReleaseService
 from execution.tasks import TaskService
 
 LOGGER = logging.getLogger(__name__)
@@ -711,7 +712,7 @@ class ContainerService:
             return
         for task_id in task_ids:
             with self.context.database.session() as session:
-                TaskRepository(session).release_claim(task_id)
+                TaskClaimReleaseService(session).release(task_id)
 
     def stop(
         self,
