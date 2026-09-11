@@ -34,7 +34,7 @@ export function BillingSettings({
             </div>
           ) : controller.loadError || !summary ? (
             <p className="text-sm text-destructive" role="alert">
-              {controller.loadError?.message ?? "The plan for this account could not be read."}
+              {controller.loadError?.message ?? "Could not load your plan."}
             </p>
           ) : (
             <>
@@ -119,8 +119,7 @@ function SubscriptionTerms({ summary }: { summary: BillingSummary }) {
   if (plan.terms_version === null || plan.monthly_nanos === null || plan.included_nanos === null) {
     return (
       <p className="text-sm text-warning">
-        Your subscription terms are being verified. Plan changes are paused until verification
-        finishes.
+        Verifying your subscription. Plan changes are unavailable until verification finishes.
       </p>
     );
   }

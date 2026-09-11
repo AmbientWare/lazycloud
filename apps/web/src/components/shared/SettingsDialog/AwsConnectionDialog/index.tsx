@@ -252,11 +252,11 @@ function ConnectionActions({
       {showCapacity ? (
         <dl className="border border-border bg-card text-xs">
           <ConnectionDetail
-            label="Placement"
+            label="New workloads"
             value={connection.hosts_workloads ? "Available" : "Unavailable"}
           />
           <ConnectionDetail
-            label="Active compute"
+            label="Existing instances"
             value={connection.can_manage_existing_capacity ? "Managed" : "Unavailable"}
           />
           <ConnectionDetail
@@ -268,14 +268,11 @@ function ConnectionActions({
 
       {customerAction?.stack ? (
         <div className="space-y-3 border border-border bg-card p-4 text-xs">
-          <p>
-            Use an AWS CLI profile for account {customerAction.stack.account_id}. LazyCloud checks
-            the account before creating the connection stack.
-          </p>
+          <p>Use an AWS CLI profile for account {customerAction.stack.account_id}.</p>
           <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-muted p-3">
             lazycloud cloud authorize --profile YOUR_AWS_PROFILE
           </pre>
-          <p>After CloudFormation finishes, select Validate connection below.</p>
+          <p>After CloudFormation finishes, select Check authorization.</p>
         </div>
       ) : null}
 

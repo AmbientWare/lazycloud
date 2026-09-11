@@ -132,7 +132,7 @@ function ConnectedCloudsPanel({
             billingError
               ? billingError.message
               : connectedCloudEnabled
-                ? "Connect AWS. Capacity is created only when a workload uses AWS."
+                ? "Connect AWS to run workloads in your account."
                 : "Connected cloud accounts are available on the Business plan."
           }
           className="min-h-full px-6 py-6"
@@ -203,16 +203,6 @@ function AddCloudMenu({
               {awsConnectionPresentation(connection).label}
             </span>
           ) : null}
-        </DropdownMenuItem>
-        <DropdownMenuItem disabled className="h-9 whitespace-nowrap">
-          <Cloud />
-          <span className="min-w-0 flex-1 whitespace-nowrap">Google Cloud</span>
-          <span className="ml-auto shrink-0 text-[11px]">Coming soon</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem disabled className="h-9 whitespace-nowrap">
-          <Cloud />
-          <span className="min-w-0 flex-1 whitespace-nowrap">Microsoft Azure</span>
-          <span className="ml-auto shrink-0 text-[11px]">Coming soon</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -305,7 +295,6 @@ function CloudInstances({ instances }: { instances: CustomerComputeInstance[] })
       <div className="mb-3 flex items-end justify-between gap-3">
         <div>
           <h3 className="text-sm font-medium">AWS instances</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">Current capacity</p>
         </div>
         <span className="mono text-xs text-muted-foreground">{instances.length}</span>
       </div>
@@ -313,7 +302,7 @@ function CloudInstances({ instances }: { instances: CustomerComputeInstance[] })
         <div className="border-y border-border px-4 py-8 text-center">
           <p className="text-sm font-medium">No AWS instances running</p>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            LazyCloud provisions capacity when a workload uses AWS.
+            Instances start when a workload uses AWS.
           </p>
         </div>
       ) : (
@@ -371,7 +360,6 @@ function SelfHostedPanel({
   return (
     <Panel
       title="Self-hosted machines"
-      description="Hosts you connected"
       action={
         <Button size="sm" variant="outline" onClick={onJoin}>
           <Server />

@@ -45,7 +45,7 @@ function PlanDialogBody({ controller }: { controller: BillingSettingsController 
     <>
       <DialogContent className="flex max-h-[min(46rem,calc(100svh-2rem))] max-w-3xl flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
         <DialogHeader className="shrink-0 border-b border-border bg-muted/20 px-5 py-4 pr-12 text-left">
-          <DialogTitle className="text-base">Subscription</DialogTitle>
+          <DialogTitle className="text-base">Change plan</DialogTitle>
           <DialogDescription>
             Paid plans include monthly usage credit. Usage rates are the same across plans.
           </DialogDescription>
@@ -62,8 +62,7 @@ function PlanDialogBody({ controller }: { controller: BillingSettingsController 
             </p>
           ) : controller.termsUnverified ? (
             <p className="mb-4 rounded-sm border-l-2 border-warning bg-warning/5 px-3 py-2 text-xs">
-              Your current subscription terms are being verified. Plan changes will be available
-              when verification finishes.
+              Verifying your subscription. Plan changes are unavailable until verification finishes.
             </p>
           ) : null}
           {summary?.plan?.scheduled_change_at ? (
@@ -142,7 +141,6 @@ function PlanCard({
         {formatCostNanos(offer.monthly_nanos)}
         <span className="ml-1 font-sans text-xs font-normal text-muted-foreground">/ month</span>
       </p>
-      <p className="mt-2 text-xs leading-5 text-muted-foreground">{offer.summary}</p>
       <ul className="mt-4 flex-1 space-y-2 border-t border-border/80 pt-4 text-xs leading-5">
         <PlanPoint>
           {offer.included_nanos > 0
@@ -154,7 +152,7 @@ function PlanCard({
           once
         </PlanPoint>
         <PlanPoint>
-          {countLabel(offer.entitlements.max_concurrent_gpus, "GPU card")} held at once
+          {countLabel(offer.entitlements.max_concurrent_gpus, "GPU card")} allocated at once
         </PlanPoint>
         <PlanPoint>{gpuModelsPhrase(offer.entitlements.gpu_types)}</PlanPoint>
         <PlanPoint>{limitPhrase(offer.entitlements.max_workspaces, "workspace")}</PlanPoint>

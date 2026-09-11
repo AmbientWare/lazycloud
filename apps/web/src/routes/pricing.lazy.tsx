@@ -167,7 +167,7 @@ function MarketingPricing() {
           >
             <div className="flex min-w-0 flex-col">
               <h1 className="font-serif text-[clamp(2.75rem,6.6vw,4.5rem)] leading-[0.94] font-normal tracking-[-0.01em] text-balance [&_em]:text-brand [&_em]:italic">
-                The meter starts and stops with your <em>code</em>.
+                Compute pricing <em>by the second.</em>
               </h1>
               <p className="mt-6 max-w-[30rem] text-[15px] leading-[1.6] text-muted-foreground sm:text-base">
                 Compute billing starts with the container and stops with it. You pay by the second.
@@ -180,7 +180,7 @@ function MarketingPricing() {
                   hash="plans"
                   to="/pricing"
                 >
-                  See the plans
+                  Compare plans
                 </MarketingButton>
               </div>
             </div>
@@ -188,7 +188,7 @@ function MarketingPricing() {
             <MarketingCard className="min-w-0 p-5 sm:p-6">
               <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
                 <h2 className="font-serif text-[clamp(1.625rem,3vw,2.125rem)] leading-none font-normal">
-                  Resource costs
+                  Usage rates
                 </h2>
                 <MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />
               </div>
@@ -226,9 +226,6 @@ function MarketingPricing() {
                         <span className="text-[12px] text-muted-foreground">per month</span>
                       </p>
                     </div>
-                    <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
-                      {plan.summary}
-                    </p>
                     <dl className="mt-4 border-t border-border text-[13px]">
                       <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
                         <dt className="text-muted-foreground">Monthly usage credit</dt>
@@ -294,10 +291,10 @@ function MarketingPricing() {
         <FinalCta
           title={
             <>
-              Pay for the resources <em>that ran.</em>
+              Choose a plan <em>and start deploying.</em>
             </>
           }
-          body="Applications, jobs, GPU workloads, and sandboxes use the same meter and draw from one balance."
+          body="Workload usage draws from your account balance. Paid plans include monthly usage credit."
         />
       </main>
     </MarketingLayout>

@@ -124,7 +124,7 @@ function PlaygroundForm({
             ))}
           </div>
         ) : fields !== null ? (
-          <p className="text-sm text-muted-foreground">This target takes no arguments.</p>
+          <p className="text-sm text-muted-foreground">This workload takes no arguments.</p>
         ) : (
           <div>
             <div className="micro-label mb-1">JSON payload</div>

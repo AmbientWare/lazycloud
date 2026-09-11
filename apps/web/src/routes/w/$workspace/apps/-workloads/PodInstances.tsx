@@ -118,7 +118,7 @@ export function PodInstances({
               detail={
                 statusFilter === "active"
                   ? "Scale this Pod above zero to start an instance."
-                  : "This Pod has no recorded instances yet."
+                  : undefined
               }
               className="h-full min-h-36 px-6"
             />

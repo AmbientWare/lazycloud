@@ -46,23 +46,23 @@ export function awsConnectionPresentation(connection: AwsConnection): AwsConnect
 export function awsConnectionDialogDescription(connection: AwsConnection): string {
   switch (connection.phase) {
     case "awaiting_authorization":
-      return "Complete authorization in AWS or cancel this unfinished setup.";
+      return "Authorize access in AWS to finish connecting your account.";
     case "validating":
       return "Checking AWS authorization.";
     case "ready":
-      return "AWS compute placement is active for this account.";
+      return "Workloads can run in your AWS account.";
     case "degraded":
-      return "Check existing access or start a replacement authorization.";
+      return "Check authorization or reconnect your AWS account.";
     case "reconnect_pending":
-      return "Current capacity stays active while you authorize replacement access.";
+      return "Existing instances keep running while you authorize access again.";
     case "retiring_authorization":
-      return "Replacement access is active. Removing the previous authorization.";
+      return "New access is ready. Removing the previous authorization.";
     case "disconnect_draining":
     case "revoking":
     case "verifying_revocation":
       return "Removing AWS resources and authorization.";
     case "action_required":
-      return "Automatic AWS cleanup needs a recovery action.";
+      return "AWS cleanup failed. Review the error and retry.";
   }
 }
 

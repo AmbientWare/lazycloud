@@ -180,7 +180,7 @@ export function GlobalSearch({
         onOpenChange(nextOpen);
       }}
       title="Search workspace"
-      description="Find apps, workloads, tasks, sandboxes, and workspace destinations"
+      description="Search this workspace by name or ID."
       className="top-[10svh] max-h-[75svh] w-[calc(100%-1.5rem)] max-w-2xl translate-y-0 border-border bg-popover shadow-2xl"
     >
       <CommandInput

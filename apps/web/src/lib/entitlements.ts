@@ -48,12 +48,12 @@ export function memberLimitPhrase(limit: PlanEntitlements["max_members"]): strin
 
 /** The GPU models a plan may ask for, from the plan's own set rather than a list held here. */
 export function gpuModelsLabel(gpuTypes: GpuTypeEntitlement): string {
-  return gpuTypes === "all" ? "Every model" : gpuTypes.join(", ");
+  return gpuTypes === "all" ? "All available models" : gpuTypes.join(", ");
 }
 
 /** The same set as a line of its own, where no column heading says what it is. */
 export function gpuModelsPhrase(gpuTypes: GpuTypeEntitlement): string {
-  return gpuTypes === "all" ? "Every GPU model the platform rents" : `${gpuTypes.join(", ")} GPUs`;
+  return gpuTypes === "all" ? "All available GPU models" : `${gpuTypes.join(", ")} GPUs`;
 }
 
 /**

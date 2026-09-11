@@ -88,6 +88,39 @@ mobile falls back to one predictable content scroller.
   Accessibility, layout containment, and interaction outcomes are what matter;
   exact pixels, colors, and DOM adjacency are not.
 
+## Product copy
+
+Apply the `unslop` skill to all visible copy, including titles, subtitles,
+badges, tooltips, empty states, errors, and marketing pages.
+
+- Name the resource, setting, or action in sentence case. Use the same name
+  across navigation, headings, buttons, and instructions. Prefer "Keep warm"
+  to "Warm retention" and "Plan limits" to "Ceilings on your plan".
+- A heading does not need a subtitle. Delete copy that repeats a heading,
+  describes the layout, narrates the interface, or tells users what they can
+  already see. Do not replace deleted filler with shorter filler.
+- Keep help beside the decision it supports. State a requirement, consequence,
+  or next action. Keep cost, permission, expiry, and deletion details precise;
+  brevity must not change their meaning.
+- Show workload settings in configuration. Keep billing rates in pricing and
+  billing views. Do not add pricing multipliers, scheduler terminology, or
+  implementation details to fill a panel. "Region: Automatic" needs no
+  paragraph explaining automatic selection.
+- Badges show a meaningful status or distinction. Do not add slogans,
+  repeated metadata, "Coming soon" promises, or decorative "Live" badges.
+  A live indicator must describe a working stream or current resource state.
+- Empty states name what is missing and offer a useful next action when one
+  exists. Errors name what failed and how to recover when recovery is known.
+  Avoid generic encouragement and claims that an operation succeeded before
+  the server confirms it.
+- Use plain words and concrete claims. Cut metaphors, puffery, rhetorical
+  questions, repeated qualifiers, and claims such as "seamless" or "safe"
+  without a specific guarantee. Avoid em dashes and title case.
+- Read the rendered copy as a whole before finishing. Remove repeated labels
+  and explanations across neighboring components. Preserve accessible names
+  and required descriptions when removing visible text. Do not add tests for
+  literal copy or badges.
+
 ## Tooling
 
 Bun is the only package manager; keep the lockfile synchronized. Reuse the
