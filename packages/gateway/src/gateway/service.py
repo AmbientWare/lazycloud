@@ -2528,22 +2528,23 @@ class GatewayControlService:
                     image_revision=image_revision,
                 )
             if claimed and worker.status is SchedulerWorkerStatus.Draining:
-                if agent_current:
+                WorkerWorkloadRolloutService(
+                    self.services.context.database,
+                    self.scheduler_container_lookup,
+                    self.services.containers,
+                    self.scheduler_worker_lookup,
+                ).reconcile(worker.worker_id)
+                slot_status = (
+                    AgentWorkerSlotStatus.Draining
+                    if self._worker_has_started_containers(worker.worker_id)
+                    else AgentWorkerSlotStatus.Pending
+                )
+                if agent_current and slot_status is AgentWorkerSlotStatus.Pending:
                     worker = self.scheduler_worker_lookup.renew_worker_update(
                         worker, expires_at=utc_now() + timedelta(seconds=60)
                     )
-                if worker.status is SchedulerWorkerStatus.Draining:
-                    WorkerWorkloadRolloutService(
-                        self.services.context.database,
-                        self.scheduler_container_lookup,
-                        self.services.containers,
-                        self.scheduler_worker_lookup,
-                    ).reconcile(worker.worker_id)
-                    slot_status = (
-                        AgentWorkerSlotStatus.Draining
-                        if self._worker_has_started_containers(worker.worker_id)
-                        else AgentWorkerSlotStatus.Pending
-                    )
+                    if worker.status is not SchedulerWorkerStatus.Draining:
+                        slot_status = AgentWorkerSlotStatus.Active
 
         if not agent_current:
             slot_status = AgentWorkerSlotStatus.Draining

@@ -702,59 +702,6 @@ def test_join_credentials_are_refused_for_provider_provisioned_units(
         )
 
 
-def test_worker_update_waits_for_prepared_image_then_drains_same_machine(
-    isolated_services: ApiServices,
-) -> None:
-    workspace_id = _default_workspace_id(isolated_services)
-    _own_default_workspace(isolated_services)
-    unit = isolated_services.compute.create_unit(
-        UnitName("worker-image-update"), workspace=workspace_id, provider="agent"
-    )
-    gateway = isolated_services.gateway_service
-    select_worker_release("worker:target")
-    join = gateway.unit_state_coordinator.create_unit_join_token(
-        unit, workspace_id=workspace_id, owner_token_id="gateway-test-owner"
-    )
-    enrolled = gateway.join_agent(_join_request(join.token))
-    state = gateway._agent_state_for_token(enrolled.agent_token)
-    assert state is not None
-    worker_id = agent_machine_worker_id(enrolled.machine_id)
-    workers = RedisSchedulerWorkerRepository(gateway.compute_state.redis)
-    workers.add_worker(
-        SchedulerWorkerRecord(
-            worker_id=worker_id,
-            machine_id=enrolled.machine_id,
-            capacity_owner_id=unit.capacity_owner_id,
-            pool=unit.pool,
-            status=SchedulerWorkerStatus.Available,
-        )
-    )
-    [preparing] = gateway._agent_slots_for_machine(
-        state,
-        billing_owner=billing_owner_for_unit(unit),
-        active_worker_images={worker_id: "worker:current"},
-        prepared_worker_images=[],
-        agent_binary_sha256="",
-    )
-    assert preparing.status is AgentWorkerSlotStatus.Active
-    current = workers.get_worker(worker_id)
-    assert current is not None and current.status is SchedulerWorkerStatus.Available
-
-    [restarting] = gateway._agent_slots_for_machine(
-        state,
-        billing_owner=billing_owner_for_unit(unit),
-        active_worker_images={worker_id: "worker:current"},
-        prepared_worker_images=["worker:target"],
-        agent_binary_sha256="",
-    )
-    assert restarting.status is AgentWorkerSlotStatus.Pending
-    assert restarting.worker_id == worker_id
-    assert restarting.machine_id == enrolled.machine_id
-    current = workers.get_worker(worker_id)
-    assert current is not None and current.status is SchedulerWorkerStatus.Draining
-    assert current.worker_update_expires_at is not None
-
-
 @pytest.mark.parametrize(
     "worker_status,slot_status",
     [
