@@ -195,6 +195,7 @@ class _Ec2:
             {
                 "VersionNumber": version,
                 "VersionDescription": self.launch_versions[version][0],
+                "LaunchTemplateData": self.launch_versions[version][1],
             }
             for version in versions
         ]
@@ -211,6 +212,7 @@ class _Ec2:
             "LaunchTemplateVersion": {
                 "VersionNumber": version,
                 "VersionDescription": description,
+                "LaunchTemplateData": self.launch_versions[version][1],
             }
         }
 
@@ -398,6 +400,7 @@ def test_disabled_pool_preserves_instances_and_other_suspended_processes() -> No
             "LifecycleState": "InService",
             "HealthStatus": "Healthy",
             "ProtectedFromScaleIn": True,
+            "LaunchTemplate": autoscaling.launch_template,
         }
         for index in (1, 2)
     ]
@@ -651,12 +654,14 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
             "LifecycleState": "InService",
             "HealthStatus": "Healthy",
             "AvailabilityZone": "us-east-1a",
+            "LaunchTemplate": autoscaling.launch_template,
         },
         {
             "InstanceId": second_instance,
             "LifecycleState": "InService",
             "HealthStatus": "Healthy",
             "AvailabilityZone": "us-east-1b",
+            "LaunchTemplate": autoscaling.launch_template,
         },
     ]
     observed_request = request.model_copy(
@@ -668,10 +673,10 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
     ready = provider.describe_unit(observed_request)
     assert ready.phase is ProviderCapacityPhase.Ready
     assert {instance.status for instance in ready.instances} == {ProviderMachineStatus.Active}
-    # The counterpart to each instance's booted version. Reported empty, nothing
-    # downstream can tell a node is running an older release than the pool would
-    # launch now, and the comparison silently never fires.
     assert ready.current_template_version != ""
+    assert {instance.booted_template_version for instance in ready.instances} == {
+        ready.current_template_version
+    }
 
     autoscaling.instances = [
         {
@@ -679,12 +684,14 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
             "LifecycleState": "InService",
             "HealthStatus": "Healthy",
             "AvailabilityZone": "us-east-1a",
+            "LaunchTemplate": autoscaling.launch_template,
         },
         {
             "InstanceId": second_instance,
             "LifecycleState": "InService",
             "HealthStatus": "Unhealthy",
             "AvailabilityZone": "us-east-1b",
+            "LaunchTemplate": autoscaling.launch_template,
         },
     ]
     degraded = provider.describe_unit(observed_request)
@@ -699,12 +706,14 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
             "LifecycleState": "InService",
             "HealthStatus": "Healthy",
             "AvailabilityZone": "us-east-1a",
+            "LaunchTemplate": autoscaling.launch_template,
         },
         {
             "InstanceId": second_instance,
             "LifecycleState": "Pending",
             "HealthStatus": "Healthy",
             "AvailabilityZone": "us-east-1b",
+            "LaunchTemplate": autoscaling.launch_template,
         },
     ]
     launching = provider.describe_unit(observed_request)
@@ -719,6 +728,23 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
     assert autoscaling.suspended_processes == {"Launch"}
     provider.set_unit_capacity(observed_request, desired_machines=2, max_machines=3)
     assert autoscaling.suspended_processes == set()
+
+    agent_release = provider.ensure_unit(
+        observed_request.model_copy(
+            update={
+                "bootstrap": observed_request.bootstrap.model_copy(
+                    update={
+                        "agent_sha256": "c" * 64,
+                        "agent_binary_url": "https://artifacts.lazycloud.test/agent/v2",
+                    }
+                )
+            }
+        )
+    )
+    assert agent_release.current_template_version == ready.current_template_version
+    assert {instance.booted_template_version for instance in agent_release.instances} == {
+        ready.current_template_version
+    }
 
 
 def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
@@ -753,18 +779,39 @@ def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
         )
 
 
-def test_managed_pool_agent_artifact_change_versions_template_and_updates_group() -> None:
+@pytest.mark.parametrize(
+    "host_change",
+    [
+        {"ami_id": "ami-00000000000000002"},
+        {"root_volume_gib": 250},
+        {"node_instance_profile_arn": "arn:aws:iam::123456789012:instance-profile/replacement"},
+        {"security_group_id": "sg-00000000000000002"},
+    ],
+)
+def test_managed_pool_replaces_hosts_for_host_configuration_changes(
+    host_change: dict[str, str | int],
+) -> None:
     ec2 = _Ec2()
     autoscaling = _AutoScaling()
     provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
     initial_spec = _spec()
     created = provisioner.ensure(initial_spec)
+    autoscaling.instances = [
+        {
+            "InstanceId": "i-00000000000000001",
+            "LifecycleState": "InService",
+            "HealthStatus": "Healthy",
+            "ProtectedFromScaleIn": True,
+            "LaunchTemplate": dict(autoscaling.launch_template),
+        }
+    ]
     upgraded_spec = initial_spec.model_copy(
         update={
             "bootstrap": initial_spec.bootstrap.model_copy(
                 update={
                     "agent_version": "0.2.0",
                     "agent_sha256": "c" * 64,
+                    "agent_binary_url": "https://artifacts.lazycloud.test/agent/v2",
                 }
             )
         }
@@ -783,10 +830,34 @@ def test_managed_pool_agent_artifact_change_versions_template_and_updates_group(
         "Version": "2",
     }
     assert autoscaling.update_count == 1
-    encoded_user_data = ec2.launch_data["UserData"]
-    assert isinstance(encoded_user_data, str)
-    user_data = base64.b64decode(encoded_user_data).decode()
-    assert f"AGENT_SHA256={'c' * 64}" in user_data
+    assert upgraded.instances[0].booted_template_version == "1"
+    assert upgraded.current_host_revision == created.current_host_revision
+    assert upgraded.instances[0].booted_host_revision == upgraded.current_host_revision
+
+    replaced = provisioner.ensure(upgraded_spec.model_copy(update=host_change))
+    assert replaced.current_host_revision != upgraded.current_host_revision
+    assert replaced.instances[0].booted_host_revision == created.current_host_revision
+
+
+def test_managed_pool_refuses_replacement_without_host_configuration_evidence() -> None:
+    ec2 = _Ec2()
+    autoscaling = _AutoScaling()
+    provisioner = AwsManagedPoolProvisioner(AwsManagedPoolClients(ec2=ec2, autoscaling=autoscaling))
+    spec = _spec()
+    provisioner.ensure(spec)
+    autoscaling.instances = [{"InstanceId": "i-00000000000000001"}]
+    with pytest.raises(AwsProviderControlError, match="instance launch template is unavailable"):
+        provisioner.describe(spec)
+    autoscaling.instances = [
+        {
+            "InstanceId": "i-00000000000000001",
+            "LaunchTemplate": autoscaling.launch_template,
+        }
+    ]
+    description, data = ec2.launch_versions[1]
+    ec2.launch_versions[1] = (description, {**data, "UserData": "invalid bootstrap"})
+    with pytest.raises(AwsProviderControlError, match="bootstrap evidence is invalid"):
+        provisioner.describe(spec)
 
 
 def test_managed_pool_delete_converges_after_asg_instance_cleanup() -> None:

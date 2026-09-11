@@ -901,6 +901,37 @@ class RedisSchedulerWorkerRepository:
     def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None:
         return self._get_worker_from_key(self.keys.worker_state(worker_id))
 
+    def recover_agent_worker(
+        self, worker: SchedulerWorkerRecord, *, now: datetime
+    ) -> SchedulerWorkerRecord:
+        def write() -> SchedulerWorkerRecord:
+            current = self.get_worker(worker.worker_id)
+            if current is not None:
+                if current.machine_id != worker.machine_id:
+                    raise SchedulerRepositoryError("worker belongs to another machine")
+                if current.status is not SchedulerWorkerStatus.Unavailable:
+                    return current
+                record = current.model_copy(
+                    update={
+                        "status": SchedulerWorkerStatus.Pending,
+                        "request_poll_expires_at": None,
+                        "unavailable_reason": None,
+                        "unavailable_detail": "",
+                        "resource_version": current.resource_version + 1,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                )
+            else:
+                record = worker
+            key = self.keys.worker_state(worker.worker_id)
+            self.redis.set_add(self.keys.worker_index(), key)
+            self.redis.hash_set(key, mapping=redis_serialization.dump_model_hash(record))
+            self.redis.expire(key, DEFAULT_PENDING_WORKER_STATE_TTL_SECONDS)
+            return record
+
+        return self._with_worker_lock(worker.worker_id, write)
+
     async def get_worker_async(
         self,
         redis: AsyncRedisClient,
@@ -1139,13 +1170,25 @@ class RedisSchedulerWorkerRepository:
         ttl_seconds: int = DEFAULT_WORKER_STATE_TTL_SECONDS,
         now: datetime | None = None,
     ) -> SchedulerWorkerRecord:
-        return self.update_worker_status(
-            worker_id,
-            SchedulerWorkerStatus.Available,
-            ttl_seconds=ttl_seconds,
-            now=now,
-            reconcile_capacity=True,
-        )
+        def write() -> SchedulerWorkerRecord:
+            worker = self.get_worker(worker_id)
+            if worker is None:
+                raise WorkerStateNotFoundError(worker_id)
+            if worker.status is SchedulerWorkerStatus.Draining:
+                return worker
+            available = _worker_with_status(
+                self._reconciled_worker_capacity(worker),
+                SchedulerWorkerStatus.Available,
+                unavailable_reason=None,
+                unavailable_detail="",
+                now=now,
+            )
+            key = self.keys.worker_state(worker_id)
+            self.redis.hash_set(key, mapping=redis_serialization.dump_model_hash(available))
+            self.redis.expire(key, ttl_seconds)
+            return available
+
+        return self._with_worker_lock(worker_id, write)
 
     def disable_worker(
         self,

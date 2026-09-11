@@ -111,6 +111,21 @@ def test_worker_slot_equality_and_reconciliation() -> None:
     switch_plan = plan_worker_slot_reconciliation([image_changed], [active])
     assert switch_plan.actions[0].action is WorkerSlotAction.Restart
 
+    agent_changed = active.model_copy(update={"agent_binary_sha256": "a" * 64})
+    assert (
+        plan_worker_slot_reconciliation([agent_changed], [active]).actions[0].action
+        is WorkerSlotAction.Prepare
+    )
+    authorized = agent_changed.model_copy(update={"status": AgentWorkerSlotStatus.Pending})
+    assert (
+        plan_worker_slot_reconciliation([authorized], [active]).actions[0].action
+        is WorkerSlotAction.Restart
+    )
+    assert (
+        plan_worker_slot_reconciliation([authorized], [agent_changed]).actions[0].action
+        is WorkerSlotAction.Keep
+    )
+
     stop_plan = plan_worker_slot_reconciliation([], [active])
     assert stop_plan.actions[0].action is WorkerSlotAction.Stop
 

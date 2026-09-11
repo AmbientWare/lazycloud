@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import tempfile
-from collections.abc import AsyncIterator
-from contextlib import suppress
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -22,7 +22,7 @@ from coordination.event_bus import (
 )
 from coordination.redis_client import AsyncRedisClient, RedisClient, redis_text
 from database.context import ServiceContext
-from database.repositories.compute import ComputeUnitRepository
+from database.repositories.compute import ComputeMachineEnrollmentRepository, ComputeUnitRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import (
@@ -30,6 +30,7 @@ from database.repositories.orchestration import (
     MachineRepository,
     WorkerRepository,
 )
+from database.repositories.worker_releases import WorkerReleaseRepository
 from database.types import DatabaseSession
 from execution.containers.preemption import PreemptedContainerControl
 from execution.containers.runtime_state import ContainerRuntimeStateRepository
@@ -58,6 +59,7 @@ from scheduler.state import (
 from scheduler.worker_inventory import WorkerCapacityRecovery
 from shared.app_identity import NAME
 from shared.cache_records import CacheEntry
+from shared.compute_enrollment import AgentCapacityState, ComputeMachineEnrollmentStatus
 from shared.compute_policy import ComputeUnitRecord
 from shared.container_requests import StopContainerReason
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
@@ -859,7 +861,7 @@ class WorkerRepositoryService:
         principal: WorkerRepositoryPrincipal,
     ) -> WorkerRecordResponse:
         unit = self._feeding_unit(request.worker, principal)
-        self._validate_runtime_worker_registration(request.worker, principal)
+        self._validate_runtime_worker_registration(request.worker, principal, unit=unit)
         if self.services is None:
             raise UpstreamUnavailableError("service dependencies are required for registration")
         availability_zone = self.services.compute.worker_availability_zone(
@@ -929,19 +931,14 @@ class WorkerRepositoryService:
             DeploymentReleaseService().worker_registration_generation(initializing_worker)
         )
         try:
-            if request.ttl_seconds > 0:
-                worker = self.workers.add_worker(
-                    initializing_worker,
-                    ttl_seconds=request.ttl_seconds,
-                )
-            else:
-                worker = self.workers.add_worker(initializing_worker)
-            try:
-                self._sync_runtime_worker_registration(worker, principal)
-            except Exception:
-                with suppress(SchedulerRepositoryError):
-                    self.workers.remove_worker(worker.worker_id)
-                raise
+            with self._runtime_worker_registration(initializing_worker, principal, unit=unit):
+                if request.ttl_seconds > 0:
+                    worker = self.workers.add_worker(
+                        initializing_worker,
+                        ttl_seconds=request.ttl_seconds,
+                    )
+                else:
+                    worker = self.workers.add_worker(initializing_worker)
             return WorkerRecordResponse(
                 worker=worker,
                 worker_session_token=self._worker_session_token(
@@ -1008,12 +1005,14 @@ class WorkerRepositoryService:
         self,
         worker: WorkerExecutionRecord,
         principal: WorkerRepositoryPrincipal,
+        *,
+        unit: ComputeUnitRecord,
     ) -> None:
         if self.services is None:
             raise UpstreamUnavailableError(
                 "service dependencies are required for worker registration"
             )
-        if not principal.is_private_worker:
+        if unit.provider == "local":
             return
         if not worker.machine_id:
             raise ConflictError("private worker requires a machine identity")
@@ -1038,18 +1037,43 @@ class WorkerRepositoryService:
                     f"worker {worker.worker_id} enrollment does not match registration"
                 )
 
-    def _sync_runtime_worker_registration(
+    @contextmanager
+    def _runtime_worker_registration(
         self,
         worker: SchedulerWorkerRecord,
         principal: WorkerRepositoryPrincipal,
-    ) -> None:
-        if not principal.is_private_worker or self.services is None:
+        *,
+        unit: ComputeUnitRecord,
+    ) -> Iterator[None]:
+        if unit.provider == "local":
+            yield
             return
+        if self.services is None:
+            raise UpstreamUnavailableError("worker registration requires durable enrollment")
         if not worker.machine_id:
             raise ConflictError("private worker requires a machine identity")
         now = utc_now()
         with self.services.context.database.session() as session:
+            enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+                principal.workspace_id, worker.machine_id, for_update=True
+            )
+            if (
+                enrollment is None
+                or enrollment.status is not ComputeMachineEnrollmentStatus.Active
+                or enrollment.capacity_owner_id != worker.capacity_owner_id
+            ):
+                raise ConflictError(
+                    "worker has no active machine enrollment in this capacity owner"
+                )
             workers = WorkerRepository(session)
+            worker.admitted_release_generation = WorkerReleaseRepository(session).admit(
+                worker, generation=worker.admitted_release_generation
+            )
+            if (
+                enrollment.capacity_state is not AgentCapacityState.Available
+                or WorkerReleaseRepository(session).update_blocks_registration(worker)
+            ):
+                worker.status = SchedulerWorkerStatus.Draining
             durable_worker = workers.get_across_workspaces(worker.worker_id)
             if durable_worker is None:
                 raise UpstreamUnavailableError(
@@ -1068,6 +1092,8 @@ class WorkerRepositoryService:
                 ),
                 workspace_id=principal.workspace_id,
             )
+            # The update owner takes this row lock before closing Redis intake.
+            yield
         self.services.workspace_changes.emit_change(
             workspace_id=principal.workspace_id,
             topic=WorkspaceChangeTopic.ComputeWorkers,
@@ -1126,7 +1152,10 @@ class WorkerRepositoryService:
         )
         try:
             current = self.workers.get_worker(request.worker_id)
-            if current is not None and current.status is SchedulerWorkerStatus.Available:
+            if current is not None and current.status in {
+                SchedulerWorkerStatus.Available,
+                SchedulerWorkerStatus.Draining,
+            }:
                 return WorkerRecordResponse(worker=current)
             return WorkerRecordResponse(
                 worker=self.workers.toggle_worker_available(request.worker_id)
@@ -1138,6 +1167,15 @@ class WorkerRepositoryService:
         releases = DeploymentReleaseService()
         if worker.admitted_release_generation == 0:
             generation = releases.worker_registration_generation(worker)
+            if self.services is not None and worker.machine_id:
+                with self.services.context.database.session() as session:
+                    if (
+                        WorkerRepository(session).get_across_workspaces(worker.worker_id)
+                        is not None
+                    ):
+                        generation = WorkerReleaseRepository(session).admit(
+                            worker, generation=generation
+                        )
             if generation:
                 worker = self.workers.admit_worker_release(worker, generation=generation)
         return bool(releases.admitted_workers([worker]))

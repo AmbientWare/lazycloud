@@ -259,20 +259,17 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
 
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
-        # A domain error carries one sentence. Almost every one is raised `from`
-        # something that says what actually happened, and that chain ended here
-        # unread — so the cheapest failures to explain were the ones this
-        # codebase explained least. Expected does not mean uninteresting.
         status_code = _domain_error_status(exc)
         request_id = request.headers.get("x-request-id") or uuid4().hex
         log = logger.warning if status_code < 500 else logger.error
         log(
-            "%s serving %s %s (request_id=%s)",
+            "%s serving %s %s (request_id=%s): %s",
             type(exc).__name__,
             request.method,
             request.url.path,
             request_id,
-            exc_info=exc,
+            exc.message,
+            exc_info=exc if status_code >= 500 else None,
         )
         return JSONResponse(
             ErrorResponse(detail=exc.message, code=exc.code).model_dump(),

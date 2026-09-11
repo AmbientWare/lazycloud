@@ -47,8 +47,8 @@ def worker_rollout_allowance(
     limit = 1 if platform else max(1, ceil(len(serving) * 0.1))
     if worker.status is SchedulerWorkerStatus.Draining:
         return limit
-    if worker.status is not SchedulerWorkerStatus.Available:
-        return 0
+    if worker.request_intake_status(at=now) is not SchedulerWorkerStatus.Available:
+        return limit
     available_after = sum(
         candidate.worker_id != worker.worker_id
         and candidate.request_intake_status(at=now) is SchedulerWorkerStatus.Available

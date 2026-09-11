@@ -98,11 +98,9 @@ class SchedulerComputeHooks:
             return None
         return self.agent_intake.observing_since()
 
-    def machine_has_worker_update(self, machine_id: str) -> bool:
-        return any(
-            worker.status is SchedulerWorkerStatus.Draining
-            and self.workers.has_worker_rollout_slot(worker.capacity_owner_id, worker.worker_id)
-            for worker in self._workers_for_machine(machine_id)
+    def machine_has_worker_update(self, capacity_owner_id: str, machine_id: str) -> bool:
+        return self.workers.has_worker_rollout_slot(
+            capacity_owner_id, agent_machine_worker_id(machine_id)
         )
 
     def _workers_for_machine(self, machine_id: str) -> list[SchedulerWorkerRecord]:

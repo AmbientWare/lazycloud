@@ -106,10 +106,8 @@ class ProviderUnitInstance(ContractModel):
     address: str = ""
     availability_zone: str = ""
     storage_volume_ids: tuple[str, ...] = ()
-    # Version of the provider-side launch configuration this instance booted
-    # with, empty when the provider reports none. A pool rolls its configuration
-    # forward without disturbing running instances, so this is the only value
-    # that identifies the release a node is actually on.
+    # Opaque host configuration revision. Agent updates applied in place do not
+    # change it. Empty means the provider has no configuration evidence.
     booted_template_version: str = ""
     billing_started_at: datetime | None = None
     billing_minimum_seconds: int | None = Field(default=None, ge=0)
@@ -183,17 +181,7 @@ class ProviderUnitSnapshot(ContractModel):
     instances: list[ProviderUnitInstance] = Field(default_factory=list)
     provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)
     current_template_version: str = ""
-    """Version an instance launched now would boot with, empty when unknown.
-
-    The counterpart to each instance's `booted_template_version`: comparing the
-    two is what says a node is running an older release than the pool would give
-    it today, and without this the comparison can only be made inside the
-    provider adapter.
-
-    Empty means the provider cannot say, and must never be read as every instance
-    being stale — a provider that reports no version is a provider whose nodes
-    nothing should replace.
-    """
+    """Host revision new instances receive. Unknown revisions never authorize replacement."""
 
 
 class DirectMachineProvider(Protocol):
@@ -365,7 +353,7 @@ class ComputeSchedulerHooks(Protocol):
 
     def machine_worker_availability(self, machine_id: str) -> MachineWorkerAvailability: ...
 
-    def machine_has_worker_update(self, machine_id: str) -> bool: ...
+    def machine_has_worker_update(self, capacity_owner_id: str, machine_id: str) -> bool: ...
 
     def agent_intake_observing_since(self) -> datetime | None:
         """Since when some process has been receiving agent heartbeats, if any.

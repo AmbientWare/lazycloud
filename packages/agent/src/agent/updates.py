@@ -74,6 +74,13 @@ class AgentUpdater:
     binary: Path
     state_dir: Path
 
+    @classmethod
+    def running(cls, state_dir: Path) -> AgentUpdater:
+        binary = Path(shutil.which(sys.argv[0]) or sys.argv[0]).resolve()
+        if not binary.is_file():
+            raise RuntimeError("the running agent executable could not be resolved")
+        return cls(binary, state_dir)
+
     def binary_sha256(self) -> str:
         return running_binary_sha256(self.binary)
 

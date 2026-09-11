@@ -10,7 +10,6 @@ import random
 import shutil
 import socket
 import subprocess
-import sys
 import time
 import traceback
 import urllib.error
@@ -664,7 +663,11 @@ class DockerAgentWorkerController:
         return self.state_dir / AGENT_ACTIVE_SLOTS_FILE
 
     def active_slots(self) -> list[AgentWorkerSlot]:
-        return [slot for slot in self._recorded_slots() if self._slot_container_running(slot)]
+        return [
+            running
+            for slot in self._recorded_slots()
+            if (running := self._running_slot(slot)) is not None
+        ]
 
     def _recorded_slots(self) -> list[AgentWorkerSlot]:
         if not self.active_slots_path.exists():
@@ -771,9 +774,7 @@ class DockerAgentWorkerController:
             slot,
             state_dir=str(self.state_dir),
             image=image,
-            agent_binary_sha256=AgentUpdater(
-                Path(sys.argv[0]).resolve(), self.state_dir
-            ).binary_sha256(),
+            agent_binary_sha256=AgentUpdater.running(self.state_dir).binary_sha256(),
             target_host=self.target_host,
             platform=self.platform,
             host_aliases=self.host_aliases,
@@ -880,10 +881,20 @@ class DockerAgentWorkerController:
                     level="error",
                 )
 
-    def _slot_container_running(self, slot: AgentWorkerSlot) -> bool:
+    def _running_slot(self, slot: AgentWorkerSlot) -> AgentWorkerSlot | None:
         name = f"{AGENT_NAME}-{sanitize_worker_name(slot.worker_id)}"
-        result = self.runner.run([self.docker_binary, "inspect", "-f", "{{.State.Running}}", name])
-        return result.returncode == 0 and result.stdout.strip().lower() == "true"
+        template = (
+            "{{.State.Running}}\n{{range .Config.Env}}"
+            '{{if eq (index (split . "=") 0) "WORKER_AGENT_BINARY_SHA256"}}'
+            '{{index (split . "=") 1}}{{end}}{{end}}'
+        )
+        result = self.runner.run([self.docker_binary, "inspect", "-f", template, name])
+        running, _, digest = result.stdout.strip().partition("\n")
+        if result.returncode != 0 or running != "true":
+            return None
+        observed = slot.model_copy()
+        observed.agent_binary_sha256 = digest
+        return observed
 
     def _save_active_slots(self, slots: list[AgentWorkerSlot]) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -1168,7 +1179,7 @@ class AgentDaemonService:
             )
             if result.capacity_interrupted:
                 return result
-        updater = AgentUpdater(Path(sys.argv[0]).resolve(), self.state_store.state_dir)
+        updater = AgentUpdater.running(self.state_store.state_dir)
         active_slots = self.worker_controller.active_slots()
         stream = self.client.stream_agent(
             StreamAgentRequest(
@@ -1195,7 +1206,12 @@ class AgentDaemonService:
                 private_network_started=private_network_started,
                 private_network_address=private_network_address,
             )
-        desired_slots = [_agent_slot_from_gateway(slot) for slot in stream.slots]
+        desired_slots = [
+            _agent_slot_from_gateway(slot).model_copy(
+                update={"agent_binary_sha256": updater.binary_sha256()}
+            )
+            for slot in stream.slots
+        ]
         plan = plan_worker_slot_reconciliation(
             desired_slots,
             active_slots,

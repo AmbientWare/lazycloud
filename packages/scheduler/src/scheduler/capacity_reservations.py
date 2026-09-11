@@ -38,6 +38,7 @@ from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequ
 from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.container_requests import OciRuntimeName, capacity_memory_mib
 from shared.contracts import ContractModel
+from shared.errors import CapacityLimitReachedError, UpstreamUnavailableError
 from shared.gpu import GPU_ANY, gpu_preference_accepts
 from shared.placement import ProductRegion, product_region
 from shared.scheduling import (
@@ -1292,7 +1293,20 @@ class CapacityReservationService:
                     result = existing_result
                 else:
                     with self.reservations.mutation_lock(candidate.capacity_owner_id):
-                        candidate.prepare()
+                        try:
+                            candidate.prepare()
+                        except (CapacityLimitReachedError, UpstreamUnavailableError) as exc:
+                            last_result = CapacityAcquisitionResult(
+                                status=(
+                                    CapacityAcquisitionStatus.AtLimit
+                                    if isinstance(exc, CapacityLimitReachedError)
+                                    else CapacityAcquisitionStatus.TemporarilyUnavailable
+                                ),
+                                reservation_id=request.container_id,
+                                operation_id=request.container_id,
+                                reason=str(exc),
+                            )
+                            continue
                         controller = self._controller_for_owner(candidate.capacity_owner_id)
                         if controller is None or not controller.accepts(request):
                             continue

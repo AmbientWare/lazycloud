@@ -81,6 +81,10 @@ class AgentMachineRepository(Protocol):
 class AgentWorkerRepository(Protocol):
     def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None: ...
 
+    def recover_agent_worker(
+        self, worker: SchedulerWorkerRecord, *, now: datetime
+    ) -> SchedulerWorkerRecord: ...
+
     def drain_worker_for_maintenance(
         self,
         operation: WorkerPlannedDrainOperation,
@@ -223,7 +227,7 @@ class AgentWorkerPoolController:
             )
         if worker is not None and worker.status is not SchedulerWorkerStatus.Unavailable:
             return self.reconcile_worker_tenancy(machine, worker, now=current_time)
-        ensured = self.workers.add_worker(
+        ensured = self.workers.recover_agent_worker(
             agent_machine_worker_record(machine, self.config, now=current_time),
             now=current_time,
         )

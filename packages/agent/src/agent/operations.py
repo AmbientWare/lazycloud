@@ -1011,6 +1011,8 @@ class AgentWorkerSlot(ContractModel):
     gpu_assignment: str = ""
     network_prefix: str = ""
     worker_image: str = ""
+    # Docker owns this observation; desired slot files must not preserve it.
+    agent_binary_sha256: str = Field(default="", exclude=True, pattern=r"^([0-9a-f]{64})?$")
     status: AgentWorkerSlotStatus = AgentWorkerSlotStatus.Active
 
     @field_validator(
@@ -1526,6 +1528,7 @@ def same_worker_slot(a: AgentWorkerSlot | None, b: AgentWorkerSlot | None) -> bo
         "gpu_assignment",
         "network_prefix",
         "worker_image",
+        "agent_binary_sha256",
         # A reclassified unit has to restart the worker: the label is stamped on
         # every usage record the running worker emits, and one left running under
         # its old classification keeps billing the wrong way until it exits.
@@ -1598,7 +1601,10 @@ def plan_worker_slot_reconciliation(
         elif desired.status is AgentWorkerSlotStatus.Pending:
             action = WorkerSlotAction.Restart
             reason = "worker slot is drained and ready to switch"
-        elif active.worker_image != desired.worker_image:
+        elif (
+            active.worker_image != desired.worker_image
+            or active.agent_binary_sha256 != desired.agent_binary_sha256
+        ):
             action = WorkerSlotAction.Prepare
             reason = "worker image is awaiting restart authorization"
         else:

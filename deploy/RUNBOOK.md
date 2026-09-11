@@ -96,10 +96,21 @@ commit images after a partial push, then publishes the complete manifest.
 
 Argo applies the chart and activates the release after its health checks pass.
 Agents receive the selected worker and agent artifacts through the gateway.
-Managed hosts replace through their existing controller. Joined agents need the
-supervised `install-service` installation once to support automatic binary updates.
-An older agent without the update protocol also needs that initial upgrade.
-Existing work drains; long-running pods remain and can delay replacement.
+API replicas keep serving the activated release throughout the sync. Only replicas
+of the activated build authorize upgrades. A reconnect preserves verified release
+admission for the same enrolled worker and artifacts, then requires source-cache
+activation and a fresh request poll before placement.
+
+Managed and joined agents update in place through their supervised service. Existing
+work drains before switching artifacts. PostgreSQL holds the update intent across
+agent restarts and Redis loss, and clears it only after the target worker accepts
+request polls. Platform updates proceed one machine at a time. When no workers have
+usable intake, one unavailable worker can update to restore service. Host lifecycle
+changes still use the replacement controller. Long-running workloads can delay an
+update until they drain.
+
+Joined agents installed without the supervisor need `install-service` once before
+automatic binary updates can run. Managed node installation already includes it.
 
 To roll back, dispatch Deploy with the earlier complete manifest URL. Deployment
 generations increase even when the selected version decreases.
