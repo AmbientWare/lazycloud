@@ -62,6 +62,39 @@ async def test_real_redis_tail_overflowed_subscriber_catches_up_without_delaying
         await broker.close()
 
 
+@pytest.mark.anyio
+async def test_new_stream_is_delivered_while_another_stream_is_idle(
+    real_redis_actors: RealRedisActors,
+    async_redis: AsyncRedisClient,
+) -> None:
+    producer = real_redis_actors.client()
+    broker = RedisStreamTailBroker(async_redis, block_milliseconds=5_000)
+    await broker.start()
+    try:
+        first = await broker.subscribe(["first"], after={"first": None}, label="first")
+        async with first:
+            producer.stream_add(async_redis.key("first"), {"value": "first"})
+            items = first.items(heartbeat_seconds=10)
+            try:
+                assert await asyncio.wait_for(anext(items), timeout=1) is not None
+                second = await broker.subscribe(["second"], after={"second": None}, label="second")
+                async with second:
+                    expected = redis_text(
+                        producer.stream_add(async_redis.key("second"), {"value": "second"})
+                    )
+                    updates = second.items(heartbeat_seconds=10)
+                    try:
+                        item = await asyncio.wait_for(anext(updates), timeout=1)
+                        assert item is not None
+                        assert redis_text(item[1][0]) == expected
+                    finally:
+                        await updates.aclose()
+            finally:
+                await items.aclose()
+    finally:
+        await broker.close()
+
+
 async def _collect(
     subscription: RedisStreamTailSubscription,
     count: int,

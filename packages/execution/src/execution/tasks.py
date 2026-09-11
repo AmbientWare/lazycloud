@@ -359,6 +359,23 @@ class TaskService:
                 attempts.upsert(latest)
         return updated
 
+    def claim_and_start(self, stub_id: str, *, container_id: str) -> Task | None:
+        resolved_container_id = required_uuid(container_id, field="container_id")
+        with self.context.database.session() as session:
+            claimed = TaskRepository(session).claim_for_stub(
+                stub_id, container_id=resolved_container_id, limit=1
+            )
+            if not claimed:
+                return None
+            persisted = self._start_task_in_session(
+                session,
+                claimed[0],
+                resolved_container_id=resolved_container_id,
+                claim=True,
+            )
+        self._publish_task_started(persisted)
+        return persisted.task
+
     def _start_task(self, task: Task, *, container_id: str | None = None, claim: bool) -> Task:
         resolved_container_id = optional_uuid(container_id, field="container_id")
         with self.context.database.session() as session:
@@ -879,6 +896,7 @@ class TaskService:
         *,
         limit: int,
         cursor: LogPageCursor | None,
+        follow: bool = False,
     ) -> LogPage:
         workspace_id = task.workspace_id
         if not workspace_id:
@@ -889,7 +907,7 @@ class TaskService:
             task_id=task.id,
             start_time=LogRetentionService.cutoff_in_session(session, workspace_id),
         )
-        if cursor is not None:
+        if follow or cursor is not None:
             return repository.page_after(
                 query,
                 workspace_id=workspace_id,

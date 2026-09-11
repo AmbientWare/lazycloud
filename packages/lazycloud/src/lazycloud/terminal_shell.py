@@ -23,8 +23,6 @@ from shared.shell_protocol import (
     ShellResizeRequest,
     encode_shell_frame,
 )
-from websockets.exceptions import ConnectionClosed
-from websockets.sync.client import connect
 
 
 class ShellConnectionError(RuntimeError):
@@ -189,6 +187,8 @@ class InteractiveShell:
         plan: ShellConnectPlanResponse,
         open_timeout_seconds: float,
     ) -> int:
+        from websockets.exceptions import ConnectionClosed
+
         if not token:
             msg = "an authenticated profile token is required to open a shell"
             raise ShellConnectionError(msg)
@@ -351,6 +351,8 @@ def _connect_websocket(
     open_timeout_seconds: float,
     max_message_bytes: int,
 ) -> Iterator[ShellWebSocket]:
+    from websockets.sync.client import connect
+
     with connect(
         url,
         additional_headers={"Authorization": f"Bearer {token}"},

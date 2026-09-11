@@ -43,6 +43,7 @@ from worker.lifecycle import (
     required_container_resolv_conf_source,
 )
 from worker.network_egress import WorkerNetworkEgressCounters
+from worker.network_pool import PreparedNetworkPool
 from worker.network_rules import (
     container_id_from_iptables_rule,
     container_network_comment,
@@ -483,6 +484,15 @@ class AgentBridgeNetworkBackend:
     _bridge_ready: bool = False
     _bridge_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _policy_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _prepared_networks: PreparedNetworkPool = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._prepared_networks = PreparedNetworkPool(
+            worker_id=self.ip_allocator.worker_id,
+            bridge_name=self.config.bridge_name,
+            host_netns_path=self.config.host_netns_path,
+            ip_binary=self.config.ip_binary,
+        )
 
     @property
     def capabilities(self) -> HostNetworkCapabilities:
@@ -498,7 +508,20 @@ class AgentBridgeNetworkBackend:
         self._ensure_bridge_commands(gateway_address=gateway_address)
         if gateway_public_http_url:
             self._probe_gateway_egress(gateway_public_http_url)
+        try:
+            self._prepared_networks.initialize()
+        except Exception as preparation_error:
+            try:
+                self._prepared_networks.close()
+            except Exception as cleanup_error:
+                raise ExceptionGroup(
+                    "network initialization and cleanup failed", [preparation_error, cleanup_error]
+                ) from cleanup_error
+            raise
         return self.capabilities
+
+    def close(self) -> None:
+        self._prepared_networks.close()
 
     def _probe_gateway_egress(self, gateway_public_http_url: str) -> None:
         parsed = urlsplit(gateway_public_http_url)
@@ -523,6 +546,8 @@ class AgentBridgeNetworkBackend:
         try:
             self._remove_container_resources(probe_id, release_ip=False)
             self.assigned_ips[probe_id] = reservation.ip_address
+            for command in self._container_creation_commands(probe_id):
+                self.system.run(command)
             self._setup_assigned_network(
                 context,
                 reservation.ip_address,
@@ -570,6 +595,7 @@ class AgentBridgeNetworkBackend:
         ip_address = self.ip_allocator.reserve_container_ip(container_id)
         self.assigned_ips[container_id] = ip_address
         try:
+            self._prepared_networks.assign(container_id)
             result = self._setup_assigned_network(
                 context,
                 ip_address,
@@ -654,6 +680,7 @@ class AgentBridgeNetworkBackend:
         self._remove_exposed_ports(container_id)
         self._remove_owned_forward_rules(container_id)
         veth_host, _ = container_veth_names(container_id)
+        cleanup_errors: list[Exception] = []
         for command in (
             NetworkCommand(
                 operation=AgentBridgeNetworkOperation.DeleteVeth,
@@ -666,7 +693,18 @@ class AgentBridgeNetworkBackend:
                 ignore_failure=True,
             ),
         ):
-            self.system.run(command)
+            outcome = self.system.run(command)
+            if not outcome.ok and not any(
+                missing in outcome.stderr
+                for missing in ("Cannot find device", "does not exist", "No such file or directory")
+            ):
+                cleanup_errors.append(
+                    RuntimeError(outcome.stderr or f"failed to {command.operation.value}")
+                )
+        if cleanup_errors:
+            raise ExceptionGroup(
+                f"container {container_id!r} network cleanup failed", cleanup_errors
+            )
         shutil.rmtree(
             Path(self.config.netns_config_root) / container_id,
             ignore_errors=True,
@@ -789,6 +827,17 @@ class AgentBridgeNetworkBackend:
         port_bindings: list[PortBinding],
     ) -> list[NetworkCommand]:
         veth_host, veth_container = container_veth_names(container_id)
+        return [
+            NetworkCommand(
+                operation=AgentBridgeNetworkOperation.AttachHostVeth,
+                argv=[self.config.ip_binary, "link", "set", veth_host, "up"],
+            ),
+            *self._namespace_commands(container_id, veth_container, ip_address),
+            *self._port_commands(container_id, veth_host, ip_address, port_bindings),
+        ]
+
+    def _container_creation_commands(self, container_id: str) -> list[NetworkCommand]:
+        veth_host, veth_container = container_veth_names(container_id)
         commands = [
             NetworkCommand(
                 operation=AgentBridgeNetworkOperation.CreateVethPair,
@@ -816,10 +865,6 @@ class AgentBridgeNetworkBackend:
                 ],
             ),
             NetworkCommand(
-                operation=AgentBridgeNetworkOperation.AttachHostVeth,
-                argv=[self.config.ip_binary, "link", "set", veth_host, "up"],
-            ),
-            NetworkCommand(
                 operation=AgentBridgeNetworkOperation.CreateNamespace,
                 argv=[self.config.ip_binary, "netns", "add", container_id],
             ),
@@ -834,8 +879,6 @@ class AgentBridgeNetworkBackend:
                     container_id,
                 ],
             ),
-            *self._namespace_commands(container_id, veth_container, ip_address),
-            *self._port_commands(container_id, veth_host, ip_address, port_bindings),
         ]
         return commands
 

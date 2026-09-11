@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncGenerator, Callable, Iterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -17,6 +17,7 @@ from database.repositories.execution import (
 )
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
+from observability.stream_state import AsyncTaskChangeReader
 from pydantic import JsonValue
 from shared.app_identity import FUNCTION_IMAGE
 from shared.autoscaling import function_container_ceiling
@@ -94,6 +95,7 @@ class FunctionControlService:
     services: ExecutionServices
     gateway_http_url: Callable[[], str] = no_gateway_origin
     async_database: AsyncDatabaseClient | None = None
+    task_changes: AsyncTaskChangeReader | None = None
     control_plane: ControlPlaneService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -973,15 +975,44 @@ class FunctionControlService:
         initial: FunctionInvokeResponse,
         *,
         headless: bool = False,
-        poll_interval_seconds: float = 0.25,
         keepalive_interval_seconds: float = 5.0,
     ) -> AsyncGenerator[FunctionInvokeResponse, None]:
         yield initial
         if initial.done or initial.exit_code != 0 or not initial.task_id or headless:
             return
 
+        if self.task_changes is None:
+            raise RuntimeError("function invocation notifications are not configured")
+        try:
+            task = await self._async_database().run_transaction(
+                lambda session: self.services.tasks.get_in_session(session, initial.task_id)
+            )
+        except NotFoundError as exc:
+            yield FunctionInvokeResponse.from_result(
+                task_id=initial.task_id, output=str(exc), done=True, exit_code=1
+            )
+            return
+        if not task.workspace_id:
+            raise RuntimeError("function invocation has no workspace")
+        # Subscribe before the snapshot: a commit during subscription is read from
+        # PostgreSQL, and a later commit wakes the stream through Redis.
+        async with self.task_changes.follow(
+            workspace_id=task.workspace_id, stub_id=task.stub_id or "", task_id=task.id
+        ) as updates:
+            async for response in self._function_invoke_updates(
+                initial, updates, keepalive_interval_seconds=keepalive_interval_seconds
+            ):
+                yield response
+
+    async def _function_invoke_updates(
+        self,
+        initial: FunctionInvokeResponse,
+        updates: AsyncIterator[None],
+        *,
+        keepalive_interval_seconds: float,
+    ) -> AsyncGenerator[FunctionInvokeResponse]:
+
         log_cursor: LogPageCursor | None = None
-        sleep_seconds = max(poll_interval_seconds, 0.05)
         last_status = ""
         last_progress: TaskPendingProgress | None = None
         last_progress_read = 0.0
@@ -1012,6 +1043,8 @@ class FunctionControlService:
                     output=_stream_log_output(entry.message),
                     stream=entry.stream,
                 )
+            if log_page.next is not None:
+                continue
             progress = last_progress
             progress_due = time.monotonic() - last_progress_read >= 1.0
             if progress_due or task.status.value != last_status:
@@ -1046,12 +1079,14 @@ class FunctionControlService:
                     else 1,
                 )
                 return
-            if time.monotonic() - last_keepalive >= max(keepalive_interval_seconds, sleep_seconds):
+            if time.monotonic() - last_keepalive >= max(keepalive_interval_seconds, 1.0):
                 last_keepalive = time.monotonic()
                 yield FunctionInvokeResponse.from_result(
                     task_id=initial.task_id, status=last_status, pending_progress=last_progress
                 )
-            await asyncio.sleep(sleep_seconds)
+            # The heartbeat also reconciles a commit whose notification was lost
+            # when its publishing process exited. Results always come from SQL.
+            await anext(updates)
 
     def _async_database(self) -> AsyncDatabaseClient:
         if self.async_database is None:
@@ -1067,7 +1102,9 @@ class FunctionControlService:
     ) -> tuple[LogPage, Task]:
         tasks = self.services.tasks
         task = tasks.get_in_session(session, task_id)
-        return tasks.log_page_in_session(session, task, limit=1_000, cursor=cursor), task
+        return tasks.log_page_in_session(
+            session, task, limit=1_000, cursor=cursor, follow=True
+        ), task
 
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse:
         """Give a container asking for work one invocation to run, if there is one.
@@ -1079,15 +1116,11 @@ class FunctionControlService:
 
         if not self.services.containers.accepting_work(request.container_id):
             return FunctionClaimResponse()
-        with self.services.context.database.session() as session:
-            claimed = TaskRepository(session).claim_for_stub(
-                request.stub_id,
-                container_id=request.container_id,
-                limit=1,
-            )
-        if not claimed:
+        task = self.services.tasks.claim_and_start(
+            request.stub_id, container_id=request.container_id
+        )
+        if task is None:
             return FunctionClaimResponse()
-        task = claimed[0]
         if task.invocation is None:
             # Failed rather than raised. The claim already happened, so raising
             # would leave a task owned by a container that was told nothing about
@@ -1101,7 +1134,6 @@ class FunctionControlService:
             self.release_dependents(updated)
             return FunctionClaimResponse()
         validate_function_dependency_bindings(task.dependency_bindings)
-        self.services.tasks.publish_lifecycle_change(task, WorkspaceChangeType.Updated)
         return FunctionClaimResponse(
             task=FunctionClaimedTask(
                 task_id=task.id,

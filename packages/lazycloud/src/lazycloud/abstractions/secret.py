@@ -15,7 +15,6 @@ from shared.http.secrets import (
 from shared.secrets import SecretRecord
 from typing_extensions import Self
 
-from lazycloud.clients.secret.control import SecretControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
 
 
@@ -127,7 +126,9 @@ class Secret:
         return True
 
 
-def _default_secret_client(config: ControlClientConfig) -> SecretControlClient:
+def _default_secret_client(config: ControlClientConfig) -> SecretClient:
+    from lazycloud.clients.secret.control import SecretControlClient
+
     return SecretControlClient.from_endpoint(
         config.endpoint,
         token=config.token,

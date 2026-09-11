@@ -25,7 +25,6 @@ from shared.http.errors import HttpApiError
 from shared.task_context import current_task_id
 from typing_extensions import Self
 
-from lazycloud.clients.artifact.control import ArtifactControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
 
 DEFAULT_ARTIFACT_CHUNK_SIZE_BYTES = 1024 * 1024
@@ -440,7 +439,9 @@ class ArtifactTaskIdError(RuntimeError):
     pass
 
 
-def _default_artifact_client(config: ControlClientConfig) -> ArtifactControlClient:
+def _default_artifact_client(config: ControlClientConfig) -> ArtifactRemoteClient:
+    from lazycloud.clients.artifact.control import ArtifactControlClient
+
     return ArtifactControlClient.from_endpoint(
         config.endpoint,
         token=config.token,

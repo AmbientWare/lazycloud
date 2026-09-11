@@ -109,7 +109,7 @@ from observability.settings import (
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
 )
-from observability.stream_state import RedisEventStreamRepository
+from observability.stream_state import AsyncTaskChangeReader, RedisEventStreamRepository
 from observability.usage import UsageService, WorkerEventService
 from observability.workspace_changes import (
     AsyncWorkspaceChangeService,
@@ -310,7 +310,6 @@ class FunctionApiService(Protocol):
         initial: FunctionInvokeResponse,
         *,
         headless: bool = False,
-        poll_interval_seconds: float = 0.25,
         keepalive_interval_seconds: float = 5.0,
     ) -> AsyncIterator[FunctionInvokeResponse]: ...
 
@@ -1261,6 +1260,7 @@ def _compose_api_services(
         core,
         gateway_http_url=lambda: core.gateway_settings.public_http_url,
         async_database=async_database,
+        task_changes=AsyncTaskChangeReader(async_io.realtime) if async_io is not None else None,
     )
     gateway = gateway_service or _gateway_control_service(
         core,
