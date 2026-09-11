@@ -268,10 +268,11 @@ function TaskDrawerBody({
                 <StubKindIcon kind={kind} className="size-3" />
                 {record.app_id ? (
                   <Link
-                    to="/w/$workspace/apps/$appId/workloads/$name"
+                    to="/w/$workspace/apps/$appId/workloads/$kind/$name"
                     params={{
                       workspace: workspace.name,
                       appId: record.app_id,
+                      kind: record.workload.kind,
                       name: record.workload.name,
                     }}
                     className="text-brand hover:underline"

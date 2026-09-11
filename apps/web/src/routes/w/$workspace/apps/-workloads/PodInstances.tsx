@@ -316,10 +316,11 @@ function InstanceRow({
   return (
     <div role="listitem" className="border-b border-border/70 last:border-b-0">
       <Link
-        to="/w/$workspace/apps/$appId/workloads/$name/instances/$containerId"
+        to="/w/$workspace/apps/$appId/workloads/$kind/$name/instances/$containerId"
         params={{
           workspace: workspaceName,
           appId,
+          kind: "pod",
           name: workloadName,
           containerId: container.id,
         }}

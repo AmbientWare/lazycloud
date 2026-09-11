@@ -126,7 +126,7 @@ export function GlobalSearch({
         detail: workload.handler
           ? `${formatKind(workload.kind)} · ${workload.handler}`
           : formatKind(workload.kind),
-        href: `${base}/apps/${encodeURIComponent(workload.app_id)}/workloads/${encodeURIComponent(workload.name)}`,
+        href: `${base}/apps/${encodeURIComponent(workload.app_id)}/workloads/${encodeURIComponent(workload.kind)}/${encodeURIComponent(workload.name)}`,
         icon: Boxes,
       });
     }
