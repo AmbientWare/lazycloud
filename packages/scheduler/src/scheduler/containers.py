@@ -1257,7 +1257,7 @@ class SchedulerContainerRequestService:
             request.model_copy(
                 update={
                     "backfill": False,
-                    "capacity_retry_at": capacity_retry_at,
+                    "capacity_retry_at": capacity_retry_at or request.capacity_retry_at,
                     "retry_count": (
                         request.retry_count + 1 if retry_count is None else retry_count
                     ),
