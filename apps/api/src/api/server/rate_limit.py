@@ -39,6 +39,9 @@ DEFAULT_UNAUTHENTICATED_LIMITS: tuple[UnauthenticatedRouteLimit, ...] = (
     # behind one address, and every one of them lands here within a minute of
     # each other.
     UnauthenticatedRouteLimit("/auth/github/callback", 20, 400),
+    # Five-second polling supports ten concurrent devices per address and 200
+    # globally. The specific prefix keeps polling out of the creation budget.
+    UnauthenticatedRouteLimit("/auth/device/token", 120, 2_400),
     UnauthenticatedRouteLimit("/auth/device", 10, 200),
     UnauthenticatedRouteLimit("/auth/authorize", 10, 200),
     # Redeeming a sign-in code. The budget bounds abuse of the exchange rather than
@@ -101,14 +104,14 @@ class UnauthenticatedRateLimitMiddleware:
             redis = self.redis()
             if not await try_consume_async(
                 redis,
-                f"ratelimit:{limit.prefix}:addr:{address}",
+                redis.key("ratelimit", limit.prefix, "addr", address),
                 limit=limit.per_address_per_minute,
                 window_seconds=_WINDOW_SECONDS,
             ):
                 return False
             return await try_consume_async(
                 redis,
-                f"ratelimit:{limit.prefix}:global",
+                redis.key("ratelimit", limit.prefix, "global"),
                 limit=limit.global_per_minute,
                 window_seconds=_WINDOW_SECONDS,
             )
