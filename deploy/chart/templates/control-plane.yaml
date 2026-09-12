@@ -33,7 +33,7 @@ spec:
         - name: wireguard-keys
           secret:
             secretName: {{ .Values.wireguard.secretName }}
-            defaultMode: 0600
+            defaultMode: 0400
         - name: wireguard-platform-key
           emptyDir: {}
         # Per pod, because the artifact is immutable and 48MB: a shared volume
@@ -44,13 +44,6 @@ spec:
           configMap:
             name: aws-chain
       initContainers:
-        - name: wireguard-route-marks
-          image: {{ include "lazycloud.image" (list . "tunnel-gateway") }}
-          command: ["sysctl", "-w", "net.ipv4.conf.all.src_valid_mark=1"]
-          securityContext:
-            privileged: true
-          resources:
-            {{- toYaml .Values.controlPlane.initResources | nindent 12 }}
         # The release publishes the agent binary; the deployment says where it
         # keeps one. Neither holds the whole path, so it is assembled here, and
         # the artifact is fetched before the process that serves it starts:
@@ -73,7 +66,7 @@ spec:
           resources:
             {{- toYaml .Values.controlPlane.initResources | nindent 12 }}
         - name: wireguard-platform-key
-          image: {{ include "lazycloud.image" (list . "tunnel-gateway") }}
+          image: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/tunnel-gateway@sha256:04d2adb643a23d26b41ab3c27c1bd8f6ca1704d71f31e283ee32be9b87f0c5be
           command:
             - /bin/sh
             - -ec
@@ -97,42 +90,6 @@ spec:
               mountPath: /var/lib/lazycloud/wireguard
           resources:
             {{- toYaml .Values.controlPlane.initResources | nindent 12 }}
-        - name: wireguard-platform
-          restartPolicy: Always
-          image: {{ include "lazycloud.image" (list . "tunnel-gateway") }}
-          # A native sidecar outlives API shutdown and preserves its draining streams.
-          command: ["lazycloud-wireguard-platform"]
-          securityContext:
-            capabilities:
-              add: ["NET_ADMIN"]
-          env:
-            - name: LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE
-              value: /var/lib/lazycloud/wireguard/private-key
-            {{- include "lazycloud.databaseEnv" .Values.wireguard.database | nindent 12 }}
-            - name: LAZYCLOUD_DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.secrets.name }}
-                  key: LAZYCLOUD_DATABASE_URL
-            - name: LAZYCLOUD_REDIS_URL
-              value: {{ required "runtime.LAZYCLOUD_REDIS_URL is required" .Values.runtime.LAZYCLOUD_REDIS_URL | quote }}
-            - name: LAZYCLOUD_WIREGUARD_POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-          volumeMounts:
-            - name: tun
-              mountPath: /dev/net/tun
-            - name: wireguard-platform-key
-              mountPath: /var/lib/lazycloud/wireguard
-          resources:
-            {{- toYaml .Values.wireguard.resources | nindent 12 }}
-          readinessProbe:
-            exec:
-              command: ["test", "-f", "/tmp/lazycloud-wireguard-platform.ready"]
-            periodSeconds: 2
-            timeoutSeconds: 2
-            failureThreshold: 5
       containers:
         - name: control-plane
           image: {{ include "lazycloud.image" (list . "api") }}
@@ -202,7 +159,49 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 6
-
+        - name: wireguard-platform
+          image: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/tunnel-gateway@sha256:04d2adb643a23d26b41ab3c27c1bd8f6ca1704d71f31e283ee32be9b87f0c5be
+          # The image's default command is the gateway. This container is the
+          # platform peer beside the API, which is the other entrypoint the same
+          # image carries, and the gateway's settings refuse this container's
+          # environment on the first line.
+          command: ["lazycloud-wireguard-platform"]
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          env:
+            - name: LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE
+              value: /var/lib/lazycloud/wireguard/private-key
+            - name: LAZYCLOUD_WIREGUARD_SERVER_PUBLIC_KEY_FILE
+              value: /var/lib/lazycloud/wireguard/server/public-key
+            - name: LAZYCLOUD_WIREGUARD_GATEWAY_ENDPOINT
+              # The ClusterIP includes the standby pod, which deliberately has no
+              # WireGuard listener. The public load balancer's TCP target health
+              # sends both platform and agent UDP traffic to the lease holder.
+              value: {{ required "wireguard.gateways[0].endpoint is required" (index .Values.wireguard.gateways 0).endpoint | quote }}
+            - name: LAZYCLOUD_WIREGUARD_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: tun
+              mountPath: /dev/net/tun
+            - name: wireguard-keys
+              mountPath: /var/lib/lazycloud/wireguard/server/public-key
+              subPath: server-public-key
+              readOnly: true
+            - name: wireguard-platform-key
+              mountPath: /var/lib/lazycloud/wireguard/private-key
+              subPath: private-key
+              readOnly: true
+          resources:
+            {{- toYaml .Values.wireguard.resources | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/lazycloud-wireguard-platform.ready"]
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 5
 ---
 apiVersion: v1
 kind: Service

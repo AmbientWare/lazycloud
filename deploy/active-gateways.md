@@ -1,11 +1,23 @@
 # Active gateways
 
-Implementation branch: `feat/active-gateways`.
+The complete implementation is merged in `5e94e848d`. This preparation release
+applies migration stage one below. It retains the deployed gateway-zero and
+platform tunnel image, publishes the updater bridge and starts gateway one.
+Service-only provisioning is already deployed, and gateway one's assigned NLB
+endpoint is recorded in the production environment.
 
-This branch describes the final deployment. It must not replace the deployed
-chart in one sync. The Service-only provisioning stage has created gateway one's
-NLB and its assigned endpoint is recorded in the production environment. The
-application migration still requires the ordered releases below.
+`wireguard-gateway.yaml` preserves gateway zero's two-replica Deployment and
+Service selector. Its pod template keeps secret revision `1` and the deployed
+network image ending in digest `87f0c5be`. The same image remains in the platform
+sidecar and key initializer. `wireguard-gateway-1.yaml` selects the new network
+image and the existing gateway-one Service. Its temporary `minAvailable: 1`
+disruption budget blocks voluntary eviction while clients migrate. Remove that
+budget and all image pins when restoring the final indexed chart.
+
+Compose runs the same preparation topology against local dependencies. Gateway
+zero and the platform peer use the pinned release image; gateway one and key
+bootstrap build from this source. Pulling the pinned image requires access to
+the platform ECR repository. Do not copy AWS credentials into these containers.
 
 ## Outcome
 
