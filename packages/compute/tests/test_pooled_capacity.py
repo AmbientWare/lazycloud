@@ -1032,10 +1032,13 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
     assert {unit.id: unit.desired_machines for unit in units} == desired_before_disable
 
 
-@pytest.mark.parametrize("floor_transferred", [False, True])
-def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
+@pytest.mark.parametrize(
+    ("floor_transferred", "serving_baseline"), [(False, 0), (True, 0), (False, 2)]
+)
+def test_failed_warm_purchase_preserves_serving_baseline_and_releases_unused_capacity(
     service_context: ServiceContext,
     floor_transferred: bool,
+    serving_baseline: int,
 ) -> None:
     with service_context.database.session() as session:
         workspace_id = service_context.default_workspace_id(session)
@@ -1084,19 +1087,42 @@ def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
         platform_providers=lambda: tuple(providers),
     )
     leases = _MutationLeases()
+    hooks = _SchedulerHooks()
     compute = ComputeService(
         service_context,
         provider_resolver=resolver,
         capacity_owner_mutations=leases,
         pool_bootstrap_factory=_bootstrap,
-        scheduler_hooks=_SchedulerHooks(),
-        fleet_policy=FleetCapacityPolicy(max_cpu_instances=1, warm_cpu_preemptible_min=1),
+        scheduler_hooks=hooks,
+        fleet_policy=FleetCapacityPolicy(
+            max_cpu_instances=serving_baseline + 1,
+            warm_cpu_preemptible_min=max(serving_baseline, 1),
+        ),
     )
     now = datetime.now(UTC)
     compute.reconcile_platform_warm_capacity(now=now)
     with service_context.database.session() as session:
         cheap = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)[0]
-    suppliers[0].max_observed_machines = 0
+    suppliers[0].max_observed_machines = serving_baseline
+    if serving_baseline:
+        compute.reconcile_unit_capacity(cheap.id, now=now)
+        machine_id = ""
+        for index in range(serving_baseline):
+            machine_id = str(uuid4())
+            _seed_serving_machine(
+                service_context,
+                cheap,
+                hooks,
+                machine_id=machine_id,
+                instance_id=f"i-{index:017x}",
+                now=now,
+            )
+        compute.begin_internal_unit_replacement(
+            workspace_id, cheap.id, machine_id, template_version="next"
+        )
+        compute.scale_internal_unit(
+            workspace_id, cheap.id, serving_baseline, before_mutation=_allow_scale
+        )
     suppliers[0].last_capacity_failure_at = now
     failed = compute.reconcile_unit_capacity(cheap.id, now=now + timedelta(seconds=1))
     assert failed is not None
@@ -1120,22 +1146,80 @@ def test_failed_warm_purchase_releases_full_fleet_slot_before_fallback(
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=2))
     with service_context.database.session() as session:
         protected = ComputeUnitRepository(session).get(cheap.id)
-    assert protected is not None and protected.desired_machines == 1
+    assert protected is not None and protected.desired_machines == max(serving_baseline, 1)
     leases.reserved_owners.clear()
+    if serving_baseline:
+        suppliers[0].capacity_failure = RuntimeError("provider capacity unavailable")
+        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=2))
+        retained = compute.get_internal_unit(workspace_id, cheap.id)
+        assert (retained.desired_machines, retained.min_machines) == (2, 2)
+        assert not retained.replacement_machine_id
+        assert retained.provider_state.degraded_reason == "provider_acquisition_rejected"
+        assert suppliers[0].desired == 3
+        suppliers[0].capacity_failure = None
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=2))
     with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
     assert {unit.provider_ref: (unit.desired_machines, unit.min_machines) for unit in units} == {
-        "hetzner:cheap": (0, 0),
+        "hetzner:cheap": (serving_baseline, serving_baseline),
         "hetzner:fallback": (1, 1),
     }
-    assert suppliers[0].desired == 0
+    retained = next(unit for unit in units if unit.provider_ref == "hetzner:cheap")
+    assert not retained.replacement_machine_id
+    assert retained.provider_state.degraded_at == failed.provider_state.degraded_at
+    assert retained.provider_state.degraded_reason == "provider_acquisition_rejected"
+    assert suppliers[0].desired == serving_baseline
     fallback = next(unit for unit in units if unit.provider_ref == "hetzner:fallback")
     compute.reconcile_unit_capacity(fallback.id, now=now + timedelta(seconds=3))
     assert suppliers[1].desired == 1
 
+    if serving_baseline:
+        assert fallback.warm_handoff_from == (cheap.id,)
+        _seed_serving_machine(
+            service_context,
+            fallback,
+            hooks,
+            machine_id=str(uuid4()),
+            instance_id="i-00000000000000000",
+            now=now + timedelta(seconds=3),
+        )
+        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=4))
+        retained = compute.get_internal_unit(workspace_id, cheap.id)
+        assert (retained.desired_machines, retained.min_machines) == (2, 1)
+        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=5))
+        retained = compute.get_internal_unit(workspace_id, cheap.id)
+        fallback = compute.get_internal_unit(workspace_id, fallback.id)
+        assert (retained.desired_machines, retained.min_machines) == (1, 1)
+        assert (fallback.desired_machines, fallback.min_machines) == (1, 1)
+        # Missing provider assets hold fleet capacity until absence settles.
+        compute.reconcile_unit_capacity(cheap.id, now=now + timedelta(seconds=126))
+        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=127))
+        fallback = compute.get_internal_unit(workspace_id, fallback.id)
+        assert (fallback.desired_machines, fallback.min_machines) == (2, 2)
+        compute.reconcile_unit_capacity(fallback.id, now=now + timedelta(seconds=128))
+        _seed_serving_machine(
+            service_context,
+            fallback,
+            hooks,
+            machine_id=str(uuid4()),
+            instance_id="i-00000000000000001",
+            now=now + timedelta(seconds=128),
+        )
+        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=129))
+        retained = compute.get_internal_unit(workspace_id, cheap.id)
+        assert (retained.desired_machines, retained.min_machines) == (1, 0)
+        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=130))
+        retained = compute.get_internal_unit(workspace_id, cheap.id)
+        assert (retained.desired_machines, retained.min_machines) == (0, 0)
+        assert suppliers[0].desired == 0
+        assert suppliers[1].desired == 2
+        compute.reconcile_unit_capacity(cheap.id, now=now + timedelta(seconds=251))
+        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=252))
+        fallback = compute.get_internal_unit(workspace_id, fallback.id)
+        assert not fallback.warm_handoff_from
+
     compute.fleet_policy = FleetCapacityPolicy(max_cpu_instances=1, warm_cpu_preemptible_min=0)
-    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=4))
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=253))
     compute.scale_internal_unit(workspace_id, fallback.id, 0, before_mutation=_allow_scale)
     compute.clear_capacity_degradation(workspace_id, cheap.capacity_owner_id)
     retried = compute.scale_internal_unit(workspace_id, cheap.id, 1, before_mutation=_allow_scale)
@@ -3506,6 +3590,21 @@ def test_recovered_warm_market_releases_handoff_after_surplus_retires() -> None:
     assert settled.handoff_from == ()
     assert settled.floors == {"source": 1, "target": 1}
     assert settled.target_machines == 1
+
+    retiring_source = WarmCapacityUnit(
+        "source", desired=0, committed=2, ready=2, floor=0, eligible=True
+    )
+    retiring = plan_warm_capacity(
+        (retiring_source,),
+        target_unit_id="target",
+        minimum=2,
+        fleet_baseline=2,
+        fleet_limit=4,
+        fleet_committed=2,
+        maintenance_busy=False,
+    )
+    assert retiring.target_machines == 1
+    assert retiring.floors == {"source": 0, "target": 1}
 
 
 def test_retirement_cannot_revive_until_provider_deletion_finishes(
