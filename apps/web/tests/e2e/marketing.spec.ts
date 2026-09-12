@@ -28,10 +28,10 @@ test("canonical marketing routes are public, responsive, and accessible", async 
   await expect(page.getByRole("heading", { name: "Sign in" })).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("lazycloud-admin");
 
-  const runTab = page.getByRole("tab", { name: "Cloud run" });
-  await runTab.click();
-  await expect(runTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("tabpanel", { name: "Cloud run" })).toBeVisible();
+  const sandboxTab = page.getByRole("tab", { name: "Sandboxes" });
+  await sandboxTab.click();
+  await expect(sandboxTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tabpanel", { name: "Sandboxes" })).toBeVisible();
 
   const marketingSurface = page.locator(".marketing-site");
   await expect(marketingSurface.locator('a[href="/dashboard"]')).toHaveCount(0);

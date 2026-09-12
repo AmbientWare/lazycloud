@@ -36,6 +36,11 @@ export function Glyph({ children }: { children: ReactNode }) {
   );
 }
 
+/* Live status dot, shared by terminal footers and product rows. */
+export function StatusDot() {
+  return <i className="size-1.5 rounded-full bg-positive shadow-[0_0_10px_var(--positive)]" />;
+}
+
 export function MarketingButton({
   to,
   hash,
@@ -121,6 +126,21 @@ export function GetStartedButton({
         <a href={githubSignInHref("/dashboard")}>{content}</a>
       )}
     </Button>
+  );
+}
+
+export function SectionHeading({ title, body }: { title: ReactNode; body?: string }) {
+  return (
+    <div className="mb-10 max-w-[770px] sm:mb-12 lg:mb-14">
+      <h2 className="max-w-[740px] font-serif text-[clamp(2.125rem,8vw,3.625rem)] leading-[1.02] font-normal tracking-[-0.005em] text-balance sm:leading-[0.99] [&_em]:text-brand [&_em]:italic">
+        {title}
+      </h2>
+      {body ? (
+        <p className="mt-4 max-w-[620px] text-base leading-[1.6] text-muted-foreground sm:mt-5 sm:text-lg sm:leading-[1.55]">
+          {body}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
