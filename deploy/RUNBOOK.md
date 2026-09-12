@@ -281,13 +281,30 @@ gh workflow run deploy.yml -f deployment=prod -f release_manifest_url=<manifest-
 # Prod onto the commit and release staging runs. No build.
 gh workflow run promote.yml
 
-# Neither: make Argo reconcile now rather than on its next poll.
-kubectl -n argocd patch application lazycloud-prod --type merge \
-  -p '{"operation":{"sync":{"revision":"prod"}}}'
 ```
 
 Deploy selects the supplied complete release. Ship supplies the URL automatically.
 Release manifests are immutable; incomplete publication cannot advance the deployment.
+
+For a manual full sync, first confirm that no operation is running. Stop if this
+prints an operation:
+
+```sh
+kubectl -n argocd get application lazycloud-prod -o jsonpath='{.operation}'
+```
+
+Submit the sync and clear the completed operation state together. Argo can retain
+a previous selective sync's resource filter and prune setting when merging the
+next operation state. This command leaves pruning disabled and runs the full
+chart, including its release activation hook:
+
+```sh
+kubectl -n argocd patch application lazycloud-prod --type merge \
+  -p '{"status":{"operationState":null},"operation":{"sync":{"revision":"prod","prune":false}}}'
+```
+
+Check the migration, workloads, and active-release generation. A successful
+selective sync does not prove that the release was activated.
 
 Images are built once per commit into repositories every deployment shares,
 so `Promote` finds every image already published and writes prod's values

@@ -60,13 +60,12 @@ class _PendingStream:
 @dataclass(slots=True)
 class _AgentSession:
     record: AgentConnectionRecord
-    context: grpc.aio.ServicerContext[bytes, bytes]
+    connect_task: asyncio.Task[None]
     commands: asyncio.Queue[TunnelCommand] = field(default_factory=lambda: asyncio.Queue(128))
     pending: dict[str, _PendingStream] = field(default_factory=dict)
-    streams: dict[asyncio.Task[None], grpc.aio.ServicerContext[bytes, bytes]] = field(
-        default_factory=dict
-    )
+    streams: set[asyncio.Task[None]] = field(default_factory=set)
     connected: bool = True
+    close_status: grpc.StatusCode | None = None
 
 
 @dataclass(slots=True)
@@ -126,7 +125,7 @@ class AgentTunnelGateway:
         )
         if not claimed:
             await context.abort(grpc.StatusCode.ABORTED, "Agent connection ownership changed")
-        session = _AgentSession(record, context)
+        session = _AgentSession(record, _current_task())
         self._sessions[record.connection_id] = session
         maintenance = asyncio.create_task(self._maintain(session))
         self._maintenance.add(maintenance)
@@ -161,6 +160,10 @@ class AgentTunnelGateway:
             done, _ = await asyncio.wait((receiving, sending), return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 task.result()
+        except asyncio.CancelledError:
+            if session.close_status is not None:
+                await context.abort(session.close_status, "Agent session is no longer available")
+            raise
         finally:
             session.connected = False
             receiving.cancel()
@@ -218,7 +221,7 @@ class AgentTunnelGateway:
         owner = _current_task()
         if len(session.streams) >= TUNNEL_MAX_STREAMS:
             await context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, "Agent stream limit reached")
-        session.streams[owner] = context
+        session.streams.add(owner)
         loop = asyncio.get_running_loop()
         pending = _PendingStream(loop.create_future(), loop.create_future(), owner)
         stream_id = str(uuid4())
@@ -237,9 +240,13 @@ class AgentTunnelGateway:
             await stream.send_message(TunnelPacket(kind=TunnelPacketKind.Opened).to_wire())
             async with asyncio.timeout(max(0, (expiry - datetime.now(UTC)).total_seconds())):
                 await bridge_packets(stream, agent)
+        except asyncio.CancelledError:
+            if session.close_status is not None:
+                await context.abort(session.close_status, "Agent session is no longer available")
+            raise
         finally:
             session.pending.pop(stream_id, None)
-            session.streams.pop(owner, None)
+            session.streams.discard(owner)
             if not pending.completed.done():
                 pending.completed.set_result(None)
 
@@ -257,7 +264,7 @@ class AgentTunnelGateway:
         if len(session.streams) >= TUNNEL_MAX_STREAMS:
             await context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, "Agent stream limit reached")
         owner = _current_task()
-        session.streams[owner] = context
+        session.streams.add(owner)
         try:
             host, port = split_host_port(self.control_address)
             async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
@@ -271,8 +278,12 @@ class AgentTunnelGateway:
                 writer.close()
                 with suppress(OSError):
                     await writer.wait_closed()
+        except asyncio.CancelledError:
+            if session.close_status is not None:
+                await context.abort(session.close_status, "Agent session is no longer available")
+            raise
         finally:
-            session.streams.pop(owner, None)
+            session.streams.discard(owner)
 
     async def drain(self) -> None:
         self.accepting = False
@@ -311,14 +322,14 @@ class AgentTunnelGateway:
             LOGGER.warning("Agent tunnel authorization closed the session: %s", type(exc).__name__)
         finally:
             session.connected = False
-            streams = tuple(session.streams.items())
+            session.close_status = status
+            # Only each RPC's owner may send its terminal status; peer closure can race it.
+            owners = (session.connect_task, *session.streams)
+            for task in owners:
+                task.cancel()
             try:
-                for _, context in streams:
-                    await _end_session_rpc(context, status)
-                await _end_session_rpc(session.context, status)
+                await asyncio.gather(*owners, return_exceptions=True)
             finally:
-                for task, _ in streams:
-                    task.cancel()
                 self._sessions.pop(session.record.connection_id, None)
                 await self._release(session.record)
 
@@ -399,15 +410,6 @@ async def _certificate(context: grpc.aio.ServicerContext[bytes, bytes]) -> str:
     ):
         await context.abort(grpc.StatusCode.UNAUTHENTICATED, "Peer certificate expired")
     return certificate
-
-
-async def _end_session_rpc(
-    context: grpc.aio.ServicerContext[bytes, bytes], status: grpc.StatusCode
-) -> None:
-    if context.done() or context.cancelled():
-        return
-    with suppress(grpc.aio.AbortError):
-        await context.abort(status, "Agent session is no longer available")
 
 
 def _current_task() -> asyncio.Task[None]:
