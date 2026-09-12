@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -369,25 +370,51 @@ def run_case(draining_index: int) -> None:
             assert run("docker", "exec", names[role], "ip", "route", "show", "203.0.113.0/24")
         print("Tunnel hooks removed and unrelated routes preserved", flush=True)
     finally:
+        original_error = sys.exception()
+        cleanup_errors: list[Exception] = []
         for role in names:
             path = root / f"{role}.log"
-            if path.exists() and "Traceback" in path.read_text():
-                print(role, path.read_text(), flush=True)
+            try:
+                if path.exists() and "Traceback" in path.read_text():
+                    print(role, path.read_text(), flush=True)
+            except Exception as error:
+                error.add_note(f"Reading acceptance diagnostics from {path}")
+                cleanup_errors.append(error)
+        cleanup_commands: list[tuple[str, ...]] = []
         if created:
-            run(
-                "docker",
-                "exec",
-                created[-1],
-                "chown",
-                "-R",
-                f"{os.getuid()}:{os.getgid()}",
-                "/proof",
+            cleanup_commands.append(
+                (
+                    "docker",
+                    "exec",
+                    created[-1],
+                    "chown",
+                    "-R",
+                    f"{os.getuid()}:{os.getgid()}",
+                    "/proof",
+                )
             )
-        for name in created:
-            run("docker", "rm", "--force", name)
-        for network in reversed(networks):
-            run("docker", "network", "rm", network)
-        shutil.rmtree(root)
+        cleanup_commands.extend(("docker", "rm", "--force", name) for name in created)
+        cleanup_commands.extend(
+            ("docker", "network", "rm", network) for network in reversed(networks)
+        )
+        for command in cleanup_commands:
+            try:
+                run(*command)
+            except Exception as error:
+                error.add_note(f"Acceptance cleanup command: {command}")
+                cleanup_errors.append(error)
+        try:
+            shutil.rmtree(root)
+        except Exception as error:
+            error.add_note(f"Removing acceptance files and temporary keys at {root}")
+            cleanup_errors.append(error)
+        if cleanup_errors:
+            if original_error is not None:
+                raise BaseExceptionGroup(
+                    "Forwarded gateway acceptance and cleanup failed",
+                    [original_error, *cleanup_errors],
+                ) from None
+            raise ExceptionGroup("Forwarded gateway acceptance cleanup failed", cleanup_errors)
         print("Removed all proof containers, networks and temporary keys", flush=True)
 
 
