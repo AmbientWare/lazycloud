@@ -766,6 +766,7 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
+        socat TCP-LISTEN:5000,bind=127.0.0.1,fork,reuseaddr TCP:workload-registry:5000 &
         exec lazycloud-agent join \
           --gateway "http://control-plane:9000" \
           --join-token-file "${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}/join-token" \
@@ -791,6 +792,8 @@ services:
       cache-server:
         condition: service_healthy
       wireguard-platform:
+        condition: service_healthy
+      workload-registry:
         condition: service_healthy
     volumes:
       - "${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}:${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}"

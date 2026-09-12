@@ -73,6 +73,7 @@ RUN apt-get update \
         fuse3 \
         iproute2 \
         iptables \
+        socat \
         wireguard-tools \
     && rm -rf /var/lib/apt/lists/*
 
