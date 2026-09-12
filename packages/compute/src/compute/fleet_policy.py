@@ -86,6 +86,12 @@ def plan_warm_capacity(
         if unit.unit_id != target_unit_id and not unit.eligible and unit.floor
     )
     handoff_from = tuple(
-        sorted(unit.unit_id for unit in units if unit.unit_id in sources and unit.committed)
+        sorted(
+            unit.unit_id
+            for unit in units
+            if unit.unit_id in sources
+            and unit.committed
+            and (not unit.eligible or unit.committed > floors[unit.unit_id])
+        )
     )
     return WarmCapacityPlan(desired, floors, handoff_from)
