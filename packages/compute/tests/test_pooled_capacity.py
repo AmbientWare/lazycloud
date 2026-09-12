@@ -3472,6 +3472,42 @@ def test_warm_handoff_keeps_one_surge_until_retiring_assets_are_gone() -> None:
     assert while_updating.target_machines == 0
 
 
+def test_recovered_warm_market_releases_handoff_after_surplus_retires() -> None:
+    source = WarmCapacityUnit("source", desired=1, committed=2, ready=1, floor=1, eligible=True)
+    target = WarmCapacityUnit(
+        "target",
+        desired=1,
+        committed=1,
+        ready=1,
+        floor=1,
+        eligible=True,
+        handoff_from=("source",),
+    )
+    retiring = plan_warm_capacity(
+        (source, target),
+        target_unit_id="target",
+        minimum=2,
+        fleet_baseline=2,
+        fleet_limit=4,
+        fleet_committed=3,
+        maintenance_busy=False,
+    )
+    assert retiring.handoff_from == ("source",)
+    source = WarmCapacityUnit("source", desired=1, committed=1, ready=1, floor=1, eligible=True)
+    settled = plan_warm_capacity(
+        (source, target),
+        target_unit_id="target",
+        minimum=2,
+        fleet_baseline=2,
+        fleet_limit=4,
+        fleet_committed=2,
+        maintenance_busy=False,
+    )
+    assert settled.handoff_from == ()
+    assert settled.floors == {"source": 1, "target": 1}
+    assert settled.target_machines == 1
+
+
 def test_retirement_cannot_revive_until_provider_deletion_finishes(
     service_context: ServiceContext,
 ) -> None:
