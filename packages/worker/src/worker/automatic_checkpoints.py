@@ -75,6 +75,8 @@ class WorkerAutomaticCheckpointService:
         if not context.checkpoint_enabled and not context.checkpoint_id:
             return mount_result
         self._validate(context)
+        if context.startup_kind is WorkerStartupKind.Sandbox:
+            return mount_result
         signal = plan_checkpoint_signal_mount(
             container_id=context.request.container_id,
             container_hostname=socket.gethostname(),
@@ -97,7 +99,8 @@ class WorkerAutomaticCheckpointService:
         container_hostname: str,
     ) -> str:
         if context.checkpoint_id:
-            self._complete(context.request.container_id, container_hostname=container_hostname)
+            if context.startup_kind is not WorkerStartupKind.Sandbox:
+                self._complete(context.request.container_id, container_hostname=container_hostname)
             return context.checkpoint_id
         decision = plan_auto_checkpoint(
             checkpoint_enabled=context.checkpoint_enabled,
@@ -146,6 +149,10 @@ class WorkerAutomaticCheckpointService:
     def _validate(self, context: ContainerExecutionContext) -> None:
         if context.request.gpu_count > 1:
             raise RuntimeError("checkpointing does not support more than one GPU")
+        if context.startup_kind is WorkerStartupKind.Sandbox and context.checkpoint_enabled:
+            raise RuntimeError(
+                "automatic checkpoint creation is not supported for sandbox workloads"
+            )
         if context.startup_kind not in CHECKPOINT_RUNNER_KINDS | CHECKPOINT_HTTP_KINDS | {
             WorkerStartupKind.Sandbox
         }:
