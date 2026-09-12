@@ -14,7 +14,11 @@ from control.service import ControlPlaneService, StubRecord
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
 from shared.app_identity import SHELL_IMAGE, SHELL_LOG_PATH
-from shared.container_requests import WorkerStartupKind
+from shared.container_requests import (
+    WORKER_USER_CODE_VOLUME,
+    StopContainerReason,
+    WorkerStartupKind,
+)
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.env import parse_environment
 from shared.errors import NotFoundError, UpstreamUnavailableError
@@ -47,7 +51,10 @@ from execution.container_clients import (
 )
 from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.service import PendingContainerReservation
-from execution.mounts import source_code_mounts
+from execution.mounts import (
+    container_resource_mounts,
+    container_resource_mounts_require_workspace_storage,
+)
 from execution.services import ExecutionServices
 from execution.shells.planning import (
     SHELL_SERVER_PROBE_TIMEOUT_SECONDS,
@@ -131,13 +138,35 @@ class ShellControlService:
         workspace_id: str,
         stub_id: str,
     ) -> StandaloneShellSession:
+        if self.scheduler_containers is None:
+            raise UpstreamUnavailableError("shell scheduling state is unavailable")
         stub = self.control_plane.get_stub(stub_id, workspace=workspace_id)
-
+        resources = ContainerResourceConfig.model_validate(stub.config.runtime.model_dump())
         token_key = secrets.token_urlsafe(24)
         container_id = str(uuid4())
-        request = self._standalone_request(stub, token_key=token_key, container_id=container_id)
+        request = self._standalone_request(
+            stub, resources=resources, token_key=token_key, container_id=container_id
+        )
         plan = plan_shell_standalone(request)
-        env = parse_environment(plan.env) | {"SHELL_CONTAINER_ID": plan.container_id}
+        env = (
+            {name: value for name, value in stub.config.env.items() if value is not None}
+            | parse_environment(plan.env)
+            | {"SHELL_CONTAINER_ID": plan.container_id}
+        )
+        workspace = self.control_plane.get_workspace(stub.workspace_id)
+        mounts = container_resource_mounts(
+            context=self.services.context,
+            object_storage=self.services.object_storage,
+            workspace_id=stub.workspace_id,
+            workspace_name=workspace.name,
+            object_id=stub.config.object_id,
+            stub_id=stub.id,
+            container_id=container_id,
+            volumes=stub.config.volumes,
+        )
+        workspace_storage_required = container_resource_mounts_require_workspace_storage(
+            context=self.services.context, workspace_id=stub.workspace_id, mounts=mounts
+        )
         with self.services.context.database.session() as session:
             record = self.services.containers.reserve_pending(
                 session,
@@ -161,7 +190,6 @@ class ShellControlService:
             record,
             WorkspaceChangeType.Created,
         )
-        workspace = self.control_plane.get_workspace(stub.workspace_id)
         submitted = self.services.containers.submit_scheduler_request(
             record,
             ContainerSchedulingOptions(
@@ -172,25 +200,33 @@ class ShellControlService:
                 preemptible=stub.config.runtime.preemptible,
                 startup_kind=WorkerStartupKind.Pod,
                 entrypoint=list(plan.entrypoint),
+                cwd=WORKER_USER_CODE_VOLUME,
                 env=env,
-                env_list=list(plan.env),
+                env_list=[f"{name}={value}" for name, value in env.items()],
                 image_id=record.image,
                 app_id=stub.app_id or "",
                 deployment_id=stub.deployment_id or "",
                 ports=[SHELL_WORKER_PORT],
                 requested_ports=[SHELL_WORKER_PORT],
                 cpu_millicores=plan.cpu_millicores,
+                cpu_limit_millicores=resources.limit_cpu_millicores,
                 memory_mib=plan.memory_mib,
+                memory_limit_mib=resources.limit_memory_mib,
                 disk_mib=plan.disk_mib,
                 gpu=list(record.gpu),
                 gpu_count=record.gpu_count,
-                mounts=source_code_mounts(
-                    context=self.services.context,
-                    object_storage=self.services.object_storage,
-                    workspace_id=stub.workspace_id,
-                    workspace_name=workspace.name,
-                    object_id=stub.config.object_id,
-                ),
+                pool_selector=resources.pool_selector or stub.config.pool,
+                runtime=resources.runtime,
+                runtime_class=resources.runtime_class or "",
+                docker_enabled=resources.docker_enabled,
+                block_network=stub.config.runtime.block_network,
+                allow_list=stub.config.runtime.allow_list,
+                workspace_gpu_quota=resources.workspace_gpu_quota,
+                workspace_cpu_quota_millicores=resources.workspace_cpu_quota_millicores,
+                secret_names=stub.config.secrets,
+                gateway_token_required=True,
+                workspace_storage_required=workspace_storage_required,
+                mounts=mounts,
             ),
         )
         if not submitted.accepted:
@@ -198,6 +234,7 @@ class ShellControlService:
             self._mark_container_failed(record, reason)
             raise UpstreamUnavailableError(reason)
         if not self._wait_for_running(record, plan.wait_timeout_seconds):
+            self.services.containers.stop(record.id, reason=StopContainerReason.Scheduler)
             msg = "shell container did not become running before timeout"
             raise UpstreamUnavailableError(msg)
         self.services.events.emit(
@@ -601,33 +638,32 @@ class ShellControlService:
         self,
         stub: StubRecord,
         *,
+        resources: ContainerResourceConfig,
         token_key: str,
         container_id: str,
     ) -> ShellStandaloneRequest:
         runtime_config = stub.config.runtime
-        resources = ContainerResourceConfig.model_validate(runtime_config.model_dump())
         return ShellStandaloneRequest(
             stub_id=stub.id,
             handler=stub.handler or stub.config.handler or "",
-            gateway_token=token_key,
             token_external_id=stub.id,
             token_key=token_key,
             container_id=container_id,
             container_id_suffix=secrets.token_hex(4),
-            cpu_millicores=runtime_config.cpu_millicores,
-            memory_mib=runtime_config.memory_mib,
+            cpu_millicores=resources.requested_cpu_millicores,
+            memory_mib=resources.requested_memory_mib,
             disk_mib=resources.requested_disk_mib,
             gpu_count=runtime_config.gpu_count,
             requires_gpu=runtime_config.requires_gpu,
             gpu=tuple(runtime_config.gpu),
-            image_id=runtime_config.image_id or "",
+            image_id=stub.config.image.image_id or runtime_config.image_id or "",
             app_id=stub.app_id or "",
             workspace_id=stub.workspace_id,
         )
 
     def _wait_for_running(self, record: ContainerRecord, timeout_seconds: int) -> bool:
         if self.scheduler_containers is None:
-            return True
+            raise UpstreamUnavailableError("shell scheduling state is unavailable")
         deadline = time.monotonic() + max(timeout_seconds, 0)
         while True:
             state = self.scheduler_containers.get_container_state(record.id)
