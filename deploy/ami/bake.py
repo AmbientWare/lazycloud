@@ -307,7 +307,7 @@ def _bake_region(request: _BakeRequest, *, region: str) -> str:
     _log(f"{region}: baking {request.image_name} from {base_ami}")
     instance_id = _launch_bake_instance(request, region=region, base_ami=base_ami)
     try:
-        _wait_for_instance_stopped(request, region=region, instance_id=instance_id)
+        _stop_completed_bake_instance(request, region=region, instance_id=instance_id)
         image_id = _create_image(request, region=region, instance_id=instance_id)
         _wait_for_image(request, region=region, image_id=image_id)
     finally:
@@ -556,24 +556,33 @@ def _read_console(request: _BakeRequest, *, region: str, instance_id: str) -> st
     return "" if result.stdout.strip() == "None" else result.stdout
 
 
-def _wait_for_instance_stopped(request: _BakeRequest, *, region: str, instance_id: str) -> None:
+def _stop_completed_bake_instance(request: _BakeRequest, *, region: str, instance_id: str) -> None:
     deadline = time.monotonic() + request.instance_timeout_seconds
     announced_ok = False
     while True:
         console = _read_console(request, region=region, instance_id=instance_id)
-        # Success is terminal and is read first. Everything after the script says
-        # it finished is shutdown, so a failure line appearing later describes the
-        # machine going away rather than the bake, and letting it win would
-        # discard an image whose work was already complete.
-        if not announced_ok and _BAKE_OK_SENTINEL in console:
-            announced_ok = True
-            _log(f"{region}: bake script finished on {instance_id}, waiting for it to stop")
         if not announced_ok and _BAKE_FAILED_SENTINEL in console:
             tail = "\n".join(console.strip().splitlines()[-_CONSOLE_TAIL_LINES:])
             raise SystemExit(
                 f"{region}: the bake script failed on {instance_id}. Its last "
                 f"{_CONSOLE_TAIL_LINES} console lines:\n{tail}"
             )
+        if not announced_ok and _BAKE_OK_SENTINEL in console:
+            _log(f"{region}: bake script finished on {instance_id}, stopping the instance")
+            _run_aws(
+                request.aws_cli,
+                [
+                    "ec2",
+                    "stop-instances",
+                    "--instance-ids",
+                    instance_id,
+                    "--region",
+                    region,
+                    "--output",
+                    "json",
+                ],
+            )
+            announced_ok = True
         result = _run_aws(
             request.aws_cli,
             [
@@ -613,13 +622,17 @@ def _wait_for_instance_stopped(request: _BakeRequest, *, region: str, instance_i
         _log("\n".join(console.strip().splitlines()[-8:]) or "No bake console output yet")
         if state == "stopped" and announced_ok:
             return
+        if state in {"stopping", "stopped"} and not announced_ok:
+            raise SystemExit(
+                f"{region}: bake instance {instance_id} stopped before completion was verified"
+            )
         if state in {"shutting-down", "terminated"}:
             raise SystemExit(f"{region}: bake instance {instance_id} terminated before imaging")
         if time.monotonic() >= deadline:
             raise SystemExit(
-                f"{region}: bake instance {instance_id} did not stop within "
+                f"{region}: bake instance {instance_id} did not complete and stop within "
                 f"{request.instance_timeout_seconds}s (state {state}); "
-                "the bake user data likely failed"
+                f"completion verified: {announced_ok}"
             )
         time.sleep(_POLL_INTERVAL_SECONDS)
 
@@ -743,15 +756,8 @@ set -Eeuo pipefail
 # baker is left inferring a cause from an instance that simply stopped moving.
 exec > >(tee -a /var/log/lazycloud-bake.log > /dev/console) 2>&1
 
-# Two sentinels the baker polls for, because the states EC2 reports cannot tell
-# these apart. A script that fails never reaches `shutdown`, so the instance
-# stays `running` exactly as it does while a driver installs, and the only thing
-# that eventually distinguishes them is a timeout that explains nothing.
-#
-# Straight to the console, not through the tee above. That redirect is an
-# asynchronous subshell and the success line is followed immediately by
-# `shutdown`: a line still in the pipe when the machine halts never arrives, and
-# the baker would refuse to image a bake that had in fact succeeded.
+# The controller stops the instance only after reading the completion marker.
+# Keep markers out of the asynchronous log pipe so it can observe them directly.
 say() { echo "$*" > /dev/console; }
 
 # Announced from EXIT rather than from ERR, so that every way out is covered by
@@ -761,15 +767,8 @@ say() { echo "$*" > /dev/console; }
 # end. ERR's job is only to record where it happened.
 bake_line="unknown"
 bake_cmd="unknown"
-bake_done="no"
 bake_announce() {
   rc=$?
-  # Nothing after the success line can unsay it. `shutdown` returning non-zero
-  # would otherwise append a failure the baker reads first, throwing away a bake
-  # that had already finished everything it was asked to do.
-  if [ "${bake_done}" = "yes" ]; then
-    return 0
-  fi
   if [ "${rc}" -ne 0 ]; then
     say "LAZYCLOUD_BAKE_FAILED rc=${rc} line=${bake_line} cmd=${bake_cmd}"
   fi
@@ -804,10 +803,8 @@ MARKER
 # not evidence of a finished bake -- a spot reclaim, an operator, or a panic all
 # stop an instance too, and every one of them would otherwise be captured and
 # published as a node image.
-bake_done="yes"
-say "LAZYCLOUD_BAKE_OK recipe=${RECIPE_SHA256} variant=__VARIANT__"
 sync
-shutdown -h now
+say "LAZYCLOUD_BAKE_OK recipe=${RECIPE_SHA256} variant=__VARIANT__"
 """
 
 
