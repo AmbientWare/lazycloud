@@ -37,7 +37,6 @@ from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
-from database.records.apps import AutoscalingStubRecord, StubRecord
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.collections.service import CollectionService
@@ -51,7 +50,6 @@ from execution.endpoints.dispatch import (
 )
 from execution.endpoints.service import (
     EndpointControlService,
-    EndpointDispatchStateRepository,
     EndpointIngressDispatchSession,
 )
 from execution.functions.service import FunctionControlService
@@ -142,12 +140,12 @@ from provider_cloudflare import CloudflareSettings
 from provider_github import GitHubAppSettings
 from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
+from scheduler.adapters import EndpointDispatchAutoscalingReader, SchedulerWorkloadDirectoryAdapter
 from scheduler.autoscaler_operations import AutoscalerOperationsService
 from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.autoscaling import (
     AutoscalingDriver,
     EndpointAutoscaler,
-    EndpointAutoscalingDispatchObservation,
     FunctionAutoscaler,
     PodAutoscaler,
 )
@@ -200,7 +198,6 @@ from shared.http.functions import (
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
-from shared.identity import WorkspaceRecord
 from shared.image_building.credentials import parse_ecr_registry
 from shared.payments import PaymentProvider
 from shared.scheduling import SchedulerWorkerRequest
@@ -402,73 +399,6 @@ class EndpointApiService(Protocol):
         cancelled: bool = False,
         error: str | None = None,
     ) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class ApiSchedulerWorkloadControl:
-    control_plane: ControlPlaneService
-
-    def list_stubs(self, *, workspace: str | None = None) -> list[StubRecord]:
-        return self.control_plane.list_stubs(workspace=workspace)
-
-    def list_autoscaling_stubs(
-        self,
-        stub_ids: Sequence[str] | None = None,
-    ) -> list[AutoscalingStubRecord]:
-        return self.control_plane.list_autoscaling_stubs(stub_ids)
-
-    def get_stub(
-        self,
-        stub_id_or_name: str,
-        *,
-        workspace: str | None = None,
-    ) -> StubRecord:
-        return self.control_plane.get_stub(stub_id_or_name, workspace=workspace)
-
-    def get_workspace(self, workspace: str = "default") -> WorkspaceRecord:
-        return self.control_plane.get_workspace(workspace)
-
-    def set_autoscaling_enabled(
-        self,
-        stub_id_or_name: str,
-        *,
-        workspace: str,
-        enabled: bool,
-    ) -> StubRecord:
-        return self.control_plane.update_stub_config(
-            stub_id_or_name,
-            workspace=workspace,
-            fields={"metadata.autoscaling_enabled": enabled},
-        ).stub
-
-
-@dataclass(frozen=True, slots=True)
-class ApiEndpointDispatchAutoscalingReader:
-    repository: EndpointDispatchStateRepository
-
-    def active_counts_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]:
-        return self.repository.active_counts_by_stub(stub_ids)
-
-    def observations_by_stub(
-        self,
-        stub_ids: Sequence[str],
-        *,
-        finished_since: datetime,
-    ) -> dict[str, list[EndpointAutoscalingDispatchObservation]]:
-        return {
-            stub_id: [
-                EndpointAutoscalingDispatchObservation(
-                    container_id=record.container_id,
-                    active=record.active,
-                    finished_at=record.finished_at,
-                )
-                for record in records
-            ]
-            for stub_id, records in self.repository.observations_by_stub(
-                stub_ids,
-                finished_since=finished_since,
-            ).items()
-        }
 
 
 @runtime_checkable
@@ -1022,7 +952,7 @@ class ApiServices(ApiServiceCore):
         )
         collections = CollectionService(context)
         volumes = VolumeService(context, workspace_changes=workspace_changes)
-        scheduler_workloads = ApiSchedulerWorkloadControl(control_plane)
+        scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
         agents = AgentService(context, workspace_changes=workspace_changes)
         metrics = MetricsService()
         worker_events = WorkerEventService(context)
@@ -1337,9 +1267,7 @@ def _compose_api_services(
             workload=EndpointAutoscaler(
                 core,
                 endpoints=endpoint,
-                dispatches=ApiEndpointDispatchAutoscalingReader(
-                    EndpointDispatchStateRepository(core)
-                ),
+                dispatches=EndpointDispatchAutoscalingReader(core.context.database),
             ),
             container_states=scheduler_containers,
             container_requests=scheduler_workers,

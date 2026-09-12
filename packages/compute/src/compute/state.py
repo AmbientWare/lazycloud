@@ -24,9 +24,6 @@ from shared.routing import AgentBackendRoute
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
 
-DEFAULT_COMPUTE_POOL_LOCK_TTL_SECONDS = 300
-DEFAULT_COMPUTE_POOL_LOCK_RETRIES = 100
-DEFAULT_COMPUTE_POOL_LOCK_RETRY_INTERVAL_MS = 100
 DEFAULT_COMPUTE_JOIN_TOKEN_TTL_SECONDS = 60
 DEFAULT_COMPUTE_AGENT_TOKEN_TTL_SECONDS = 86_400
 
@@ -193,15 +190,6 @@ class ComputeAgentWorkerSlotState(ContractModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class ComputeUnitLockPlan(ContractModel):
-    workspace_id: str
-    capacity_owner_id: str
-    key: str
-    ttl_seconds: int = DEFAULT_COMPUTE_POOL_LOCK_TTL_SECONDS
-    retries: int = DEFAULT_COMPUTE_POOL_LOCK_RETRIES
-    retry_interval_ms: int = DEFAULT_COMPUTE_POOL_LOCK_RETRY_INTERVAL_MS
-
-
 @dataclass(frozen=True, slots=True)
 class ComputeStateKeys:
     redis: RedisClient | AsyncRedisClient
@@ -363,13 +351,6 @@ class RedisComputeStateRepository:
     def __init__(self, redis: RedisClient, keys: ComputeStateKeys | None = None) -> None:
         self.redis = redis
         self.keys = keys or ComputeStateKeys(redis)
-
-    def pool_lock_plan(self, workspace_id: str, capacity_owner_id: str) -> ComputeUnitLockPlan:
-        return ComputeUnitLockPlan(
-            workspace_id=workspace_id,
-            capacity_owner_id=capacity_owner_id,
-            key=self.keys.pool_state_lock(workspace_id, capacity_owner_id),
-        )
 
     def save_unit_state(self, state: ComputeUnitState) -> ComputeUnitState:
         self.redis.set(

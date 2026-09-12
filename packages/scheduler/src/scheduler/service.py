@@ -562,30 +562,6 @@ class Scheduler:
         return agent_pools
 
     @property
-    def function_autoscaling_service(self) -> AutoscalingDriver:
-        functions = self.workloads.function_autoscaler
-        if functions is None:
-            msg = "scheduler function autoscaler was not injected"
-            raise RuntimeError(msg)
-        return functions
-
-    @property
-    def endpoint_autoscaling_service(self) -> AutoscalingDriver:
-        endpoints = self.workloads.endpoints
-        if endpoints is None:
-            msg = "scheduler endpoint autoscaler was not injected"
-            raise RuntimeError(msg)
-        return endpoints
-
-    @property
-    def pod_autoscaling_service(self) -> AutoscalingDriver:
-        pods = self.workloads.pods
-        if pods is None:
-            msg = "scheduler pod autoscaler was not injected"
-            raise RuntimeError(msg)
-        return pods
-
-    @property
     def cron_job_locks(self) -> RedisClient:
         cron_job_locks = self.states.cron_job_locks
         if cron_job_locks is None:
@@ -671,30 +647,6 @@ class Scheduler:
         if not configs:
             return []
         return self.agent_pool_service.reconcile(configs, now=now)
-
-    def reconcile_functions(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> list[AutoscaleResult]:
-        return self.function_autoscaling_service.reconcile(now=now, limit=limit)
-
-    def reconcile_endpoints(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> list[AutoscaleResult]:
-        return self.endpoint_autoscaling_service.reconcile(now=now, limit=limit)
-
-    def reconcile_pods(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> list[AutoscaleResult]:
-        return self.pod_autoscaling_service.reconcile(now=now, limit=limit)
 
     def refresh_pool_states(
         self,

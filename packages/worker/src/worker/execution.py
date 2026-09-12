@@ -108,11 +108,6 @@ PLATFORM_GATEWAY_ENV_KEYS = {
 }
 
 
-class GatewayProtocol(StrEnum):
-    Grpc = "grpc"
-    Http = "http"
-
-
 class ContainerRuntimeOperation(StrEnum):
     Kill = "kill"
     Exec = "exec"

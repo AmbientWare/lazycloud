@@ -9,12 +9,15 @@ import {
   userSchema,
   userStatusRequestSchema,
   type BillingAccountAdmin,
-  type BillingAccountAdminList,
   type PlatformRole,
   type User,
   type UserStatus,
 } from "@/lib/api/schemas";
-import { selectInfiniteList, type InfiniteListQueryData } from "@/lib/queries/infinite-list";
+import {
+  nextListCursor,
+  selectInfiniteList,
+  type InfiniteListQueryData,
+} from "@/lib/queries/infinite-list";
 import {
   accountQueryKeys,
   EVERY_ACCOUNT,
@@ -46,18 +49,8 @@ export function billingAccountsQueryOptions(scope: AdminAccountsKeyParts = EVERY
       if (scope.status) params.set("status", scope.status);
       return apiRequest(`${ACCOUNTS}?${params.toString()}`, billingAccountAdminListSchema);
     },
-    getNextPageParam: nextAccountsCursor,
+    getNextPageParam: nextListCursor,
   });
-}
-
-/** A repeated cursor would page forever, so a server that returns one ends the list. */
-function nextAccountsCursor(
-  lastPage: BillingAccountAdminList,
-  pages: BillingAccountAdminList[],
-): string | undefined {
-  if (!lastPage.next) return undefined;
-  const cursorAlreadySeen = pages.slice(0, -1).some((page) => page.next === lastPage.next);
-  return cursorAlreadySeen ? undefined : lastPage.next;
 }
 
 export function selectBillingAccountList(

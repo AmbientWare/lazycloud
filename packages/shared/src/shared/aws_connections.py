@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -31,10 +30,6 @@ _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
 _OPERATION_ID_PATTERN = r"^[A-Za-z][-A-Za-z0-9]{0,127}$"
 AWS_REGION_PATTERN = r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$"
 AwsRegion = Annotated[str, Field(pattern=AWS_REGION_PATTERN)]
-
-
-def _matches_aws_region(region: str) -> bool:
-    return re.fullmatch(AWS_REGION_PATTERN, region) is not None
 
 
 class AwsAccountConnectionPhase(StringEnum):

@@ -749,16 +749,6 @@ METERED_RATES_EFFECTIVE_AT = PUBLISHED_METERED_RATE_HISTORY[-1].effective_at
 _LATEST_METERED_CARD = published_metered_rate_card(METERED_RATES_EFFECTIVE_AT)
 PUBLISHED_COMPUTE_RATES = _LATEST_METERED_CARD.compute_rates
 PUBLISHED_PLATFORM_RATE = _LATEST_METERED_CARD.platform_rate
-PUBLISHED_SHAPE_RATES = tuple(
-    PublishedShapeRate(
-        billing_owner=rate.billing_owner,
-        nanos_per_container_hour=rate.nanos_per_container_hour,
-        nanos_per_cpu_core_hour=rate.nanos_per_cpu_core_hour,
-        nanos_per_memory_gib_hour=rate.nanos_per_memory_gib_hour,
-    )
-    for rate in PUBLISHED_COMPUTE_RATES
-    if rate.rate_class == AUTO_RATE_CLASS and rate.gpu_type == NO_GPU
-)
 PUBLISHED_GPU_RATES = tuple(
     PublishedGpuRate(GpuType(rate.gpu_type), rate.nanos_per_gpu_card_hour)
     for rate in PUBLISHED_COMPUTE_RATES
@@ -810,7 +800,6 @@ __all__ = [
     "PUBLISHED_METERED_RATE_HISTORY",
     "PUBLISHED_PLANS",
     "PUBLISHED_PLATFORM_RATE",
-    "PUBLISHED_SHAPE_RATES",
     "SECONDS_PER_30_DAY_MONTH",
     "STORED_RATE_STEP",
     "SUBSCRIPTION_TERMS",

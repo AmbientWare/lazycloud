@@ -9,7 +9,7 @@ import urllib.request
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from email.message import Message
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypeGuard, runtime_checkable
 
 from shared.client_version import (
     RECOMMENDED_CLIENT_VERSION_HEADER,
@@ -53,11 +53,6 @@ _SSL_CONTEXT = build_http_ssl_context()
 @runtime_checkable
 class QueryMapping(Protocol):
     def items(self) -> Iterable[tuple[str, object]]: ...
-
-
-@runtime_checkable
-class QuerySequence(Protocol):
-    def __iter__(self) -> Iterator[object]: ...
 
 
 @runtime_checkable
@@ -203,17 +198,13 @@ def _query_items(
 
 
 def _query_sequence(value: object) -> list[str] | None:
-    if not isinstance(value, QuerySequence) or not _is_query_sequence(value):
+    if not _is_query_sequence(value):
         return None
-    return _stringify_query_sequence(value)
+    return [str(item) for item in value]
 
 
-def _is_query_sequence(value: QuerySequence) -> bool:
+def _is_query_sequence(value: object) -> TypeGuard[list[object] | tuple[object, ...] | set[object]]:
     return isinstance(value, list | tuple | set)
-
-
-def _stringify_query_sequence(values: QuerySequence) -> list[str]:
-    return [str(item) for item in values]
 
 
 def _urlopen_response(

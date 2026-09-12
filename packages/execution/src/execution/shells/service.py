@@ -4,7 +4,7 @@ import logging
 import secrets
 import socket
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Protocol
@@ -39,6 +39,7 @@ from shared.shell_protocol import (
 from shared.timestamps import utc_now
 
 from database import AsyncDatabaseClient
+from execution.config import env_sequence_mapping
 from execution.container_clients import (
     PodContainerControlClient,
     SchedulerContainerClientFactory,
@@ -135,7 +136,7 @@ class ShellControlService:
         container_id = str(uuid4())
         request = self._standalone_request(stub, token_key=token_key, container_id=container_id)
         plan = plan_shell_standalone(request)
-        env = _env_tuple_to_mapping(plan.env) | {"SHELL_CONTAINER_ID": plan.container_id}
+        env = env_sequence_mapping(plan.env) | {"SHELL_CONTAINER_ID": plan.container_id}
         with self.services.context.database.session() as session:
             record = self.services.containers.reserve_pending(
                 session,
@@ -751,15 +752,6 @@ class ShellControlService:
         if container.status is not ContainerStatus.Running:
             raise ShellTargetUnavailableError("Container is not running")
         return container
-
-
-def _env_tuple_to_mapping(values: Iterable[str]) -> dict[str, str]:
-    env: dict[str, str] = {}
-    for value in values:
-        key, separator, item = value.partition("=")
-        if separator:
-            env[key] = item
-    return env
 
 
 def _rollback_shell_port(

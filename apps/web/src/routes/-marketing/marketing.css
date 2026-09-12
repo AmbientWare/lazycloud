@@ -973,29 +973,6 @@
   padding: 9px 11px 10px;
 }
 
-.marketing-example-figure {
-  background-color: var(--card);
-  background-image:
-    linear-gradient(color-mix(in oklab, var(--foreground) 7%, transparent) 1px, transparent 1px),
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--foreground) 7%, transparent) 1px,
-      transparent 1px
-    );
-  background-size: 28px 28px;
-}
-
-.marketing-example-figure > span {
-  position: absolute;
-  top: 13px;
-  left: 15px;
-  color: var(--muted-foreground);
-  font-family: var(--font-mono);
-  font-size: 8px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
 .marketing-cta-grid {
   position: absolute;
   inset: 0;

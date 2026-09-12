@@ -5,19 +5,12 @@ import {
   useEffect,
   useRef,
   useState,
-  useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
   type Ref,
 } from "react";
 
 import { createRectCache } from "./rect-cache";
-
-declare module "react" {
-  interface CanvasHTMLAttributes<T> {
-    layoutsubtree?: T extends HTMLCanvasElement ? "true" : never;
-  }
-}
 
 export interface CloudsOptions {
   scale?: number;
@@ -35,32 +28,18 @@ export interface CloudsOptions {
   shadowSoftness?: number;
   wind?: number;
   windRadius?: number;
-  refraction?: number;
-  fogBlur?: number;
   quality?: number;
 }
 
 export interface CloudsElements {
-  source: HTMLCanvasElement;
   content: HTMLElement;
   output: HTMLCanvasElement;
-  captureContent?: boolean;
 }
 
 export interface CloudsInstance {
   setOptions: (options: CloudsOptions) => void;
-  resize: () => void;
   destroy: () => void;
 }
-
-type PaintableCanvas = HTMLCanvasElement & {
-  requestPaint?: () => void;
-  onpaint: (() => void) | null;
-};
-
-type ElementImageContext = CanvasRenderingContext2D & {
-  drawElementImage?: (element: Element, x: number, y: number) => void;
-};
 
 const DEFAULTS: Required<CloudsOptions> = {
   scale: 1,
@@ -78,8 +57,6 @@ const DEFAULTS: Required<CloudsOptions> = {
   shadowSoftness: 1,
   wind: 0.6,
   windRadius: 350,
-  refraction: 0,
-  fogBlur: 0,
   quality: 1,
 };
 
@@ -215,10 +192,8 @@ const COMPOSITE_FRAG = `#version 300 es
 precision highp float;
 out vec4 outColor;
 uniform sampler2D uField;
-uniform sampler2D uContent;
 uniform sampler2D uWind;
 uniform vec2 uResolution;
-uniform vec2 uContentScale;
 uniform vec3 uBase;
 uniform float uBlur;
 uniform float uShading;
@@ -227,9 +202,6 @@ uniform float uShadow;
 uniform vec2 uShadowShift;
 uniform float uShadowLod;
 uniform float uWindAmt;
-uniform float uRefraction;
-uniform float uFogBlur;
-uniform float uHasContent;
 
 void main () {
   vec2 uv = gl_FragCoord.xy / uResolution;
@@ -253,44 +225,17 @@ void main () {
     - texture(uWind, sUv).r * uWindAmt;
   float shadowA = smoothstep(0.35, 1.0, s) * uShadow * (1.0 - mist);
 
-  float a;
-  vec3 rgb;
-  if (uHasContent > 0.5) {
-    vec2 e = vec2(8.0) / uResolution;
-    float gx = texture(uField, uv + vec2(e.x, 0.0)).r
-      - texture(uField, uv - vec2(e.x, 0.0)).r;
-    float gy = texture(uField, uv + vec2(0.0, e.y)).r
-      - texture(uField, uv - vec2(0.0, e.y)).r;
-    vec2 rUv = uv + vec2(gx, gy) * uRefraction * mist;
-    vec3 fogged = textureLod(
-      uContent, vec2(rUv.x, 1.0 - rUv.y) * uContentScale, mist * uFogBlur * 5.0
-    ).rgb;
-    vec3 layer = mix(fogged, cloudRGB, cloudA) * (1.0 - shadowA);
-    float aF = smoothstep(0.02, 0.2, mist);
-    a = aF + shadowA * (1.0 - aF);
-    rgb = layer * aF;
-  } else {
-    a = cloudA + shadowA * (1.0 - cloudA);
-    rgb = cloudRGB * cloudA;
-  }
+  float a = cloudA + shadowA * (1.0 - cloudA);
+  vec3 rgb = cloudRGB * cloudA;
   outColor = vec4(rgb, a);
 }`;
-
-function supportsHtmlInCanvas(): boolean {
-  if (typeof document === "undefined") return false;
-  const probe = document.createElement("canvas") as PaintableCanvas;
-  const ctx = probe.getContext("2d") as ElementImageContext | null;
-  return Boolean(
-    ctx && typeof ctx.drawElementImage === "function" && typeof probe.requestPaint === "function",
-  );
-}
 
 function createClouds(
   elements: CloudsElements,
   options: CloudsOptions = {},
 ): CloudsInstance | null {
   const config = { ...DEFAULTS, ...options };
-  const { source, content, output, captureContent = true } = elements;
+  const { content, output } = elements;
 
   const gl = output.getContext("webgl2", {
     alpha: true,
@@ -300,31 +245,6 @@ function createClouds(
     premultipliedAlpha: true,
   });
   if (!gl || gl.isContextLost()) return null;
-
-  const sourceCtx = source.getContext("2d") as ElementImageContext | null;
-  const paintable = source as PaintableCanvas;
-  const htmlInCanvas = Boolean(
-    captureContent &&
-    sourceCtx &&
-    typeof sourceCtx.drawElementImage === "function" &&
-    typeof paintable.requestPaint === "function",
-  );
-
-  let contentDirty = false;
-  let wake = () => {};
-
-  if (htmlInCanvas) {
-    paintable.onpaint = () => {
-      try {
-        sourceCtx!.reset();
-        sourceCtx!.drawElementImage!(content, 0, 0);
-        contentDirty = true;
-        wake();
-      } catch {
-        // The experimental capture API can reject a frame while layout changes.
-      }
-    };
-  }
 
   function compile(type: number, text: string): WebGLShader {
     const shader = gl!.createShader(type)!;
@@ -369,25 +289,6 @@ function createClouds(
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-  const contentTexture = gl.createTexture()!;
-  gl.bindTexture(gl.TEXTURE_2D, contentTexture);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texImage2D(
-    gl.TEXTURE_2D,
-    0,
-    gl.RGBA,
-    1,
-    1,
-    0,
-    gl.RGBA,
-    gl.UNSIGNED_BYTE,
-    new Uint8Array([0, 0, 0, 255]),
-  );
-  gl.generateMipmap(gl.TEXTURE_2D);
-
   function makeWindTexture() {
     const texture = gl!.createTexture()!;
     gl!.bindTexture(gl!.TEXTURE_2D, texture);
@@ -404,8 +305,6 @@ function createClouds(
 
   let fieldW = 0;
   let fieldH = 0;
-  let contentScaleX = 1;
-  let contentScaleY = 1;
 
   let baseColor: [number, number, number] = [1, 1, 1];
   const probe = document.createElement("canvas");
@@ -452,8 +351,6 @@ function createClouds(
       output.width = width;
       output.height = height;
     }
-    contentScaleX = htmlInCanvas ? Math.min(1, cw / Math.max(source.clientWidth, 1)) : 1;
-    contentScaleY = htmlInCanvas ? Math.min(1, ch / Math.max(source.clientHeight, 1)) : 1;
     const quality = Math.min(Math.max(config.quality, 0.2), 1);
     const cap = 1440 / Math.max(output.clientWidth, 1);
     const q = Math.min(quality, cap);
@@ -490,27 +387,10 @@ function createClouds(
         );
       }
     }
-    if (htmlInCanvas) {
-      const cssWidth = Math.max(1, Math.round(source.clientWidth));
-      const cssHeight = Math.max(1, Math.round(source.clientHeight));
-      if (source.width !== cssWidth * dpr || source.height !== cssHeight * dpr) {
-        source.width = cssWidth * dpr;
-        source.height = cssHeight * dpr;
-      }
-      paintable.requestPaint!();
-    }
   }
 
   syncCanvasSize();
   syncBaseColor();
-
-  function uploadContent() {
-    if (!htmlInCanvas || !contentDirty) return;
-    contentDirty = false;
-    gl!.bindTexture(gl!.TEXTURE_2D, contentTexture);
-    gl!.texImage2D(gl!.TEXTURE_2D, 0, gl!.RGBA, gl!.RGBA, gl!.UNSIGNED_BYTE, source);
-    gl!.generateMipmap(gl!.TEXTURE_2D);
-  }
 
   let pointerX = 0.5;
   let pointerY = 0.5;
@@ -522,8 +402,6 @@ function createClouds(
   let time = Math.random() * 64;
 
   function render(delta: number) {
-    uploadContent();
-
     gl!.bindFramebuffer(gl!.FRAMEBUFFER, fbo);
     gl!.framebufferTexture2D(
       gl!.FRAMEBUFFER,
@@ -579,13 +457,9 @@ function createClouds(
     gl!.bindTexture(gl!.TEXTURE_2D, fieldTexture);
     gl!.uniform1i(composite.uniforms.uField, 0);
     gl!.activeTexture(gl!.TEXTURE1);
-    gl!.bindTexture(gl!.TEXTURE_2D, contentTexture);
-    gl!.uniform1i(composite.uniforms.uContent, 1);
-    gl!.activeTexture(gl!.TEXTURE2);
     gl!.bindTexture(gl!.TEXTURE_2D, nextWind);
-    gl!.uniform1i(composite.uniforms.uWind, 2);
+    gl!.uniform1i(composite.uniforms.uWind, 1);
     gl!.uniform2f(composite.uniforms.uResolution, output.width, output.height);
-    gl!.uniform2f(composite.uniforms.uContentScale, contentScaleX, contentScaleY);
     gl!.uniform3f(composite.uniforms.uBase, baseColor[0], baseColor[1], baseColor[2]);
     gl!.uniform1f(composite.uniforms.uBlur, Math.min(Math.max(config.blur, 0), 1));
     gl!.uniform1f(composite.uniforms.uOpacity, Math.min(Math.max(config.opacity, 0), 1));
@@ -601,12 +475,6 @@ function createClouds(
       Math.min(Math.max(config.shadowSoftness, 0), 1) * 4,
     );
     gl!.uniform1f(composite.uniforms.uWindAmt, Math.min(Math.max(config.wind, 0), 1));
-    gl!.uniform1f(
-      composite.uniforms.uRefraction,
-      Math.max(config.refraction, 0) / Math.max(output.clientWidth, 1),
-    );
-    gl!.uniform1f(composite.uniforms.uFogBlur, Math.min(Math.max(config.fogBlur, 0), 1));
-    gl!.uniform1f(composite.uniforms.uHasContent, htmlInCanvas ? 1 : 0);
     gl!.drawArrays(gl!.TRIANGLE_STRIP, 0, 4);
   }
 
@@ -631,7 +499,7 @@ function createClouds(
     if (driftActive) time += delta * config.speed * 0.03;
     render(delta);
     const windActive = now - lastPointerMove < 3000;
-    if (!driftActive && !windActive && !contentDirty) {
+    if (!driftActive && !windActive) {
       running = false;
       return;
     }
@@ -644,8 +512,6 @@ function createClouds(
     lastTime = performance.now();
     raf = requestAnimationFrame(frame);
   }
-
-  wake = start;
 
   start();
 
@@ -723,10 +589,6 @@ function createClouds(
       syncBaseColor();
       start();
     },
-    resize() {
-      syncCanvasSize();
-      start();
-    },
     destroy() {
       destroyed = true;
       rectCache.destroy();
@@ -740,9 +602,7 @@ function createClouds(
       content.removeEventListener("pointermove", onPointerMove);
       content.removeEventListener("pointerleave", onPointerLeave);
       content.removeEventListener("scroll", start);
-      if (htmlInCanvas) paintable.onpaint = null;
       gl!.deleteTexture(fieldTexture);
-      gl!.deleteTexture(contentTexture);
       gl!.deleteTexture(windTextures[0]);
       gl!.deleteTexture(windTextures[1]);
       gl!.deleteFramebuffer(fbo);
@@ -765,11 +625,8 @@ export interface CloudsProps extends CloudsOptions {
   className?: string;
   contentClassName?: string;
   contentRef?: Ref<HTMLDivElement>;
-  layer?: "over" | "between" | "behind";
   style?: CSSProperties;
 }
-
-const emptySubscribe = () => () => {};
 
 function setRefValue<T>(ref: Ref<T> | undefined, value: T | null) {
   if (typeof ref === "function") {
@@ -784,19 +641,13 @@ export function Clouds({
   className,
   contentClassName,
   contentRef: forwardedContentRef,
-  layer = "over",
   style,
   ...options
 }: CloudsProps) {
-  const sourceRef = useRef<HTMLCanvasElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const outputRef = useRef<HTMLCanvasElement>(null);
   const instanceRef = useRef<CloudsInstance | null>(null);
   const [initialOptions] = useState(options);
-  const [failed, setFailed] = useState(false);
-
-  const supported = useSyncExternalStore(emptySubscribe, supportsHtmlInCanvas, () => false);
-  const native = layer === "over" && supported && !failed;
   const setContentRef = useCallback(
     (element: HTMLDivElement | null) => {
       contentRef.current = element;
@@ -806,20 +657,15 @@ export function Clouds({
   );
 
   useEffect(() => {
-    const source = sourceRef.current;
     const content = contentRef.current;
     const output = outputRef.current;
-    if (!source || !content || !output) return;
-    instanceRef.current = createClouds(
-      { source, content, output, captureContent: native },
-      initialOptions,
-    );
-    if (native && !instanceRef.current) setFailed(true);
+    if (!content || !output) return;
+    instanceRef.current = createClouds({ content, output }, initialOptions);
     return () => {
       instanceRef.current?.destroy();
       instanceRef.current = null;
     };
-  }, [initialOptions, native]);
+  }, [initialOptions]);
 
   useEffect(() => {
     instanceRef.current?.setOptions(options);
@@ -827,7 +673,6 @@ export function Clouds({
 
   const contentStyle: CSSProperties = {
     position: "relative",
-    zIndex: layer === "behind" ? 1 : undefined,
     width: "100%",
     height: "100%",
     overflow: "auto",
@@ -835,27 +680,9 @@ export function Clouds({
 
   return (
     <div className={className} style={{ position: "relative", ...style }}>
-      <canvas
-        ref={sourceRef}
-        layoutsubtree="true"
-        suppressHydrationWarning
-        style={
-          native
-            ? { position: "absolute", inset: 0, width: "100%", height: "100%" }
-            : { display: "none" }
-        }
-      >
-        {native ? (
-          <div ref={setContentRef} className={contentClassName} style={contentStyle}>
-            {children}
-          </div>
-        ) : null}
-      </canvas>
-      {!native ? (
-        <div ref={setContentRef} className={contentClassName} style={contentStyle}>
-          {children}
-        </div>
-      ) : null}
+      <div ref={setContentRef} className={contentClassName} style={contentStyle}>
+        {children}
+      </div>
       <canvas
         ref={outputRef}
         aria-hidden
@@ -865,11 +692,9 @@ export function Clouds({
           width: "100%",
           height: "100%",
           pointerEvents: "none",
-          zIndex: layer === "behind" ? 0 : layer === "between" ? 1 : undefined,
+          zIndex: 1,
         }}
       />
     </div>
   );
 }
-
-export default Clouds;

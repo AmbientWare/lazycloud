@@ -546,10 +546,6 @@ class TaskService:
         await self.publish_lifecycle_change_async(saved, WorkspaceChangeType.Updated)
         return saved
 
-    def latest_attempt(self, task_id: str) -> TaskAttempt | None:
-        with self.context.database.session() as session:
-            return TaskAttemptRepository(session).latest_for_task(task_id)
-
     def attempts(self, task_id: str) -> list[TaskAttempt]:
         with self.context.database.session() as session:
             return TaskAttemptRepository(session).list_for_task(task_id)

@@ -804,28 +804,6 @@ def _read_cgroup_memory_value(cgroup_path: str, name: str) -> int:
         return 0
 
 
-def read_process_memory_bytes(pid: int, *, proc_root: str = "/proc") -> int:
-    """Resident bytes held by a sandbox, or zero when it cannot be read.
-
-    The sandbox process, not a cgroup. Every container here runs under gVisor,
-    where the sentry holds the guest's memory in its own address space, and the
-    cgroup branch beside this one belongs to a runtime this worker no longer has.
-    It is the same source the OOM watcher already reads for the same reason.
-    """
-    if pid <= 0:
-        return 0
-    try:
-        fields = Path(proc_root, str(pid), "statm").read_text(encoding="utf-8").split()
-    except OSError:
-        return 0
-    if len(fields) < 2:
-        return 0
-    try:
-        return int(fields[1]) * os.sysconf("SC_PAGE_SIZE")
-    except (ValueError, OSError):
-        return 0
-
-
 def parse_meminfo_total_mib(text: str) -> int:
     """What the machine holds, from `/proc/meminfo`.
 

@@ -3,15 +3,12 @@ from __future__ import annotations
 NAME = "lazycloud"
 DISPLAY_NAME = NAME.replace("-", " ").title()
 ENV_PREFIX = NAME.upper().replace("-", "_")
-_LABEL_NAME = "".join(part.capitalize() for part in NAME.replace("_", "-").split("-"))
 HOME_DIR = f".{NAME}"
 STATE_DIR = f"/var/lib/{NAME}"
 CACHE_DIR = f"{STATE_DIR}/cache"
-CACHE_PAGES_DIR = f"{CACHE_DIR}/pages"
 WORKER_BUNDLE_ROOT = f"/tmp/{NAME}-containers"
 WORKER_CHECKPOINT_ROOT = f"/tmp/{NAME}-checkpoints"
 CHECKPOINT_SIGNAL_ROOT = f"/tmp/{NAME}-checkpoint-signals"
-MANAGED_PACKAGE_ROOT = f"/tmp/{NAME}-packages"
 FUNCTION_IMAGE = f"{NAME}-function"
 ENDPOINT_IMAGE = f"{NAME}-endpoint"
 POD_IMAGE = f"{NAME}-pod"
@@ -21,8 +18,6 @@ AGENT_CONTAINER_TMP_PATH = f"/tmp/{NAME}"
 AGENT_CONTAINER_LOG_PATH = f"/var/log/{NAME}"
 AGENT_STATE_DIR = f"{STATE_DIR}/agent"
 AGENT_CONTAINER_DATA_PATH = f"{AGENT_STATE_DIR}/data"
-AGENT_CONTAINER_OBJECT_PATH = f"{AGENT_CONTAINER_DATA_PATH}/objects"
-AGENT_WORKER_CONFIG_PATH = f"/etc/{NAME}/worker/config.json"
 CLI_NAME = NAME
 ADMIN_CLI_NAME = f"{NAME}-admin"
 REDIS_KEY_PREFIX = NAME
@@ -34,30 +29,19 @@ WORKSPACE_BUCKET_PREFIX = "workspace"
 A deployment sharing an AWS account with another one overrides this, because the
 grant that reaches `workspace-*` cannot otherwise tell two deployments apart.
 """
-DATA_STORAGE_BUCKET = f"{NAME}-data"
 WORKSPACE_OBJECT_BUCKET = "default"
 IMAGE_BUILD_CONTEXT_BUCKET = "build-contexts"
-CLUSTER_NAME_LABEL = f"{_LABEL_NAME}ClusterName"
-POOL_NAME_LABEL = f"{_LABEL_NAME}PoolName"
-MACHINE_ID_LABEL = f"{_LABEL_NAME}MachineId"
 DEFAULT_RESOURCE_TYPE = NAME
 EVENT_SOURCE = f"{NAME}-cluster"
-INTERNAL_WEBHOOK_FORMAT = f"{NAME}-webhook"
-METRICS_NAMESPACE = NAME.replace("-", "_")
 AGENT_NAME = f"{NAME}-agent"
 AGENT_SERVICE_DESCRIPTION = f"{DISPLAY_NAME} agent"
 AGENT_LAUNCHD_LABEL_PREFIX = f"com.{NAME}.agent"
 CONTROL_PLANE_SERVICE_NAME = f"{NAME}-api"
-CONTROL_PLANE_IMAGE = "api"
 SCHEDULER_PROCESS_NAME = f"{NAME}-scheduler"
-SCHEDULER_IMAGE = "scheduler"
 CONTAINER_WORKER_PROCESS_NAME = f"{NAME}-container-worker"
-CONTAINER_WORKER_IMAGE = "container-worker"
 CONTAINER_HELPER_PATH = f"/usr/local/bin/{NAME}-sandbox-supervisor"
 WORKER_BOOTSTRAP_PROCESS_NAME = f"{NAME}-worker-bootstrap"
-WORKER_BOOTSTRAP_IMAGE = "worker-bootstrap"
 CACHE_SERVER_PROCESS_NAME = f"{NAME}-cache-server"
-CACHE_SERVER_IMAGE = "cache-server"
 SANDBOX_COMPOSE_OVERRIDE_PATH = f"/tmp/{NAME}-docker-compose.override.yml"
 METRICS_SOURCE = NAME
 PRIVATE_RESOURCE_PREFIX = f"{NAME}-private"
@@ -71,26 +55,18 @@ __all__ = [
     "ADMIN_CLI_NAME",
     "AGENT_CONTAINER_DATA_PATH",
     "AGENT_CONTAINER_LOG_PATH",
-    "AGENT_CONTAINER_OBJECT_PATH",
     "AGENT_CONTAINER_TMP_PATH",
     "AGENT_LAUNCHD_LABEL_PREFIX",
     "AGENT_NAME",
     "AGENT_SERVICE_DESCRIPTION",
     "AGENT_STATE_DIR",
-    "AGENT_WORKER_CONFIG_PATH",
     "CACHE_DIR",
-    "CACHE_PAGES_DIR",
-    "CACHE_SERVER_IMAGE",
     "CACHE_SERVER_PROCESS_NAME",
     "CHECKPOINT_SIGNAL_ROOT",
     "CLI_NAME",
-    "CLUSTER_NAME_LABEL",
     "CONTAINER_HELPER_PATH",
-    "CONTAINER_WORKER_IMAGE",
     "CONTAINER_WORKER_PROCESS_NAME",
-    "CONTROL_PLANE_IMAGE",
     "CONTROL_PLANE_SERVICE_NAME",
-    "DATA_STORAGE_BUCKET",
     "DEFAULT_RESOURCE_TYPE",
     "DISPLAY_NAME",
     "ENDPOINT_IMAGE",
@@ -99,26 +75,19 @@ __all__ = [
     "FUNCTION_IMAGE",
     "HOME_DIR",
     "IMAGE_BUILD_CONTEXT_BUCKET",
-    "INTERNAL_WEBHOOK_FORMAT",
-    "MACHINE_ID_LABEL",
-    "MANAGED_PACKAGE_ROOT",
-    "METRICS_NAMESPACE",
     "METRICS_SOURCE",
     "NAME",
     "OBJECT_STORE_BUCKET",
     "POD_IMAGE",
-    "POOL_NAME_LABEL",
     "PRIVATE_RESOURCE_PREFIX",
     "REDIS_KEY_PREFIX",
     "SANDBOX_COMPOSE_OVERRIDE_PATH",
-    "SCHEDULER_IMAGE",
     "SCHEDULER_PROCESS_NAME",
     "SHELL_IMAGE",
     "SHELL_LOG_PATH",
     "SOURCE_CACHE_DIR",
     "SOURCE_PACKAGE_BUCKET",
     "STATE_DIR",
-    "WORKER_BOOTSTRAP_IMAGE",
     "WORKER_BOOTSTRAP_PROCESS_NAME",
     "WORKER_BUNDLE_ROOT",
     "WORKER_CHECKPOINT_ROOT",

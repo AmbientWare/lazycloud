@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { selectInfiniteList } from "./infinite-list";
+import { nextListCursor, selectInfiniteList } from "./infinite-list";
+
+it("stops paging when the API repeats a cursor", () => {
+  const first = { next: "cursor-2" };
+  const repeated = { next: "cursor-2" };
+
+  expect(nextListCursor(first, [first])).toBe("cursor-2");
+  expect(nextListCursor(repeated, [first, repeated])).toBeUndefined();
+});
 
 describe("selectInfiniteList", () => {
   it("exposes items and the active continuation cursor without page plumbing", () => {

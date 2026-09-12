@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable
 from enum import StrEnum
 from types import TracebackType
 from typing import Self
@@ -40,11 +39,6 @@ class TelemetryProviderKind(StrEnum):
     Tracer = "tracer"
     Meter = "meter"
     Logger = "logger"
-
-
-class TelemetrySpanStatus(StrEnum):
-    Ok = "ok"
-    Error = "error"
 
 
 class TelemetryConfig(ContractModel):
@@ -123,13 +117,6 @@ class TelemetrySetupPlan(ContractModel):
     trace_batch_delay_millis: int = int(DEFAULT_TRACE_INTERVAL_SECONDS * 1000)
     export_timeout_millis: int = int(DEFAULT_EXPORT_TIMEOUT_SECONDS * 1000)
     shutdown_order: tuple[TelemetryProviderKind, ...] = ()
-
-
-class TelemetrySpanPlan(ContractModel):
-    tracer_name: str
-    span_name: str
-    attributes: dict[str, str] = Field(default_factory=dict)
-    status: TelemetrySpanStatus = TelemetrySpanStatus.Ok
 
 
 class TelemetryHandle:
@@ -341,32 +328,6 @@ def setup_telemetry(
         callbacks.append(logger_provider.shutdown)
 
     return TelemetryHandle(plan, callbacks)
-
-
-@contextmanager
-def trace_span(
-    tracer_name: str,
-    span_name: str,
-    attributes: Mapping[str, str | bool | int | float] | None = None,
-) -> Iterator[TelemetrySpanPlan]:
-    from opentelemetry import trace
-
-    normalized = {key: str(value) for key, value in (attributes or {}).items()}
-    with trace.get_tracer(tracer_name).start_as_current_span(span_name) as span:
-        for key, value in normalized.items():
-            span.set_attribute(key, value)
-        status = TelemetrySpanStatus.Ok
-        try:
-            yield TelemetrySpanPlan(
-                tracer_name=tracer_name,
-                span_name=span_name,
-                attributes=normalized,
-                status=status,
-            )
-        except BaseException:
-            status = TelemetrySpanStatus.Error
-            span.set_attribute("error", True)
-            raise
 
 
 def _seconds_to_millis(value: float) -> int:

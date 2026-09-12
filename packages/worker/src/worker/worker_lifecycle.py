@@ -122,13 +122,6 @@ class WorkerLifecycleStepResult(ContractModel):
         return self.status is not WorkerLifecycleStatus.Error
 
 
-class WorkerStartupSlotResult(ContractModel):
-    acquired: bool
-    active_starts: int
-    limit: int
-    reason: str = ""
-
-
 class WorkerShutdownResult(ContractModel):
     worker_id: str
     steps: list[WorkerLifecycleStepResult] = Field(default_factory=list)
@@ -167,19 +160,12 @@ class WorkerLifecycleOrchestrator:
     registration: WorkerExecutionRecord | None = None
     readiness_validator: Callable[[], None] | None = None
     cleanup_actions: list[WorkerCleanupAction] = field(default_factory=list)
-    startup_concurrency_limit: int = 1
     keepalive_ttl_seconds: int = DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS
     cleanup_retries: int = DEFAULT_WORKER_CLEANUP_RETRIES
     usage_interval_seconds: float = DEFAULT_WORKER_USAGE_INTERVAL_SECONDS
     _draining: bool = False
     _active: dict[str, WorkerActiveContainer] = field(default_factory=dict)
     _lock: threading.RLock = field(default_factory=threading.RLock)
-    _start_sem: threading.BoundedSemaphore = field(init=False)
-    _active_starts: int = 0
-
-    def __post_init__(self) -> None:
-        self.startup_concurrency_limit = max(self.startup_concurrency_limit, 1)
-        self._start_sem = threading.BoundedSemaphore(self.startup_concurrency_limit)
 
     @property
     def draining(self) -> bool:
@@ -343,36 +329,6 @@ class WorkerLifecycleOrchestrator:
                 ttl_seconds=self.keepalive_ttl_seconds,
             ),
         )
-
-    def acquire_start_slot(self, *, timeout_seconds: float = 0.0) -> WorkerStartupSlotResult:
-        acquired = self._start_sem.acquire(timeout=max(timeout_seconds, 0.0))
-        with self._lock:
-            if acquired:
-                self._active_starts += 1
-            return WorkerStartupSlotResult(
-                acquired=acquired,
-                active_starts=self._active_starts,
-                limit=self.startup_concurrency_limit,
-                reason="startup slot acquired" if acquired else "startup concurrency limit reached",
-            )
-
-    def release_start_slot(self) -> WorkerStartupSlotResult:
-        with self._lock:
-            if self._active_starts <= 0:
-                return WorkerStartupSlotResult(
-                    acquired=False,
-                    active_starts=0,
-                    limit=self.startup_concurrency_limit,
-                    reason="no startup slot is held",
-                )
-            self._active_starts -= 1
-            self._start_sem.release()
-            return WorkerStartupSlotResult(
-                acquired=False,
-                active_starts=self._active_starts,
-                limit=self.startup_concurrency_limit,
-                reason="startup slot released",
-            )
 
     def register_container(
         self,

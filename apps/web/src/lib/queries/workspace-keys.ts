@@ -251,8 +251,6 @@ export const accountQueryKeys = {
     // Keyed on the narrowing, so each search and filter caches its own pages
     // and changing one starts a fresh walk rather than appending to the last.
     accounts: Object.assign(
-      // Keyed on the narrowing, so each search and filter caches its own pages
-      // and changing one starts a fresh walk rather than appending to the last.
       (scope: AdminAccountsKeyParts = EVERY_ACCOUNT) =>
         [...accountRoot, "admin", "accounts", scope] as const,
       { root: () => [...accountRoot, "admin", "accounts"] as const },

@@ -31,9 +31,6 @@ class TaskPolicy(ContractModel):
     timeout_seconds: int | None = None
 
 
-DEFAULT_RETRYABLE_TASK_STATUSES: frozenset[TaskStatus] = frozenset(
-    {TaskStatus.Failed, TaskStatus.Timeout}
-)
 DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE: tuple[TaskStatus, ...] = (
     TaskStatus.Failed,
     TaskStatus.Timeout,
@@ -110,18 +107,6 @@ def normalize_retry_policy(
         max_delay_seconds=resolved.max_delay_seconds,
         retry_on_statuses=resolved.retry_on_statuses,
     )
-
-
-def retry_policy_from_config(
-    value: RetryPolicy | JsonValue,
-    *,
-    default_retries: int = 0,
-) -> RetryPolicy:
-    if isinstance(value, RetryPolicy):
-        return value
-    if isinstance(value, Mapping) and value:
-        return RetryPolicy.model_validate(dict(value))
-    return RetryPolicy.from_retries(default_retries)
 
 
 def plan_retry(
@@ -270,7 +255,6 @@ class TaskDependency(ContractModel):
 
 
 __all__ = [
-    "DEFAULT_RETRYABLE_TASK_STATUSES",
     "IN_FLIGHT_TASK_STATUSES",
     "TERMINAL_TASK_STATUSES",
     "RetryBackoff",
@@ -286,5 +270,4 @@ __all__ = [
     "normalize_retry_policy",
     "plan_retry",
     "retry_delay_for_attempt",
-    "retry_policy_from_config",
 ]

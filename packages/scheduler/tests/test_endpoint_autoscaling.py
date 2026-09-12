@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from api.server.services import ApiServices
@@ -13,13 +12,13 @@ from database.repositories.endpoint_dispatch import EndpointDispatchRepository
 from database.repositories.orchestration import AutoscalerStateRepository, ContainerRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.endpoints.dispatch import EndpointDispatchStatus
-from execution.endpoints.service import EndpointControlService, EndpointDispatchStateRepository
+from execution.endpoints.service import EndpointControlService
 from observability.stream_state import RedisEventStreamRepository
 from pydantic import JsonValue
+from scheduler.adapters import EndpointDispatchAutoscalingReader
 from scheduler.autoscaling import (
     AutoscalingDriver,
     EndpointAutoscaler,
-    EndpointAutoscalingDispatchObservation,
 )
 from scheduler.containers import (
     CONTAINER_DISPATCH_WAKE_SCOPE,
@@ -268,7 +267,6 @@ def _attach_dispatch(
         deployment_id=stub.deployment_id,
         handler=stub.handler,
     )
-    repository = EndpointDispatchStateRepository(runtime)
     now = utc_now()
     with runtime.context.database.session() as session:
         EndpointDispatchRepository(session).create(
@@ -276,27 +274,26 @@ def _attach_dispatch(
                 task_id=task.id,
                 workspace_id=stub.workspace_id,
                 stub_id=stub.id,
-                container_id=None,
+                container_id=container_id,
                 method="POST",
                 path="/",
-                status=EndpointDispatchStatus.Queued.value,
+                status=status.value,
                 wait_timeout_seconds=30,
                 max_pending_requests=100,
                 max_inflight_per_container=1,
                 attempts=0,
                 enqueued_at=now,
-                started_at=None,
+                started_at=None if status is EndpointDispatchStatus.Queued else now,
                 heartbeat_at=now,
                 expires_at=now + timedelta(seconds=30),
-                finished_at=None,
+                finished_at=(
+                    None
+                    if status in {EndpointDispatchStatus.Queued, EndpointDispatchStatus.Inflight}
+                    else now
+                ),
                 error=None,
             )
         )
-    if status is EndpointDispatchStatus.Queued:
-        return
-    repository.transition(task, EndpointDispatchStatus.Inflight, container_id=container_id)
-    if status is not EndpointDispatchStatus.Inflight:
-        repository.transition(task, status)
 
 
 def _endpoint_containers(services: ApiServices, stub: StubRecord) -> list[ContainerRecord]:
@@ -315,40 +312,11 @@ def _endpoint_autoscaler(
             endpoints=EndpointControlService(
                 services,
             ),
-            dispatches=_EndpointDispatchReader(EndpointDispatchStateRepository(services)),
+            dispatches=EndpointDispatchAutoscalingReader(services.context.database),
         ),
         container_states=RedisSchedulerContainerRepository(redis),
         container_requests=RedisSchedulerWorkerRepository(redis),
     )
-
-
-@dataclass(frozen=True, slots=True)
-class _EndpointDispatchReader:
-    repository: EndpointDispatchStateRepository
-
-    def active_counts_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]:
-        return self.repository.active_counts_by_stub(stub_ids)
-
-    def observations_by_stub(
-        self,
-        stub_ids: Sequence[str],
-        *,
-        finished_since: datetime,
-    ) -> dict[str, list[EndpointAutoscalingDispatchObservation]]:
-        return {
-            stub_id: [
-                EndpointAutoscalingDispatchObservation(
-                    container_id=record.container_id,
-                    active=record.active,
-                    finished_at=record.finished_at,
-                )
-                for record in records
-            ]
-            for stub_id, records in self.repository.observations_by_stub(
-                stub_ids,
-                finished_since=finished_since,
-            ).items()
-        }
 
 
 def _record_container(

@@ -577,27 +577,6 @@ class ComputeUnitRepository:
         row = self.session.scalars(statement).first()
         return _compute_unit_record(row) if row is not None else None
 
-    def list_for_machine_pool(
-        self,
-        workspace_id: str,
-        pool: MachinePool,
-    ) -> list[ComputeUnitRecord]:
-        """Every unit feeding one scheduling group, best candidate first."""
-        statement = (
-            select(ComputeUnitTable)
-            .options(
-                load_only(
-                    ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True
-                )
-            )
-            .where(
-                ComputeUnitTable.workspace_id == workspace_id,
-                ComputeUnitTable.pool == pool,
-            )
-            .order_by(ComputeUnitTable.priority.desc(), ComputeUnitTable.id)
-        )
-        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
-
     def list_for_workspace(self, workspace_id: str) -> list[ComputeUnitRecord]:
         statement = (
             select(ComputeUnitTable)
@@ -631,13 +610,6 @@ class ComputeUnitRepository:
             )
         )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
-
-    def list_internal(self, *, workspace_id: str) -> list[ComputeUnitRecord]:
-        return self._list_internal(workspace_id=workspace_id)
-
-    def list_internal_across_workspaces(self) -> list[ComputeUnitRecord]:
-        """System listing over every workspace's internal placement pools."""
-        return self._list_internal(workspace_id=None)
 
     def claim_reconciliation_batch(
         self,
@@ -714,12 +686,11 @@ class ComputeUnitRepository:
         )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
-    def _list_internal(self, *, workspace_id: str | None) -> list[ComputeUnitRecord]:
+    def list_internal(self, *, workspace_id: str) -> list[ComputeUnitRecord]:
         statement = select(ComputeUnitTable).where(
-            ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value
+            ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
+            ComputeUnitTable.workspace_id == workspace_id,
         )
-        if workspace_id is not None:
-            statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
         statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id)
         statement = statement.options(
             load_only(
@@ -2257,7 +2228,3 @@ class AwsAuthorizationCleanupTombstoneRepository:
         row.updated_at = tombstone.updated_at
         flag_modified(row, "payload")
         self.session.flush()
-
-
-def _unique_nonempty_strings(values: list[str]) -> list[str]:
-    return list(dict.fromkeys(value.strip() for value in values if value.strip()))
