@@ -816,7 +816,7 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--product-inset);
+  background: var(--muted);
   padding: 9px 10px 6px;
 }
 
