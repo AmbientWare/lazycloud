@@ -1005,13 +1005,17 @@ class AgentDaemonService:
         try:
             self._report_bootstrap_phase(MachineBootstrapPhase.Booting)
             state = self._join_step("identity.resolve", self.resolve_identity)
-        except Exception:
+        except BaseException as exc:
             try:
                 if self._capacity_shutdown.deadline is not None:
                     self._capacity_shutdown.stop()
             finally:
                 self._capacity_shutdown.close()
-                self._report_bootstrap_failure(MachineBootstrapFailureReason.ProviderIdentityFailed)
+                self.worker_controller.close()
+                if isinstance(exc, Exception):
+                    self._report_bootstrap_failure(
+                        MachineBootstrapFailureReason.ProviderIdentityFailed
+                    )
             raise
         if state.capacity_notice_at is not None:
             self._capacity_shutdown.arm(state.capacity_notice_at)
@@ -1028,8 +1032,13 @@ class AgentDaemonService:
         )
         route_proxy: AgentRouteProxyService | None = None
         runtime_ready = False
+        runtime_closed = False
 
         def close_runtime() -> None:
+            nonlocal runtime_closed
+            if runtime_closed:
+                return
+            runtime_closed = True
             try:
                 self._capacity_shutdown.close()
                 if self._capacity_shutdown.deadline is not None:
@@ -1700,7 +1709,7 @@ class AgentDaemonService:
                 "WireGuard has no reachable gateway after initial connection polls; "
                 "verify outbound UDP and gateway readiness"
             )
-        except Exception:
+        except BaseException:
             runtime.close()
             raise
 

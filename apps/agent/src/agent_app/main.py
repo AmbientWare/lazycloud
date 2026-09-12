@@ -5,10 +5,12 @@ import logging
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import FrameType
 
 from agent.operations import (
     AGENT_SOURCE_CACHE_RELATIVE_PATH,
@@ -136,6 +138,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv, namespace=AgentCommandArgs())
+    previous_handlers = {
+        signum: signal.signal(signum, _interrupt_agent)
+        for signum in (signal.SIGINT, signal.SIGTERM)
+    }
     try:
         if args.command == "join":
             result = run_agent_daemon(_daemon_options(args))
@@ -149,13 +155,25 @@ def main(argv: list[str] | None = None) -> None:
             )
         else:
             result = _manage_service(args)
+    except KeyboardInterrupt:
+        return
     except (OSError, RuntimeError, ValueError) as exc:
         parser.exit(1, f"error: {exc}\n")
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
     print(result.model_dump_json())
     if isinstance(result, AgentDaemonRunResult) and result.authority_revoked:
         # A revoked agent has finished for good. Exiting non-zero is what tells
         # the service manager this was not a clean stop to be restarted.
         parser.exit(1)
+
+
+def _interrupt_agent(signum: int, frame: FrameType | None) -> None:
+    del signum, frame
+    for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(shutdown_signal, signal.SIG_IGN)
+    raise KeyboardInterrupt
 
 
 def _add_service_options(
