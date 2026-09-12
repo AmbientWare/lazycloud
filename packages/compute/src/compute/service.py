@@ -2511,6 +2511,8 @@ class ComputeService:
             provider_machine = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
             if provider_machine is None or provider_machine.pool_id != unit.id:
                 raise NotFoundError(f"provider machine not found in compute unit: {machine_id}")
+            if not _provider_machine_can_be_replaced(provider_machine):
+                raise ConflictError("retired provider machine cannot start a replacement")
             if not template_version:
                 enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
                     workspace_id, machine_id
@@ -2548,6 +2550,20 @@ class ComputeService:
                     }
                 )
             )
+
+    def internal_unit_replaceable_machines(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+    ) -> set[str]:
+        unit = self.get_internal_unit(workspace_id, capacity_owner_id)
+        with self.context.database.session() as session:
+            records = ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
+        return {
+            record.machine_id
+            for record in records
+            if record.machine_id and _provider_machine_can_be_replaced(record)
+        }
 
     @contextmanager
     def worker_maintenance_admission(
@@ -4407,6 +4423,15 @@ def _owns_provider_pool_capacity(pool: ComputeUnitRecord) -> bool:
 
 def _pool_gpu_capacity(pool: ComputeUnitRecord) -> bool:
     return pool.worker_gpu_count > 0
+
+
+def _provider_machine_can_be_replaced(record: ComputeProviderInstanceRecord) -> bool:
+    # Providers may still report a retired instance while its termination runs.
+    return (
+        bool(record.instance_id)
+        and record.status in {ReservationStatus.Pending.value, ReservationStatus.Active.value}
+        and "missing_since" not in record.metadata
+    )
 
 
 def _require_workspace_internal_pooled_unit(
