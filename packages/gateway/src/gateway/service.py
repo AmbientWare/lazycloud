@@ -2601,10 +2601,8 @@ class GatewayControlService:
                 worker_releases.admit(worker, generation=worker.admitted_release_generation)
             if worker is not None and worker.agent_binary_sha256 == agent_binary_sha256:
                 worker_releases.complete_update(worker)
-            continuing_rollout = (
-                worker_releases.update_generation(worker_id, agent_state.machine_id)
-                == release.generation
-            )
+            update_generation = worker_releases.update_generation(worker_id, agent_state.machine_id)
+            continuing_rollout = update_generation == release.generation
         if (
             worker is not None
             and active_image == target_image
@@ -2619,6 +2617,8 @@ class GatewayControlService:
         needs_update = (
             active_image != target_image
             or not agent_current
+            # An unfinished release owns intake even when the installed image is current.
+            or 0 < update_generation < release.generation
             or (
                 worker is not None
                 and bool(worker.runtime_image)
@@ -2635,7 +2635,10 @@ class GatewayControlService:
                 worker, claimed = self._claim_worker_image_rollout(
                     worker,
                     release=release,
+                    agent_binary_sha256=agent_binary_sha256,
                 )
+            if claimed and worker.status is not SchedulerWorkerStatus.Draining:
+                slot_status = AgentWorkerSlotStatus.Active
             if claimed and worker.status is SchedulerWorkerStatus.Draining:
                 WorkerWorkloadRolloutService(
                     self.services.context.database,
@@ -2735,6 +2738,7 @@ class GatewayControlService:
         worker: SchedulerWorkerRecord,
         *,
         release: ActiveRelease,
+        agent_binary_sha256: str,
     ) -> tuple[SchedulerWorkerRecord, bool]:
         if self.scheduler_maintenance is None:
             raise RuntimeError("scheduler worker maintenance is not configured")
@@ -2769,6 +2773,15 @@ class GatewayControlService:
                 if not claimed:
                     raise ConflictError("worker update allowance is already occupied")
                 if current.status is SchedulerWorkerStatus.Draining:
+                    if (
+                        current.admitted_release_generation == release.generation
+                        and current.agent_binary_sha256 == agent_binary_sha256
+                        and release.admits(current.runtime_image, current.agent_binary_sha256)
+                    ):
+                        return (
+                            self.scheduler_worker_lookup.resume_worker_registration(current),
+                            True,
+                        )
                     return current, True
                 try:
                     drained = self.scheduler_maintenance.drain_worker(
