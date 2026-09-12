@@ -240,6 +240,7 @@ class TaskAttempt(ContractModel):
     exit_code: int | None = None
     created_at: datetime = Field(default_factory=utc_now)
     started_at: datetime | None = None
+    deadline_at: datetime | None = None
     finished_at: datetime | None = None
 
 

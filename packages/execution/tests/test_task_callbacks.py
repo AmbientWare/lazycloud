@@ -6,10 +6,14 @@ import json
 import socket
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import timedelta
 
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
+from database.repositories.execution import TaskRepository
+from database.repositories.task_callbacks import TaskCallbackRepository
+from database.tables.task_callbacks import TaskCallbackTable
 from execution.callbacks import (
     CallbackDeliveryError,
     HttpTaskCallbackSender,
@@ -18,7 +22,9 @@ from execution.callbacks import (
 from pydantic import ValidationError
 from shared.http.callbacks import TaskCallbackBody
 from shared.tasks import RetryPolicy, TaskStatus
+from shared.timestamps import utc_now
 from shared.workload_config import StubConfig
+from sqlalchemy import select
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +57,6 @@ def test_terminal_tasks_deliver_signed_callback_for_supported_workloads(
         sender=sender,
         now=lambda: 1_720_000_000.0,
     )
-    isolated_services.tasks.callback_dispatcher = callback_service
     control_plane = ControlPlaneService(isolated_services.context)
     stub = control_plane.create_stub(
         "callback-function",
@@ -70,6 +75,11 @@ def test_terminal_tasks_deliver_signed_callback_for_supported_workloads(
         TaskStatus.Complete,
         result={"value": 42},
     )
+    assert sender.calls == []
+    assert callback_service.drain() == 1
+    with isolated_services.context.database.session() as session:
+        [row] = session.scalars(select(TaskCallbackTable)).all()
+        assert row.status == "sent" and row.payload == {} and row.target == ""
 
     assert completed.status is TaskStatus.Complete
     assert len(sender.calls) == 1
@@ -111,12 +121,10 @@ def test_retry_callback_uses_bounded_delivery_retries_and_stable_idempotency(
             202,
         ]
     )
-    delays: list[float] = []
-    isolated_services.tasks.callback_dispatcher = TaskCallbackService(
+    callback_service = TaskCallbackService(
         isolated_services.context,
         isolated_services.events,
         sender=sender,
-        sleep=delays.append,
         now=lambda: 1_720_000_000.0,
     )
     stub = ControlPlaneService(isolated_services.context).create_stub(
@@ -139,12 +147,18 @@ def test_retry_callback_uses_bounded_delivery_retries_and_stable_idempotency(
     )
 
     assert outcome.task.status is TaskStatus.Retry
+    assert isolated_services.tasks.start(running.id).attempt_number == 2
+    now = utc_now()
+    assert callback_service.drain(now=now) == 0
+    assert callback_service.drain(now=now + timedelta(seconds=0.24)) == 0
+    assert callback_service.drain(now=now + timedelta(seconds=0.25)) == 0
+    assert callback_service.drain(now=now + timedelta(seconds=1)) == 1
     assert len(sender.calls) == 3
-    assert delays == [0.25, 0.75]
     assert len({call.body for call in sender.calls}) == 1
     assert len({call.headers["Idempotency-Key"] for call in sender.calls}) == 1
     callback = TaskCallbackBody.model_validate_json(sender.calls[0].body)
     assert callback.status is TaskStatus.Retry
+    assert callback.attempt_number == 1
     assert callback.retry_scheduled is True
 
 
@@ -152,7 +166,7 @@ def test_permanent_callback_failure_is_observable_without_exposing_target_query(
     isolated_services: ApiServices,
 ) -> None:
     sender = _CallbackSender([CallbackDeliveryError("callback returned HTTP 401", retryable=False)])
-    isolated_services.tasks.callback_dispatcher = TaskCallbackService(
+    callback_service = TaskCallbackService(
         isolated_services.context,
         isolated_services.events,
         sender=sender,
@@ -170,6 +184,7 @@ def test_permanent_callback_failure_is_observable_without_exposing_target_query(
     running = isolated_services.tasks.transition(task, TaskStatus.Running)
 
     completed = isolated_services.tasks.transition(running, TaskStatus.Complete)
+    assert callback_service.drain() == 0
 
     assert completed.status is TaskStatus.Complete
     assert len(sender.calls) == 1
@@ -181,6 +196,66 @@ def test_permanent_callback_failure_is_observable_without_exposing_target_query(
     assert failed.data["attempts"] == 1
     assert failed.data["callback_host"] == "callbacks.example.com"
     assert "secret-value" not in json.dumps(failed.data)
+
+
+def test_callback_claim_loss_is_fenced_bounded_and_retention_is_task_scoped(
+    isolated_services: ApiServices,
+) -> None:
+    services = isolated_services
+    stub = ControlPlaneService(services.context).create_stub(
+        "callback-claim-loss",
+        kind=StubKind.Function,
+        config={"callback_url": "https://callbacks.example.com/task"},
+    )
+    tasks = [
+        services.tasks.create(
+            f"callback-claim-{index}",
+            workspace_id=stub.workspace_id,
+            stub_id=stub.id,
+        )
+        for index in range(2)
+    ]
+    services.tasks.transition(tasks[0], TaskStatus.Complete, result="retained-until-sent")
+    services.tasks.transition(tasks[0], TaskStatus.Complete)
+    now = utc_now()
+    with services.context.database.session() as session:
+        repo = TaskCallbackRepository(session)
+        first = repo.claim(now=now, stale_before=now - timedelta(seconds=120), max_attempts=3)
+        assert first is not None and first.attempts == 1
+        assert (
+            repo.claim(now=now, stale_before=now - timedelta(seconds=120), max_attempts=3) is None
+        )
+    with services.context.database.session() as session:
+        repo = TaskCallbackRepository(session)
+        second = repo.claim(now=now + timedelta(seconds=121), stale_before=now, max_attempts=3)
+        assert second is not None and second.attempts == 2
+        assert second.idempotency_key == first.idempotency_key and second.body == first.body
+        assert not repo.settle(first, now=now, succeeded=True)
+    with services.context.database.session() as session:
+        third = TaskCallbackRepository(session).claim(
+            now=now + timedelta(seconds=242),
+            stale_before=now + timedelta(seconds=121),
+            max_attempts=3,
+        )
+        assert third is not None and third.attempts == 3
+    with services.context.database.session() as session:
+        repo = TaskCallbackRepository(session)
+        assert (
+            repo.claim(
+                now=now + timedelta(seconds=363),
+                stale_before=now + timedelta(seconds=242),
+                max_attempts=3,
+            )
+            is None
+        )
+        [row] = session.scalars(select(TaskCallbackTable)).all()
+        assert row.status == "failed" and row.attempts == 3
+        assert row.payload == {} and row.target == ""
+    services.tasks.transition(tasks[1], TaskStatus.Complete)
+    with services.context.database.session() as session:
+        TaskRepository(session).records.delete_across_workspaces(tasks[0].id)
+        [sibling] = session.scalars(select(TaskCallbackTable)).all()
+        assert sibling.task_id == tasks[1].id and sibling.status == "pending"
 
 
 @pytest.mark.parametrize(

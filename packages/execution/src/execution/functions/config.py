@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 from shared.deployment_records import (
     DEFAULT_FUNCTION_KEEP_WARM_SECONDS,
+    DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     DEFAULT_MAX_PENDING_TASKS,
 )
 from shared.lifecycle import LifecycleHooks
@@ -31,6 +32,7 @@ class FunctionImageConfig(BaseModel):
 
 
 class FunctionRuntimeConfig(ContainerResourceConfig):
+    timeout_seconds: int | float | None = Field(default=DEFAULT_FUNCTION_TIMEOUT_SECONDS, ge=0)
     requires_gpu: bool = False
     retries: int = Field(default=0, ge=0)
     checkpoint_enabled: bool = False
@@ -50,6 +52,12 @@ class FunctionRuntimeConfig(ContainerResourceConfig):
     @property
     def gpu_required(self) -> bool:
         return self.requires_gpu or bool(self.gpu) or self.gpu_count > 0
+
+    @property
+    def execution_timeout_seconds(self) -> int | float:
+        if self.timeout_seconds is None:
+            return DEFAULT_FUNCTION_TIMEOUT_SECONDS
+        return self.timeout_seconds
 
 
 class FunctionStubConfig(BaseModel):

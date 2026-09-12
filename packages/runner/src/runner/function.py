@@ -294,7 +294,9 @@ class FunctionRunner:
         try:
             self.run_task_hooks(task, LifecycleHookName.Running, TaskStatus.Running)
             result = self.execute_with_log_capture(task)
-            self.set_result(task, _serialize_function_result(result, task.invocation))
+            response = self.set_result(task, _serialize_function_result(result, task.invocation))
+            if not response.stored or response.status is not TaskStatus.Complete:
+                return
             duration = time.perf_counter() - started
             self.run_task_hooks(
                 task,
@@ -344,8 +346,10 @@ class FunctionRunner:
                 stderr.close()
                 logs.close()
 
-    def set_result(self, task: ClaimedTask, result: FunctionResultPayload) -> None:
-        FunctionSetResultResponse.model_validate(
+    def set_result(
+        self, task: ClaimedTask, result: FunctionResultPayload
+    ) -> FunctionSetResultResponse:
+        return FunctionSetResultResponse.model_validate(
             self.control.post(
                 "/api/v1/functions/set-result",
                 FunctionSetResultBody(

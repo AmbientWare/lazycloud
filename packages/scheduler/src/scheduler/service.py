@@ -349,7 +349,15 @@ class SchedulerCustomDomainService(Protocol):
     ) -> int: ...
 
 
+class SchedulerTaskCallbackService(Protocol):
+    def drain(self, *, now: datetime | None = None, limit: int = 100) -> int: ...
+
+
 class ScheduledFunctionControl(Protocol):
+    def expire_function_attempts(
+        self, *, now: datetime | None = None, limit: int = 100
+    ) -> list[Task]: ...
+
     def schedule_due_retries(
         self,
         *,
@@ -451,6 +459,7 @@ class SchedulerCapacityControls:
 
 @dataclass(frozen=True, slots=True)
 class SchedulerMaintenanceControls:
+    task_callbacks: SchedulerTaskCallbackService | None = None
     billing_payments: SchedulerBillingPaymentsService | None = None
     storage_access: SchedulerStorageAccessService | None = None
     volume_metering: SchedulerVolumeMeteringService | None = None
@@ -699,6 +708,15 @@ class Scheduler:
         if not include_containers:
             return SchedulerRunResult()
         current_time = now or utc_now()
+        if self.workloads.functions is not None:
+            try:
+                expired = self.workloads.functions.expire_function_attempts(
+                    now=current_time, limit=container_limit
+                )
+                if expired:
+                    LOGGER.info("expired %s function attempts", len(expired))
+            except Exception:
+                LOGGER.exception("scheduler function deadline reconciliation failed")
         self.container_scheduler.recover_scheduling_requests(
             now=current_time, limit=container_limit
         )
@@ -900,6 +918,11 @@ class Scheduler:
         plan_changes = self._settle_plan_changes(now=now)
         billing_reconciliation = self._best_effort_reconcile_billing(now=now)
         self._best_effort_deliver_email(now=now)
+        if self.maintenance.task_callbacks is not None:
+            try:
+                self.maintenance.task_callbacks.drain(now=now, limit=container_limit)
+            except Exception:
+                LOGGER.exception("task callback outbox delivery failed")
         self._best_effort_reconcile_custom_domains(now=now)
         expired_tokens_pruned = (
             self._best_effort_prune_expired_tokens(now=now) if include_containers else 0

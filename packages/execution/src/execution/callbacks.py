@@ -9,24 +9,30 @@ import ssl
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Protocol
 from urllib.parse import SplitResult, urlsplit
 
 from control.service import ControlPlaneService
+from database.repositories.apps import StubRepository
+from database.repositories.task_callbacks import ClaimedTaskCallback, TaskCallbackRepository
+from database.types import DatabaseSession
 from identity.signatures import sign_payload
 from observability.events import EventService
 from shared.callbacks import normalize_callback_url
 from shared.deployments import StubKind
-from shared.errors import NotFoundError
 from shared.events import EventLevel
 from shared.http.callbacks import TaskCallbackBody
 from shared.tasks import Task, TaskStatus, is_terminal_task_status
+from shared.timestamps import utc_now
 
 from execution.context import ExecutionContext
 
 CALLBACK_DELIVERY_ATTEMPTS = 3
 CALLBACK_RETRY_DELAYS_SECONDS: tuple[float, ...] = (0.25, 0.75)
 CALLBACK_REQUEST_TIMEOUT_SECONDS = 5.0
+CALLBACK_CLAIM_SECONDS = 120
+CALLBACK_DRAIN_BATCH_SIZE = 5
 CALLBACK_RESPONSE_BODY_LIMIT = 64 * 1024
 CALLBACK_SUPPORTED_STUB_KINDS: frozenset[StubKind] = frozenset(
     {
@@ -39,10 +45,6 @@ CALLBACK_SUPPORTED_STUB_KINDS: frozenset[StubKind] = frozenset(
 
 class TaskCallbackSender(Protocol):
     def send(self, target: str, body: bytes, headers: Mapping[str, str]) -> int: ...
-
-
-class TaskCallbackDispatcher(Protocol):
-    def deliver(self, task: Task) -> None: ...
 
 
 class CallbackDeliveryError(RuntimeError):
@@ -132,97 +134,111 @@ class TaskCallbackService:
     context: ExecutionContext
     events: EventService
     sender: TaskCallbackSender = field(default_factory=HttpTaskCallbackSender)
-    sleep: Callable[[float], None] = time.sleep
     now: Callable[[], float] = time.time
 
-    def deliver(self, task: Task) -> None:
-        if task.status is not TaskStatus.Retry and not is_terminal_task_status(task.status):
-            return
-        target = self._target(task)
-        if target is None:
-            return
-        payload = _callback_body(task)
+    def drain(self, *, now: datetime | None = None, limit: int = 100) -> int:
+        delivered = 0
+        for _ in range(max(min(limit, CALLBACK_DRAIN_BATCH_SIZE), 0)):
+            current = now or utc_now()
+            with self.context.database.session() as session:
+                claimed = TaskCallbackRepository(session).claim(
+                    now=current,
+                    stale_before=current - timedelta(seconds=CALLBACK_CLAIM_SECONDS),
+                    max_attempts=CALLBACK_DELIVERY_ATTEMPTS,
+                )
+            if claimed is None:
+                break
+            succeeded = False
+            retryable = False
+            status_code = None
+            error = ""
+            try:
+                status_code = self._send(claimed)
+                succeeded = True
+            except CallbackDeliveryError as exc:
+                retryable = exc.retryable
+                error = str(exc)
+            except Exception as exc:
+                retryable = True
+                error = f"callback transport failed: {type(exc).__name__}"
+            finished = now or utc_now()
+            retry_at = (
+                finished + timedelta(seconds=CALLBACK_RETRY_DELAYS_SECONDS[claimed.attempts - 1])
+                if retryable and claimed.attempts < CALLBACK_DELIVERY_ATTEMPTS
+                else None
+            )
+            with self.context.database.session() as session:
+                settled = TaskCallbackRepository(session).settle(
+                    claimed,
+                    now=finished,
+                    succeeded=succeeded,
+                    retry_at=retry_at,
+                )
+            if not settled:
+                continue
+            delivered += int(succeeded)
+            if succeeded or retry_at is None:
+                self.events.emit(
+                    "task.callback.delivered" if succeeded else "task.callback.failed",
+                    resource_type="task",
+                    resource_id=claimed.task_id,
+                    message="task callback delivered"
+                    if succeeded
+                    else "task callback delivery failed",
+                    level=EventLevel.Info if succeeded else EventLevel.Warning,
+                    data={
+                        "attempts": claimed.attempts,
+                        "callback_host": urlsplit(claimed.target).hostname or "",
+                        "idempotency_key": claimed.idempotency_key,
+                        "status_code": status_code,
+                        "error": error,
+                        "task_status": claimed.body.status.value,
+                    },
+                    workspace_id=claimed.workspace_id,
+                )
+        return delivered
+
+    def _send(self, claimed: ClaimedTaskCallback) -> int:
+        payload = claimed.body
         body = json.dumps(
             payload.model_dump(mode="json"),
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
         timestamp = int(self.now())
-        signature = sign_payload(body, self._signing_key(task), timestamp=timestamp)
-        idempotency_key = _callback_idempotency_key(task)
+        signing_key = ControlPlaneService(self.context).workspace_signing_key(claimed.workspace_id)
+        signature = sign_payload(body, signing_key, timestamp=timestamp)
         headers = {
             "Content-Type": "application/json",
-            "Idempotency-Key": idempotency_key,
-            "X-Task-ID": task.id,
-            "X-Task-Status": task.status.value,
-            "X-Task-Attempt": str(task.attempt_number),
+            "Idempotency-Key": claimed.idempotency_key,
+            "X-Task-ID": claimed.task_id,
+            "X-Task-Status": payload.status.value,
+            "X-Task-Attempt": str(payload.attempt_number),
             "X-Task-Signature": signature.key,
             "X-Task-Timestamp": str(signature.timestamp),
         }
-        attempts = 0
-        last_error = "callback delivery failed"
-        for attempts in range(1, CALLBACK_DELIVERY_ATTEMPTS + 1):
-            try:
-                status_code = self.sender.send(target, body, headers)
-            except CallbackDeliveryError as exc:
-                last_error = str(exc)
-                if not exc.retryable or attempts >= CALLBACK_DELIVERY_ATTEMPTS:
-                    break
-                self.sleep(CALLBACK_RETRY_DELAYS_SECONDS[attempts - 1])
-                continue
-            except Exception as exc:
-                last_error = f"callback transport failed: {type(exc).__name__}"
-                if attempts >= CALLBACK_DELIVERY_ATTEMPTS:
-                    break
-                self.sleep(CALLBACK_RETRY_DELAYS_SECONDS[attempts - 1])
-                continue
-            self.events.emit(
-                "task.callback.delivered",
-                resource_type="task",
-                resource_id=task.id,
-                message="task callback delivered",
-                data={
-                    "attempts": attempts,
-                    "callback_host": urlsplit(target).hostname or "",
-                    "idempotency_key": idempotency_key,
-                    "status_code": status_code,
-                    "task_status": task.status.value,
-                },
-                workspace_id=task.workspace_id,
-            )
-            return
-        self.events.emit(
-            "task.callback.failed",
-            resource_type="task",
-            resource_id=task.id,
-            message="task callback delivery failed",
-            level=EventLevel.Warning,
-            data={
-                "attempts": attempts,
-                "callback_host": urlsplit(target).hostname or "",
-                "error": last_error,
-                "idempotency_key": idempotency_key,
-                "task_status": task.status.value,
-            },
-            workspace_id=task.workspace_id,
-        )
+        return self.sender.send(claimed.target, body, headers)
 
-    def _target(self, task: Task) -> str | None:
-        if not task.stub_id:
-            return None
-        try:
-            stub = ControlPlaneService(self.context).get_stub(task.stub_id)
-        except NotFoundError:
-            return None
-        if stub.kind not in CALLBACK_SUPPORTED_STUB_KINDS:
-            return None
-        return normalize_callback_url(stub.config.callback_url)
 
-    def _signing_key(self, task: Task) -> str:
-        if not task.workspace_id:
-            msg = f"task {task.id} has no workspace"
-            raise CallbackDeliveryError(msg, retryable=False)
-        return ControlPlaneService(self.context).workspace_signing_key(task.workspace_id)
+def enqueue_task_callback(session: DatabaseSession, task: Task) -> None:
+    if task.status is not TaskStatus.Retry and not is_terminal_task_status(task.status):
+        return
+    if not task.stub_id or not task.workspace_id:
+        return
+    stub = StubRepository(session).records.get_across_workspaces(task.stub_id)
+    if stub is None or stub.kind not in CALLBACK_SUPPORTED_STUB_KINDS:
+        return
+    target = normalize_callback_url(stub.config.callback_url)
+    if target is None:
+        return
+    TaskCallbackRepository(session).enqueue(
+        task_id=task.id,
+        workspace_id=task.workspace_id,
+        target=target,
+        payload=_callback_body(task).model_dump(mode="json"),
+        idempotency_key=_callback_idempotency_key(task),
+        now=utc_now(),
+    )
 
 
 def _callback_body(task: Task) -> TaskCallbackBody:
@@ -294,7 +310,7 @@ def _host_header(parsed: SplitResult, port: int) -> str:
 __all__ = [
     "CallbackDeliveryError",
     "HttpTaskCallbackSender",
-    "TaskCallbackDispatcher",
     "TaskCallbackSender",
     "TaskCallbackService",
+    "enqueue_task_callback",
 ]

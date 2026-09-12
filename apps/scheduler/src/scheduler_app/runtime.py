@@ -7,6 +7,7 @@ from compute.state import RedisComputeStateRepository
 from control.custom_domains import CustomDomainService
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
+from execution.callbacks import TaskCallbackService
 from execution.containers.preemption import PreemptedContainerService
 from execution.endpoints.service import EndpointControlService
 from execution.functions.service import FunctionControlService
@@ -298,6 +299,9 @@ class SchedulerRuntime:
                 ),
             ),
             maintenance=SchedulerMaintenanceControls(
+                task_callbacks=TaskCallbackService(
+                    execution_services.context, execution_services.events
+                ),
                 storage_access=storage_access,
                 volume_metering=volume_metering,
                 volume_deletion=volume_deletion,
