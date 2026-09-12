@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from lazycloud.abstractions.endpoint import EndpointResponse
 from lazycloud.client_handles import (
+    ClientHandleError,
     EndpointHandle,
     FunctionHandle,
     ResourceManifest,
@@ -20,17 +21,20 @@ from shared.http.tasks import TaskDetailResponse
 from shared.tasks import Task, TaskStatus
 
 
-def test_function_handle_async_remote_json_preserves_json_result_format(
+@pytest.mark.parametrize("encoded_python", [False, True])
+def test_function_handle_json_result_refuses_encoded_python(
     monkeypatch: pytest.MonkeyPatch,
+    encoded_python: bool,
 ) -> None:
-    calls: list[dict[str, Any]] = []
-
     def fake_json_request(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        _ = args
-        calls.append(kwargs["json_body"])
+        _ = args, kwargs
         return FunctionInvokeResponse.from_result(
             task_id="task-square",
-            result=FunctionJsonResult(value=100),
+            result=(
+                FunctionCloudpickleResult.from_bytes(cloudpickle_bytes(100))
+                if encoded_python
+                else FunctionJsonResult(value=100)
+            ),
             done=True,
         ).model_dump(mode="json")
 
@@ -47,24 +51,20 @@ def test_function_handle_async_remote_json_preserves_json_result_format(
         )
     )
 
-    assert handle.remote_json(value=10) == 100
-    assert asyncio.run(handle.async_remote_json(value=10)) == 100
-    assert calls == [
-        {
-            "args": [],
-            "kwargs": {"value": 10},
-            "result_format": "json",
-        },
-        {
-            "args": [],
-            "kwargs": {"value": 10},
-            "result_format": "json",
-        },
-    ]
+    if encoded_python:
+        with pytest.raises(ClientHandleError, match="invalid JSON result"):
+            handle.remote_json(value=10)
+        with pytest.raises(ClientHandleError, match="invalid JSON result"):
+            asyncio.run(handle.async_remote_json(value=10))
+    else:
+        assert handle.remote_json(value=10) == 100
+        assert asyncio.run(handle.async_remote_json(value=10)) == 100
 
 
-def test_function_handle_remote_json_decodes_deferred_task_result(
+@pytest.mark.parametrize("status", [TaskStatus.Complete, TaskStatus.Failed])
+def test_function_handle_remote_json_settles_deferred_task_result(
     monkeypatch: pytest.MonkeyPatch,
+    status: TaskStatus,
 ) -> None:
     def fake_json_request(*args: Any, **kwargs: Any) -> dict[str, Any]:
         _ = args, kwargs
@@ -78,9 +78,10 @@ def test_function_handle_remote_json_decodes_deferred_task_result(
             return Task(
                 id=task_id,
                 name="function-square",
-                status=TaskStatus.Complete,
+                status=status,
                 result=FunctionJsonResult(value=49).model_dump(mode="json"),
-                exit_code=0,
+                exit_code=0 if status is TaskStatus.Complete else 1,
+                error="handler failed" if status is TaskStatus.Failed else "",
             )
 
         def get(self, task_id: str) -> TaskDetailResponse:
@@ -100,7 +101,11 @@ def test_function_handle_remote_json_decodes_deferred_task_result(
         )
     )
 
-    assert handle.remote_json(7) == 49
+    if status is TaskStatus.Complete:
+        assert handle.remote_json(7) == 49
+    else:
+        with pytest.raises(ClientHandleError, match="handler failed"):
+            handle.remote_json(7)
 
 
 def test_function_handle_remote_decodes_cloudpickled_bytes(

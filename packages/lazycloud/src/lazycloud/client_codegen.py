@@ -54,6 +54,7 @@ def write_client_package(
         response = GatewayControlClient.from_endpoint(
             config.endpoint,
             token=config.token,
+            workspace=config.workspace,
             timeout_seconds=config.timeout_seconds,
         ).client_manifest(
             ClientManifestRequest(
@@ -78,7 +79,9 @@ def write_client_package(
     output.mkdir(parents=True, exist_ok=True)
     version_root.mkdir(parents=True, exist_ok=True)
 
-    _write_version_package(version_root, resources)
+    _write_version_package(
+        version_root, resources, endpoint=config.endpoint, workspace=response.workspace
+    )
     _write_app_package(package_root, version=version)
     lock = _read_lock(output)
     lock[slug] = validate_json_object(
@@ -101,7 +104,13 @@ def write_client_package(
     }
 
 
-def _write_version_package(path: Path, resources: list[ClientManifestResource]) -> None:
+def _write_version_package(
+    path: Path,
+    resources: list[ClientManifestResource],
+    *,
+    endpoint: str,
+    workspace: str,
+) -> None:
     symbols = _resource_symbols(resources)
     manifest_json = json.dumps(
         [item.model_dump(mode="json") for item in resources],
@@ -125,6 +134,7 @@ def _write_version_package(path: Path, resources: list[ClientManifestResource]) 
         "from lazycloud.client_handles import (",
         "    ASGIHandle as _ASGIHandle,",
         "    EndpointHandle as _EndpointHandle,",
+        "    FunctionHandle as _FunctionHandle,",
         "    handle_from_manifest as _handle_from_manifest,",
         ")",
         "from lazycloud.session.task import Task as _Task",
@@ -137,6 +147,8 @@ def _write_version_package(path: Path, resources: list[ClientManifestResource]) 
         "from shared.tasks import Task as _TaskRecord",
         "",
         f"_MANIFEST = _json_loads({manifest_json!r})",
+        f"_ENDPOINT = {endpoint!r}",
+        f"_WORKSPACE = {workspace!r}",
         "",
     ]
     for index, resource in enumerate(resources):
@@ -247,7 +259,9 @@ def _resource_wrapper_lines(
             ],
             "",
             "    def __init__(self) -> None:",
-            f"        handle = _handle_from_manifest(_MANIFEST[{index}])",
+            "        handle = _handle_from_manifest(",
+            f"            _MANIFEST[{index}], endpoint=_ENDPOINT, workspace=_WORKSPACE",
+            "        )",
             f"        if not isinstance(handle, {_handle_type(resource.kind)}):",
             "            raise TypeError('client manifest handle kind mismatch')",
             "        self._handle = handle",
@@ -480,11 +494,24 @@ def _contract_operation_lines(
         return _endpoint_operation_lines(resource, contract=contract, context=context)
     signature = _contract_signature(parameters, context)
     return_annotation = _contract_return_annotation(resource, contract, context)
-    call = _contract_call(resource, method_name, parameters)
-    lines = [
-        f"    def {method_name}(self{signature}) -> {return_annotation}:",
-        f"        return {call}",
-    ]
+    call = _contract_call(resource, method_name, parameters, handle_method="remote_json")
+    async_call = _contract_call(
+        resource, method_name, parameters, handle_method="async_remote_json"
+    )
+    lines: list[str] = []
+    for public_method in (method_name, "remote_json"):
+        lines.extend(
+            [
+                f"    def {public_method}(self{signature}) -> {return_annotation}:",
+                f"        return _TypeAdapter({return_annotation}).validate_python({call})",
+                "",
+                f"    async def async_{public_method}(self{signature}) -> {return_annotation}:",
+                f"        return _TypeAdapter({return_annotation}).validate_python(",
+                f"            await {async_call}",
+                "        )",
+                "",
+            ]
+        )
     return lines
 
 
@@ -535,19 +562,26 @@ def _contract_variadic_operation_lines(
     method_name: str,
 ) -> list[str]:
     return_annotation = _kind_return_annotation(resource.kind)
-    lines = [
-        f"    def {method_name}(self, *args: _Any, **kwargs: _Any) -> {return_annotation}:",
-        f"        return self._handle.{method_name}(*args, **kwargs)",
-    ]
-    if resource.kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:
+    handle_method = "remote_json" if resource.kind is DeploymentKind.Function else method_name
+    methods = (
+        (method_name, "remote_json") if resource.kind is DeploymentKind.Function else (method_name,)
+    )
+    lines: list[str] = []
+    for public_method in methods:
         lines.extend(
             [
+                (
+                    f"    def {public_method}(self, *args: _Any, **kwargs: _Any)"
+                    f" -> {return_annotation}:"
+                ),
+                f"        return self._handle.{handle_method}(*args, **kwargs)",
                 "",
                 (
-                    f"    async def async_{method_name}"
+                    f"    async def async_{public_method}"
                     f"(self, *args: _Any, **kwargs: _Any) -> {return_annotation}:"
                 ),
-                f"        return await self._handle.async_{method_name}(*args, **kwargs)",
+                f"        return await self._handle.async_{handle_method}(*args, **kwargs)",
+                "",
             ]
         )
     return lines
@@ -604,7 +638,7 @@ def _contract_return_annotation(
         if not contract.operation.return_schema:
             return "_EndpointResponse"
         return _annotation_from_json_schema(contract.operation.return_schema, context)
-    return "_Any"
+    return _annotation_from_json_schema(contract.operation.return_schema, context)
 
 
 def _kind_return_annotation(kind: DeploymentKind) -> str:
@@ -716,6 +750,8 @@ def _python_name(value: str) -> str:
 
 
 def _handle_type(kind: DeploymentKind) -> str:
+    if kind is DeploymentKind.Function:
+        return "_FunctionHandle"
     if kind is DeploymentKind.Endpoint:
         return "_EndpointHandle"
     if kind is DeploymentKind.Asgi:

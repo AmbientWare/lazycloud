@@ -962,6 +962,7 @@ class GatewayControlService:
                 client_manifest_resource(
                     deployed_resource,
                     external_url=request.external_url,
+                    pin_version=True,
                 )
                 for deployed_resource in deployed_resources
             ]

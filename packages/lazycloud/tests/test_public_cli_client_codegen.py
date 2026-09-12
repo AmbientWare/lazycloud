@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import sys
 from collections.abc import Awaitable, Callable
@@ -10,7 +11,7 @@ from typing import Protocol, runtime_checkable
 import pytest
 from lazycloud.abstractions.endpoint import EndpointResponse
 from lazycloud.cli.main import build_public_cli
-from lazycloud.client_handles import EndpointHandle
+from lazycloud.client_handles import EndpointHandle, FunctionHandle
 from lazycloud.control import ControlClientConfig
 from lazycloud.json_contracts import JsonValue, parse_json_object
 from shared.deployments import DeploymentKind
@@ -189,10 +190,19 @@ class _GeneratedSiteHandle(Protocol):
 
 
 @runtime_checkable
+class _GeneratedFunctionHandle(Protocol):
+    remote: Callable[..., int]
+    async_remote: Callable[..., Awaitable[int]]
+    remote_json: Callable[..., int]
+    async_remote_json: Callable[..., Awaitable[int]]
+
+
+@runtime_checkable
 class _GeneratedClientPackage(Protocol):
     __all__: list[str]
     health: _GeneratedHealthHandle
     site: _GeneratedSiteHandle
+    square: _GeneratedFunctionHandle
 
 
 def _client_contract(
@@ -238,7 +248,7 @@ def _json_string(value: JsonValue, *path: str | int) -> str:
     return selected
 
 
-def test_public_cli_generated_client_returns_typed_endpoint_result(
+def test_public_cli_generated_client_returns_typed_results(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -257,9 +267,10 @@ def test_public_cli_generated_client_returns_typed_endpoint_result(
         endpoint: str,
         *,
         token: str | None,
+        workspace: str,
         timeout_seconds: float,
     ) -> _FakeClientManifestGateway:
-        _ = endpoint, token, timeout_seconds
+        _ = endpoint, token, workspace, timeout_seconds
         return gateway
 
     monkeypatch.setattr(
@@ -325,3 +336,21 @@ def test_public_cli_generated_client_returns_typed_endpoint_result(
     health = generated.health.request(user_id=42, include_details=True)
 
     assert (health.status, health.details.code) == ("ok", 200)
+
+    def square(_handle: FunctionHandle, *, value: int) -> int:
+        return value * value
+
+    async def async_square(_handle: FunctionHandle, *, value: int) -> int:
+        return value * value
+
+    monkeypatch.setattr(FunctionHandle, "remote_json", square)
+    monkeypatch.setattr(FunctionHandle, "async_remote_json", async_square)
+
+    assert generated.square.remote(value=7) == 49
+    assert generated.square.remote_json(value=9) == 81
+
+    async def invoke_square() -> int:
+        assert await generated.square.async_remote_json(value=10) == 100
+        return await generated.square.async_remote(value=8)
+
+    assert asyncio.run(invoke_square()) == 64

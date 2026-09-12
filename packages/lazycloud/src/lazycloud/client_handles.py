@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import ValidationError
 from shared.deployments import DeploymentKind
+from shared.function_payloads import FunctionJsonResult
 from shared.http.errors import http_api_error_from_body
 from shared.http.functions import FunctionInvokeResponse
 from shared.serialization import to_json_value
@@ -62,6 +62,8 @@ class ResourceManifest:
 @dataclass(slots=True)
 class ResourceHandle:
     manifest: ResourceManifest
+    endpoint: str | None = field(default=None, repr=False)
+    workspace: str | None = field(default=None, repr=False)
     token: str | None = field(default=None, init=False, repr=False)
     timeout_seconds: float = field(default=10.0, init=False, repr=False)
 
@@ -149,23 +151,26 @@ class FunctionHandle(ResourceHandle):
             raise ClientHandleError(response.output or "function invocation failed")
         if response.result is not None:
             try:
-                return decode_function_result(response.result)
-            except FunctionResultDecodeError as exc:
-                raise ClientHandleError("function returned an invalid result") from exc
+                return FunctionJsonResult.model_validate(response.result).value
+            except ValidationError as exc:
+                raise ClientHandleError("function returned an invalid JSON result") from exc
         if not response.task_id:
             return None
         completed = Task(
             task_id=response.task_id,
             client=TaskClient(
-                endpoint=_origin(self.invoke_url),
+                endpoint=self.endpoint,
+                workspace=self.workspace,
                 token=self._token(),
                 timeout_seconds=self.timeout_seconds,
             ),
         ).wait()
+        if not completed.ok:
+            raise ClientHandleError(completed.error or f"function task ended as {completed.status}")
         try:
-            return decode_function_result(completed.value)
-        except FunctionResultDecodeError as exc:
-            raise ClientHandleError("function returned an invalid result") from exc
+            return FunctionJsonResult.model_validate(completed.value).value
+        except ValidationError as exc:
+            raise ClientHandleError("function returned an invalid JSON result") from exc
 
     async def async_remote(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self.remote, *args, **kwargs)
@@ -234,17 +239,20 @@ class ASGIHandle(ResourceHandle):
 
 def handle_from_manifest(
     manifest: ResourceManifest | Mapping[str, JsonValue],
+    *,
+    endpoint: str | None = None,
+    workspace: str | None = None,
 ) -> ResourceHandle:
     selected = (
         manifest if isinstance(manifest, ResourceManifest) else ResourceManifest.from_dict(manifest)
     )
     if selected.kind is DeploymentKind.Function:
-        return FunctionHandle(selected)
+        return FunctionHandle(selected, endpoint=endpoint, workspace=workspace)
     if selected.kind is DeploymentKind.Endpoint:
-        return EndpointHandle(selected)
+        return EndpointHandle(selected, endpoint=endpoint, workspace=workspace)
     if selected.kind is DeploymentKind.Asgi:
-        return ASGIHandle(selected)
-    return ResourceHandle(selected)
+        return ASGIHandle(selected, endpoint=endpoint, workspace=workspace)
+    return ResourceHandle(selected, endpoint=endpoint, workspace=workspace)
 
 
 def _call_payload(
@@ -359,11 +367,6 @@ def _manifest_object(data: Mapping[str, JsonValue], key: str) -> dict[str, JsonV
 def _endpoint_method(manifest: ResourceManifest) -> str:
     allowed = {item.upper() for item in manifest.methods}
     return "POST" if "POST" in allowed else next(iter(allowed), "POST")
-
-
-def _origin(url: str) -> str:
-    parsed = urllib.parse.urlparse(url)
-    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
 
 
 __all__ = [
